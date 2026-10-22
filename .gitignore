@@ -1,0 +1,27 @@
+# secrets and local state
+infra/.env
+infra/data/
+infra/keycast/master.key
+infra/certs/
+*.key
+*.pem
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# odoo
+*.pot~
+odoo/filestore/
+
+# editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
