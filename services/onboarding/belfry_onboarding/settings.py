@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Sent as the Host header to Keycast (tenant = Host); must be in ALLOWED_TENANT_DOMAINS.
     keycast_tenant_domain: str | None = Field(default=None, alias="KEYCAST_TENANT_DOMAIN")
 
+    # Community relay (ws:// or wss://). Empty: no kind-0 profile is published at provisioning.
+    relay_url: str = Field(default="", alias="RELAY_URL")
+    # Domain of the NIP-05 names (member number @ domain); Keycast serves nostr.json for it.
+    nip05_domain: str = Field(default="belfry.local", alias="NIP05_DOMAIN")
+
     hook_token: str = Field(alias="HOOK_TOKEN")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
 

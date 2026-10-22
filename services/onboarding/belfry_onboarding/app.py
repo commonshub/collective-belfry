@@ -16,6 +16,7 @@ from .clients.authentik import AuthentikClient
 from .clients.keycast import KeycastClient
 from .clients.odoo import OdooClient, OdooError
 from .core import Services
+from .relay import RelayPublisher
 from .settings import Settings
 from .stripe_sig import StripeSignatureError, verify_signature
 
@@ -42,6 +43,7 @@ def build_services(settings: Settings) -> Services:
             tenant_domain=settings.keycast_tenant_domain,
         ),
         settings=settings,
+        relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
     )
 
 

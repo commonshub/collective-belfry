@@ -263,10 +263,12 @@ class FakeKeycast:
         self.status: dict[str, str] = {}  # pubkey -> status
         self.preloads = 0
         self.status_calls: list[tuple[str, str]] = []
+        self.signed: list[dict[str, Any]] = []
         base = base_url.rstrip("/")
         self.preload_route = router.post(f"{base}/api/admin/preload-user").mock(
             side_effect=self._preload
         )
+        router.post(f"{base}/api/nostr").mock(side_effect=self._sign)
         router.put(
             url__regex=rf"{re.escape(base)}/api/admin/users/(?P<pubkey>[0-9a-f]+)/status"
         ).mock(side_effect=self._set_status)
@@ -287,6 +289,20 @@ class FakeKeycast:
             200, json={"pubkey": self.users[vine_id]["pubkey"], "token": "ucan-token"}
         )
 
+    def _sign(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        if request.headers.get("Authorization") != "Bearer ucan-token":
+            return httpx.Response(401, json={"error": "unauthorized"})
+        if body["method"] != "sign_event":
+            return httpx.Response(400, json={"error": f"unsupported {body['method']}"})
+        event = dict(body["params"][0])
+        if "pubkey" not in event:
+            return httpx.Response(400, json={"error": "event must include pubkey"})
+        event["id"] = f"{len(self.signed) + 1:064x}"
+        event["sig"] = "fake-sig"
+        self.signed.append(event)
+        return httpx.Response(200, json={"result": event})
+
     def _set_status(self, request: httpx.Request, pubkey: str) -> httpx.Response:
         if pubkey not in self.status:
             return httpx.Response(404, json={"error": "user not found"})
@@ -294,3 +310,31 @@ class FakeKeycast:
         self.status[pubkey] = body["status"]
         self.status_calls.append((pubkey, body["status"]))
         return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})
+
+
+class FakeRelay:
+    """Stands in for RelayPublisher: records published events, optionally demands AUTH or fails."""
+
+    url = "ws://relay.test"
+
+    def __init__(self, require_auth: bool = False, fail: bool = False):
+        self.require_auth = require_auth
+        self.fail = fail
+        self.events: list[dict[str, Any]] = []
+        self.auth_events: list[dict[str, Any]] = []
+
+    def publish(self, event: dict[str, Any], sign) -> None:
+        if self.fail:
+            raise RuntimeError("relay down")
+        if self.require_auth:
+            auth = sign(
+                {
+                    "kind": 22242,
+                    "created_at": 0,
+                    "tags": [["relay", self.url], ["challenge", "c1"]],
+                    "content": "",
+                }
+            )
+            assert auth["kind"] == 22242 and auth["pubkey"] == event["pubkey"]
+            self.auth_events.append(auth)
+        self.events.append(event)

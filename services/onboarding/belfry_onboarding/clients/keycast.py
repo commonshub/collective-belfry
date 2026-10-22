@@ -33,8 +33,26 @@ class KeycastClient:
         common = {"Accept": "application/json"}
         if tenant_domain:
             common["Host"] = tenant_domain
+        self._common = common
         self._admin = {"Authorization": f"Bearer {admin_token}", **common}
         self._service = {"Authorization": f"Bearer {service_token}", **common}
+
+    def sign_event(self, token: str, event: dict[str, Any]) -> dict[str, Any]:
+        """Sign an unsigned event (must carry ``pubkey``) through ``POST /api/nostr``.
+
+        ``token`` is a user-scoped UCAN, e.g. the one ``preload_user`` returns; it is used right
+        away and never stored.
+        """
+        r = self._client.post(
+            f"{self.url}/api/nostr",
+            json={"method": "sign_event", "params": [event]},
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+        data = r.json()
+        if data.get("error"):
+            raise RuntimeError(f"keycast sign_event failed: {data['error']}")
+        return data["result"]
 
     def preload_user(self, vine_id: str, username: str, display_name: str) -> dict[str, Any]:
         """Returns ``{"pubkey": <hex>, "token": <UCAN>}``. The token is not needed by Belfry."""

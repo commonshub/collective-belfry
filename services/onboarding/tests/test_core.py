@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 
 import httpx
 import pytest
@@ -59,6 +60,41 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     assert p["npub"] == partner["belfry_npub"] == hex_to_npub(kc_user["pubkey"])
     assert p["npub"].startswith("npub1")
     assert keycast.status[kc_user["pubkey"]] == "active"
+
+
+def test_profile_published_with_name_and_member_number_only(services, odoo, keycast, relay):
+    ids = seed_paid_invoice(odoo, tier="day")
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+
+    assert len(relay.events) == 1
+    ev = relay.events[0]
+    partner = odoo.get("res.partner", ids["partner"])
+    assert ev["kind"] == 0
+    assert ev["pubkey"] == active_pass(odoo, ids["invoice"])["keycast_pubkey"]
+    assert json.loads(ev["content"]) == {
+        "name": partner["name"],
+        "display_name": partner["name"],
+        "nip05": "osv-0001@belfry.local",
+    }
+    # NIP-42: the challenge was signed with the same key, and both signatures went through Keycast
+    assert len(relay.auth_events) == 1
+    assert [e["kind"] for e in keycast.signed] == [0, 22242]
+    # the Keycast user token was used once and not written anywhere
+    assert "token" not in json.dumps(odoo.tables["belfry.pass"])
+
+
+def test_relay_failure_does_not_block_activation(services, odoo, relay):
+    relay.fail = True
+    ids = seed_paid_invoice(odoo)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    assert relay.events == []
+
+
+def test_no_relay_configured_skips_profile(services, odoo, keycast):
+    services.relay = None
+    ids = seed_paid_invoice(odoo)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    assert keycast.signed == []
 
 
 def test_activation_survives_authentik_refusing_the_source_link(services, odoo, authentik, keycast):

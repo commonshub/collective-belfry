@@ -12,7 +12,7 @@ from belfry_onboarding.clients.keycast import KeycastClient
 from belfry_onboarding.core import Services
 from belfry_onboarding.settings import Settings
 
-from .fakes import FakeAuthentik, FakeKeycast, FakeOdoo
+from .fakes import FakeAuthentik, FakeKeycast, FakeOdoo, FakeRelay
 
 AUTHENTIK_URL = "http://authentik.test"
 KEYCAST_URL = "http://keycast.test"
@@ -60,12 +60,18 @@ def keycast(router) -> FakeKeycast:
 
 
 @pytest.fixture
-def services(settings, odoo, authentik, keycast) -> Services:
+def relay() -> FakeRelay:
+    return FakeRelay(require_auth=True)
+
+
+@pytest.fixture
+def services(settings, odoo, authentik, keycast, relay) -> Services:
     return Services(
         odoo=odoo,
         authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
         keycast=KeycastClient(KEYCAST_URL, "kc-admin", "kc-service"),
         settings=settings,
+        relay=relay,  # type: ignore[arg-type]
     )
 
 

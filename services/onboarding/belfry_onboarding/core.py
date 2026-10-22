@@ -8,7 +8,9 @@ on ``vine_id``, status PUTs) and writes back to Odoo last. All state lives in Od
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +20,7 @@ from .clients.authentik import AuthentikClient
 from .clients.keycast import KeycastClient
 from .clients.odoo import OdooApi, OdooError
 from .nostr import hex_to_npub
+from .relay import RelayPublisher
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -48,6 +51,7 @@ class Services:
     authentik: AuthentikClient
     keycast: KeycastClient
     settings: Settings
+    relay: RelayPublisher | None = None
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -246,8 +250,8 @@ def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number
 
 def _ensure_keycast_user(
     svc: Services, partner: dict[str, Any], member_number: str
-) -> tuple[str, str]:
-    """Returns (pubkey hex, npub)."""
+) -> tuple[str, str, str]:
+    """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored."""
     result = svc.keycast.preload_user(
         vine_id=f"odoo-partner-{partner['id']}",
         username=member_number.lower(),
@@ -255,7 +259,44 @@ def _ensure_keycast_user(
     )
     pubkey = result["pubkey"]
     svc.keycast.set_user_status(pubkey, "active")
-    return pubkey, hex_to_npub(pubkey)
+    return pubkey, hex_to_npub(pubkey), result.get("token", "")
+
+
+def profile_content(name: str, member_number: str, nip05_domain: str) -> dict[str, str]:
+    """What the directory may see without opt-in (decided 2026-10-22): name and member number."""
+    return {
+        "name": name,
+        "display_name": name,
+        "nip05": f"{member_number.lower()}@{nip05_domain}",
+    }
+
+
+def publish_profile(
+    svc: Services, token: str, pubkey: str, partner: dict[str, Any], member_number: str
+) -> bool:
+    """Publish the participant's kind-0 profile to the community relay. Best effort."""
+    if svc.relay is None or not token:
+        return False
+    name = partner.get("name") or member_number
+    content = profile_content(name, member_number, svc.settings.nip05_domain)
+
+    def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
+        return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
+
+    try:
+        event = sign(
+            {
+                "kind": 0,
+                "created_at": int(time.time()),
+                "tags": [],
+                "content": json.dumps(content, separators=(",", ":")),
+            }
+        )
+        svc.relay.publish(event, sign)
+    except Exception as exc:
+        log.warning("profile for %s not published to %s: %s", member_number, svc.relay.url, exc)
+        return False
+    return True
 
 
 def activate_pass(svc: Services, invoice_id: int) -> str:
@@ -346,7 +387,8 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
     date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
 
     authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
-    pubkey, npub = _ensure_keycast_user(svc, partner, member_number)
+    pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number)
+    publish_profile(svc, user_token, pubkey, partner, member_number)
 
     svc.odoo.write(
         "res.partner",
