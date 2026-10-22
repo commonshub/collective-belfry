@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     relay_url: str = Field(default="", alias="RELAY_URL")
     # Domain of the NIP-05 names (member number @ domain); Keycast serves nostr.json for it.
     nip05_domain: str = Field(default="belfry.local", alias="NIP05_DOMAIN")
+    # Relay whitelist (Phase 2): the rnostr config is rendered from RELAY_CONFIG_TEMPLATE into
+    # RELAY_CONFIG_PATH with the pubkeys of all active passes. Empty path: no whitelist sync.
+    relay_config_path: str = Field(default="", alias="RELAY_CONFIG_PATH")
+    relay_config_template: str = Field(
+        default="/relay-template/rnostr.toml", alias="RELAY_CONFIG_TEMPLATE"
+    )
+    # Comma-separated hex pubkeys always on the whitelist (Belfry's own keys, stewards).
+    relay_extra_pubkeys: str = Field(default="", alias="RELAY_EXTRA_PUBKEYS")
 
     hook_token: str = Field(alias="HOOK_TOKEN")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")

@@ -11,7 +11,7 @@ Keycast (Divine's fork, github.com/divinevideo/keycast @ `fe9c6460`) is the Nost
 | File | Purpose |
 | --- | --- |
 | `master.key` | 32 random bytes, base64, written by `scripts/gen-secrets.sh`. Gitignored. AES-256-GCM key for every stored Nostr secret: losing it makes all participant keys unreadable, so back it up with the database. |
-| `policy.sql` | The `belfry-event` policy (kinds 1, 7, 30023). Applied by `scripts/bootstrap.sh`, idempotent. |
+| `policy.sql` | The `belfry-event` policy (kinds 0, 1, 7, 22242, 30023: profile, note, reaction, relay AUTH, long-form). Applied by `scripts/bootstrap.sh` on every run, idempotent, updates the kinds of an existing permission. |
 
 ## The master.key path gotcha
 

@@ -4,7 +4,7 @@ Belfry (the Collective Bunker) runs access and identity for Open Source Village:
 
 ## Current status
 
-Plan verified against the real software on 2026-10-22 (spike notes in `docs/research/`); decisions recorded in @docs/NEXT_STEPS.md §2. Build slice 1 (Phase 1 onboarding: Compose stack, Odoo module `belfry_pass`, onboarding service) is built and green locally; its contract is @docs/slice-1-onboarding.md. Next work is in @docs/NEXT_STEPS.md §4. Run `make up && make bootstrap && make up-app && make smoke` to see it work.
+Plan verified against the real software on 2026-10-22 (spike notes in `docs/research/`); decisions recorded in @docs/NEXT_STEPS.md §2. Build slice 1 (Phase 1 onboarding: Compose stack, Odoo module `belfry_pass`, onboarding service) is built and green locally; its contract is @docs/slice-1-onboarding.md. Phase 2 has started: the community relay (rnostr, `infra/relay/`) with a NIP-42 whitelist derived from active passes and kind-0 profiles published at activation (2026-10-23). Next work is in @docs/NEXT_STEPS.md §4. Run `make up && make bootstrap && make up-app && make smoke` to see it work.
 
 ## Project plan
 

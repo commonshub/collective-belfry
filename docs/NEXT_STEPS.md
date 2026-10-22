@@ -1,6 +1,6 @@
-# Next steps (handoff from 2026-10-22, updated after the verification session)
+# Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0 and 1 are done; step 2 is waiting on the user; step 3 starts once the decisions are in.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b); continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -59,13 +59,27 @@ Known gaps to carry into the next steps:
 4. No enrollment or password link is sent to the Authentik user yet (Phase 2 login work).
 5. VAT, credit notes on refund and the day-pass "which day" question are still open (see the Odoo spike note).
 
+## 3b. Phase 2 start: community relay with a whitelist from Odoo — built 2026-10-23
+
+Decision (recorded in the live doc): the community relay is **rnostr** (0.4.9, `rnostr/rnostr:latest`). It has NIP-42 with a `pubkey_whitelist` for REQ and EVENT keyed on the authenticated pubkey, and hot-reloads its config file. Reading and writing both need AUTH as a whitelisted pubkey; the list is derived from `belfry.pass` (state `active`) and never edited by hand. The Keycast NIP-46 relay stays a separate, open service.
+
+- [x] `infra/relay/rnostr.toml` template (lines marked `# belfry:whitelist`), `relay-init` seeds the config volume, `relay` on host port 3090; `infra/relay/README.md`.
+- [x] Onboarding: `relay_whitelist.py` renders the template in place (rnostr `--watch` ignores renames); synced at start, at activation (new pubkey included before the kind-0 profile is published), after revoke/expire/reactivate, via `python -m belfry_onboarding sync-relay` and `POST /admin/sync-relay`. `RELAY_EXTRA_PUBKEYS` for Belfry's own keys.
+- [x] Kind-0 profile (name, display name, NIP-05 `member@NIP05_DOMAIN`) signed through Keycast with the preload UCAN, published with NIP-42 AUTH (commit f410206, now exercised in the smoke test).
+- [x] Keycast policy `belfry-event` now allows kinds 0, 1, 7, 22242, 30023; bootstrap applies `policy.sql` on every run (it updates the kinds).
+- [x] Bug found and fixed in the live check: Keycast's status endpoint needs a `reason` for `suspended`/`banned`, so slice 1 never actually suspended a signer account on refund or expiry. `_close_pass` now syncs the whitelist before calling Keycast.
+- [x] Verified live: unauthenticated REQ → `CLOSED auth-required`; activation adds the pubkey and rnostr reloads; refund/steward revoke removes it and suspends the Keycast user with the reason; reactivation restores it. `make smoke` 23 checks, `make test-onboarding` 35 tests.
+
+Open from this slice: whether a Keycast suspension takes effect on an already cached HTTP-RPC authorization (spike: unverified); the kind list for the Phase 2 apps (calendar, marketplace, chat kinds are not in the policy yet); `RELAY_EXTRA_PUBKEYS` is empty, so no Belfry announcement key exists yet; the profile is not re-published when the partner's name changes.
+
 ## 4. Next
 
-1. Phase 2: relay whitelist synced from `belfry.pass` (active passes), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), the Keycast fork with Authentik OIDC login (3–5 days, files listed in `docs/research/keycast-spike.md` §4), remove the Divine UI parts.
+1. Phase 2 (continued): Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), the Keycast fork with Authentik OIDC login (3–5 days, files listed in `docs/research/keycast-spike.md` §4), remove the Divine UI parts, pick the community apps and extend the policy kinds.
 2. Phase 3 start: walt.id Issuer2 once the issuer decision is confirmed with the DIDroom maintainer; status-list service; VCTM hosting; SUNET verifier patch for the OIDC path.
 3. Run the smoke flow against Stripe test mode on a public URL.
 
 ## Notes
 
-- First commits made on 2026-10-22 (layout agreed: monorepo).
+- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice committed 2026-10-23.
+- Local test run: the host Python is 3.14; use `python3.12 -m venv` and `pip install -e 'services/onboarding[dev]'` for `pytest` and `ruff`.
 - Research notes: `docs/research/` (spikes dated 2026-10-22), consistency review in `plan-consistency-review.md`.

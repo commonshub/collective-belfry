@@ -1,6 +1,6 @@
 # Belfry Identity & Membership Plan
 
-> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22). The live doc is the source of truth.
+> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, see docs/NEXT_STEPS.md §3b). The live doc is the source of truth.
 
 2026-10-20
 

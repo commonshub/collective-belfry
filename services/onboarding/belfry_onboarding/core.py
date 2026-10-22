@@ -21,6 +21,7 @@ from .clients.keycast import KeycastClient
 from .clients.odoo import OdooApi, OdooError
 from .nostr import hex_to_npub
 from .relay import RelayPublisher
+from .relay_whitelist import RelayWhitelist
 from .settings import Settings
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ class Services:
     keycast: KeycastClient
     settings: Settings
     relay: RelayPublisher | None = None
+    whitelist: RelayWhitelist | None = None
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -262,6 +264,32 @@ def _ensure_keycast_user(
     return pubkey, hex_to_npub(pubkey), result.get("token", "")
 
 
+def active_pubkeys(svc: Services) -> list[str]:
+    """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey"],
+    )
+    return [r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")]
+
+
+def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = False):
+    """Rewrite the relay config with the active pubkeys plus ``include`` (a pass being activated
+    whose Odoo state is still pending). Best effort unless ``strict``: a failure is logged and
+    the next sync (any later activation, revoke, expiry or the cron) catches up.
+    """
+    if svc.whitelist is None:
+        return None
+    try:
+        return svc.whitelist.sync([*active_pubkeys(svc), *include])
+    except Exception as exc:
+        if strict:
+            raise
+        log.warning("relay whitelist not updated: %s", exc)
+        return None
+
+
 def profile_content(name: str, member_number: str, nip05_domain: str) -> dict[str, str]:
     """What the directory may see without opt-in (decided 2026-10-22): name and member number."""
     return {
@@ -388,6 +416,9 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
 
     authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
     pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number)
+    # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
+    # the profile is published (the pass is still pending in Odoo at this point).
+    sync_relay_whitelist(svc, include=[pubkey])
     publish_profile(svc, user_token, pubkey, partner, member_number)
 
     svc.odoo.write(
@@ -452,7 +483,7 @@ def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
     return rows[0]["keycast_pubkey"] if rows else None
 
 
-def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any]) -> bool:
+def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason: str) -> bool:
     """Suspend the Keycast user unless the partner has another active pass.
 
     Returns True if a suspension was sent.
@@ -464,7 +495,7 @@ def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any]) -> boo
     if not pubkey:
         log.info("pass %s has no Keycast pubkey, nothing to suspend", pass_row["id"])
         return False
-    svc.keycast.set_user_status(pubkey, "suspended")
+    svc.keycast.set_user_status(pubkey, "suspended", reason=f"pass {pass_row['id']}: {reason}")
     return True
 
 
@@ -479,8 +510,11 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
     else:
         result = f"already_{state}"
     pass_row = dict(pass_row, state=state)
+    # Relay access first (derived from the state just written), then the signer: a Keycast
+    # failure must not leave the pubkey on the relay whitelist.
+    sync_relay_whitelist(svc)
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
-    _suspend_unless_other_active(svc, pass_row)
+    _suspend_unless_other_active(svc, pass_row, reason)
     return result
 
 
@@ -533,6 +567,7 @@ def reactivate_pass(svc: Services, pass_id: int) -> str:
     pubkey = _keycast_pubkey_for(svc, pass_row)
     if pubkey:
         svc.keycast.set_user_status(pubkey, "active")
+    sync_relay_whitelist(svc)
     return result
 
 

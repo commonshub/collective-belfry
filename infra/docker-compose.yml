@@ -146,6 +146,41 @@ services:
     volumes:
       - relay-data:/data
 
+  # Community relay (Phase 2): rnostr with NIP-42 and a pubkey whitelist for REQ and EVENT.
+  # The config lives in the community-relay-config volume: relay-init seeds it from
+  # relay/rnostr.toml once, then the onboarding service rewrites it from that template with the
+  # pubkeys of all active passes and rnostr (--watch) reloads it. See relay/README.md.
+  relay-init:
+    image: rnostr/rnostr:latest
+    # A fresh volume is populated with the image's default rnostr.toml, so test for the Belfry
+    # marker rather than for the file.
+    entrypoint: ["sh", "-c", "grep -q belfry:whitelist /rnostr/config/rnostr.toml 2>/dev/null || cp /template/rnostr.toml /rnostr/config/rnostr.toml"]
+    volumes:
+      - community-relay-config:/rnostr/config
+      - ./relay/rnostr.toml:/template/rnostr.toml:ro
+    restart: "no"
+
+  relay:
+    image: rnostr/rnostr:latest
+    # The image's CMD already is: relay --watch -c ./config/rnostr.toml
+    depends_on:
+      relay-init:
+        condition: service_completed_successfully
+    ports: ["3090:8080"]
+    volumes:
+      - community-relay-config:/rnostr/config
+      - community-relay-data:/rnostr/data
+    healthcheck:
+      # No curl in the image; a TCP connect to the listener is enough.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+
   # One-shot: the keycast binary does not run migrations at startup and the image
   # entrypoint only knows unified/keycast/web, so the entrypoint is overridden.
   # The image is built from keycast/build/Dockerfile (clones divinevideo/keycast @ fe9c6460;
@@ -197,7 +232,12 @@ services:
         condition: service_healthy
       keycast:
         condition: service_healthy
+      relay:
+        condition: service_healthy
     ports: ["8100:8100"]
+    volumes:
+      - community-relay-config:/relay-config
+      - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
     environment:
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
@@ -211,6 +251,13 @@ services:
       KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
       KEYCAST_ADMIN_TOKEN: ${KEYCAST_ADMIN_TOKEN:-}
       KEYCAST_SERVICE_TOKEN: ${KEYCAST_SERVICE_TOKEN:?}
+      # Community relay: kind-0 profiles are published here; the whitelist is rendered from
+      # the template into the shared config volume (rnostr reloads it).
+      RELAY_URL: ws://relay:8080
+      RELAY_CONFIG_PATH: /relay-config/rnostr.toml
+      RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
+      RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
+      NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
       HOOK_TOKEN: ${HOOK_TOKEN:?}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       EVENT_START: ${EVENT_START:-2027-01-25}
@@ -228,3 +275,5 @@ volumes:
   authentik-media:
   authentik-certs:
   relay-data:
+  community-relay-config:
+  community-relay-data:

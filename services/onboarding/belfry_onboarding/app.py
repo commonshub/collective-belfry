@@ -17,6 +17,7 @@ from .clients.keycast import KeycastClient
 from .clients.odoo import OdooClient, OdooError
 from .core import Services
 from .relay import RelayPublisher
+from .relay_whitelist import RelayWhitelist
 from .settings import Settings
 from .stripe_sig import StripeSignatureError, verify_signature
 
@@ -44,6 +45,15 @@ def build_services(settings: Settings) -> Services:
         ),
         settings=settings,
         relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
+        whitelist=(
+            RelayWhitelist(
+                settings.relay_config_template,
+                settings.relay_config_path,
+                settings.relay_extra_pubkeys,
+            )
+            if settings.relay_config_path
+            else None
+        ),
     )
 
 
@@ -56,6 +66,8 @@ def create_app(services: Services | None = None) -> FastAPI:
             app.state.services = build_services(settings)
         else:
             app.state.services = services
+        # Bring the relay whitelist up to date with Odoo on every start (best effort).
+        await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
         yield
 
     app = FastAPI(title="Belfry onboarding", version="0.1.0", lifespan=lifespan)
@@ -121,6 +133,16 @@ def create_app(services: Services | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         check_token(request, token)
         return await run_in_threadpool(core.reconcile, svc(request))
+
+    @app.post("/admin/sync-relay")
+    async def admin_sync_relay(
+        request: Request, token: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        check_token(request, token)
+        if svc(request).whitelist is None:
+            return {"result": "disabled"}
+        result = await run_in_threadpool(core.sync_relay_whitelist, svc(request), [], True)
+        return {"result": "synced", **result}
 
     @app.post("/hooks/stripe")
     async def stripe_hook(request: Request) -> dict[str, Any]:

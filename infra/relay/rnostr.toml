@@ -1,0 +1,66 @@
+# Belfry community relay: rnostr (https://github.com/rnostr/rnostr), template.
+#
+# The onboarding service renders this file into the relay's config volume: every line ending
+# in "# belfry:whitelist" gets its list replaced by the hex pubkeys of all *active* passes
+# (belfry.pass.state = active) plus RELAY_EXTRA_PUBKEYS. rnostr runs with --watch and reloads
+# the file in place. Everything else here is copied verbatim, so edit this file to change the
+# relay; the rendered copy is derived state. Durations: https://docs.rs/duration-str
+#
+# Access model (plan, "Collective Bunker"): both reading (REQ) and writing (EVENT) need a
+# NIP-42 AUTH as a whitelisted pubkey. Clients sign the AUTH event through Keycast, so the
+# belfry-event policy must allow kind 22242.
+
+[information]
+name = "Belfry"
+description = "Open Source Village community relay. Participants only (NIP-42)."
+software = "https://github.com/rnostr/rnostr"
+
+[data]
+path = "./data"
+db_query_timeout = "100ms"
+
+[network]
+host = "0.0.0.0"
+port = 8080
+# Set when the relay runs behind a reverse proxy that terminates TLS.
+# real_ip_header = "x-forwarded-for"
+
+[limitation]
+max_message_length = 524288
+max_subscriptions = 20
+max_filters = 10
+max_limit = 300
+max_subid_length = 100
+min_prefix = 10
+max_event_tags = 5000
+max_event_time_older_than_now = 94608000
+max_event_time_newer_than_now = 900
+
+[metrics]
+enabled = false
+
+[auth]
+enabled = true
+
+# Reading: only authenticated participants.
+[auth.req]
+pubkey_whitelist = []  # belfry:whitelist
+
+# Writing: only authenticated participants.
+[auth.event]
+pubkey_whitelist = []  # belfry:whitelist
+
+[rate_limiter]
+enabled = true
+
+[[rate_limiter.event]]
+name = "all"
+description = "allow only sixty events per minute"
+period = "1m"
+limit = 60
+
+[count]
+enabled = false
+
+[search]
+enabled = false

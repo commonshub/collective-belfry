@@ -129,6 +129,24 @@ LINKS_BEFORE=$(jq length <<<"$AKC")
 KCP=$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')
 [[ "$KCP" == "$KC_PUB" ]] && ok "Keycast NIP-05 $USERNAME -> $KC_PUB" || bad "Keycast pubkey for $USERNAME: '$KCP' (pass has $KC_PUB)"
 
+step "6b. community relay: whitelist rendered and the kind-0 profile stored"
+COMPOSE=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app)
+RELAY_CONF=$("${COMPOSE[@]}" exec -T relay cat /rnostr/config/rnostr.toml 2>/dev/null || true)
+WL_LINES=$(grep -c "^pubkey_whitelist = \[.*belfry:whitelist" <<<"$RELAY_CONF" || true)
+[[ "$WL_LINES" == 2 ]] && ok "relay config has the two whitelist lines (req and event)" || bad "relay config whitelist lines: $WL_LINES"
+[[ "$(grep -c "\"$KC_PUB\"" <<<"$RELAY_CONF")" == 2 ]] && ok "pubkey $KC_PUB whitelisted for req and event" || bad "pubkey not in both whitelists"
+"${COMPOSE[@]}" logs --no-log-prefix relay 2>/dev/null | grep -qi "reload" && ok "rnostr reloaded its config" || bad "no reload in the relay log"
+PROFILE=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$KC_PUB\"],\"kinds\":[0]}" 2>/dev/null | head -n1 || true)
+if [[ -n "$PROFILE" ]]; then
+  CONTENT=$(jq -r '.content' <<<"$PROFILE")
+  [[ "$(jq -r .nip05 <<<"$CONTENT")" == "$USERNAME@"* && "$(jq -r .name <<<"$CONTENT")" == "$NAME" ]] && ok "kind-0 profile on the relay: $CONTENT" || bad "unexpected profile content: $CONTENT"
+  [[ "$(jq -r 'keys | join(",")' <<<"$CONTENT")" == "display_name,name,nip05" ]] && ok "profile carries only name, display_name, nip05" || bad "profile has extra fields: $(jq -c keys <<<"$CONTENT")"
+else
+  bad "no kind-0 event for $KC_PUB on the relay (check the onboarding log for 'not published')"
+fi
+SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
+[[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
+
 step "7. replay the webhook three times and check nothing was duplicated"
 for i in 1 2 3; do
   curl -sS -o /dev/null -w "  replay $i -> %{http_code}\n" -X POST "$ONB_URL/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" \

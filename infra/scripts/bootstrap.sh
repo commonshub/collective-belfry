@@ -220,12 +220,10 @@ else
   echo "KEYCAST_ADMIN_TOKEN written to .env"
 fi
 
-if "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from policies where slug='belfry-event'" | grep -q 1; then
-  echo "policy belfry-event exists"
-else
-  "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q < "$INFRA_DIR/keycast/policy.sql"
-  echo "policy belfry-event inserted"
-fi
+# policy.sql is idempotent and updates the allowed kinds of an existing permission, so apply it
+# on every run.
+"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q < "$INFRA_DIR/keycast/policy.sql"
+echo "policy belfry-event applied: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select config from permissions where identifier='allowed_kinds_belfry_event'")"
 kc "$KC_URL/api/policies" | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
   || die "GET /api/policies does not list belfry-event"
 

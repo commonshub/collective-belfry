@@ -66,12 +66,17 @@ class KeycastClient:
         r.raise_for_status()
         return r.json()
 
-    def set_user_status(self, pubkey: str, status: str) -> None:
+    def set_user_status(self, pubkey: str, status: str, reason: str | None = None) -> None:
+        """Keycast answers 400 "reason is required when status is suspended or banned"
+        (verified 2026-10-23 against fe9c6460), so a reason is mandatory for those."""
         if status not in USER_STATUSES:
             raise ValueError(f"unknown Keycast user status {status!r}")
+        body: dict[str, Any] = {"status": status}
+        if status != "active":
+            body["reason"] = reason or "belfry"
         r = self._client.put(
             f"{self.url}/api/admin/users/{pubkey}/status",
-            json={"status": status},
+            json=body,
             headers=self._service,
         )
         r.raise_for_status()

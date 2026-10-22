@@ -307,6 +307,11 @@ class FakeKeycast:
         if pubkey not in self.status:
             return httpx.Response(404, json={"error": "user not found"})
         body = json.loads(request.content)
+        if body["status"] in ("suspended", "banned") and not body.get("reason"):
+            # Verified 2026-10-23 against Keycast fe9c6460.
+            return httpx.Response(
+                400, json={"error": "reason is required when status is suspended or banned"}
+            )
         self.status[pubkey] = body["status"]
         self.status_calls.append((pubkey, body["status"]))
         return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})

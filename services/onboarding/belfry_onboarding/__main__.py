@@ -18,6 +18,7 @@ def main(argv: list[str] | None = None) -> int:
         "reconcile", help="activate paid invoices without an active pass, revoke refunded ones"
     )
     sub.add_parser("expire", help="expire active passes whose date_end has passed")
+    sub.add_parser("sync-relay", help="rewrite the relay whitelist from the active passes")
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -25,6 +26,11 @@ def main(argv: list[str] | None = None) -> int:
     services = build_services(settings)
     if args.command == "reconcile":
         result = core.reconcile(services)
+    elif args.command == "sync-relay":
+        if services.whitelist is None:
+            print("RELAY_CONFIG_PATH is not set", file=sys.stderr)
+            return 2
+        result = core.sync_relay_whitelist(services, strict=True)
     else:
         result = core.expire(services)
     json.dump(result, sys.stdout)

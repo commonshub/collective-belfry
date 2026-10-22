@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 import pytest
 import respx
@@ -10,6 +11,7 @@ from belfry_onboarding.app import create_app
 from belfry_onboarding.clients.authentik import AuthentikClient
 from belfry_onboarding.clients.keycast import KeycastClient
 from belfry_onboarding.core import Services
+from belfry_onboarding.relay_whitelist import RelayWhitelist
 from belfry_onboarding.settings import Settings
 
 from .fakes import FakeAuthentik, FakeKeycast, FakeOdoo, FakeRelay
@@ -64,14 +66,24 @@ def relay() -> FakeRelay:
     return FakeRelay(require_auth=True)
 
 
+TEMPLATE = Path(__file__).resolve().parents[3] / "infra" / "relay" / "rnostr.toml"
+
+
 @pytest.fixture
-def services(settings, odoo, authentik, keycast, relay) -> Services:
+def whitelist(tmp_path) -> RelayWhitelist:
+    """A real RelayWhitelist rendering the repo's rnostr template into a temp file."""
+    return RelayWhitelist(str(TEMPLATE), str(tmp_path / "rnostr.toml"))
+
+
+@pytest.fixture
+def services(settings, odoo, authentik, keycast, relay, whitelist) -> Services:
     return Services(
         odoo=odoo,
         authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
         keycast=KeycastClient(KEYCAST_URL, "kc-admin", "kc-service"),
         settings=settings,
         relay=relay,  # type: ignore[arg-type]
+        whitelist=whitelist,
     )
 
 

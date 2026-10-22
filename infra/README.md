@@ -1,6 +1,6 @@
 # Belfry local stack
 
-One Docker Compose project (`belfry`) with everything slice 1 needs: Postgres, Odoo 19, Authentik, Keycast (signer) with its relay and Redis, and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
+One Docker Compose project (`belfry`) with everything slice 1 needs: Postgres, Odoo 19, Authentik, Keycast (signer) with its NIP-46 relay and Redis, the community relay (rnostr, whitelist from Odoo) and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
 
 ## Run
 
@@ -16,7 +16,7 @@ Without `make`: `infra/scripts/gen-secrets.sh`, `docker compose -f infra/docker-
 
 `make up` starts the stack without the `app` profile, so it works before `services/onboarding` exists; the onboarding service needs the tokens bootstrap writes anyway. `make up-app` builds only that service (the Keycast image is never rebuilt implicitly, see below).
 
-Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`. About 5 GB of RAM for the stack (Odoo is capped at 2 GB, Postgres at 512 MB; Authentik server + worker take about 1 GB; Keycast about 100 MB), more while building images.
+Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`. About 5 GB of RAM for the stack (Odoo is capped at 2 GB, Postgres at 512 MB; Authentik server + worker take about 1 GB; Keycast about 100 MB; the community relay is capped at 256 MB), more while building images.
 
 | Service | URL on the host | Login |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `open
 | Authentik | http://localhost:9000 | `akadmin` / `AUTHENTIK_BOOTSTRAP_PASSWORD` |
 | Keycast | http://localhost:3000 | `KEYCAST_ADMIN_EMAIL` / `KEYCAST_ADMIN_PASSWORD` |
 | Keycast relay (NIP-46) | ws://localhost:3080 | |
+| Community relay (rnostr) | ws://localhost:3090 | NIP-42 as a whitelisted pubkey, see `relay/README.md` |
 | Onboarding service | http://localhost:8100 (`/health`) | |
 
 Postgres and Redis are internal (`docker compose exec postgres psql -U postgres`).
@@ -49,7 +50,7 @@ Idempotent; each step checks before it changes anything (a second run takes two 
 1. Waits for `/web/health` (Odoo), `/-/health/ready/` (Authentik) and `/health` (Keycast).
 2. Creates the Odoo database `odoo` with `docker compose exec odoo odoo -d odoo -i base,belfry_pass --stop-after-init --without-demo` (the database must not exist beforehand: an empty database that matches the dbfilter makes Odoo answer 500 on every request). If `odoo/addons/belfry_pass` is missing, it installs the standard modules the contract lists instead and prints a notice; a later run installs `belfry_pass` once the directory exists. The full CLI output goes to `infra/.bootstrap-odoo.log`.
 3. Sets the admin password, creates the user `onboarding@belfry.local` (Settings, Sales manager, Accounting manager and `belfry_pass.group_admin` when present) and generates an API key for it through `odoo shell` (`res.users.apikeys._generate` in a sudo env; the public `generate()` RPC method needs an existing key of the same user, so it cannot create the first one). Stores `belfry.onboarding_url` and `belfry.hook_token`.
-4. Keycast: registers the admin with the key from `ALLOWED_PUBKEYS`, confirms the e-mail through the dev inbox (`GET /api/dev/emails`), logs in, fetches the admin token, inserts `keycast/policy.sql` and checks `GET /api/policies` lists `belfry-event`.
+4. Keycast: registers the admin with the key from `ALLOWED_PUBKEYS`, confirms the e-mail through the dev inbox (`GET /api/dev/emails`), logs in, fetches the admin token, applies `keycast/policy.sql` (idempotent, also updates the allowed kinds: 0, 1, 7, 22242, 30023) and checks `GET /api/policies` lists `belfry-event`.
 5. Authentik: waits until the bootstrap token works, then until the blueprint `belfry-pass-bridge-source` reports `successful`, and checks that the source `pass-bridge` and the group `belfry-participants` exist.
 
 ## Keycast image

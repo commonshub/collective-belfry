@@ -163,4 +163,4 @@ LOG_LEVEL=info
 
 ## Out of scope for this slice
 
-Relay whitelist sync, Blossom, NIP-05 outside Keycast, certificates and status lists, the Keycast OIDC login change, the SUNET verifier patch, the Stripe webhook registration on a public URL.
+Blossom, NIP-05 outside Keycast, (the relay whitelist sync and kind-0 profiles were added on 2026-10-23 as the first Phase 2 piece, see `infra/relay/README.md` and the onboarding README), certificates and status lists, the Keycast OIDC login change, the SUNET verifier patch, the Stripe webhook registration on a public URL.
