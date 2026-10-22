@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <template id="invite_layout" name="Belfry invite layout">
+        <t t-call="web.frontend_layout">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="pageName" t-value="'belfry_invite'"/>
+            <div id="wrap" class="oe_structure">
+                <div class="container py-5" style="max-width: 760px;">
+                    <h1 class="mb-1">Open Source Village</h1>
+                    <p class="text-muted mb-4">Your pass, issued by Belfry</p>
+                    <t t-out="0"/>
+                </div>
+            </div>
+        </t>
+    </template>
+
+    <template id="invite_error" name="Belfry invite error">
+        <t t-call="belfry_pass.invite_layout">
+            <div class="alert alert-warning" role="alert">
+                <h4 class="alert-heading">Invite not available</h4>
+                <p class="mb-0" t-esc="message"/>
+            </div>
+            <p class="text-muted small">Reason code: <span t-esc="reason"/></p>
+        </t>
+    </template>
+
+    <template id="invite_page" name="Belfry invite page">
+        <t t-call="belfry_pass.invite_layout">
+            <p>
+                You were invited by <strong t-esc="invite.steward_id.name"/>.
+                Pick a pass and enter your billing details; you will be taken to the payment page next.
+                This link can be used once and expires on
+                <span t-esc="invite.expires_at" t-options="{'widget': 'date'}"/>.
+            </p>
+            <div t-if="early_bird" class="alert alert-success py-2" role="alert">
+                Early-bird prices apply until <span t-esc="early_bird_until"/>.
+            </div>
+            <div t-if="error" class="alert alert-danger" role="alert" id="belfry_form_error">
+                <t t-esc="error"/>
+            </div>
+
+            <form method="post" t-attf-action="/belfry/invite/#{invite.token}" id="belfry_invite_form">
+                <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+
+                <h5 class="mt-4">1. Your pass</h5>
+                <div class="list-group mb-4" id="belfry_passes">
+                    <t t-foreach="rows" t-as="row">
+                        <label class="list-group-item d-flex align-items-start gap-3">
+                            <input class="form-check-input mt-1" type="radio" name="product_id"
+                                   t-att-value="row['template'].id"
+                                   t-att-checked="'checked' if form.get('product_id') == row['template'].id else None"/>
+                            <span class="flex-grow-1">
+                                <strong t-esc="row['template'].name"/>
+                                <br/>
+                                <small class="text-muted" t-esc="row['template'].description_sale"/>
+                            </span>
+                            <span class="text-end">
+                                <span class="fs-5">
+                                    <t t-esc="row['price']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                </span>
+                                <t t-if="row['price'] &lt; row['list_price']">
+                                    <br/>
+                                    <small class="text-muted text-decoration-line-through">
+                                        <t t-esc="row['list_price']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                    </small>
+                                </t>
+                                <br/>
+                                <small class="text-muted">
+                                    companies:
+                                    <t t-esc="row['company_price']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                </small>
+                            </span>
+                        </label>
+                    </t>
+                </div>
+
+                <h5>2. Billing details</h5>
+                <div class="row g-3 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label" for="belfry_name">Name</label>
+                        <input class="form-control" type="text" id="belfry_name" name="name" required="required"
+                               t-att-value="form.get('name')"/>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="belfry_email">Email</label>
+                        <input class="form-control" type="email" id="belfry_email" name="email" required="required"
+                               t-att-value="form.get('email')"/>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="belfry_company">Company (optional, +50%)</label>
+                        <input class="form-control" type="text" id="belfry_company" name="company_name"
+                               t-att-value="form.get('company_name')"/>
+                        <div class="form-text">Fill in when the invoice goes to a company.</div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="belfry_vat">VAT number (optional)</label>
+                        <input class="form-control" type="text" id="belfry_vat" name="vat"
+                               t-att-value="form.get('vat')"/>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label" for="belfry_promo">Discount code (optional)</label>
+                        <input class="form-control" type="text" id="belfry_promo" name="promo_code"
+                               t-att-value="form.get('promo_code')"/>
+                    </div>
+                </div>
+
+                <button type="submit" class="btn btn-primary btn-lg">Continue to payment</button>
+            </form>
+        </t>
+    </template>
+</odoo>

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_partner_form_belfry" model="ir.ui.view">
+        <field name="name">res.partner.form.belfry</field>
+        <field name="model">res.partner</field>
+        <field name="inherit_id" ref="base.view_partner_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[@name='button_box']" position="inside">
+                <button name="action_view_belfry_passes" type="object" class="oe_stat_button" icon="fa-ticket"
+                        invisible="belfry_pass_count == 0" groups="belfry_pass.group_steward">
+                    <field name="belfry_pass_count" widget="statinfo" string="Passes"/>
+                </button>
+            </xpath>
+            <xpath expr="//notebook" position="inside">
+                <page string="Belfry" name="belfry" groups="belfry_pass.group_steward">
+                    <group>
+                        <field name="belfry_member_number"/>
+                        <field name="belfry_npub"/>
+                        <field name="belfry_authentik_user_id"/>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+</odoo>

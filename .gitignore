@@ -1,5 +1,7 @@
 # secrets and local state
 infra/.env
+infra/.env.bak.*
+infra/.bootstrap-odoo.log
 infra/data/
 infra/keycast/master.key
 infra/certs/

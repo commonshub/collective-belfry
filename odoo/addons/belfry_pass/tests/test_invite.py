@@ -1,0 +1,168 @@
+import re
+from datetime import timedelta
+
+from odoo import fields
+from odoo.tests import HttpCase, tagged
+
+from .common import ensure_chart_of_accounts
+
+
+@tagged('post_install', '-at_install', 'belfry')
+class TestInviteFlow(HttpCase):
+
+    def setUp(self):
+        super().setUp()
+        ensure_chart_of_accounts(self.env)
+        self.steward = self.env['res.users'].create({
+            'name': "Steward Sam",
+            'login': 'steward-http@belfry.test',
+            'group_ids': [(6, 0, [self.env.ref('base.group_user').id, self.env.ref('belfry_pass.group_steward').id])],
+        })
+        invite = self.env['belfry.invite'].with_user(self.steward).create({'note': "for alice"})
+        # re-browse as the test superuser: the steward cannot read orders and invoices
+        self.invite = self.env['belfry.invite'].browse(invite.id)
+        self.product_full = self.env.ref('belfry_pass.product_full')
+        self.product_week = self.env.ref('belfry_pass.product_week')
+
+    def _get(self, token):
+        return self.url_open('/belfry/invite/%s' % token)
+
+    def _post(self, token, **form):
+        page = self._get(token)
+        self.assertEqual(page.status_code, 200)
+        match = re.search(r'name="csrf_token" value="([^"]+)"', page.text)
+        self.assertTrue(match, "csrf token on the page")
+        self._csrf = match.group(1)
+        data = {'csrf_token': self._csrf, **form}
+        return self.url_open('/belfry/invite/%s' % token, data=data, allow_redirects=False)
+
+    def test_invite_model(self):
+        self.assertEqual(self.invite.state, 'open')
+        self.assertEqual(self.invite.steward_id, self.steward)
+        self.assertGreaterEqual(len(self.invite.token), 40)
+        self.assertTrue(self.invite.url.endswith('/belfry/invite/%s' % self.invite.token))
+        self.assertGreater(self.invite.expires_at, fields.Datetime.now() + timedelta(days=13))
+
+    def test_steward_sees_only_own_invites(self):
+        other = self.env['res.users'].create({
+            'name': "Other Steward",
+            'login': 'other-steward@belfry.test',
+            'group_ids': [(6, 0, [self.env.ref('base.group_user').id, self.env.ref('belfry_pass.group_steward').id])],
+        })
+        self.env['belfry.invite'].with_user(other).create({'note': "other"})
+        self.assertEqual(self.env['belfry.invite'].with_user(self.steward).search([]), self.invite)
+        self.assertEqual(len(self.env['belfry.invite'].with_user(self.env.ref('base.user_admin')).search([])), 2)
+
+    def test_get_shows_passes_and_prices(self):
+        response = self._get(self.invite.token)
+        self.assertEqual(response.status_code, 200)
+        for name in ('Day pass', 'Week pass', 'Full access'):
+            self.assertIn(name, response.text)
+        self.assertIn('40.00', response.text)
+        self.assertIn('160.00', response.text)
+        self.assertIn('240.00', response.text, "company price shown")
+        self.assertIn('csrf_token', response.text)
+
+    def test_unknown_token(self):
+        self.assertEqual(self._get('no-such-token').status_code, 404)
+
+    def test_expired_invite_refused(self):
+        self.invite.write({'expires_at': fields.Datetime.now() - timedelta(minutes=1)})
+        response = self._get(self.invite.token)
+        self.assertEqual(response.status_code, 410)
+        self.assertIn('expired', response.text)
+        self.invite.invalidate_recordset()
+        self.assertEqual(self.invite.state, 'expired')
+
+    def test_revoked_invite_refused(self):
+        self.invite.action_revoke()
+        self.assertEqual(self.invite.state, 'revoked')
+        self.assertEqual(self._get(self.invite.token).status_code, 410)
+
+    def test_post_creates_order_invoice_pass_and_redirects(self):
+        response = self._post(
+            self.invite.token,
+            product_id=self.product_full.id,
+            name="Alice Normal",
+            email="Alice@Example.org",
+            promo_code="OSV10",
+        )
+        self.assertEqual(response.status_code, 303, response.text[:500])
+        location = response.headers.get('Location', '')
+        self.assertIn('payment', location)
+
+        self.invite.invalidate_recordset()
+        self.assertEqual(self.invite.state, 'used')
+        partner = self.invite.used_by_partner_id
+        self.assertEqual(partner.email, 'Alice@Example.org')
+        self.assertFalse(partner.is_company)
+
+        belfry_pass = self.invite.pass_id
+        self.assertEqual(belfry_pass.state, 'pending')
+        self.assertEqual(belfry_pass.tier, 'full')
+        self.assertEqual(belfry_pass.partner_id, partner)
+        order = belfry_pass.sale_order_id
+        self.assertEqual(order.state, 'sale')
+        self.assertEqual(order.user_id, self.steward)
+        self.assertAlmostEqual(order.amount_total, 144.0, msg="early bird 160 minus 10%")
+        invoice = belfry_pass.invoice_id
+        self.assertEqual(invoice.state, 'posted')
+        self.assertEqual(invoice.move_type, 'out_invoice')
+        self.assertAlmostEqual(invoice.amount_total, 144.0)
+        self.assertIn('move_id=%s' % invoice.id, location)
+
+        # second use is refused and creates nothing new
+        again = self._post_without_get(self.invite.token, product_id=self.product_week.id, name="X", email="x@example.org")
+        self.assertEqual(again.status_code, 410)
+        self.assertEqual(self.env['belfry.pass'].search_count([('invite_id', '=', self.invite.id)]), 1)
+
+    def _post_without_get(self, token, **form):
+        # same session, so the token of the first page is still valid
+        return self.url_open('/belfry/invite/%s' % token, data={'csrf_token': self._csrf, **form}, allow_redirects=False)
+
+    def test_post_company_billing(self):
+        response = self._post(
+            self.invite.token,
+            product_id=self.product_week.id,
+            name="Bob Acme",
+            email="bob@acme.example",
+            company_name="ACME Corp",
+            vat="BE0123456789",
+        )
+        self.assertEqual(response.status_code, 303, response.text[:500])
+        self.invite.invalidate_recordset()
+        belfry_pass = self.invite.pass_id
+        person = belfry_pass.partner_id
+        company = person.parent_id
+        self.assertTrue(company.is_company)
+        self.assertEqual(company.name, "ACME Corp")
+        self.assertEqual(company.vat, "BE0123456789")
+        self.assertEqual(company.property_product_pricelist, self.env.ref('belfry_pass.pricelist_company'))
+        order = belfry_pass.sale_order_id
+        self.assertEqual(order.partner_id, company)
+        self.assertEqual(order.partner_invoice_id, company)
+        self.assertEqual(order.partner_shipping_id, person)
+        self.assertAlmostEqual(order.amount_total, 120.0, msg="early bird 80 +50%")
+        self.assertEqual(belfry_pass.invoice_id.partner_id, company)
+
+    def test_post_existing_partner_is_reused(self):
+        existing = self.env['res.partner'].create({'name': "Carol", 'email': 'carol@example.org'})
+        response = self._post(self.invite.token, product_id=self.product_week.id, name="Carol X", email="CAROL@example.org")
+        self.assertEqual(response.status_code, 303)
+        self.invite.invalidate_recordset()
+        self.assertEqual(self.invite.used_by_partner_id, existing)
+
+    def test_post_bad_promo_code_keeps_invite_open(self):
+        response = self._post(self.invite.token, product_id=self.product_week.id, name="Dan", email="dan@example.org", promo_code="NOPE")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('belfry_form_error', response.text)
+        self.invite.invalidate_recordset()
+        self.assertEqual(self.invite.state, 'open')
+        self.assertFalse(self.env['sale.order'].search([('origin', '=', "Belfry invite #%s" % self.invite.id)]))
+
+    def test_post_missing_email(self):
+        response = self._post(self.invite.token, product_id=self.product_week.id, name="Eve", email="")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('belfry_form_error', response.text)
+        self.invite.invalidate_recordset()
+        self.assertEqual(self.invite.state, 'open')

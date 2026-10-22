@@ -1,0 +1,7 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_belfry_invite_steward,belfry.invite steward,model_belfry_invite,group_steward,1,1,1,0
+access_belfry_invite_admin,belfry.invite admin,model_belfry_invite,group_admin,1,1,1,1
+access_belfry_pass_steward,belfry.pass steward,model_belfry_pass,group_steward,1,0,0,0
+access_belfry_pass_admin,belfry.pass admin,model_belfry_pass,group_admin,1,1,1,1
+access_belfry_stripe_event_steward,belfry.stripe.event steward,model_belfry_stripe_event,group_steward,1,0,0,0
+access_belfry_stripe_event_admin,belfry.stripe.event admin,model_belfry_stripe_event,group_admin,1,1,1,1

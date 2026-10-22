@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- The public pricelist is the default one (lowest sequence, no country group):
+         partners without an explicit pricelist get it. Early-bird fixed prices are added
+         to it by the post-init hook, dated by belfry.early_bird_until. -->
+    <record id="pricelist_public" model="product.pricelist">
+        <field name="name">Belfry public</field>
+        <field name="sequence">1</field>
+    </record>
+
+    <!-- Companies pay +50% on the public price, so the surcharge compounds with early bird
+         (60 / 120 / 240 while early bird runs, 75 / 150 / 300 after). A negative discount
+         on a formula rule is a markup. -->
+    <record id="pricelist_company" model="product.pricelist">
+        <field name="name">Belfry companies</field>
+        <field name="sequence">5</field>
+    </record>
+    <record id="pricelist_company_item" model="product.pricelist.item">
+        <field name="pricelist_id" ref="pricelist_company"/>
+        <field name="applied_on">3_global</field>
+        <field name="compute_price">formula</field>
+        <field name="base">pricelist</field>
+        <field name="base_pricelist_id" ref="pricelist_public"/>
+        <field name="price_discount">-50</field>
+    </record>
+</odoo>

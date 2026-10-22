@@ -41,22 +41,31 @@ Results are in `docs/research/`. Read the verdict paragraph at the top of each n
 
 Still open (not gating the build): Belfry as required witness, directory defaults, PID at checkout, Cashu.
 
-## 3. First build slice: Phase 1 end to end, locally
+## 3. First build slice: Phase 1 end to end, locally — built 2026-10-22
 
-Goal: a paid pass in Stripe test mode creates every account it should, once.
+Contract: `docs/slice-1-onboarding.md`. Verified with `make up && make bootstrap && make up-app && make smoke` (17 checks green), `make test-odoo` (41 tests) and `make test-onboarding` (22 tests).
 
-1. Initialise the repo structure (after decision 6), e.g. `infra/` (Docker Compose), `services/onboarding-webhook/`, `docs/`.
-2. `infra/docker-compose.yml` with Postgres, Odoo, Authentik and Keycast.
-3. Odoo: pass products (day €50, week €100, full €200), early-bird and discount codes, company +50%, steward invite links.
-4. Onboarding webhook, idempotent on the Stripe event id:
-   - mark invoice paid → create the Odoo contact with pass dates;
-   - create the Authentik user;
-   - create the Keycast user via preload-user and store the npub on the Odoo contact;
-   - replays create nothing new.
-5. Tests: replayed webhook, refund (revokes access), expiry job.
-6. Then Phase 2: relay whitelist synced from Odoo, Blossom, NIP-05 on Belfry's domain.
+- [x] Repo layout: `infra/`, `odoo/addons/belfry_pass/`, `services/onboarding/`, `docs/`.
+- [x] Compose stack: Postgres, Odoo 19, Authentik 2026.8.5, Keycast (fe9c6460) + relay + Redis, onboarding service; `bootstrap.sh` creates the Odoo DB, API key, Keycast admin and policy, applies the Authentik blueprint.
+- [x] Odoo: pass products with early-bird (40/80/160 until `belfry.early_bird_until`), company pricelist +50% compounding, promo code `OSV10`, steward invite links (`/belfry/invite/<token>`), `belfry.pass`, automation webhooks on invoice paid and on refund.
+- [x] Onboarding service: `activate_pass` idempotent on invoice + PaymentIntent (Authentik user, Keycast preload, npub written back), refund and dispute revocation, `reconcile` and `expire` jobs, Stripe dispute endpoint keyed on event id.
+- [x] Tests: replayed webhook, refund, expiry, duplicate Stripe event, signature.
+
+Known gaps to carry into the next steps:
+
+1. Authentik refuses API-created source links (`user` read-only on `UserOAuthSourceConnection` in 2026.8.5), so participants link the pass once from user settings. Decide between that and `username_link` matching when the Phase 3 bridge exists.
+2. The Keycast image is built from the upstream Dockerfile via `infra/keycast/build/`; the git build context fails on a dangling submodule. The Belfry fork (OIDC login, branding) does not exist yet.
+3. Stripe is emulated locally (done transaction + manual payment). Real Stripe test mode needs a public URL for Odoo's webhook and `stripe listen` for the dispute endpoint.
+4. No enrollment or password link is sent to the Authentik user yet (Phase 2 login work).
+5. VAT, credit notes on refund and the day-pass "which day" question are still open (see the Odoo spike note).
+
+## 4. Next
+
+1. Phase 2: relay whitelist synced from `belfry.pass` (active passes), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), the Keycast fork with Authentik OIDC login (3–5 days, files listed in `docs/research/keycast-spike.md` §4), remove the Divine UI parts.
+2. Phase 3 start: walt.id Issuer2 once the issuer decision is confirmed with the DIDroom maintainer; status-list service; VCTM hosting; SUNET verifier patch for the OIDC path.
+3. Run the smoke flow against Stripe test mode on a public URL.
 
 ## Notes
 
-- The folder became a git repository on 2026-10-22 with nothing committed yet. Commit once the user agrees on the layout.
-- Research notes: `docs/research/signing-server.md`, `docs/research/authentik-openid4vp.md`.
+- First commits made on 2026-10-22 (layout agreed: monorepo).
+- Research notes: `docs/research/` (spikes dated 2026-10-22), consistency review in `plan-consistency-review.md`.

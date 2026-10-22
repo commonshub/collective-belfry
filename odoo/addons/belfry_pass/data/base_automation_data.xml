@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Outgoing webhooks to the onboarding service. The URLs below are placeholders built
+         from the default config parameters; models/ir_config_parameter.py rewrites them from
+         belfry.onboarding_url and belfry.hook_token (post-init hook and on every change). -->
+
+    <record id="automation_invoice_paid" model="base.automation">
+        <field name="name">Belfry: invoice paid, notify onboarding</field>
+        <field name="model_id" ref="account.model_account_move"/>
+        <field name="trigger">on_create_or_write</field>
+        <field name="trigger_field_ids" eval="[(6, 0, [ref('account.field_account_move__payment_state')])]"/>
+        <field name="filter_domain">[('move_type', '=', 'out_invoice'), ('state', '=', 'posted'), ('payment_state', 'in', ['paid', 'in_payment'])]</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="action_webhook_invoice_paid" model="ir.actions.server">
+        <field name="name">Belfry: POST invoice-paid</field>
+        <field name="model_id" ref="account.model_account_move"/>
+        <field name="base_automation_id" ref="automation_invoice_paid"/>
+        <field name="usage">base_automation</field>
+        <field name="state">webhook</field>
+        <field name="webhook_url">http://onboarding:8100/hooks/odoo/invoice-paid?token=change-me</field>
+        <field name="webhook_field_ids" eval="[(6, 0, [
+            ref('account.field_account_move__name'),
+            ref('account.field_account_move__state'),
+            ref('account.field_account_move__payment_state'),
+            ref('account.field_account_move__partner_id'),
+            ref('account.field_account_move__amount_total'),
+        ])]"/>
+    </record>
+
+    <record id="automation_refund_done" model="base.automation">
+        <field name="name">Belfry: refund done, notify onboarding</field>
+        <field name="model_id" ref="payment.model_payment_transaction"/>
+        <field name="trigger">on_create_or_write</field>
+        <field name="trigger_field_ids" eval="[(6, 0, [ref('payment.field_payment_transaction__state')])]"/>
+        <field name="filter_domain">[('operation', '=', 'refund'), ('state', '=', 'done')]</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="action_webhook_refund" model="ir.actions.server">
+        <field name="name">Belfry: POST refund</field>
+        <field name="model_id" ref="payment.model_payment_transaction"/>
+        <field name="base_automation_id" ref="automation_refund_done"/>
+        <field name="usage">base_automation</field>
+        <field name="state">webhook</field>
+        <field name="webhook_url">http://onboarding:8100/hooks/odoo/refund?token=change-me</field>
+        <field name="webhook_field_ids" eval="[(6, 0, [
+            ref('payment.field_payment_transaction__reference'),
+            ref('payment.field_payment_transaction__provider_reference'),
+            ref('payment.field_payment_transaction__state'),
+            ref('payment.field_payment_transaction__operation'),
+            ref('payment.field_payment_transaction__amount'),
+            ref('payment.field_payment_transaction__source_transaction_id'),
+        ])]"/>
+    </record>
+</odoo>

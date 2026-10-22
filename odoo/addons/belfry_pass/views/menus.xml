@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <menuitem id="menu_belfry_root" name="Belfry" sequence="60" groups="belfry_pass.group_steward" web_icon="belfry_pass,static/description/icon.png"/>
+    <menuitem id="menu_belfry_passes" name="Passes" parent="menu_belfry_root" action="action_belfry_pass" sequence="10"/>
+    <menuitem id="menu_belfry_invites" name="Invites" parent="menu_belfry_root" action="action_belfry_invite" sequence="20"/>
+    <menuitem id="menu_belfry_stripe_events" name="Stripe events" parent="menu_belfry_root" action="action_belfry_stripe_event" sequence="30" groups="belfry_pass.group_admin"/>
+</odoo>

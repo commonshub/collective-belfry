@@ -1,0 +1,73 @@
+# Belfry local stack
+
+One Docker Compose project (`belfry`) with everything slice 1 needs: Postgres, Odoo 19, Authentik, Keycast (signer) with its relay and Redis, and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
+
+## Run
+
+```
+make up           # generates infra/.env on first run, starts everything except the onboarding service
+make bootstrap    # database, users, tokens, policy; writes tokens into infra/.env
+make up-app       # builds and starts the onboarding service (needs services/onboarding and the tokens)
+make smoke        # invite -> pay -> accounts created exactly once
+make down         # stop, keep volumes
+```
+
+Without `make`: `infra/scripts/gen-secrets.sh`, `docker compose -f infra/docker-compose.yml up -d`, `infra/scripts/bootstrap.sh`, `docker compose -f infra/docker-compose.yml --profile app up -d`.
+
+`make up` starts the stack without the `app` profile, so it works before `services/onboarding` exists; the onboarding service needs the tokens bootstrap writes anyway. `make up-app` builds only that service (the Keycast image is never rebuilt implicitly, see below).
+
+Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`. About 5 GB of RAM for the stack (Odoo is capped at 2 GB, Postgres at 512 MB; Authentik server + worker take about 1 GB; Keycast about 100 MB), more while building images.
+
+| Service | URL on the host | Login |
+| --- | --- | --- |
+| Odoo | http://localhost:8069 | `admin` / `ODOO_ADMIN_PASSWORD` |
+| Authentik | http://localhost:9000 | `akadmin` / `AUTHENTIK_BOOTSTRAP_PASSWORD` |
+| Keycast | http://localhost:3000 | `KEYCAST_ADMIN_EMAIL` / `KEYCAST_ADMIN_PASSWORD` |
+| Keycast relay (NIP-46) | ws://localhost:3080 | |
+| Onboarding service | http://localhost:8100 (`/health`) | |
+
+Postgres and Redis are internal (`docker compose exec postgres psql -U postgres`).
+
+## Secrets and tokens
+
+`scripts/gen-secrets.sh` writes `infra/.env` from `.env.example` (every variable has a comment there) with random passwords, the Keycast server key and admin Nostr keypair (`scripts/nostr_keys.py`, pure Python), and `infra/keycast/master.key`. Existing files are kept; `--force` regenerates `.env` with a backup. Everything is gitignored.
+
+`scripts/bootstrap.sh` fills the three values the services need and replaces them in `.env` in place:
+
+| Variable | What | Lifetime |
+| --- | --- | --- |
+| `ODOO_API_KEY` | API key of the Odoo user `onboarding@belfry.local` (JSON-RPC password) | persistent |
+| `KEYCAST_ADMIN_TOKEN` | admin UCAN from `GET /api/admin/token` | 30 days, re-run bootstrap |
+| `AUTHENTIK_TOKEN` | the akadmin API token created by Authentik's bootstrap blueprint (`AUTHENTIK_BOOTSTRAP_TOKEN`) | non-expiring |
+
+Restart the onboarding service after bootstrap so it reads the new values (`make up-app`).
+
+## What bootstrap does
+
+Idempotent; each step checks before it changes anything (a second run takes two seconds).
+
+1. Waits for `/web/health` (Odoo), `/-/health/ready/` (Authentik) and `/health` (Keycast).
+2. Creates the Odoo database `odoo` with `docker compose exec odoo odoo -d odoo -i base,belfry_pass --stop-after-init --without-demo` (the database must not exist beforehand: an empty database that matches the dbfilter makes Odoo answer 500 on every request). If `odoo/addons/belfry_pass` is missing, it installs the standard modules the contract lists instead and prints a notice; a later run installs `belfry_pass` once the directory exists. The full CLI output goes to `infra/.bootstrap-odoo.log`.
+3. Sets the admin password, creates the user `onboarding@belfry.local` (Settings, Sales manager, Accounting manager and `belfry_pass.group_admin` when present) and generates an API key for it through `odoo shell` (`res.users.apikeys._generate` in a sudo env; the public `generate()` RPC method needs an existing key of the same user, so it cannot create the first one). Stores `belfry.onboarding_url` and `belfry.hook_token`.
+4. Keycast: registers the admin with the key from `ALLOWED_PUBKEYS`, confirms the e-mail through the dev inbox (`GET /api/dev/emails`), logs in, fetches the admin token, inserts `keycast/policy.sql` and checks `GET /api/policies` lists `belfry-event`.
+5. Authentik: waits until the bootstrap token works, then until the blueprint `belfry-pass-bridge-source` reports `successful`, and checks that the source `pass-bridge` and the group `belfry-participants` exist.
+
+## Keycast image
+
+`belfry-keycast:local` is built from `keycast/build/Dockerfile`, which clones divinevideo/keycast at the pinned commit in a first stage and then runs the upstream Dockerfile stages (a plain git build context fails on upstream's dangling `divine-funnelcake` submodule entry). The build takes about 15 minutes cold and is only run explicitly: `make build-keycast`. `docker compose up` uses the existing image. See `keycast/README.md` for the environment and the `master.key` path gotcha.
+
+## Odoo notes
+
+- Config: `odoo/odoo.conf` (addons path `/mnt/extra-addons` = `../odoo/addons`, `dbfilter ^odoo$`, `proxy_mode`, single process, memory limits). Database credentials reach Odoo as `PGHOST/PGUSER/PGPASSWORD`, so `docker compose exec odoo odoo -d odoo ...` and `odoo shell -d odoo` work without extra arguments.
+- RPC: `/jsonrpc` with `execute_kw` works but Odoo 19 logs it as deprecated (removal planned for 22). The replacement is `POST /json/2/<model>/<method>` with `Authorization: Bearer <api key>` and the kwargs as JSON body, which the same API key already works for.
+- `make test-odoo` drops `test_belfry`, then runs `odoo -d test_belfry -i belfry_pass --test-enable --test-tags /belfry_pass --stop-after-init` in a throwaway container (host port 8169) against the stack's Postgres.
+
+## Authentik notes
+
+- Blueprints in `authentik/blueprints/` are bind-mounted at `/blueprints/custom`; the worker applies them within seconds of a change. Status: `GET /api/v3/managed/blueprints/?search=belfry`.
+- The pass-bridge source uses placeholder `authorization_url` / `access_token_url` / `profile_url` under `https://bridge.belfry.example`. `oidc_well_known_url` cannot be used until the bridge exists: authentik fetches it on save and rejects the source (400, name resolution error).
+- Pre-linking a user to the source (`POST /api/v3/sources/user_connections/oauth/`): `source` is the source UUID, not the slug, and `user` is read-only in the serializer, so the request fails (400 for a slug, 500 IntegrityError on `user_id` for a UUID). The onboarding service therefore treats the pre-link as best effort (warning in its log) and the participant links the pass once from user settings; `smoke.sh` reports the missing link as a note. Revisit when the Phase 3 bridge exists (alternative: `user_matching_mode: username_link` with the bridge sending `preferred_username` = member number).
+
+## Smoke test
+
+`scripts/smoke.sh` creates an invite over JSON-RPC, drives `/belfry/invite/<token>` with curl, emulates a Stripe payment (a `payment.transaction` in state `done` with a `provider_reference`, then a manual payment on the invoice, which fires the automation rule), waits for the pass to become `active`, checks the Authentik user and source link and the Keycast NIP-05 name, and replays the webhook three times. Form field names and the emulated-payment approach are documented in its header.

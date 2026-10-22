@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="product_category_pass" model="product.category">
+        <field name="name">Belfry passes</field>
+    </record>
+
+    <record id="product_day" model="product.template">
+        <field name="name">Day pass</field>
+        <field name="default_code">PASS-DAY</field>
+        <field name="categ_id" ref="product_category_pass"/>
+        <field name="type">service</field>
+        <field name="invoice_policy">order</field>
+        <field name="list_price">50</field>
+        <field name="sale_ok" eval="True"/>
+        <field name="purchase_ok" eval="False"/>
+        <field name="taxes_id" eval="[(5, 0, 0)]"/>
+        <field name="belfry_tier">day</field>
+        <field name="belfry_duration_days">1</field>
+        <field name="description_sale">Open Source Village day pass, valid one day.</field>
+    </record>
+
+    <record id="product_week" model="product.template">
+        <field name="name">Week pass</field>
+        <field name="default_code">PASS-WEEK</field>
+        <field name="categ_id" ref="product_category_pass"/>
+        <field name="type">service</field>
+        <field name="invoice_policy">order</field>
+        <field name="list_price">100</field>
+        <field name="sale_ok" eval="True"/>
+        <field name="purchase_ok" eval="False"/>
+        <field name="taxes_id" eval="[(5, 0, 0)]"/>
+        <field name="belfry_tier">week</field>
+        <field name="belfry_duration_days">7</field>
+        <field name="description_sale">Open Source Village week pass, valid seven days.</field>
+    </record>
+
+    <record id="product_full" model="product.template">
+        <field name="name">Full access</field>
+        <field name="default_code">PASS-FULL</field>
+        <field name="categ_id" ref="product_category_pass"/>
+        <field name="type">service</field>
+        <field name="invoice_policy">order</field>
+        <field name="list_price">200</field>
+        <field name="sale_ok" eval="True"/>
+        <field name="purchase_ok" eval="False"/>
+        <field name="taxes_id" eval="[(5, 0, 0)]"/>
+        <field name="belfry_tier">full</field>
+        <field name="belfry_duration_days">0</field>
+        <field name="description_sale">Open Source Village full access, valid for the whole event.</field>
+    </record>
+</odoo>

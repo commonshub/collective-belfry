@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="view_belfry_pass_list" model="ir.ui.view">
+        <field name="name">belfry.pass.list</field>
+        <field name="model">belfry.pass</field>
+        <field name="arch" type="xml">
+            <list default_order="id desc">
+                <field name="partner_id"/>
+                <field name="member_number"/>
+                <field name="tier"/>
+                <field name="state" widget="badge"
+                       decoration-success="state == 'active'"
+                       decoration-warning="state == 'pending'"
+                       decoration-danger="state == 'revoked'"
+                       decoration-muted="state == 'expired'"/>
+                <field name="date_start"/>
+                <field name="date_end"/>
+                <field name="invoice_id"/>
+                <field name="payment_state"/>
+                <field name="npub" optional="hide"/>
+                <field name="invite_id" optional="hide"/>
+                <field name="company_id" optional="hide" groups="base.group_multi_company"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="view_belfry_pass_form" model="ir.ui.view">
+        <field name="name">belfry.pass.form</field>
+        <field name="model">belfry.pass</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <field name="state" widget="statusbar" statusbar_visible="pending,active"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="display_name"/></h1>
+                    </div>
+                    <group>
+                        <group string="Pass">
+                            <field name="partner_id"/>
+                            <field name="member_number"/>
+                            <field name="tier"/>
+                            <field name="product_id"/>
+                            <field name="date_start"/>
+                            <field name="date_end"/>
+                            <field name="company_id" groups="base.group_multi_company"/>
+                        </group>
+                        <group string="Billing">
+                            <field name="invite_id"/>
+                            <field name="sale_order_id"/>
+                            <field name="invoice_id"/>
+                            <field name="amount_total"/>
+                            <field name="payment_state"/>
+                            <field name="transaction_id"/>
+                            <field name="stripe_payment_intent"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Accounts (set at activation)">
+                            <field name="activated_at"/>
+                            <field name="npub"/>
+                            <field name="keycast_pubkey"/>
+                            <field name="authentik_user_id"/>
+                            <field name="credential_status_index"/>
+                        </group>
+                        <group string="Revocation">
+                            <field name="revoked_at"/>
+                            <field name="revoke_reason"/>
+                            <field name="stripe_dispute_id"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_belfry_pass_search" model="ir.ui.view">
+        <field name="name">belfry.pass.search</field>
+        <field name="model">belfry.pass</field>
+        <field name="arch" type="xml">
+            <search>
+                <field name="partner_id"/>
+                <field name="member_number"/>
+                <field name="npub"/>
+                <field name="invoice_id"/>
+                <filter name="pending" string="Pending" domain="[('state', '=', 'pending')]"/>
+                <filter name="active" string="Active" domain="[('state', '=', 'active')]"/>
+                <filter name="revoked" string="Revoked" domain="[('state', '=', 'revoked')]"/>
+                <filter name="expired" string="Expired" domain="[('state', '=', 'expired')]"/>
+                <group>
+                    <filter name="group_state" string="State" context="{'group_by': 'state'}"/>
+                    <filter name="group_tier" string="Tier" context="{'group_by': 'tier'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_belfry_pass" model="ir.actions.act_window">
+        <field name="name">Passes</field>
+        <field name="res_model">belfry.pass</field>
+        <field name="view_mode">list,form</field>
+        <field name="search_view_id" ref="view_belfry_pass_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No passes yet</p>
+            <p>Passes are created when a participant completes the invite form, and activated by the onboarding service once the invoice is paid.</p>
+        </field>
+    </record>
+</odoo>

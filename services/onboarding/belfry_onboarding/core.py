@@ -1,0 +1,606 @@
+"""Core operations: activate, revoke, reactivate, reconcile, expire.
+
+Every operation is idempotent and resumable: it re-reads state from Odoo, re-runs the external
+steps (which are idempotent on their side: Authentik lookup before create, Keycast preload keyed
+on ``vine_id``, status PUTs) and writes back to Odoo last. All state lives in Odoo.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+
+from .clients.authentik import AuthentikClient
+from .clients.keycast import KeycastClient
+from .clients.odoo import OdooApi, OdooError
+from .nostr import hex_to_npub
+from .settings import Settings
+
+log = logging.getLogger(__name__)
+
+PAID_STATES = ("paid", "in_payment")
+TIER_DEFAULT_DAYS = {"day": 1, "week": 7, "full": 0}
+
+PASS_FIELDS = [
+    "partner_id",
+    "tier",
+    "product_id",
+    "invoice_id",
+    "transaction_id",
+    "stripe_payment_intent",
+    "date_start",
+    "date_end",
+    "state",
+    "npub",
+    "keycast_pubkey",
+    "authentik_user_id",
+    "stripe_dispute_id",
+]
+
+
+@dataclass
+class Services:
+    odoo: OdooApi
+    authentik: AuthentikClient
+    keycast: KeycastClient
+    settings: Settings
+
+
+# -- small helpers ------------------------------------------------------------------------------
+
+
+def m2o_id(value: Any) -> int | None:
+    """Odoo returns many2one fields as ``[id, display_name]`` or ``False``."""
+    if isinstance(value, list | tuple):
+        return int(value[0]) if value else None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return None
+
+
+def odoo_date(value: Any) -> dt.date | None:
+    """Parse an Odoo Date (``YYYY-MM-DD``) or Datetime (``YYYY-MM-DD HH:MM:SS``) string."""
+    if not value:
+        return None
+    if isinstance(value, dt.datetime):
+        return value.date()
+    if isinstance(value, dt.date):
+        return value
+    return dt.date.fromisoformat(str(value)[:10])
+
+
+def now_utc_str() -> str:
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today() -> dt.date:
+    return dt.datetime.now(dt.UTC).date()
+
+
+def member_number_fallback(partner_id: int) -> str:
+    return f"OSV-{partner_id:04d}"
+
+
+# -- activation ---------------------------------------------------------------------------------
+
+
+def _find_paid_transaction(svc: Services, invoice: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``done`` non-refund transaction with a provider reference, or None."""
+    tx_ids = [i for i in (invoice.get("transaction_ids") or []) if isinstance(i, int)]
+    if not tx_ids:
+        return None
+    rows = svc.odoo.search_read(
+        "payment.transaction",
+        [
+            ["id", "in", tx_ids],
+            ["state", "=", "done"],
+            ["operation", "!=", "refund"],
+            ["provider_reference", "!=", False],
+        ],
+        ["provider_reference", "last_state_change", "operation", "state"],
+        order="id desc",
+    )
+    rows = [r for r in rows if r.get("provider_reference")]
+    return rows[0] if rows else None
+
+
+def _tier_from_invoice(svc: Services, invoice_id: int) -> tuple[str | None, int | None, int | None]:
+    """(tier, duration_days, product_id) from the first invoice line with a pass product."""
+    lines = svc.odoo.search_read(
+        "account.move.line",
+        [["move_id", "=", invoice_id], ["product_id", "!=", False]],
+        ["product_id"],
+    )
+    product_ids = [m2o_id(line.get("product_id")) for line in lines]
+    product_ids = [p for p in product_ids if p]
+    if not product_ids:
+        return None, None, None
+    products = svc.odoo.search_read(
+        "product.product",
+        [["id", "in", product_ids], ["belfry_tier", "!=", False]],
+        ["belfry_tier", "belfry_duration_days"],
+    )
+    for product in products:
+        if product.get("belfry_tier"):
+            days = product.get("belfry_duration_days")
+            return (
+                product["belfry_tier"],
+                (int(days) if days not in (None, False) else None),
+                product["id"],
+            )
+    return None, None, None
+
+
+def _find_or_create_pass(svc: Services, invoice: dict[str, Any]) -> dict[str, Any]:
+    invoice_id = invoice["id"]
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["invoice_id", "=", invoice_id]], PASS_FIELDS, limit=1
+    )
+    if rows:
+        return rows[0]
+    # Prefer the module's own method (it knows the product and invite); fall back for older modules.
+    try:
+        svc.odoo.call("belfry.pass", "belfry_find_or_create_for_invoice", [invoice_id])
+    except OdooError as exc:
+        if not exc.is_missing_method:
+            raise
+        log.warning("belfry.pass.belfry_find_or_create_for_invoice missing, creating pass locally")
+        tier, _days, product_id = _tier_from_invoice(svc, invoice_id)
+        if tier is None:
+            raise RuntimeError(f"invoice {invoice_id} has no pass product line") from exc
+        vals: dict[str, Any] = {
+            "partner_id": m2o_id(invoice["partner_id"]),
+            "tier": tier,
+            "invoice_id": invoice_id,
+            "state": "pending",
+        }
+        if product_id:
+            vals["product_id"] = product_id
+        try:
+            svc.odoo.create("belfry.pass", vals)
+        except OdooError as exc2:
+            if not exc2.is_constraint_violation:
+                raise
+            log.info("belfry.pass for invoice %s was created concurrently", invoice_id)
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["invoice_id", "=", invoice_id]], PASS_FIELDS, limit=1
+    )
+    if not rows:
+        raise RuntimeError(f"belfry.pass for invoice {invoice_id} could not be created")
+    return rows[0]
+
+
+def _ensure_member_number(svc: Services, partner: dict[str, Any]) -> str:
+    if partner.get("belfry_member_number"):
+        return partner["belfry_member_number"]
+    partner_id = partner["id"]
+    try:
+        svc.odoo.call("res.partner", "belfry_ensure_member_number", [[partner_id]])
+    except OdooError as exc:
+        if not exc.is_missing_method:
+            raise
+        log.warning("res.partner.belfry_ensure_member_number missing, using OSV-<partner id>")
+        svc.odoo.write(
+            "res.partner",
+            [partner_id],
+            {"belfry_member_number": member_number_fallback(partner_id)},
+        )
+    rows = svc.odoo.read("res.partner", [partner_id], ["belfry_member_number"])
+    number = rows[0].get("belfry_member_number") if rows else None
+    if not number:
+        number = member_number_fallback(partner_id)
+        svc.odoo.write("res.partner", [partner_id], {"belfry_member_number": number})
+    return number
+
+
+def _pass_dates(
+    settings: Settings, tier: str, duration_days: int | None, payment_date: dt.date
+) -> tuple[dt.date, dt.date]:
+    date_start = max(payment_date, settings.event_start)
+    days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
+    if tier == "full" or days <= 0:
+        date_end = settings.event_end
+    else:
+        date_end = date_start + dt.timedelta(days=days)
+    return date_start, date_end
+
+
+def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number: str) -> int:
+    ak = svc.authentik
+    email = partner.get("email") or None
+    users = ak.find_users_by_attribute("belfry_member_number", member_number)
+    if not users and email:
+        users = ak.find_users_by_email(email)
+    if users:
+        user = users[0]
+    else:
+        user = ak.create_user(
+            username=member_number.lower(),
+            name=partner.get("name") or member_number,
+            email=email,
+            attributes={"belfry_member_number": member_number, "odoo_partner_id": partner["id"]},
+            path=svc.settings.authentik_user_path,
+        )
+    user_pk = int(user["pk"])
+    slug = svc.settings.authentik_source_slug
+    # Pre-linking the pass-bridge source is best effort: authentik 2026.8.5 does not let the API
+    # create UserOAuthSourceConnection rows (``user`` is read-only, see infra/README.md), so the
+    # participant links the pass once while signed in. A failure here must not block activation.
+    try:
+        if not ak.find_source_connections(user_pk, slug):
+            ak.create_source_connection(user_pk, slug, member_number)
+    except httpx.HTTPStatusError as exc:
+        log.warning(
+            "authentik: could not pre-link source %s for user %s (%s); link must be made by the "
+            "participant from user settings",
+            slug,
+            user_pk,
+            exc.response.status_code,
+        )
+    return user_pk
+
+
+def _ensure_keycast_user(
+    svc: Services, partner: dict[str, Any], member_number: str
+) -> tuple[str, str]:
+    """Returns (pubkey hex, npub)."""
+    result = svc.keycast.preload_user(
+        vine_id=f"odoo-partner-{partner['id']}",
+        username=member_number.lower(),
+        display_name=partner.get("name") or member_number,
+    )
+    pubkey = result["pubkey"]
+    svc.keycast.set_user_status(pubkey, "active")
+    return pubkey, hex_to_npub(pubkey)
+
+
+def activate_pass(svc: Services, invoice_id: int) -> str:
+    """Activate the pass of a paid invoice. Returns a short result code."""
+    invoice = svc.odoo.read_one(
+        "account.move",
+        invoice_id,
+        [
+            "name",
+            "move_type",
+            "state",
+            "payment_state",
+            "partner_id",
+            "invoice_date",
+            "transaction_ids",
+        ],
+    )
+    if invoice is None:
+        log.warning("activate_pass: invoice %s not found", invoice_id)
+        return "not_found"
+    if (
+        invoice.get("move_type") != "out_invoice"
+        or invoice.get("state") != "posted"
+        or invoice.get("payment_state") not in PAID_STATES
+    ):
+        log.info(
+            "activate_pass: invoice %s not paid (type=%s state=%s payment_state=%s)",
+            invoice_id,
+            invoice.get("move_type"),
+            invoice.get("state"),
+            invoice.get("payment_state"),
+        )
+        return "not_paid"
+
+    tx = _find_paid_transaction(svc, invoice)
+    if tx is None:
+        has_transactions = bool(invoice.get("transaction_ids"))
+        if has_transactions or not svc.settings.allow_manual_payments:
+            log.info(
+                "activate_pass: invoice %s has no done transaction with a provider reference",
+                invoice_id,
+            )
+            return "not_paid"
+        log.info(
+            "activate_pass: invoice %s paid without a transaction (manual payment accepted)",
+            invoice_id,
+        )
+
+    pass_row = _find_or_create_pass(svc, invoice)
+    state = pass_row.get("state")
+    if state == "active":
+        return "already_active"
+    if state in ("revoked", "expired"):
+        log.info("activate_pass: pass %s is %s, not reactivating", pass_row["id"], state)
+        return f"already_{state}"
+
+    partner_id = m2o_id(pass_row.get("partner_id")) or m2o_id(invoice.get("partner_id"))
+    if partner_id is None:
+        raise RuntimeError(f"pass {pass_row['id']} has no partner")
+    partner = svc.odoo.read(
+        "res.partner",
+        [partner_id],
+        ["name", "email", "belfry_member_number", "belfry_authentik_user_id", "belfry_npub"],
+    )[0]
+    member_number = _ensure_member_number(svc, partner)
+
+    tier = pass_row.get("tier")
+    duration_days: int | None = None
+    if not tier:
+        tier, duration_days, _product = _tier_from_invoice(svc, invoice_id)
+        if not tier:
+            raise RuntimeError(
+                f"pass {pass_row['id']} has no tier and the invoice has no pass product"
+            )
+    else:
+        product_id = m2o_id(pass_row.get("product_id"))
+        if product_id:
+            products = svc.odoo.read("product.product", [product_id], ["belfry_duration_days"])
+            days = products[0].get("belfry_duration_days") if products else None
+            duration_days = int(days) if days not in (None, False) else None
+
+    # Payment date: the done transaction's last_state_change, else the invoice date, else today.
+    payment_date = (
+        (odoo_date(tx.get("last_state_change")) if tx else None)
+        or odoo_date(invoice.get("invoice_date"))
+        or today()
+    )
+    date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
+
+    authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
+    pubkey, npub = _ensure_keycast_user(svc, partner, member_number)
+
+    svc.odoo.write(
+        "res.partner",
+        [partner_id],
+        {"belfry_authentik_user_id": authentik_user_id, "belfry_npub": npub},
+    )
+    vals: dict[str, Any] = {
+        "npub": npub,
+        "keycast_pubkey": pubkey,
+        "authentik_user_id": authentik_user_id,
+        "date_start": date_start.isoformat(),
+        "date_end": date_end.isoformat(),
+        "activated_at": now_utc_str(),
+        "state": "active",
+    }
+    if not pass_row.get("tier"):
+        vals["tier"] = tier
+    if tx:
+        vals["transaction_id"] = tx["id"]
+        vals["stripe_payment_intent"] = tx["provider_reference"]
+    svc.odoo.write("belfry.pass", [pass_row["id"]], vals)
+    log.info(
+        "activate_pass: pass %s active for partner %s (%s), npub %s, %s..%s",
+        pass_row["id"],
+        partner_id,
+        member_number,
+        npub,
+        date_start,
+        date_end,
+    )
+    return "activated"
+
+
+# -- revocation, expiry, reactivation -----------------------------------------------------------
+
+
+def _partner_has_other_active_pass(svc: Services, partner_id: int, except_pass_id: int) -> bool:
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", partner_id], ["state", "=", "active"], ["id", "!=", except_pass_id]],
+        ["id"],
+        limit=1,
+    )
+    return bool(rows)
+
+
+def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
+    pubkey = pass_row.get("keycast_pubkey")
+    if pubkey:
+        return pubkey
+    partner_id = m2o_id(pass_row.get("partner_id"))
+    if partner_id is None:
+        return None
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", partner_id], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey"],
+        limit=1,
+        order="id desc",
+    )
+    return rows[0]["keycast_pubkey"] if rows else None
+
+
+def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any]) -> bool:
+    """Suspend the Keycast user unless the partner has another active pass.
+
+    Returns True if a suspension was sent.
+    """
+    partner_id = m2o_id(pass_row.get("partner_id"))
+    if partner_id is not None and _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
+        return False
+    pubkey = _keycast_pubkey_for(svc, pass_row)
+    if not pubkey:
+        log.info("pass %s has no Keycast pubkey, nothing to suspend", pass_row["id"])
+        return False
+    svc.keycast.set_user_status(pubkey, "suspended")
+    return True
+
+
+def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str) -> str:
+    if pass_row.get("state") != state:
+        svc.odoo.write(
+            "belfry.pass",
+            [pass_row["id"]],
+            {"state": state, "revoked_at": now_utc_str(), "revoke_reason": reason},
+        )
+        result = state
+    else:
+        result = f"already_{state}"
+    pass_row = dict(pass_row, state=state)
+    # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
+    _suspend_unless_other_active(svc, pass_row)
+    return result
+
+
+def revoke_pass(svc: Services, pass_id: int, reason: str) -> str:
+    pass_row = svc.odoo.read_one("belfry.pass", pass_id, PASS_FIELDS)
+    if pass_row is None:
+        return "not_found"
+    return _close_pass(svc, pass_row, "revoked", reason)
+
+
+def revoke_for_refund(svc: Services, transaction_id: int) -> str:
+    tx = svc.odoo.read_one(
+        "payment.transaction", transaction_id, ["operation", "state", "source_transaction_id"]
+    )
+    if tx is None:
+        return "not_found"
+    if tx.get("operation") != "refund" or tx.get("state") != "done":
+        log.info("revoke_for_refund: transaction %s is not a done refund", transaction_id)
+        return "not_refund"
+    source_id = m2o_id(tx.get("source_transaction_id"))
+    if source_id is None:
+        log.warning("revoke_for_refund: refund %s has no source transaction", transaction_id)
+        return "no_source"
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["transaction_id", "=", source_id]], ["id"], limit=1
+    )
+    if not rows:
+        log.warning("revoke_for_refund: no pass for source transaction %s", source_id)
+        return "no_pass"
+    return revoke_pass(svc, rows[0]["id"], "refund")
+
+
+def reactivate_pass(svc: Services, pass_id: int) -> str:
+    pass_row = svc.odoo.read_one("belfry.pass", pass_id, PASS_FIELDS)
+    if pass_row is None:
+        return "not_found"
+    date_end = odoo_date(pass_row.get("date_end"))
+    if date_end is not None and date_end < today():
+        log.info("reactivate_pass: pass %s ended on %s, leaving it closed", pass_id, date_end)
+        return "expired"
+    if pass_row.get("state") != "active":
+        svc.odoo.write(
+            "belfry.pass",
+            [pass_id],
+            {"state": "active", "revoked_at": False, "revoke_reason": False},
+        )
+        result = "reactivated"
+    else:
+        result = "already_active"
+    pubkey = _keycast_pubkey_for(svc, pass_row)
+    if pubkey:
+        svc.keycast.set_user_status(pubkey, "active")
+    return result
+
+
+def expire(svc: Services) -> dict[str, Any]:
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["date_end", "<", today().isoformat()]],
+        PASS_FIELDS,
+    )
+    expired: list[int] = []
+    for pass_row in rows:
+        try:
+            _close_pass(svc, pass_row, "expired", "expiry")
+            expired.append(pass_row["id"])
+        except Exception:
+            log.exception("expire: pass %s failed", pass_row["id"])
+    return {"expired": expired}
+
+
+def reconcile(svc: Services) -> dict[str, Any]:
+    cutoff = (today() - dt.timedelta(days=svc.settings.reconcile_days)).isoformat()
+    invoices = svc.odoo.search_read(
+        "account.move",
+        [
+            ["move_type", "=", "out_invoice"],
+            ["state", "=", "posted"],
+            ["payment_state", "in", list(PAID_STATES)],
+            ["invoice_date", ">=", cutoff],
+        ],
+        ["id"],
+    )
+    invoice_ids = [inv["id"] for inv in invoices]
+    active = (
+        svc.odoo.search_read(
+            "belfry.pass",
+            [["invoice_id", "in", invoice_ids], ["state", "in", ["active", "revoked", "expired"]]],
+            ["invoice_id"],
+        )
+        if invoice_ids
+        else []
+    )
+    settled = {m2o_id(p["invoice_id"]) for p in active}
+    activated: dict[int, str] = {}
+    for invoice_id in invoice_ids:
+        if invoice_id in settled:
+            continue
+        try:
+            activated[invoice_id] = activate_pass(svc, invoice_id)
+        except Exception:
+            log.exception("reconcile: activate_pass(%s) failed", invoice_id)
+            activated[invoice_id] = "error"
+
+    refunds = svc.odoo.search_read(
+        "payment.transaction",
+        [["operation", "=", "refund"], ["state", "=", "done"]],
+        ["source_transaction_id"],
+    )
+    source_ids = sorted({s for s in (m2o_id(r.get("source_transaction_id")) for r in refunds) if s})
+    revoked: dict[int, str] = {}
+    if source_ids:
+        passes = svc.odoo.search_read(
+            "belfry.pass",
+            [["transaction_id", "in", source_ids], ["state", "=", "active"]],
+            ["id"],
+        )
+        for pass_row in passes:
+            try:
+                revoked[pass_row["id"]] = revoke_pass(svc, pass_row["id"], "refund")
+            except Exception:
+                log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
+                revoked[pass_row["id"]] = "error"
+    return {"activated": activated, "revoked": revoked}
+
+
+# -- Stripe disputes ----------------------------------------------------------------------------
+
+
+def find_pass_by_payment_intent(svc: Services, payment_intent: str) -> dict[str, Any] | None:
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["stripe_payment_intent", "=", payment_intent]], PASS_FIELDS, limit=1
+    )
+    return rows[0] if rows else None
+
+
+def handle_dispute_created(svc: Services, dispute: dict[str, Any]) -> tuple[str, int | None]:
+    payment_intent = dispute.get("payment_intent")
+    if isinstance(payment_intent, dict):
+        payment_intent = payment_intent.get("id")
+    if not payment_intent:
+        return "no_payment_intent", None
+    pass_row = find_pass_by_payment_intent(svc, payment_intent)
+    if pass_row is None:
+        return "no_pass", None
+    if dispute.get("id"):
+        svc.odoo.write("belfry.pass", [pass_row["id"]], {"stripe_dispute_id": dispute["id"]})
+    return revoke_pass(svc, pass_row["id"], "chargeback"), pass_row["id"]
+
+
+def handle_dispute_closed(svc: Services, dispute: dict[str, Any]) -> tuple[str, int | None]:
+    if dispute.get("status") != "won":
+        return f"ignored_status_{dispute.get('status')}", None
+    payment_intent = dispute.get("payment_intent")
+    if isinstance(payment_intent, dict):
+        payment_intent = payment_intent.get("id")
+    pass_row = find_pass_by_payment_intent(svc, payment_intent) if payment_intent else None
+    if pass_row is None and dispute.get("id"):
+        rows = svc.odoo.search_read(
+            "belfry.pass", [["stripe_dispute_id", "=", dispute["id"]]], PASS_FIELDS, limit=1
+        )
+        pass_row = rows[0] if rows else None
+    if pass_row is None:
+        return "no_pass", None
+    return reactivate_pass(svc, pass_row["id"]), pass_row["id"]

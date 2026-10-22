@@ -4,7 +4,7 @@ Belfry (the Collective Bunker) runs access and identity for Open Source Village:
 
 ## Current status
 
-Plan verified against the real software on 2026-10-22 (spike notes in `docs/research/`). Building waits on the decisions in @docs/NEXT_STEPS.md §2; once taken, start the first build slice there. Nothing is committed yet.
+Plan verified against the real software on 2026-10-22 (spike notes in `docs/research/`); decisions recorded in @docs/NEXT_STEPS.md §2. Build slice 1 (Phase 1 onboarding: Compose stack, Odoo module `belfry_pass`, onboarding service) is built and green locally; its contract is @docs/slice-1-onboarding.md. Next work is in @docs/NEXT_STEPS.md §4. Run `make up && make bootstrap && make up-app && make smoke` to see it work.
 
 ## Project plan
 

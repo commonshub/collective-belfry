@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Where the onboarding service listens. The two webhook server actions are rewritten
+         from these two parameters whenever they change (see models/ir_config_parameter.py). -->
+    <record id="param_onboarding_url" model="ir.config_parameter">
+        <field name="key">belfry.onboarding_url</field>
+        <field name="value">http://onboarding:8100</field>
+    </record>
+    <record id="param_hook_token" model="ir.config_parameter">
+        <field name="key">belfry.hook_token</field>
+        <field name="value">change-me</field>
+    </record>
+    <record id="param_event_start" model="ir.config_parameter">
+        <field name="key">belfry.event_start</field>
+        <field name="value">2027-01-25</field>
+    </record>
+    <record id="param_event_end" model="ir.config_parameter">
+        <field name="key">belfry.event_end</field>
+        <field name="value">2027-01-31</field>
+    </record>
+    <!-- Read once by the post-init hook to date the early-bird pricelist rules. -->
+    <record id="param_early_bird_until" model="ir.config_parameter">
+        <field name="key">belfry.early_bird_until</field>
+        <field name="value">2026-12-31</field>
+    </record>
+</odoo>

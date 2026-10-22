@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Example discount code: OSV10 gives 10% off pass products. -->
+    <record id="promo_example" model="loyalty.program">
+        <field name="name">OSV10 (example discount code)</field>
+        <field name="program_type">promo_code</field>
+        <field name="trigger">with_code</field>
+        <field name="applies_on">current</field>
+    </record>
+    <record id="promo_example_rule" model="loyalty.rule">
+        <field name="program_id" ref="promo_example"/>
+        <field name="mode">with_code</field>
+        <field name="code">OSV10</field>
+        <field name="minimum_qty">1</field>
+    </record>
+    <record id="promo_example_reward" model="loyalty.reward">
+        <field name="program_id" ref="promo_example"/>
+        <field name="reward_type">discount</field>
+        <field name="discount">10</field>
+        <field name="discount_mode">percent</field>
+        <field name="discount_applicability">specific</field>
+        <field name="discount_product_ids"
+               model="product.product"
+               search="[('product_tmpl_id', 'in', [ref('belfry_pass.product_day'), ref('belfry_pass.product_week'), ref('belfry_pass.product_full')])]"/>
+    </record>
+</odoo>

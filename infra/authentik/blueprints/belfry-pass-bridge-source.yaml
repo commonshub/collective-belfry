@@ -1,0 +1,90 @@
+# Belfry: the OpenID4VP-to-OIDC bridge as an authentik OpenID Connect source (pass sign-in),
+# plus the participants group. From docs/research/authentik-spike.md (authentik 2026.8.5).
+# Applied by the worker's file watcher (bind mount /blueprints/custom); re-applied on change.
+#
+# The bridge does not exist until Phase 3, so the endpoint URLs are placeholders. They are
+# given explicitly instead of oidc_well_known_url: authentik fetches the well-known document
+# on save and fails the blueprint when the host does not answer. Swap in the real URLs (or the
+# well-known URL) when the bridge is deployed; the slug "pass-bridge" must stay, the onboarding
+# service links users to it by slug.
+version: 1
+metadata:
+  name: belfry-pass-bridge-source
+  labels:
+    blueprints.goauthentik.io/description: "Village pass sign-in via the OpenID4VP-to-OIDC bridge, participants group"
+context:
+  bridge_base: https://bridge.belfry.example
+  bridge_client_id: belfry-authentik
+  bridge_client_secret: !Env [BELFRY_BRIDGE_CLIENT_SECRET, "placeholder-set-BRIDGE_CLIENT_SECRET"]
+entries:
+  # 1. Group that activated participants are added to. Users get path belfry/participants.
+  - model: authentik_core.group
+    id: belfry-participants
+    identifiers:
+      name: belfry-participants
+    attrs:
+      is_superuser: false
+      attributes:
+        belfry.path: belfry/participants
+
+  # 2. Property mapping: copy bridge claims into user attributes, never into identity fields.
+  - model: authentik_sources_oauth.oauthsourcepropertymapping
+    id: belfry-pass-claims
+    identifiers:
+      name: belfry-pass-claims
+    attrs:
+      expression: |
+        # `info` is the bridge's userinfo payload. The base properties (username/email/name) that
+        # authentik derives from it are nulled so a user_write stage can never rewrite identity
+        # fields; only attributes are written. None values are dropped by authentik before writing.
+        attrs = {"pass_bridge_sub": info.get("sub")}
+        if info.get("npub"):
+            attrs["npub"] = info["npub"]
+        return {"username": None, "email": None, "name": None, "attributes": attrs}
+
+  # 3. The source itself. user_matching_mode identifier + no enrollment flow = only users that
+  #    already have a UserOAuthSourceConnection (identifier = bridge sub = member number) can log in.
+  - model: authentik_sources_oauth.oauthsource
+    id: pass-bridge
+    identifiers:
+      slug: pass-bridge
+    attrs:
+      name: Village pass (EUDI wallet)
+      enabled: true
+      promoted: true
+      provider_type: openidconnect
+      consumer_key: !Context bridge_client_id
+      consumer_secret: !Context bridge_client_secret
+      authorization_url: !Format ["%s/authorize", !Context bridge_base]
+      access_token_url: !Format ["%s/token", !Context bridge_base]
+      profile_url: !Format ["%s/userinfo", !Context bridge_base]
+      pkce: S256
+      authorization_code_auth_method: basic_auth
+      user_matching_mode: identifier
+      group_matching_mode: identifier
+      enrollment_flow: null
+      authentication_flow: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+      user_property_mappings:
+        - !KeyOf belfry-pass-claims
+
+  # 4. Show the source on the login page.
+  - model: authentik_stages_identification.identificationstage
+    identifiers:
+      name: default-authentication-identification
+    attrs:
+      sources:
+        - !KeyOf pass-bridge
+
+  # 5. Persist mapped attributes (pass_bridge_sub, npub) on every source login.
+  - model: authentik_stages_user_write.userwritestage
+    id: belfry-source-auth-write
+    identifiers:
+      name: belfry-source-auth-write
+    attrs:
+      user_creation_mode: never_create
+      create_users_as_inactive: false
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-source-authentication]]
+      stage: !KeyOf belfry-source-auth-write
+      order: -10

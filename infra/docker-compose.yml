@@ -1,0 +1,230 @@
+# Belfry local stack (slice 1). See infra/README.md.
+# Variables come from infra/.env (generate it with scripts/gen-secrets.sh).
+name: belfry
+
+x-authentik-env: &authentik-env
+  AUTHENTIK_POSTGRESQL__HOST: postgres
+  AUTHENTIK_POSTGRESQL__NAME: authentik
+  AUTHENTIK_POSTGRESQL__USER: authentik
+  AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_DB_PASSWORD:?}
+  AUTHENTIK_SECRET_KEY: ${AUTHENTIK_SECRET_KEY:?}
+  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
+  # The system blueprint /blueprints/system/bootstrap.yaml creates akadmin and a
+  # non-expiring API token (identifier authentik-bootstrap-token) on first start.
+  AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:?}
+  AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:?}
+  AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-akadmin@belfry.local}
+  # Read by the pass-bridge blueprint (!Env).
+  BELFRY_BRIDGE_CLIENT_SECRET: ${BRIDGE_CLIENT_SECRET:?}
+
+x-keycast-env: &keycast-env
+  DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
+  REDIS_URL: redis://redis:6379
+  KMS_PROVIDER: file
+  # Only checked for presence; the binary opens /app/master.key (see keycast/README.md).
+  MASTER_KEY_PATH: /app/master.key
+  SERVER_NSEC: ${KEYCAST_SERVER_NSEC:?}
+  ALLOWED_PUBKEYS: ${KEYCAST_ADMIN_PUBKEY:?}
+  ALLOWED_ORIGINS: ${KEYCAST_APP_URL:-http://localhost:3000}
+  # Tenant = Host header without port. Every caller (browser and onboarding service)
+  # must present this host, otherwise Keycast answers 400 "Invalid domain".
+  ALLOWED_TENANT_DOMAINS: ${KEYCAST_TENANT_DOMAIN:-localhost}
+  BUNKER_RELAYS: ws://keycast-relay:8080
+  APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+  BASE_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+  WEB_BUILD_DIR: /app/web
+  NODE_ENV: development
+  ENABLE_DEV_EMAIL_INBOX: "true"
+  FROM_EMAIL: noreply@belfry.local
+  FROM_NAME: Belfry
+  KEYCAST_SERVICE_TOKEN: ${KEYCAST_SERVICE_TOKEN:?}
+  RUST_LOG: ${KEYCAST_RUST_LOG:-info}
+  PORT: "3000"
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      ODOO_DB_PASSWORD: ${ODOO_DB_PASSWORD:?}
+      AUTHENTIK_DB_PASSWORD: ${AUTHENTIK_DB_PASSWORD:?}
+      KEYCAST_DB_PASSWORD: ${KEYCAST_DB_PASSWORD:?}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - ./postgres/init.sh:/docker-entrypoint-initdb.d/10-belfry.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc \"select 1 from pg_database where datname='keycast'\" | grep -q 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  odoo:
+    image: odoo:19
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["8069:8069"]
+    environment:
+      # The image entrypoint passes no --db_* args when PG* vars are set; libpq reads them.
+      # That also makes `docker compose exec odoo odoo -d ...` work without extra arguments.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: odoo
+      PGPASSWORD: ${ODOO_DB_PASSWORD:?}
+    volumes:
+      - odoo-data:/var/lib/odoo
+      - ./odoo/odoo.conf:/etc/odoo/odoo.conf:ro
+      - ../odoo/addons:/mnt/extra-addons:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:8069/web/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 2g
+
+  authentik-server:
+    image: ghcr.io/goauthentik/server:2026.8.5
+    command: server
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *authentik-env
+    ports: ["9000:9000"]
+    shm_size: 512mb
+    volumes:
+      - authentik-media:/media
+      - ./authentik/blueprints:/blueprints/custom:ro
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:2026.8.5
+    command: worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment: *authentik-env
+    shm_size: 512mb
+    volumes:
+      - authentik-media:/media
+      - authentik-certs:/certs
+      - ./authentik/blueprints:/blueprints/custom:ro
+    healthcheck:
+      test: ["CMD", "ak", "healthcheck"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  redis:
+    image: redis:7
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  keycast-relay:
+    image: ghcr.io/verse-pbc/relay_builder:latest
+    environment:
+      IDLE_TIMEOUT: "0"
+    ports: ["3080:8080"]
+    volumes:
+      - relay-data:/data
+
+  # One-shot: the keycast binary does not run migrations at startup and the image
+  # entrypoint only knows unified/keycast/web, so the entrypoint is overridden.
+  # The image is built from keycast/build/Dockerfile (clones divinevideo/keycast @ fe9c6460;
+  # a plain git build context fails on upstream's broken submodule entry). ~15 min cold.
+  keycast-migrate:
+    image: belfry-keycast:local
+    build:
+      context: ./keycast/build
+    entrypoint: ["/app/keycast", "--migrate"]
+    environment:
+      DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  keycast:
+    image: belfry-keycast:local
+    build:
+      context: ./keycast/build
+    command: unified
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      keycast-migrate:
+        condition: service_completed_successfully
+    environment: *keycast-env
+    ports: ["3000:3000"]
+    volumes:
+      - ./keycast/master.key:/app/master.key:ro
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  # Belfry's glue. Behind the "app" profile so the rest of the stack starts before
+  # services/onboarding exists: `docker compose --profile app up -d` once it does.
+  onboarding:
+    build: ../services/onboarding
+    profiles: ["app"]
+    depends_on:
+      odoo:
+        condition: service_healthy
+      authentik-server:
+        condition: service_healthy
+      keycast:
+        condition: service_healthy
+    ports: ["8100:8100"]
+    environment:
+      ODOO_URL: http://odoo:8069
+      ODOO_DB: odoo
+      ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}
+      ODOO_API_KEY: ${ODOO_API_KEY:-}
+      AUTHENTIK_URL: http://authentik-server:9000
+      AUTHENTIK_TOKEN: ${AUTHENTIK_TOKEN:-}
+      AUTHENTIK_SOURCE_SLUG: pass-bridge
+      KEYCAST_URL: http://keycast:3000
+      # Send this as the Host header to Keycast (tenant = Host).
+      KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
+      KEYCAST_ADMIN_TOKEN: ${KEYCAST_ADMIN_TOKEN:-}
+      KEYCAST_SERVICE_TOKEN: ${KEYCAST_SERVICE_TOKEN:?}
+      HOOK_TOKEN: ${HOOK_TOKEN:?}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      EVENT_START: ${EVENT_START:-2027-01-25}
+      EVENT_END: ${EVENT_END:-2027-01-31}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8100/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres:
+  odoo-data:
+  authentik-media:
+  authentik-certs:
+  relay-data:
