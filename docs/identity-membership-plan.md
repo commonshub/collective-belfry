@@ -1,6 +1,6 @@
 # Belfry Identity & Membership Plan
 
-> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions, rev 47 the community app protocols; see docs/NEXT_STEPS.md §3b–§3h). The live doc is the source of truth.
+> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions, rev 47 the community app protocols, rev 49 the passwordless magic-link login; see docs/NEXT_STEPS.md §3b–§3h and §3j). The live doc is the source of truth.
 
 2026-10-20
 
@@ -23,7 +23,7 @@ The system has six layers. Each answers one question, and Odoo is the single sou
 | Layer | Question it answers | Component | Who controls it |
 | --- | --- | --- | --- |
 | Registry and billing | Who holds which pass, and has it been paid? | Odoo (contacts, pass products, invoices), Stripe payment links | Belfry |
-| Login | Is this the returning participant? | Authentik (OIDC) with passkeys, plus sign-in by presenting the EUDI pass (OpenID4VP) | Belfry |
+| Login | Is this the returning participant? | Authentik (OIDC) with e-mail magic links, plus sign-in by presenting the EUDI pass (OpenID4VP) | Belfry |
 | Pass certificate | Can anyone verify this pass offline? | SD-JWT VC in the EUDI Wallet, issued via OpenID4VCI, revocable via a status list | Belfry issues; the participant holds it |
 | Collective Bunker | Which Nostr key may use the community apps? | Keycast signer (KMS-encrypted keys, signing over HTTPS or NIP-46, login delegated to Authentik), whitelisted Nostr relay, Blossom file server, NIP-05 on Belfry's domain | Belfry |
 | Identifier | Which keys speak for a long-term member? | did:webvh at `id.belfry.example` (full access and above) | Belfry (standard) or the member (advanced) |
@@ -204,7 +204,7 @@ The most urgent open decision is the event date, because it determines which EUD
 
 - [x] Signing server: Keycast (Divine's fork) instead of an OpenBunker fork, decided 2026-10-22. It already has KMS-encrypted keys, per-app policies, provisioning with claim links, and active maintenance; OpenBunker stores keys unencrypted and lacks a provisioning API.
 - [x] Login for the Nostr apps: Keycast trusts Authentik via OIDC (one login), decided 2026-10-22. The Keycast fork mints a server-signed UCAN session after the Authentik callback, 3 to 5 days per the spike; the Keycast claim email is not needed.
-- [x] Participant login for Phase 2: at activation the onboarding service mints a one-time Authentik account-setup link (recovery-link API, flow belfry-account-setup: choose a password, signed in) and Odoo mails it with the pass details; stewards re-send it from the pass form. Decided 2026-10-23. Passkeys can be added from Authentik user settings; self-service password recovery waits for an SMTP setup; the pass sign-in arrives with the Phase 3 bridge.
+- [x] Participant login for Phase 2: passwordless. At activation the onboarding service mints a one-time Authentik sign-in link (recovery-link API, flow belfry-account-setup: signs in, no password) and Odoo mails it with the pass details; stewards re-send it from the pass form. Later sign-ins: the login page mails a one-time magic link (10 minutes, same browser for app logins) or the participant presents the pass. Participants never get a password; the Authentik admin keeps one on a separate flow. Decided 2026-10-23 (magic link replaced the first version's set-a-password link the same day).
 - [x] Event date: late January 2027, decided 2026-10-22. Some national EUDI wallets may be usable by then; test the pass against the ones participants are likely to hold, and keep sandbox and open-source wallets as the baseline (see Risks).
 - [ ] Belfry as required witness for advanced members (recommended), or watcher only.
 - [x] Issuer stack: walt.id Issuer2 + Verifier2 (community), built 2026-10-23 as the spike recommended; provisional until the steward's check with the DIDroom maintainer, which can still add Credimi for testing. Belfry hosts the status list and the type metadata itself.
