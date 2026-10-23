@@ -43,6 +43,18 @@ class TestInviteFlow(HttpCase):
         self.assertTrue(self.invite.url.endswith('/belfry/invite/%s' % self.invite.token))
         self.assertGreater(self.invite.expires_at, fields.Datetime.now() + timedelta(days=13))
 
+    def test_invite_urls_of_several_records(self):
+        # The list view computes the link for all rows at once (failed on the test deployment
+        # with "Expected singleton" once there were three invites).
+        Invite = self.env['belfry.invite'].with_user(self.steward)
+        Invite.create({'note': "for bob"})
+        invites = Invite.search([])
+        self.assertEqual(len(invites), 2)
+        rows = invites.web_search_read([], {'url': {}, 'token': {}})['records']
+        self.assertEqual(len(rows), 2)
+        for row in rows:
+            self.assertTrue(row['url'].endswith('/belfry/invite/%s' % row['token']))
+
     def test_steward_sees_only_own_invites(self):
         other = self.env['res.users'].create({
             'name': "Other Steward",

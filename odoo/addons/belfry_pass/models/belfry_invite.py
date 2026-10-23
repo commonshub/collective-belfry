@@ -56,9 +56,9 @@ class BelfryInvite(models.Model):
 
     @api.depends('token')
     def _compute_url(self):
-        base_url = self.get_base_url()
+        # get_base_url() takes one record at most; the list view computes all rows at once.
         for invite in self:
-            invite.url = "%s/belfry/invite/%s" % (base_url, invite.token)
+            invite.url = "%s/belfry/invite/%s" % (invite.get_base_url(), invite.token)
 
     def _compute_display_name(self):
         for invite in self:
