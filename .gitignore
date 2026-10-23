@@ -7,6 +7,8 @@ infra/keycast/master.key
 infra/issuer/keys/
 infra/issuer/config/issuer2-profiles.conf
 infra/issuer/config/issuer-service.conf
+infra/verifier/config/verifier-service.conf
+infra/odoo/odoo.conf
 infra/certs/
 *.key
 *.pem

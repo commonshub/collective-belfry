@@ -109,6 +109,20 @@ services:
         limits:
           memory: 2g
 
+  # Local mail sink: Odoo's outgoing mail server points here (bootstrap, SMTP_* in .env).
+  # Web UI and API on http://localhost:8025; production replaces it with a real SMTP relay.
+  mailpit:
+    image: axllent/mailpit:latest
+    ports: ["8025:8025"]
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "1"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "1"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   authentik-server:
     image: ghcr.io/goauthentik/server:2026.8.5
     command: server

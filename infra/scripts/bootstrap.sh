@@ -149,8 +149,12 @@ xmlid_res_id() { # module name -> res_id or empty
   odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.model.data search_read \
     "[[[\"module\",\"=\",\"$1\"],[\"name\",\"=\",\"$2\"]]]" '{"fields":["res_id"],"limit":1}' | jq -r '.[0].res_id // empty'
 }
+# Least privilege for the service: an internal user with the Belfry admin group (belfry.*
+# plus read on invoices and payment transactions, see the module's ACL) and contact
+# management (member numbers, Authentik id and npub are written on res.partner). Everything
+# the smoke test does beyond that runs as admin.
 GROUP_IDS=()
-for xid in base.group_user base.group_system sales_team.group_sale_manager account.group_account_manager belfry_pass.group_admin; do
+for xid in base.group_user base.group_partner_manager belfry_pass.group_admin; do
   gid=$(xmlid_res_id "${xid%%.*}" "${xid#*.}")
   [[ -n "$gid" ]] && GROUP_IDS+=("$gid")
 done
@@ -194,6 +198,19 @@ odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
 echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url and belfry.public_url set"
+
+# Outgoing mail: the company (sender) and one ir.mail_server from SMTP_* (Mailpit locally).
+COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"limit":1}' | jq -r '.[0]')
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\"${COMPANY_NAME:-Belfry}\",\"email\":\"${MAIL_FROM:-belfry@belfry.local}\"}]" >/dev/null
+MS_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server search '[[["name","=","belfry"]]]' '{"limit":1}' | jq -r '.[0] // empty')
+MS_VALS="{\"name\":\"belfry\",\"smtp_host\":\"${SMTP_HOST:-mailpit}\",\"smtp_port\":${SMTP_PORT:-1025},\"smtp_encryption\":\"${SMTP_ENCRYPTION:-none}\",\"smtp_authentication\":\"login\",\"smtp_user\":\"${SMTP_USER:-}\",\"smtp_pass\":\"${SMTP_PASSWORD:-}\",\"from_filter\":\"${MAIL_FROM:-belfry@belfry.local}\",\"sequence\":1}"
+if [[ -z "$MS_ID" ]]; then
+  odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server create "[$MS_VALS]" >/dev/null
+  echo "outgoing mail server 'belfry' created (${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025})"
+else
+  odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server write "[[$MS_ID],$MS_VALS]" >/dev/null
+  echo "outgoing mail server 'belfry' updated (${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025})"
+fi
 
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"

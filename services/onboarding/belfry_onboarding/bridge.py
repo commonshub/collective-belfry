@@ -172,7 +172,12 @@ def poll(svc: Services, store: BridgeStore, sid: str) -> dict[str, Any]:
     assert svc.verifier is not None
     info = svc.verifier.session_info(auth.verifier_session_id)
     if info.get("status") == "SUCCESSFUL":
-        claims = credentials.presented_claims(info) or {}
+        cred = credentials.presented_credential(info) or {}
+        if not credentials.issued_by_belfry(cred, svc.issuer_x5c[:1]):
+            log.warning("bridge: login %s presented a pass not signed by Belfry's key", sid)
+            auth.failed = ["issuer-certificate"]
+            return poll(svc, store, sid)
+        claims = cred.get("credentialData") or {}
         if not claims.get("member_number"):
             auth.failed = ["member_number not disclosed"]
             return poll(svc, store, sid)

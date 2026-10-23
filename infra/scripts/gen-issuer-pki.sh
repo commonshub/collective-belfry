@@ -11,15 +11,22 @@
 #   issuer.jwk.json                   private JWK of the signer (kid = RFC 7638 thumbprint)
 #   issuer.x5c.json                   ["<leaf b64 DER>", "<ca b64 DER>"], the x5c header
 #   bridge.jwk.json                   private JWK that signs the pass-bridge ID tokens
+#   verifier.key.pem, verifier.crt.pem, verifier.jwk.json, verifier.x5c.json
+#                                     Verifier2's request-signing key, SAN = VERIFIER_SAN (the
+#                                     x509_san_dns client id; default verifier.belfry.local)
 #   ci-token.jwk.json                 Issuer2's access-token key (ciTokenKey)
-# Rendered into infra/issuer/config/ (both gitignored, mounted with the rest of the config):
-#   issuer2-profiles.conf             from issuer2-profiles.conf.tmpl (issuer key + x5c chain)
-#   issuer-service.conf               from issuer-service.conf.tmpl (ciTokenKey)
+# Rendered (gitignored, mounted with the rest of the config):
+#   infra/issuer/config/issuer2-profiles.conf   from issuer2-profiles.conf.tmpl (issuer key + x5c chain)
+#   infra/issuer/config/issuer-service.conf     from issuer-service.conf.tmpl (ciTokenKey)
+#   infra/verifier/config/verifier-service.conf from verifier-service.conf.tmpl (signing key, x5c, client id)
 set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEYS="$INFRA_DIR/issuer/keys"
 SAN=${ISSUER_SAN:-issuer.belfry.local}
+# The verifier's x509_san_dns client id. walt.id requires a dotted DNS name (no "localhost");
+# in production this is the verifier's public hostname.
+VERIFIER_SAN=${VERIFIER_SAN:-verifier.belfry.local}
 mkdir -p "$KEYS"
 cd "$KEYS"
 
@@ -94,4 +101,50 @@ svc = open(f"{keys}/../config/issuer-service.conf.tmpl").read()
 open(f"{keys}/../config/issuer-service.conf", "w").write(svc.replace("@@CI_TOKEN_JWK@@", json.dumps({k: ci_token[k] for k in ("kty", "crv", "x", "y", "d")})))
 print("issuer kid", issuer["kid"], "- wrote keys/*.jwk.json, keys/issuer.x5c.json, config/issuer2-profiles.conf, config/issuer-service.conf")
 PY
+# Verifier request-signing certificate (same CA), created on demand so older key sets gain it.
+if [[ ! -f verifier.key.pem ]]; then
+  openssl ecparam -name prime256v1 -genkey -noout -out verifier.key.pem
+  openssl req -new -key verifier.key.pem -subj "/O=Belfry/CN=Belfry Verifier" -out verifier.csr.pem
+  cat > verifier.ext <<EXT
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature
+subjectAltName=DNS:$VERIFIER_SAN
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid
+EXT
+  openssl x509 -req -in verifier.csr.pem -CA ca.crt.pem -CAkey ca.key.pem -CAcreateserial -days 1095 -sha256 \
+    -extfile verifier.ext -out verifier.crt.pem 2>/dev/null
+  rm -f verifier.csr.pem verifier.ext ca.crt.srl ca.srl
+  chmod 600 verifier.key.pem
+  echo "verifier request-signing certificate written (SAN $VERIFIER_SAN)"
+fi
+python3 - "$KEYS" "$VERIFIER_SAN" <<'PY2'
+import base64, hashlib, json, subprocess, sys
+keys, san = sys.argv[1:3]
+def b64url(b): return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
+def jwk_from_pem(path):
+    out = subprocess.check_output(["openssl", "ec", "-in", path, "-text", "-noout"], stderr=subprocess.DEVNULL).decode()
+    def hexblock(label):
+        lines = out.split("\n"); i = next(k for k, l in enumerate(lines) if l.strip().startswith(label))
+        hexs = ""
+        for l in lines[i + 1:]:
+            if not l.startswith("    "): break
+            hexs += l.strip().replace(":", "")
+        return bytes.fromhex(hexs)
+    priv = hexblock("priv:").rjust(32, b"\0")[-32:]; pub = hexblock("pub:")
+    jwk = {"kty": "EC", "crv": "P-256", "x": b64url(pub[1:33]), "y": b64url(pub[33:65])}
+    thumb = json.dumps({k: jwk[k] for k in ("crv", "kty", "x", "y")}, separators=(",", ":"), sort_keys=True).encode()
+    jwk["kid"] = b64url(hashlib.sha256(thumb).digest()); jwk["d"] = b64url(priv)
+    return jwk
+def der_b64(p): return base64.b64encode(subprocess.check_output(["openssl", "x509", "-in", p, "-outform", "DER"])).decode()
+jwk = jwk_from_pem(f"{keys}/verifier.key.pem")
+json.dump(jwk, open(f"{keys}/verifier.jwk.json", "w"), indent=1)
+x5c = [der_b64(f"{keys}/verifier.crt.pem"), der_b64(f"{keys}/ca.crt.pem")]
+json.dump(x5c, open(f"{keys}/verifier.x5c.json", "w"))
+tmpl = open(f"{keys}/../../verifier/config/verifier-service.conf.tmpl").read()
+out = (tmpl.replace("@@VERIFIER_KEY@@", json.dumps({"type": "jwk", "jwk": jwk}))
+           .replace("@@VERIFIER_X5C@@", json.dumps(x5c)).replace("@@VERIFIER_SAN@@", san))
+open(f"{keys}/../../verifier/config/verifier-service.conf", "w").write(out)
+print("verifier kid", jwk["kid"], "- wrote keys/verifier.jwk.json, keys/verifier.x5c.json, verifier/config/verifier-service.conf")
+PY2
 chmod 600 "$KEYS"/*.jwk.json

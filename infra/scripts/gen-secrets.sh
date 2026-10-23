@@ -32,6 +32,7 @@ values = {
     "AUTHENTIK_DB_PASSWORD": "$(rand)",
     "KEYCAST_DB_PASSWORD": "$(rand)",
     "ODOO_ADMIN_PASSWORD": "$(rand 16)",
+    "ODOO_MASTER_PASSWORD": "$(rand 24)",
     "AUTHENTIK_SECRET_KEY": "$(rand 48)",
     "AUTHENTIK_BOOTSTRAP_PASSWORD": "$(rand 16)",
     "AUTHENTIK_BOOTSTRAP_TOKEN": "$(rand 32)",
@@ -82,6 +83,16 @@ else
   chmod 600 "$MASTER_KEY"
   echo "wrote $MASTER_KEY"
 fi
+
+# Odoo config with the master password from .env (odoo.conf is gitignored).
+python3 - "$INFRA_DIR" <<'PYRENDER'
+import re, sys
+infra = sys.argv[1]
+env = dict(m.groups() for m in (re.match(r"^([A-Z0-9_]+)=([^#\s]*)", l) for l in open(f"{infra}/.env")) if m)
+tmpl = open(f"{infra}/odoo/odoo.conf.tmpl").read()
+open(f"{infra}/odoo/odoo.conf", "w").write(tmpl.replace("@@ODOO_MASTER_PASSWORD@@", env.get("ODOO_MASTER_PASSWORD", "")))
+print(f"wrote {infra}/odoo/odoo.conf")
+PYRENDER
 
 # Phase 3: the credential issuer's CA, signer key and the walt.id Issuer2 key files.
 "$INFRA_DIR/scripts/gen-issuer-pki.sh"

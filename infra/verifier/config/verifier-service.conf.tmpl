@@ -1,0 +1,18 @@
+# Template, rendered into verifier-service.conf (gitignored) by scripts/gen-issuer-pki.sh.
+# walt.id Verifier2 checks village-pass presentations for the door page and the pass bridge
+# (both in the onboarding service). urlPrefix is the wallet-facing URL of the sessions; the
+# onboarding service creates sessions through the docker network (http://verifier:7004).
+#
+# Requests are signed (OpenID4VP x509_san_dns client id): the request object is a JWT signed
+# with the verifier key below and carries the x5c chain (Belfry CA + verifier leaf, SAN =
+# VERIFIER_SAN). walt.id requires a dotted DNS name, so "localhost" is not possible; locally the
+# client id does not match the response_uri host (the test wallet does not check it, real
+# wallets do), in production VERIFIER_SAN is the verifier's public hostname.
+clientId: "x509_san_dns:@@VERIFIER_SAN@@"
+clientMetadata: {
+   client_name: "Belfry (Open Source Village)"
+}
+urlPrefix: "${VERIFIER_PUBLIC_URL}/verification-session"
+urlHost: "openid4vp://authorize"
+key: @@VERIFIER_KEY@@
+x5c: @@VERIFIER_X5C@@

@@ -5,3 +5,6 @@ access_belfry_pass_steward,belfry.pass steward,model_belfry_pass,group_steward,1
 access_belfry_pass_admin,belfry.pass admin,model_belfry_pass,group_admin,1,1,1,1
 access_belfry_stripe_event_steward,belfry.stripe.event steward,model_belfry_stripe_event,group_steward,1,0,0,0
 access_belfry_stripe_event_admin,belfry.stripe.event admin,model_belfry_stripe_event,group_admin,1,1,1,1
+access_account_move_belfry_admin,account.move read for the onboarding service,account.model_account_move,group_admin,1,0,0,0
+access_account_move_line_belfry_admin,account.move.line read for the onboarding service,account.model_account_move_line,group_admin,1,0,0,0
+access_payment_transaction_belfry_admin,payment.transaction read for the onboarding service,payment.model_payment_transaction,group_admin,1,0,0,0

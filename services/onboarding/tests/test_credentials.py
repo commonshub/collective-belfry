@@ -148,6 +148,7 @@ def test_door_asks_for_the_tier_only_and_reports_validity(client, verifier):
     query = created["dcql_query"]["credentials"][0]
     assert query["meta"]["vct_values"] == ["https://belfry.test/vct/village-pass/v1"]
     assert query["claims"] == [{"path": ["pass_tier"]}]
+    assert created["signed_request"] is True
     policies = created["policies"]["vc_policies"]
     assert "signature" in policies and "expiration" in policies and "not-before" in policies
     assert {
@@ -338,3 +339,37 @@ def test_pass_credential_data_validity(tier, start, end):
         now=2_000_000_000,
     )  # fmt: skip
     assert late["nbf"] == int(dt.datetime(2027, 1, 25, tzinfo=dt.UTC).timestamp())
+
+
+def test_door_refuses_a_pass_signed_by_another_issuer_certificate(client, verifier):
+    sid = client.post("/door/sessions").json()["session_id"]
+    verifier.succeed(sid, {"pass_tier": "week", "exp": 1_800_000_000}, leaf="MIIBsomebodyElse")
+    result = client.get(f"/door/sessions/{sid}").json()
+    assert result == {
+        "status": "invalid",
+        "verifier_status": "SUCCESSFUL",
+        "failed": ["issuer-certificate"],
+    }
+
+
+def test_bridge_refuses_a_pass_signed_by_another_issuer_certificate(client, verifier):
+    r = client.get(
+        "/bridge/authorize",
+        params={"client_id": "belfry-authentik", "redirect_uri": "http://authentik.test/cb",
+                "response_type": "code", "state": "s"},
+    )  # fmt: skip
+    sid = r.text.split('data-sid="', 1)[1].split('"', 1)[0]
+    verifier.succeed(
+        list(verifier.sessions)[-1], {"member_number": "OSV-0001"}, leaf="MIIBsomebodyElse"
+    )
+    res = client.get(f"/bridge/poll/{sid}").json()
+    assert res["status"] == "failed" and res["failed"] == ["issuer-certificate"]
+
+
+def test_issuer_pinning_helpers():
+    assert credentials.issued_by_belfry({}, ["MIIBfake"]) is False
+    assert credentials.issued_by_belfry({"signed": "not-a-jwt"}, ["MIIBfake"]) is False
+    assert (
+        credentials.issued_by_belfry({"signed": "eyJ4NWMiOlsiTUlJQmZha2UiXX0.e30.c2ln"}, [])
+        is False
+    )

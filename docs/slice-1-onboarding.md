@@ -89,7 +89,7 @@ Depends on `sale_management`, `account_payment`, `payment_stripe`, `loyalty`, `s
 | note | Char | |
 | url | Char, computed | `<base_url>/belfry/invite/<token>` |
 
-Stewards are members of group `belfry_pass.group_steward` (create, read own invites). Admins: `belfry_pass.group_admin`.
+Stewards are members of group `belfry_pass.group_steward` (create, read own invites). Admins: `belfry_pass.group_admin`, which also grants read access to `account.move`, `account.move.line` and `payment.transaction` so the onboarding service user needs no accounting or settings groups (2026-10-23).
 
 **Model `belfry.stripe.event`**: `event_id` Char unique, `type` Char, `received_at` Datetime, `pass_id` Many2one, `result` Char. Written only by the onboarding service's Stripe endpoint.
 

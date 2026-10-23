@@ -46,10 +46,13 @@ rpc() {
   curl -fsS "$ODOO_URL/jsonrpc" -H 'Content-Type: application/json' \
     -d "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"id\":1,\"params\":{\"service\":\"$1\",\"method\":\"$2\",\"args\":$3}}"
 }
-UID_=$(rpc common authenticate "[\"$ODOO_DB\",\"$ODOO_ONBOARDING_LOGIN\",\"$ODOO_API_KEY\",{}]" | jq -r '.result')
-[[ "$UID_" =~ ^[0-9]+$ ]] || die "cannot authenticate to Odoo with ODOO_API_KEY"
+# The test's own Odoo calls (invites, emulated payments, inspection) run as admin; the service
+# user is restricted to what the onboarding service needs (bootstrap).
+UID_=$(rpc common authenticate "[\"$ODOO_DB\",\"admin\",\"$ODOO_ADMIN_PASSWORD\",{}]" | jq -r '.result')
+[[ "$UID_" =~ ^[0-9]+$ ]] || die "cannot authenticate to Odoo as admin with ODOO_ADMIN_PASSWORD"
+[[ "$(rpc common authenticate "[\"$ODOO_DB\",\"$ODOO_ONBOARDING_LOGIN\",\"$ODOO_API_KEY\",{}]" | jq -r '.result')" =~ ^[0-9]+$ ]] || die "the service user's ODOO_API_KEY does not authenticate"
 ox() { # model method args_json [kwargs_json]
-  local out; out=$(rpc object execute_kw "[\"$ODOO_DB\",$UID_,\"$ODOO_API_KEY\",\"$1\",\"$2\",$3,${4:-{\}}]")
+  local out; out=$(rpc object execute_kw "[\"$ODOO_DB\",$UID_,\"$ODOO_ADMIN_PASSWORD\",\"$1\",\"$2\",$3,${4:-{\}}]")
   if [[ $(jq -r 'has("error")' <<<"$out") == true ]]; then jq -r '.error.data.message // .error.message' <<<"$out" >&2; return 1; fi
   jq -c '.result' <<<"$out"
 }
@@ -168,6 +171,19 @@ else
   bad "activation mail: $(jq -c 'map({recipient_ids, subject, state})' <<<"$MAILS")"
 fi
 [[ -n "$(jq -r '.login_mail_sent_at // empty' <<<"$PASS_LOGIN")" ]] && ok "login_mail_sent_at set" || bad "login_mail_sent_at empty"
+# Deliver the queued mail now (the mail queue cron runs every few minutes) and read it back
+# from Mailpit, Odoo's outgoing mail server in the local stack.
+MAILPIT_URL=${MAILPIT_URL:-http://localhost:8025}
+ox mail.mail send "[$(jq -c 'map(.id)' <<<"$MAILS")]" >/dev/null || true
+sleep 1
+MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=to:$EMAIL")
+if [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]]; then
+  MP_ID=$(jq -r '.messages[0].ID' <<<"$MP")
+  MP_BODY=$(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.HTML // .Text')
+  grep -q "$SETUP_URL" <<<"$MP_BODY" && ok "mail delivered over SMTP to Mailpit with the setup link (from $(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.From.Address'))" || bad "delivered mail lacks the setup link"
+else
+  bad "no mail for $EMAIL in Mailpit: $(jq -c '{messages_count}' <<<"$MP")"
+fi
 
 # Drive the setup flow like the browser: prompt (password) -> user write -> login (remember me).
 AK_PW="smoke-$(openssl rand -hex 12)"

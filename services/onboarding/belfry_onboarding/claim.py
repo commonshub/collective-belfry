@@ -187,7 +187,15 @@ def door_result(svc: Services, session_id: str) -> dict[str, Any]:
     info = svc.verifier.session_info(session_id)
     status = info.get("status")
     if status == "SUCCESSFUL":
-        claims = credentials.presented_claims(info) or {}
+        cred = credentials.presented_credential(info) or {}
+        if not credentials.issued_by_belfry(cred, svc.issuer_x5c[:1]):
+            log.warning("door: session %s presented a pass not signed by Belfry's key", session_id)
+            return {
+                "status": "invalid",
+                "verifier_status": status,
+                "failed": ["issuer-certificate"],
+            }
+        claims = cred.get("credentialData") or {}
         exp = claims.get("exp")
         valid_until = (
             dt.datetime.fromtimestamp(int(exp), dt.UTC).date().isoformat() if exp else None

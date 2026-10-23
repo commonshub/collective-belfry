@@ -442,13 +442,30 @@ class FakeVerifier:
             return httpx.Response(404, json={"error": "not found"})
         return httpx.Response(200, json=self.sessions[sid])
 
-    def succeed(self, sid: str, claims: dict[str, Any]) -> None:
+    def succeed(self, sid: str, claims: dict[str, Any], leaf: str = "MIIBfake") -> None:
+        """Mark the session as presented; ``leaf`` is the x5c[0] of the issuer JWT (the fixture
+        issuer leaf by default, so the door and bridge accept it)."""
+        import base64
+
+        header = (
+            base64.urlsafe_b64encode(
+                json.dumps({"alg": "ES256", "typ": "dc+sd-jwt", "x5c": [leaf, "MIIBca"]}).encode()
+            )
+            .rstrip(b"=")
+            .decode()
+        )
         self.sessions[sid].update(
             {
                 "status": "SUCCESSFUL",
                 "attempted": True,
                 "presented_credentials": {
-                    "village_pass": [{"type": "vc-sd_jwt", "credentialData": claims}]
+                    "village_pass": [
+                        {
+                            "type": "vc-sd_jwt",
+                            "credentialData": claims,
+                            "signed": f"{header}.e30.c2ln",
+                        }
+                    ]
                 },
                 "policy_results": {
                     "vc_policies": [{"policy": {"id": "signature"}, "success": True}]

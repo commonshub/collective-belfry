@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login) and Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in). The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login), Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in) and a first hardening pass is in (§3f: Odoo mail and privileges, issuer pinning, signed verifier requests). The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -130,11 +130,22 @@ Open from this slice (not blocking the local happy path):
 6. Issuer key rotation (old keys in the JWKS until their credentials expire) and HSM/KMS for the key: not done.
 7. Day-pass `exp` is the end of the day (UTC); the plan's `role` claim and the `sub` = did:webvh variant (Phase 4) are not in the credential yet.
 
+## 3f. Hardening: Odoo mail and privileges, issuer pinning, signed verifier requests — built 2026-10-23
+
+- [x] Odoo sends mail: `mailpit` in Compose (SMTP sink, UI http://localhost:8025); bootstrap creates the outgoing mail server `belfry` from `SMTP_*`, sets the company name and sender (`COMPANY_NAME`, `MAIL_FROM`). The smoke test sends the queue and reads the delivered activation mail back from Mailpit. Production: point `SMTP_*` at a real relay.
+- [x] Odoo master password: `odoo/odoo.conf` is rendered from `odoo.conf.tmpl` with `ODOO_MASTER_PASSWORD` (`admin_passwd`); `list_db` stays off. The rendered file is gitignored (it had been committed before; untracked now). Note: `/web/database/manager` still answers 200 with `list_db = False`; the master password is what guards create/drop/backup there, so block the path at the reverse proxy in production as well.
+- [x] Least privilege for the service user: internal user + contact management + `belfry_pass.group_admin` only (was Settings, Sales manager, Accounting manager). The module grants `group_admin` read on `account.move`, `account.move.line` and `payment.transaction` (ACL rows, module 19.0.1.3.0). The smoke test's own Odoo calls run as `admin`.
+- [x] Issuer pinning: Verifier2's `signature` policy trusts any x5c leaf, so the door and the bridge now accept only credentials whose `x5c[0]` is Belfry's own leaf (`credentials.issued_by_belfry`; a rotation appends old leaves). Closes §3e open item 2 for the verifier side; publishing the CA for wallets stays open.
+- [x] Signed verifier requests: `gen-issuer-pki.sh` adds a verifier key and certificate (SAN `VERIFIER_SAN`, default `verifier.belfry.local`, walt.id refuses `localhost`) and renders `verifier/config/verifier-service.conf` with `clientId: x509_san_dns:...`, `key` and `x5c`. The request object is a signed JWT; the test wallet reads it. Encrypted responses (`direct_post.jwt`) are not enabled.
+- [x] Verified live: `make smoke` 61 checks with the restricted service user (activation, revoke, login links, claim, door, bridge all through it), the activation mail delivered over SMTP to Mailpit with the setup and claim links, signed request objects accepted by the test wallet, revoked and foreign-issuer passes refused. `make test-onboarding` 67 tests, `make test-odoo` 46 tests.
+
+Still open: encrypted responses and HAIP's authorization-code flow; CA publication; issuer key in a KMS and rotation; the management APIs stay unauthenticated behind the network.
+
 ## 4. Next
 
 1. A public test deployment (HTTPS) and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
 2. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
-3. Phase 3 hardening: trust-list/x5c policy and CA publication, signed verifier requests, issuer key in a KMS, key rotation, status list persistence (see §3e open items).
+3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
 ## Notes
 

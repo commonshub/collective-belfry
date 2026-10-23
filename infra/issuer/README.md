@@ -13,11 +13,12 @@ Every pass is an SD-JWT VC (`dc+sd-jwt`, `vct` `<public URL>/vct/village-pass/v1
 | `issuer.jwk.json` | the same key as private JWK (`kid` = RFC 7638 thumbprint); signs the status list in the onboarding service |
 | `issuer.x5c.json` | `[leaf, CA]` as base64 DER: the `x5c` header of credentials and status lists |
 | `bridge.jwk.json` | signs the pass bridge's ID tokens |
+| `verifier.key.pem`, `verifier.crt.pem`, `verifier.jwk.json`, `verifier.x5c.json` | Verifier2's request-signing key and certificate, SAN `verifier.belfry.local` (`VERIFIER_SAN`), rendered into `infra/verifier/config/verifier-service.conf` |
 | `ci-token.jwk.json` | Issuer2's own access-token and nonce key |
 
 and renders two config files with that material into `infra/issuer/config/` (also gitignored): `issuer2-profiles.conf` (profile `villagePass`) and `issuer-service.conf` (`ciTokenKey`). The committed files in `config/` are the rest of the Issuer2 configuration; `credential-issuer-metadata.conf` declares the `village_pass` configuration. **Rotating the issuer key invalidates every pass certificate signed with it** (the plan keeps old keys in the JWKS until their credentials expire; not implemented yet).
 
-The leaf is what matters to verifiers: Verifier2's `signature` policy takes the key from the `x5c` leaf, and it accepts a status list only when the list's `x5c` leaf is the credential's leaf (or the list's `iss` equals the credential's `iss`). Trust in the CA itself is not configured anywhere yet (Phase 3 open item: `x5c`/trust-list policy, publishing the CA).
+The leaf is what matters to verifiers: Verifier2's `signature` policy takes the key from whatever `x5c` leaf the credential carries, so on its own it would accept a credential signed by anyone. The door and the bridge therefore **pin Belfry's leaf**: after a successful session they read the presented credential's `x5c[0]` and accept only Belfry's own certificate (`ISSUER_X5C_PATH`; a rotation appends the old leaf to the accepted list). Verifier2 accepts a status list only when the list's `x5c` leaf is the credential's leaf (or the list's `iss` equals the credential's `iss`). The CA is not published anywhere yet; wallets that need a trust anchor get it with the public deployment.
 
 ## What is where
 
@@ -39,5 +40,5 @@ Wallets talk to `ISSUER_PUBLIC_URL` (`credential_issuer` = `<that>/openid4vci`) 
 
 - Phones: `http://localhost` works for the test wallet only. Real wallets need HTTPS with a public chain for the issuer, verifier and onboarding URLs (EUDI reference wallet: also signed issuer metadata and a trusted issuer certificate, see the spike note).
 - HAIP mandates the authorization code flow; the claim QR is the pre-authorized code flow (accepted by wallets, not by a strict conformance run).
-- The verifier's request is unsigned (`client_id = redirect_uri:...`); a signed `x509_san_dns` request needs a verifier key and certificate in `verifier/config/verifier-service.conf`.
+- The verifier's requests are signed (`x509_san_dns:verifier.belfry.local`, request object JWT with the verifier's x5c). walt.id refuses `localhost` as a DNS name, so locally the client id does not match the response URI's host; the test wallet does not check that, real wallets do. In production `VERIFIER_SAN` is the verifier's public hostname. Encrypted responses (`direct_post.jwt`) are not enabled.
 - `exp` of a day pass is the end of its day (UTC), not the event's closing hour.

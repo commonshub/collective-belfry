@@ -49,13 +49,18 @@ class VerifierClient:
         self.url = url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
 
-    def create_session(self, dcql_query: dict[str, Any], vc_policies: list[Any]) -> dict[str, Any]:
+    def create_session(
+        self, dcql_query: dict[str, Any], vc_policies: list[Any], signed_request: bool = True
+    ) -> dict[str, Any]:
         """Cross-device OpenID4VP session. Returns ``sessionId`` and
-        ``bootstrapAuthorizationRequestUrl`` (the ``openid4vp://`` URL for the QR code)."""
+        ``bootstrapAuthorizationRequestUrl`` (the ``openid4vp://`` URL for the QR code).
+        ``signed_request``: the request object is a JWT signed with the verifier's configured
+        key and x5c (client id ``x509_san_dns:...``), so wallets can authenticate the verifier."""
         body = {
             "flow_type": "cross_device",
             "core_flow": {
                 "dcql_query": dcql_query,
+                "signed_request": signed_request,
                 "policies": {
                     "vp_policies": {"dc+sd-jwt": VP_POLICIES_SD_JWT},
                     "vc_policies": vc_policies,

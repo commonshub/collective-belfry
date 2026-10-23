@@ -1,6 +1,9 @@
 [options]
-; Belfry local Odoo 19 config. DB host/user/password come from PGHOST/PGUSER/PGPASSWORD
-; in the compose environment (libpq reads them), so nothing secret lives in this file.
+; Template of the Belfry Odoo 19 config, rendered into odoo.conf (gitignored) by
+; scripts/gen-secrets.sh. DB host/user/password come from PGHOST/PGUSER/PGPASSWORD in the
+; compose environment (libpq reads them). The only secret here is the master password that
+; guards database management (create/drop/backup over /web/database); list_db is off as well.
+admin_passwd = @@ODOO_MASTER_PASSWORD@@
 addons_path = /mnt/extra-addons
 data_dir = /var/lib/odoo
 ; The main server only serves the "odoo" database; test databases (test_belfry) are

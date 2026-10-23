@@ -166,17 +166,42 @@ def type_metadata(vct: str) -> dict[str, Any]:
 # -- reading a Verifier2 session -----------------------------------------------------------------
 
 
-def presented_claims(info: dict[str, Any]) -> dict[str, Any] | None:
-    """The disclosed claims of the first presented village pass in a Verifier2 session, or None
-    while the session has no successful result. walt.id stores presented credentials with the
-    disclosures already applied, so this is a plain lookup."""
-    status = info.get("status")
-    if status != "SUCCESSFUL":
+def presented_credential(info: dict[str, Any]) -> dict[str, Any] | None:
+    """The first presented village pass of a successful Verifier2 session (walt.id's record
+    with ``credentialData`` = claims with disclosures applied, ``signed`` = the issuer JWT)."""
+    if info.get("status") != "SUCCESSFUL":
         return None
     presented = info.get("presented_credentials") or {}
     for _query_id, creds in presented.items() if isinstance(presented, dict) else []:
         for cred in creds or []:
-            data = cred.get("credentialData") if isinstance(cred, dict) else None
-            if isinstance(data, dict):
-                return data
+            if isinstance(cred, dict) and isinstance(cred.get("credentialData"), dict):
+                return cred
     return None
+
+
+def presented_claims(info: dict[str, Any]) -> dict[str, Any] | None:
+    """The disclosed claims of the first presented village pass, or None."""
+    cred = presented_credential(info)
+    return cred["credentialData"] if cred else None
+
+
+def issuer_leaf(cred: dict[str, Any]) -> str | None:
+    """The base64 DER leaf certificate (``x5c[0]``) the presented credential was signed with."""
+    signed = cred.get("signed") or cred.get("signedWithDisclosures") or ""
+    try:
+        header = json.loads(
+            base64.urlsafe_b64decode(signed.split(".")[0] + "=" * (-len(signed.split(".")[0]) % 4))
+        )
+    except (ValueError, IndexError):
+        return None
+    x5c = header.get("x5c") or []
+    return x5c[0] if x5c else None
+
+
+def issued_by_belfry(cred: dict[str, Any], accepted_leaves: list[str]) -> bool:
+    """Verifier2's ``signature`` policy trusts whatever x5c leaf the credential carries, so the
+    door and the bridge pin the issuer: the leaf must be one of Belfry's own (the current
+    signer, plus older ones kept during a rotation). Without a configured leaf nothing is
+    accepted."""
+    leaf = issuer_leaf(cred)
+    return bool(leaf) and leaf in accepted_leaves
