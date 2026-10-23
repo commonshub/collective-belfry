@@ -56,6 +56,10 @@ Then in Odoo: Invoicing › Configuration › Payment Providers › Stripe: keys
 registers its own webhook); Belfry's dispute endpoint is `https://pass.<domain>/hooks/stripe`
 (`STRIPE_WEBHOOK_SECRET`). Stewards get the `Steward` group; the first steward is created by hand.
 
+## Keycast and Authentik behind the proxy
+
+The overlay unsets `OIDC_BACKCHANNEL_URL` for Keycast: it fetches Authentik's discovery document, tokens and keys through the public `https://login.<domain>` instead of the Compose network, because Authentik derives the issuer from the request scheme and would publish `http://login.<domain>/...` for an internal request, which Keycast rejects against `OIDC_ISSUER`. The local stack keeps the backchannel (Authentik is only reachable as `http://localhost:9000` from the host there).
+
 ## What the proxy does (proxy/Caddyfile)
 
 | Host | Upstream | Blocked |

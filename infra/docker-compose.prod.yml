@@ -44,6 +44,11 @@ services:
   keycast:
     ports: !reset []
     restart: unless-stopped
+    environment:
+      # Behind the proxy Keycast talks to Authentik over the public HTTPS hostname: through the
+      # Compose network Authentik only sees plain HTTP and publishes an http:// issuer, which
+      # Keycast rejects against OIDC_ISSUER (seen on the first deployment, 2026-10-23).
+      OIDC_BACKCHANNEL_URL: ""
   keycast-relay:
     ports: !reset []
     restart: unless-stopped

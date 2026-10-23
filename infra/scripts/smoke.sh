@@ -21,13 +21,43 @@ set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a; . "$INFRA_DIR/.env"; set +a
-# Public deployment: set the public URLs (ODOO_URL, AK_URL, KC_URL, ONB_URL, BLOSSOM_URL) and
-# WALLET_MAP="" (the test wallet then uses the public hostnames); MAILPIT_URL is optional there.
+# Public deployment: set the public URLs (ODOO_URL, AK_URL, KC_URL, ONB_URL, BLOSSOM_URL),
+# WALLET_MAP="" (the test wallet then uses the public hostnames) and ONB_ADMIN_EXEC=1; MAILPIT_URL
+# is optional there (the activation mail to the fake smoke address is refused by a real relay).
 ODOO_URL=${ODOO_URL:-http://localhost:8069}
 AK_URL=${AK_URL:-http://localhost:9000}
 KC_URL=${KC_URL:-http://localhost:3000}
 ONB_URL=${ONB_URL:-http://localhost:8100}
 WALLET_MAP=${WALLET_MAP-localhost:7005=issuer:7005,localhost:7004=verifier:7004,localhost:8100=onboarding:8100}
+# ONB_ADMIN_EXEC=1: the public proxy denies /admin/* and /hooks/odoo/*, so those calls run inside
+# the onboarding container (python's urllib; the image has no curl).
+ONB_ADMIN_EXEC=${ONB_ADMIN_EXEC:-}
+onb_post() { # path -> body (admin and hook endpoints of the onboarding service)
+  if [[ -n "$ONB_ADMIN_EXEC" ]]; then
+    docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c '
+import sys, urllib.request, urllib.error
+req = urllib.request.Request("http://localhost:8100" + sys.argv[1], method="POST", data=(sys.argv[2].encode() if len(sys.argv) > 2 else None), headers={"Content-Type": "application/json"})
+try:
+    r = urllib.request.urlopen(req); print(r.read().decode())
+except urllib.error.HTTPError as e:
+    print(e.read().decode()); sys.exit(0)' "$@"
+  else
+    local path=$1; shift
+    curl -sS -X POST "$ONB_URL$path" ${1:+-H 'Content-Type: application/json' -d "$1"}
+  fi
+}
+onb_post_code() { # path -> HTTP status
+  if [[ -n "$ONB_ADMIN_EXEC" ]]; then
+    docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c '
+import sys, urllib.request, urllib.error
+try:
+    print(urllib.request.urlopen(urllib.request.Request("http://localhost:8100" + sys.argv[1], method="POST")).status)
+except urllib.error.HTTPError as e:
+    print(e.code)' "$1"
+  else
+    curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL$1"
+  fi
+}
 ODOO_DB=odoo
 FORM_FIELD_NAME=${FORM_FIELD_NAME:-name}
 FORM_FIELD_EMAIL=${FORM_FIELD_EMAIL:-email}
@@ -116,8 +146,7 @@ for i in $(seq 1 30); do
 done
 if [[ "$(jq -r .state <<<"$PASS")" != active ]]; then
   echo "  pass still $(jq -r .state <<<"$PASS") after 60s; calling the webhook directly"
-  curl -sS -o /dev/null -X POST "$ONB_URL/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" -H 'Content-Type: application/json' \
-    -d "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke\"}" || true
+  onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke\"}" >/dev/null || true
   sleep 3
   PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
 fi
@@ -276,14 +305,18 @@ else
 fi
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
-RESEND=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
+RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"
 SETUP_URL2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url"]}' | jq -r '.[0].login_setup_url')
 [[ -n "$SETUP_URL2" && "$SETUP_URL2" != "$SETUP_URL" ]] && ok "pass carries a new link" || bad "link unchanged: $SETUP_URL2"
 MAIL_N2=$(ox mail.mail search_count "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]")
 [[ "$MAIL_N2" == 2 ]] && ok "second mail queued" || bad "mails for the pass: $MAIL_N2"
-RESEND=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=wrong")
+RESEND=$(onb_post_code "/admin/passes/$PASS_ID/login-link?token=wrong")
 [[ "$RESEND" == 401 ]] && ok "wrong token -> 401" || bad "wrong token -> $RESEND"
+if [[ -n "$ONB_ADMIN_EXEC" ]]; then
+  PUB=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
+  [[ "$PUB" == 404 ]] && ok "admin endpoint denied at the public proxy -> 404" || bad "admin endpoint public -> $PUB"
+fi
 
 step "8. pass certificate: claim link in the mail, offer minted, SD-JWT VC received by the test wallet"
 # The test wallet (python -m belfry_onboarding.testwallet) runs inside the onboarding container
@@ -351,7 +384,7 @@ step "11. revoke the pass: status list bit flips, the door refuses the certifica
 STATUS_JWT=$(curl -sS "$ONB_URL/status/1"); echo "$STATUS_JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -c '{iss, sub, ttl, bits: .status_list.bits}' | sed 's/^/  /'
 bit() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "import sys,json,base64; from belfry_onboarding import credentials as c; t=sys.argv[1].split('.')[1]; p=json.loads(base64.urlsafe_b64decode(t+'='*(-len(t)%4))); print(c.status_at(p['status_list']['lst'], int(sys.argv[2])))" "$1" "$2"; }
 [[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 0 ]] && ok "status list: pass $PASS_ID valid (bit 0)" || bad "status bit before revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
-REV=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/revoke?token=$HOOK_TOKEN")
+REV=$(onb_post "/admin/passes/$PASS_ID/revoke?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$REV")" == revoked ]] && ok "steward revoke -> revoked" || bad "revoke: $REV"
 STATUS_JWT=$(curl -sS "$ONB_URL/status/1")
 [[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 1 ]] && ok "status list: pass $PASS_ID revoked (bit 1)" || bad "status bit after revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
@@ -361,7 +394,7 @@ DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"
 for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
 [[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
-[[ "$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
+[[ "$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
 if [[ -n "${KC_TOKEN:-}" ]]; then
   # The signer is suspended and the pass is gone: a fresh Blossom token is refused twice over.
   BAUTH2=$(blossom_auth upload "$(printf 'again' | sha256sum | cut -c1-64)")
@@ -374,8 +407,7 @@ step "7. replay the webhook three times and check nothing was duplicated"
 # step 10 linked the pass-bridge source, so count the links as they are now
 LINKS_BEFORE_REPLAY=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')
 for i in 1 2 3; do
-  curl -sS -o /dev/null -w "  replay $i -> %{http_code}\n" -X POST "$ONB_URL/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" \
-    -H 'Content-Type: application/json' -d "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke-replay\"}"
+  echo "  replay $i -> $(onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke-replay\"}" | jq -r .result)"
 done
 sleep 2
 PASS2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id"]}' | jq -c '.[0]')
