@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<odoo noupdate="1">
+<odoo noupdate="0">
     <!-- Sent by belfry.pass.write whenever login_setup_url is written on an active pass: at
          activation (the onboarding service writes the link together with state=active) and when
          a steward presses "Send new login link". Mails are kept (auto_delete off) so a failed
-         delivery stays visible under Settings > Technical > Emails. -->
+         delivery stays visible under Settings > Technical > Emails. The text is maintained here,
+         not in the database: noupdate is off, so a module upgrade rewrites the template
+         (migrations/19.0.1.4.0 released the record, which was created with noupdate on). -->
     <record id="mail_template_pass_activated" model="mail.template">
-        <field name="name">Belfry: pass active, login setup link</field>
+        <field name="name">Belfry: pass active, sign-in link</field>
         <field name="model_id" ref="belfry_pass.model_belfry_pass"/>
         <field name="subject">Your Open Source Village pass is active ({{ object.member_number }})</field>
         <field name="email_from">{{ object.company_id.email_formatted or user.email_formatted }}</field>
@@ -21,12 +23,14 @@
         Your member number is <strong><t t-out="object.member_number or ''"/></strong>.
     </p>
     <p>
-        <strong>1. Set up your Belfry login.</strong> Choose a password through this link; it works once
-        and expires on <t t-out="format_datetime(object.login_setup_expires_at, dt_format='long') if object.login_setup_expires_at else ''"/>:
+        <strong>1. Sign in to Belfry.</strong> This link signs you in once, without a password, and
+        expires on <t t-out="format_datetime(object.login_setup_expires_at, dt_format='long') if object.login_setup_expires_at else ''"/>.
+        Later, sign in at <a t-att-href="object.belfry_login_url()"><t t-out="object.belfry_login_url()"/></a>
+        with your e-mail address: you get a new sign-in link by mail each time (or present your pass).
     </p>
     <p style="margin: 16px 0;">
         <a t-att-href="object.login_setup_url" style="background-color: #875A7B; padding: 8px 16px; text-decoration: none; color: #fff; border-radius: 5px; font-size: 13px;">
-            Set up your Belfry login
+            Sign in to Belfry
         </a>
     </p>
     <t t-if="object.sudo().claim_url">
@@ -47,8 +51,7 @@
         <code><t t-out="object.npub or ''"/></code>.
     </p>
     <p>
-        If you already have a Belfry login, you can ignore the link and sign in as usual.
-        If the link has expired, reply to this e-mail and we will send a new one.
+        If the link has expired, just sign in with your e-mail address as described above.
     </p>
     <p>See you at the village,<br/>Belfry</p>
 </div>

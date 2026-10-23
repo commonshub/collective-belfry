@@ -9,7 +9,9 @@
 #     belfry.onboarding_url / belfry.hook_token config parameters
 #  4. bootstraps the Keycast admin (register with the ALLOWED_PUBKEYS key, verify through the
 #     dev inbox, login, fetch the admin token) and inserts the belfry-event policy
-#  5. waits for the Authentik bootstrap token and the pass-bridge blueprint
+#  5. waits for the Authentik bootstrap token and the Belfry blueprints (pass bridge, Keycast
+#     provider, sign-in link, magic-link login) and writes the SMTP settings into the
+#     magic-link e-mail stage
 #  6. writes ODOO_API_KEY, KEYCAST_ADMIN_TOKEN, AUTHENTIK_TOKEN into infra/.env
 #
 # Usage: infra/scripts/bootstrap.sh   (needs curl, jq, python3, docker compose)
@@ -205,12 +207,13 @@ fi
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onboarding_url\",\"${ONBOARDING_URL:-http://onboarding:8100}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.login_url\",\"${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
 # Odoo's own absolute links (invite URLs, payment links in mails) use web.base.url; freeze it so a
 # login from another host name does not rewrite it.
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"web.base.url\",\"${ODOO_PUBLIC_URL:-http://localhost:8069}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"web.base.url.freeze\",\"True\"]" >/dev/null
-echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url, belfry.public_url and web.base.url (${ODOO_PUBLIC_URL:-http://localhost:8069}) set"
+echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url, belfry.login_url, belfry.public_url and web.base.url (${ODOO_PUBLIC_URL:-http://localhost:8069}) set"
 
 # Outgoing mail: the company (sender) and one ir.mail_server from SMTP_* (Mailpit locally).
 COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"limit":1}' | jq -r '.[0]')
@@ -330,6 +333,31 @@ SETUP_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-account-setup/" | jq -r '
 ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '[.results[] | select(.flow_recovery == $f and .default)] | length >= 1' >/dev/null \
   || die "no default brand carries the recovery flow belfry-account-setup (blueprint belfry-account-setup-flow)"
 echo "blueprint belfry-account-setup-flow: successful, default brand recovery flow set"
+# Participants sign in by magic link (blueprint belfry-magic-link-flow): the flow must be the
+# default brand's authentication flow, and its e-mail stage gets the SMTP settings here (the
+# blueprint leaves them out so a re-apply never resets them; same values as Odoo's mail server).
+i=0
+while :; do
+  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-magic-link-flow" | jq -c '.results[0] // empty')
+  status=$(jq -r '.status // empty' <<<"$bp")
+  [[ "$status" == successful ]] && break
+  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-magic-link-flow status '$status'"; }
+  printf '.'; sleep 5
+done
+LOGIN_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-magic-link/" | jq -r '.pk // empty')
+[[ -n "$LOGIN_FLOW" ]] || die "flow belfry-magic-link missing"
+ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$LOGIN_FLOW" '[.results[] | select(.flow_authentication == $f and .default)] | length >= 1' >/dev/null \
+  || die "the default brand's authentication flow is not belfry-magic-link (blueprint belfry-magic-link-flow)"
+EMAIL_STAGE=$(ak "$AK_URL/api/v3/stages/email/?name=belfry-magic-link-email" | jq -r '.results[0].pk // empty')
+[[ -n "$EMAIL_STAGE" ]] || die "e-mail stage belfry-magic-link-email missing"
+STAGE_SMTP=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PORT:-1025}" \
+  --arg user "${SMTP_USER:-}" --arg pass "$SMTP_PASSWORD" --arg enc "${SMTP_ENCRYPTION:-none}" \
+  --arg from "${MAIL_FROM:-belfry@belfry.local}" \
+  '{use_global_settings: false, host: $host, port: $port, username: $user, password: $pass,
+    use_tls: ($enc == "starttls"), use_ssl: ($enc == "ssl"), timeout: 30, from_address: $from}')
+ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/stages/email/$EMAIL_STAGE/" -d "$STAGE_SMTP" \
+  || die "could not write the SMTP settings into the e-mail stage"
+echo "blueprint belfry-magic-link-flow: successful, brand login flow set, magic links sent via ${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025}"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 
 # ---------- 6. summary ----------

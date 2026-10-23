@@ -19,7 +19,7 @@ def test_activation_stores_a_public_link_once(services, odoo, authentik):
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     p = pass_for(odoo, ids["invoice"])
-    assert authentik.recovery_links == [(p["authentik_user_id"], "days=30")]
+    assert authentik.recovery_links == [(p["authentik_user_id"], "days=7")]
     # authentik answered with its own host; the stored link uses the public origin and keeps
     # the flow path and token
     assert (

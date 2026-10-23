@@ -135,6 +135,8 @@ services:
     volumes:
       - authentik-media:/media
       - ./authentik/blueprints:/blueprints/custom:ro
+      # Custom e-mail templates (belfry/magic_link.html for the magic-link stage).
+      - ./authentik/templates:/templates:ro
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s
@@ -154,6 +156,7 @@ services:
       - authentik-media:/media
       - authentik-certs:/certs
       - ./authentik/blueprints:/blueprints/custom:ro
+      - ./authentik/templates:/templates:ro
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s

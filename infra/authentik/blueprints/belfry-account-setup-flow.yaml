@@ -1,87 +1,58 @@
-# Belfry: how a participant gets an Authentik login (Phase 2, 2026-10-23).
+# Belfry: the one-time sign-in link mailed at activation (Phase 2, 2026-10-23; passwordless since
+# the magic-link decision of the same day, blueprint belfry-magic-link-flow).
 #
-# Participants are created by the onboarding service without a password. At activation the
-# service asks authentik for a recovery link for the user (POST /api/v3/core/users/<pk>/recovery/,
-# which plans the brand's recovery flow for that user and wraps the plan in a one-time flow
-# token), stores it on the pass, and Odoo mails it ("Set up your Belfry login"). Opening the link
-# runs this flow with the user already pending: choose a password, the account is written and
-# the browser is logged in. A later link for the same user replaces the earlier token.
+# Participants are created by the onboarding service without a password and never get one. At
+# activation the service asks authentik for a recovery link for the user (POST
+# /api/v3/core/users/<pk>/recovery/, which plans the brand's recovery flow for that user and wraps
+# the plan in a one-time flow token), stores it on the pass, and Odoo mails it ("Sign in to
+# Belfry"). Opening the link runs this flow with the user already pending and signs the browser
+# in; nothing else. A later link for the same user replaces the earlier token. Later sign-ins go
+# through the login page's magic link (belfry-magic-link) or the pass.
 #
 # Deliberately minimal: no identification or e-mail stage, so the flow only does something when
-# opened through such a link (a direct visit asks for a password and then fails at the user
-# write stage, "no pending user"; nothing is created). Self-service "forgot password" needs
-# authentik's own SMTP settings and is left for later; stewards re-send a link from the pass form.
+# opened through such a link (a direct visit ends in "no pending user"). The slug stays
+# belfry-account-setup (bootstrap, the smoke test and the onboarding service refer to it).
 # Applied by the worker's file watcher (bind mount /blueprints/custom); re-applied on change.
 version: 1
 metadata:
   name: belfry-account-setup-flow
   labels:
-    blueprints.goauthentik.io/description: "Account setup: participants choose a password through the link sent at activation"
+    blueprints.goauthentik.io/description: "One-time sign-in link sent at activation (no password)"
 entries:
   - model: authentik_flows.flow
     id: belfry-account-setup
     identifiers:
       slug: belfry-account-setup
     attrs:
-      name: Belfry account setup
-      title: Set up your Belfry login
+      name: Belfry sign-in link
+      title: Sign in to Belfry
       designation: recovery
       authentication: require_unauthenticated
       denied_action: message_continue
       compatibility_mode: true
 
-  - model: authentik_stages_prompt.prompt
-    id: belfry-setup-field-password
-    identifiers:
-      name: belfry-setup-field-password
-    attrs:
-      field_key: password
-      label: Password
-      type: password
-      required: true
-      placeholder: "At least 12 characters"
-      order: 0
-      sub_text: "This password signs you in to the Belfry community apps. A passkey can be added afterwards in your account settings."
-  - model: authentik_stages_prompt.prompt
-    id: belfry-setup-field-password-repeat
-    identifiers:
-      name: belfry-setup-field-password-repeat
-    attrs:
-      field_key: password_repeat
-      label: Password (repeat)
-      type: password
-      required: true
-      placeholder: "Password (repeat)"
-      order: 1
-
-  - model: authentik_policies_password.passwordpolicy
-    id: belfry-password-policy
-    identifiers:
-      name: belfry-password-policy
-    attrs:
-      password_field: password
-      length_min: 12
-      check_static_rules: true
-      check_zxcvbn: true
-      zxcvbn_score_threshold: 2
-      error_message: "Choose at least 12 characters that are not easy to guess."
-
+  # The password step of the first version is gone (deleting a stage deletes its bindings).
   - model: authentik_stages_prompt.promptstage
-    id: belfry-account-setup-password
+    state: absent
     identifiers:
       name: belfry-account-setup-password
-    attrs:
-      fields:
-        - !KeyOf belfry-setup-field-password
-        - !KeyOf belfry-setup-field-password-repeat
-      validation_policies:
-        - !KeyOf belfry-password-policy
   - model: authentik_stages_user_write.userwritestage
-    id: belfry-account-setup-write
+    state: absent
     identifiers:
       name: belfry-account-setup-write
-    attrs:
-      user_creation_mode: never_create
+  - model: authentik_policies_password.passwordpolicy
+    state: absent
+    identifiers:
+      name: belfry-password-policy
+  - model: authentik_stages_prompt.prompt
+    state: absent
+    identifiers:
+      name: belfry-setup-field-password
+  - model: authentik_stages_prompt.prompt
+    state: absent
+    identifiers:
+      name: belfry-setup-field-password-repeat
+
   - model: authentik_stages_user_login.userloginstage
     id: belfry-account-setup-login
     identifiers:
@@ -89,19 +60,6 @@ entries:
     attrs:
       session_duration: seconds=0
       remember_me_offset: days=14
-
-  - model: authentik_flows.flowstagebinding
-    identifiers:
-      target: !KeyOf belfry-account-setup
-      stage: !KeyOf belfry-account-setup-password
-      order: 10
-    attrs:
-      invalid_response_action: retry
-  - model: authentik_flows.flowstagebinding
-    identifiers:
-      target: !KeyOf belfry-account-setup
-      stage: !KeyOf belfry-account-setup-write
-      order: 20
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf belfry-account-setup

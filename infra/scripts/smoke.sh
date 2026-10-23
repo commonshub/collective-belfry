@@ -186,13 +186,13 @@ fi
 SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
 
-step "6c. login setup link: mailed by Odoo, sets the password through Authentik's flow"
-# Participants have no Authentik password: activation stores a one-time account-setup link
+step "6c. sign-in link: mailed by Odoo, signs the browser in through Authentik (no password)"
+# Participants never get an Authentik password: activation stores a one-time sign-in link
 # (authentik recovery flow belfry-account-setup) on the pass and Odoo mails it.
 PASS_LOGIN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url","login_setup_expires_at","login_mail_sent_at"]}' | jq -c '.[0]')
 SETUP_URL=$(jq -r '.login_setup_url // empty' <<<"$PASS_LOGIN")
 [[ "$SETUP_URL" == "${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-account-setup/?flow_token="* ]] \
-  && ok "pass carries a setup link on the public Authentik URL (valid until $(jq -r .login_setup_expires_at <<<"$PASS_LOGIN"))" \
+  && ok "pass carries a sign-in link on the public Authentik URL (valid until $(jq -r .login_setup_expires_at <<<"$PASS_LOGIN"))" \
   || bad "login_setup_url: '$SETUP_URL'"
 MAILS=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]" '{"fields":["recipient_ids","subject","body_html","state"]}')
 MAIL_N=$(jq length <<<"$MAILS")
@@ -219,17 +219,15 @@ else
   bad "no mail for $EMAIL in Mailpit: $(jq -c '{messages_count}' <<<"$MP")"
 fi
 
-# Drive the setup flow like the browser: prompt (password) -> user write -> login (remember me).
-AK_PW="smoke-$(openssl rand -hex 12)"
+# Drive the link like the browser: the flow only signs the pending user in (remember-me choice).
 FLOW_TOKEN=${SETUP_URL#*flow_token=}
 SETUP_EXEC="$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=flow_token%3D$FLOW_TOKEN"
-run_setup_flow() { # password -> prints the final component; the session jar is $1's caller's
-  local jar=$1 pw=$2 ch comp
+run_setup_flow() { # cookie jar -> prints the final component
+  local jar=$1 ch comp body
   ch=$(curl -sS -b "$jar" -c "$jar" "$SETUP_EXEC")
-  for _ in 1 2 3 4; do
+  for _ in 1 2 3; do
     comp=$(jq -r '.component // empty' <<<"$ch")
     case "$comp" in
-      ak-stage-prompt) body=$(jq -nc --arg p "$pw" '{component:"ak-stage-prompt",password:$p,password_repeat:$p}') ;;
       ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
       *) break ;;
     esac
@@ -237,19 +235,21 @@ run_setup_flow() { # password -> prints the final component; the session jar is 
   done
   jq -r '.component // "none"' <<<"$ch"
 }
+AK_SESSION=$(mktemp)   # the participant's browser; 6d continues in it
+FINAL=$(run_setup_flow "$AK_SESSION")
+ME=$(curl -sS -b "$AK_SESSION" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+[[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "sign-in link: browser signed in as Authentik user $AK_UID, no password asked" || bad "sign-in flow ended with '$FINAL', session user '$ME'"
+AK_PW_LOGIN=$(curl -sS -c /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/" | jq -r '[.password_fields // false] | .[0]')
+[[ "$AK_PW_LOGIN" == false ]] && ok "the login page asks for no password (magic link or pass)" || bad "login page offers a password field"
+# The link is one-time: a second use must not sign anyone in.
 SJAR=$(mktemp)
-FINAL=$(run_setup_flow "$SJAR" "$AK_PW")
-ME=$(curl -sS -b "$SJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-[[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "setup link: password chosen, browser signed in as Authentik user $AK_UID" || bad "setup flow ended with '$FINAL', session user '$ME'"
-rm -f "$SJAR"
-# The link is one-time: a second use must not be able to set a password.
-SJAR=$(mktemp)
-FINAL=$(run_setup_flow "$SJAR" "evil-$(openssl rand -hex 8)")
-[[ "$FINAL" == ak-stage-access-denied ]] && ok "consumed link is refused (access denied, no pending user)" || bad "consumed link ended with '$FINAL'"
+FINAL=$(run_setup_flow "$SJAR")
+ME2=$(curl -sS -b "$SJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+[[ "$FINAL" != xak-flow-redirect && -z "$ME2" ]] && ok "consumed link is refused ($FINAL, no session)" || bad "consumed link ended with '$FINAL', session user '$ME2'"
 rm -f "$SJAR"
 
-step "6d. Keycast sign-in through Authentik (OIDC) with the chosen password"
-if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$USERNAME" "$AK_PW" "$KC_PUB" 2>&1); then
+step "6d. Keycast sign-in through Authentik (OIDC) in the browser the sign-in link opened"
+if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
   KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=' <<<"$OUT")
   sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
 else
@@ -257,6 +257,62 @@ else
 fi
 CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
 [[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
+
+step "6h. magic link: the login page mails a one-time link that signs the participant in"
+MAGIC_EXEC="$AK_URL/api/v3/flows/executor/belfry-magic-link/"
+magic_request() { # cookie jar, e-mail -> component after the identification stage
+  curl -sS -b "$1" -c "$1" "$MAGIC_EXEC" >/dev/null
+  curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" \
+    --data "$(jq -nc --arg e "$2" '{component:"ak-stage-identification",uid_field:$e}')" "$MAGIC_EXEC" | jq -c '{component, response_errors}'
+}
+magic_open() { # cookie jar, flow token -> final component (authentik asks to confirm before it uses the token)
+  local q ch comp body
+  q="query=$(jq -rn --arg v "flow_token=$2" '$v|@uri')"
+  ch=$(curl -sS -b "$1" -c "$1" "$MAGIC_EXEC?$q")
+  for _ in 1 2 3; do
+    comp=$(jq -r '.component // empty' <<<"$ch")
+    case "$comp" in
+      ak-stage-consent) body=$(jq -c '{component:"ak-stage-consent", token}' <<<"$ch") ;;
+      ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
+      *) break ;;
+    esac
+    ch=$(curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$MAGIC_EXEC?$q")
+  done
+  jq -r '.component // "none"' <<<"$ch"
+}
+MJAR=$(mktemp)
+UNKNOWN=$(magic_request "$MJAR" "nobody-$STAMP@example.org")
+[[ "$(jq -r '.component' <<<"$UNKNOWN")" == ak-stage-identification && "$UNKNOWN" == *"Failed to authenticate"* ]] \
+  && ok "unknown address refused, no mail sent" || bad "unknown address: $UNKNOWN"
+if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/null | jq -r '.total // empty' 2>/dev/null)" ]]; then
+  rm -f "$MJAR"; MJAR=$(mktemp)
+  REQ=$(magic_request "$MJAR" "$EMAIL")
+  [[ "$(jq -r .component <<<"$REQ")" == ak-stage-email ]] && ok "link requested for $EMAIL (e-mail stage)" || bad "magic-link request: $REQ"
+  ML=""
+  for _ in 1 2 3 4 5 6; do
+    sleep 1
+    MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=$(jq -rn --arg v "to:$EMAIL subject:\"sign-in link\"" '$v|@uri')")
+    [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]] || continue
+    # The text part has CRLF line ends: strip them before taking the token.
+    ML=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r' | grep -o 'flow_token=[A-Za-z0-9]*' | head -n1 | cut -d= -f2)
+    [[ -n "$ML" ]] && break
+  done
+  if [[ -n "$ML" ]]; then
+    ok "magic-link mail delivered (subject 'Your Belfry sign-in link')"
+    FINAL=$(magic_open "$MJAR" "$ML")
+    ME=$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+    [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "magic link signed the browser in as Authentik user $AK_UID" || bad "magic link ended with '$FINAL', session user '$ME'"
+    RJAR=$(mktemp); FINAL=$(magic_open "$RJAR" "$ML")
+    ME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+    [[ -z "$ME" ]] && ok "the magic link works once ($FINAL on reuse)" || bad "reused magic link signed in user $ME"
+    rm -f "$RJAR"
+  else
+    bad "no magic-link mail for $EMAIL in Mailpit"
+  fi
+else
+  echo "  note Mailpit not reachable at $MAILPIT_URL: the mail round trip is checked by hand on a public deployment"
+fi
+rm -f "$MJAR"
 
 step "6f. Blossom: uploads need a signed BUD-11 event from a key with an active pass"
 BLOSSOM_URL=${BLOSSOM_URL:-http://localhost:3100}

@@ -2,17 +2,19 @@
 # End-to-end check of the Keycast fork's Authentik login, driven with curl like a browser:
 #
 #   app -> Keycast /api/oauth/authorize (popup shows "Sign in with Belfry")
-#       -> /api/auth/oidc/start -> Authentik login (flow executor API) -> Authentik authorize
+#       -> /api/auth/oidc/start -> Authentik authorize with an existing Authentik session
 #       -> Keycast /api/auth/oidc/callback (session cookie) -> back to /api/oauth/authorize
 #       -> consent -> code -> /api/oauth/token -> sign a kind-1 event with the participant's key
 #
-# Usage: keycast-oidc-login.sh <authentik username> <authentik password> <expected pubkey hex>
+# Usage: keycast-oidc-login.sh <authentik session cookie jar> <expected pubkey hex>
+# Participants have no password (magic link, blueprint belfry-magic-link-flow), so the caller
+# signs in first (the smoke test: the one-time sign-in link of the activation mail) and hands
+# over that browser's cookie jar; it is copied, not changed.
 # Prints one line per step; exits non-zero at the first failure. Needs curl, jq, openssl.
 set -euo pipefail
 
-USERNAME=${1:?authentik username}
-PASSWORD=${2:?authentik password}
-EXPECT_PUB=${3:?expected Keycast pubkey (hex)}
+SESSION_JAR=${1:?cookie jar of a signed-in Authentik session}
+EXPECT_PUB=${2:?expected Keycast pubkey (hex)}
 KC_URL=${KC_URL:-http://localhost:3000}
 AK_URL=${AK_URL:-http://localhost:9000}
 CLIENT_ID=${CLIENT_ID:-belfry-oidc-check}
@@ -26,6 +28,8 @@ b64url() { openssl base64 -A | tr '+/' '-_' | tr -d '='; }
 
 JAR=$(mktemp -d); trap 'rm -rf "$JAR"' EXIT
 KC_JAR="$JAR/keycast"; AK_JAR="$JAR/authentik"
+[[ -s "$SESSION_JAR" ]] || fail "no cookie jar at $SESSION_JAR"
+cp "$SESSION_JAR" "$AK_JAR"
 kc() { curl -sS -b "$KC_JAR" -c "$KC_JAR" "$@"; }
 akc() { curl -sS -b "$AK_JAR" -c "$AK_JAR" "$@"; }
 
@@ -43,28 +47,10 @@ LOC=$(kc -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/start?return_t
 grep -q keycast_oidc "$KC_JAR" || fail "no keycast_oidc cookie"
 say "start -> Authentik authorize, flow cookie set"
 
-# 3. Authentik login through the flow executor (what the login page does).
-akc -o /dev/null "$LOC"   # unauthenticated: sets the session and points at the auth flow
-NEXT=${LOC#"$AK_URL"}
-EXEC="$AK_URL/api/v3/flows/executor/default-authentication-flow/?query=$(urlenc "next=$NEXT")"
-CH=$(akc "$EXEC")
-for _ in 1 2 3 4 5 6; do
-  comp=$(jq -r '.component // empty' <<<"$CH")
-  case "$comp" in
-    ak-stage-identification)
-      body=$(jq -nc --arg u "$USERNAME" --arg p "$PASSWORD" '{component:"ak-stage-identification",uid_field:$u,password:$p}') ;;
-    ak-stage-password)
-      body=$(jq -nc --arg p "$PASSWORD" '{component:"ak-stage-password",password:$p}') ;;
-    xak-flow-redirect) break ;;
-    *) fail "unexpected Authentik challenge: $(jq -c '{component, response_errors}' <<<"$CH")" ;;
-  esac
-  # Each POST answers 302 to the GET of the next challenge (no -X, so curl follows with GET).
-  CH=$(akc -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$EXEC")
-  errs=$(jq -c '.response_errors // empty' <<<"$CH")
-  [[ -z "$errs" || "$errs" == "{}" ]] || fail "Authentik refused the login: $errs"
-done
-[[ "$(jq -r .component <<<"$CH")" == xak-flow-redirect ]] || fail "Authentik flow did not finish: $(jq -c . <<<"$CH")"
-say "Authentik login as $USERNAME"
+# 3. The Authentik session belongs to the participant (signed in before, no password involved).
+WHO=$(akc "$AK_URL/api/v3/core/users/me/" | jq -r '.user.username // empty')
+[[ -n "$WHO" ]] || fail "the cookie jar holds no Authentik session"
+say "Authentik session of $WHO"
 
 # 4. Authentik authorize (implicit consent) -> Keycast callback with a code.
 CB=$(akc -o /dev/null -w '%{redirect_url}' "$LOC")

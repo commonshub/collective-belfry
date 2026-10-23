@@ -1,0 +1,97 @@
+# Belfry: participants sign in by magic link, never with a password (decided 2026-10-23).
+#
+# The brand's authentication flow (the login page, and every OIDC authorize request, Keycast's
+# "Sign in with Belfry" included): enter the e-mail address, authentik mails a one-time link
+# (10 minutes), opening it signs the browser in and continues where the login started. The pass
+# sign-in (source pass-bridge) is offered on the same page. Unknown addresses get authentik's
+# "Failed to authenticate." and no mail is sent (no mail to arbitrary addresses; the price is that
+# the page tells whether an address has an account).
+#
+# The link continues the flow in the browser that opens it. For an OIDC login (Keycast) it has to
+# be the browser where the login started, because the app's own state cookie lives there.
+#
+# SMTP: the e-mail stage does not use authentik's global settings; bootstrap.sh writes host, port,
+# user, password (infra/secrets/smtp_password) and sender into the stage over the API. Those
+# fields are left out here so that re-applying the blueprint never resets them.
+#
+# Admins: akadmin keeps authentik's default-authentication-flow with a password, reachable at
+# /if/flow/default-authentication-flow/?next=/if/admin/ (that flow is not changed here).
+# Applied by the worker's file watcher (bind mount /blueprints/custom); re-applied on change.
+version: 1
+metadata:
+  name: belfry-magic-link-flow
+  labels:
+    blueprints.goauthentik.io/description: "Participant login: e-mail magic link, or the village pass"
+entries:
+  # The pass-bridge source must exist before the identification stage can list it.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        name: belfry-pass-bridge-source
+      required: true
+
+  - model: authentik_flows.flow
+    id: belfry-magic-link
+    identifiers:
+      slug: belfry-magic-link
+    attrs:
+      name: Belfry sign-in
+      title: Sign in to Belfry
+      designation: authentication
+      authentication: none
+      denied_action: message_continue
+      compatibility_mode: true
+
+  - model: authentik_stages_identification.identificationstage
+    id: belfry-magic-link-identification
+    identifiers:
+      name: belfry-magic-link-identification
+    attrs:
+      user_fields: [email]
+      case_insensitive_matching: true
+      pretend_user_exists: false
+      show_matched_user: false
+      password_stage: null
+      enrollment_flow: null
+      recovery_flow: null
+      sources:
+        - !Find [authentik_sources_oauth.oauthsource, [slug, pass-bridge]]
+  - model: authentik_stages_email.emailstage
+    id: belfry-magic-link-email
+    identifiers:
+      name: belfry-magic-link-email
+    attrs:
+      use_global_settings: false
+      activate_user_on_success: false
+      token_expiry: minutes=10
+      subject: Your Belfry sign-in link
+      template: belfry/magic_link.html
+  - model: authentik_stages_user_login.userloginstage
+    id: belfry-magic-link-login
+    identifiers:
+      name: belfry-magic-link-login
+    attrs:
+      session_duration: seconds=0
+      remember_me_offset: days=14
+
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf belfry-magic-link
+      stage: !KeyOf belfry-magic-link-identification
+      order: 10
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf belfry-magic-link
+      stage: !KeyOf belfry-magic-link-email
+      order: 20
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf belfry-magic-link
+      stage: !KeyOf belfry-magic-link-login
+      order: 30
+
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      flow_authentication: !KeyOf belfry-magic-link

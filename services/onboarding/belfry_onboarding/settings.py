@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     odoo_api_key: str = Field(alias="ODOO_API_KEY")
 
     authentik_url: str = Field(default="http://authentik-server:9000", alias="AUTHENTIK_URL")
-    # Authentik as the participant's browser reaches it. The account-setup links authentik
+    # Authentik as the participant's browser reaches it. The sign-in links authentik
     # returns carry the host the service called, so they are rewritten to this origin.
     authentik_public_url: str = Field(default="http://localhost:9000", alias="AUTHENTIK_PUBLIC_URL")
     authentik_token: str = Field(alias="AUTHENTIK_TOKEN")
@@ -48,8 +48,8 @@ class Settings(BaseSettings):
     # Comma-separated hex pubkeys always on the whitelist (Belfry's own keys, stewards).
     relay_extra_pubkeys: str = Field(default="", alias="RELAY_EXTRA_PUBKEYS")
 
-    # Validity of the account-setup link mailed at activation (authentik flow token), in days.
-    login_link_days: int = Field(default=30, alias="LOGIN_LINK_DAYS")
+    # Validity of the one-time sign-in link mailed at activation (authentik flow token), in days.
+    login_link_days: int = Field(default=7, alias="LOGIN_LINK_DAYS")
 
     # Phase 3: pass certificates. Empty ISSUER_URL disables claim offers and the status list.
     issuer_url: str = Field(default="", alias="ISSUER_URL")  # walt.id Issuer2 management API

@@ -313,11 +313,12 @@ def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | N
 
 
 def _login_link(svc: Services, user_pk: int) -> tuple[str, str]:
-    """A one-time account-setup link for the Authentik user, and its expiry (Odoo datetime).
+    """A one-time sign-in link for the Authentik user, and its expiry (Odoo datetime).
 
     authentik plans the default brand's recovery flow (blueprint belfry-account-setup-flow) for
-    the user and wraps it in a flow token; opening the link lets the participant choose a
-    password and signs the browser in. The link is built from the host the service called, so
+    the user and wraps it in a flow token; opening the link signs the browser in (participants
+    have no password; later sign-ins use the login page's magic link or the pass). The link is
+    built from the host the service called, so
     its origin is replaced with AUTHENTIK_PUBLIC_URL. A new link replaces the user's earlier
     token. Raises when the brand has no recovery flow (blueprint not applied yet), so the caller
     stays pending and a retry completes the job, like the participants group.
@@ -334,7 +335,7 @@ def _login_link(svc: Services, user_pk: int) -> tuple[str, str]:
 
 
 def send_login_link(svc: Services, pass_id: int) -> str:
-    """Mint a new account-setup link for the holder of an active pass and store it on the pass.
+    """Mint a new one-time sign-in link for the holder of an active pass and store it on the pass.
     Odoo mails it: ``belfry.pass.write`` sends the activation template whenever the link changes
     on an active pass. Returns ``sent``, ``not_active``, ``no_user`` or ``not_found``."""
     pass_row = svc.odoo.read_one("belfry.pass", pass_id, PASS_FIELDS)
@@ -523,7 +524,7 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
     pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number)
     # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
     _set_participant(svc, authentik_user_id, True)
-    # The participant has no password yet: Odoo mails this one-time link with the activation.
+    # Participants never get a password: Odoo mails this one-time sign-in link with the activation.
     login_url, login_expires = _login_link(svc, authentik_user_id)
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).

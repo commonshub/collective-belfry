@@ -1,5 +1,5 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
-``... sync-participants``; and ``... login-link <pass id>`` for a new account-setup link."""
+``... sync-participants``; and ``... login-link <pass id>`` for a new one-time sign-in link."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
         help="make the Authentik participants group equal to the holders of active passes",
     )
     link = sub.add_parser(
-        "login-link", help="mint and store a new account-setup link for an active pass"
+        "login-link", help="mint and store a new one-time sign-in link for an active pass"
     )
     link.add_argument("pass_id", type=int)
     args = parser.parse_args(argv)

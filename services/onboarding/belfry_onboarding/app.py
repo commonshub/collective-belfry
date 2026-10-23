@@ -164,7 +164,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     async def admin_login_link(
         pass_id: int, request: Request, token: str | None = Query(default=None)
     ) -> dict[str, Any]:
-        """A new account-setup link for an active pass (Odoo's "Send new login link" button).
+        """A new one-time sign-in link for an active pass (Odoo's "Send new login link" button).
         Odoo mails it when the pass is written. Errors from Authentik or Odoo are 500."""
         check_token(request, token)
         result = await run_in_threadpool(core.send_login_link, svc(request), pass_id)

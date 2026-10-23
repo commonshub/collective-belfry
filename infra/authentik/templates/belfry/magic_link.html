@@ -1,0 +1,40 @@
+{% extends "email/base.html" %}
+{% comment %}
+Belfry magic-link mail (e-mail stage belfry-magic-link-email, blueprint belfry-magic-link-flow).
+Mounted at /templates in authentik-server and authentik-worker; plain-text twin magic_link.txt.
+{% endcomment %}
+{% load humanize %}
+
+{% block content %}
+<tr>
+  <td align="center">
+    <h1>Sign in to Belfry</h1>
+  </td>
+</tr>
+<tr>
+  <td align="center">
+    <table border="0">
+      <tr>
+        <td align="center" style="max-width: 300px; padding: 20px 0; color: #212124;">
+          Someone asked to sign in to Belfry with this e-mail address. Open the link below in the
+          same browser where you started; it signs you in once.
+        </td>
+      </tr>
+      <tr>
+        <td align="center" class="btn btn-primary">
+          <a id="confirm" href="{{ url }}" rel="noopener noreferrer" target="_blank">Sign in to Belfry</a>
+        </td>
+      </tr>
+    </table>
+  </td>
+</tr>
+{% endblock %}
+
+{% block sub_content %}
+<tr>
+  <td style="padding: 20px; font-size: 12px; color: #212124;" align="center">
+    The link is valid for {{ expires|timeuntil }}. If you did not try to sign in, ignore this mail;
+    nobody can sign in without opening the link.
+  </td>
+</tr>
+{% endblock %}

@@ -37,7 +37,7 @@
                     <button name="action_send_login_link" type="object" string="Send new login link"
                             class="btn-secondary" invisible="state != 'active'"
                             groups="belfry_pass.group_steward"
-                            help="Asks the onboarding service for a new one-time Authentik login setup link and mails it to the pass holder. Earlier links stop working."/>
+                            help="Asks the onboarding service for a new one-time Authentik sign-in link and mails it to the pass holder. Earlier links stop working."/>
                     <field name="state" widget="statusbar" statusbar_visible="pending,active"/>
                 </header>
                 <sheet>

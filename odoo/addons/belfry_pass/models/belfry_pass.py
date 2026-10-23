@@ -62,10 +62,11 @@ class BelfryPass(models.Model):
         copy=False,
     )
     stripe_dispute_id = fields.Char(copy=False)
-    # Phase 2 login: a one-time link into Authentik's account-setup flow (the participant
-    # chooses a password). Minted by the onboarding service at activation and on request
-    # ("Send new login link"); writing it on an active pass mails the activation template.
-    login_setup_url = fields.Char(string="Login setup link", copy=False, readonly=True)
+    # Phase 2 login: a one-time sign-in link into Authentik (participants have no password;
+    # later sign-ins use the login page's magic link). Minted by the onboarding service at
+    # activation and on request ("Send new login link"); writing it on an active pass mails the
+    # activation template.
+    login_setup_url = fields.Char(string="Sign-in link", copy=False, readonly=True)
     login_setup_expires_at = fields.Datetime(string="Login link valid until", copy=False, readonly=True)
     login_mail_sent_at = fields.Datetime(string="Login mail sent", copy=False, readonly=True)
     # Phase 3: the pass certificate. The claim token is the secret in the participant's claim
@@ -134,8 +135,12 @@ class BelfryPass(models.Model):
         """Where participants use the community apps (Keycast's web app for now)."""
         return self.env['ir.config_parameter'].sudo().get_param('belfry.apps_url') or ''
 
+    def belfry_login_url(self):
+        """Authentik's login page: e-mail magic link or the village pass."""
+        return self.env['ir.config_parameter'].sudo().get_param('belfry.login_url') or ''
+
     def _belfry_send_login_mail(self):
-        """Queue the activation mail (pass details and the login setup link) for every pass
+        """Queue the activation mail (pass details and the one-time sign-in link) for every pass
         in ``self``. Odoo's mail queue sends it; failures stay visible in Settings > Technical >
         Emails because the template keeps its mails."""
         template = self.env.ref('belfry_pass.mail_template_pass_activated', raise_if_not_found=False)
@@ -148,7 +153,7 @@ class BelfryPass(models.Model):
                 continue
             template.sudo().send_mail(record.id, force_send=False)
             record.write({'login_mail_sent_at': fields.Datetime.now()})
-            _logger.info("Belfry pass %s: login setup mail queued for %s", record.id, record.partner_id.email)
+            _logger.info("Belfry pass %s: sign-in mail queued for %s", record.id, record.partner_id.email)
 
     def action_revoke(self):
         """Steward decision: the onboarding service revokes the pass (relay, signer, Authentik

@@ -97,6 +97,10 @@ class TestPass(BelfryCase):
         self.assertIn('Week pass', mails.body_html)
         self.assertIn('npub1example', mails.body_html)
         self.assertIn(belfry_pass.belfry_apps_url(), mails.body_html)
+        # passwordless: the mail offers a sign-in, never a password
+        self.assertIn('Sign in to Belfry', mails.body_html)
+        self.assertIn(belfry_pass.belfry_login_url(), mails.body_html)
+        self.assertNotIn('password', mails.body_html.lower().replace('without a password', ''))
         self.assertTrue(belfry_pass.login_mail_sent_at)
         # other writes do not resend; a new link does
         belfry_pass.write({'date_end': '2027-02-02'})

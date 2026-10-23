@@ -173,6 +173,17 @@ Found and fixed on the way: bootstrap's verifier probe and Keycast admin calls h
 
 Open there: a real wallet against the public issuer and door, the HTTP→HTTPS redirect is Caddy's default, Stripe test mode on the public Odoo, publishing the CA for wallets.
 
+## 3j. Participant login by magic link, no passwords — built 2026-10-23
+
+Decision (user, 2026-10-23, before the real-user test): participants sign in by e-mail magic link only and never get a password; the activation mail carries a one-time sign-in link instead of the set-a-password link; akadmin keeps a password on authentik's default flow. Supersedes the password part of §3d.
+
+- [x] Blueprint `belfry-magic-link-flow.yaml`: flow `belfry-magic-link` as the default brand's authentication flow (login page and every OIDC authorize, Keycast included): identification by e-mail with the pass source on the same page, e-mail stage (one-time link, 10 minutes, template `infra/authentik/templates/belfry/magic_link.html` mounted at `/templates`), user login (14-day remember me). Unknown addresses: "Failed to authenticate.", no mail (no mail to arbitrary addresses; the page does tell whether an address has an account). authentik 2026.8 asks for a "Continue" click before it uses an e-mail token, so mail scanners cannot consume links.
+- [x] `belfry-account-setup-flow.yaml`: the recovery flow behind the activation link is now only a user login; the password prompt, policy and user write are removed by the blueprint (`state: absent`). `LOGIN_LINK_DAYS` default 30 → 7.
+- [x] bootstrap writes the SMTP settings (`SMTP_*`, `secrets/smtp_password`) into the e-mail stage over the API and checks the brand's authentication flow; Odoo `belfry_pass` 19.0.1.4.0: activation mail text (sign in once, later by e-mail at `belfry.login_url`), template `noupdate` off with a pre-migration that releases the old record.
+- [x] Tests: `keycast-oidc-login.sh` takes a signed-in Authentik cookie jar instead of a password; smoke 6c (sign-in link, no password field on the login page, consumed link refused), 6d (Keycast in that browser), 6h (magic link from the login page through Mailpit, unknown address, link works once). Local: smoke 95 ok / 0 failed, onboarding 78 tests, Odoo 36 tests. Checked by hand: Keycast "Sign in with Belfry" without a session → magic link → back in Keycast, signed in; the same link opened in another browser ends in Keycast's 400 (flow cookie missing).
+
+Open from this slice: Keycast's 400 page for a link opened in another browser is bare (a friendlier message would be a fork patch); the akadmin password login is only reachable by its direct URL; passkeys for participants are not offered.
+
 ## 4. Next
 
 1. The real-user happy-path test on `belfry.tofauti.net` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.

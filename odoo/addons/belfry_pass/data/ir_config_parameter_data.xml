@@ -24,6 +24,12 @@
         <field name="key">belfry.apps_url</field>
         <field name="value">http://localhost:3000</field>
     </record>
+    <!-- Authentik's login page (magic link or pass); in the activation mail. bootstrap.sh sets
+         it from AUTHENTIK_PUBLIC_URL. -->
+    <record id="param_login_url" model="ir.config_parameter">
+        <field name="key">belfry.login_url</field>
+        <field name="value">http://localhost:9000</field>
+    </record>
     <!-- The onboarding service as the participant's browser sees it: claim links in the
          activation mail are <this>/claim/<token>. bootstrap.sh sets it from ONBOARDING_PUBLIC_URL. -->
     <record id="param_public_url" model="ir.config_parameter">
