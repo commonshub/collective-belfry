@@ -1,0 +1,921 @@
+From 3c67f12f7cad56ff56871424cae8b7951abb8124 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@example.invalid>
+Date: Fri, 23 Oct 2026 21:20:39 +0200
+Subject: [PATCH] Belfry: Open Source Village branding, deployment relays,
+ managed-key sign-in, NIP-42
+
+- OSV dark palette and lime accent as defaults, Geist and favicon from the deployment's /brand,
+  OSV logo and titles.
+- Relays from the build: VITE_TEST_RELAY (community relay), VITE_SIGNER_RELAYS (Keycast's NIP-46
+  relay for nostrconnect).
+- Sign-in dialog: the remote signer first, with a hint to the apps page (Connect to Nostr App);
+  local keys (existing key, create account) only with VITE_LOCAL_KEYS=true.
+- Sidebar: Apps opens VITE_APPS_URL, About goes to VITE_ABOUT_URL; Formstr's privacy policy and
+  contact form are hidden when VITE_APPS_URL is set.
+- @formstr/local-relay 0.6.0 -> 0.6.5: 0.6.0 never answers NIP-42 AUTH challenges (the app
+  already routes them to the signer), so a relay that requires AUTH refused every read and
+  write.
+---
+ index.html                                    |   6 +-
+ package.json                                  |   2 +-
+ pnpm-lock.yaml                                | 194 +++++++++++++-----
+ src/common/dictionary.ts                      |  13 +-
+ src/components/LoginModal.tsx                 |  83 ++++----
+ src/components/SidebarContent.tsx             |  52 +++--
+ src/components/ui/TopBar.tsx                  |   9 +-
+ .../auth/components/RemoteSignerPanel.tsx     |   5 +-
+ src/stores/settings.ts                        |   7 +-
+ src/theme/AppThemeProvider.tsx                |   2 +-
+ src/theme/theme.ts                            |   4 +-
+ src/theme/tokens.ts                           |  26 +--
+ vite.config.ts                                |   6 +-
+ 13 files changed, 257 insertions(+), 152 deletions(-)
+
+diff --git a/index.html b/index.html
+index a33f41c..8fb84a7 100644
+--- a/index.html
++++ b/index.html
+@@ -6,8 +6,10 @@
+       name="viewport"
+       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+     />
+-    <title>Calendar by Form*</title>
+-    <meta name="theme-color" content="#000000" />
++    <title>Open Source Village calendar</title>
++    <meta name="theme-color" content="#2b3a31" />
++    <link rel="stylesheet" href="%VITE_BRAND_URL%/fonts.css" />
++    <link rel="icon" href="%VITE_BRAND_URL%/favicon.svg" type="image/svg+xml" />
+     <link rel="apple-touch-icon" href="/pwa-192x192.png" />
+   </head>
+   <body>
+diff --git a/package.json b/package.json
+index 60fd4b8..424c788 100644
+--- a/package.json
++++ b/package.json
+@@ -36,7 +36,7 @@
+     "@emotion/styled": "^11.14.1",
+     "@fontsource/inter": "^5.3.0",
+     "@formstr/common-ui": "^0.1.2",
+-    "@formstr/local-relay": "0.6.0",
++    "@formstr/local-relay": "0.6.5",
+     "@formstr/sdk": "^0.2.7",
+     "@formstr/signer": "^0.2.2",
+     "@khadarvsk/capacitor-secure-storage": "0.0.3",
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 5bd0620..85da6e5 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -47,11 +47,11 @@ importers:
+         specifier: ^0.1.2
+         version: 0.1.2(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+       '@formstr/local-relay':
+-        specifier: 0.6.0
+-        version: 0.6.0(typescript@5.8.3)
++        specifier: 0.6.5
++        version: 0.6.5(typescript@5.8.3)
+       '@formstr/sdk':
+         specifier: ^0.2.7
+-        version: 0.2.7(@babel/core@7.28.0)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.28.0))(babel-plugin-macros@3.1.0)(jest-util@29.7.0)
++        version: 0.2.7(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(babel-plugin-macros@3.1.0)(jest-util@29.7.0)
+       '@formstr/signer':
+         specifier: ^0.2.2
+         version: 0.2.2(nostr-signer-capacitor-plugin@0.0.5(patch_hash=02913e3c2941eee20a2c373e6f312de15f140907bb8dfed5ded07d04a75f49a6)(@capacitor/core@8.0.0))(typescript@5.8.3)
+@@ -1391,8 +1391,8 @@ packages:
+       react: '>=18'
+       react-dom: '>=18'
+ 
+-  '@formstr/local-relay@0.6.0':
+-    resolution: {integrity: sha512-xqM20OR4CVhJG1gxqxzTWPwZLCS4AcMJUFq7VffFKKFhtkT/1kBf8rhUy8Bk6ptX7E5ukNX37pJd/SaOIlWGkw==}
++  '@formstr/local-relay@0.6.5':
++    resolution: {integrity: sha512-wSKmbDve4BbHF1+A9F3h4F8Y3LukQ+9wAqKoaK4sfTKHbd42f+dSuqEcoQbaCo9bLS7WITv25L31HfTbOV4cRA==}
+ 
+   '@formstr/sdk@0.2.7':
+     resolution: {integrity: sha512-juGV2EzN42Aiqvsj1mfFqNro3jIwlughatICfU+1pAyI33FedqNOueFQ8No8bN3Zyhp5F5WpIt2g2ykL4KYbHg==}
+@@ -1733,7 +1733,6 @@ packages:
+     engines: {node: ^22.20 || ^24.12 || >=25}
+     cpu: [x64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@noble/ciphers@2.1.1':
+     resolution: {integrity: sha512-bysYuiVfhxNJuldNXlFEitTVdNnYUc+XNJZd7Qm2a5j1vZHgY+fazadNFWFaMK/2vye0JVlxV3gHmC0WDfAOQw==}
+@@ -2063,145 +2062,121 @@ packages:
+     resolution: {integrity: sha512-+xmiDGGaSfIIOXMzkhJ++Oa0Gwvl9oXUeIiwarsdRXSe27HUIvjbSIpPxvnNsRebsNdUo7uAiQVgBD1hVriwSQ==}
+     cpu: [arm]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-arm-gnueabihf@4.62.4':
+     resolution: {integrity: sha512-81wiiX3v7aqy+T+bT61TJ78yJjRquqFFTTbAPt08imfQQzkPIW8t6aJbkTagtCCrXMNc9D66+geqlK7ydLPNqA==}
+     cpu: [arm]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-arm-musleabihf@4.44.2':
+     resolution: {integrity: sha512-bDHvhzOfORk3wt8yxIra8N4k/N0MnKInCW5OGZaeDYa/hMrdPaJzo7CSkjKZqX4JFUWjUGm88lI6QJLCM7lDrA==}
+     cpu: [arm]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-arm-musleabihf@4.62.4':
+     resolution: {integrity: sha512-9kmDIvNZqdoHOBZgNtpTBeLWYO/LVipM3H/j62P8848/l/VPEQL6N3uxU9pvP1oZAsXyC2MEnFP3ovRjo7WYNQ==}
+     cpu: [arm]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-arm64-gnu@4.44.2':
+     resolution: {integrity: sha512-NMsDEsDiYghTbeZWEGnNi4F0hSbGnsuOG+VnNvxkKg0IGDvFh7UVpM/14mnMwxRxUf9AdAVJgHPvKXf6FpMB7A==}
+     cpu: [arm64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-arm64-gnu@4.62.4':
+     resolution: {integrity: sha512-CcnXHWnXg69g+DX5VWL3FHts3qMRN2uVEHX+BZvGLdd07/gXkn3ePjYtO1LDJvxkGKVHMclKBRa1QUTH+6toYQ==}
+     cpu: [arm64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-arm64-musl@4.44.2':
+     resolution: {integrity: sha512-lb5bxXnxXglVq+7imxykIp5xMq+idehfl+wOgiiix0191av84OqbjUED+PRC5OA8eFJYj5xAGcpAZ0pF2MnW+A==}
+     cpu: [arm64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-arm64-musl@4.62.4':
+     resolution: {integrity: sha512-iFOibiHnTRuhrWLlRsOQFdZJJIa7S8OwkneJr4ocALP16u5yk6lWLINFwhHaEqBFMsKDUZofLkGos7+CPzGB3g==}
+     cpu: [arm64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-loong64-gnu@4.62.4':
+     resolution: {integrity: sha512-XnWYMI7euHlb5a871xPja+Gm7DRCFU+FGRrtS2sMq9N8FvqtpagUy6gD4YOemC5MRk9xbh8+jYMEJbigFQwsgA==}
+     cpu: [loong64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-loong64-musl@4.62.4':
+     resolution: {integrity: sha512-qGDAlO0U8xedCcsdRm9oaoQY8DAx/QT7uIxJWhCdx0ceIWX783UC9QSYkdpzAe29wNiVfp24+bZdQmn49o45SQ==}
+     cpu: [loong64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-loongarch64-gnu@4.44.2':
+     resolution: {integrity: sha512-Yl5Rdpf9pIc4GW1PmkUGHdMtbx0fBLE1//SxDmuf3X0dUC57+zMepow2LK0V21661cjXdTn8hO2tXDdAWAqE5g==}
+     cpu: [loong64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-powerpc64le-gnu@4.44.2':
+     resolution: {integrity: sha512-03vUDH+w55s680YYryyr78jsO1RWU9ocRMaeV2vMniJJW/6HhoTBwyyiiTPVHNWLnhsnwcQ0oH3S9JSBEKuyqw==}
+     cpu: [ppc64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-ppc64-gnu@4.62.4':
+     resolution: {integrity: sha512-ru4H6ezD7ysA5EiEK6qkkaEb4modH8CTej6kUy/gQi20u3kB3G7Zn8snXXkeJSCOFKG/rbPPtM/+9Wgas1961w==}
+     cpu: [ppc64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-ppc64-musl@4.62.4':
+     resolution: {integrity: sha512-2W4MO5WQVJnbJaZdvDb9rhBDuFU1nKIepPFpJUBsTh2k1YY2g+ODViaWuyOAjQ5cOP7NvrvLzt3wvHOoiAvc7w==}
+     cpu: [ppc64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-riscv64-gnu@4.44.2':
+     resolution: {integrity: sha512-iYtAqBg5eEMG4dEfVlkqo05xMOk6y/JXIToRca2bAWuqjrJYJlx/I7+Z+4hSrsWU8GdJDFPL4ktV3dy4yBSrzg==}
+     cpu: [riscv64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-riscv64-gnu@4.62.4':
+     resolution: {integrity: sha512-+fxjfuoAmVMCYV5QyjoIpu0cp5DOiOTeqYFk1AVaxGr+/ravWLX89XfQmptsoWcaVy/TGf2hexzbUOrCQIL1CQ==}
+     cpu: [riscv64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-riscv64-musl@4.44.2':
+     resolution: {integrity: sha512-e6vEbgaaqz2yEHqtkPXa28fFuBGmUJ0N2dOJK8YUfijejInt9gfCSA7YDdJ4nYlv67JfP3+PSWFX4IVw/xRIPg==}
+     cpu: [riscv64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-riscv64-musl@4.62.4':
+     resolution: {integrity: sha512-jTn8JfHGL4djjFxPuM06LmNUJDsst2jeVlsd9OmIH6zc5sC9K6rIuO4YajXatLUpBmBKl6b35ro1QZocLi+tcA==}
+     cpu: [riscv64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-s390x-gnu@4.44.2':
+     resolution: {integrity: sha512-evFOtkmVdY3udE+0QKrV5wBx7bKI0iHz5yEVx5WqDJkxp9YQefy4Mpx3RajIVcM6o7jxTvVd/qpC1IXUhGc1Mw==}
+     cpu: [s390x]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-s390x-gnu@4.62.4':
+     resolution: {integrity: sha512-oCJCJL4pXsoDcP2QZ+JVlPTIRc6266zsIaeJJsWImmF7HO0W8nb6HuSgZlMWxJwaPf8ehbSw8yo0EUw925hKsA==}
+     cpu: [s390x]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-x64-gnu@4.44.2':
+     resolution: {integrity: sha512-/bXb0bEsWMyEkIsUL2Yt5nFB5naLAwyOWMEviQfQY1x3l5WsLKgvZf66TM7UTfED6erckUVUJQ/jJ1FSpm3pRQ==}
+     cpu: [x64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-x64-gnu@4.62.4':
+     resolution: {integrity: sha512-W69hukhZ3KKNRCaMIEzKvcFye42hh0FE1+YoYaf5+Ikacuftoco6yO/xouz0hc5d5W/s3yBro5jRiuEE/Q5vUw==}
+     cpu: [x64]
+     os: [linux]
+-    libc: [glibc]
+ 
+   '@rollup/rollup-linux-x64-musl@4.44.2':
+     resolution: {integrity: sha512-3D3OB1vSSBXmkGEZR27uiMRNiwN08/RVAcBKwhUYPaiZ8bcvdeEwWPvbnXvvXHY+A/7xluzcN+kaiOFNiOZwWg==}
+     cpu: [x64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-linux-x64-musl@4.62.4':
+     resolution: {integrity: sha512-qiXbGG2jkjXhzXpsFZSR2Xpb8DN/UaxYsbb/STbuR/6fpaDgRmmaq1B/LmtF2wQFOFOSsK2jdE0RZ3a0zHn4QA==}
+     cpu: [x64]
+     os: [linux]
+-    libc: [musl]
+ 
+   '@rollup/rollup-openbsd-x64@4.62.4':
+     resolution: {integrity: sha512-nWeM//hxv8mIo6jD7Hu4o48DVmV9pbV6gsKaWU+4NFyqHoPKwrkRiZGLKUhOBk8qNmDmpwFtPKg80Bo/Tn4xiQ==}
+@@ -4108,14 +4083,6 @@ packages:
+       typescript:
+         optional: true
+ 
+-  nostr-tools@2.24.1:
+-    resolution: {integrity: sha512-KdrKjC74n/rr6J3eCSfZj8dcbZFvolHYe4S22SefNZ5YWbhHiB0KL/mmJjEZ0u6B9mZK0YcQtl+WQ46KzwapeQ==}
+-    peerDependencies:
+-      typescript: '>=5.0.0'
+-    peerDependenciesMeta:
+-      typescript:
+-        optional: true
+-
+   nostr-tools@2.25.2:
+     resolution: {integrity: sha512-7JAx+brEPmqGz1yzaK9MOxvis/Nl1B38j9hVsBSRDMRmxk5XSc0+5LlPEYbzeiUyk41RURBDcfuMzmaT754HAg==}
+     peerDependencies:
+@@ -5580,21 +5547,45 @@ snapshots:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-async-generators@7.8.4(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-bigint@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-bigint@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-class-properties@7.12.13(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-class-properties@7.12.13(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-class-static-block@7.14.5(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-class-static-block@7.14.5(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-import-assertions@7.29.7(@babel/core@7.29.7)':
+     dependencies:
+       '@babel/core': 7.29.7
+@@ -5615,11 +5606,23 @@ snapshots:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-import-meta@7.10.4(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-json-strings@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-json-strings@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-jsx@7.29.7(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+@@ -5630,41 +5633,89 @@ snapshots:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-logical-assignment-operators@7.10.4(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-nullish-coalescing-operator@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-nullish-coalescing-operator@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-numeric-separator@7.10.4(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-numeric-separator@7.10.4(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-object-rest-spread@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-object-rest-spread@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-optional-catch-binding@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-optional-catch-binding@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-optional-chaining@7.8.3(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-optional-chaining@7.8.3(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-private-property-in-object@7.14.5(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-private-property-in-object@7.14.5(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-top-level-await@7.14.5(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+       '@babel/helper-plugin-utils': 7.27.1
+ 
++  '@babel/plugin-syntax-top-level-await@7.14.5(@babel/core@7.29.7)':
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/helper-plugin-utils': 7.27.1
++    optional: true
++
+   '@babel/plugin-syntax-typescript@7.29.7(@babel/core@7.28.0)':
+     dependencies:
+       '@babel/core': 7.28.0
+@@ -6562,13 +6613,13 @@ snapshots:
+       react: 19.2.3
+       react-dom: 19.2.3(react@19.2.3)
+ 
+-  '@formstr/local-relay@0.6.0(typescript@5.8.3)':
++  '@formstr/local-relay@0.6.5(typescript@5.8.3)':
+     dependencies:
+-      nostr-tools: 2.24.1(typescript@5.8.3)
++      nostr-tools: 2.25.2(typescript@5.8.3)
+     transitivePeerDependencies:
+       - typescript
+ 
+-  '@formstr/sdk@0.2.7(@babel/core@7.28.0)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.28.0))(babel-plugin-macros@3.1.0)(jest-util@29.7.0)':
++  '@formstr/sdk@0.2.7(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(babel-plugin-macros@3.1.0)(jest-util@29.7.0)':
+     dependencies:
+       '@noble/hashes': 1.8.0
+       '@types/aes-js': 3.1.4
+@@ -6580,7 +6631,7 @@ snapshots:
+       jsonschema: 1.5.0
+       nostr-tools: 2.23.5(typescript@5.8.3)
+       sha256: 0.2.0
+-      ts-jest: 29.4.11(@babel/core@7.28.0)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.28.0))(jest-util@29.7.0)(jest@29.7.0(@types/node@16.18.126)(babel-plugin-macros@3.1.0))(typescript@5.8.3)
++      ts-jest: 29.4.11(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(jest-util@29.7.0)(jest@29.7.0(@types/node@16.18.126)(babel-plugin-macros@3.1.0))(typescript@5.8.3)
+       typescript: 5.8.3
+     transitivePeerDependencies:
+       - '@babel/core'
+@@ -7755,6 +7806,20 @@ snapshots:
+     transitivePeerDependencies:
+       - supports-color
+ 
++  babel-jest@29.7.0(@babel/core@7.29.7):
++    dependencies:
++      '@babel/core': 7.29.7
++      '@jest/transform': 29.7.0
++      '@types/babel__core': 7.20.5
++      babel-plugin-istanbul: 6.1.1
++      babel-preset-jest: 29.6.3(@babel/core@7.29.7)
++      chalk: 4.1.2
++      graceful-fs: 4.2.11
++      slash: 3.0.0
++    transitivePeerDependencies:
++      - supports-color
++    optional: true
++
+   babel-plugin-istanbul@6.1.1:
+     dependencies:
+       '@babel/helper-plugin-utils': 7.27.1
+@@ -7821,12 +7886,39 @@ snapshots:
+       '@babel/plugin-syntax-private-property-in-object': 7.14.5(@babel/core@7.28.0)
+       '@babel/plugin-syntax-top-level-await': 7.14.5(@babel/core@7.28.0)
+ 
++  babel-preset-current-node-syntax@1.2.0(@babel/core@7.29.7):
++    dependencies:
++      '@babel/core': 7.29.7
++      '@babel/plugin-syntax-async-generators': 7.8.4(@babel/core@7.29.7)
++      '@babel/plugin-syntax-bigint': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-class-properties': 7.12.13(@babel/core@7.29.7)
++      '@babel/plugin-syntax-class-static-block': 7.14.5(@babel/core@7.29.7)
++      '@babel/plugin-syntax-import-attributes': 7.29.7(@babel/core@7.29.7)
++      '@babel/plugin-syntax-import-meta': 7.10.4(@babel/core@7.29.7)
++      '@babel/plugin-syntax-json-strings': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-logical-assignment-operators': 7.10.4(@babel/core@7.29.7)
++      '@babel/plugin-syntax-nullish-coalescing-operator': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-numeric-separator': 7.10.4(@babel/core@7.29.7)
++      '@babel/plugin-syntax-object-rest-spread': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-optional-catch-binding': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-optional-chaining': 7.8.3(@babel/core@7.29.7)
++      '@babel/plugin-syntax-private-property-in-object': 7.14.5(@babel/core@7.29.7)
++      '@babel/plugin-syntax-top-level-await': 7.14.5(@babel/core@7.29.7)
++    optional: true
++
+   babel-preset-jest@29.6.3(@babel/core@7.28.0):
+     dependencies:
+       '@babel/core': 7.28.0
+       babel-plugin-jest-hoist: 29.6.3
+       babel-preset-current-node-syntax: 1.2.0(@babel/core@7.28.0)
+ 
++  babel-preset-jest@29.6.3(@babel/core@7.29.7):
++    dependencies:
++      '@babel/core': 7.29.7
++      babel-plugin-jest-hoist: 29.6.3
++      babel-preset-current-node-syntax: 1.2.0(@babel/core@7.29.7)
++    optional: true
++
+   bail@2.0.2: {}
+ 
+   balanced-match@1.0.2: {}
+@@ -9839,18 +9931,6 @@ snapshots:
+     optionalDependencies:
+       typescript: 5.8.3
+ 
+-  nostr-tools@2.24.1(typescript@5.8.3):
+-    dependencies:
+-      '@noble/ciphers': 2.1.1
+-      '@noble/curves': 2.0.1
+-      '@noble/hashes': 2.0.1
+-      '@scure/base': 2.0.0
+-      '@scure/bip32': 2.0.1
+-      '@scure/bip39': 2.0.1
+-      nostr-wasm: 0.1.0
+-    optionalDependencies:
+-      typescript: 5.8.3
+-
+   nostr-tools@2.25.2(typescript@5.8.3):
+     dependencies:
+       '@noble/ciphers': 2.1.1
+@@ -10679,7 +10759,7 @@ snapshots:
+     dependencies:
+       typescript: 5.8.3
+ 
+-  ts-jest@29.4.11(@babel/core@7.28.0)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.28.0))(jest-util@29.7.0)(jest@29.7.0(@types/node@16.18.126)(babel-plugin-macros@3.1.0))(typescript@5.8.3):
++  ts-jest@29.4.11(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(jest-util@29.7.0)(jest@29.7.0(@types/node@16.18.126)(babel-plugin-macros@3.1.0))(typescript@5.8.3):
+     dependencies:
+       bs-logger: 0.2.6
+       fast-json-stable-stringify: 2.1.0
+@@ -10693,10 +10773,10 @@ snapshots:
+       typescript: 5.8.3
+       yargs-parser: 21.1.1
+     optionalDependencies:
+-      '@babel/core': 7.28.0
++      '@babel/core': 7.29.7
+       '@jest/transform': 29.7.0
+       '@jest/types': 29.6.3
+-      babel-jest: 29.7.0(@babel/core@7.28.0)
++      babel-jest: 29.7.0(@babel/core@7.29.7)
+       jest-util: 29.7.0
+ 
+   tslib@2.8.1: {}
+diff --git a/src/common/dictionary.ts b/src/common/dictionary.ts
+index 12ce9a0..ed7fa9b 100644
+--- a/src/common/dictionary.ts
++++ b/src/common/dictionary.ts
+@@ -48,7 +48,7 @@ const dictionary: NestedObject = {
+       showPublicEvents: "Show Public Events",
+     },
+     message: {
+-      title: "Calendar by Form*",
++      title: "Open Source Village calendar",
+       modeSelection_description: "Choose how you'd like to use the calendar",
+       modeSelection_loginButton: "Login with Nostr",
+       modeSelection_guestButton: "Continue as Guest",
+@@ -385,8 +385,11 @@ const dictionary: NestedObject = {
+       stayHere: "Stay Here",
+     },
+     login: {
+-      signInToFormstr: "Sign in to Calendar",
+-      chooseLoginMethod: "Choose your preferred login method",
++      signInToFormstr: "Sign in to the Open Source Village calendar",
++      chooseLoginMethod:
++        "Use your Open Source Village key: connect the remote signer with your bunker link.",
++      remoteSignerHint:
++        "On the Open Source Village apps page choose Connect to Nostr App, then paste the bunker URL here",
+       signInWithExtension: "Sign in with Nostr Extension (NIP-07)",
+       signInWithNsec: "Sign in with nsec",
+       signInWithApp: "Sign in with {name}",
+@@ -959,7 +962,9 @@ const dictionary: NestedObject = {
+       stayHere: "Hier bleiben",
+     },
+     login: {
+-      signInToFormstr: "Bei Calendar anmelden",
++      signInToFormstr: "Beim Open Source Village Kalender anmelden",
++      remoteSignerHint:
++        "Wähle auf der Open Source Village App-Seite Connect to Nostr App und füge die Bunker-URL hier ein",
+       chooseLoginMethod: "Wählen Sie Ihre bevorzugte Anmeldemethode",
+       signInWithExtension: "Mit Nostr-Erweiterung anmelden (NIP-07)",
+       signInWithNsec: "Mit nsec anmelden",
+diff --git a/src/components/LoginModal.tsx b/src/components/LoginModal.tsx
+index 9d7ef81..821f57b 100644
+--- a/src/components/LoginModal.tsx
++++ b/src/components/LoginModal.tsx
+@@ -187,6 +187,20 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
+             )}
+           </Box>
+           <Stack divider={<Divider />} sx={{ overflowY: "auto" }}>
++            <Box>
++              <AuthOption
++                icon={<HubOutlinedIcon />}
++                title={intl.formatMessage({ id: "login.connectRemoteSigner" })}
++                description={intl.formatMessage({
++                  id: "login.remoteSignerHint",
++                })}
++                onClick={() => toggle("nip46")}
++                expanded={panel === "nip46"}
++              />
++              {panel === "nip46" && (
++                <RemoteSignerPanel onSuccess={success} onError={setError} />
++              )}
++            </Box>
+             {!isNative && (
+               <AuthOption
+                 icon={<VpnKeyOutlinedIcon />}
+@@ -243,45 +257,36 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
+                 )}
+               </Box>
+             )}
+-            <Box>
+-              <AuthOption
+-                icon={<LockOutlinedIcon />}
+-                title={intl.formatMessage({ id: "login.existingKey" })}
+-                description={intl.formatMessage({
+-                  id: "login.existingKeyDescription",
+-                })}
+-                onClick={() => toggle("ncryptsec")}
+-                expanded={panel === "ncryptsec"}
+-              />
+-              {panel === "ncryptsec" && (
+-                <NcryptsecPanel onSuccess={success} onError={setError} />
+-              )}
+-            </Box>
+-            <AuthOption
+-              icon={<PersonAddOutlinedIcon />}
+-              title={intl.formatMessage({ id: "login.createAccount" })}
+-              description={intl.formatMessage({
+-                id: "login.createAccountDescription",
+-              })}
+-              onClick={() => {
+-                setError("");
+-                setScreen("create");
+-              }}
+-            />
+-            <Box>
+-              <AuthOption
+-                icon={<HubOutlinedIcon />}
+-                title={intl.formatMessage({ id: "login.connectRemoteSigner" })}
+-                description={intl.formatMessage({
+-                  id: "login.connectRemoteSigner",
+-                })}
+-                onClick={() => toggle("nip46")}
+-                expanded={panel === "nip46"}
+-              />
+-              {panel === "nip46" && (
+-                <RemoteSignerPanel onSuccess={success} onError={setError} />
+-              )}
+-            </Box>
++            {/* Belfry: participants have a managed key (Keycast); local keys only on request. */}
++            {import.meta.env.VITE_LOCAL_KEYS === "true" && (
++              <>
++                <Box>
++                  <AuthOption
++                    icon={<LockOutlinedIcon />}
++                    title={intl.formatMessage({ id: "login.existingKey" })}
++                    description={intl.formatMessage({
++                      id: "login.existingKeyDescription",
++                    })}
++                    onClick={() => toggle("ncryptsec")}
++                    expanded={panel === "ncryptsec"}
++                  />
++                  {panel === "ncryptsec" && (
++                    <NcryptsecPanel onSuccess={success} onError={setError} />
++                  )}
++                </Box>
++                <AuthOption
++                  icon={<PersonAddOutlinedIcon />}
++                  title={intl.formatMessage({ id: "login.createAccount" })}
++                  description={intl.formatMessage({
++                    id: "login.createAccountDescription",
++                  })}
++                  onClick={() => {
++                    setError("");
++                    setScreen("create");
++                  }}
++                />
++              </>
++            )}
+           </Stack>
+         </>
+       )}
+diff --git a/src/components/SidebarContent.tsx b/src/components/SidebarContent.tsx
+index 2bb748f..2728bfb 100644
+--- a/src/components/SidebarContent.tsx
++++ b/src/components/SidebarContent.tsx
+@@ -183,7 +183,12 @@ export function SidebarContent({
+             <Box
+               component="button"
+               type="button"
+-              onClick={(event) => openDesk(event.currentTarget)}
++              onClick={(event) =>
++                // Belfry: the deployment's apps page instead of Formstr's app desk.
++                import.meta.env.VITE_APPS_URL
++                  ? window.open(import.meta.env.VITE_APPS_URL, "_blank")
++                  : openDesk(event.currentTarget)
++              }
+               sx={{
+                 border: 0,
+                 p: 0,
+@@ -200,31 +205,38 @@ export function SidebarContent({
+             <Typography
+               variant="caption"
+               component="a"
+-              href="https://about.formstr.app"
++              href={
++                import.meta.env.VITE_ABOUT_URL || "https://about.formstr.app"
++              }
+               target="_blank"
+               rel="noopener noreferrer"
+               sx={{ textDecoration: "none" }}
+             >
+               {intl.formatMessage({ id: "sidebar.about" })}
+             </Typography>
+-            <Typography
+-              variant="caption"
+-              component="a"
+-              href="https://about.formstr.app/privacy-policy"
+-              target="_blank"
+-              rel="noopener noreferrer"
+-              sx={{ textDecoration: "none" }}
+-            >
+-              {intl.formatMessage({ id: "sidebar.privacyPolicy" })}
+-            </Typography>
+-            <Typography
+-              variant="caption"
+-              component="span"
+-              onClick={() => setContactFormOpen(true)}
+-              sx={{ cursor: "pointer" }}
+-            >
+-              {intl.formatMessage({ id: "sidebar.contactUs" })}
+-            </Typography>
++            {/* Belfry: Formstr's privacy policy and contact form do not apply to this deployment. */}
++            {!import.meta.env.VITE_APPS_URL && (
++              <>
++                <Typography
++                  variant="caption"
++                  component="a"
++                  href="https://about.formstr.app/privacy-policy"
++                  target="_blank"
++                  rel="noopener noreferrer"
++                  sx={{ textDecoration: "none" }}
++                >
++                  {intl.formatMessage({ id: "sidebar.privacyPolicy" })}
++                </Typography>
++                <Typography
++                  variant="caption"
++                  component="span"
++                  onClick={() => setContactFormOpen(true)}
++                  sx={{ cursor: "pointer" }}
++                >
++                  {intl.formatMessage({ id: "sidebar.contactUs" })}
++                </Typography>
++              </>
++            )}
+           </Box>
+           <ICSUpload onImportEvent={onImportEvent} />
+         </Box>
+diff --git a/src/components/ui/TopBar.tsx b/src/components/ui/TopBar.tsx
+index dd413f9..65577b9 100644
+--- a/src/components/ui/TopBar.tsx
++++ b/src/components/ui/TopBar.tsx
+@@ -121,14 +121,9 @@ export function TopBar({
+             flexShrink: 0,
+           }}
+         >
+-          {!isMobile && (
+-            <Typography sx={{ fontWeight: 800, fontSize: 15 }}>
+-              Calendar by
+-            </Typography>
+-          )}
+           <img
+-            src="/formstr.png"
+-            alt="Formstr"
++            src="/osv-logo.svg"
++            alt="Open Source Village"
+             style={{ height: 28, width: "auto" }}
+           />
+         </Link>
+diff --git a/src/features/auth/components/RemoteSignerPanel.tsx b/src/features/auth/components/RemoteSignerPanel.tsx
+index 6fd8938..f0950e6 100644
+--- a/src/features/auth/components/RemoteSignerPanel.tsx
++++ b/src/features/auth/components/RemoteSignerPanel.tsx
+@@ -13,7 +13,10 @@ import { QRCodeCanvas } from "qrcode.react";
+ import { signerManager } from "../../../common/signer";
+ import { useIntl } from "react-intl";
+ 
+-const defaultRelays = ["wss://relay.nsec.app", "wss://nostr.oxtr.dev"];
++// Belfry: the signer relay of the deployment (Keycast's NIP-46 relay), VITE_SIGNER_RELAYS.
++const defaultRelays = import.meta.env.VITE_SIGNER_RELAYS
++  ? (import.meta.env.VITE_SIGNER_RELAYS as string).split(",")
++  : ["wss://relay.nsec.app", "wss://nostr.oxtr.dev"];
+ 
+ export function RemoteSignerPanel({
+   onSuccess,
+diff --git a/src/stores/settings.ts b/src/stores/settings.ts
+index 5b4975a..7b73f39 100644
+--- a/src/stores/settings.ts
++++ b/src/stores/settings.ts
+@@ -1,6 +1,6 @@
+ import { create } from "zustand";
+ import { getItem, setItem } from "../common/localStorage";
+-import { AccentPresetName, defaultAccent } from "../theme/tokens";
++import { AccentPresetName } from "../theme/tokens";
+ import {
+   fetchGeneralSettings,
+   publishGeneralSettings,
+@@ -40,8 +40,9 @@ const defaultSettings: ISettings = {
+   filters: {
+     showPublicEvents: false,
+   },
+-  themeMode: "system",
+-  accent: defaultAccent,
++  // Belfry: Open Source Village is dark only, lime accent (brand/tokens.css).
++  themeMode: "dark",
++  accent: "#d6ff52",
+   general: {
+     weekStart: "monday",
+     timeFormat: "24h",
+diff --git a/src/theme/AppThemeProvider.tsx b/src/theme/AppThemeProvider.tsx
+index e18ddeb..bf16e6b 100644
+--- a/src/theme/AppThemeProvider.tsx
++++ b/src/theme/AppThemeProvider.tsx
+@@ -50,7 +50,7 @@ function ColorSchemeSync() {
+ 
+ export function AppThemeProvider({ children }: { children: ReactNode }) {
+   return (
+-    <ThemeProvider theme={theme} defaultMode="system">
++    <ThemeProvider theme={theme} defaultMode="dark">
+       <CssBaseline />
+       <ColorSchemeSync />
+       {children}
+diff --git a/src/theme/theme.ts b/src/theme/theme.ts
+index b28a542..b2eba6c 100644
+--- a/src/theme/theme.ts
++++ b/src/theme/theme.ts
+@@ -53,8 +53,8 @@ export const theme = createTheme({
+     dark: {
+       palette: {
+         mode: "dark",
+-        primary: { main: darkTokens.text, contrastText: "#0b0b0c" },
+-        secondary: { main: darkTokens.text },
++        primary: { main: "#d6ff52", contrastText: "#1a231d" },
++        secondary: { main: "#d6ff52" },
+         background: {
+           default: darkTokens.canvas,
+           paper: darkTokens.surface,
+diff --git a/src/theme/tokens.ts b/src/theme/tokens.ts
+index 4affc18..9292993 100644
+--- a/src/theme/tokens.ts
++++ b/src/theme/tokens.ts
+@@ -17,19 +17,20 @@ export const lightTokens = {
+   segmentTrack: "#ececea",
+ };
+ 
++// Belfry: Open Source Village palette (brand/tokens.css in the Belfry repo).
+ export const darkTokens = {
+-  canvas: "#121212",
+-  surface: "#1a1a1a",
+-  raised: "#242424",
+-  border: "#2c2c2c",
+-  borderStrong: "#3a3a3a",
+-  text: "#f2f2f0",
+-  text2: "#a8a49b",
+-  text3: "#8a8a86",
+-  accentSoft: "#242424",
+-  otherMonthBg: "#181818",
+-  otherMonthText: "#5a5a57",
+-  segmentTrack: "#242424",
++  canvas: "#2b3a31",
++  surface: "#1a231d",
++  raised: "#243029",
++  border: "#3d4c43",
++  borderStrong: "#56655c",
++  text: "#ffffff",
++  text2: "#c9d1cb",
++  text3: "#8e9a91",
++  accentSoft: "#243029",
++  otherMonthBg: "#222e27",
++  otherMonthText: "#6b786f",
++  segmentTrack: "#243029",
+ };
+ 
+ export type AccentPresetName =
+@@ -95,6 +96,7 @@ export const mailTokens = {
+ 
+ export const typography = {
+   fontFamily: [
++    "Geist",
+     "Inter",
+     "-apple-system",
+     "BlinkMacSystemFont",
+diff --git a/vite.config.ts b/vite.config.ts
+index 976ddc3..be99eca 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -18,11 +18,11 @@ export default defineConfig({
+       // Manual registration so we can guard against native platforms
+       injectRegister: null,
+       manifest: {
+-        name: "Calendar by Form*",
++        name: "Open Source Village calendar",
+         short_name: "Calendar",
+         description: "A Nostr-based calendar application",
+-        theme_color: "#000000",
+-        background_color: "#ffffff",
++        theme_color: "#2b3a31",
++        background_color: "#2b3a31",
+         display: "standalone",
+         start_url: "/",
+         icons: [
+-- 
+2.53.0
+

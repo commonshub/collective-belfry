@@ -4,7 +4,7 @@
 #   infra/scripts/prod-env.sh <domain> <acme e-mail>
 #
 # Hostnames (proxy/Caddyfile): shop. (Odoo; ODOO_HOST_PREFIX=odoo keeps the old name), login., apps., relay., bunker., issuer., verifier.,
-# pass.<domain>; NIP-05 names are <member>@<domain>. Re-run gen-secrets.sh afterwards so the
+# pass., calendar.<domain>; NIP-05 names are <member>@<domain>. Re-run gen-secrets.sh afterwards so the
 # issuer and verifier certificates carry the public hostnames, then bootstrap.
 set -euo pipefail
 DOMAIN=${1:?domain, e.g. belfry.example}
@@ -35,6 +35,8 @@ values = {
     "STATUS_LIST_TTL": "300",
     "MAIL_FROM": f"belfry@{domain}",
     "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
+    "COMMUNITY_RELAY_URL": f"wss://relay.{domain}",
+    "CALENDAR_PUBLIC_URL": f"https://calendar.{domain}",
 }
 lines = open(path).read().splitlines(keepends=True)
 seen = set()

@@ -140,6 +140,12 @@ verifier.{$BELFRY_DOMAIN} {
 	}
 }
 
+# Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
+calendar.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy calendar:80
+}
+
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {

@@ -440,6 +440,22 @@ services:
       timeout: 5s
       retries: 10
 
+  # Community app: the Open Source Village calendar (Calendar by Form*, NIP-52), a static build
+  # (infra/apps/calendar). The relay and brand URLs are baked in at build time: rebuild the image
+  # after changing COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS or ONBOARDING_PUBLIC_URL.
+  calendar:
+    profiles: ["app"]
+    image: belfry-calendar:local
+    build:
+      context: ..
+      dockerfile: infra/apps/calendar/Dockerfile
+      args:
+        VITE_TEST_RELAY: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
+        VITE_SIGNER_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+        VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
+        VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+    ports: ["3200:80"]
+
 volumes:
   blossom-data:
   postgres:

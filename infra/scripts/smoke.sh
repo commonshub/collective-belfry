@@ -379,6 +379,22 @@ else
   bad "no bunker URL from step 6d"
 fi
 
+step "6k. calendar app (Calendar by Form*): served, built against the community relay and the bunker relay"
+CAL_URL=${CALENDAR_URL:-${CALENDAR_PUBLIC_URL:-http://localhost:3200}}
+CAL_HTML=$(curl -sS -o - -w '\n%{http_code}' "$CAL_URL/")
+[[ "${CAL_HTML##*$'\n'}" == 200 && "$CAL_HTML" == *"<title>Open Source Village calendar</title>"* ]] && ok "calendar answers at $CAL_URL with the Open Source Village title" || bad "calendar at $CAL_URL: HTTP ${CAL_HTML##*$'\n'}"
+CAL_JS=$(grep -oE 'src="/assets/index[^"]*\.js"' <<<"$CAL_HTML" | head -n1 | sed 's/src="//;s/"$//')
+if [[ -n "$CAL_JS" ]]; then
+  CAL_BUNDLE=$(curl -sS "$CAL_URL$CAL_JS" | tr -d '\n')
+  for want in "${COMMUNITY_RELAY_URL:-ws://localhost:3090}" "${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}"; do
+    [[ "$CAL_BUNDLE" == *"$want"* ]] && ok "calendar bundle carries $want" || bad "calendar bundle lacks $want"
+  done
+  [[ "$CAL_BUNDLE" != *"relay.formstr.app"* && "$CAL_BUNDLE" != *"api.formstr.app"* ]] && ok "no Formstr relays or mail API in the calendar bundle" || bad "the calendar bundle still names Formstr's relays or API"
+else
+  bad "no index bundle in the calendar page"
+fi
+echo "  note the browser check (bunker sign-in, calendar and event read back) is infra/scripts/calendar-check.mjs"
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"
