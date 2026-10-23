@@ -491,7 +491,8 @@ LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__
 rm -f "$PJAR"
 
 step "11. revoke the pass: status list bit flips, the door refuses the certificate"
-STATUS_JWT=$(curl -sS "$ONB_URL/status/1"); echo "$STATUS_JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -c '{iss, sub, ttl, bits: .status_list.bits}' | sed 's/^/  /'
+# (printed for the log only; python decodes, since base64 -d fails on unpadded base64url)
+STATUS_JWT=$(curl -sS "$ONB_URL/status/1"); python3 -c 'import sys,json,base64; t=sys.argv[1].split(".")[1]; p=json.loads(base64.urlsafe_b64decode(t+"="*(-len(t)%4))); print("  "+json.dumps({k: p.get(k) for k in ("iss","sub","ttl")} | {"bits": p["status_list"]["bits"]}))' "$STATUS_JWT" || true
 bit() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "import sys,json,base64; from belfry_onboarding import credentials as c; t=sys.argv[1].split('.')[1]; p=json.loads(base64.urlsafe_b64decode(t+'='*(-len(t)%4))); print(c.status_at(p['status_list']['lst'], int(sys.argv[2])))" "$1" "$2"; }
 [[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 0 ]] && ok "status list: pass $PASS_ID valid (bit 0)" || bad "status bit before revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
 REV=$(onb_post "/admin/passes/$PASS_ID/revoke?token=$HOOK_TOKEN")
