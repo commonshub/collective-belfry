@@ -110,6 +110,7 @@ TOKEN=$(jq -r '.access_token // empty' <<<"$TOKEN_RESP" 2>/dev/null || true)
 say "code -> access token"
 # PRINT_TOKEN=1: hand the access token to the caller (the smoke test signs a Blossom auth event with it).
 [[ "${PRINT_TOKEN:-}" == 1 ]] && echo "ACCESS_TOKEN=$TOKEN"
+[[ -n "${PRINT_TOKEN:-}" ]] && echo "BUNKER_URL=$(jq -r '.bunker_url // empty' <<<"$TOKEN_RESP")"
 
 # 7. Sign with the participant's key.
 EVENT=$(jq -nc --arg pk "$EXPECT_PUB" --argjson t "$(date +%s)" \

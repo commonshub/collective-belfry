@@ -24,6 +24,7 @@ values = {
     "AUTHENTIK_PUBLIC_URL": f"https://login.{domain}",
     "KEYCAST_APP_URL": f"https://apps.{domain}",
     "KEYCAST_TENANT_DOMAIN": f"apps.{domain}",
+    "BUNKER_PUBLIC_RELAYS": f"wss://bunker.{domain}",
     "NIP05_DOMAIN": domain,
     "ISSUER_PUBLIC_URL": f"https://issuer.{domain}",
     "ISSUER_SAN": f"issuer.{domain}",

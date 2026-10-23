@@ -1,7 +1,7 @@
 From 2e7c89716688a3995eb5237190285ab9791fc286 Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 10:57:58 +0200
-Subject: [PATCH 1/6] feat(auth): sign in through an upstream OpenID Provider
+Subject: [PATCH 1/7] feat(auth): sign in through an upstream OpenID Provider
 
 Authorization code + PKCE login against OIDC_ISSUER (Belfry: Authentik).
 The callback verifies the ID token against the provider's JWKS (RS256 or

@@ -45,6 +45,9 @@ x-keycast-env: &keycast-env
   # must present this host, otherwise Keycast answers 400 "Invalid domain".
   ALLOWED_TENANT_DOMAINS: ${KEYCAST_TENANT_DOMAIN:-localhost}
   BUNKER_RELAYS: ws://keycast-relay:8080
+  # Belfry fork (patch 0007): the same relay as clients reach it, written into bunker:// URLs and
+  # NIP-05 discovery; the signer keeps BUNKER_RELAYS. Host port 3080 locally, wss://bunker.<domain> in production.
+  BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
   APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
   BASE_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
   WEB_BUILD_DIR: /app/web
@@ -255,6 +258,11 @@ services:
     build:
       context: ./keycast/build
     command: unified
+    # Keycast's graceful shutdown (pre-drain 15 s, HTTP drain, signer drain) ends with leaving the
+    # signer hashring in Redis. Docker's default 10 s would kill it during the pre-drain, the dead
+    # instance would stay in the ring for 30 s and NIP-46 requests hashed to it would be dropped
+    # silently until then (seen 2026-10-23). Clients retry, but give it time to leave cleanly.
+    stop_grace_period: 90s
     depends_on:
       postgres:
         condition: service_healthy

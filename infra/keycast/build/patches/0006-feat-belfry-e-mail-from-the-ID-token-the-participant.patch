@@ -1,7 +1,7 @@
-From 6eff3b3adc2f7e33ea302dda37d8b0eaf49d7f25 Mon Sep 17 00:00:00 2001
+From 370ea6fd0b3e9d77190a5fb62ff71186ab28a339 Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@belfry.local>
 Date: Fri, 23 Oct 2026 19:18:42 +0200
-Subject: [PATCH 6/6] feat(belfry): e-mail from the ID token; the participant's
+Subject: [PATCH 6/7] feat(belfry): e-mail from the ID token; the participant's
  pass on the dashboard
 
 Preloaded accounts have no e-mail, so the dashboard asked them to verify
@@ -20,12 +20,12 @@ the card is hidden in both cases.
 ---
  api/src/api/http/auth.rs      |  12 ++-
  api/src/api/http/mod.rs       |   1 +
- api/src/api/http/oidc.rs      |  25 ++++++-
- api/src/api/http/pass.rs      | 137 ++++++++++++++++++++++++++++++++++
+ api/src/api/http/oidc.rs      |  25 +++++-
+ api/src/api/http/pass.rs      | 141 ++++++++++++++++++++++++++++++++++
  api/src/api/http/routes.rs    |   3 +-
  core/src/repositories/user.rs |  28 +++++++
- web/src/routes/+page.svelte   | 136 ++++++++++++++++++++++++++++++++-
- 7 files changed, 337 insertions(+), 5 deletions(-)
+ web/src/routes/+page.svelte   | 136 +++++++++++++++++++++++++++++++-
+ 7 files changed, 341 insertions(+), 5 deletions(-)
  create mode 100644 api/src/api/http/pass.rs
 
 diff --git a/api/src/api/http/auth.rs b/api/src/api/http/auth.rs
@@ -125,10 +125,10 @@ index 0771540..c085664 100644
          &user_pk,
 diff --git a/api/src/api/http/pass.rs b/api/src/api/http/pass.rs
 new file mode 100644
-index 0000000..5359863
+index 0000000..8773e0b
 --- /dev/null
 +++ b/api/src/api/http/pass.rs
-@@ -0,0 +1,137 @@
+@@ -0,0 +1,141 @@
 +//! Belfry: the signed-in participant's pass (tier, validity, state, claim link), read server to
 +//! server from the onboarding service so the dashboard can show it before and after the claim.
 +//!
@@ -219,7 +219,11 @@ index 0000000..5359863
 +            .fetch_optional(&pool)
 +            .await
 +            .map_err(AuthError::Database)?;
-+    let Some(partner) = vine_id.flatten().as_deref().and_then(partner_id).map(str::to_owned)
++    let Some(partner) = vine_id
++        .flatten()
++        .as_deref()
++        .and_then(partner_id)
++        .map(str::to_owned)
 +    else {
 +        return Ok(json_status(StatusCode::NOT_FOUND, "no_pass"));
 +    };

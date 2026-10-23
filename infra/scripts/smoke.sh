@@ -250,7 +250,7 @@ rm -f "$SJAR"
 
 step "6d. Keycast sign-in through Authentik (OIDC) in the browser the sign-in link opened"
 if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" EXPECT_EMAIL="$EMAIL" EXPECT_MEMBER="$MEMBER" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
-  KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=' <<<"$OUT")
+  KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); KC_BUNKER=$(sed -n 's/^BUNKER_URL=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=\|^BUNKER_URL=' <<<"$OUT")
   sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
 else
   sed 's/^/  /' <<<"$OUT" >&2; bad "Keycast OIDC login"
@@ -358,6 +358,25 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   [[ "$(jq -r '.result // empty' <<<"$DEC")" == "hello village" ]] && ok "nip44_decrypt round trip" || bad "nip44_decrypt: $DEC"
 else
   bad "no Keycast access token from step 6d"
+fi
+
+step "6i. NIP-46: the bunker URL names the public relay and a remote-signing client connects through it"
+# The relay inside bunker:// URLs and NIP-05 discovery is BUNKER_PUBLIC_RELAYS (Keycast patch 0007);
+# the signer keeps the Compose-internal one. The client runs inside the onboarding container, so
+# BUNKER_MAP rewrites the public host (empty on a public deployment, like WALLET_MAP).
+BUNKER_MAP=${BUNKER_MAP-localhost:3080=keycast-relay:8080}
+PUBLIC_RELAY=${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+DISC_RELAY=$(curl -sS "$KC_URL/.well-known/nostr.json" | jq -r '.nip46.relay // empty')
+[[ "$DISC_RELAY" == "$PUBLIC_RELAY" ]] && ok "NIP-05 discovery advertises the public relay $DISC_RELAY" || bad "NIP-05 discovery relay is '$DISC_RELAY', expected $PUBLIC_RELAY"
+if [[ -n "${KC_BUNKER:-}" ]]; then
+  BUNKER_RELAY=$(python3 -c 'import sys, urllib.parse as u; print((u.parse_qs(u.urlsplit(sys.argv[1]).query).get("relay") or [""])[0])' "$KC_BUNKER")
+  [[ "$BUNKER_RELAY" == "$PUBLIC_RELAY" ]] && ok "the OAuth bunker URL names the public relay $BUNKER_RELAY" || bad "bunker URL relay is '$BUNKER_RELAY', expected $PUBLIC_RELAY"
+  NIP46=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.nip46check "$KC_BUNKER" --expect-pubkey "$KC_PUB" --refused-kind 9735)
+  [[ -n "$BUNKER_MAP" ]] && NIP46+=(--map "$BUNKER_MAP")
+  if OUT=$("${NIP46[@]}" 2>&1); then sed 's/^/  /' <<<"$OUT"; ok "NIP-46 client: connect, get_public_key, sign_event through the bunker relay"
+  else sed 's/^/  /' <<<"$OUT" >&2; bad "NIP-46 client through the bunker relay"; fi
+else
+  bad "no bunker URL from step 6d"
 fi
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"

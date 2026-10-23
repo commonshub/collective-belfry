@@ -1,7 +1,7 @@
 From 6f320ddcdd2316ccb57937a41d4338863503de32 Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@localhost>
 Date: Fri, 23 Oct 2026 14:11:05 +0200
-Subject: [PATCH 4/6] chore(brand): Belfry branding instead of Divine
+Subject: [PATCH 4/7] chore(brand): Belfry branding instead of Divine
 
 Product name Belfry in the API (e-mail subjects and bodies, claim pages, default sender)
 and the web app (brand constants, title, manifest, logo and favicon as SVG, landing page

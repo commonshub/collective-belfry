@@ -89,7 +89,7 @@ The overlay unsets `OIDC_BACKCHANNEL_URL` for Keycast: it fetches Authentik's di
 | `apps.` | Keycast web app and API | `/api/admin/*` (onboarding service only) |
 | apex | NIP-05 `/.well-known/nostr.json` → Keycast (with the tenant host); everything else redirects to `shop.` | |
 | `relay.` | community relay (rnostr, NIP-42) | |
-| `bunker.` | Keycast's NIP-46 relay | |
+| `bunker.` | Keycast's NIP-46 relay; `BUNKER_PUBLIC_RELAYS=wss://bunker.<domain>` (set by `prod-env.sh`) is what Keycast writes into bunker URLs | |
 | `issuer.` | Issuer2 wallet-facing API | `/issuer2/*` (management API, no auth upstream) |
 | `verifier.` | Verifier2 `request` and `response` of a session only | everything else (session management, no auth upstream) |
 | `pass.` | onboarding service: claim pages, door, bridge, status list, vct, Stripe webhook | `/admin/*`, `/hooks/odoo/*`, API docs |

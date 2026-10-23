@@ -1,0 +1,127 @@
+From c6ff5f57cc8a03f7d7ec5f7312dc25b56719fe9a Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@belfry.local>
+Date: Fri, 23 Oct 2026 20:30:57 +0200
+Subject: [PATCH 7/7] feat(bunker): BUNKER_PUBLIC_RELAYS for the relay handed
+ to clients
+
+Behind a reverse proxy the signer listens on the Compose-internal relay
+(BUNKER_RELAYS=ws://keycast-relay:8080), but that address was written into
+every bunker:// URL (OAuth token response, create bunker, team and group
+bunkers) and into the NIP-05 discovery's nip46.relay, so no client outside
+the network could connect. BUNKER_PUBLIC_RELAYS, when set, is what clients
+get; the signer keeps BUNKER_RELAYS. Both must name the same relay.
+---
+ api/src/api/tenant.rs           | 49 +++++++++++++++++++++++++++++----
+ core/src/types/authorization.rs | 17 ++++++++----
+ 2 files changed, 55 insertions(+), 11 deletions(-)
+
+diff --git a/api/src/api/tenant.rs b/api/src/api/tenant.rs
+index 932b1a5..beffe04 100644
+--- a/api/src/api/tenant.rs
++++ b/api/src/api/tenant.rs
+@@ -55,8 +55,16 @@ impl Tenant {
+         }
+     }
+ 
+-    /// Get relay URL with fallback to first BUNKER_RELAYS entry
++    /// The relay URL for clients: `BUNKER_PUBLIC_RELAYS` when set (Belfry: the deployment
++    /// decides, the tenant settings were seeded with the signer's internal relay), else the tenant
++    /// setting, else the first `BUNKER_RELAYS` entry.
+     pub fn relay_url(&self) -> String {
++        if let Some(public) = std::env::var("BUNKER_PUBLIC_RELAYS")
++            .ok()
++            .and_then(|v| v.split(',').map(str::trim).find(|r| !r.is_empty()).map(String::from))
++        {
++            return public;
++        }
+         self.get_settings()
+             .ok()
+             .and_then(|s| s.relay)
+@@ -299,13 +307,17 @@ fn validate_domain(domain: &str) -> Result<(), TenantError> {
+     Ok(())
+ }
+ 
+-/// Get default relay URL from BUNKER_RELAYS environment variable
++/// Default relay URL for clients: `BUNKER_PUBLIC_RELAYS` (Belfry: the relay as clients reach it)
++/// or else `BUNKER_RELAYS` (the relay as the signer reaches it; required).
+ ///
+-/// Requires BUNKER_RELAYS environment variable to be set.
+-/// Panics if not configured - relay connections must be explicit.
++/// Panics if neither is configured - relay connections must be explicit.
+ fn get_default_relay() -> String {
+-    let relays_str =
+-        std::env::var("BUNKER_RELAYS").expect("BUNKER_RELAYS environment variable is required");
++    let relays_str = std::env::var("BUNKER_PUBLIC_RELAYS")
++        .ok()
++        .filter(|v| !v.trim().is_empty())
++        .unwrap_or_else(|| {
++            std::env::var("BUNKER_RELAYS").expect("BUNKER_RELAYS environment variable is required")
++        });
+ 
+     relays_str
+         .split(',')
+@@ -475,6 +487,31 @@ mod tests {
+         std::env::remove_var("BUNKER_RELAYS");
+     }
+ 
++    #[test]
++    #[serial]
++    fn test_tenant_relay_url_prefers_public_relays() {
++        use chrono::Utc;
++
++        // Belfry: clients get the public relay, the signer keeps the internal one
++        std::env::set_var("BUNKER_RELAYS", "ws://keycast-relay:8080");
++        std::env::set_var("BUNKER_PUBLIC_RELAYS", "wss://bunker.example.org");
++
++        // Even a tenant whose stored settings carry the internal relay hands out the public one
++        let tenant = Tenant {
++            id: 1,
++            domain: "test.com".to_string(),
++            name: "Test".to_string(),
++            settings: Some(serde_json::json!({"relay": "ws://keycast-relay:8080"}).to_string()),
++            created_at: Utc::now(),
++            updated_at: Utc::now(),
++        };
++
++        assert_eq!(tenant.relay_url(), "wss://bunker.example.org");
++
++        std::env::remove_var("BUNKER_PUBLIC_RELAYS");
++        std::env::remove_var("BUNKER_RELAYS");
++    }
++
+     #[test]
+     fn test_tenant_email_from_fallback() {
+         use chrono::Utc;
+diff --git a/core/src/types/authorization.rs b/core/src/types/authorization.rs
+index 46d4d6e..c565019 100644
+--- a/core/src/types/authorization.rs
++++ b/core/src/types/authorization.rs
+@@ -203,13 +203,20 @@ impl Authorization {
+         )
+     }
+ 
+-    /// Get the configured bunker relay list from environment
++    /// The relay list handed to clients (bunker URLs, NIP-05 discovery).
+     ///
+-    /// Requires BUNKER_RELAYS environment variable to be set.
+-    /// Panics if not configured - relay connections must be explicit.
++    /// Belfry: `BUNKER_PUBLIC_RELAYS` when set, so that clients get a relay they can reach
++    /// (`wss://bunker.<domain>` behind the proxy) while the signer itself keeps listening on
++    /// `BUNKER_RELAYS` (`ws://keycast-relay:8080` on the Compose network); both must be the same
++    /// relay. Falls back to `BUNKER_RELAYS`, which is required. Panics if neither is configured.
+     pub fn get_bunker_relays() -> Vec<String> {
+-        let relays_str =
+-            std::env::var("BUNKER_RELAYS").expect("BUNKER_RELAYS environment variable is required");
++        let relays_str = std::env::var("BUNKER_PUBLIC_RELAYS")
++            .ok()
++            .filter(|v| !v.trim().is_empty())
++            .unwrap_or_else(|| {
++                std::env::var("BUNKER_RELAYS")
++                    .expect("BUNKER_RELAYS environment variable is required")
++            });
+ 
+         let relays: Vec<String> = relays_str
+             .split(',')
+-- 
+2.53.0
+
