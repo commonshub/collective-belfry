@@ -1,0 +1,106 @@
+# Belfry reverse proxy for a public deployment (docker-compose.prod.yml). One hostname per
+# service under BELFRY_DOMAIN, automatic TLS (Let's Encrypt, ACME_EMAIL). Everything that is
+# management or internal only is denied here; the services keep talking to each other over
+# the Compose network. CADDY_TLS_ARG is the argument of the tls directive: the ACME e-mail in
+# production (docker-compose.prod.yml defaults it to ACME_EMAIL), "internal" for a local check
+# with Caddy's own CA.
+{
+	email {$ACME_EMAIL}
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+(security) {
+	tls {$CADDY_TLS_ARG}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+	encode zstd gzip
+}
+
+# Registry and billing: invite pages, Odoo payment links, back office.
+odoo.{$BELFRY_DOMAIN} {
+	import security
+	# Database management is guarded by the master password; keep it off the internet anyway.
+	@dbmanager path /web/database/*
+	respond @dbmanager 404
+	reverse_proxy odoo:8069
+}
+
+# Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
+login.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy authentik-server:9000
+}
+
+# Community apps / signer (Keycast web app and API, NIP-05 for its usernames).
+apps.{$BELFRY_DOMAIN} {
+	import security
+	# Admin API only for the onboarding service (Compose network).
+	@admin path /api/admin/*
+	respond @admin 404
+	reverse_proxy keycast:3000
+}
+
+# NIP-05 on Belfry's own domain: <member>@<domain> resolves through Keycast's nostr.json.
+{$BELFRY_DOMAIN} {
+	import security
+	@nip05 path /.well-known/nostr.json
+	handle @nip05 {
+		# Keycast already answers with Access-Control-Allow-Origin: *.
+		# Keycast takes its tenant from the Host header and only knows KEYCAST_TENANT_DOMAIN.
+		reverse_proxy keycast:3000 {
+			header_up Host {$KEYCAST_TENANT_DOMAIN}
+		}
+	}
+	# Everything else on the apex: the invite/registry front door.
+	handle {
+		redir https://odoo.{$BELFRY_DOMAIN}{uri}
+	}
+}
+
+# Community relay (NIP-42 whitelist); wss://relay.<domain>
+relay.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy relay:8080
+}
+
+# Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
+bunker.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy keycast-relay:8080
+}
+
+# Credential issuer: wallet-facing OpenID4VCI only; the management API stays internal.
+issuer.{$BELFRY_DOMAIN} {
+	import security
+	@management path /issuer2/*
+	respond @management 404
+	reverse_proxy issuer:7005
+}
+
+# Verifier: wallets fetch request objects and post presentations; session management is
+# internal (door page and bridge create and read sessions over the Compose network).
+verifier.{$BELFRY_DOMAIN} {
+	import security
+	@wallet path_regexp ^/verification-session/[^/]+/(request|response)$
+	handle @wallet {
+		reverse_proxy verifier:7004
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Participant-facing pages of the onboarding service: claim page, door, pass bridge, status
+# list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
+pass.{$BELFRY_DOMAIN} {
+	import security
+	@internal path /admin/* /hooks/odoo/* /docs /openapi.json /redoc
+	respond @internal 404
+	reverse_proxy onboarding:8100
+}

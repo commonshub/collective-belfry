@@ -32,6 +32,10 @@ Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `open
 
 Postgres and Redis are internal (`docker compose exec postgres psql -U postgres`).
 
+## Public deployment
+
+`docker-compose.prod.yml` adds a Caddy reverse proxy with automatic TLS and one hostname per service (`proxy/Caddyfile`), and unpublishes every other port; `scripts/prod-env.sh <domain> <acme e-mail>` points the public URLs in `.env` at those hostnames. The proxy denies the management surfaces (Issuer2 `/issuer2/*`, Verifier2 session management, the onboarding service's `/admin/*` and `/hooks/odoo/*`, Keycast's `/api/admin/*`, Odoo's database manager) and serves NIP-05 on the apex domain. Step by step: `DEPLOY.md`. The routing rules were checked locally with Caddy's internal CA against the running stack (2026-10-23).
+
 ## Secrets and tokens
 
 `scripts/gen-secrets.sh` renders `odoo/odoo.conf` from `odoo/odoo.conf.tmpl` (with the Odoo master password `ODOO_MASTER_PASSWORD`) and runs `scripts/gen-issuer-pki.sh` (the issuer CA, signer, bridge and verifier keys, `issuer/README.md`); it writes `infra/.env` from `.env.example` (every variable has a comment there) with random passwords, the Keycast server key and admin Nostr keypair (`scripts/nostr_keys.py`, pure Python), and `infra/keycast/master.key`. Existing files are kept, and variables added to `.env.example` since are appended to an existing `.env` (generated ones with fresh values); `--force` regenerates `.env` with a backup. An empty variable must not carry an inline comment (`VAR=   # note`): Compose reads the comment as the value, so comments for empty variables sit on the line above. Everything is gitignored.

@@ -197,7 +197,11 @@ odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onbo
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
-echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url and belfry.public_url set"
+# Odoo's own absolute links (invite URLs, payment links in mails) use web.base.url; freeze it so a
+# login from another host name does not rewrite it.
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"web.base.url\",\"${ODOO_PUBLIC_URL:-http://localhost:8069}\"]" >/dev/null
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"web.base.url.freeze\",\"True\"]" >/dev/null
+echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url, belfry.public_url and web.base.url (${ODOO_PUBLIC_URL:-http://localhost:8069}) set"
 
 # Outgoing mail: the company (sender) and one ir.mail_server from SMTP_* (Mailpit locally).
 COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"limit":1}' | jq -r '.[0]')

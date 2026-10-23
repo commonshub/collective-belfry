@@ -1,0 +1,69 @@
+# Production overlay: docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml
+# Adds the Caddy reverse proxy (TLS, one hostname per service, see proxy/Caddyfile) and stops
+# publishing the services' own ports; everything reaches them through the proxy or the Compose
+# network. Public URLs in .env must point at the proxy hostnames (scripts/prod-env.sh).
+name: belfry
+
+services:
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      BELFRY_DOMAIN: ${BELFRY_DOMAIN:?set BELFRY_DOMAIN (scripts/prod-env.sh)}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
+      CADDY_TLS_ARG: ${CADDY_TLS_ARG:-${ACME_EMAIL}}
+      KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
+    volumes:
+      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - odoo
+      - authentik-server
+      - keycast
+      - relay
+      - issuer
+      - verifier
+
+  odoo:
+    ports: !reset []
+    restart: unless-stopped
+  mailpit:
+    # No local mail sink in production: SMTP_* point at a real relay. The service stays
+    # defined but unreachable from outside.
+    ports: !reset []
+  authentik-server:
+    ports: !reset []
+    restart: unless-stopped
+  authentik-worker:
+    restart: unless-stopped
+  keycast:
+    ports: !reset []
+    restart: unless-stopped
+  keycast-relay:
+    ports: !reset []
+    restart: unless-stopped
+  relay:
+    ports: !reset []
+    restart: unless-stopped
+  issuer:
+    ports: !reset []
+    restart: unless-stopped
+  verifier:
+    ports: !reset []
+    restart: unless-stopped
+  onboarding:
+    ports: !reset []
+    restart: unless-stopped
+  postgres:
+    restart: unless-stopped
+  redis:
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

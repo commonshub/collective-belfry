@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login), Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in) and a first hardening pass is in (§3f: Odoo mail and privileges, issuer pinning, signed verifier requests). The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login), Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in), a first hardening pass is in (§3f) and the public deployment is prepared (§3g: proxy overlay, public URLs, `infra/DEPLOY.md`). What is left before the event is in §4. The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -141,9 +141,20 @@ Open from this slice (not blocking the local happy path):
 
 Still open: encrypted responses and HAIP's authorization-code flow; CA publication; issuer key in a KMS and rotation; the management APIs stay unauthenticated behind the network.
 
+## 3g. Deployment preparation: reverse proxy, public URLs, guide — built 2026-10-23
+
+The public deployment itself needs a VM and a domain; everything up to that point is prepared and checked locally.
+
+- [x] `infra/docker-compose.prod.yml`: Caddy (`caddy:2`, ports 80/443, Let's Encrypt) in front of everything, every other `ports:` reset, `restart: unless-stopped`. `infra/proxy/Caddyfile`: `odoo.`, `login.`, `apps.`, `relay.`, `bunker.`, `issuer.`, `verifier.`, `pass.<domain>` and the apex (NIP-05 `/.well-known/nostr.json` → Keycast with the tenant host, everything else → `odoo.`). Denied: `/issuer2/*`, Verifier2 session management (only `/verification-session/<id>/request|response` pass), onboarding `/admin/*`, `/hooks/odoo/*` and API docs, Keycast `/api/admin/*`, Odoo `/web/database/*`. HSTS and the usual headers.
+- [x] `scripts/prod-env.sh <domain> <acme e-mail>` sets `BELFRY_DOMAIN`, `ACME_EMAIL` and every public URL, SAN and tenant variable in `.env`. New `ODOO_PUBLIC_URL`: bootstrap sets and freezes `web.base.url` (invite links and payment links in mails were built from the request host before).
+- [x] `infra/DEPLOY.md`: steps, DNS records, Stripe, what the proxy does, checks after the first start, backups.
+- [x] Checked locally: Caddy with its internal CA on the stack's network; 21 routing checks (allowed and denied paths per host, NIP-05 on the apex) pass; the merged overlay validates.
+
+Open: the deployment run itself (and with it: Stripe test mode, a real wallet, publishing the CA); Caddy rate limiting for the public claim and bridge pages; the HTTP → HTTPS redirect is Caddy's default and untested here.
+
 ## 4. Next
 
-1. A public test deployment (HTTPS) and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
+1. A public test deployment (HTTPS) following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
 2. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
 3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
