@@ -30,6 +30,10 @@
         <field name="arch" type="xml">
             <form>
                 <header>
+                    <button name="action_send_login_link" type="object" string="Send new login link"
+                            class="btn-secondary" invisible="state != 'active'"
+                            groups="belfry_pass.group_steward"
+                            help="Asks the onboarding service for a new one-time Authentik login setup link and mails it to the pass holder. Earlier links stop working."/>
                     <field name="state" widget="statusbar" statusbar_visible="pending,active"/>
                 </header>
                 <sheet>
@@ -63,6 +67,11 @@
                             <field name="keycast_pubkey"/>
                             <field name="authentik_user_id"/>
                             <field name="credential_status_index"/>
+                        </group>
+                        <group string="Login (Authentik)">
+                            <field name="login_setup_url" widget="url"/>
+                            <field name="login_setup_expires_at"/>
+                            <field name="login_mail_sent_at"/>
                         </group>
                         <group string="Revocation">
                             <field name="revoked_at"/>

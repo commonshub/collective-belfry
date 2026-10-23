@@ -209,7 +209,16 @@ class FakeAuthentik:
             "belfry-participants": {"pk": "0000-participants", "members": set()}
         }
         self.group_calls: list[tuple[str, str, int]] = []
+        # Account-setup (recovery) links: (user pk, token_duration) per call; the link carries
+        # this fake's own origin, like authentik builds it from the request host.
+        self.recovery_links: list[tuple[int, str]] = []
+        # Emulate a brand without a recovery flow (blueprint belfry-account-setup-flow missing).
+        self.recovery_flow_missing = False
         base = base_url.rstrip("/")
+        self.base = base
+        router.post(url__regex=rf"{re.escape(base)}/api/v3/core/users/(?P<pk>\d+)/recovery/").mock(
+            side_effect=self._recovery_link
+        )
         router.get(f"{base}/api/v3/core/groups/").mock(side_effect=self._list_groups)
         router.post(
             url__regex=rf"{re.escape(base)}/api/v3/core/groups/(?P<gpk>[^/]+)/(?P<op>add_user|remove_user)/"
@@ -221,6 +230,18 @@ class FakeAuthentik:
         )
         router.post(f"{base}/api/v3/sources/user_connections/oauth/").mock(
             side_effect=self._create_connection
+        )
+
+    def _recovery_link(self, request: httpx.Request, pk: str) -> httpx.Response:
+        if self.recovery_flow_missing:
+            return httpx.Response(400, json={"non_field_errors": "No recovery flow set."})
+        if not any(u["pk"] == int(pk) for u in self.users):
+            return httpx.Response(404, json={"detail": "Not found."})
+        body = json.loads(request.content or b"{}")
+        self.recovery_links.append((int(pk), body.get("token_duration", "hours=1")))
+        token = f"tok{len(self.recovery_links):03d}"
+        return httpx.Response(
+            200, json={"link": f"{self.base}/if/flow/belfry-account-setup/?flow_token={token}"}
         )
 
     def _list_users(self, request: httpx.Request) -> httpx.Response:

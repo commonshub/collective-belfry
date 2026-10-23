@@ -1,7 +1,13 @@
+import logging
+
+import requests
+
 from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from .product_template import PASS_TIERS
+
+_logger = logging.getLogger(__name__)
 
 
 class BelfryPass(models.Model):
@@ -16,6 +22,7 @@ class BelfryPass(models.Model):
 
     partner_id = fields.Many2one('res.partner', string="Pass holder", required=True, index=True, ondelete='restrict')
     tier = fields.Selection(PASS_TIERS, required=True)
+    tier_name = fields.Char(compute='_compute_tier_name')
     product_id = fields.Many2one('product.product', string="Pass product")
     sale_order_id = fields.Many2one('sale.order', string="Sales order", ondelete='set null')
     invoice_id = fields.Many2one('account.move', string="Invoice", index=True, ondelete='set null')
@@ -55,6 +62,12 @@ class BelfryPass(models.Model):
         copy=False,
     )
     stripe_dispute_id = fields.Char(copy=False)
+    # Phase 2 login: a one-time link into Authentik's account-setup flow (the participant
+    # chooses a password). Minted by the onboarding service at activation and on request
+    # ("Send new login link"); writing it on an active pass mails the activation template.
+    login_setup_url = fields.Char(string="Login setup link", copy=False, readonly=True)
+    login_setup_expires_at = fields.Datetime(string="Login link valid until", copy=False, readonly=True)
+    login_mail_sent_at = fields.Datetime(string="Login mail sent", copy=False, readonly=True)
     credential_status_index = fields.Integer(
         string="Status list index",
         copy=False,
@@ -81,13 +94,75 @@ class BelfryPass(models.Model):
         for record in self:
             record.display_name = "%s - %s" % (record.partner_id.name or "?", tiers.get(record.tier, record.tier))
 
+    @api.depends('tier')
+    def _compute_tier_name(self):
+        tiers = dict(PASS_TIERS)
+        for record in self:
+            record.tier_name = tiers.get(record.tier, record.tier or "")
+
     def write(self, vals):
         res = super().write(vals)
         if vals.get('state') == 'active':
             # belt and braces: the service assigns the number before activation, but make
             # sure an active pass never belongs to a partner without one
             self.partner_id.filtered(lambda p: not p.belfry_member_number).belfry_ensure_member_number()
+        if vals.get('login_setup_url'):
+            # at activation (state and link in one write) and when a steward asks for a new link
+            self.filtered(lambda p: p.state == 'active')._belfry_send_login_mail()
         return res
+
+    # ------------------------------------------------------------------
+    # login link mail
+    # ------------------------------------------------------------------
+
+    @api.model
+    def belfry_apps_url(self):
+        """Where participants use the community apps (Keycast's web app for now)."""
+        return self.env['ir.config_parameter'].sudo().get_param('belfry.apps_url') or ''
+
+    def _belfry_send_login_mail(self):
+        """Queue the activation mail (pass details and the login setup link) for every pass
+        in ``self``. Odoo's mail queue sends it; failures stay visible in Settings > Technical >
+        Emails because the template keeps its mails."""
+        template = self.env.ref('belfry_pass.mail_template_pass_activated', raise_if_not_found=False)
+        if not template:
+            return
+        for record in self:
+            if not record.partner_id.email:
+                _logger.warning("Belfry pass %s: holder %s has no e-mail, login link not mailed",
+                                record.id, record.partner_id.id)
+                continue
+            template.sudo().send_mail(record.id, force_send=False)
+            record.write({'login_mail_sent_at': fields.Datetime.now()})
+            _logger.info("Belfry pass %s: login setup mail queued for %s", record.id, record.partner_id.email)
+
+    def action_send_login_link(self):
+        """Steward button: ask the onboarding service for a new link. The service mints it in
+        Authentik and writes it on this pass, which queues the mail (see ``write``)."""
+        self.ensure_one()
+        if self.state != 'active':
+            raise UserError(_("Only an active pass can get a login link."))
+        if not self.partner_id.email:
+            raise UserError(_("%s has no e-mail address.", self.partner_id.display_name))
+        url = self.env['ir.config_parameter'].sudo().belfry_webhook_url('/admin/passes/%d/login-link' % self.id)
+        try:
+            response = requests.post(url, timeout=20)
+            response.raise_for_status()
+            result = response.json().get('result')
+        except (requests.RequestException, ValueError) as exc:
+            raise UserError(_("The onboarding service did not answer: %s", exc)) from exc
+        if result != 'sent':
+            raise UserError(_("The onboarding service answered '%s' instead of 'sent'.", result))
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _("Login link sent"),
+                'message': _("A new login link was mailed to %s.", self.partner_id.email),
+                'type': 'success',
+                'next': {'type': 'ir.actions.client', 'tag': 'soft_reload'},
+            },
+        }
 
     @api.model
     def _belfry_partner_for_invoice(self, invoice):

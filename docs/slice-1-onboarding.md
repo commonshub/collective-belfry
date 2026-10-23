@@ -69,6 +69,8 @@ Depends on `sale_management`, `account_payment`, `payment_stripe`, `loyalty`, `s
 | revoke_reason | Selection refund / chargeback / steward / expiry | |
 | stripe_dispute_id | Char | |
 | credential_status_index | Integer | reserved for Phase 3 |
+| login_setup_url, login_setup_expires_at | Char, Datetime | one-time Authentik account-setup link (added 2026-10-23); writing the URL on an active pass queues the activation mail |
+| login_mail_sent_at | Datetime | set when the mail was queued |
 
 **Model `belfry.invite`**
 
@@ -93,13 +95,16 @@ Stewards are members of group `belfry_pass.group_steward` (create, read own invi
 - Pricelist rules on the default pricelist: early-bird fixed prices €40 / €80 / €160 valid until `ir.config_parameter` `belfry.early_bird_until` (default 2026-12-31). Applied by a post-init hook or XML with a date.
 - Pricelist `belfry_pass.pricelist_company` "Belfry companies": one formula rule, +50% on the public pricelist price (so it compounds with early bird: 60 / 120 / 240).
 - Loyalty program `belfry_pass.promo_example` with promo code `OSV10`, 10% off pass products, as the example discount code.
-- Config parameters: `belfry.onboarding_url` (default `http://onboarding:8100`), `belfry.hook_token` (shared secret, appended as `?token=` to webhook URLs), `belfry.event_start` (2027-01-25), `belfry.event_end` (2027-01-31).
+- Config parameters: `belfry.onboarding_url` (default `http://onboarding:8100`), `belfry.hook_token` (shared secret, appended as `?token=` to webhook URLs), `belfry.event_start` (2027-01-25), `belfry.event_end` (2027-01-31), `belfry.apps_url` (where participants use the community apps, in the activation mail; default `http://localhost:3000`).
+- Mail template `belfry_pass.mail_template_pass_activated` (added 2026-10-23): pass details and the login setup link, addressed to the pass holder, sent by `belfry.pass.write` when `login_setup_url` is written on an active pass (activation and "Send new login link"). Mails are kept (`auto_delete` off).
 - Automation rules (`base_automation` + server action of type webhook):
   1. `account.move` on create/update of `payment_state`, domain `move_type = out_invoice and payment_state in (paid, in_payment) and state = posted` → POST `${belfry.onboarding_url}/hooks/odoo/invoice-paid?token=${belfry.hook_token}` with the record's `id`.
   2. `payment.transaction` on create/update of `state`, domain `operation = refund and state = done` → POST `.../hooks/odoo/refund?token=...` with the record's `id`.
   The webhook action sends `{"_model", "_id", "_action", ...fields}`; the receiver reads `_id`.
 
 **Controller** (`portal`, public): `GET /belfry/invite/<token>` shows the three passes with the prices the visitor will pay (early bird applied) and a billing form (name, email, company name optional, VAT optional). `POST` creates or finds the partner by email (company → a company partner with the person as contact; pricelist = company pricelist when a company name is given), creates a `sale.order` with the chosen product (and an optional promo code applied through the loyalty wizard), confirms it, creates and posts the invoice, generates the Odoo payment link (`payment.link.wizard`), creates the `belfry.pass` in state pending linked to invite, order and invoice, marks the invite used, and redirects to the payment link. Expired, used or revoked invites show a plain error page.
+
+**Button** on the pass form (stewards): "Send new login link" posts to the onboarding service's `/admin/passes/<id>/login-link`; the service writes the new link and the mail goes out.
 
 **Cron**: none in slice 1 (expiry runs in the onboarding service).
 
@@ -114,6 +119,7 @@ Python 3.12, FastAPI + httpx, `pyproject.toml` with `uv` or pip; package `belfry
 ```
 ODOO_URL=http://odoo:8069   ODOO_DB=odoo   ODOO_USER=onboarding@belfry.local   ODOO_API_KEY=...
 AUTHENTIK_URL=http://authentik-server:9000   AUTHENTIK_TOKEN=...   AUTHENTIK_SOURCE_SLUG=pass-bridge
+AUTHENTIK_PUBLIC_URL=http://localhost:9000  # origin of the account-setup links (added 2026-10-23)
 KEYCAST_URL=http://keycast:3000   KEYCAST_ADMIN_TOKEN=...   KEYCAST_SERVICE_TOKEN=...
 HOOK_TOKEN=...                      # must equal Odoo's belfry.hook_token
 STRIPE_WEBHOOK_SECRET=whsec_...     # for /hooks/stripe only
@@ -130,6 +136,7 @@ LOG_LEVEL=info
 | POST /hooks/odoo/refund?token= | HOOK_TOKEN | reads `_id` (payment.transaction) | runs `revoke_for_refund(transaction_id)` |
 | POST /hooks/stripe | Stripe signature | raw Stripe event | handles `charge.dispute.created` (revoke, reason chargeback) and `charge.dispute.closed` with status `won` (reactivate); idempotent on `event.id` via `belfry.stripe.event`; other types recorded and ignored |
 | POST /admin/reconcile?token= | HOOK_TOKEN | | runs one `reconcile()` pass (see below) |
+| POST /admin/passes/<id>/login-link?token= | HOOK_TOKEN | | new account-setup link for an active pass, written on the pass (Odoo mails it); added 2026-10-23 |
 
 **CLI**: `python -m belfry_onboarding reconcile` and `python -m belfry_onboarding expire`, for cron.
 
@@ -140,9 +147,9 @@ LOG_LEVEL=info
   2. Find `belfry.pass` by `invoice_id`; if none, create one (partner from the invoice, tier from the product with `belfry_tier`). If `state = active`, return `already_active` and do nothing else.
   3. Assign `belfry_member_number` to the partner if empty.
   4. Dates: `date_start = max(payment date, EVENT_START)`; `date_end = date_start + duration_days` for day/week, `EVENT_END` for full.
-  5. Authentik: find the user by `attributes.belfry_member_number` or email; else create (`username` = member number lowercased, `name`, `email`, `attributes = {belfry_member_number, odoo_partner_id}`, `path = belfry/participants`). Then ensure a `UserOAuthSourceConnection` exists for source `AUTHENTIK_SOURCE_SLUG` with `identifier = member number` (create if missing). Trigger a password-reset / enrollment link only if the API makes it cheap; otherwise leave it to Phase 2 login work.
+  5. Authentik: find the user by `attributes.belfry_member_number` or email; else create (`username` = member number lowercased, `name`, `email`, `attributes = {belfry_member_number, odoo_partner_id}`, `path = belfry/participants`). Then ensure a `UserOAuthSourceConnection` exists for source `AUTHENTIK_SOURCE_SLUG` with `identifier = member number` (create if missing). Since 2026-10-23: add the user to `belfry-participants` and mint a one-time account-setup link (`POST /api/v3/core/users/<pk>/recovery/`, brand recovery flow `belfry-account-setup`, `days=LOGIN_LINK_DAYS`), rewritten to `AUTHENTIK_PUBLIC_URL`; both steps are strict (the pass stays pending until they succeed).
   6. Keycast: `POST /api/admin/preload-user` with `vine_id = "odoo-partner-<partner id>"`, `username` = member number lowercased (e.g. `osv-0001`), `display_name` = partner name. Response pubkey → bech32 `npub`. Then `PUT /api/admin/users/<pubkey>/status` `active` (service token) in case the account was suspended by an earlier expiry.
-  7. Write back: partner `belfry_authentik_user_id`, `belfry_npub`; pass `npub`, `keycast_pubkey`, `authentik_user_id`, `transaction_id`, `stripe_payment_intent`, dates, `activated_at`, and `state = active` last.
+  7. Write back: partner `belfry_authentik_user_id`, `belfry_npub`; pass `npub`, `keycast_pubkey`, `authentik_user_id`, `transaction_id`, `stripe_payment_intent`, dates, `activated_at`, `login_setup_url`, `login_setup_expires_at`, and `state = active` last (one write; Odoo mails the link).
 - `revoke_pass(pass_id, reason)`: set `state = revoked`, `revoked_at`, `revoke_reason`; if the partner has no other active pass, set the Keycast user status to `suspended`. Idempotent.
 - `revoke_for_refund(transaction_id)`: load the refund transaction, follow `source_transaction_id` to the pass (by `transaction_id`), `revoke_pass(..., "refund")`.
 - `reactivate_pass(pass_id)`: for a won dispute; state back to active if `date_end` has not passed, Keycast status active.
@@ -157,7 +164,7 @@ LOG_LEVEL=info
 
 - One `docker-compose.yml` with the services above; `.env.example` lists every secret; `scripts/gen-secrets.sh` fills `.env` (Keycast master key, server nsec, admin key, Authentik secret and bootstrap token, hook token, Odoo admin password).
 - `scripts/bootstrap.sh`: waits for health, creates the Odoo database with `belfry_pass` installed (`odoo -d odoo -i belfry_pass --stop-after-init`), creates the Odoo API key for the onboarding user, bootstraps the Keycast admin (register, verify via the dev inbox, fetch the admin token) and inserts the `belfry-event` policy, and writes the resulting tokens into `.env`.
-- `authentik/blueprints/belfry-pass-bridge-source.yaml`: the source from `docs/research/authentik-spike.md` with the bridge URL as context (a placeholder until Phase 3), plus a `belfry/participants` user path and a group `belfry-participants`.
+- `authentik/blueprints/belfry-pass-bridge-source.yaml`: the source from `docs/research/authentik-spike.md` with the bridge URL as context (a placeholder until Phase 3), plus a `belfry/participants` user path and a group `belfry-participants`. `belfry-keycast-provider.yaml`: the OIDC application Keycast logs in with. `belfry-account-setup-flow.yaml` (2026-10-23): the recovery flow behind the account-setup links, set as the default brand's recovery flow.
 - `scripts/smoke.sh`: creates an invite through JSON-RPC, drives the invite form with curl, registers a manual payment on the invoice (as Stripe test mode would), waits for the onboarding webhook, and checks that the pass is active and the Authentik user, source link and Keycast user exist. Then replays the webhook and checks nothing was duplicated.
 - `Makefile` at the repo root: `make up`, `make bootstrap`, `make smoke`, `make down`, `make test-odoo`, `make test-onboarding`.
 

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <!-- Sent by belfry.pass.write whenever login_setup_url is written on an active pass: at
+         activation (the onboarding service writes the link together with state=active) and when
+         a steward presses "Send new login link". Mails are kept (auto_delete off) so a failed
+         delivery stays visible under Settings > Technical > Emails. -->
+    <record id="mail_template_pass_activated" model="mail.template">
+        <field name="name">Belfry: pass active, login setup link</field>
+        <field name="model_id" ref="belfry_pass.model_belfry_pass"/>
+        <field name="subject">Your Open Source Village pass is active ({{ object.member_number }})</field>
+        <field name="email_from">{{ object.company_id.email_formatted or user.email_formatted }}</field>
+        <field name="partner_to">{{ object.partner_id.id }}</field>
+        <field name="lang">{{ object.partner_id.lang }}</field>
+        <field name="auto_delete" eval="False"/>
+        <field name="body_html" type="html">
+<div style="margin: 0px; padding: 0px; font-size: 14px; line-height: 1.5;">
+    <p>Hello <t t-out="object.partner_id.name or ''"/>,</p>
+    <p>
+        Your <strong><t t-out="object.tier_name or ''"/></strong> pass for Open Source Village is active
+        from <t t-out="format_date(object.date_start) or ''"/> to <t t-out="format_date(object.date_end) or ''"/>.
+        Your member number is <strong><t t-out="object.member_number or ''"/></strong>.
+    </p>
+    <p>
+        <strong>1. Set up your Belfry login.</strong> Choose a password through this link; it works once
+        and expires on <t t-out="format_datetime(object.login_setup_expires_at, dt_format='long') if object.login_setup_expires_at else ''"/>:
+    </p>
+    <p style="margin: 16px 0;">
+        <a t-att-href="object.login_setup_url" style="background-color: #875A7B; padding: 8px 16px; text-decoration: none; color: #fff; border-radius: 5px; font-size: 13px;">
+            Set up your Belfry login
+        </a>
+    </p>
+    <p>
+        <strong>2. Use the community apps.</strong> Open <a t-att-href="object.belfry_apps_url()"><t t-out="object.belfry_apps_url()"/></a>
+        and choose "Sign in with Belfry". Your Nostr key is kept safe by Belfry; your public key is
+        <code><t t-out="object.npub or ''"/></code>.
+    </p>
+    <p>
+        If you already have a Belfry login, you can ignore the link and sign in as usual.
+        If the link has expired, reply to this e-mail and we will send a new one.
+    </p>
+    <p>See you at the village,<br/>Belfry</p>
+</div>
+        </field>
+    </record>
+</odoo>

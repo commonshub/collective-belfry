@@ -29,6 +29,7 @@ def settings() -> Settings:
         ODOO_API_KEY="odoo-key",
         AUTHENTIK_URL=AUTHENTIK_URL,
         AUTHENTIK_TOKEN="ak-token",
+        AUTHENTIK_PUBLIC_URL="https://login.belfry.test",
         KEYCAST_URL=KEYCAST_URL,
         KEYCAST_ADMIN_TOKEN="kc-admin",
         KEYCAST_SERVICE_TOKEN="kc-service",

@@ -1,6 +1,6 @@
 # Belfry Identity & Membership Plan
 
-> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik; see docs/NEXT_STEPS.md §3b and §3c). The live doc is the source of truth.
+> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link; see docs/NEXT_STEPS.md §3b, §3c and §3d). The live doc is the source of truth.
 
 2026-10-20
 
@@ -204,6 +204,7 @@ The most urgent open decision is the event date, because it determines which EUD
 
 - [x] Signing server: Keycast (Divine's fork) instead of an OpenBunker fork, decided 2026-10-22. It already has KMS-encrypted keys, per-app policies, provisioning with claim links, and active maintenance; OpenBunker stores keys unencrypted and lacks a provisioning API.
 - [x] Login for the Nostr apps: Keycast trusts Authentik via OIDC (one login), decided 2026-10-22. The Keycast fork mints a server-signed UCAN session after the Authentik callback, 3 to 5 days per the spike; the Keycast claim email is not needed.
+- [x] Participant login for Phase 2: at activation the onboarding service mints a one-time Authentik account-setup link (recovery-link API, flow belfry-account-setup: choose a password, signed in) and Odoo mails it with the pass details; stewards re-send it from the pass form. Decided 2026-10-23. Passkeys can be added from Authentik user settings; self-service password recovery waits for an SMTP setup; the pass sign-in arrives with the Phase 3 bridge.
 - [x] Event date: late January 2027, decided 2026-10-22. Some national EUDI wallets may be usable by then; test the pass against the ones participants are likely to hold, and keep sandbox and open-source wallets as the baseline (see Risks).
 - [ ] Belfry as required witness for advanced members (recommended), or watcher only.
 - [ ] Issuer stack: walt.id recommended by the spike, Credo as fallback; a steward checks with the DIDroom maintainer before deciding (2026-10-22).

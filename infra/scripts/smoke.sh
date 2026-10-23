@@ -2,7 +2,8 @@
 # Smoke test for slice 1 (docs/slice-1-onboarding.md, "Infra"): invite -> pay -> accounts
 # created exactly once, replay-safe.
 #
-# STATUS (2026-10-22): ran green end to end (18 checks) against the full stack. The Authentik
+# STATUS (2026-10-23): ran green end to end against the full stack (slice 1, relay, Keycast
+# login, login setup links). The Authentik
 # source link (POST /api/v3/sources/user_connections/oauth/) cannot be created over the API on
 # authentik 2026.8.5 ("user" is read-only), so the service logs a warning and the participant
 # links the pass once from user settings; this script reports the missing link as a note, and
@@ -150,12 +151,54 @@ fi
 SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
 
-step "6c. Keycast sign-in through Authentik (OIDC) with the participant's account"
-# Participants get no Authentik password yet (enrollment is open, see NEXT_STEPS); the smoke
-# participant gets a throwaway one so the login can be driven over the flow executor API.
+step "6c. login setup link: mailed by Odoo, sets the password through Authentik's flow"
+# Participants have no Authentik password: activation stores a one-time account-setup link
+# (authentik recovery flow belfry-account-setup) on the pass and Odoo mails it.
+PASS_LOGIN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url","login_setup_expires_at","login_mail_sent_at"]}' | jq -c '.[0]')
+SETUP_URL=$(jq -r '.login_setup_url // empty' <<<"$PASS_LOGIN")
+[[ "$SETUP_URL" == "${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-account-setup/?flow_token="* ]] \
+  && ok "pass carries a setup link on the public Authentik URL (valid until $(jq -r .login_setup_expires_at <<<"$PASS_LOGIN"))" \
+  || bad "login_setup_url: '$SETUP_URL'"
+MAILS=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]" '{"fields":["recipient_ids","subject","body_html","state"]}')
+MAIL_N=$(jq length <<<"$MAILS")
+if [[ "$MAIL_N" == 1 ]] && jq -e --arg u "$SETUP_URL" '.[0].body_html | contains($u)' <<<"$MAILS" >/dev/null \
+   && jq -e --argjson p "$PARTNER_ID" '.[0].recipient_ids == [$p]' <<<"$MAILS" >/dev/null; then
+  ok "one activation mail queued to partner $PARTNER_ID with the link (state $(jq -r '.[0].state' <<<"$MAILS"))"
+else
+  bad "activation mail: $(jq -c 'map({recipient_ids, subject, state})' <<<"$MAILS")"
+fi
+[[ -n "$(jq -r '.login_mail_sent_at // empty' <<<"$PASS_LOGIN")" ]] && ok "login_mail_sent_at set" || bad "login_mail_sent_at empty"
+
+# Drive the setup flow like the browser: prompt (password) -> user write -> login (remember me).
 AK_PW="smoke-$(openssl rand -hex 12)"
-ak -f -o /dev/null -X POST "$AK_URL/api/v3/core/users/$AK_UID/set_password/" -H 'Content-Type: application/json' \
-  -d "{\"password\":\"$AK_PW\"}" || bad "could not set a password on Authentik user $AK_UID"
+FLOW_TOKEN=${SETUP_URL#*flow_token=}
+SETUP_EXEC="$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=flow_token%3D$FLOW_TOKEN"
+run_setup_flow() { # password -> prints the final component; the session jar is $1's caller's
+  local jar=$1 pw=$2 ch comp
+  ch=$(curl -sS -b "$jar" -c "$jar" "$SETUP_EXEC")
+  for _ in 1 2 3 4; do
+    comp=$(jq -r '.component // empty' <<<"$ch")
+    case "$comp" in
+      ak-stage-prompt) body=$(jq -nc --arg p "$pw" '{component:"ak-stage-prompt",password:$p,password_repeat:$p}') ;;
+      ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
+      *) break ;;
+    esac
+    ch=$(curl -sS -b "$jar" -c "$jar" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$SETUP_EXEC")
+  done
+  jq -r '.component // "none"' <<<"$ch"
+}
+SJAR=$(mktemp)
+FINAL=$(run_setup_flow "$SJAR" "$AK_PW")
+ME=$(curl -sS -b "$SJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+[[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "setup link: password chosen, browser signed in as Authentik user $AK_UID" || bad "setup flow ended with '$FINAL', session user '$ME'"
+rm -f "$SJAR"
+# The link is one-time: a second use must not be able to set a password.
+SJAR=$(mktemp)
+FINAL=$(run_setup_flow "$SJAR" "evil-$(openssl rand -hex 8)")
+[[ "$FINAL" == ak-stage-access-denied ]] && ok "consumed link is refused (access denied, no pending user)" || bad "consumed link ended with '$FINAL'"
+rm -f "$SJAR"
+
+step "6d. Keycast sign-in through Authentik (OIDC) with the chosen password"
 if OUT=$(KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$USERNAME" "$AK_PW" "$KC_PUB" 2>&1); then
   sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
 else
@@ -163,6 +206,16 @@ else
 fi
 CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
 [[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
+
+step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
+RESEND=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
+[[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"
+SETUP_URL2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url"]}' | jq -r '.[0].login_setup_url')
+[[ -n "$SETUP_URL2" && "$SETUP_URL2" != "$SETUP_URL" ]] && ok "pass carries a new link" || bad "link unchanged: $SETUP_URL2"
+MAIL_N2=$(ox mail.mail search_count "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]")
+[[ "$MAIL_N2" == 2 ]] && ok "second mail queued" || bad "mails for the pass: $MAIL_N2"
+RESEND=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=wrong")
+[[ "$RESEND" == 401 ]] && ok "wrong token -> 401" || bad "wrong token -> $RESEND"
 
 step "7. replay the webhook three times and check nothing was duplicated"
 for i in 1 2 3; do

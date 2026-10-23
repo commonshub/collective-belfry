@@ -115,6 +115,15 @@ if [[ "$(psql_odoo "select 1 from information_schema.tables where table_name='ir
 elif [[ "$WANT_MODULES" == *belfry_pass* && "$(module_state belfry_pass)" != "installed" ]]; then
   echo "installing belfry_pass into the existing database"
   odoo_cli -d "$ODOO_DB" -i belfry_pass --stop-after-init --without-demo
+elif [[ "$WANT_MODULES" == *belfry_pass* ]] && \
+     [[ "$(psql_odoo "select latest_version from ir_module_module where name='belfry_pass'")" != \
+        "$(sed -n "s/^ *'version': *'\([^']*\)'.*/\1/p" "$REPO_DIR/odoo/addons/belfry_pass/__manifest__.py")" ]]; then
+  echo "upgrading belfry_pass (manifest version changed)"
+  odoo_cli -d "$ODOO_DB" -u belfry_pass --stop-after-init --without-demo
+  # The running server does not pick up new fields from a CLI upgrade (threaded mode, no
+  # registry reload observed), so restart it.
+  "${COMPOSE[@]}" restart odoo >/dev/null
+  wait_for odoo "$ODOO_URL/web/health"
 else
   echo "database $ODOO_DB already initialised"
 fi
@@ -180,7 +189,8 @@ fi
 
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onboarding_url\",\"${ONBOARDING_URL:-http://onboarding:8100}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
-echo "config parameters belfry.onboarding_url and belfry.hook_token set"
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
+echo "config parameters belfry.onboarding_url, belfry.hook_token and belfry.apps_url set"
 
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
@@ -265,6 +275,21 @@ echo "blueprint belfry-keycast-provider: successful"
 ak "$AK_URL/application/o/keycast/.well-known/openid-configuration" | jq -e '.issuer | endswith("/application/o/keycast/")' >/dev/null \
   || die "Keycast OIDC application not served at /application/o/keycast/"
 echo "Keycast OIDC issuer: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/"
+# The account-setup flow (participants choose a password through the link mailed at activation)
+# must be the default brand's recovery flow, otherwise the onboarding service cannot mint links.
+i=0
+while :; do
+  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-account-setup-flow" | jq -c '.results[0] // empty')
+  status=$(jq -r '.status // empty' <<<"$bp")
+  [[ "$status" == successful ]] && break
+  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-account-setup-flow status '$status'"; }
+  printf '.'; sleep 5
+done
+SETUP_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-account-setup/" | jq -r '.pk // empty')
+[[ -n "$SETUP_FLOW" ]] || die "flow belfry-account-setup missing"
+ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '.results[] | select(.default) | .flow_recovery == $f' >/dev/null \
+  || die "the default brand's recovery flow is not belfry-account-setup"
+echo "blueprint belfry-account-setup-flow: successful, default brand recovery flow set"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 
 # ---------- 6. summary ----------

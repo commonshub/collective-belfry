@@ -88,6 +88,19 @@ class AuthentikClient:
         """Idempotent: 204 also for a non-member."""
         self._post_no_content(f"/api/v3/core/groups/{group_pk}/remove_user/", {"pk": user_pk})
 
+    # -- account setup (recovery) links -------------------------------------------------------
+
+    def create_recovery_link(self, user_pk: int, token_duration: str) -> str:
+        """One-time link into the brand's recovery flow with ``user_pk`` as the pending user
+        (``POST /api/v3/core/users/<pk>/recovery/``). The token replaces any earlier one for the
+        user; authentik builds the link from the request host, so callers rewrite the origin.
+        ``token_duration`` uses authentik's timedelta string, e.g. ``days=30``.
+        400 "No recovery flow set." when the default brand has no recovery flow."""
+        data = self._post(
+            f"/api/v3/core/users/{user_pk}/recovery/", {"token_duration": token_duration}
+        )
+        return str(data["link"])
+
     # -- OAuth source connections -------------------------------------------------------------
 
     def find_source_connections(self, user_pk: int, source_slug: str) -> list[dict[str, Any]]:

@@ -39,7 +39,7 @@ To move to a newer upstream commit, rebase the branch onto it, regenerate the pa
 
 **Check it end to end:** `scripts/keycast-oidc-login.sh <authentik username> <password> <pubkey hex>` drives the whole browser flow with curl (popup, Authentik login over the flow executor API, callback, consent, token, a signed kind-1 event); `make smoke` runs it for a fresh participant (step 6c).
 
-**Not done yet in the fork:** removing the Divine UI parts and branding, key export for OIDC-only accounts (export needs a password, spike §6.5), and a way for participants to get an Authentik login at all (no password or enrollment link is sent yet; the pass sign-in arrives with the Phase 3 bridge).
+**Not done yet in the fork:** removing the Divine UI parts and branding, and key export for OIDC-only accounts (export needs a password, spike §6.5). Participants get their Authentik login through the account-setup link Odoo mails at activation (`authentik/blueprints/belfry-account-setup-flow.yaml`, since 2026-10-23); the pass sign-in arrives with the Phase 3 bridge.
 
 ## Files in this directory
 

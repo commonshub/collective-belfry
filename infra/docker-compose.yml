@@ -259,6 +259,8 @@ services:
       ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}
       ODOO_API_KEY: ${ODOO_API_KEY:-}
       AUTHENTIK_URL: http://authentik-server:9000
+      # Authentik as the browser sees it: the account-setup links mailed at activation use it.
+      AUTHENTIK_PUBLIC_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}
       AUTHENTIK_TOKEN: ${AUTHENTIK_TOKEN:-}
       AUTHENTIK_SOURCE_SLUG: pass-bridge
       KEYCAST_URL: http://keycast:3000

@@ -146,6 +146,16 @@ def create_app(services: Services | None = None) -> FastAPI:
         result = await run_in_threadpool(core.sync_relay_whitelist, svc(request), [], True)
         return {"result": "synced", **result}
 
+    @app.post("/admin/passes/{pass_id}/login-link")
+    async def admin_login_link(
+        pass_id: int, request: Request, token: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        """A new account-setup link for an active pass (Odoo's "Send new login link" button).
+        Odoo mails it when the pass is written. Errors from Authentik or Odoo are 500."""
+        check_token(request, token)
+        result = await run_in_threadpool(core.send_login_link, svc(request), pass_id)
+        return {"result": result, "pass_id": pass_id}
+
     @app.post("/hooks/stripe")
     async def stripe_hook(request: Request) -> dict[str, Any]:
         services = svc(request)

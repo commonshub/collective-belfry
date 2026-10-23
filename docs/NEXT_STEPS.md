@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login); continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login); continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -86,19 +86,30 @@ Decision 2 implemented. The fork is a `git format-patch` series in `infra/keycas
 
 Open from this slice:
 
-1. Participants still have no way to get an Authentik login: no password or enrollment link is sent (slice 1 gap 4), and pass sign-in needs the Phase 3 bridge. The smoke test sets a throwaway password. Next step for Phase 2: send an Authentik recovery/enrollment link at activation, or make the pass bridge the only login.
+1. ~~Participants still have no way to get an Authentik login~~ — done in §3d (account-setup link mailed at activation, 2026-10-23). Pass sign-in still needs the Phase 3 bridge.
 2. Key export needs the account password, which OIDC-only accounts do not have (spike §6.5); "managed, exportable" for full access does not hold yet.
 3. Divine UI and branding are unchanged (logo, "Divine" e-mail copy, ATProto settings card).
 4. Keycast's e-mail stays empty for preloaded accounts; the UCAN carries an empty `email` fact. Nothing in Belfry's flow needs it so far.
 
+## 3d. Phase 2: participants get their Authentik login — built 2026-10-23
+
+Closes §3c open item 1. Decision (recorded in the live doc, rev 45): at activation the onboarding service mints a one-time Authentik account-setup link and Odoo mails it with the pass details; stewards can re-send it from the pass form.
+
+- [x] Blueprint `infra/authentik/blueprints/belfry-account-setup-flow.yaml`: recovery flow `belfry-account-setup` (prompt password + repeat with a 12-character zxcvbn policy, user write, user login with a 14-day "remember me"), set as the default brand's recovery flow (model `authentik_brands.brand`). Deliberately without identification or e-mail stage: the link alone drives it, a direct visit ends in "no pending user".
+- [x] Onboarding service: `create_recovery_link` (`POST /api/v3/core/users/<pk>/recovery/`, `token_duration days=LOGIN_LINK_DAYS`, default 30); the link's origin is rewritten to the new `AUTHENTIK_PUBLIC_URL` (authentik builds it from the request host, `authentik-server:9000`). Written on the pass (`login_setup_url`, `login_setup_expires_at`) in the activation write; strict like the group step. `send_login_link`, `POST /admin/passes/<id>/login-link`, CLI `login-link <pass id>`. 49 tests.
+- [x] Odoo `belfry_pass` 19.0.1.1.0: the three fields, mail template `mail_template_pass_activated` (pass, dates, member number, link and expiry, apps URL from the new `belfry.apps_url`, npub) sent by `belfry.pass.write` whenever the link is written on an active pass, button "Send new login link" (calls the service), 44 tests. Bootstrap upgrades the module when the manifest version changes and restarts Odoo (the running server does not pick up new fields from a CLI upgrade), sets `belfry.apps_url`, waits for the blueprint and checks the brand.
+- [x] Verified live: `make smoke` 34 checks. The mailed link runs prompt → login → redirect and the session is the participant's; a consumed link is refused ("No user found and can't create new user") and its password does not log in; the chosen password signs in to Keycast through Authentik (step 6d); the re-send endpoint replaces the link and queues a second mail. The throwaway `set_password` in the smoke test is gone.
+
+Open from this slice: no outgoing mail server locally (mails stay `outgoing`; production needs Odoo's SMTP); self-service "forgot password" needs authentik's SMTP settings and an identification + e-mail stage (the example blueprint in the image shows the shape); passkeys are only offered from Authentik user settings, not in the setup flow; the participant lands on Authentik's user portal after setup, not on the apps (the flow executor refuses external `next` URLs; a brand `default_application` could change that).
+
 ## 4. Next
 
-1. Phase 2 (continued): an Authentik login for participants (enrollment or recovery link at activation, §3c open item 1), key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds.
+1. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
 2. Phase 3 start: walt.id Issuer2 once the issuer decision is confirmed with the DIDroom maintainer; status-list service; VCTM hosting; SUNET verifier patch for the OIDC path.
 3. Run the smoke flow against Stripe test mode on a public URL.
 
 ## Notes
 
-- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice and Keycast fork committed 2026-10-23.
+- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice, Keycast fork and participant login committed 2026-10-23.
 - Local test run: the host Python is 3.14; use `python3.12 -m venv` and `pip install -e 'services/onboarding[dev]'` for `pytest` and `ruff`.
 - Research notes: `docs/research/` (spikes dated 2026-10-22), consistency review in `plan-consistency-review.md`.

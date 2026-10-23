@@ -18,6 +18,12 @@
         <field name="key">belfry.event_end</field>
         <field name="value">2027-01-31</field>
     </record>
+    <!-- Where participants use the community apps (Keycast's web app for now); in the activation
+         mail. bootstrap.sh sets it from KEYCAST_APP_URL. -->
+    <record id="param_apps_url" model="ir.config_parameter">
+        <field name="key">belfry.apps_url</field>
+        <field name="value">http://localhost:3000</field>
+    </record>
     <!-- Read once by the post-init hook to date the early-bird pricelist rules. -->
     <record id="param_early_bird_until" model="ir.config_parameter">
         <field name="key">belfry.early_bird_until</field>

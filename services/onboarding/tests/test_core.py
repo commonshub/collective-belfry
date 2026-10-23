@@ -80,7 +80,7 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     assert len(relay.auth_events) == 1
     assert [e["kind"] for e in keycast.signed] == [0, 22242]
     # the Keycast user token was used once and not written anywhere
-    assert "token" not in json.dumps(odoo.tables["belfry.pass"])
+    assert "ucan-token" not in json.dumps(odoo.tables["belfry.pass"])
 
 
 def test_relay_failure_does_not_block_activation(services, odoo, relay):

@@ -10,8 +10,9 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Steward invite links with a public billing page that ends on an Odoo payment link
 - belfry.pass registry (one row per purchased pass), belfry.stripe.event log
 - Automation rules that notify the onboarding service when an invoice is paid or a refund is done
+- Activation mail with the one-time Authentik login setup link (Phase 2), "Send new login link" button
 """,
-    'version': '19.0.1.0.0',
+    'version': '19.0.1.1.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',
@@ -24,6 +25,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
         'sale_loyalty',
         'base_automation',
         'portal',
+        'mail',
     ],
     'data': [
         'security/res_groups.xml',
@@ -35,6 +37,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
         'data/pricelist_data.xml',
         'data/loyalty_data.xml',
         'data/base_automation_data.xml',
+        'data/mail_template_data.xml',
         'views/belfry_pass_views.xml',
         'views/belfry_invite_views.xml',
         'views/belfry_stripe_event_views.xml',

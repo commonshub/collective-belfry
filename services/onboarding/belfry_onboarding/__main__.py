@@ -1,5 +1,5 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
-``... sync-participants``."""
+``... sync-participants``; and ``... login-link <pass id>`` for a new account-setup link."""
 
 from __future__ import annotations
 
@@ -24,6 +24,10 @@ def main(argv: list[str] | None = None) -> int:
         "sync-participants",
         help="make the Authentik participants group equal to the holders of active passes",
     )
+    link = sub.add_parser(
+        "login-link", help="mint and store a new account-setup link for an active pass"
+    )
+    link.add_argument("pass_id", type=int)
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -38,6 +42,8 @@ def main(argv: list[str] | None = None) -> int:
         result = core.sync_relay_whitelist(services, strict=True)
     elif args.command == "sync-participants":
         result = core.sync_participants(services, strict=True)
+    elif args.command == "login-link":
+        result = {"result": core.send_login_link(services, args.pass_id), "pass_id": args.pass_id}
     else:
         result = core.expire(services)
     json.dump(result, sys.stdout)

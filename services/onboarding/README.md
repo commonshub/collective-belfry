@@ -8,15 +8,15 @@ Glue between Odoo (registry and billing), Authentik (login) and Keycast (Nostr s
 | --- | --- |
 | `belfry_onboarding/settings.py` | Environment (pydantic-settings), names as in the contract |
 | `belfry_onboarding/clients/odoo.py` | JSON-RPC `/jsonrpc` client: `common.authenticate` once, then `object.execute_kw`; helpers `search_read`, `read`, `write`, `create`, `call` |
-| `belfry_onboarding/clients/authentik.py` | REST client with the bearer token: users, group membership and OAuth source connections |
+| `belfry_onboarding/clients/authentik.py` | REST client with the bearer token: users, group membership, account-setup (recovery) links and OAuth source connections |
 | `belfry_onboarding/clients/keycast.py` | `POST /api/admin/preload-user` (admin UCAN), `PUT /api/admin/users/:pubkey/status` (service token) |
-| `belfry_onboarding/core.py` | `activate_pass`, `revoke_pass`, `revoke_for_refund`, `reactivate_pass`, `reconcile`, `expire`, dispute handlers |
+| `belfry_onboarding/core.py` | `activate_pass`, `revoke_pass`, `revoke_for_refund`, `reactivate_pass`, `reconcile`, `expire`, `send_login_link`, dispute handlers |
 | `belfry_onboarding/app.py` | FastAPI routes; `handle_stripe_event` |
 | `belfry_onboarding/stripe_sig.py` | `Stripe-Signature` HMAC verification without the Stripe SDK |
 | `belfry_onboarding/nostr.py` | hex pubkey to `npub1...` (bech32, NIP-19) |
 | `belfry_onboarding/relay.py` | publishes an event to the community relay, answering its NIP-42 AUTH challenge through a signer callback |
 | `belfry_onboarding/relay_whitelist.py` | renders `infra/relay/rnostr.toml` (template) into the relay's config with the pubkeys of all active passes |
-| `belfry_onboarding/__main__.py` | `python -m belfry_onboarding reconcile` / `expire` / `sync-relay` / `sync-participants` |
+| `belfry_onboarding/__main__.py` | `python -m belfry_onboarding reconcile` / `expire` / `sync-relay` / `sync-participants` / `login-link <pass id>` |
 | `tests/` | `FakeOdoo` (in-memory `execute_kw`), respx fakes for Authentik and Keycast, the contract's cases |
 
 ## Run
@@ -31,6 +31,7 @@ python -m belfry_onboarding reconcile              # cron: every few minutes
 python -m belfry_onboarding expire                 # cron: nightly
 python -m belfry_onboarding sync-relay             # rewrite the relay whitelist from Odoo (also runs at start and after every change)
 python -m belfry_onboarding sync-participants      # make the Authentik participants group match the active passes (also at start and in reconcile)
+python -m belfry_onboarding login-link 42          # mint a new account-setup link for pass 42 (Odoo mails it)
 docker build -t belfry-onboarding:local .
 ```
 
@@ -39,6 +40,7 @@ docker build -t belfry-onboarding:local .
 ```
 ODOO_URL=http://odoo:8069   ODOO_DB=odoo   ODOO_USER=onboarding@belfry.local   ODOO_API_KEY=...
 AUTHENTIK_URL=http://authentik-server:9000   AUTHENTIK_TOKEN=...   AUTHENTIK_SOURCE_SLUG=pass-bridge
+AUTHENTIK_PUBLIC_URL=http://localhost:9000  # origin of the account-setup links mailed to participants
 KEYCAST_URL=http://keycast:3000   KEYCAST_ADMIN_TOKEN=...   KEYCAST_SERVICE_TOKEN=...
 HOOK_TOKEN=...                      # must equal Odoo's belfry.hook_token
 STRIPE_WEBHOOK_SECRET=whsec_...     # for /hooks/stripe only
@@ -51,6 +53,7 @@ Extras, not in the contract, all optional:
 - `KEYCAST_TENANT_DOMAIN` (compose sets it, default none): sent as the `Host` header on every Keycast call, because Keycast takes the tenant from `Host` and rejects hosts outside `ALLOWED_TENANT_DOMAINS` (inside Compose the URL host is `keycast`, which is not a tenant).
 - `AUTHENTIK_USER_PATH` (default `belfry/participants`).
 - `AUTHENTIK_PARTICIPANTS_GROUP` (default `belfry-participants`): the group that may use the Keycast login (see below).
+- `LOGIN_LINK_DAYS` (default 30): validity of the account-setup link minted at activation (see below).
 - `RECONCILE_DAYS` (default 30): how far back `reconcile` looks, by `invoice_date`.
 - `RELAY_URL` (default empty) and `NIP05_DOMAIN` (default `belfry.local`): when `RELAY_URL` is set, activation publishes the participant's kind-0 profile to that relay (see below). Empty: no profile is published.
 - `RELAY_CONFIG_PATH` (default empty) and `RELAY_CONFIG_TEMPLATE` (default `/relay-template/rnostr.toml`): when the path is set, the relay whitelist is kept in sync (see below). Compose sets both and mounts the relay's config volume. `RELAY_EXTRA_PUBKEYS`: comma-separated hex pubkeys always whitelisted.
@@ -66,6 +69,7 @@ Extras, not in the contract, all optional:
 | `POST /hooks/stripe` | `Stripe-Signature` | verifies the signature (300 s tolerance), records the event in `belfry.stripe.event` first, then handles `charge.dispute.created` (revoke, reason `chargeback`) and `charge.dispute.closed` with `status = won` (reactivate). Replays answer `{"result": "duplicate"}`. Other types are recorded with result `ignored`. A delivery whose handling raised is recorded as `error: ...` and processed again on Stripe's retry. |
 | `POST /admin/reconcile?token=` | `HOOK_TOKEN` | one `reconcile()` pass |
 | `POST /admin/sync-relay?token=` | `HOOK_TOKEN` | rewrites the relay whitelist from the active passes; `{"result": "synced", "pubkeys": n, "changed": bool}` or `{"result": "disabled"}` without `RELAY_CONFIG_PATH`. Errors are 500 (strict, unlike the implicit syncs). |
+| `POST /admin/passes/<id>/login-link?token=` | `HOOK_TOKEN` | mints a new account-setup link for the holder of an active pass and writes it on the pass, which makes Odoo mail it (the "Send new login link" button calls this). `{"result": "sent" / "not_active" / "no_user" / "not_found"}`; Authentik or Odoo errors are 500. |
 
 Result codes from `activate_pass`: `activated`, `already_active`, `already_revoked`, `already_expired`, `not_paid`, `not_found`.
 
@@ -79,10 +83,11 @@ Result codes from `activate_pass`: `activated`, `already_active`, `already_revok
 - Payment date = the `done` transaction's `last_state_change` (date part); without one (manual payment, see `ALLOW_MANUAL_PAYMENTS`) the invoice's `invoice_date`; without that, today. `date_start = max(payment date, EVENT_START)`; `date_end = date_start + belfry_duration_days` (product field; 1/7 by tier when unreadable) for day/week, `EVENT_END` for full or duration 0.
 - Authentik: lookup `GET /api/v3/core/users/?attributes={"belfry_member_number": "OSV-0001"}`, then `?email=`, else `POST /api/v3/core/users/` with `username` = member number lowercased, `name`, `email`, `path`, `attributes = {belfry_member_number, odoo_partner_id}`. Then `GET /api/v3/sources/user_connections/oauth/?user=<pk>&source__slug=<slug>`; if empty, `POST /api/v3/sources/user_connections/oauth/` with `{"user": pk, "source": "<slug>", "identifier": "<member number>"}`. This POST is best effort: authentik 2026.8.5 rejects it (`user` is read-only in the serializer, verified 2026-10-22 in the smoke test), so the service logs a warning and continues; the participant links the pass once from user settings. No enrollment or password-reset link is triggered (left to the Phase 2 login work).
 - Keycast: `vine_id = odoo-partner-<partner id>`, `username` = member number lowercased, `display_name` = partner name; the response `pubkey` becomes the npub; then status `active`.
+- Account-setup link (Phase 2 login, 2026-10-23): participants are created without a password, so the service asks authentik for a recovery link for the user (`POST /api/v3/core/users/<pk>/recovery/` with `token_duration = days=<LOGIN_LINK_DAYS>`), which plans the default brand's recovery flow (`belfry-account-setup`, blueprint `belfry-account-setup-flow`: choose a password, user written, browser signed in) and wraps it in a one-time flow token. authentik builds the link from the host it was called on (`authentik-server:9000`), so the origin is replaced with `AUTHENTIK_PUBLIC_URL`. The link and its expiry are written on the pass (`login_setup_url`, `login_setup_expires_at`) in the same write as `state = active`; `belfry.pass.write` then queues the activation mail. The step is strict like the group: without a recovery flow on the brand (400 "No recovery flow set.") the pass stays pending and the retry completes it. A new link for the same user replaces the earlier token (`send_login_link`, the admin endpoint, the CLI).
 - Participants group (Phase 2, Keycast login): the Authentik user is added to `belfry-participants` (`POST /api/v3/core/groups/<uuid>/add_user/`, idempotent, 204). Only that group may use Authentik's Keycast application, whose `keycast` scope carries `keycast_vine_id = odoo-partner-<partner id>`, the key the Keycast fork uses to find the preloaded account. A missing group raises, so the pass stays pending until the blueprint has run and a retry completes it.
 - Profile (Phase 2, directory default decided 2026-10-22): with `RELAY_URL` set, the service signs a kind-0 event `{"name", "display_name", "nip05": "<member number>@<NIP05_DOMAIN>"}` through Keycast's `POST /api/nostr` with the user UCAN that preload-user returned, publishes it to the relay, and answers the relay's NIP-42 AUTH challenge the same way. Nothing else about the participant (email, company, role) is published. The UCAN is used for these two signatures only and never stored. Failures are logged and do not block activation; `reconcile` does not retry profiles yet.
 - Relay whitelist (Phase 2): with `RELAY_CONFIG_PATH` set, `sync_relay_whitelist` reads the `keycast_pubkey` of every `belfry.pass` in state `active` (plus `RELAY_EXTRA_PUBKEYS`), renders the template's lines marked `# belfry:whitelist` and rewrites the config file in place (rnostr `--watch` ignores renames). At activation it runs with the new pubkey included *before* the profile is published, because the relay refuses unknown pubkeys. Best effort there and in revoke/expire/reactivate (a warning in the log, the next sync catches up); strict for the CLI and the admin endpoint. The service also syncs at startup. Details: `infra/relay/README.md`.
-- Write-back: partner `belfry_authentik_user_id`, `belfry_npub`; pass `npub`, `keycast_pubkey`, `authentik_user_id`, `transaction_id`, `stripe_payment_intent`, `date_start`, `date_end`, `activated_at` and `state = active` in one write, after every external call succeeded. A failure halfway leaves the pass `pending`; the retry finds the Authentik user by attribute and the Keycast user by `vine_id`, so nothing is duplicated.
+- Write-back: partner `belfry_authentik_user_id`, `belfry_npub`; pass `npub`, `keycast_pubkey`, `authentik_user_id`, `transaction_id`, `stripe_payment_intent`, `date_start`, `date_end`, `activated_at`, `login_setup_url`, `login_setup_expires_at` and `state = active` in one write, after every external call succeeded. A failure halfway leaves the pass `pending`; the retry finds the Authentik user by attribute and the Keycast user by `vine_id`, so nothing is duplicated.
 
 **revoke_pass / expire** write the state, rewrite the relay whitelist (so a Keycast failure never leaves the pubkey on the relay), then always re-check "does the partner have another active pass" and suspend the Keycast user if not, so a retry after a failed Keycast call completes the suspension. After that the Authentik user leaves the participants group unless it holds another active pass; this is checked per Authentik user, not per partner, because two partners with the same e-mail share one Authentik user. `reactivate_pass` adds it back. The pubkey comes from the pass, falling back to the partner's most recent pass with one. Keycast requires a `reason` for `suspended` and `banned` (400 otherwise; found 2026-10-23 in the live check, slice 1 never suspended anyone), so the client sends `pass <id>: <revoke reason>`.
 
