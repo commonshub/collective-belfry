@@ -31,6 +31,11 @@ from .stripe_sig import StripeSignatureError, verify_signature
 
 log = logging.getLogger(__name__)
 
+ISSUER_STATE_REQUIRED = {
+    "error": "invalid_request",
+    "error_description": "issuer_state is required: scan the sign-in code on your claim page",
+}
+
 
 def configure_logging(level: str) -> None:
     logging.basicConfig(
@@ -226,23 +231,28 @@ def create_app(services: Services | None = None) -> FastAPI:
         return HTMLResponse(claim.page("Pass not available", body), status_code=exc.status)
 
     @app.get("/claim/{token}", response_class=HTMLResponse)
-    async def claim_page(token: str, request: Request):
-        """The participant's claim page: a fresh credential offer as QR code and link."""
+    async def claim_page(token: str, request: Request, signin: bool = False):
+        """The participant's claim page: a fresh credential offer as QR code and link;
+        ``?signin=1`` for the authorization-code variant (wallets that sign in, DIDroom)."""
         services = svc(request)
         try:
             pass_row, partner = await run_in_threadpool(claim.pass_for_claim, services, token)
-            offer = await run_in_threadpool(claim.create_claim_offer, services, pass_row, partner)
+            offer = await run_in_threadpool(
+                claim.create_claim_offer, services, pass_row, partner, signin
+            )
         except claim.ClaimError as exc:
             return claim_error(exc)
         return HTMLResponse(claim.claim_page(services, pass_row, partner, offer))
 
     @app.get("/claim/{token}/offer")
-    async def claim_offer(token: str, request: Request) -> JSONResponse:
+    async def claim_offer(token: str, request: Request, signin: bool = False) -> JSONResponse:
         """The same offer as JSON (for wallets and the smoke test)."""
         services = svc(request)
         try:
             pass_row, partner = await run_in_threadpool(claim.pass_for_claim, services, token)
-            offer = await run_in_threadpool(claim.create_claim_offer, services, pass_row, partner)
+            offer = await run_in_threadpool(
+                claim.create_claim_offer, services, pass_row, partner, signin
+            )
         except claim.ClaimError as exc:
             return JSONResponse({"error": exc.message}, status_code=exc.status)
         return JSONResponse(
@@ -295,6 +305,55 @@ def create_app(services: Services | None = None) -> FastAPI:
         form = {k: str(v) for k, v in (await request.form()).items()}
         r = await run_in_threadpool(issuer.token, form)
         return Response(r.content, status_code=r.status_code, media_type="application/json")
+
+    @app.post("/issuer-shim/ak-token")
+    async def issuer_ak_token(request: Request) -> Response:
+        """Relay of Issuer2's token call to Authentik (its external login): Issuer2 sends
+        "Upgrade: h2c" over plain HTTP, which makes Authentik lose the form body. Internal only
+        (the proxy does not route /issuer-shim/* on pass.<domain>)."""
+        body = await request.body()
+        headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower() in ("content-type", "authorization", "accept")
+        }
+        url = svc(request).settings.authentik_url.rstrip("/") + "/application/o/token/"
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, content=body, headers=headers)
+        return Response(
+            r.content,
+            status_code=r.status_code,
+            media_type=r.headers.get("content-type", "application/json"),
+        )
+
+    @app.post("/issuer-shim/par")
+    async def issuer_par(request: Request) -> Response:
+        """Issuer2's pushed authorization endpoint, only for requests with issuer_state: without
+        it Issuer2 starts a session from the profile, whose data are placeholders. Every
+        legitimate authorization-code flow starts from a claim page offer, which carries it."""
+        issuer = svc(request).issuer
+        if issuer is None:
+            raise HTTPException(status_code=404, detail="no issuer configured")
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        if not form.get("issuer_state"):
+            return JSONResponse(ISSUER_STATE_REQUIRED, status_code=400)
+        r = await run_in_threadpool(issuer.par, form)
+        return Response(r.content, status_code=r.status_code, media_type="application/json")
+
+    @app.get("/issuer-shim/authorize")
+    async def issuer_authorize(request: Request) -> Response:
+        """Issuer2's authorize endpoint, gated like PAR: a request_uri (from a gated PAR) or an
+        issuer_state is required. Issuer2 answers with redirects, passed on as they are."""
+        issuer = svc(request).issuer
+        if issuer is None:
+            raise HTTPException(status_code=404, detail="no issuer configured")
+        query = request.url.query
+        params = request.query_params
+        if not params.get("issuer_state") and not params.get("request_uri"):
+            return JSONResponse(ISSUER_STATE_REQUIRED, status_code=400)
+        r = await run_in_threadpool(issuer.authorize, query)
+        headers = {k: v for k, v in r.headers.items() if k.lower() in ("location", "content-type")}
+        return Response(r.content, status_code=r.status_code, headers=headers)
 
     @app.post("/issuer-shim/credential")
     async def issuer_credential(request: Request) -> Response:

@@ -1,0 +1,67 @@
+# Belfry: Issuer2's login for authorization-code offers (2026-10-23, for wallets such as DIDroom
+# that do not take pre-authorized codes). The claim page offers a "sign in" variant of the pass
+# offer; the wallet sends the participant's browser through Issuer2 to this application, the
+# participant signs in like everywhere else (magic link or pass, the brand's authentication flow),
+# and Issuer2 issues the pass the offer was minted for (issuer_state). Participants only.
+# Issuer2's side: infra/issuer/config/authentication-service.conf.tmpl.
+# Applied by the worker's file watcher (bind mount /blueprints/custom); re-applied on change,
+# and by bootstrap.sh (the worker may apply the file before the container has the secret).
+version: 1
+metadata:
+  name: belfry-issuer-app
+  labels:
+    blueprints.goauthentik.io/description: "Issuer2 login for authorization-code pass offers (participants)"
+context:
+  redirect_uri: !Env [BELFRY_ISSUER_REDIRECT_URI, "http://localhost:7005/openid4vci/external/oauth/callback"]
+  client_secret: !Env [ISSUER_OIDC_CLIENT_SECRET, "placeholder-set-ISSUER_OIDC_CLIENT_SECRET"]
+entries:
+  # belfry-participants is created by the pass-bridge source blueprint.
+  - model: authentik_blueprints.metaapplyblueprint
+    attrs:
+      identifiers:
+        name: belfry-pass-bridge-source
+      required: true
+
+  - model: authentik_providers_oauth2.oauth2provider
+    id: belfry-issuer-oidc
+    identifiers:
+      name: belfry-issuer-oidc
+    attrs:
+      authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
+      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      client_type: confidential
+      # authentik 2026.8 leaves grant_types empty for blueprint-created providers (see
+      # belfry-keycast-provider.yaml).
+      grant_types: [authorization_code]
+      client_id: belfry-issuer
+      client_secret: !Context client_secret
+      redirect_uris:
+        - matching_mode: strict
+          url: !Context redirect_uri
+      signing_key: !Find [authentik_crypto.certificatekeypair, [name, "authentik Self-signed Certificate"]]
+      issuer_mode: per_provider
+      sub_mode: hashed_user_id
+      access_code_validity: minutes=1
+      access_token_validity: minutes=5
+      property_mappings:
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-openid]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-email]]
+        - !Find [authentik_providers_oauth2.scopemapping, [managed, goauthentik.io/providers/oauth2/scope-profile]]
+
+  - model: authentik_core.application
+    id: belfry-issuer-app
+    identifiers:
+      slug: belfry-issuer
+    attrs:
+      name: Open Source Village pass (wallet sign-in)
+      provider: !KeyOf belfry-issuer-oidc
+      policy_engine_mode: any
+
+  # Participants only (the group the onboarding service keeps equal to active passes).
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf belfry-issuer-app
+      group: !Find [authentik_core.group, [name, belfry-participants]]
+    attrs:
+      order: 0
+      enabled: true

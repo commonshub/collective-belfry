@@ -18,6 +18,9 @@
 # Rendered (gitignored, mounted with the rest of the config):
 #   infra/issuer/config/issuer2-profiles.conf   from issuer2-profiles.conf.tmpl (issuer key + x5c chain)
 #   infra/issuer/config/issuer-service.conf     from issuer-service.conf.tmpl (ciTokenKey)
+#   infra/issuer/config/authentication-service.conf from authentication-service.conf.tmpl
+#                                     (Authentik login of authorization-code offers: public
+#                                     Authentik URL, ISSUER_OIDC_CLIENT_SECRET)
 #   infra/verifier/config/verifier-service.conf from verifier-service.conf.tmpl (signing key, x5c, client id)
 set -euo pipefail
 
@@ -152,3 +155,20 @@ open(f"{keys}/../../verifier/config/verifier-service.conf", "w").write(out)
 print("verifier kid", jwk["kid"], "- wrote keys/verifier.jwk.json, keys/verifier.x5c.json, verifier/config/verifier-service.conf")
 PY2
 chmod 600 "$KEYS"/*.jwk.json
+
+# Issuer2's external login (authorization-code offers) at Authentik, from .env.
+AK_PUBLIC=${AUTHENTIK_PUBLIC_URL:-$(env_value AUTHENTIK_PUBLIC_URL)}
+ISSUER_OIDC_CLIENT_SECRET=${ISSUER_OIDC_CLIENT_SECRET:-$(env_value ISSUER_OIDC_CLIENT_SECRET)}
+AK_PUBLIC=${AK_PUBLIC:-http://localhost:9000} ISSUER_OIDC_CLIENT_SECRET=$ISSUER_OIDC_CLIENT_SECRET \
+  python3 - "$INFRA_DIR/issuer/config" <<'PY3'
+import os, sys
+cfg = sys.argv[1]
+secret = os.environ["ISSUER_OIDC_CLIENT_SECRET"] or "unset-run-gen-secrets"
+out = (open(f"{cfg}/authentication-service.conf.tmpl").read()
+       .replace("@@AUTHENTIK_PUBLIC_URL@@", os.environ["AK_PUBLIC"].rstrip("/"))
+       .replace("@@ISSUER_OIDC_CLIENT_SECRET@@", secret))
+path = f"{cfg}/authentication-service.conf"
+with open(path, "w") as f:
+    f.write(out)
+print("wrote issuer/config/authentication-service.conf (Authentik", os.environ["AK_PUBLIC"] + ")")
+PY3

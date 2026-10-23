@@ -1,0 +1,18 @@
+# Template, rendered into authentication-service.conf (gitignored) by scripts/gen-issuer-pki.sh.
+# Issuer2's external login for authorization-code offers (the claim page's "sign in" variant,
+# used by wallets such as DIDroom that do not take pre-authorized codes): the participant signs in
+# at Authentik (application belfry-issuer, blueprint belfry-issuer-app.yaml, participants only).
+# The browser goes to the public authorize URL. Issuer2 exchanges the code over the Compose
+# network through the onboarding service's relay (/issuer-shim/ak-token): its Java HTTP client
+# sends plain-HTTP POSTs with "Upgrade: h2c", and Authentik then loses the form body (empty
+# client_id). Issuer2 only reads the ID token (it does not verify it), so the internal issuer
+# name in it does not matter.
+# Requests without issuer_state never get here: the onboarding service refuses them (Issuer2
+# would otherwise issue the profile's placeholder data).
+name = "authentik"
+authorizeUrl = "@@AUTHENTIK_PUBLIC_URL@@/application/o/authorize/"
+accessTokenUrl = "http://onboarding:8100/issuer-shim/ak-token"
+clientId = "belfry-issuer"
+clientSecret = "@@ISSUER_OIDC_CLIENT_SECRET@@"
+defaultScopes = ["openid", "profile", "email"]
+forwardIssuerStateToAuthorizationServer = false

@@ -6,6 +6,13 @@ KB-JWT). It stands in for an EUDI wallet in the smoke test; it is not a wallet.
     python -m belfry_onboarding.testwallet present '<openid4vp://authorize?...>' --wallet w.json \\
         --disclose pass_tier,npub
 
+The sign-in variant (authorization-code offer with issuer_state, as DIDroom uses it) is split in
+two, because the browser part (Issuer2's login at Authentik) happens outside the wallet:
+
+    python -m belfry_onboarding.testwallet signin-start '<offer>' --state s.json   # prints the URL
+    # ... a browser opens that URL and ends at <redirect_uri>?code=...&state=...
+    python -m belfry_onboarding.testwallet signin-finish '<redirect>' --state s.json --out w.json
+
 ``--map localhost:7005=issuer:7005`` rewrites hosts in URLs before connecting (the public URLs in
 offers and requests stay as they are in signed values such as ``aud``).
 """
@@ -123,6 +130,124 @@ def receive(offer: str, client_id: str, hostmap: HostMap) -> dict[str, Any]:
     return {"credential": sd_jwt, "holder_key_pem": pem, "holder_jwk": jwk, "issuer": issuer}
 
 
+SIGNIN_REDIRECT_URI = "https://wallet.belfry.test/callback"
+
+
+def _issuer_metadata(http: httpx.Client, issuer: str, hostmap: HostMap) -> dict[str, Any]:
+    meta = http.get(hostmap(f"{issuer}/.well-known/openid-credential-issuer"))
+    if meta.status_code != 200:  # walt.id serves it under the openid4vci path segment
+        base, _, tail = issuer.rpartition("/")
+        meta = http.get(hostmap(f"{base}/.well-known/openid-credential-issuer/{tail}"))
+    meta.raise_for_status()
+    return meta.json()
+
+
+def _auth_server_metadata(http: httpx.Client, server: str, hostmap: HostMap) -> dict[str, Any]:
+    base, _, tail = server.rpartition("/")
+    r = http.get(hostmap(f"{base}/.well-known/oauth-authorization-server/{tail}"))
+    if r.status_code != 200:
+        r = http.get(hostmap(f"{server}/.well-known/oauth-authorization-server"))
+    r.raise_for_status()
+    return r.json()
+
+
+def signin_start(offer: str, client_id: str, hostmap: HostMap) -> dict[str, Any]:
+    """PAR for an authorization-code offer; returns the state to keep and the authorize URL a
+    browser opens (public, not host-mapped)."""
+    data = parse_offer(offer)
+    issuer = data["credential_issuer"]
+    config_id = data["credential_configuration_ids"][0]
+    issuer_state = data["grants"]["authorization_code"]["issuer_state"]
+    verifier = b64url(hashlib.sha256(str(time.time_ns()).encode()).digest())
+    challenge = b64url(hashlib.sha256(verifier.encode()).digest())
+    state = b64url(hashlib.sha256(verifier.encode() + b"state").digest())[:16]
+    with httpx.Client(timeout=30) as http:
+        metadata = _issuer_metadata(http, issuer, hostmap)
+        server = (metadata.get("authorization_servers") or [issuer])[0]
+        as_meta = _auth_server_metadata(http, server, hostmap)
+        par = http.post(
+            hostmap(as_meta["pushed_authorization_request_endpoint"]),
+            data={
+                "response_type": "code",
+                "client_id": client_id,
+                "redirect_uri": SIGNIN_REDIRECT_URI,
+                "code_challenge": challenge,
+                "code_challenge_method": "S256",
+                "state": state,
+                "issuer_state": issuer_state,
+                "authorization_details": json.dumps(
+                    [{"type": "openid_credential", "credential_configuration_id": config_id}]
+                ),
+            },
+        )
+        if par.status_code not in (200, 201):
+            raise SystemExit(f"PAR {par.status_code}: {par.text[:300]}")
+        request_uri = par.json()["request_uri"]
+    query = urllib.parse.urlencode({"client_id": client_id, "request_uri": request_uri})
+    return {
+        "issuer": issuer,
+        "config_id": config_id,
+        "client_id": client_id,
+        "code_verifier": verifier,
+        "state": state,
+        "token_endpoint": as_meta["token_endpoint"],
+        "nonce_endpoint": metadata.get("nonce_endpoint") or f"{issuer}/nonce",
+        "credential_endpoint": metadata["credential_endpoint"],
+        "authorize_url": f"{as_meta['authorization_endpoint']}?{query}",
+    }
+
+
+def signin_finish(redirect: str, st: dict[str, Any], hostmap: HostMap) -> dict[str, Any]:
+    """Code from the wallet redirect -> token (PKCE) -> credential."""
+    params = urllib.parse.parse_qs(urllib.parse.urlsplit(redirect).query)
+    if "error" in params:
+        raise SystemExit(f"authorization error: {params}")
+    if params.get("state", [None])[0] != st["state"]:
+        raise SystemExit("state mismatch")
+    with httpx.Client(timeout=30) as http:
+        tok = http.post(
+            hostmap(st["token_endpoint"]),
+            data={
+                "grant_type": "authorization_code",
+                "code": params["code"][0],
+                "redirect_uri": SIGNIN_REDIRECT_URI,
+                "client_id": st["client_id"],
+                "code_verifier": st["code_verifier"],
+            },
+        )
+        if tok.status_code != 200:
+            raise SystemExit(f"token {tok.status_code}: {tok.text[:300]}")
+        return _fetch_credential(
+            http, st, tok.json()["access_token"], hostmap, proof_iss=st["client_id"]
+        )
+
+
+def _fetch_credential(
+    http: httpx.Client,
+    st: dict[str, Any],
+    access_token: str,
+    hostmap: HostMap,
+    proof_iss: str | None,
+) -> dict[str, Any]:
+    nonce = http.post(hostmap(st["nonce_endpoint"])).json()["c_nonce"]
+    pem, jwk = new_key()
+    claims: dict[str, Any] = {"aud": st["issuer"], "iat": int(time.time()), "nonce": nonce}
+    if proof_iss:
+        claims["iss"] = proof_iss
+    proof = jwt.encode(
+        claims, pem, algorithm="ES256", headers={"typ": "openid4vci-proof+jwt", "jwk": jwk}
+    )
+    cred = http.post(
+        hostmap(st["credential_endpoint"]),
+        headers={"Authorization": f"Bearer {access_token}"},
+        json={"credential_configuration_id": st["config_id"], "proofs": {"jwt": [proof]}},
+    )
+    if cred.status_code != 200:
+        raise SystemExit(f"credential endpoint {cred.status_code}: {cred.text[:300]}")
+    sd_jwt = cred.json()["credentials"][0]["credential"]
+    return {"credential": sd_jwt, "holder_key_pem": pem, "holder_jwk": jwk, "issuer": st["issuer"]}
+
+
 def split_sd_jwt(compact: str) -> tuple[str, list[str]]:
     parts = compact.split("~")
     return parts[0], [d for d in parts[1:] if d]
@@ -204,12 +329,28 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("request_url")
     p.add_argument("--wallet", required=True)
     p.add_argument("--disclose", default="")
+    ss = sub.add_parser("signin-start")
+    ss.add_argument("offer")
+    ss.add_argument("--state", required=True)
+    ss.add_argument("--client-id", default="belfry-test-wallet")
+    sf = sub.add_parser("signin-finish")
+    sf.add_argument("redirect")
+    sf.add_argument("--state", required=True)
+    sf.add_argument("--out", required=True)
     s = sub.add_parser("show")
     s.add_argument("--wallet", required=True)
     args = parser.parse_args(argv)
     hostmap = HostMap(args.map)
     if args.command == "receive":
         wallet = receive(args.offer, args.client_id, hostmap)
+        json.dump(wallet, open(args.out, "w"))
+        json.dump(decode_credential(wallet["credential"]), sys.stdout)
+    elif args.command == "signin-start":
+        st = signin_start(args.offer, args.client_id, hostmap)
+        json.dump(st, open(args.state, "w"))
+        sys.stdout.write(st["authorize_url"])
+    elif args.command == "signin-finish":
+        wallet = signin_finish(args.redirect, json.load(open(args.state)), hostmap)
         json.dump(wallet, open(args.out, "w"))
         json.dump(decode_credential(wallet["credential"]), sys.stdout)
     elif args.command == "present":

@@ -14,4 +14,6 @@ RUN pip install --no-cache-dir .
 USER belfry
 EXPOSE 8100
 
-CMD ["uvicorn", "belfry_onboarding.app:app", "--host", "0.0.0.0", "--port", "8100"]
+# h11, not httptools: Issuer2's Java HTTP client sends plain-HTTP POSTs with "Upgrade: h2c", and
+# the httptools implementation then loses the request body (/issuer-shim/ak-token).
+CMD ["uvicorn", "belfry_onboarding.app:app", "--host", "0.0.0.0", "--port", "8100", "--http", "h11"]

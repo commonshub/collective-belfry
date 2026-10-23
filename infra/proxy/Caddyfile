@@ -113,6 +113,17 @@ issuer.{$BELFRY_DOMAIN} {
 		rewrite * /issuer-shim/credential
 		reverse_proxy onboarding:8100
 	}
+	# Authorization-code flows (the claim page's sign-in offer, DIDroom) only with issuer_state:
+	# without it Issuer2 would issue the profile's placeholder data. The onboarding service
+	# checks and passes the request on.
+	handle /openid4vci/par {
+		rewrite * /issuer-shim/par
+		reverse_proxy onboarding:8100
+	}
+	handle /openid4vci/authorize {
+		rewrite * /issuer-shim/authorize?{query}
+		reverse_proxy onboarding:8100
+	}
 	reverse_proxy issuer:7005
 }
 
@@ -133,7 +144,7 @@ verifier.{$BELFRY_DOMAIN} {
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {
 	import security
-	@internal path /admin/* /hooks/odoo/* /docs /openapi.json /redoc
+	@internal path /admin/* /hooks/odoo/* /issuer-shim/* /docs /openapi.json /redoc
 	respond @internal 404
 	reverse_proxy onboarding:8100
 }

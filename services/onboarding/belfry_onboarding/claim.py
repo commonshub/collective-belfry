@@ -120,9 +120,12 @@ def pass_for_claim(svc: Services, token: str) -> tuple[dict[str, Any], dict[str,
     return pass_row, partner
 
 
-def create_claim_offer(svc: Services, pass_row: dict[str, Any], partner: dict[str, Any]):
-    """Mint a fresh pre-authorized credential offer for this pass. Returns the Issuer2 response
-    (``credentialOffer`` is the QR payload) with the pass validity added."""
+def create_claim_offer(
+    svc: Services, pass_row: dict[str, Any], partner: dict[str, Any], sign_in: bool = False
+):
+    """Mint a fresh credential offer for this pass: pre-authorized, or with ``sign_in`` an
+    authorization-code offer for wallets that only do that flow (DIDroom). Returns the Issuer2
+    response (``credentialOffer`` is the QR payload) with the pass validity added."""
     if svc.issuer is None:
         raise ClaimError(503, "The credential issuer is not configured.")
     date_start = odoo_date(pass_row.get("date_start")) or dt.date.today()
@@ -139,15 +142,25 @@ def create_claim_offer(svc: Services, pass_row: dict[str, Any], partner: dict[st
     idx = pass_row.get("credential_status_index") or pass_row["id"]
     status = credentials.status_claim(svc.settings.effective_status_list_url, int(idx))
     offer = svc.issuer.create_offer(
-        svc.settings.issuer_profile, data, status, svc.settings.offer_expiry_seconds
+        svc.settings.issuer_profile,
+        data,
+        status,
+        svc.settings.offer_expiry_seconds,
+        sign_in=sign_in,
     )
-    log.info("claim: offer %s for pass %s", offer.get("offerId"), pass_row["id"])
+    log.info(
+        "claim: %s offer %s for pass %s",
+        "sign-in" if sign_in else "pre-authorized",
+        offer.get("offerId"),
+        pass_row["id"],
+    )
     return {
         **offer,
         "pass_id": pass_row["id"],
         "tier": pass_row.get("tier"),
         "date_start": date_start.isoformat(),
         "date_end": date_end.isoformat(),
+        "sign_in": sign_in,
     }
 
 
@@ -155,6 +168,17 @@ def claim_page(svc: Services, pass_row: dict[str, Any], partner: dict[str, Any],
     offer_url = offer["credentialOffer"]
     expires = dt.datetime.fromtimestamp(offer["expiresAt"] / 1000, dt.UTC)
     tier = TIER_NAMES.get(pass_row.get("tier"), pass_row.get("tier"))
+    if offer.get("sign_in"):
+        variant = """<p>This code is for wallets that ask you to sign in (DIDroom, for example). After
+scanning, the wallet opens the Open Source Village sign-in: enter your e-mail and open the link we
+send you, then return to the wallet.</p>"""
+        switch = '<p class="muted"><a href="?">Back to the standard code</a></p>'
+    else:
+        variant = ""
+        switch = (
+            '<p class="muted">Your wallet asks you to sign in, or says the offer is not supported? '
+            '<a href="?signin=1">Use the sign-in code</a>.</p>'
+        )
     body = f"""
 <div class="card">
 <h1>Your Open Source Village pass</h1>
@@ -162,10 +186,12 @@ def claim_page(svc: Services, pass_row: dict[str, Any], partner: dict[str, Any],
 member {html.escape(partner.get("belfry_member_number") or "")}</p>
 <p>Scan this code with your EUDI wallet (or another OpenID4VCI wallet) to add the pass certificate.
 The code is valid until {expires.strftime("%H:%M UTC")}; reload the page for a new one.</p>
+{variant}
 <p class="qr"><img alt="QR code with the credential offer" src="{qr_svg(offer_url)}"></p>
 <p><a class="btn" href="{html.escape(offer_url)}">Open in a wallet on this device</a></p>
 <p class="muted">The pass shows your tier and validity to anyone who scans it at the door. Your name,
 member number and Nostr key are only shared when you choose to disclose them.</p>
+{switch}
 </div>"""
     return page("Claim your Open Source Village pass", body)
 

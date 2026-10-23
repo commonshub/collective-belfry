@@ -390,23 +390,33 @@ STAGE_SMTP=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PO
 ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/stages/email/$EMAIL_STAGE/" --data-binary @- <<<"$STAGE_SMTP" \
   || die "could not write the SMTP settings into the e-mail stage"
 echo "blueprint belfry-magic-link-flow: successful, brand login flow set, magic links sent via ${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025}"
+# Blueprints that read a client secret (!Env) are applied once more on every run: the worker
+# applies a new blueprint file as soon as it appears, possibly before the container has the
+# secret, and then keeps the placeholder. The apply runs asynchronously: wait for a newer
+# last_applied, not just for "successful".
+reapply_blueprint() {
+  local name=$1 bp before status i=0
+  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=$name" | jq -c '.results[0] // empty')
+  before=$(jq -r '.last_applied // empty' <<<"$bp")
+  [[ -n "$bp" ]] && ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$(jq -r .pk <<<"$bp")/apply/" || true
+  while :; do
+    bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=$name" | jq -c '.results[0] // empty')
+    status=$(jq -r '.status // empty' <<<"$bp")
+    [[ "$status" == successful && "$(jq -r '.last_applied // empty' <<<"$bp")" != "$before" ]] && break
+    (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint $name status '$status'"; }
+    printf '.'; sleep 5
+  done
+}
 # Steward pages (/steward in the onboarding service): their OIDC application and the group.
-# Applied once more on every run: the worker applies a new blueprint file as soon as it appears,
-# possibly before the container has STEWARD_OIDC_CLIENT_SECRET, and then keeps the placeholder.
-# The apply runs asynchronously: wait for a newer last_applied, not just for "successful".
-bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-steward-app" | jq -c '.results[0] // empty')
-before=$(jq -r '.last_applied // empty' <<<"$bp")
-[[ -n "$bp" ]] && ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$(jq -r .pk <<<"$bp")/apply/" || true
-i=0
-while :; do
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-steward-app" | jq -c '.results[0] // empty')
-  status=$(jq -r '.status // empty' <<<"$bp")
-  [[ "$status" == successful && "$(jq -r '.last_applied // empty' <<<"$bp")" != "$before" ]] && break
-  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-steward-app status '$status'"; }
-  printf '.'; sleep 5
-done
+reapply_blueprint belfry-steward-app
 ak "$AK_URL/api/v3/core/groups/?name=belfry-stewards" | jq -e '.results | length == 1' >/dev/null || die "group belfry-stewards missing"
 echo "blueprint belfry-steward-app: successful (add stewards: docker compose exec onboarding python -m belfry_onboarding add-steward <e-mail> [name])"
+# Issuer2's login for authorization-code pass offers (DIDroom and other wallets that sign in).
+reapply_blueprint belfry-issuer-app
+ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-issuer" \
+  | jq -e --arg s "${ISSUER_OIDC_CLIENT_SECRET:-}" '.results[0].client_secret == $s and $s != ""' >/dev/null \
+  || die "provider belfry-issuer missing or without ISSUER_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
+echo "blueprint belfry-issuer-app: successful (issuer sign-in for authorization-code offers)"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 
 # ---------- 6. summary ----------

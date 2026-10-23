@@ -396,6 +396,41 @@ CRED=$(tail -n1 <<<"$CRED")
 [[ "$(jq -r .payload.status.status_list.idx <<<"$CRED")" == "$PASS_ID" ]] && ok "status list index = pass id" || bad "status idx $(jq -c .payload.status <<<"$CRED")"
 VCTM=$(curl -sS "$ONB_URL/vct/village-pass/v1" | jq -r .vct); [[ "$VCTM" == "$(jq -r .payload.vct <<<"$CRED")" ]] && ok "type metadata served at the vct URL" || bad "vctm: $VCTM"
 
+step "8b. sign-in offer (authorization code + issuer_state, as DIDroom uses it): Issuer2 login at Authentik"
+SOFFER=$(curl -sS "$ONB_URL/claim/$CLAIM_TOKEN/offer?signin=1" | jq -r '.credential_offer // empty')
+[[ "$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$SOFFER")" == *'"issuer_state"'* ]] \
+  && ok "sign-in offer carries issuer_state" || bad "sign-in offer: $SOFFER"
+# The wallet pushes the authorization request; a browser (the participant's Authentik session from
+# 6c) follows the redirects through Issuer2's login at Authentik back to the wallet's redirect URI.
+SIGNIN_STATE=/tmp/smoke-signin.json
+AUTHZ_URL=$("${WALLET[@]}" signin-start "$SOFFER" --state "$SIGNIN_STATE" 2>&1) || die "signin-start failed: $AUTHZ_URL"
+AUTHZ_URL=$(tail -n1 <<<"$AUTHZ_URL")
+ok "PAR accepted, browser sent to $(sed 's/?.*//' <<<"$AUTHZ_URL")"
+BROWSER=$(mktemp); cp "$AK_SESSION" "$BROWSER"
+URL=$AUTHZ_URL; HOPS=""
+for _ in $(seq 12); do
+  read -r LAST_STATUS NEXT < <(curl -sS -b "$BROWSER" -c "$BROWSER" -o "$BROWSER.body" -w '%{http_code} %{redirect_url}\n' "$URL")
+  [[ -z "$NEXT" ]] && { HOPS+="[$LAST_STATUS: $(head -c 300 "$BROWSER.body")]"; break; }
+  HOPS+="$(sed -E 's#^(https?://[^/]+/[^?]*).*#\1#' <<<"$NEXT") "
+  URL=$NEXT
+  [[ "$URL" == https://wallet.belfry.test/* ]] && break
+done
+rm -f "$BROWSER" "$BROWSER.body"
+[[ "$URL" == https://wallet.belfry.test/callback\?*code=* ]] && ok "Issuer2 login at Authentik -> wallet redirect with a code" \
+  || die "sign-in flow ended at '$URL' (hops: $HOPS)"
+[[ "$HOPS" == *"/application/o/authorize/"* ]] && ok "the participant passed Authentik (application belfry-issuer)" || bad "no Authentik hop: $HOPS"
+SCRED=$("${WALLET[@]}" signin-finish "$URL" --state "$SIGNIN_STATE" --out /tmp/smoke-wallet-signin.json 2>&1) || die "signin-finish failed: $SCRED"
+SCRED=$(tail -n1 <<<"$SCRED")
+[[ "$(jq -r .payload.pass_tier <<<"$SCRED")" == week && "$(jq -r .disclosed.member_number <<<"$SCRED")" == "$MEMBER" && "$(jq -r .payload.status.status_list.idx <<<"$SCRED")" == "$PASS_ID" ]] \
+  && ok "SD-JWT VC through the sign-in offer: tier week, member $MEMBER, status index $PASS_ID" || bad "sign-in credential: $(jq -c '{p: .payload.pass_tier, d: .disclosed, s: .payload.status}' <<<"$SCRED")"
+if [[ -z "$WALLET_MAP" ]]; then
+  # public deployment: the proxy refuses authorization requests without issuer_state (Issuer2
+  # would issue the profile's placeholder data)
+  NOSTATE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "${ISSUER_PUBLIC_URL%/}/openid4vci/par" \
+    -d response_type=code -d client_id=probe -d code_challenge=x -d code_challenge_method=S256)
+  [[ "$NOSTATE" == 400 ]] && ok "PAR without issuer_state refused (400)" || bad "PAR without issuer_state -> $NOSTATE"
+fi
+
 step "9. door check: tier only, validity and status by policy"
 DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"$DOOR"); DURL=$(jq -r .authorization_request_url <<<"$DOOR")
 [[ -n "$DSID" && "$DURL" == openid4vp://* ]] && ok "door session $DSID" || die "door session: $DOOR"

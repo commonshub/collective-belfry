@@ -19,14 +19,17 @@ class IssuerClient:
         credential_data: dict[str, Any],
         status: dict[str, Any] | None,
         expires_in_seconds: int,
+        sign_in: bool = False,
     ) -> dict[str, Any]:
         """``POST /issuer2/credential-offers``: returns ``offerId``, ``expiresAt`` (ms) and
         ``credentialOffer`` (the ``openid-credential-offer://`` URL for the QR code). The
         profile's credentialData is overridden per participant; ``status`` becomes the
-        credential's ``status`` claim verbatim."""
+        credential's ``status`` claim verbatim. ``sign_in`` mints an authorization-code offer
+        instead: the wallet sends the holder through Issuer2's login (Authentik), and the offer's
+        ``issuer_state`` ties that login to this offer's data."""
         body: dict[str, Any] = {
             "profileId": profile_id,
-            "authMethod": "PRE_AUTHORIZED",
+            "authMethod": "AUTHORIZED" if sign_in else "PRE_AUTHORIZED",
             "valueMode": "BY_VALUE",
             "expiresInSeconds": expires_in_seconds,
             "runtimeOverrides": {"credentialData": credential_data},
@@ -67,6 +70,14 @@ class IssuerClient:
             doc["c_nonce"] = nonce.json()["c_nonce"]
             doc.setdefault("c_nonce_expires_in", 300)
         return httpx.Response(200, json=doc, headers={"Cache-Control": "no-store"})
+
+    def par(self, form: dict[str, str]) -> httpx.Response:
+        """Issuer2's pushed authorization request endpoint, unchanged."""
+        return self._client.post(f"{self.url}/openid4vci/par", data=form)
+
+    def authorize(self, query: str) -> httpx.Response:
+        """Issuer2's authorize endpoint; its redirect is returned, not followed."""
+        return self._client.get(f"{self.url}/openid4vci/authorize?{query}", follow_redirects=False)
 
     def credential(self, body: dict[str, Any], authorization: str) -> httpx.Response:
         """Issuer2's credential endpoint; a draft-13 request is rewritten to 1.0 and the first

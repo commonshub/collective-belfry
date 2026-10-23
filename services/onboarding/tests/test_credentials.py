@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import secrets
+import urllib.parse
 from urllib.parse import parse_qs, urlsplit
 
 import jwt
@@ -79,6 +80,49 @@ def test_claim_offer_carries_the_pass_claims(client, services, odoo, issuer):
     assert page.status_code == 200
     assert "data:image/svg+xml" in page.text and "Open in a wallet" in page.text
     assert len(issuer.offers) == 2
+    assert issuer.offers[1]["authMethod"] == "PRE_AUTHORIZED"
+    assert "?signin=1" in page.text
+
+
+def test_sign_in_offer_for_wallets_that_sign_in(client, services, odoo, issuer):
+    """DIDroom: an authorization-code offer with issuer_state and the same pass data."""
+    _ids, p = activate(services, odoo, tier="day")
+    body = client.get(f"/claim/{p['claim_token']}/offer?signin=1").json()
+    assert issuer.offers[0]["authMethod"] == "AUTHORIZED"
+    assert issuer.offers[0]["runtimeOverrides"]["credentialData"]["pass_tier"] == "day"
+    assert issuer.offers[0]["runtimeOverrides"]["credentialStatus"]["status_list"]["idx"] == p["id"]
+    assert "issuer_state" in urllib.parse.unquote(body["credential_offer"])
+    page = client.get(f"/claim/{p['claim_token']}?signin=1")
+    assert "ask you to sign in" in page.text and 'href="?"' in page.text
+    assert issuer.offers[1]["authMethod"] == "AUTHORIZED"
+
+
+def test_issuer_shim_refuses_authorization_without_issuer_state(client, router):
+    """Without issuer_state Issuer2 would issue the profile's placeholder data."""
+    par = router.post("http://issuer.test/openid4vci/par").respond(
+        201, json={"request_uri": "urn:x", "expires_in": 60}
+    )
+    form = {"response_type": "code", "client_id": "did:x", "code_challenge": "c"}
+    r = client.post("/issuer-shim/par", data=form)
+    assert r.status_code == 400 and "issuer_state" in r.json()["error_description"]
+    assert not par.called
+    r = client.post("/issuer-shim/par", data={**form, "issuer_state": "session-1"})
+    assert r.status_code == 201 and r.json()["request_uri"] == "urn:x"
+    assert b"issuer_state=session-1" in par.calls.last.request.content
+
+    authz = router.get(url__startswith="http://issuer.test/openid4vci/authorize").respond(
+        302, headers={"Location": "https://issuer.example/openid4vci/external_login/x"}
+    )
+    r = client.get(
+        "/issuer-shim/authorize?response_type=code&client_id=did:x", follow_redirects=False
+    )
+    assert r.status_code == 400 and not authz.called
+    r = client.get(
+        "/issuer-shim/authorize?client_id=did:x&request_uri=urn:x", follow_redirects=False
+    )
+    assert r.status_code == 302
+    assert r.headers["location"] == "https://issuer.example/openid4vci/external_login/x"
+    assert "request_uri=urn" in str(authz.calls.last.request.url)
 
 
 def test_claim_refuses_unknown_and_closed_passes(client, services, odoo):
@@ -479,3 +523,15 @@ def test_issuer_shim_translates_draft13_credential_requests(client, router):
     r = client.post("/issuer-shim/credential", headers={"Authorization": "Bearer at"}, json=body)
     assert r.json() == {"credentials": [{"credential": "sd-jwt~"}]}
     assert json.loads(cred.calls.last.request.content) == body
+
+
+def test_issuer_shim_relays_issuer2_token_calls_to_authentik(client, router):
+    route = router.post("http://authentik.test/application/o/token/").respond(
+        json={"access_token": "a", "id_token": "x.y.z", "token_type": "Bearer"}
+    )
+    r = client.post(
+        "/issuer-shim/ak-token",
+        data={"client_id": "belfry-issuer", "client_secret": "s", "code": "c"},
+    )
+    assert r.status_code == 200 and r.json()["id_token"] == "x.y.z"
+    assert b"client_id=belfry-issuer" in route.calls.last.request.content

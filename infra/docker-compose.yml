@@ -25,6 +25,9 @@ x-authentik-env: &authentik-env
   BELFRY_STEWARD_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward
   BELFRY_STEWARD_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward/callback
   STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
+  # Read by the issuer-app blueprint (!Env): Issuer2's login for authorization-code offers.
+  BELFRY_ISSUER_REDIRECT_URI: ${ISSUER_PUBLIC_URL:-http://localhost:7005}/openid4vci/external/oauth/callback
+  ISSUER_OIDC_CLIENT_SECRET: ${ISSUER_OIDC_CLIENT_SECRET:?}
   # Read by the brand blueprint (!Env): logo, favicon, background and fonts come from the
   # repo's brand/ folder as served by the onboarding service (pass.<domain>/brand).
   BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand

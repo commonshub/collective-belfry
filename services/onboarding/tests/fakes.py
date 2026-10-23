@@ -419,11 +419,15 @@ class FakeIssuer:
         offer = {
             "credential_issuer": "http://localhost:7005/openid4vci",
             "credential_configuration_ids": ["village_pass"],
-            "grants": {
-                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
-                    "pre-authorized_code": f"code-{n:03d}"
+            "grants": (
+                {"authorization_code": {"issuer_state": f"session-{n:03d}"}}
+                if body.get("authMethod") == "AUTHORIZED"
+                else {
+                    "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                        "pre-authorized_code": f"code-{n:03d}"
+                    }
                 }
-            },
+            ),
         }
         from urllib.parse import quote
 
@@ -432,7 +436,7 @@ class FakeIssuer:
             json={
                 "offerId": f"offer-{n:03d}",
                 "profileId": body["profileId"],
-                "authMethod": "PRE_AUTHORIZED",
+                "authMethod": body.get("authMethod"),
                 "expiresAt": 1_900_000_000_000,
                 "credentialOffer": "openid-credential-offer://?credential_offer="
                 + quote(json.dumps(offer, separators=(",", ":")), safe=""),
