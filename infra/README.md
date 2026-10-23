@@ -1,6 +1,6 @@
 # Belfry local stack
 
-One Docker Compose project (`belfry`) with everything slice 1 needs: Postgres, Odoo 19, Authentik, Keycast (signer, Belfry fork with Authentik login) with its NIP-46 relay and Redis, the community relay (rnostr, whitelist from Odoo) and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
+One Docker Compose project (`belfry`) with everything the event release needs so far: Postgres, Odoo 19, Authentik, Keycast (signer, Belfry fork with Authentik login) with its NIP-46 relay and Redis, the community relay (rnostr, whitelist from Odoo), the walt.id issuer and verifier for the pass certificates (`issuer/README.md`) and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
 
 ## Run
 
@@ -25,13 +25,15 @@ Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `open
 | Keycast | http://localhost:3000 | `KEYCAST_ADMIN_EMAIL` / `KEYCAST_ADMIN_PASSWORD` |
 | Keycast relay (NIP-46) | ws://localhost:3080 | |
 | Community relay (rnostr) | ws://localhost:3090 | NIP-42 as a whitelisted pubkey, see `relay/README.md` |
-| Onboarding service | http://localhost:8100 (`/health`) | |
+| Onboarding service | http://localhost:8100 (`/health`, `/door`, `/claim/<token>`, `/status/1`, `/bridge/...`) | |
+| Issuer (walt.id Issuer2) | http://localhost:7005 (`/.well-known/openid-credential-issuer/openid4vci`) | management API `/issuer2/*` unauthenticated: internal only |
+| Verifier (walt.id Verifier2) | http://localhost:7004 | session management unauthenticated: internal only |
 
 Postgres and Redis are internal (`docker compose exec postgres psql -U postgres`).
 
 ## Secrets and tokens
 
-`scripts/gen-secrets.sh` writes `infra/.env` from `.env.example` (every variable has a comment there) with random passwords, the Keycast server key and admin Nostr keypair (`scripts/nostr_keys.py`, pure Python), and `infra/keycast/master.key`. Existing files are kept, and variables added to `.env.example` since are appended to an existing `.env` (generated ones with fresh values); `--force` regenerates `.env` with a backup. An empty variable must not carry an inline comment (`VAR=   # note`): Compose reads the comment as the value, so comments for empty variables sit on the line above. Everything is gitignored.
+`scripts/gen-secrets.sh` writes `infra/.env` from `.env.example` and runs `scripts/gen-issuer-pki.sh` (the issuer CA, signer and bridge keys, `issuer/README.md`); it writes `infra/.env` from `.env.example` (every variable has a comment there) with random passwords, the Keycast server key and admin Nostr keypair (`scripts/nostr_keys.py`, pure Python), and `infra/keycast/master.key`. Existing files are kept, and variables added to `.env.example` since are appended to an existing `.env` (generated ones with fresh values); `--force` regenerates `.env` with a backup. An empty variable must not carry an inline comment (`VAR=   # note`): Compose reads the comment as the value, so comments for empty variables sit on the line above. Everything is gitignored.
 
 `scripts/bootstrap.sh` fills the three values the services need and replaces them in `.env` in place:
 
@@ -47,13 +49,13 @@ Restart the onboarding service after bootstrap so it reads the new values (`make
 
 Idempotent; each step checks before it changes anything (a second run takes two seconds).
 
-1. Waits for `/web/health` (Odoo), `/-/health/ready/` (Authentik) and `/health` (Keycast).
+1. Waits for `/web/health` (Odoo), `/-/health/ready/` (Authentik), `/health` (Keycast), the issuer metadata and the verifier.
 2. Creates the Odoo database `odoo` with `docker compose exec odoo odoo -d odoo -i base,belfry_pass --stop-after-init --without-demo` (the database must not exist beforehand: an empty database that matches the dbfilter makes Odoo answer 500 on every request). If `odoo/addons/belfry_pass` is missing, it installs the standard modules the contract lists instead and prints a notice; a later run installs `belfry_pass` once the directory exists. The full CLI output goes to `infra/.bootstrap-odoo.log`.
 3. Sets the admin password, creates the user `onboarding@belfry.local` (Settings, Sales manager, Accounting manager and `belfry_pass.group_admin` when present) and generates an API key for it through `odoo shell` (`res.users.apikeys._generate` in a sudo env; the public `generate()` RPC method needs an existing key of the same user, so it cannot create the first one). Stores `belfry.onboarding_url` and `belfry.hook_token`.
 4. Keycast: registers the admin with the key from `ALLOWED_PUBKEYS`, confirms the e-mail through the dev inbox (`GET /api/dev/emails`), logs in, fetches the admin token, applies `keycast/policy.sql` (idempotent, also updates the allowed kinds: 0, 1, 7, 22242, 30023) and checks `GET /api/policies` lists `belfry-event`.
 5. Authentik: waits until the bootstrap token works, then until the blueprint `belfry-pass-bridge-source` reports `successful`, and checks that the source `pass-bridge` and the group `belfry-participants` exist. Then waits for `belfry-keycast-provider` (the OIDC provider and application Keycast logs in with, bound to `belfry-participants`), re-applying it once if it ran before the group existed, and checks the issuer `/application/o/keycast/`. Finally waits for `belfry-account-setup-flow` and checks that the default brand's recovery flow is `belfry-account-setup` (the onboarding service mints the participants' login setup links through it).
 
-Step 2 also upgrades `belfry_pass` (`odoo -u`) when the manifest version differs from the installed one, and step 3 stores `belfry.apps_url` (= `KEYCAST_APP_URL`) for the activation mail.
+Step 2 also upgrades `belfry_pass` (`odoo -u`) when the manifest version differs from the installed one, and step 3 stores `belfry.apps_url` (= `KEYCAST_APP_URL`) and `belfry.public_url` (= `ONBOARDING_PUBLIC_URL`, claim links) for the activation mail.
 
 ## Keycast image
 
@@ -74,4 +76,4 @@ Step 2 also upgrades `belfry_pass` (`odoo -u`) when the manifest version differs
 
 ## Smoke test
 
-`scripts/smoke.sh` creates an invite over JSON-RPC, drives `/belfry/invite/<token>` with curl, emulates a Stripe payment (a `payment.transaction` in state `done` with a `provider_reference`, then a manual payment on the invoice, which fires the automation rule), waits for the pass to become `active`, checks the Authentik user and source link and the Keycast NIP-05 name, the relay whitelist and kind-0 profile, reads the login setup link from the pass and the queued activation mail, runs the account-setup flow with curl (password chosen, session is the participant's; the consumed link is refused), then signs in to Keycast through Authentik with that password (`scripts/keycast-oidc-login.sh`: OAuth popup, Authentik flow executor, callback, consent, token, a signed kind-1 event), asks for a new link through `/admin/passes/<id>/login-link` (second mail), and replays the webhook three times. Form field names and the emulated-payment approach are documented in its header.
+`scripts/smoke.sh` creates an invite over JSON-RPC, drives `/belfry/invite/<token>` with curl, emulates a Stripe payment (a `payment.transaction` in state `done` with a `provider_reference`, then a manual payment on the invoice, which fires the automation rule), waits for the pass to become `active`, checks the Authentik user and source link and the Keycast NIP-05 name, the relay whitelist and kind-0 profile, reads the login setup link from the pass and the queued activation mail, runs the account-setup flow with curl (password chosen, session is the participant's; the consumed link is refused), then signs in to Keycast through Authentik with that password (`scripts/keycast-oidc-login.sh`: OAuth popup, Authentik flow executor, callback, consent, token, a signed kind-1 event), asks for a new link through `/admin/passes/<id>/login-link` (second mail); then Phase 3: reads the claim link from the mail, receives the pass certificate with the test wallet (`python -m belfry_onboarding.testwallet`, run inside the onboarding container), presents it to a door session (valid, tier), signs in to Authentik by presenting it through the bridge (session is the participant's, source link created), revokes the pass and checks that the status list bit flips and the door refuses the certificate; finally replays the webhook three times. Form field names and the emulated-payment approach are documented in its header.

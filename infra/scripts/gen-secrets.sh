@@ -82,3 +82,6 @@ else
   chmod 600 "$MASTER_KEY"
   echo "wrote $MASTER_KEY"
 fi
+
+# Phase 3: the credential issuer's CA, signer key and the walt.id Issuer2 key files.
+"$INFRA_DIR/scripts/gen-issuer-pki.sh"

@@ -4,6 +4,9 @@ infra/.env.bak.*
 infra/.bootstrap-odoo.log
 infra/data/
 infra/keycast/master.key
+infra/issuer/keys/
+infra/issuer/config/issuer2-profiles.conf
+infra/issuer/config/issuer-service.conf
 infra/certs/
 *.key
 *.pem

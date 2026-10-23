@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login); continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login) and Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in). The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -102,14 +102,42 @@ Closes §3c open item 1. Decision (recorded in the live doc, rev 45): at activat
 
 Open from this slice: no outgoing mail server locally (mails stay `outgoing`; production needs Odoo's SMTP); self-service "forgot password" needs authentik's SMTP settings and an identification + e-mail stage (the example blueprint in the image shows the shape); passkeys are only offered from Authentik user settings, not in the setup flow; the participant lands on Authentik's user portal after setup, not on the apps (the flow executor refuses external `next` URLs; a brand `default_application` could change that).
 
+## 3e. Phase 3: pass certificates, door check and pass sign-in — built 2026-10-23
+
+Built on the user's "continue until the happy path works". Decisions taken while building (recorded in the live doc, rev 46):
+
+- Issuer stack: **walt.id Issuer2 + Verifier2 1.2.0** (community), as the spike recommended; decision 3 is closed provisionally, the DIDroom check can still swap Credimi in for testing. Belfry's issuer key and x5c chain come from an own CA (`scripts/gen-issuer-pki.sh`); keys live in files until an HSM/KMS is chosen.
+- Pass sign-in bridge: **Belfry's own Python bridge over Verifier2** (`services/onboarding/belfry_onboarding/bridge.py`, a few hundred lines: OIDC authorize/token/userinfo/jwks, PKCE, client secret) instead of patching the SUNET verifier (decision 7). Reasons: the SUNET OIDC path verifies nothing and would need a Go fork whose HEAD does not build here (sunet-verifier-spike.md); Verifier2 was already running for the door; Belfry's code is Python (decision 5). The SUNET patch can still be offered upstream later; nothing depends on it.
+- Authentik matching for the pass source: `username_link` (the bridge sends `preferred_username` = member number lowercased = the Authentik username), so the first pass login links the source without the participant doing anything; `identifier` matching from then on. The property mapping keeps `username` (needed for the match) and nulls `email`/`name`.
+- Status list: one Token Status List (`/status/1`, 1 bit per pass, bit = pass id), derived from Odoo on every request, signed with the issuer key and the same x5c leaf as the credentials, because Verifier2 trusts a status list only from the credential's own signer. `STATUS_LIST_TTL` is the revocation delay at the door (5 s locally, 300 s suggested for production).
+- Claim offers are minted when the claim page is opened (Issuer2 keeps offers in memory only); the mail carries the claim link, not the QR.
+
+Pieces (details: `infra/issuer/README.md`, onboarding README):
+
+- [x] Compose: `issuer` (7005) and `verifier` (7004); `infra/issuer/config/` with the `village_pass` configuration and the rendered profile; `infra/verifier/config/`; new env `ISSUER_PUBLIC_URL`, `VERIFIER_PUBLIC_URL`, `ONBOARDING_PUBLIC_URL`, `STATUS_LIST_URL`, `STATUS_LIST_TTL`; bootstrap waits for both and sets `belfry.public_url`.
+- [x] Onboarding: `claim_token` and `credential_status_index` at activation; `GET /claim/<token>` (QR page) and `/offer`; `GET /status/1`; `GET /vct/village-pass/v1`; `/door` + sessions; `/bridge/*`; `POST /admin/passes/<id>/revoke`; test wallet `python -m belfry_onboarding.testwallet` (OpenID4VCI receive, OpenID4VP present with KB-JWT). 64 tests.
+- [x] Odoo `belfry_pass` 19.0.1.2.0: `claim_token` (admins), `claim_url`, status index, "Revoke pass" button, claim link in the activation mail, `belfry.public_url`. 46 tests.
+- [x] Authentik blueprint: the pass-bridge source points at the bridge (public authorize URL, internal token/userinfo), `username_link`.
+- [x] Verified live: `make smoke` 60 checks. Issuer2 issued a `dc+sd-jwt` with Belfry's key, two-certificate x5c, explicit validity (no rounding), status claim and three disclosable claims; the door session verified it with `signature`, `expiration`, `not-before`, `allowed-issuer` and `credential-status`; Authentik signed the participant in by pass alone through the bridge (link created, no password); a steward revoke flipped the status bit and the door refused the certificate after the TTL. Found on the way: Issuer2's JWKS lists the profile key as well as the token key (open question in the spike, answered); the verifier caches the status list for min(max-age, ttl, exp).
+
+Open from this slice (not blocking the local happy path):
+
+1. Real wallets: everything is `http://localhost`. Phones need HTTPS with public certificates for issuer, verifier and onboarding URLs; the EUDI reference wallet additionally wants signed issuer metadata and a trusted issuer certificate (issuer-spike.md §3). A public test deployment is the next step for this.
+2. Trust in Belfry's CA is not configured on the verifier (the `signature` policy takes the x5c leaf key; `allowed-issuer` pins the `iss`); add an `x5c`/trust-list policy and publish the CA. `/.well-known/jwt-vc-issuer` is served by Issuer2 but only resolved over HTTPS by walt.id.
+3. The verifier's request is unsigned (`redirect_uri` client id); HAIP wants `x509_san_dns` and `direct_post.jwt`. The claim flow is the pre-authorized code (HAIP wants the authorization code flow).
+4. Bridge state is in memory (one instance); Authentik's OIDC source does not verify the ID token signature (it uses userinfo), so `/bridge/jwks` is unused for now.
+5. The management APIs of Issuer2 and Verifier2 are unauthenticated: the production reverse proxy must block `/issuer2/*` and `/verification-session/create|info`.
+6. Issuer key rotation (old keys in the JWKS until their credentials expire) and HSM/KMS for the key: not done.
+7. Day-pass `exp` is the end of the day (UTC); the plan's `role` claim and the `sub` = did:webvh variant (Phase 4) are not in the credential yet.
+
 ## 4. Next
 
-1. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
-2. Phase 3 start: walt.id Issuer2 once the issuer decision is confirmed with the DIDroom maintainer; status-list service; VCTM hosting; SUNET verifier patch for the OIDC path.
-3. Run the smoke flow against Stripe test mode on a public URL.
+1. A public test deployment (HTTPS) and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
+2. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
+3. Phase 3 hardening: trust-list/x5c policy and CA publication, signed verifier requests, issuer key in a KMS, key rotation, status list persistence (see §3e open items).
 
 ## Notes
 
-- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice, Keycast fork and participant login committed 2026-10-23.
+- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice, Keycast fork, participant login and Phase 3 committed 2026-10-23.
 - Local test run: the host Python is 3.14; use `python3.12 -m venv` and `pip install -e 'services/onboarding[dev]'` for `pytest` and `ruff`.
 - Research notes: `docs/research/` (spikes dated 2026-10-22), consistency review in `plan-consistency-review.md`.

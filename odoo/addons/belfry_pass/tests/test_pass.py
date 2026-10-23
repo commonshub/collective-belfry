@@ -142,3 +142,37 @@ class TestPass(BelfryCase):
                    side_effect=requests.ConnectionError("down")):
             with self.assertRaises(UserError):
                 belfry_pass.action_send_login_link()
+
+    # -- Phase 3: claim link and revoke button -------------------------------------------------
+
+    def test_claim_url_from_public_url(self):
+        self.env['ir.config_parameter'].sudo().set_param('belfry.public_url', 'https://belfry.test/')
+        belfry_pass = self.env['belfry.pass'].create({'partner_id': self.alice.id, 'tier': 'day'})
+        self.assertFalse(belfry_pass.claim_url)
+        belfry_pass.write({
+            'state': 'active', 'claim_token': 'tok-abc', 'credential_status_index': belfry_pass.id,
+            'login_setup_url': 'https://login.test/?flow_token=z',
+        })
+        self.assertEqual(belfry_pass.claim_url, 'https://belfry.test/claim/tok-abc')
+        mails = self._login_mails(belfry_pass)
+        self.assertEqual(len(mails), 1)
+        self.assertIn('https://belfry.test/claim/tok-abc', mails.body_html)
+        self.assertIn('Add the pass to your wallet', mails.body_html)
+
+    def test_revoke_button_calls_the_onboarding_service(self):
+        from unittest.mock import MagicMock, patch
+
+        Param = self.env['ir.config_parameter'].sudo()
+        Param.set_param('belfry.onboarding_url', 'http://glue.test:8100')
+        Param.set_param('belfry.hook_token', 'secret-1')
+        belfry_pass = self.env['belfry.pass'].create({'partner_id': self.alice.id, 'tier': 'day'})
+        with self.assertRaises(UserError):
+            belfry_pass.action_revoke()
+        belfry_pass.write({'state': 'active'})
+        response = MagicMock()
+        response.json.return_value = {'result': 'revoked', 'pass_id': belfry_pass.id}
+        with patch('odoo.addons.belfry_pass.models.belfry_pass.requests.post', return_value=response) as post:
+            belfry_pass.action_revoke()
+        post.assert_called_once_with(
+            'http://glue.test:8100/admin/passes/%d/revoke?token=secret-1' % belfry_pass.id, timeout=20,
+        )

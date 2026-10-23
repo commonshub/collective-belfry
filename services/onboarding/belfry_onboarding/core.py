@@ -10,16 +10,19 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import secrets
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from .clients.authentik import AuthentikClient
+from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.odoo import OdooApi, OdooError
+from .clients.verifier import VerifierClient
 from .nostr import hex_to_npub
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
@@ -44,6 +47,8 @@ PASS_FIELDS = [
     "keycast_pubkey",
     "authentik_user_id",
     "stripe_dispute_id",
+    "claim_token",
+    "credential_status_index",
 ]
 
 
@@ -55,6 +60,12 @@ class Services:
     settings: Settings
     relay: RelayPublisher | None = None
     whitelist: RelayWhitelist | None = None
+    # Phase 3
+    issuer: IssuerClient | None = None
+    verifier: VerifierClient | None = None
+    issuer_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs status lists
+    issuer_x5c: list[str] = field(default_factory=list)
+    bridge_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs ID tokens
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -533,6 +544,10 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
         "activated_at": now_utc_str(),
         "login_setup_url": login_url,
         "login_setup_expires_at": login_expires,
+        # Phase 3: the claim page (/claim/<token>) mints the wallet offer; the status list bit
+        # of this pass is its id (one list, one bit per pass).
+        "claim_token": pass_row.get("claim_token") or secrets.token_urlsafe(24),
+        "credential_status_index": pass_row["id"],
         "state": "active",
     }
     if not pass_row.get("tier"):

@@ -87,6 +87,8 @@ log "1/6 waiting for services"
 wait_for odoo "$ODOO_URL/web/health"
 wait_for authentik "$AK_URL/-/health/ready/"
 wait_for keycast "$KC_URL/health"
+wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/openid-credential-issuer/openid4vci"
+wait_for verifier "${VERIFIER_PUBLIC_URL:-http://localhost:7004}/transaction-data-profiles"
 
 # ---------- 2. Odoo database ----------
 log "2/6 Odoo database"
@@ -190,7 +192,8 @@ fi
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onboarding_url\",\"${ONBOARDING_URL:-http://onboarding:8100}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
-echo "config parameters belfry.onboarding_url, belfry.hook_token and belfry.apps_url set"
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
+echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_url and belfry.public_url set"
 
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"

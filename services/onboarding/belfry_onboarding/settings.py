@@ -51,6 +51,41 @@ class Settings(BaseSettings):
     # Validity of the account-setup link mailed at activation (authentik flow token), in days.
     login_link_days: int = Field(default=30, alias="LOGIN_LINK_DAYS")
 
+    # Phase 3: pass certificates. Empty ISSUER_URL disables claim offers and the status list.
+    issuer_url: str = Field(default="", alias="ISSUER_URL")  # walt.id Issuer2 management API
+    # The issuer as wallets see it; the credential's iss is <this>/openid4vci.
+    issuer_public_url: str = Field(default="http://localhost:7005", alias="ISSUER_PUBLIC_URL")
+    issuer_profile: str = Field(default="villagePass", alias="ISSUER_PROFILE")
+    # A claim offer (pre-authorized code) is minted when the claim page is opened and lives
+    # this long; Issuer2 keeps offers in memory only.
+    offer_expiry_seconds: int = Field(default=600, alias="OFFER_EXPIRY_SECONDS")
+    verifier_url: str = Field(default="", alias="VERIFIER_URL")  # walt.id Verifier2, internal
+    # This service as the browser sees it: claim pages, door, bridge, status list, vct.
+    public_url: str = Field(default="http://localhost:8100", alias="PUBLIC_URL")
+    # status_list.uri in the credential, as the verifier reaches it (Compose: service name).
+    status_list_url: str = Field(default="", alias="STATUS_LIST_URL")
+    # How long verifiers may cache the status list (ttl claim and Cache-Control max-age), in
+    # seconds: the longest a revocation takes to reach the door. Low locally for the smoke test.
+    status_list_ttl: int = Field(default=300, alias="STATUS_LIST_TTL")
+    issuer_jwk_path: str = Field(default="", alias="ISSUER_JWK_PATH")
+    issuer_x5c_path: str = Field(default="", alias="ISSUER_X5C_PATH")
+    bridge_jwk_path: str = Field(default="", alias="BRIDGE_JWK_PATH")
+    # The OIDC client Authentik's pass-bridge source uses (blueprint belfry-pass-bridge-source).
+    bridge_client_id: str = Field(default="belfry-authentik", alias="BRIDGE_CLIENT_ID")
+    bridge_client_secret: str = Field(default="", alias="BRIDGE_CLIENT_SECRET")
+
+    @property
+    def vct(self) -> str:
+        return self.public_url.rstrip("/") + "/vct/village-pass/v1"
+
+    @property
+    def credential_issuer(self) -> str:
+        return self.issuer_public_url.rstrip("/") + "/openid4vci"
+
+    @property
+    def effective_status_list_url(self) -> str:
+        return self.status_list_url or self.public_url.rstrip("/") + "/status/1"
+
     hook_token: str = Field(alias="HOOK_TOKEN")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
 

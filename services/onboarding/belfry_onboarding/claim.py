@@ -1,0 +1,233 @@
+"""Phase 3, holder side: the claim page that puts the pass into a wallet, the Token Status
+List verifiers read, the Type Metadata document, and the door check. HTML is rendered inline
+(no template engine; the pages are two screens)."""
+
+from __future__ import annotations
+
+import datetime as dt
+import html
+import json
+import logging
+from typing import Any
+
+import segno
+
+from . import credentials
+from .core import PASS_FIELDS, Services, m2o_id, odoo_date
+
+log = logging.getLogger(__name__)
+
+TIER_NAMES = {"day": "Day pass", "week": "Week pass", "full": "Full access"}
+
+
+class ClaimError(Exception):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def qr_svg(data: str) -> str:
+    """Inline SVG data URI of a QR code."""
+    return segno.make(data, error="m").svg_data_uri(scale=6, border=2, dark="#1F2A44")
+
+
+def page(title: str, body: str) -> str:
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{html.escape(title)}</title>
+<style>
+ body {{ font: 16px/1.5 system-ui, sans-serif; margin: 0; background: #f4f5f7; color: #1F2A44; }}
+ main {{ max-width: 640px; margin: 0 auto; padding: 32px 16px; }}
+ .card {{ background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
+ h1 {{ font-size: 1.5rem; margin: 0 0 4px; }} .muted {{ color: #667; }} .qr img {{ width: 280px; max-width: 100%; }}
+ .btn {{ display: inline-block; background: #1F2A44; color: #fff; padding: 10px 18px; border-radius: 8px; text-decoration: none; }}
+ .ok {{ color: #1b7f3b; font-weight: 600; }} .bad {{ color: #b3261e; font-weight: 600; }} code {{ word-break: break-all; }}
+</style></head><body><main>{body}</main></body></html>"""
+
+
+# -- claim page ------------------------------------------------------------------------------------
+
+
+def pass_for_claim(svc: Services, token: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(pass row, partner) for a claim token; the pass must be active."""
+    if not token or len(token) < 16:
+        raise ClaimError(404, "This claim link does not exist.")
+    rows = svc.odoo.search_read("belfry.pass", [["claim_token", "=", token]], PASS_FIELDS, limit=1)
+    if not rows:
+        raise ClaimError(404, "This claim link does not exist.")
+    pass_row = rows[0]
+    if pass_row.get("state") != "active":
+        raise ClaimError(410, f"This pass is {pass_row.get('state')}; it cannot be claimed.")
+    partner_id = m2o_id(pass_row.get("partner_id"))
+    partner = svc.odoo.read_one(
+        "res.partner", partner_id, ["name", "email", "belfry_member_number", "belfry_npub"]
+    )
+    if partner is None:
+        raise ClaimError(404, "This claim link does not exist.")
+    return pass_row, partner
+
+
+def create_claim_offer(svc: Services, pass_row: dict[str, Any], partner: dict[str, Any]):
+    """Mint a fresh pre-authorized credential offer for this pass. Returns the Issuer2 response
+    (``credentialOffer`` is the QR payload) with the pass validity added."""
+    if svc.issuer is None:
+        raise ClaimError(503, "The credential issuer is not configured.")
+    date_start = odoo_date(pass_row.get("date_start")) or dt.date.today()
+    date_end = odoo_date(pass_row.get("date_end")) or date_start
+    member_number = partner.get("belfry_member_number") or ""
+    data = credentials.pass_credential_data(
+        tier=pass_row.get("tier") or "day",
+        display_name=partner.get("name") or member_number,
+        member_number=member_number,
+        npub=pass_row.get("npub") or partner.get("belfry_npub") or "",
+        date_start=date_start,
+        date_end=date_end,
+    )
+    idx = pass_row.get("credential_status_index") or pass_row["id"]
+    status = credentials.status_claim(svc.settings.effective_status_list_url, int(idx))
+    offer = svc.issuer.create_offer(
+        svc.settings.issuer_profile, data, status, svc.settings.offer_expiry_seconds
+    )
+    log.info("claim: offer %s for pass %s", offer.get("offerId"), pass_row["id"])
+    return {
+        **offer,
+        "pass_id": pass_row["id"],
+        "tier": pass_row.get("tier"),
+        "date_start": date_start.isoformat(),
+        "date_end": date_end.isoformat(),
+    }
+
+
+def claim_page(svc: Services, pass_row: dict[str, Any], partner: dict[str, Any], offer) -> str:
+    offer_url = offer["credentialOffer"]
+    expires = dt.datetime.fromtimestamp(offer["expiresAt"] / 1000, dt.UTC)
+    tier = TIER_NAMES.get(pass_row.get("tier"), pass_row.get("tier"))
+    body = f"""
+<div class="card">
+<h1>Your Open Source Village pass</h1>
+<p class="muted">{html.escape(tier or "")} · valid {offer["date_start"]} to {offer["date_end"]} ·
+member {html.escape(partner.get("belfry_member_number") or "")}</p>
+<p>Scan this code with your EUDI wallet (or another OpenID4VCI wallet) to add the pass certificate.
+The code is valid until {expires.strftime("%H:%M UTC")}; reload the page for a new one.</p>
+<p class="qr"><img alt="QR code with the credential offer" src="{qr_svg(offer_url)}"></p>
+<p><a class="btn" href="{html.escape(offer_url)}">Open in a wallet on this device</a></p>
+<p class="muted">The pass shows your tier and validity to anyone who scans it at the door. Your name,
+member number and Nostr key are only shared when you choose to disclose them.</p>
+</div>"""
+    return page("Claim your Open Source Village pass", body)
+
+
+# -- status list and type metadata -----------------------------------------------------------------
+
+
+def revoked_status_indexes(svc: Services) -> set[int]:
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "in", ["revoked", "expired"]], ["credential_status_index", "!=", False]],
+        ["credential_status_index"],
+    )
+    return {int(r["credential_status_index"]) for r in rows if r.get("credential_status_index")}
+
+
+def status_list_jwt(svc: Services) -> str:
+    if not svc.issuer_jwk:
+        raise ClaimError(503, "The issuer key is not configured.")
+    return credentials.status_list_token(
+        issuer=svc.settings.credential_issuer,
+        uri=svc.settings.effective_status_list_url,
+        revoked=revoked_status_indexes(svc),
+        jwk=svc.issuer_jwk,
+        x5c=svc.issuer_x5c,
+        ttl=svc.settings.status_list_ttl,
+    )
+
+
+def type_metadata(svc: Services) -> dict[str, Any]:
+    return credentials.type_metadata(svc.settings.vct)
+
+
+# -- door -------------------------------------------------------------------------------------------
+
+
+def door_session(svc: Services) -> dict[str, Any]:
+    """A verification session asking for the tier only; validity and status come from the
+    policies (expiration, not-before, credential-status) and are never disclosed by name."""
+    if svc.verifier is None:
+        raise ClaimError(503, "The verifier is not configured.")
+    from .clients.verifier import village_pass_policies, village_pass_query
+
+    session = svc.verifier.create_session(
+        village_pass_query(svc.settings.vct, ["pass_tier"]),
+        village_pass_policies(svc.settings.credential_issuer, check_status=True),
+    )
+    return {
+        "session_id": session["sessionId"],
+        "authorization_request_url": session["bootstrapAuthorizationRequestUrl"],
+    }
+
+
+def failed_policies(info: dict[str, Any]) -> list[str]:
+    failed: list[str] = []
+    results = info.get("policy_results") or {}
+    for entry in results.get("vc_policies") or []:
+        if isinstance(entry, dict) and entry.get("success") is False:
+            failed.append(str((entry.get("policy") or {}).get("id") or "vc-policy"))
+    for _q, policies in (info.get("presentation_validation_results") or {}).items():
+        for name, result in (policies or {}).items():
+            if isinstance(result, dict) and result.get("success") is False:
+                failed.append(name)
+    return failed
+
+
+def door_result(svc: Services, session_id: str) -> dict[str, Any]:
+    """{status: pending|valid|invalid, tier, valid_until, failed: [...]} for the door page."""
+    if svc.verifier is None:
+        raise ClaimError(503, "The verifier is not configured.")
+    info = svc.verifier.session_info(session_id)
+    status = info.get("status")
+    if status == "SUCCESSFUL":
+        claims = credentials.presented_claims(info) or {}
+        exp = claims.get("exp")
+        valid_until = (
+            dt.datetime.fromtimestamp(int(exp), dt.UTC).date().isoformat() if exp else None
+        )
+        return {
+            "status": "valid",
+            "tier": claims.get("pass_tier"),
+            "tier_name": TIER_NAMES.get(claims.get("pass_tier"), claims.get("pass_tier")),
+            "valid_until": valid_until,
+        }
+    if info.get("attempted") or status in ("FAILED", "ERROR", "EXPIRED", "REJECTED"):
+        return {"status": "invalid", "verifier_status": status, "failed": failed_policies(info)}
+    return {"status": "pending", "verifier_status": status}
+
+
+def door_page(session: dict[str, Any]) -> str:
+    url = session["authorization_request_url"]
+    body = f"""
+<div class="card" id="door" data-session="{html.escape(session["session_id"])}">
+<h1>Door check</h1>
+<p class="muted">Open Source Village · Belfry</p>
+<p>Ask the participant to scan this code with their wallet. Only the pass tier is requested;
+validity and revocation are checked by the verifier.</p>
+<p class="qr"><img alt="QR code with the verification request" src="{qr_svg(url)}"></p>
+<p id="result" class="muted">Waiting for a presentation…</p>
+<p><a class="btn" href="/door">New check</a></p>
+</div>
+<script>
+const sid = document.getElementById('door').dataset.session;
+async function poll() {{
+  const r = await fetch('/door/sessions/' + sid); const j = await r.json();
+  const el = document.getElementById('result');
+  if (j.status === 'valid') {{ el.className = 'ok'; el.textContent = 'Valid pass: ' + (j.tier_name || j.tier) + ', valid until ' + j.valid_until; return; }}
+  if (j.status === 'invalid') {{ el.className = 'bad'; el.textContent = 'Not valid: ' + ((j.failed || []).join(', ') || j.verifier_status); return; }}
+  setTimeout(poll, 1500);
+}}
+poll();
+</script>"""
+    return page("Door check", body)
+
+
+def json_dumps(data: Any) -> str:
+    return json.dumps(data, separators=(",", ":"))

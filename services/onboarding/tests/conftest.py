@@ -14,10 +14,13 @@ from belfry_onboarding.core import Services
 from belfry_onboarding.relay_whitelist import RelayWhitelist
 from belfry_onboarding.settings import Settings
 
-from .fakes import FakeAuthentik, FakeKeycast, FakeOdoo, FakeRelay
+from .fakes import FakeAuthentik, FakeIssuer, FakeKeycast, FakeOdoo, FakeRelay, FakeVerifier
 
 AUTHENTIK_URL = "http://authentik.test"
 KEYCAST_URL = "http://keycast.test"
+ISSUER_URL = "http://issuer.test"
+VERIFIER_URL = "http://verifier.test"
+BRIDGE_SECRET = "bridge-secret"
 HOOK_TOKEN = "hook-secret"
 STRIPE_SECRET = "whsec_test_secret"
 
@@ -37,8 +40,57 @@ def settings() -> Settings:
         STRIPE_WEBHOOK_SECRET=STRIPE_SECRET,
         EVENT_START=dt.date(2027, 1, 25),
         EVENT_END=dt.date(2027, 1, 31),
+        ISSUER_URL=ISSUER_URL,
+        ISSUER_PUBLIC_URL="http://localhost:7005",
+        VERIFIER_URL=VERIFIER_URL,
+        PUBLIC_URL="https://belfry.test",
+        STATUS_LIST_URL="http://onboarding:8100/status/1",
+        BRIDGE_CLIENT_SECRET=BRIDGE_SECRET,
         _env_file=None,
     )
+
+
+def make_jwk() -> dict[str, str]:
+    """A fresh P-256 private JWK with kid (the shape gen-issuer-pki.sh writes)."""
+    import base64
+
+    from cryptography.hazmat.primitives.asymmetric import ec
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    nums = key.private_numbers()
+    pub = nums.public_numbers
+
+    def b(i: int) -> str:
+        return base64.urlsafe_b64encode(i.to_bytes(32, "big")).rstrip(b"=").decode()
+
+    return {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": b(pub.x),
+        "y": b(pub.y),
+        "d": b(nums.private_value),
+        "kid": "test-key",
+    }
+
+
+@pytest.fixture(scope="session")
+def issuer_jwk() -> dict[str, str]:
+    return make_jwk()
+
+
+@pytest.fixture(scope="session")
+def bridge_jwk() -> dict[str, str]:
+    return make_jwk()
+
+
+@pytest.fixture
+def issuer(router) -> FakeIssuer:
+    return FakeIssuer(router, ISSUER_URL)
+
+
+@pytest.fixture
+def verifier(router) -> FakeVerifier:
+    return FakeVerifier(router, VERIFIER_URL)
 
 
 @pytest.fixture
@@ -77,7 +129,12 @@ def whitelist(tmp_path) -> RelayWhitelist:
 
 
 @pytest.fixture
-def services(settings, odoo, authentik, keycast, relay, whitelist) -> Services:
+def services(
+    settings, odoo, authentik, keycast, relay, whitelist, issuer, verifier, issuer_jwk, bridge_jwk
+) -> Services:
+    from belfry_onboarding.clients.issuer import IssuerClient
+    from belfry_onboarding.clients.verifier import VerifierClient
+
     return Services(
         odoo=odoo,
         authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
@@ -85,6 +142,11 @@ def services(settings, odoo, authentik, keycast, relay, whitelist) -> Services:
         settings=settings,
         relay=relay,  # type: ignore[arg-type]
         whitelist=whitelist,
+        issuer=IssuerClient(ISSUER_URL),
+        verifier=VerifierClient(VERIFIER_URL),
+        issuer_jwk=issuer_jwk,
+        issuer_x5c=["MIIBfake"],
+        bridge_jwk=bridge_jwk,
     )
 
 

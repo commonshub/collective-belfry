@@ -68,10 +68,18 @@ class BelfryPass(models.Model):
     login_setup_url = fields.Char(string="Login setup link", copy=False, readonly=True)
     login_setup_expires_at = fields.Datetime(string="Login link valid until", copy=False, readonly=True)
     login_mail_sent_at = fields.Datetime(string="Login mail sent", copy=False, readonly=True)
+    # Phase 3: the pass certificate. The claim token is the secret in the participant's claim
+    # link (the onboarding service mints a wallet offer when the page is opened); the status
+    # list index is the certificate's bit in Belfry's Token Status List (= the pass id).
+    claim_token = fields.Char(string="Claim token", copy=False, readonly=True, index=True,
+                              groups="belfry_pass.group_admin")
+    claim_url = fields.Char(string="Claim link", compute='_compute_claim_url',
+                            groups="belfry_pass.group_admin")
     credential_status_index = fields.Integer(
         string="Status list index",
         copy=False,
-        help="Reserved for Phase 3 (token status list bit of the pass certificate).",
+        readonly=True,
+        help="Bit of this pass in Belfry's Token Status List (status_list.idx of the certificate).",
     )
     member_number = fields.Char(related='partner_id.belfry_member_number', string="Member number")
     company_id = fields.Many2one('res.company', default=lambda self: self.env.company)
@@ -93,6 +101,12 @@ class BelfryPass(models.Model):
         tiers = dict(PASS_TIERS)
         for record in self:
             record.display_name = "%s - %s" % (record.partner_id.name or "?", tiers.get(record.tier, record.tier))
+
+    @api.depends('claim_token')
+    def _compute_claim_url(self):
+        base = (self.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')
+        for record in self:
+            record.claim_url = "%s/claim/%s" % (base, record.claim_token) if record.claim_token and base else False
 
     @api.depends('tier')
     def _compute_tier_name(self):
@@ -135,6 +149,23 @@ class BelfryPass(models.Model):
             template.sudo().send_mail(record.id, force_send=False)
             record.write({'login_mail_sent_at': fields.Datetime.now()})
             _logger.info("Belfry pass %s: login setup mail queued for %s", record.id, record.partner_id.email)
+
+    def action_revoke(self):
+        """Steward decision: the onboarding service revokes the pass (relay, signer, Authentik
+        group and the certificate's status list bit all follow)."""
+        self.ensure_one()
+        if self.state != 'active':
+            raise UserError(_("Only an active pass can be revoked."))
+        url = self.env['ir.config_parameter'].sudo().belfry_webhook_url('/admin/passes/%d/revoke' % self.id)
+        try:
+            response = requests.post(url, timeout=20)
+            response.raise_for_status()
+            result = response.json().get('result')
+        except (requests.RequestException, ValueError) as exc:
+            raise UserError(_("The onboarding service did not answer: %s", exc)) from exc
+        if result not in ('revoked', 'already_revoked'):
+            raise UserError(_("The onboarding service answered '%s'.", result))
+        return {'type': 'ir.actions.client', 'tag': 'soft_reload'}
 
     def action_send_login_link(self):
         """Steward button: ask the onboarding service for a new link. The service mints it in

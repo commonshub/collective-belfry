@@ -29,7 +29,9 @@ docs/                       plan snapshot, research notes, this contract
 | keycast | built from github.com/divinevideo/keycast @ fe9c6460 | 3000 | `KMS_PROVIDER=file`, `master.key` mounted at `/app/master.key` |
 | keycast-relay | ghcr.io/verse-pbc/relay_builder:latest | 3080 | NIP-46 relay for the signer |
 | redis | redis:7 | internal | required by Keycast |
-| onboarding | built from `services/onboarding` | 8100 | Belfry's glue |
+| onboarding | built from `services/onboarding` | 8100 | Belfry's glue, claim pages, status list, door, pass bridge |
+| issuer | waltid/issuer-api2:1.2.0 | 7005 | OpenID4VCI issuer of the pass certificates (Phase 3); config `infra/issuer/` |
+| verifier | waltid/verifier-api2:1.2.0 | 7004 | OpenID4VP verifier for the door and the bridge (Phase 3); config `infra/verifier/` |
 
 Test stacks used by module or service tests must use other ports (Odoo test stack: 8169) and their own compose project names.
 
@@ -68,9 +70,11 @@ Depends on `sale_management`, `account_payment`, `payment_stripe`, `loyalty`, `s
 | activated_at, revoked_at | Datetime | |
 | revoke_reason | Selection refund / chargeback / steward / expiry | |
 | stripe_dispute_id | Char | |
-| credential_status_index | Integer | reserved for Phase 3 |
+| credential_status_index | Integer | the pass's bit in the Token Status List (= pass id), set at activation |
 | login_setup_url, login_setup_expires_at | Char, Datetime | one-time Authentik account-setup link (added 2026-10-23); writing the URL on an active pass queues the activation mail |
 | login_mail_sent_at | Datetime | set when the mail was queued |
+| claim_token | Char, indexed, admins only | secret of the claim link (`belfry.public_url` + `/claim/<token>`), set at activation (Phase 3, 2026-10-23) |
+| claim_url | Char, computed | the claim link, in the activation mail |
 
 **Model `belfry.invite`**
 
@@ -95,7 +99,7 @@ Stewards are members of group `belfry_pass.group_steward` (create, read own invi
 - Pricelist rules on the default pricelist: early-bird fixed prices €40 / €80 / €160 valid until `ir.config_parameter` `belfry.early_bird_until` (default 2026-12-31). Applied by a post-init hook or XML with a date.
 - Pricelist `belfry_pass.pricelist_company` "Belfry companies": one formula rule, +50% on the public pricelist price (so it compounds with early bird: 60 / 120 / 240).
 - Loyalty program `belfry_pass.promo_example` with promo code `OSV10`, 10% off pass products, as the example discount code.
-- Config parameters: `belfry.onboarding_url` (default `http://onboarding:8100`), `belfry.hook_token` (shared secret, appended as `?token=` to webhook URLs), `belfry.event_start` (2027-01-25), `belfry.event_end` (2027-01-31), `belfry.apps_url` (where participants use the community apps, in the activation mail; default `http://localhost:3000`).
+- Config parameters: `belfry.onboarding_url` (default `http://onboarding:8100`), `belfry.hook_token` (shared secret, appended as `?token=` to webhook URLs), `belfry.event_start` (2027-01-25), `belfry.event_end` (2027-01-31), `belfry.apps_url` (where participants use the community apps, in the activation mail; default `http://localhost:3000`), `belfry.public_url` (the onboarding service as browsers see it, for claim links; default `http://localhost:8100`).
 - Mail template `belfry_pass.mail_template_pass_activated` (added 2026-10-23): pass details and the login setup link, addressed to the pass holder, sent by `belfry.pass.write` when `login_setup_url` is written on an active pass (activation and "Send new login link"). Mails are kept (`auto_delete` off).
 - Automation rules (`base_automation` + server action of type webhook):
   1. `account.move` on create/update of `payment_state`, domain `move_type = out_invoice and payment_state in (paid, in_payment) and state = posted` → POST `${belfry.onboarding_url}/hooks/odoo/invoice-paid?token=${belfry.hook_token}` with the record's `id`.
@@ -104,7 +108,7 @@ Stewards are members of group `belfry_pass.group_steward` (create, read own invi
 
 **Controller** (`portal`, public): `GET /belfry/invite/<token>` shows the three passes with the prices the visitor will pay (early bird applied) and a billing form (name, email, company name optional, VAT optional). `POST` creates or finds the partner by email (company → a company partner with the person as contact; pricelist = company pricelist when a company name is given), creates a `sale.order` with the chosen product (and an optional promo code applied through the loyalty wizard), confirms it, creates and posts the invoice, generates the Odoo payment link (`payment.link.wizard`), creates the `belfry.pass` in state pending linked to invite, order and invoice, marks the invite used, and redirects to the payment link. Expired, used or revoked invites show a plain error page.
 
-**Button** on the pass form (stewards): "Send new login link" posts to the onboarding service's `/admin/passes/<id>/login-link`; the service writes the new link and the mail goes out.
+**Buttons** on the pass form (stewards): "Send new login link" posts to the onboarding service's `/admin/passes/<id>/login-link`; the service writes the new link and the mail goes out. "Revoke pass" posts to `/admin/passes/<id>/revoke` (reason `steward`).
 
 **Cron**: none in slice 1 (expiry runs in the onboarding service).
 
@@ -120,6 +124,7 @@ Python 3.12, FastAPI + httpx, `pyproject.toml` with `uv` or pip; package `belfry
 ODOO_URL=http://odoo:8069   ODOO_DB=odoo   ODOO_USER=onboarding@belfry.local   ODOO_API_KEY=...
 AUTHENTIK_URL=http://authentik-server:9000   AUTHENTIK_TOKEN=...   AUTHENTIK_SOURCE_SLUG=pass-bridge
 AUTHENTIK_PUBLIC_URL=http://localhost:9000  # origin of the account-setup links (added 2026-10-23)
+ISSUER_URL, ISSUER_PUBLIC_URL, VERIFIER_URL, PUBLIC_URL, STATUS_LIST_URL, STATUS_LIST_TTL, ISSUER_JWK_PATH, ISSUER_X5C_PATH, BRIDGE_JWK_PATH, BRIDGE_CLIENT_ID, BRIDGE_CLIENT_SECRET   # Phase 3, see services/onboarding/README.md
 KEYCAST_URL=http://keycast:3000   KEYCAST_ADMIN_TOKEN=...   KEYCAST_SERVICE_TOKEN=...
 HOOK_TOKEN=...                      # must equal Odoo's belfry.hook_token
 STRIPE_WEBHOOK_SECRET=whsec_...     # for /hooks/stripe only
@@ -137,6 +142,11 @@ LOG_LEVEL=info
 | POST /hooks/stripe | Stripe signature | raw Stripe event | handles `charge.dispute.created` (revoke, reason chargeback) and `charge.dispute.closed` with status `won` (reactivate); idempotent on `event.id` via `belfry.stripe.event`; other types recorded and ignored |
 | POST /admin/reconcile?token= | HOOK_TOKEN | | runs one `reconcile()` pass (see below) |
 | POST /admin/passes/<id>/login-link?token= | HOOK_TOKEN | | new account-setup link for an active pass, written on the pass (Odoo mails it); added 2026-10-23 |
+| POST /admin/passes/<id>/revoke?token= | HOOK_TOKEN | | steward revocation |
+| GET /claim/<token>, /claim/<token>/offer | claim token | | claim page / offer JSON (Phase 3) |
+| GET /status/1, GET /vct/village-pass/v1 | none | | Token Status List, Type Metadata (Phase 3) |
+| GET /door, POST /door/sessions, GET /door/sessions/<id> | none | | door check (Phase 3) |
+| /bridge/* | OIDC client | | OpenID4VP-to-OIDC bridge for Authentik (Phase 3) |
 
 **CLI**: `python -m belfry_onboarding reconcile` and `python -m belfry_onboarding expire`, for cron.
 
@@ -170,4 +180,4 @@ LOG_LEVEL=info
 
 ## Out of scope for this slice
 
-Blossom, NIP-05 outside Keycast, (the relay whitelist sync and kind-0 profiles were added on 2026-10-23 as the first Phase 2 piece, see `infra/relay/README.md` and the onboarding README), certificates and status lists, the Keycast OIDC login change, the SUNET verifier patch, the Stripe webhook registration on a public URL.
+Blossom, NIP-05 outside Keycast, the Stripe webhook registration on a public URL. Added since on 2026-10-23: the relay whitelist and kind-0 profiles (`infra/relay/README.md`), the Keycast login through Authentik and the participants' setup links (Phase 2), and the pass certificates with status list, door check and pass bridge (Phase 3, `infra/issuer/README.md`); the bridge is Belfry's own Python code over walt.id Verifier2, not the SUNET patch.

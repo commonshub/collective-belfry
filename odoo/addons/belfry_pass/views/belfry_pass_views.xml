@@ -30,6 +30,10 @@
         <field name="arch" type="xml">
             <form>
                 <header>
+                    <button name="action_revoke" type="object" string="Revoke pass"
+                            class="btn-secondary" invisible="state != 'active'"
+                            groups="belfry_pass.group_steward"
+                            confirm="Revoke this pass? The participant loses relay and signer access and the pass certificate is marked revoked in the status list."/>
                     <button name="action_send_login_link" type="object" string="Send new login link"
                             class="btn-secondary" invisible="state != 'active'"
                             groups="belfry_pass.group_steward"
@@ -66,6 +70,9 @@
                             <field name="npub"/>
                             <field name="keycast_pubkey"/>
                             <field name="authentik_user_id"/>
+                        </group>
+                        <group string="Pass certificate (Phase 3)">
+                            <field name="claim_url" widget="url" groups="belfry_pass.group_admin"/>
                             <field name="credential_status_index"/>
                         </group>
                         <group string="Login (Authentik)">

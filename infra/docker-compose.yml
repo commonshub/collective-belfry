@@ -14,8 +14,10 @@ x-authentik-env: &authentik-env
   AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD:?}
   AUTHENTIK_BOOTSTRAP_TOKEN: ${AUTHENTIK_BOOTSTRAP_TOKEN:?}
   AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-akadmin@belfry.local}
-  # Read by the pass-bridge blueprint (!Env).
+  # Read by the pass-bridge blueprint (!Env): the bridge lives in the onboarding service.
   BELFRY_BRIDGE_CLIENT_SECRET: ${BRIDGE_CLIENT_SECRET:?}
+  BELFRY_BRIDGE_PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/bridge
+  BELFRY_BRIDGE_INTERNAL_URL: http://onboarding:8100/bridge
   # Read by the keycast-provider blueprint (!Env): redirect URI and client secret.
   KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
   KEYCAST_OIDC_CLIENT_SECRET: ${KEYCAST_OIDC_CLIENT_SECRET:?}
@@ -235,6 +237,49 @@ services:
       retries: 20
       start_period: 15s
 
+  # Phase 3: walt.id Issuer2 issues the village-pass SD-JWT VC (OpenID4VCI, pre-authorized code).
+  # Config: issuer/config (the two *.conf files with key material are rendered there by gen-issuer-pki.sh).
+  # Port 7005 is the wallet-facing API; the management API (/issuer2/*) on the same port has no
+  # authentication: block it at the reverse proxy in production.
+  issuer:
+    image: waltid/issuer-api2:1.2.0
+    environment:
+      ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
+      BELFRY_VCT: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/vct/village-pass/v1
+    ports: ["7005:7005"]
+    volumes:
+      - ./issuer/config:/waltid-issuer-api2/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:7005/.well-known/openid-credential-issuer/openid4vci >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  # Phase 3: walt.id Verifier2 checks presentations (door page and pass bridge create sessions
+  # through http://verifier:7004; wallets use VERIFIER_PUBLIC_URL).
+  verifier:
+    image: waltid/verifier-api2:1.2.0
+    environment:
+      VERIFIER_PUBLIC_URL: ${VERIFIER_PUBLIC_URL:-http://localhost:7004}
+    ports: ["7004:7004"]
+    volumes:
+      - ./verifier/config:/waltid-verifier-api2/config:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:7004/transaction-data-profiles >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
   # Belfry's glue. Behind the "app" profile so the rest of the stack starts before
   # services/onboarding exists: `docker compose --profile app up -d` once it does.
   onboarding:
@@ -249,10 +294,17 @@ services:
         condition: service_healthy
       relay:
         condition: service_healthy
+      issuer:
+        condition: service_healthy
+      verifier:
+        condition: service_healthy
     ports: ["8100:8100"]
     volumes:
       - community-relay-config:/relay-config
       - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
+      - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
+      - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
+      - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro
     environment:
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
@@ -275,6 +327,18 @@ services:
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
       NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
+      # Phase 3: credentials (issuer management API, verifier sessions, status list, bridge).
+      ISSUER_URL: http://issuer:7005
+      ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
+      VERIFIER_URL: http://verifier:7004
+      PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
+      STATUS_LIST_URL: ${STATUS_LIST_URL:-http://onboarding:8100/status/1}
+      STATUS_LIST_TTL: ${STATUS_LIST_TTL:-300}
+      ISSUER_JWK_PATH: /keys/issuer.jwk.json
+      ISSUER_X5C_PATH: /keys/issuer.x5c.json
+      BRIDGE_JWK_PATH: /keys/bridge.jwk.json
+      BRIDGE_CLIENT_ID: belfry-authentik
+      BRIDGE_CLIENT_SECRET: ${BRIDGE_CLIENT_SECRET:?}
       HOOK_TOKEN: ${HOOK_TOKEN:?}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       EVENT_START: ${EVENT_START:-2027-01-25}

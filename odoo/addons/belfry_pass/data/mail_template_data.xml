@@ -29,8 +29,20 @@
             Set up your Belfry login
         </a>
     </p>
+    <t t-if="object.sudo().claim_url">
     <p>
-        <strong>2. Use the community apps.</strong> Open <a t-att-href="object.belfry_apps_url()"><t t-out="object.belfry_apps_url()"/></a>
+        <strong>2. Add the pass to your wallet.</strong> Open this page and scan the code with your EUDI wallet
+        (or another OpenID4VCI wallet); the pass certificate shows your tier and validity at the door and signs you
+        in to the apps:
+    </p>
+    <p style="margin: 16px 0;">
+        <a t-att-href="object.sudo().claim_url" style="background-color: #1F2A44; padding: 8px 16px; text-decoration: none; color: #fff; border-radius: 5px; font-size: 13px;">
+            Add the pass to your wallet
+        </a>
+    </p>
+    </t>
+    <p>
+        <strong>3. Use the community apps.</strong> Open <a t-att-href="object.belfry_apps_url()"><t t-out="object.belfry_apps_url()"/></a>
         and choose "Sign in with Belfry". Your Nostr key is kept safe by Belfry; your public key is
         <code><t t-out="object.npub or ''"/></code>.
     </p>

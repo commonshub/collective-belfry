@@ -22,7 +22,7 @@ M2O: dict[str, set[str]] = {
     "res.partner": set(),
 }
 UNIQUE: dict[str, list[str]] = {
-    "belfry.pass": ["invoice_id", "stripe_payment_intent"],
+    "belfry.pass": ["invoice_id", "stripe_payment_intent", "claim_token"],
     "belfry.stripe.event": ["event_id"],
     "res.partner": ["belfry_member_number"],
 }
@@ -371,6 +371,104 @@ class FakeKeycast:
         self.status[pubkey] = body["status"]
         self.status_calls.append((pubkey, body["status"]))
         return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})
+
+
+class FakeIssuer:
+    """respx stand-in for walt.id Issuer2's offer endpoint: records the credentialData and
+    status overrides, answers with an offer URL carrying a pre-authorized code."""
+
+    def __init__(self, router: respx.MockRouter, base_url: str = "http://issuer.test"):
+        self.offers: list[dict[str, Any]] = []
+        base = base_url.rstrip("/")
+        router.post(f"{base}/issuer2/credential-offers").mock(side_effect=self._create)
+
+    def _create(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.offers.append(body)
+        n = len(self.offers)
+        offer = {
+            "credential_issuer": "http://localhost:7005/openid4vci",
+            "credential_configuration_ids": ["village_pass"],
+            "grants": {
+                "urn:ietf:params:oauth:grant-type:pre-authorized_code": {
+                    "pre-authorized_code": f"code-{n:03d}"
+                }
+            },
+        }
+        from urllib.parse import quote
+
+        return httpx.Response(
+            200,
+            json={
+                "offerId": f"offer-{n:03d}",
+                "profileId": body["profileId"],
+                "authMethod": "PRE_AUTHORIZED",
+                "expiresAt": 1_900_000_000_000,
+                "credentialOffer": "openid-credential-offer://?credential_offer="
+                + quote(json.dumps(offer, separators=(",", ":")), safe=""),
+            },
+        )
+
+
+class FakeVerifier:
+    """respx stand-in for walt.id Verifier2: sessions are created pending; a test marks one as
+    presented (``succeed``) or failed and the info endpoint reflects it."""
+
+    def __init__(self, router: respx.MockRouter, base_url: str = "http://verifier.test"):
+        self.sessions: dict[str, dict[str, Any]] = {}
+        self.created: list[dict[str, Any]] = []
+        base = base_url.rstrip("/")
+        router.post(f"{base}/verification-session/create").mock(side_effect=self._create)
+        router.get(url__regex=rf"{re.escape(base)}/verification-session/(?P<sid>[^/]+)/info").mock(
+            side_effect=self._info
+        )
+
+    def _create(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.created.append(body)
+        sid = f"vs-{len(self.created):03d}"
+        self.sessions[sid] = {"id": sid, "status": "ACTIVE", "attempted": False}
+        return httpx.Response(
+            200,
+            json={
+                "sessionId": sid,
+                "bootstrapAuthorizationRequestUrl": f"openid4vp://authorize?request_uri="
+                f"http%3A%2F%2Flocalhost%3A7004%2Fverification-session%2F{sid}%2Frequest",
+            },
+        )
+
+    def _info(self, request: httpx.Request, sid: str) -> httpx.Response:
+        if sid not in self.sessions:
+            return httpx.Response(404, json={"error": "not found"})
+        return httpx.Response(200, json=self.sessions[sid])
+
+    def succeed(self, sid: str, claims: dict[str, Any]) -> None:
+        self.sessions[sid].update(
+            {
+                "status": "SUCCESSFUL",
+                "attempted": True,
+                "presented_credentials": {
+                    "village_pass": [{"type": "vc-sd_jwt", "credentialData": claims}]
+                },
+                "policy_results": {
+                    "vc_policies": [{"policy": {"id": "signature"}, "success": True}]
+                },
+            }
+        )
+
+    def fail(self, sid: str, policy: str = "credential-status") -> None:
+        self.sessions[sid].update(
+            {
+                "status": "FAILED",
+                "attempted": True,
+                "policy_results": {
+                    "vc_policies": [
+                        {"policy": {"id": "signature"}, "success": True},
+                        {"policy": {"id": policy}, "success": False},
+                    ]
+                },
+            }
+        )
 
 
 class FakeRelay:

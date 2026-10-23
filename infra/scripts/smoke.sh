@@ -3,7 +3,7 @@
 # created exactly once, replay-safe.
 #
 # STATUS (2026-10-23): ran green end to end against the full stack (slice 1, relay, Keycast
-# login, login setup links). The Authentik
+# login, login setup links, pass certificates: claim, door check, pass sign-in, revocation). The Authentik
 # source link (POST /api/v3/sources/user_connections/oauth/) cannot be created over the API on
 # authentik 2026.8.5 ("user" is read-only), so the service logs a warning and the participant
 # links the pass once from user settings; this script reports the missing link as a note, and
@@ -217,7 +217,87 @@ MAIL_N2=$(ox mail.mail search_count "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_
 RESEND=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=wrong")
 [[ "$RESEND" == 401 ]] && ok "wrong token -> 401" || bad "wrong token -> $RESEND"
 
+step "8. pass certificate: claim link in the mail, offer minted, SD-JWT VC received by the test wallet"
+# The test wallet (python -m belfry_onboarding.testwallet) runs inside the onboarding container
+# and rewrites the public hosts of the offer and verifier URLs to the Compose service names.
+WALLET=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.testwallet
+        --map "localhost:7005=issuer:7005,localhost:7004=verifier:7004,localhost:8100=onboarding:8100")
+CLAIM_TOKEN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["claim_token","credential_status_index"]}' | jq -r '.[0].claim_token // empty')
+[[ -n "$CLAIM_TOKEN" ]] && ok "pass carries a claim token (status list index $(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["credential_status_index"]}' | jq -r '.[0].credential_status_index'))" || die "no claim_token on the pass"
+MAIL1=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]" '{"fields":["body_html"],"order":"id asc","limit":1}' | jq -r '.[0].body_html')
+grep -q "/claim/$CLAIM_TOKEN" <<<"$MAIL1" && ok "activation mail links to the claim page" || bad "activation mail has no claim link"
+CLAIM_PAGE=$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN")
+[[ "$CLAIM_PAGE" == 200 ]] && ok "GET /claim/<token> -> 200 (QR page)" || bad "claim page -> $CLAIM_PAGE"
+OFFER=$(curl -sS "$ONB_URL/claim/$CLAIM_TOKEN/offer")
+OFFER_URL=$(jq -r '.credential_offer // empty' <<<"$OFFER")
+[[ "$OFFER_URL" == openid-credential-offer://* ]] && ok "offer minted: $(jq -c '{tier, date_start, date_end}' <<<"$OFFER")" || die "no offer: $OFFER"
+CRED=$("${WALLET[@]}" receive "$OFFER_URL" --out /tmp/smoke-wallet.json 2>&1) || die "wallet receive failed: $CRED"
+CRED=$(tail -n1 <<<"$CRED")
+[[ "$(jq -r .header.typ <<<"$CRED")" == "dc+sd-jwt" && "$(jq -r '.header.x5c|length' <<<"$CRED")" == 2 ]] && ok "SD-JWT VC received, x5c chain of 2" || bad "credential header: $(jq -c .header <<<"$CRED")"
+[[ "$(jq -r .payload.vct <<<"$CRED")" == "${AUTHENTIK_PUBLIC_URL%:9000}:8100/vct/village-pass/v1" || "$(jq -r .payload.vct <<<"$CRED")" == *"/vct/village-pass/v1" ]] && ok "vct $(jq -r .payload.vct <<<"$CRED")" || bad "vct: $(jq -r .payload.vct <<<"$CRED")"
+[[ "$(jq -r .payload.pass_tier <<<"$CRED")" == week && "$(jq -r .disclosed.member_number <<<"$CRED")" == "$MEMBER" && "$(jq -r .disclosed.npub <<<"$CRED")" == "$NPUB" ]] && ok "claims: tier week, member $MEMBER, npub (disclosable)" || bad "claims: $(jq -c '{p: .payload.pass_tier, d: .disclosed}' <<<"$CRED")"
+[[ "$(jq -r .payload.status.status_list.idx <<<"$CRED")" == "$PASS_ID" ]] && ok "status list index = pass id" || bad "status idx $(jq -c .payload.status <<<"$CRED")"
+VCTM=$(curl -sS "$ONB_URL/vct/village-pass/v1" | jq -r .vct); [[ "$VCTM" == "$(jq -r .payload.vct <<<"$CRED")" ]] && ok "type metadata served at the vct URL" || bad "vctm: $VCTM"
+
+step "9. door check: tier only, validity and status by policy"
+DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"$DOOR"); DURL=$(jq -r .authorization_request_url <<<"$DOOR")
+[[ -n "$DSID" && "$DURL" == openid4vp://* ]] && ok "door session $DSID" || die "door session: $DOOR"
+PRES=$("${WALLET[@]}" present "$DURL" --wallet /tmp/smoke-wallet.json --disclose pass_tier 2>&1 | tail -n1)
+[[ "$(jq -r .status <<<"$PRES")" == 200 ]] && ok "wallet presented the pass (disclosed nothing beyond the tier)" || bad "present: $PRES"
+for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
+[[ "$(jq -r .status <<<"$RES")" == valid && "$(jq -r .tier <<<"$RES")" == week ]] && ok "door: valid pass, tier week, until $(jq -r .valid_until <<<"$RES")" || bad "door result: $RES"
+curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/door" | grep -q 200 && ok "GET /door -> 200 (QR page)" || bad "door page"
+
+step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"
+PJAR=$(mktemp); pj() { curl -sS -b "$PJAR" -c "$PJAR" "$@"; }
+pj -o /dev/null "$AK_URL/if/flow/default-authentication-flow/"
+LOGIN=$(pj -o /dev/null -w '%{redirect_url}' "$AK_URL/source/oauth/login/pass-bridge/")
+[[ "$LOGIN" == "$ONB_URL/bridge/authorize?"* ]] && ok "Authentik sends the browser to the bridge" || die "source login redirected to '$LOGIN'"
+BPAGE=$(pj "$LOGIN"); BSID=$(sed -n 's/.*data-sid="\([^"]*\)".*/\1/p' <<<"$BPAGE" | head -n1)
+[[ -n "$BSID" ]] && ok "bridge shows the QR page (login $BSID)" || die "no bridge session in the page"
+BREQ=$(sed -n 's/.*<a class="btn" href="\([^"]*\)">Open the wallet.*/\1/p' <<<"$BPAGE" | head -n1 | sed 's/&amp;/\&/g')
+PRES=$("${WALLET[@]}" present "$BREQ" --wallet /tmp/smoke-wallet.json --disclose member_number,npub,pass_tier 2>&1 | tail -n1)
+[[ "$(jq -r .status <<<"$PRES")" == 200 ]] && ok "wallet presented member number, npub and tier" || bad "present: $PRES"
+for i in 1 2 3 4 5; do POLL=$(curl -sS "$ONB_URL/bridge/poll/$BSID"); [[ "$(jq -r .status <<<"$POLL")" != pending ]] && break; sleep 1; done
+[[ "$(jq -r .status <<<"$POLL")" == done ]] && ok "bridge verified the pass and issued a code" || die "bridge poll: $POLL"
+CB=$(jq -r .redirect <<<"$POLL")
+read -r CB_CODE CB_NEXT < <(pj -o /dev/null -w '%{http_code} %{redirect_url}\n' "$CB")
+[[ "$CB_CODE" == 302 && "$CB_NEXT" == *"/if/flow/default-source-authentication/"* ]] && ok "Authentik accepted the code (token + userinfo through the bridge)" || bad "callback -> $CB_CODE $CB_NEXT"
+# The executor answers 302 once the plan is in the session; following it runs the user_write
+# and user_login stages and ends in the xak-flow-redirect challenge.
+EXEC="$AK_URL/api/v3/flows/executor/default-source-authentication/?query="
+CH=$(pj -L "$EXEC")
+for _ in 1 2 3; do
+  case "$(jq -r '.component // empty' <<<"$CH")" in
+    ak-stage-user-login) CH=$(pj -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data '{"component":"ak-stage-user-login","remember_me":false}' "$EXEC") ;;
+    *) break ;;
+  esac
+done
+ME=$(pj "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+[[ "$ME" == "$AK_UID" ]] && ok "signed in to Authentik as the participant (user $AK_UID) with the pass, no password" || bad "session user '$ME' after flow $(jq -c '{component, response_errors}' <<<"$CH")"
+LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq -c '.results | map(.identifier)')
+[[ "$LINKS" == "[\"$MEMBER\"]" ]] && ok "pass-bridge link created with identifier $MEMBER" || bad "links: $LINKS"
+rm -f "$PJAR"
+
+step "11. revoke the pass: status list bit flips, the door refuses the certificate"
+STATUS_JWT=$(curl -sS "$ONB_URL/status/1"); echo "$STATUS_JWT" | cut -d. -f2 | tr '_-' '/+' | base64 -d 2>/dev/null | jq -c '{iss, sub, ttl, bits: .status_list.bits}' | sed 's/^/  /'
+bit() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "import sys,json,base64; from belfry_onboarding import credentials as c; t=sys.argv[1].split('.')[1]; p=json.loads(base64.urlsafe_b64decode(t+'='*(-len(t)%4))); print(c.status_at(p['status_list']['lst'], int(sys.argv[2])))" "$1" "$2"; }
+[[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 0 ]] && ok "status list: pass $PASS_ID valid (bit 0)" || bad "status bit before revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
+REV=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/revoke?token=$HOOK_TOKEN")
+[[ "$(jq -r .result <<<"$REV")" == revoked ]] && ok "steward revoke -> revoked" || bad "revoke: $REV"
+STATUS_JWT=$(curl -sS "$ONB_URL/status/1")
+[[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 1 ]] && ok "status list: pass $PASS_ID revoked (bit 1)" || bad "status bit after revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
+sleep "$(( ${STATUS_LIST_TTL:-5} + 1 ))"   # the verifier may cache the list for STATUS_LIST_TTL seconds
+DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"$DOOR")
+"${WALLET[@]}" present "$(jq -r .authorization_request_url <<<"$DOOR")" --wallet /tmp/smoke-wallet.json --disclose pass_tier >/dev/null 2>&1 || true
+for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
+[[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
+[[ "$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
+
 step "7. replay the webhook three times and check nothing was duplicated"
+# step 10 linked the pass-bridge source, so count the links as they are now
+LINKS_BEFORE_REPLAY=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')
 for i in 1 2 3; do
   curl -sS -o /dev/null -w "  replay $i -> %{http_code}\n" -X POST "$ONB_URL/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" \
     -H 'Content-Type: application/json' -d "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke-replay\"}"
@@ -227,7 +307,7 @@ PASS2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_p
 [[ "$(jq -r .npub <<<"$PASS2")" == "$NPUB" && "$(jq -r .authentik_user_id <<<"$PASS2")" == "$AK_UID" ]] && ok "pass unchanged after replay" || bad "pass changed: $PASS2"
 [[ "$(ox belfry.pass search_count "[[[\"invoice_id\",\"=\",$INV_ID]]]")" == 1 ]] && ok "one pass for the invoice" || bad "more than one pass for invoice $INV_ID"
 [[ "$(ak "$AK_URL/api/v3/core/users/?username=$USERNAME" | jq '.pagination.count')" == 1 ]] && ok "still one Authentik user" || bad "Authentik user count changed"
-[[ "$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')" == "$LINKS_BEFORE" ]] && ok "source link count unchanged ($LINKS_BEFORE)" || bad "source link count changed"
+[[ "$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')" == "$LINKS_BEFORE_REPLAY" ]] && ok "source link count unchanged ($LINKS_BEFORE_REPLAY)" || bad "source link count changed"
 [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n]')" == "$KC_PUB" ]] && ok "same Keycast pubkey" || bad "Keycast pubkey changed"
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"

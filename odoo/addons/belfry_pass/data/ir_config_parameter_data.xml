@@ -24,6 +24,12 @@
         <field name="key">belfry.apps_url</field>
         <field name="value">http://localhost:3000</field>
     </record>
+    <!-- The onboarding service as the participant's browser sees it: claim links in the
+         activation mail are <this>/claim/<token>. bootstrap.sh sets it from ONBOARDING_PUBLIC_URL. -->
+    <record id="param_public_url" model="ir.config_parameter">
+        <field name="key">belfry.public_url</field>
+        <field name="value">http://localhost:8100</field>
+    </record>
     <!-- Read once by the post-init hook to date the early-bird pricelist rules. -->
     <record id="param_early_bird_until" model="ir.config_parameter">
         <field name="key">belfry.early_bird_until</field>

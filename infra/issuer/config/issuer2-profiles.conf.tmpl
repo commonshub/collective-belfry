@@ -1,0 +1,42 @@
+# Rendered into infra/issuer/config/issuer2-profiles.conf (gitignored) by scripts/gen-issuer-pki.sh (the
+# issuer key and certificate chain are secrets, generated per deployment). One profile: the
+# village pass, SD-JWT VC, signed with Belfry's P-256 key and the x5c chain (CA + leaf). The
+# onboarding service overrides credentialData and credentialStatus per participant when it
+# creates an offer; nbf/exp/iat are passed explicitly so Issuer2 does not round them (its
+# <timestamp> mapping functions round iat/nbf to the day and exp to the hour).
+belfryIssuerKey = {
+  type = "jwk"
+  jwk = @@ISSUER_JWK@@
+}
+belfryIssuerX5chain = [
+  @@X5CHAIN_PEM@@
+]
+
+profiles = {
+  villagePass = {
+    name = "Open Source Village pass"
+    credentialConfigurationId = "village_pass"
+    issuerKey = ${belfryIssuerKey}
+    x5Chain = ${belfryIssuerX5chain}
+    credentialData = {
+      "pass_tier" = "day"
+      "display_name" = "Participant"
+      "member_number" = "OSV-0000"
+      "npub" = "npub1"
+      "nbf" = 0
+      "exp" = 0
+      "iat" = 0
+    }
+    mapping = {}
+    selectiveDisclosure = {
+      "fields" = {
+        "pass_tier" = { "sd" = false }
+        "display_name" = { "sd" = true }
+        "member_number" = { "sd" = true }
+        "npub" = { "sd" = true }
+      }
+      "decoyMode" = "NONE"
+      "decoys" = 0
+    }
+  }
+}

@@ -1,0 +1,8 @@
+# Template, rendered by scripts/gen-issuer-pki.sh. baseUrl is what wallets see (credential_issuer = <baseUrl>/openid4vci); set from the public
+# issuer URL. The management API (/issuer2/*) has no authentication in the community edition:
+# only the onboarding service may reach it (docker network); never publish it on the internet.
+baseUrl = "${ISSUER_PUBLIC_URL}"
+enforcePushedAuthorizationRequests = false
+# Key that signs the issuer's own access tokens and nonces; scripts/gen-issuer-pki.sh renders
+# this template into config/issuer-service.conf (gitignored) with the key from keys/ci-token.jwk.json.
+ciTokenKey = """{"type":"jwk","jwk":@@CI_TOKEN_JWK@@}"""

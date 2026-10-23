@@ -1,6 +1,6 @@
 # Belfry onboarding service
 
-Glue between Odoo (registry and billing), Authentik (login) and Keycast (Nostr signer). It activates a pass once its invoice is paid, revokes on refund or chargeback, reinstates on a won dispute and expires passes nightly. It is stateless: every piece of state lives in Odoo (`belfry.pass`, `res.partner`, `belfry.stripe.event`). Contract: `docs/slice-1-onboarding.md`, section "Onboarding service".
+Glue between Odoo (registry and billing), Authentik (login), Keycast (Nostr signer) and, since Phase 3, the walt.id issuer and verifier. It activates a pass once its invoice is paid, revokes on refund or chargeback, reinstates on a won dispute and expires passes nightly; it serves the participant's claim page (pass certificate into the wallet), the Token Status List, the door check and the OpenID4VP-to-OIDC bridge that lets participants sign in to Authentik with the pass. It is stateless: every piece of state lives in Odoo (`belfry.pass`, `res.partner`, `belfry.stripe.event`). Contract: `docs/slice-1-onboarding.md`, section "Onboarding service".
 
 ## Layout
 
@@ -10,6 +10,11 @@ Glue between Odoo (registry and billing), Authentik (login) and Keycast (Nostr s
 | `belfry_onboarding/clients/odoo.py` | JSON-RPC `/jsonrpc` client: `common.authenticate` once, then `object.execute_kw`; helpers `search_read`, `read`, `write`, `create`, `call` |
 | `belfry_onboarding/clients/authentik.py` | REST client with the bearer token: users, group membership, account-setup (recovery) links and OAuth source connections |
 | `belfry_onboarding/clients/keycast.py` | `POST /api/admin/preload-user` (admin UCAN), `PUT /api/admin/users/:pubkey/status` (service token) |
+| `belfry_onboarding/clients/issuer.py`, `clients/verifier.py` | walt.id Issuer2 offers; Verifier2 sessions, the village-pass DCQL query and policy set |
+| `belfry_onboarding/credentials.py` | the pass claims, Token Status List encoding and signing, Type Metadata, reading a verified presentation |
+| `belfry_onboarding/claim.py` | claim page and offer, status list endpoint, door session and result, the inline HTML pages |
+| `belfry_onboarding/bridge.py` | the OIDC provider over Verifier2 (authorize, poll, token, userinfo, jwks) for Authentik's pass-bridge source |
+| `belfry_onboarding/testwallet.py` | scripted SD-JWT VC holder for the smoke test (receive over OpenID4VCI, present over OpenID4VP) |
 | `belfry_onboarding/core.py` | `activate_pass`, `revoke_pass`, `revoke_for_refund`, `reactivate_pass`, `reconcile`, `expire`, `send_login_link`, dispute handlers |
 | `belfry_onboarding/app.py` | FastAPI routes; `handle_stripe_event` |
 | `belfry_onboarding/stripe_sig.py` | `Stripe-Signature` HMAC verification without the Stripe SDK |
@@ -46,6 +51,11 @@ HOOK_TOKEN=...                      # must equal Odoo's belfry.hook_token
 STRIPE_WEBHOOK_SECRET=whsec_...     # for /hooks/stripe only
 EVENT_START=2027-01-25  EVENT_END=2027-01-31
 LOG_LEVEL=info
+# Phase 3 (all optional; without ISSUER_URL/VERIFIER_URL the claim, door and bridge routes answer 503)
+ISSUER_URL=http://issuer:7005   ISSUER_PUBLIC_URL=http://localhost:7005   ISSUER_PROFILE=villagePass   OFFER_EXPIRY_SECONDS=600
+VERIFIER_URL=http://verifier:7004   PUBLIC_URL=http://localhost:8100   STATUS_LIST_URL=http://onboarding:8100/status/1   STATUS_LIST_TTL=300
+ISSUER_JWK_PATH=/keys/issuer.jwk.json   ISSUER_X5C_PATH=/keys/issuer.x5c.json   BRIDGE_JWK_PATH=/keys/bridge.jwk.json
+BRIDGE_CLIENT_ID=belfry-authentik   BRIDGE_CLIENT_SECRET=...
 ```
 
 Extras, not in the contract, all optional:
@@ -69,6 +79,12 @@ Extras, not in the contract, all optional:
 | `POST /hooks/stripe` | `Stripe-Signature` | verifies the signature (300 s tolerance), records the event in `belfry.stripe.event` first, then handles `charge.dispute.created` (revoke, reason `chargeback`) and `charge.dispute.closed` with `status = won` (reactivate). Replays answer `{"result": "duplicate"}`. Other types are recorded with result `ignored`. A delivery whose handling raised is recorded as `error: ...` and processed again on Stripe's retry. |
 | `POST /admin/reconcile?token=` | `HOOK_TOKEN` | one `reconcile()` pass |
 | `POST /admin/sync-relay?token=` | `HOOK_TOKEN` | rewrites the relay whitelist from the active passes; `{"result": "synced", "pubkeys": n, "changed": bool}` or `{"result": "disabled"}` without `RELAY_CONFIG_PATH`. Errors are 500 (strict, unlike the implicit syncs). |
+| `POST /admin/passes/<id>/revoke?token=` | `HOOK_TOKEN` | steward revocation (Odoo's "Revoke pass" button): `revoke_pass(id, "steward")` |
+| `GET /claim/<token>`, `GET /claim/<token>/offer` | the claim token (in the activation mail) | the pass holder's claim page: mints a fresh pre-authorized credential offer at Issuer2 and shows it as QR code and link (JSON variant for wallets and tests). 404 unknown, 410 when the pass is not active |
+| `GET /status/1` | none | the Token Status List (`application/statuslist+jwt`, signed with the issuer key and x5c): bit = pass id, 1 for revoked and expired passes, from Odoo on every request, `Cache-Control: max-age=STATUS_LIST_TTL` |
+| `GET /vct/village-pass/v1` | none | SD-JWT VC Type Metadata of the pass |
+| `GET /door`, `POST /door/sessions`, `GET /door/sessions/<id>` | none (put the door page behind the venue network or a proxy) | door check: a Verifier2 session asking for `pass_tier` only; the result is `valid` with tier and date or `invalid` with the failed policies |
+| `/bridge/.well-known/openid-configuration`, `GET /bridge/authorize`, `GET /bridge/poll/<sid>`, `POST /bridge/token`, `GET /bridge/userinfo`, `GET /bridge/jwks` | OIDC (client secret, PKCE S256) | the pass sign-in for Authentik: `sub` = member number, `preferred_username` = Authentik username, `npub`, `pass_tier` |
 | `POST /admin/passes/<id>/login-link?token=` | `HOOK_TOKEN` | mints a new account-setup link for the holder of an active pass and writes it on the pass, which makes Odoo mail it (the "Send new login link" button calls this). `{"result": "sent" / "not_active" / "no_user" / "not_found"}`; Authentik or Odoo errors are 500. |
 
 Result codes from `activate_pass`: `activated`, `already_active`, `already_revoked`, `already_expired`, `not_paid`, `not_found`.
@@ -92,6 +108,8 @@ Result codes from `activate_pass`: `activated`, `already_active`, `already_revok
 **revoke_pass / expire** write the state, rewrite the relay whitelist (so a Keycast failure never leaves the pubkey on the relay), then always re-check "does the partner have another active pass" and suspend the Keycast user if not, so a retry after a failed Keycast call completes the suspension. After that the Authentik user leaves the participants group unless it holds another active pass; this is checked per Authentik user, not per partner, because two partners with the same e-mail share one Authentik user. `reactivate_pass` adds it back. The pubkey comes from the pass, falling back to the partner's most recent pass with one. Keycast requires a `reason` for `suspended` and `banned` (400 otherwise; found 2026-10-23 in the live check, slice 1 never suspended anyone), so the client sends `pass <id>: <revoke reason>`.
 
 **reconcile** looks at posted `out_invoice` records with `payment_state in (paid, in_payment)` and `invoice_date` in the last `RECONCILE_DAYS`, skips those whose pass is active, revoked or expired, and runs `activate_pass` on the rest; then revokes every active pass whose `transaction_id` is the source of a `done` refund transaction; finally `sync_participants` makes the group equal to the Authentik users of all active passes (adds and removes; also run at startup, best effort there and here, strict for the CLI). Its result is in the `participants` key.
+
+**Pass certificates (Phase 3, 2026-10-23).** Activation stores a `claim_token` and sets `credential_status_index` = pass id. The claim page builds the claims from the pass (`pass_tier`; `display_name`, `member_number`, `npub` selectively disclosable; `nbf`/`exp` from the pass dates, explicit so Issuer2 does not round them) and the `status` claim pointing at `/status/1`, and asks Issuer2 for a pre-authorized offer (`OFFER_EXPIRY_SECONDS`); nothing about the offer is stored, a reload mints a new one. The status list is derived from Odoo on every request and signed with the same key and x5c leaf as the credentials, which is what Verifier2 requires to trust it. The door and the bridge create Verifier2 sessions with the policies `signature`, `expiration`, `not-before`, `allowed-issuer` (the credential issuer) and `credential-status` (fail closed); the bridge additionally asks for `member_number`, `npub` and `pass_tier` and refuses a presentation without the member number. Bridge state (logins in progress, codes, access tokens) is in memory.
 
 **Disputes** are matched by `data.object.payment_intent` against `belfry.pass.stripe_payment_intent`; the dispute id is stored in `stripe_dispute_id` and used as a fallback key on `charge.dispute.closed`.
 

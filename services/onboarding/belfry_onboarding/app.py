@@ -6,15 +6,19 @@ import hmac
 import json
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import core
+from . import bridge, claim, core
 from .clients.authentik import AuthentikClient
+from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.odoo import OdooClient, OdooError
+from .clients.verifier import VerifierClient
 from .core import Services
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
@@ -31,8 +35,17 @@ def configure_logging(level: str) -> None:
     )
 
 
+def _load_json(path: str) -> Any:
+    return json.loads(Path(path).read_text()) if path else None
+
+
 def build_services(settings: Settings) -> Services:
     return Services(
+        issuer=IssuerClient(settings.issuer_url) if settings.issuer_url else None,
+        verifier=VerifierClient(settings.verifier_url) if settings.verifier_url else None,
+        issuer_jwk=_load_json(settings.issuer_jwk_path) or {},
+        issuer_x5c=_load_json(settings.issuer_x5c_path) or [],
+        bridge_jwk=_load_json(settings.bridge_jwk_path) or {},
         odoo=OdooClient(
             settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
         ),
@@ -72,7 +85,8 @@ def create_app(services: Services | None = None) -> FastAPI:
         await run_in_threadpool(core.sync_participants, app.state.services)
         yield
 
-    app = FastAPI(title="Belfry onboarding", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
+    app.state.bridge = bridge.BridgeStore()
 
     def svc(request: Request) -> Services:
         return request.app.state.services
@@ -155,6 +169,169 @@ def create_app(services: Services | None = None) -> FastAPI:
         check_token(request, token)
         result = await run_in_threadpool(core.send_login_link, svc(request), pass_id)
         return {"result": result, "pass_id": pass_id}
+
+    @app.post("/admin/passes/{pass_id}/revoke")
+    async def admin_revoke(
+        pass_id: int, request: Request, token: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        """Steward decision (Odoo's "Revoke pass" button): relay, signer, Authentik group and
+        the status list bit (served live from Odoo's state) all follow."""
+        check_token(request, token)
+        result = await run_in_threadpool(core.revoke_pass, svc(request), pass_id, "steward")
+        return {"result": result, "pass_id": pass_id}
+
+    # -- Phase 3: claim page, status list, type metadata, door ------------------------------------
+
+    def claim_error(exc: claim.ClaimError) -> HTMLResponse:
+        body = (
+            f'<div class="card"><h1>Pass not available</h1><p class="bad">{exc.message}</p></div>'
+        )
+        return HTMLResponse(claim.page("Pass not available", body), status_code=exc.status)
+
+    @app.get("/claim/{token}", response_class=HTMLResponse)
+    async def claim_page(token: str, request: Request):
+        """The participant's claim page: a fresh credential offer as QR code and link."""
+        services = svc(request)
+        try:
+            pass_row, partner = await run_in_threadpool(claim.pass_for_claim, services, token)
+            offer = await run_in_threadpool(claim.create_claim_offer, services, pass_row, partner)
+        except claim.ClaimError as exc:
+            return claim_error(exc)
+        return HTMLResponse(claim.claim_page(services, pass_row, partner, offer))
+
+    @app.get("/claim/{token}/offer")
+    async def claim_offer(token: str, request: Request) -> JSONResponse:
+        """The same offer as JSON (for wallets and the smoke test)."""
+        services = svc(request)
+        try:
+            pass_row, partner = await run_in_threadpool(claim.pass_for_claim, services, token)
+            offer = await run_in_threadpool(claim.create_claim_offer, services, pass_row, partner)
+        except claim.ClaimError as exc:
+            return JSONResponse({"error": exc.message}, status_code=exc.status)
+        return JSONResponse(
+            {
+                "credential_offer": offer["credentialOffer"],
+                "offer_id": offer.get("offerId"),
+                "expires_at": offer.get("expiresAt"),
+                "pass_id": offer["pass_id"],
+                "tier": offer["tier"],
+                "date_start": offer["date_start"],
+                "date_end": offer["date_end"],
+            }
+        )
+
+    @app.get("/status/1")
+    async def status_list(request: Request) -> Response:
+        """Token Status List of every pass certificate (bit = pass id): 1 for revoked and
+        expired passes. Derived from Odoo on every request, cacheable for a few minutes."""
+        services = svc(request)
+        try:
+            token = await run_in_threadpool(claim.status_list_jwt, services)
+        except claim.ClaimError as exc:
+            return JSONResponse({"error": exc.message}, status_code=exc.status)
+        return Response(
+            token,
+            media_type="application/statuslist+jwt",
+            headers={"Cache-Control": f"max-age={services.settings.status_list_ttl}"},
+        )
+
+    @app.get("/vct/village-pass/v1")
+    async def vct(request: Request) -> JSONResponse:
+        return JSONResponse(claim.type_metadata(svc(request)))
+
+    @app.get("/door", response_class=HTMLResponse)
+    async def door(request: Request):
+        try:
+            session = await run_in_threadpool(claim.door_session, svc(request))
+        except claim.ClaimError as exc:
+            return claim_error(exc)
+        return HTMLResponse(claim.door_page(session))
+
+    @app.post("/door/sessions")
+    async def door_create(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(await run_in_threadpool(claim.door_session, svc(request)))
+        except claim.ClaimError as exc:
+            return JSONResponse({"error": exc.message}, status_code=exc.status)
+
+    @app.get("/door/sessions/{session_id}")
+    async def door_poll(session_id: str, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(
+                await run_in_threadpool(claim.door_result, svc(request), session_id)
+            )
+        except claim.ClaimError as exc:
+            return JSONResponse({"error": exc.message}, status_code=exc.status)
+
+    # -- Phase 3: OpenID4VP-to-OIDC bridge for Authentik ------------------------------------------
+
+    def store(request: Request) -> bridge.BridgeStore:
+        return request.app.state.bridge
+
+    def bridge_json_error(exc: bridge.BridgeError) -> JSONResponse:
+        return JSONResponse(
+            {"error": exc.error, "error_description": exc.description}, status_code=exc.status
+        )
+
+    @app.get("/bridge/.well-known/openid-configuration")
+    async def bridge_discovery(request: Request) -> JSONResponse:
+        return JSONResponse(bridge.discovery(svc(request).settings.public_url))
+
+    @app.get("/bridge/jwks")
+    async def bridge_jwks(request: Request) -> JSONResponse:
+        key = svc(request).bridge_jwk
+        return JSONResponse({"keys": [bridge.public_jwk(key)] if key else []})
+
+    @app.get("/bridge/authorize", response_class=HTMLResponse)
+    async def bridge_authorize(request: Request):
+        params = dict(request.query_params)
+        try:
+            auth = await run_in_threadpool(
+                bridge.start_authorization, svc(request), store(request), params
+            )
+        except bridge.BridgeError as exc:
+            if exc.error in ("invalid_client", "invalid_request") or not params.get("redirect_uri"):
+                return HTMLResponse(bridge.error_page(exc), status_code=exc.status)
+            sep = "&" if "?" in params["redirect_uri"] else "?"
+            return RedirectResponse(
+                f"{params['redirect_uri']}{sep}error={exc.error}"
+                + (f"&state={params['state']}" if params.get("state") else ""),
+                status_code=302,
+            )
+        return HTMLResponse(bridge.authorize_page(auth))
+
+    @app.get("/bridge/poll/{sid}")
+    async def bridge_poll(sid: str, request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(
+                await run_in_threadpool(bridge.poll, svc(request), store(request), sid)
+            )
+        except bridge.BridgeError as exc:
+            return bridge_json_error(exc)
+
+    @app.post("/bridge/token")
+    async def bridge_token(request: Request) -> JSONResponse:
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        try:
+            tokens = await run_in_threadpool(
+                bridge.exchange_code,
+                svc(request),
+                store(request),
+                form,
+                request.headers.get("authorization"),
+            )
+        except bridge.BridgeError as exc:
+            return bridge_json_error(exc)
+        return JSONResponse(tokens, headers={"Cache-Control": "no-store"})
+
+    @app.get("/bridge/userinfo")
+    async def bridge_userinfo(request: Request) -> JSONResponse:
+        try:
+            return JSONResponse(
+                bridge.userinfo(store(request), request.headers.get("authorization"))
+            )
+        except bridge.BridgeError as exc:
+            return bridge_json_error(exc)
 
     @app.post("/hooks/stripe")
     async def stripe_hook(request: Request) -> dict[str, Any]:
