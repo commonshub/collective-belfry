@@ -146,6 +146,11 @@ def test_brand_assets_are_served(client):
     r = client.get("/brand/tokens.css")
     assert r.status_code == 200
     assert "--osv-accent: #d6ff52" in r.text
+    assert r.headers["access-control-allow-origin"] == "*"
+    font = client.get("/brand/fonts/Geist-400-latin.woff2")
+    assert font.status_code == 200
+    assert font.headers["access-control-allow-origin"] == "*"
+    assert font.headers["content-type"] == "font/woff2"
     assert client.get("/brand/osv-logo-horizontal-white.svg").status_code == 200
     page = client.get("/door")
     assert page.status_code == 200

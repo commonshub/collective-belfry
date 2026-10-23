@@ -5,6 +5,7 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -95,7 +96,18 @@ def create_app(services: Services | None = None) -> FastAPI:
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
     brand_dir = Path(os.environ.get("BRAND_DIR") or Path(__file__).resolve().parents[3] / "brand")
     if brand_dir.is_dir():
+        mimetypes.add_type("font/woff2", ".woff2")  # python-slim knows no woff2
         app.mount("/brand", StaticFiles(directory=str(brand_dir)), name="brand")
+
+    @app.middleware("http")
+    async def brand_cors(request: Request, call_next):
+        """Authentik (login.<domain>) and Odoo (odoo.<domain>) load the fonts from here; font
+        files are CORS-checked, so /brand answers every origin and may be cached for a day."""
+        response = await call_next(request)
+        if request.url.path.startswith("/brand/"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers.setdefault("Cache-Control", "public, max-age=86400")
+        return response
 
     def svc(request: Request) -> Services:
         return request.app.state.services
