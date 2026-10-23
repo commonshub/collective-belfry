@@ -66,8 +66,10 @@ def create_app(services: Services | None = None) -> FastAPI:
             app.state.services = build_services(settings)
         else:
             app.state.services = services
-        # Bring the relay whitelist up to date with Odoo on every start (best effort).
+        # Bring the relay whitelist and the Authentik participants group up to date with Odoo
+        # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
+        await run_in_threadpool(core.sync_participants, app.state.services)
         yield
 
     app = FastAPI(title="Belfry onboarding", version="0.1.0", lifespan=lifespan)

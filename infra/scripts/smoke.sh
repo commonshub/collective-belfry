@@ -135,7 +135,10 @@ RELAY_CONF=$("${COMPOSE[@]}" exec -T relay cat /rnostr/config/rnostr.toml 2>/dev
 WL_LINES=$(grep -c "^pubkey_whitelist = \[.*belfry:whitelist" <<<"$RELAY_CONF" || true)
 [[ "$WL_LINES" == 2 ]] && ok "relay config has the two whitelist lines (req and event)" || bad "relay config whitelist lines: $WL_LINES"
 [[ "$(grep -c "\"$KC_PUB\"" <<<"$RELAY_CONF")" == 2 ]] && ok "pubkey $KC_PUB whitelisted for req and event" || bad "pubkey not in both whitelists"
-"${COMPOSE[@]}" logs --no-log-prefix relay 2>/dev/null | grep -qi "reload" && ok "rnostr reloaded its config" || bad "no reload in the relay log"
+# Count instead of grep -q: an early grep exit makes docker logs die of SIGPIPE, and pipefail
+# then reports a failure once the log is long.
+RELOADS=$("${COMPOSE[@]}" logs --no-log-prefix relay 2>/dev/null | grep -ci "reload config success" || true)
+[[ "${RELOADS:-0}" -gt 0 ]] && ok "rnostr reloaded its config ($RELOADS reloads logged)" || bad "no reload in the relay log"
 PROFILE=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$KC_PUB\"],\"kinds\":[0]}" 2>/dev/null | head -n1 || true)
 if [[ -n "$PROFILE" ]]; then
   CONTENT=$(jq -r '.content' <<<"$PROFILE")
@@ -146,6 +149,20 @@ else
 fi
 SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
+
+step "6c. Keycast sign-in through Authentik (OIDC) with the participant's account"
+# Participants get no Authentik password yet (enrollment is open, see NEXT_STEPS); the smoke
+# participant gets a throwaway one so the login can be driven over the flow executor API.
+AK_PW="smoke-$(openssl rand -hex 12)"
+ak -f -o /dev/null -X POST "$AK_URL/api/v3/core/users/$AK_UID/set_password/" -H 'Content-Type: application/json' \
+  -d "{\"password\":\"$AK_PW\"}" || bad "could not set a password on Authentik user $AK_UID"
+if OUT=$(KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$USERNAME" "$AK_PW" "$KC_PUB" 2>&1); then
+  sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
+else
+  sed 's/^/  /' <<<"$OUT" >&2; bad "Keycast OIDC login"
+fi
+CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
+[[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
 
 step "7. replay the webhook three times and check nothing was duplicated"
 for i in 1 2 3; do

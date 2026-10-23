@@ -1,0 +1,100 @@
+From 9e2bceff74de9006edb1bc405d9ab5e4d3835b2d Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Fri, 23 Oct 2026 10:57:58 +0200
+Subject: [PATCH 2/3] feat(web): 'Sign in with ...' on the login page when OIDC
+ login is configured
+
+Reads GET /api/auth/oidc/config; continues automatically after the OIDC
+callback; hides the password form with OIDC_HIDE_PASSWORD_LOGIN.
+---
+ web/src/routes/login/+page.svelte | 42 +++++++++++++++++++++++++++++++
+ 1 file changed, 42 insertions(+)
+
+diff --git a/web/src/routes/login/+page.svelte b/web/src/routes/login/+page.svelte
+index 301cee8..0c7f08b 100644
+--- a/web/src/routes/login/+page.svelte
++++ b/web/src/routes/login/+page.svelte
+@@ -19,10 +19,26 @@
+ 	let currentSessionEmail = $state('');
+ 	let currentSessionPubkey = $state('');
+ 	let isSwitchingAccount = $state(false);
++	// Upstream OIDC login (api/src/api/http/oidc.rs), off unless the server has OIDC_ISSUER.
++	let oidc = $state<{ enabled: boolean; provider_name?: string; hide_password_login: boolean }>({
++		enabled: false,
++		hide_password_login: false
++	});
++
++	function oidcStartUrl() {
++		const back = `/login?oidc=1&redirect=${encodeURIComponent(resolveRedirectTarget())}`;
++		return `/api/auth/oidc/start?return_to=${encodeURIComponent(back)}`;
++	}
+ 
+ 	onMount(async () => {
+ 		hasExtension = typeof window !== 'undefined' && !!window.nostr;
+ 
++		try {
++			oidc = await api.get('/auth/oidc/config');
++		} catch {
++			// Older servers have no such endpoint: keep the password form.
++		}
++
+ 		try {
+ 			const status = await api.get<{
+ 				authenticated: boolean;
+@@ -33,6 +49,12 @@
+ 			hasExistingSession = !!status.authenticated;
+ 			currentSessionEmail = status.email || status.pubkey || '';
+ 			currentSessionPubkey = status.pubkey || '';
++
++			// Coming back from the OIDC callback: the session cookie is fresh, so continue.
++			if (hasExistingSession && $page.url.searchParams.get('oidc') === '1') {
++				await handleContinueAsCurrentAccount();
++				return;
++			}
+ 		} catch (err) {
+ 			console.error('Session status check failed:', err);
+ 		} finally {
+@@ -208,6 +230,18 @@
+ 				</button>
+ 			</div>
+ 		{:else}
++			{#if oidc.enabled}
++			<a class="btn-primary btn-oidc" href={oidcStartUrl()}>
++				Sign in with {oidc.provider_name}
++			</a>
++			{#if !oidc.hide_password_login}
++			<div class="auth-divider">
++				<span>or</span>
++			</div>
++			{/if}
++			{/if}
++
++			{#if !(oidc.enabled && oidc.hide_password_login)}
+ 			<form onsubmit={(e) => { e.preventDefault(); handleLogin(); }}>
+ 				<div class="form-group">
+ 					<label for="email">Email</label>
+@@ -244,6 +278,7 @@
+ 			<p class="auth-link">
+ 				Don't have an account? <a href="/register">Create one</a>
+ 			</p>
++			{/if}
+ 
+ 			{#if hasExtension}
+ 			<div class="auth-divider">
+@@ -459,6 +494,13 @@
+ 		text-decoration: underline;
+ 	}
+ 
++	.btn-oidc {
++		display: block;
++		text-align: center;
++		text-decoration: none;
++		box-sizing: border-box;
++	}
++
+ 	.auth-divider {
+ 		display: flex;
+ 		align-items: center;
+-- 
+2.53.0
+

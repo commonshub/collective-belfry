@@ -203,7 +203,17 @@ class FakeAuthentik:
         self.connection_creates = 0
         # authentik 2026.8.5 refuses API-created source connections; set to emulate that.
         self.reject_connections = False
+        # Groups by name -> {"pk": uuid, "members": set of user pks}; the blueprint creates
+        # belfry-participants, so it exists unless a test deletes it.
+        self.groups: dict[str, dict[str, Any]] = {
+            "belfry-participants": {"pk": "0000-participants", "members": set()}
+        }
+        self.group_calls: list[tuple[str, str, int]] = []
         base = base_url.rstrip("/")
+        router.get(f"{base}/api/v3/core/groups/").mock(side_effect=self._list_groups)
+        router.post(
+            url__regex=rf"{re.escape(base)}/api/v3/core/groups/(?P<gpk>[^/]+)/(?P<op>add_user|remove_user)/"
+        ).mock(side_effect=self._group_member)
         router.get(f"{base}/api/v3/core/users/").mock(side_effect=self._list_users)
         router.post(f"{base}/api/v3/core/users/").mock(side_effect=self._create_user)
         router.get(f"{base}/api/v3/sources/user_connections/oauth/").mock(
@@ -223,7 +233,32 @@ class FakeAuthentik:
             ]
         if "email" in params:
             results = [u for u in results if u.get("email") == params["email"]]
+        if "groups_by_name" in params:
+            members = self.groups.get(params["groups_by_name"], {}).get("members", set())
+            results = [u for u in results if u["pk"] in members]
+        return httpx.Response(
+            200, json={"pagination": {"count": len(results), "next": 0}, "results": results}
+        )
+
+    def members(self, name: str = "belfry-participants") -> set[int]:
+        return set(self.groups[name]["members"])
+
+    def _list_groups(self, request: httpx.Request) -> httpx.Response:
+        name = request.url.params.get("name")
+        results = [{"pk": g["pk"], "name": n} for n, g in self.groups.items() if name in (None, n)]
         return httpx.Response(200, json={"pagination": {"count": len(results)}, "results": results})
+
+    def _group_member(self, request: httpx.Request, gpk: str, op: str) -> httpx.Response:
+        group = next((g for g in self.groups.values() if g["pk"] == gpk), None)
+        user_pk = json.loads(request.content)["pk"]
+        if group is None or not any(u["pk"] == user_pk for u in self.users):
+            return httpx.Response(404, json={"detail": "Not found."})
+        self.group_calls.append((op, gpk, user_pk))
+        if op == "add_user":
+            group["members"].add(user_pk)
+        else:
+            group["members"].discard(user_pk)
+        return httpx.Response(204)
 
     def _create_user(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)

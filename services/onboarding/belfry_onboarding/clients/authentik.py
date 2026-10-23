@@ -58,6 +58,36 @@ class AuthentikClient:
             body["email"] = email
         return self._post("/api/v3/core/users/", body)
 
+    # -- groups -------------------------------------------------------------------------------
+
+    def find_group(self, name: str) -> dict[str, Any] | None:
+        data = self._get("/api/v3/core/groups/", {"name": name})
+        results = list(data.get("results", []))
+        return results[0] if results else None
+
+    def group_member_pks(self, name: str) -> set[int]:
+        members: set[int] = set()
+        page = 1
+        while page:
+            data = self._get(
+                "/api/v3/core/users/", {"groups_by_name": name, "page": page, "page_size": 500}
+            )
+            members.update(int(u["pk"]) for u in data.get("results", []))
+            page = int((data.get("pagination") or {}).get("next") or 0)
+        return members
+
+    def _post_no_content(self, path: str, body: dict[str, Any]) -> None:
+        r = self._client.post(f"{self.url}{path}", json=body, headers=self._headers)
+        r.raise_for_status()
+
+    def add_user_to_group(self, group_pk: str, user_pk: int) -> None:
+        """Idempotent: authentik answers 204 whether or not the user already is a member."""
+        self._post_no_content(f"/api/v3/core/groups/{group_pk}/add_user/", {"pk": user_pk})
+
+    def remove_user_from_group(self, group_pk: str, user_pk: int) -> None:
+        """Idempotent: 204 also for a non-member."""
+        self._post_no_content(f"/api/v3/core/groups/{group_pk}/remove_user/", {"pk": user_pk})
+
     # -- OAuth source connections -------------------------------------------------------------
 
     def find_source_connections(self, user_pk: int, source_slug: str) -> list[dict[str, Any]]:

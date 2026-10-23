@@ -1,0 +1,64 @@
+From febaf4c589cd8171c66ed69309953873f878dd8d Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Fri, 23 Oct 2026 11:11:44 +0200
+Subject: [PATCH 3/3] fix(oauth): token exchange for accounts without an e-mail
+
+The authorization-code grant read users.email as non-null, so a preloaded,
+unclaimed account (email NULL) got 503 'Service temporarily unavailable'
+at /api/oauth/token. Such accounts can authorize apps once they sign in
+through the upstream OIDC login. Use an empty e-mail, as the refresh grant
+already does, while database errors still fail the request.
+---
+ api/src/api/http/oauth.rs     |  7 ++++++-
+ core/src/repositories/user.rs | 17 +++++++++++++++++
+ 2 files changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index b466cdb..4a97086 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -3194,7 +3194,12 @@ async fn handle_authorization_code_grant(
+         // Resolve the email before claiming the code so a lookup failure leaves it immediately
+         // redeemable.
+         let user_repo = UserRepository::new(pool.clone());
+-        let email = user_repo.get_email(&user_pubkey, tenant_id).await?;
++        // Accounts preloaded by an admin have no e-mail until claimed; with the upstream OIDC
++        // login they can authorize apps before that, so a missing e-mail is not an error.
++        let email = user_repo
++            .get_optional_email(&user_pubkey, tenant_id)
++            .await?
++            .unwrap_or_default();
+ 
+         // Claim, but do not delete, the exchange code. Downstream failures release this claim so
+         // the same code can retry.
+diff --git a/core/src/repositories/user.rs b/core/src/repositories/user.rs
+index f58fb6c..2be28f6 100644
+--- a/core/src/repositories/user.rs
++++ b/core/src/repositories/user.rs
+@@ -1974,6 +1974,23 @@ impl UserRepository {
+             .map_err(Into::into)
+     }
+ 
++    /// Like [`Self::get_email`], but `None` for an account without an e-mail (a preloaded,
++    /// unclaimed account signed in through an upstream OIDC provider).
++    pub async fn get_optional_email(
++        &self,
++        pubkey: &str,
++        tenant_id: i64,
++    ) -> Result<Option<String>, RepositoryError> {
++        sqlx::query_scalar::<_, Option<String>>(
++            "SELECT email FROM users WHERE pubkey = $1 AND tenant_id = $2",
++        )
++        .bind(pubkey)
++        .bind(tenant_id)
++        .fetch_one(&self.pool)
++        .await
++        .map_err(Into::into)
++    }
++
+     // =========================================================================
+     // Key change methods
+     // =========================================================================
+-- 
+2.53.0
+

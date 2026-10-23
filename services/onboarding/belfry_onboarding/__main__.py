@@ -1,4 +1,5 @@
-"""CLI for cron: ``python -m belfry_onboarding reconcile`` and ``... expire``."""
+"""CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
+``... sync-participants``."""
 
 from __future__ import annotations
 
@@ -19,6 +20,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("expire", help="expire active passes whose date_end has passed")
     sub.add_parser("sync-relay", help="rewrite the relay whitelist from the active passes")
+    sub.add_parser(
+        "sync-participants",
+        help="make the Authentik participants group equal to the holders of active passes",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -31,6 +36,8 @@ def main(argv: list[str] | None = None) -> int:
             print("RELAY_CONFIG_PATH is not set", file=sys.stderr)
             return 2
         result = core.sync_relay_whitelist(services, strict=True)
+    elif args.command == "sync-participants":
+        result = core.sync_participants(services, strict=True)
     else:
         result = core.expire(services)
     json.dump(result, sys.stdout)

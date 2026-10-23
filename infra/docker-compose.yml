@@ -16,6 +16,9 @@ x-authentik-env: &authentik-env
   AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-akadmin@belfry.local}
   # Read by the pass-bridge blueprint (!Env).
   BELFRY_BRIDGE_CLIENT_SECRET: ${BRIDGE_CLIENT_SECRET:?}
+  # Read by the keycast-provider blueprint (!Env): redirect URI and client secret.
+  KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+  KEYCAST_OIDC_CLIENT_SECRET: ${KEYCAST_OIDC_CLIENT_SECRET:?}
 
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
@@ -40,6 +43,18 @@ x-keycast-env: &keycast-env
   KEYCAST_SERVICE_TOKEN: ${KEYCAST_SERVICE_TOKEN:?}
   RUST_LOG: ${KEYCAST_RUST_LOG:-info}
   PORT: "3000"
+  # Belfry fork: sign-in through Authentik (infra/keycast/README.md, "The Belfry fork").
+  # The issuer is the URL the browser sees; back-channel calls go to authentik-server with
+  # that Host header, so the ID token's iss matches.
+  OIDC_ISSUER: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/
+  OIDC_CLIENT_ID: keycast
+  OIDC_CLIENT_SECRET: ${KEYCAST_OIDC_CLIENT_SECRET:?}
+  OIDC_REDIRECT_URL: ${KEYCAST_APP_URL:-http://localhost:3000}/api/auth/oidc/callback
+  OIDC_BACKCHANNEL_URL: http://authentik-server:9000
+  OIDC_SCOPES: openid email profile keycast
+  OIDC_LINK_CLAIM: keycast_vine_id
+  OIDC_PROVIDER_NAME: Belfry
+  OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
 
 services:
   postgres:

@@ -306,14 +306,25 @@ def test_reconcile_activates_missed_invoices_and_revokes_refunds(
     assert not any(
         p["invoice_id"] == unpaid["invoice"] for p in odoo.tables["belfry.pass"].values()
     )
+    # the participants group follows the active passes: the refunded holder was dropped
+    assert result["participants"] == {"members": 1, "added": [], "removed": []}
+    assert authentik.members() == {active_pass(odoo, missed["invoice"])["authentik_user_id"]}
     # second run is a no-op
-    assert core.reconcile(services) == {"activated": {}, "revoked": {}}
+    assert core.reconcile(services) == {
+        "activated": {},
+        "revoked": {},
+        "participants": {"members": 1, "added": [], "removed": []},
+    }
 
 
 def test_reconcile_endpoint_requires_token(client):
     assert client.post("/admin/reconcile").status_code == 401
     r = client.post(f"/admin/reconcile?token={HOOK_TOKEN}")
-    assert r.status_code == 200 and r.json() == {"activated": {}, "revoked": {}}
+    assert r.status_code == 200 and r.json() == {
+        "activated": {},
+        "revoked": {},
+        "participants": {"members": 0, "added": [], "removed": []},
+    }
 
 
 def test_legacy_module_fallbacks(settings, authentik, keycast):

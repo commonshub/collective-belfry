@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b); continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login); continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -54,7 +54,7 @@ Contract: `docs/slice-1-onboarding.md`. Verified with `make up && make bootstrap
 Known gaps to carry into the next steps:
 
 1. Authentik refuses API-created source links (`user` read-only on `UserOAuthSourceConnection` in 2026.8.5), so participants link the pass once from user settings. Decide between that and `username_link` matching when the Phase 3 bridge exists.
-2. The Keycast image is built from the upstream Dockerfile via `infra/keycast/build/`; the git build context fails on a dangling submodule. The Belfry fork (OIDC login, branding) does not exist yet.
+2. The Keycast image is built from the upstream Dockerfile via `infra/keycast/build/`; the git build context fails on a dangling submodule. The Belfry fork exists since 2026-10-23 as a patch series (§3c); branding is still Divine's.
 3. Stripe is emulated locally (done transaction + manual payment). Real Stripe test mode needs a public URL for Odoo's webhook and `stripe listen` for the dispute endpoint.
 4. No enrollment or password link is sent to the Authentik user yet (Phase 2 login work).
 5. VAT, credit notes on refund and the day-pass "which day" question are still open (see the Odoo spike note).
@@ -72,14 +72,33 @@ Decision (recorded in the live doc): the community relay is **rnostr** (0.4.9, `
 
 Open from this slice: whether a Keycast suspension takes effect on an already cached HTTP-RPC authorization (spike: unverified); the kind list for the Phase 2 apps (calendar, marketplace, chat kinds are not in the policy yet); `RELAY_EXTRA_PUBKEYS` is empty, so no Belfry announcement key exists yet; the profile is not re-published when the partner's name changes.
 
+## 3c. Phase 2: Keycast fork with the Authentik login — built 2026-10-23
+
+Decision 2 implemented. The fork is a `git format-patch` series in `infra/keycast/build/patches/` on top of the pinned upstream commit, applied by the image build (monorepo, decision 6; no GitHub fork). Details and the workflow for changing a patch: `infra/keycast/README.md`, "The Belfry fork". Decision recorded in the live doc.
+
+- [x] Patch 0001, `api/src/api/http/oidc.rs`: `GET /api/auth/oidc/start|callback|config`, authorization code + PKCE against `OIDC_ISSUER`, ID token verified against the JWKS (RS256/ES256, `iss`, `aud`, `exp`, `nonce`; alg confusion refused), signed short-lived flow cookie, same-origin `return_to` only. The subject is linked on first login to the account whose `vine_id` equals the claim `keycast_vine_id` (`odoo-partner-<id>`), table `oidc_identities`; accounts are never created. A server-signed UCAN session cookie is set and the browser returns to `/api/oauth/authorize`, so consent continues as before. The OAuth popup shows "Sign in with Belfry"; `KEYCAST_OIDC_ONLY=true` hides the password and registration forms (the password API stays: bootstrap registers the admin through it). 9 unit tests.
+- [x] Patch 0002: the web app's `/login` page offers the same login.
+- [x] Patch 0003: upstream bug found in the live check. `/api/oauth/token` answered 503 for preloaded accounts because it read the NULL e-mail as non-null; upstream never hit it because unclaimed accounts could not log in.
+- [x] Authentik blueprint `belfry-keycast-provider.yaml`: OIDC provider + application `keycast`, scope `keycast` with the link claim, bound to `belfry-participants`. authentik 2026.8 leaves `grant_types` empty for blueprint-created providers and then refuses every authorize request, so the blueprint sets it.
+- [x] Onboarding service: the Authentik user joins `belfry-participants` at activation and reactivation and leaves it when its last active pass closes (checked per Authentik user, since two partners with one e-mail share one user); full sync at start, in `reconcile` and via `python -m belfry_onboarding sync-participants`. Slice 1 never added anyone to that group.
+- [x] Found on the way: `.gitignore`'s `build/` rule had kept `infra/keycast/build/Dockerfile` out of git since slice 1 (a fresh clone could not build Keycast); Compose read `STRIPE_WEBHOOK_SECRET` and `RELAY_EXTRA_PUBKEYS` as their inline comments because the values were empty (comments moved above); `gen-secrets.sh` now appends variables new in `.env.example` to an existing `.env`.
+- [x] Verified live: `make smoke` 25 checks, including step 6c (`infra/scripts/keycast-oidc-login.sh`: popup, Authentik login over the flow executor API, callback, consent, token, kind-1 signed with the participant's key). Revoked participant: Authentik refuses the authorize request. Reactivated: login works again, Keycast skips consent for the already approved app. Authentik user in the group without an Odoo partner: Keycast answers 403 "No account". `make test-onboarding` 42 tests.
+
+Open from this slice:
+
+1. Participants still have no way to get an Authentik login: no password or enrollment link is sent (slice 1 gap 4), and pass sign-in needs the Phase 3 bridge. The smoke test sets a throwaway password. Next step for Phase 2: send an Authentik recovery/enrollment link at activation, or make the pass bridge the only login.
+2. Key export needs the account password, which OIDC-only accounts do not have (spike §6.5); "managed, exportable" for full access does not hold yet.
+3. Divine UI and branding are unchanged (logo, "Divine" e-mail copy, ATProto settings card).
+4. Keycast's e-mail stays empty for preloaded accounts; the UCAN carries an empty `email` fact. Nothing in Belfry's flow needs it so far.
+
 ## 4. Next
 
-1. Phase 2 (continued): Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), the Keycast fork with Authentik OIDC login (3–5 days, files listed in `docs/research/keycast-spike.md` §4), remove the Divine UI parts, pick the community apps and extend the policy kinds.
+1. Phase 2 (continued): an Authentik login for participants (enrollment or recovery link at activation, §3c open item 1), key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds.
 2. Phase 3 start: walt.id Issuer2 once the issuer decision is confirmed with the DIDroom maintainer; status-list service; VCTM hosting; SUNET verifier patch for the OIDC path.
 3. Run the smoke flow against Stripe test mode on a public URL.
 
 ## Notes
 
-- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice committed 2026-10-23.
+- First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice and Keycast fork committed 2026-10-23.
 - Local test run: the host Python is 3.14; use `python3.12 -m venv` and `pip install -e 'services/onboarding[dev]'` for `pytest` and `ruff`.
 - Research notes: `docs/research/` (spikes dated 2026-10-22), consistency review in `plan-consistency-review.md`.

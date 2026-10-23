@@ -248,6 +248,23 @@ echo "blueprint belfry-pass-bridge-source: successful"
 ak "$AK_URL/api/v3/sources/oauth/?slug=pass-bridge" | jq -e '.pagination.count == 1' >/dev/null || die "source pass-bridge missing"
 ak "$AK_URL/api/v3/core/groups/?name=belfry-participants" | jq -e '.pagination.count == 1' >/dev/null || die "group belfry-participants missing"
 echo "source pass-bridge and group belfry-participants present"
+# The Keycast provider blueprint binds the application to belfry-participants, so it fails when
+# the worker applies it before the pass-bridge blueprint; apply it again once that one is done.
+i=0
+while :; do
+  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-keycast-provider" | jq -c '.results[0] // empty')
+  status=$(jq -r '.status // empty' <<<"$bp")
+  [[ "$status" == successful ]] && break
+  if [[ -n "$bp" && "$status" != unknown ]]; then
+    ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$(jq -r .pk <<<"$bp")/apply/" || true
+  fi
+  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-keycast-provider status '$status'"; }
+  printf '.'; sleep 5
+done
+echo "blueprint belfry-keycast-provider: successful"
+ak "$AK_URL/application/o/keycast/.well-known/openid-configuration" | jq -e '.issuer | endswith("/application/o/keycast/")' >/dev/null \
+  || die "Keycast OIDC application not served at /application/o/keycast/"
+echo "Keycast OIDC issuer: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 
 # ---------- 6. summary ----------

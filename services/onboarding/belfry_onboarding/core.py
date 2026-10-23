@@ -250,6 +250,56 @@ def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number
     return user_pk
 
 
+def _set_participant(svc: Services, user_pk: int, member: bool) -> None:
+    """Add the Authentik user to (or remove it from) the participants group, which gates the
+    Keycast login (blueprint belfry-keycast-provider). Idempotent; raises if the group is
+    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran."""
+    name = svc.settings.authentik_participants_group
+    group = svc.authentik.find_group(name)
+    if group is None:
+        raise RuntimeError(f"authentik group {name!r} does not exist (blueprint not applied?)")
+    if member:
+        svc.authentik.add_user_to_group(group["pk"], user_pk)
+    else:
+        svc.authentik.remove_user_from_group(group["pk"], user_pk)
+
+
+def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | None:
+    """Make the participants group equal to the Authentik users of all active passes.
+
+    Run at startup and by reconcile, so passes activated before the group existed (or a missed
+    group call) converge. Best effort unless ``strict``."""
+    name = svc.settings.authentik_participants_group
+    try:
+        group = svc.authentik.find_group(name)
+        if group is None:
+            raise RuntimeError(f"authentik group {name!r} does not exist (blueprint not applied?)")
+        rows = svc.odoo.search_read(
+            "belfry.pass",
+            [["state", "=", "active"], ["authentik_user_id", "!=", False]],
+            ["authentik_user_id"],
+        )
+        wanted = {int(r["authentik_user_id"]) for r in rows if r.get("authentik_user_id")}
+        current = svc.authentik.group_member_pks(name)
+        for user_pk in sorted(wanted - current):
+            svc.authentik.add_user_to_group(group["pk"], user_pk)
+        for user_pk in sorted(current - wanted):
+            svc.authentik.remove_user_from_group(group["pk"], user_pk)
+        result = {
+            "members": len(wanted),
+            "added": sorted(wanted - current),
+            "removed": sorted(current - wanted),
+        }
+        if result["added"] or result["removed"]:
+            log.info("participants group %s synced: %s", name, result)
+        return result
+    except Exception as exc:
+        if strict:
+            raise
+        log.warning("participants group not synced: %s", exc)
+        return None
+
+
 def _ensure_keycast_user(
     svc: Services, partner: dict[str, Any], member_number: str
 ) -> tuple[str, str, str]:
@@ -416,6 +466,8 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
 
     authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
     pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number)
+    # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
+    _set_participant(svc, authentik_user_id, True)
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
@@ -483,20 +535,57 @@ def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
     return rows[0]["keycast_pubkey"] if rows else None
 
 
-def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason: str) -> bool:
-    """Suspend the Keycast user unless the partner has another active pass.
-
-    Returns True if a suspension was sent.
-    """
+def _authentik_user_for(svc: Services, pass_row: dict[str, Any]) -> int | None:
+    user_id = pass_row.get("authentik_user_id")
+    if user_id:
+        return int(user_id)
     partner_id = m2o_id(pass_row.get("partner_id"))
-    if partner_id is not None and _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
-        return False
-    pubkey = _keycast_pubkey_for(svc, pass_row)
-    if not pubkey:
-        log.info("pass %s has no Keycast pubkey, nothing to suspend", pass_row["id"])
-        return False
-    svc.keycast.set_user_status(pubkey, "suspended", reason=f"pass {pass_row['id']}: {reason}")
-    return True
+    if partner_id is None:
+        return None
+    partner = svc.odoo.read_one("res.partner", partner_id, ["belfry_authentik_user_id"])
+    value = partner.get("belfry_authentik_user_id") if partner else None
+    return int(value) if value else None
+
+
+def _authentik_user_has_other_active_pass(svc: Services, user_pk: int, except_pass_id: int) -> bool:
+    # Two partners can share one Authentik user (matched by e-mail), so the group is decided per
+    # Authentik user, not per partner.
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [
+            ["authentik_user_id", "=", user_pk],
+            ["state", "=", "active"],
+            ["id", "!=", except_pass_id],
+        ],
+        ["id"],
+        limit=1,
+    )
+    return bool(rows)
+
+
+def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason: str) -> bool:
+    """Suspend the Keycast user unless the partner has another active pass, and drop the
+    Authentik user from the participants group unless it holds another active pass.
+
+    Returns True if the Keycast suspension was sent.
+    """
+    suspended = False
+    partner_id = m2o_id(pass_row.get("partner_id"))
+    if partner_id is None or not _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
+        pubkey = _keycast_pubkey_for(svc, pass_row)
+        if pubkey:
+            svc.keycast.set_user_status(
+                pubkey, "suspended", reason=f"pass {pass_row['id']}: {reason}"
+            )
+            suspended = True
+        else:
+            log.info("pass %s has no Keycast pubkey, nothing to suspend", pass_row["id"])
+    user_pk = _authentik_user_for(svc, pass_row)
+    if user_pk is not None and not _authentik_user_has_other_active_pass(
+        svc, user_pk, pass_row["id"]
+    ):
+        _set_participant(svc, user_pk, False)
+    return suspended
 
 
 def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str) -> str:
@@ -567,6 +656,9 @@ def reactivate_pass(svc: Services, pass_id: int) -> str:
     pubkey = _keycast_pubkey_for(svc, pass_row)
     if pubkey:
         svc.keycast.set_user_status(pubkey, "active")
+    user_pk = _authentik_user_for(svc, pass_row)
+    if user_pk is not None:
+        _set_participant(svc, user_pk, True)
     sync_relay_whitelist(svc)
     return result
 
@@ -639,7 +731,7 @@ def reconcile(svc: Services) -> dict[str, Any]:
             except Exception:
                 log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
                 revoked[pass_row["id"]] = "error"
-    return {"activated": activated, "revoked": revoked}
+    return {"activated": activated, "revoked": revoked, "participants": sync_participants(svc)}
 
 
 # -- Stripe disputes ----------------------------------------------------------------------------

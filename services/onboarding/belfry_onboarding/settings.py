@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     authentik_token: str = Field(alias="AUTHENTIK_TOKEN")
     authentik_source_slug: str = Field(default="pass-bridge", alias="AUTHENTIK_SOURCE_SLUG")
     authentik_user_path: str = Field(default="belfry/participants", alias="AUTHENTIK_USER_PATH")
+    # Members of this group may use the Keycast OIDC application (blueprint
+    # belfry-keycast-provider); derived from active passes like the relay whitelist.
+    authentik_participants_group: str = Field(
+        default="belfry-participants", alias="AUTHENTIK_PARTICIPANTS_GROUP"
+    )
 
     keycast_url: str = Field(default="http://keycast:3000", alias="KEYCAST_URL")
     keycast_admin_token: str = Field(alias="KEYCAST_ADMIN_TOKEN")
