@@ -272,6 +272,9 @@ def create_app(services: Services | None = None) -> FastAPI:
         )
 
     @app.get("/vct/village-pass/v1")
+    # walt.id's wallet looks the type up at <authority>/.well-known/vct<path of the vct>
+    # (an earlier SD-JWT VC draft), not at the vct URL itself.
+    @app.get("/.well-known/vct/vct/village-pass/v1")
     async def vct(request: Request) -> JSONResponse:
         return JSONResponse(claim.type_metadata(svc(request)))
 

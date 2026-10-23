@@ -134,6 +134,8 @@ def test_type_metadata(client):
     paths = [c["path"][0] for c in doc["claims"]]
     assert paths == ["pass_tier", "display_name", "member_number", "npub"]
     assert doc["claims"][0]["sd"] == "never"
+    # walt.id's wallet: <authority>/.well-known/vct<path>
+    assert client.get("/.well-known/vct/vct/village-pass/v1").json() == doc
     simple = doc["display"][0]["rendering"]["simple"]
     assert simple["background_color"] == "#2b3a31"
     assert simple["logo"] == {
