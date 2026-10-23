@@ -15,6 +15,7 @@ What it adds:
   2. `payment.transaction`, on create/update of `state`, domain `operation = refund, state = done` → `POST ${belfry.onboarding_url}/hooks/odoo/refund?token=...`
 
   Payload, as observed: `{"_action": "Belfry: POST invoice-paid(#360)", "_id": 11, "_model": "account.move", "amount_total": 216.0, "id": 11, "name": "INV/2026/00001", "partner_id": 40, "payment_state": "paid", "state": "posted"}` and `{"_action": "Belfry: POST refund(#361)", "_id": 4, "_model": "payment.transaction", "amount": -216.0, "id": 4, "operation": "refund", "provider_reference": "re_...", "reference": "R-...", "source_transaction_id": 3, "state": "done"}`. The receiver reads `_id`. Odoo sends post-commit with a 1 s timeout and no retry; the service's reconcile loop is the safety net.
+- **Activation mail** (`mail_template_pass_activated`): queued by `belfry.pass.write` whenever the onboarding service writes a sign-in link on an active pass (activation, "Send new login link"): pass details, the one-time sign-in link, the claim link, the apps URL. The template is `noupdate="0"` since 19.0.1.4.0, so **every module upgrade rewrites it from `data/mail_template_data.xml`: edits made in the Odoo UI are lost; change the text in git.** (To keep UI edits instead: set noupdate back on and ship text changes as a migration that writes the body once.)
 - **Menu** Belfry > Passes, Invites, Stripe events (group `belfry_pass.group_steward`; Stripe events for `belfry_pass.group_admin`). Settings administrators are Belfry admins.
 
 ## Config parameters
@@ -23,6 +24,7 @@ What it adds:
 | --- | --- | --- |
 | `belfry.onboarding_url` | `http://onboarding:8100` | base URL of the onboarding service |
 | `belfry.hook_token` | `change-me` | shared secret appended as `?token=` to the webhook URLs |
+| `belfry.login_url` | `http://localhost:9000` | Authentik's login page in the activation mail (bootstrap sets it from `AUTHENTIK_PUBLIC_URL`) |
 | `belfry.event_start` | `2027-01-25` | read by the onboarding service |
 | `belfry.event_end` | `2027-01-31` | read by the onboarding service |
 | `belfry.early_bird_until` | `2026-12-31` | end date of the early-bird pricelist rules, read once at install |

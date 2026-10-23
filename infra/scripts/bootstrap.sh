@@ -74,8 +74,10 @@ wait_for_any() { # name url [seconds]: any HTTP answer counts (behind the proxy 
 
 # ---------- Odoo JSON-RPC helpers ----------
 rpc() { # service method args_json
-  curl -fsS "$ODOO_URL/jsonrpc" -H 'Content-Type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"id\":1,\"params\":{\"service\":\"$1\",\"method\":\"$2\",\"args\":$3}}"
+  # The body goes through stdin, not argv: it carries the admin and SMTP passwords, and argv is
+  # visible to every user in ps.
+  curl -fsS "$ODOO_URL/jsonrpc" -H 'Content-Type: application/json' --data-binary @- \
+    <<<"{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"id\":1,\"params\":{\"service\":\"$1\",\"method\":\"$2\",\"args\":$3}}"
 }
 rpc_result() { # same as rpc, prints .result or fails with the error message
   local out; out=$(rpc "$@")
@@ -221,11 +223,12 @@ odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\
 MS_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server search '[[["name","=","belfry"]]]' '{"limit":1}' | jq -r '.[0] // empty')
 # The password comes from infra/secrets/smtp_password (scripts/put-secret.sh) unless SMTP_PASSWORD is set.
 SMTP_PASSWORD=${SMTP_PASSWORD:-$(cat "$INFRA_DIR/secrets/smtp_password" 2>/dev/null || true)}
+export SMTP_PASSWORD   # jq reads it from the environment ($ENV), never from its argv
 MS_VALS=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PORT:-1025}" \
-  --arg enc "${SMTP_ENCRYPTION:-none}" --arg user "${SMTP_USER:-}" --arg pass "$SMTP_PASSWORD" \
+  --arg enc "${SMTP_ENCRYPTION:-none}" --arg user "${SMTP_USER:-}" \
   --arg from "${MAIL_FROM:-belfry@belfry.local}" \
   '{name: "belfry", smtp_host: $host, smtp_port: $port, smtp_encryption: $enc, smtp_authentication: "login",
-    smtp_user: $user, smtp_pass: $pass, from_filter: $from, sequence: 1}')
+    smtp_user: $user, smtp_pass: $ENV.SMTP_PASSWORD, from_filter: $from, sequence: 1}')
 if [[ -z "$MS_ID" ]]; then
   odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server create "[$MS_VALS]" >/dev/null
   echo "outgoing mail server 'belfry' created (${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025})"
@@ -351,11 +354,11 @@ ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$LOGIN_FLOW" '[.results[] | se
 EMAIL_STAGE=$(ak "$AK_URL/api/v3/stages/email/?name=belfry-magic-link-email" | jq -r '.results[0].pk // empty')
 [[ -n "$EMAIL_STAGE" ]] || die "e-mail stage belfry-magic-link-email missing"
 STAGE_SMTP=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PORT:-1025}" \
-  --arg user "${SMTP_USER:-}" --arg pass "$SMTP_PASSWORD" --arg enc "${SMTP_ENCRYPTION:-none}" \
+  --arg user "${SMTP_USER:-}" --arg enc "${SMTP_ENCRYPTION:-none}" \
   --arg from "${MAIL_FROM:-belfry@belfry.local}" \
-  '{use_global_settings: false, host: $host, port: $port, username: $user, password: $pass,
+  '{use_global_settings: false, host: $host, port: $port, username: $user, password: $ENV.SMTP_PASSWORD,
     use_tls: ($enc == "starttls"), use_ssl: ($enc == "ssl"), timeout: 30, from_address: $from}')
-ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/stages/email/$EMAIL_STAGE/" -d "$STAGE_SMTP" \
+ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/stages/email/$EMAIL_STAGE/" --data-binary @- <<<"$STAGE_SMTP" \
   || die "could not write the SMTP settings into the e-mail stage"
 echo "blueprint belfry-magic-link-flow: successful, brand login flow set, magic links sent via ${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025}"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"

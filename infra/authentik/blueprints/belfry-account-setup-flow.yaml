@@ -27,7 +27,10 @@ entries:
       name: Belfry sign-in link
       title: Sign in to Belfry
       designation: recovery
-      authentication: require_unauthenticated
+      # "none", not require_unauthenticated: a participant who is already signed in (magic link)
+      # and opens the activation link again should simply be signed in, not shown "denied".
+      # The session becomes the token's user either way.
+      authentication: none
       denied_action: message_continue
       compatibility_mode: true
 
