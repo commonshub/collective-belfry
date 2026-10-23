@@ -3,10 +3,13 @@
 // creates a calendar (CALENDAR=<name>) and an event (CREATE=1 TITLE=<title>), and prints the
 // relay frames (OK/CLOSED/AUTH) and console errors. Screenshots: <out prefix>-*.png.
 // Usage: node calendar-check.mjs <app url> <file with a bunker URL> <out prefix>
+//   SSO=1: no bunker URL (pass "-"): load COOKIE_JAR (a curl jar with the participant's Authentik
+//   session) into the browser and expect the silent "Sign in with Open Source Village" on load
+//   (Keycast prompt=none -> Authentik -> bunker URL) to sign in without the dialog.
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 const [url, bunkerFile, out] = process.argv.slice(2);
-const bunker = readFileSync(bunkerFile, 'utf8').trim();
+const bunker = bunkerFile === '-' ? '' : readFileSync(bunkerFile, 'utf8').trim();
 const chrome = process.env.CHROME || process.env.HOME + '/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome';
 const port = 9344;
 const p = spawn(chrome, ['--headless=new','--no-sandbox','--hide-scrollbars','--window-size=1280,900',`--remote-debugging-port=${port}`,'about:blank'], {stdio:'ignore'});
@@ -32,7 +35,24 @@ const clickText = (t) => ev(`(() => { const el=[...document.querySelectorAll('bu
 await send('Page.enable'); await send('Runtime.enable'); await send('Network.enable');
 await send('Target.setDiscoverTargets',{discover:true});
 await send('Target.setAutoAttach',{autoAttach:true, waitForDebuggerOnStart:false, flatten:true});
+if (process.env.COOKIE_JAR) {
+  for (const line of readFileSync(process.env.COOKIE_JAR,'utf8').split('\n')) {
+    if (!line || line.startsWith('# ')) continue;
+    const f = line.replace(/^#HttpOnly_/, '').split('\t'); if (f.length < 7) continue;
+    await send('Network.setCookie', {name: f[5], value: f[6], domain: f[0].replace(/^\./,''), path: f[2], httpOnly: line.startsWith('#HttpOnly_')});
+  }
+}
 await send('Page.navigate',{url}); await sleep(5000);
+if (process.env.SSO) {
+  await sleep(Number(process.env.WAIT || 15000));
+  await shot('sso');
+  const where = await ev('location.href');
+  const dialog = await ev(`!!document.querySelector('[role=dialog]')`);
+  console.log('sso: at', where, '| dialog open:', dialog);
+  console.log('frames:\n'+frames.filter(f=>/^WS|"OK"|"CLOSED"|AUTH/.test(f)).slice(-12).join('\n'));
+  console.log('logs:', logs.slice(-8).join('\n'));
+  ws.close(); p.kill(); process.exit(dialog ? 1 : 0);
+}
 console.log('open remote signer:', await clickText('Connect with Remote Signer'));
 await sleep(800);
 // type the bunker URL into the first text input of the panel (React-controlled: use the native setter)

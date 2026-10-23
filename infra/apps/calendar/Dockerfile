@@ -24,8 +24,12 @@ ARG VITE_BRAND_URL=http://localhost:8100/brand
 # About link; with VITE_APPS_URL set, Formstr's privacy policy and contact form are hidden.
 ARG VITE_APPS_URL=http://localhost:3000
 ARG VITE_ABOUT_URL=https://opensourcevillage.org
+# "Sign in with Open Source Village": Keycast's OAuth (client belfry-calendar, redirect URI
+# <origin>/oauth/callback) yields the bunker URL; empty disables the button and the silent check.
+ARG VITE_KEYCAST_URL=http://localhost:3000
 ENV VITE_TEST_RELAY=$VITE_TEST_RELAY VITE_SIGNER_RELAYS=$VITE_SIGNER_RELAYS \
     VITE_BRAND_URL=$VITE_BRAND_URL VITE_APPS_URL=$VITE_APPS_URL VITE_ABOUT_URL=$VITE_ABOUT_URL \
+    VITE_KEYCAST_URL=$VITE_KEYCAST_URL \
     VITE_MAIL_API_BASE_URL=""
 RUN pnpm typecheck && pnpm build
 

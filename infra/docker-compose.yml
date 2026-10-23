@@ -470,6 +470,7 @@ services:
         VITE_SIGNER_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
     ports: ["3200:80"]
 
 volumes:

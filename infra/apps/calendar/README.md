@@ -6,9 +6,14 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
 
 ## How participants use it
 
-1. On the apps page (`apps.<domain>`, Keycast) choose **Connect to Nostr App** and copy the
-   bunker URL. One bunker per app: Keycast binds the first app that connects with its secret.
-2. On the calendar, **Connect with Remote Signer (NIP-46)**, paste the URL, **Connect**.
+1. Open the calendar. A participant who is signed in to Open Source Village (Authentik, or
+   Keycast within 24 h) is signed in without a click: on load the app tries Keycast's OAuth with
+   `prompt=none` once per tab and connects with the bunker URL the token response carries.
+2. Otherwise the dialog offers **Sign in with Open Source Village** (the same OAuth, with the
+   e-mail link or the pass at Authentik when needed) and, below it, the manual way: on the apps
+   page (`apps.<domain>`) **Connect to Nostr App**, copy the bunker URL, paste it under
+   **Connect with Remote Signer (NIP-46)**. One bunker per app: Keycast binds the first client
+   that connects with its secret.
 3. Create a calendar first ("Create Calendar"), then events. Events are private by default
    (gift-wrapped to the invited participants); switch an event to public to show it to every
    participant on the community relay.
@@ -25,13 +30,20 @@ the OSV logo and mark from `brand/` and builds with pnpm 10. The URLs are build 
 into the bundle (rebuild after changing them): `VITE_TEST_RELAY` (`COMMUNITY_RELAY_URL`, the
 app's single-relay switch), `VITE_SIGNER_RELAYS` (`BUNKER_PUBLIC_RELAYS`), `VITE_BRAND_URL`
 (`<ONBOARDING_PUBLIC_URL>/brand`, fonts and favicon), `VITE_APPS_URL` (`KEYCAST_APP_URL`),
-`VITE_ABOUT_URL`. `VITE_MAIL_API_BASE_URL` is empty, so the app never calls Formstr's mail API.
+`VITE_ABOUT_URL`, `VITE_KEYCAST_URL` (`KEYCAST_APP_URL`; empty disables "Sign in with Open
+Source Village"). Keycast must know the client `belfry-calendar` with the redirect URI
+`<CALENDAR_PUBLIC_URL>/oauth/callback` and trust it (no consent screen; Keycast patch 0008,
+bootstrap). `VITE_MAIL_API_BASE_URL` is empty, so the app never calls Formstr's mail API.
 
 The patch (one commit, `0001-...patch`):
 
 - OSV palette, lime accent and dark mode as defaults, Geist and favicon from `/brand`, OSV
   logo, titles and manifest.
-- Sign-in dialog: the remote signer first, with the apps-page hint; "Existing Key" and "Create
+- Sign in with Open Source Village (`src/belfry/sso.ts`): authorization code + PKCE against
+  Keycast, silent attempt on load (`prompt=none`, once per tab), callback `/oauth/callback`
+  exchanges the code and logs in with the bunker URL; any error opens the dialog.
+- Sign-in dialog: Sign in with Open Source Village first, then the remote signer with the
+  apps-page hint; "Existing Key" and "Create
   Account" only with `VITE_LOCAL_KEYS=true` (participants have a managed key in Keycast).
 - Sidebar: Apps and About point to the deployment; Formstr's privacy policy and contact form are
   hidden.

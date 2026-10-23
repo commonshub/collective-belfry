@@ -1,4 +1,4 @@
-From 3c67f12f7cad56ff56871424cae8b7951abb8124 Mon Sep 17 00:00:00 2001
+From 700cfe78c84dce424d25ec16f314d492fa12564c Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@example.invalid>
 Date: Fri, 23 Oct 2026 21:20:39 +0200
 Subject: [PATCH] Belfry: Open Source Village branding, deployment relays,
@@ -8,8 +8,12 @@ Subject: [PATCH] Belfry: Open Source Village branding, deployment relays,
   OSV logo and titles.
 - Relays from the build: VITE_TEST_RELAY (community relay), VITE_SIGNER_RELAYS (Keycast's NIP-46
   relay for nostrconnect).
-- Sign-in dialog: the remote signer first, with a hint to the apps page (Connect to Nostr App);
-  local keys (existing key, create account) only with VITE_LOCAL_KEYS=true.
+- Sign in with Open Source Village (src/belfry/sso.ts): Keycast OAuth, authorization code + PKCE,
+  client VITE_OAUTH_CLIENT_ID (belfry-calendar), redirect <origin>/oauth/callback; the token
+  response's bunker URL goes to the app's NIP-46 login. On load without a signer, one silent
+  attempt per tab (prompt=none); any error shows the sign-in dialog. Needs VITE_KEYCAST_URL.
+- Sign-in dialog: Sign in with Open Source Village first, then the remote signer with the
+  apps-page hint; local keys (existing key, create account) only with VITE_LOCAL_KEYS=true.
 - Sidebar: Apps opens VITE_APPS_URL, About goes to VITE_ABOUT_URL; Formstr's privacy policy and
   contact form are hidden when VITE_APPS_URL is set.
 - @formstr/local-relay 0.6.0 -> 0.6.5: 0.6.0 never answers NIP-42 AUTH challenges (the app
@@ -19,8 +23,10 @@ Subject: [PATCH] Belfry: Open Source Village branding, deployment relays,
  index.html                                    |   6 +-
  package.json                                  |   2 +-
  pnpm-lock.yaml                                | 194 +++++++++++++-----
- src/common/dictionary.ts                      |  13 +-
- src/components/LoginModal.tsx                 |  83 ++++----
+ src/App.tsx                                   |  40 +++-
+ src/belfry/sso.ts                             | 122 +++++++++++
+ src/common/dictionary.ts                      |  18 +-
+ src/components/LoginModal.tsx                 |  95 +++++----
  src/components/SidebarContent.tsx             |  52 +++--
  src/components/ui/TopBar.tsx                  |   9 +-
  .../auth/components/RemoteSignerPanel.tsx     |   5 +-
@@ -29,7 +35,8 @@ Subject: [PATCH] Belfry: Open Source Village branding, deployment relays,
  src/theme/theme.ts                            |   4 +-
  src/theme/tokens.ts                           |  26 +--
  vite.config.ts                                |   6 +-
- 13 files changed, 257 insertions(+), 152 deletions(-)
+ 15 files changed, 434 insertions(+), 154 deletions(-)
+ create mode 100644 src/belfry/sso.ts
 
 diff --git a/index.html b/index.html
 index a33f41c..8fb84a7 100644
@@ -548,8 +555,208 @@ index 5bd0620..85da6e5 100644
        jest-util: 29.7.0
  
    tslib@2.8.1: {}
+diff --git a/src/App.tsx b/src/App.tsx
+index 4cdfc8a..a319d64 100755
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -37,6 +37,13 @@ import { busyListMonthKeysForRange } from "./utils/dateHelper";
+ import { useDateWithRouting } from "./hooks/useDateWithRouting";
+ import { isPublicAppPath } from "./utils/deepLinks";
+ import { useNativeDeepLinks } from "./hooks/useNativeDeepLinks";
++import { signerManager } from "./common/signer";
++import {
++  SSO_CALLBACK_PATH,
++  finishSso,
++  shouldTrySilentSso,
++  startSso,
++} from "./belfry/sso";
+ 
+ const browserLocale =
+   (navigator.languages && navigator.languages[0]) ||
+@@ -72,6 +79,29 @@ function Application() {
+     initializeUser();
+   }, []);
+ 
++  // Belfry: the redirect back from Keycast ("Sign in with Open Source Village" or the silent
++  // check on load): exchange the code, then sign in with the bunker URL it yields.
++  const [ssoBusy, setSsoBusy] = useState(
++    location.pathname === SSO_CALLBACK_PATH,
++  );
++  useEffect(() => {
++    if (location.pathname !== SSO_CALLBACK_PATH) return;
++    void (async () => {
++      const result = await finishSso(location.search);
++      if (result.ok) {
++        try {
++          await signerManager.loginWithNip46(result.bunkerUrl);
++        } catch (e) {
++          console.error("Sign in with Open Source Village failed:", e);
++        }
++      } else if (result.error !== "login_required") {
++        console.warn("Sign in with Open Source Village:", result.error);
++      }
++      navigate(result.returnTo || "/", { replace: true });
++      setSsoBusy(false);
++    })();
++  }, []);
++
+   useEffect(() => {
+     document.documentElement.classList.toggle("ios-native", iosNative);
+   }, [iosNative]);
+@@ -223,15 +253,21 @@ function Application() {
+   }, [navigate]);
+ 
+   useEffect(() => {
+-    if (!isInitialized || user) return;
++    if (!isInitialized || user || ssoBusy) return;
+ 
+     if (publicRoute) {
+       updateLoginModal(false);
+       return;
+     }
+ 
++    // Belfry: once per tab, try a silent sign-in through Keycast before asking.
++    if (shouldTrySilentSso()) {
++      void startSso(true);
++      return;
++    }
++
+     updateLoginModal(true);
+-  }, [user, isInitialized, updateLoginModal, publicRoute]);
++  }, [user, isInitialized, updateLoginModal, publicRoute, ssoBusy]);
+   useNativeDeepLinks();
+ 
+   return (
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+new file mode 100644
+index 0000000..857c997
+--- /dev/null
++++ b/src/belfry/sso.ts
+@@ -0,0 +1,122 @@
++/**
++ * Belfry: "Sign in with Open Source Village" through Keycast's OAuth (authorization code +
++ * PKCE). The token response carries a bunker URL, which the app's own NIP-46 login uses, so the
++ * participant never copies a bunker link. With `prompt=none` Keycast answers without showing a
++ * page (signed in and approved -> code, otherwise ?error=login_required and similar); the app
++ * tries that once per tab on load and shows the sign-in dialog when it fails.
++ */
++const KEYCAST_URL = (
++  import.meta.env.VITE_KEYCAST_URL as string | undefined
++)?.replace(/\/$/, "");
++const CLIENT_ID =
++  (import.meta.env.VITE_OAUTH_CLIENT_ID as string | undefined) ||
++  "belfry-calendar";
++const SCOPE = "policy:belfry-event";
++const PENDING_KEY = "belfry-sso-pending";
++const TRIED_KEY = "belfry-sso-silent-tried";
++
++export const SSO_CALLBACK_PATH = "/oauth/callback";
++export const ssoEnabled = Boolean(KEYCAST_URL);
++
++interface Pending {
++  state: string;
++  verifier: string;
++  returnTo: string;
++}
++
++const b64url = (bytes: Uint8Array) =>
++  btoa(String.fromCharCode(...bytes))
++    .replace(/\+/g, "-")
++    .replace(/\//g, "_")
++    .replace(/=+$/, "");
++
++const randomString = () => b64url(crypto.getRandomValues(new Uint8Array(32)));
++
++const redirectUri = () => `${window.location.origin}${SSO_CALLBACK_PATH}`;
++
++function session(): Storage | null {
++  try {
++    return window.sessionStorage;
++  } catch {
++    return null;
++  }
++}
++
++/** Send the browser to Keycast's authorize endpoint; `silent` adds prompt=none. */
++export async function startSso(silent: boolean): Promise<void> {
++  if (!KEYCAST_URL) return;
++  const verifier = randomString();
++  const digest = await crypto.subtle.digest(
++    "SHA-256",
++    new TextEncoder().encode(verifier),
++  );
++  const pending: Pending = {
++    state: randomString(),
++    verifier,
++    returnTo: window.location.pathname + window.location.search,
++  };
++  session()?.setItem(PENDING_KEY, JSON.stringify(pending));
++  const params = new URLSearchParams({
++    client_id: CLIENT_ID,
++    redirect_uri: redirectUri(),
++    scope: SCOPE,
++    code_challenge: b64url(new Uint8Array(digest)),
++    code_challenge_method: "S256",
++    state: pending.state,
++  });
++  if (silent) params.set("prompt", "none");
++  window.location.assign(`${KEYCAST_URL}/api/oauth/authorize?${params}`);
++}
++
++/** True once per tab: the caller should try a silent sign-in now. */
++export function shouldTrySilentSso(): boolean {
++  const store = session();
++  if (!ssoEnabled || !store || store.getItem(TRIED_KEY)) return false;
++  store.setItem(TRIED_KEY, "1");
++  return true;
++}
++
++export type SsoResult =
++  | { ok: true; bunkerUrl: string; returnTo: string }
++  | { ok: false; error: string; returnTo: string };
++
++/** Handle the redirect back to SSO_CALLBACK_PATH: check state, exchange the code. */
++export async function finishSso(search: string): Promise<SsoResult> {
++  const params = new URLSearchParams(search);
++  const store = session();
++  const raw = store?.getItem(PENDING_KEY);
++  store?.removeItem(PENDING_KEY);
++  const pending: Pending | null = raw ? JSON.parse(raw) : null;
++  const returnTo = pending?.returnTo || "/";
++  if (!pending || params.get("state") !== pending.state) {
++    return { ok: false, error: "state_mismatch", returnTo };
++  }
++  const error = params.get("error");
++  if (error) return { ok: false, error, returnTo };
++  const code = params.get("code");
++  if (!code || !KEYCAST_URL) return { ok: false, error: "no_code", returnTo };
++  try {
++    const res = await fetch(`${KEYCAST_URL}/api/oauth/token`, {
++      method: "POST",
++      headers: { "Content-Type": "application/json" },
++      body: JSON.stringify({
++        grant_type: "authorization_code",
++        code,
++        client_id: CLIENT_ID,
++        redirect_uri: redirectUri(),
++        code_verifier: pending.verifier,
++      }),
++    });
++    const body = await res.json().catch(() => ({}));
++    if (!res.ok || typeof body.bunker_url !== "string") {
++      return {
++        ok: false,
++        error: body.error || `token_${res.status}`,
++        returnTo,
++      };
++    }
++    return { ok: true, bunkerUrl: body.bunker_url, returnTo };
++  } catch {
++    return { ok: false, error: "token_request_failed", returnTo };
++  }
++}
 diff --git a/src/common/dictionary.ts b/src/common/dictionary.ts
-index 12ce9a0..ed7fa9b 100644
+index 12ce9a0..625f871 100644
 --- a/src/common/dictionary.ts
 +++ b/src/common/dictionary.ts
 @@ -48,7 +48,7 @@ const dictionary: NestedObject = {
@@ -561,39 +768,63 @@ index 12ce9a0..ed7fa9b 100644
        modeSelection_description: "Choose how you'd like to use the calendar",
        modeSelection_loginButton: "Login with Nostr",
        modeSelection_guestButton: "Continue as Guest",
-@@ -385,8 +385,11 @@ const dictionary: NestedObject = {
+@@ -385,8 +385,13 @@ const dictionary: NestedObject = {
        stayHere: "Stay Here",
      },
      login: {
 -      signInToFormstr: "Sign in to Calendar",
 -      chooseLoginMethod: "Choose your preferred login method",
 +      signInToFormstr: "Sign in to the Open Source Village calendar",
-+      chooseLoginMethod:
-+        "Use your Open Source Village key: connect the remote signer with your bunker link.",
++      chooseLoginMethod: "Sign in with your Open Source Village account.",
++      signInWithOsv: "Sign in with Open Source Village",
++      signInWithOsvDescription:
++        "Your village account: e-mail link or pass, no key to copy",
 +      remoteSignerHint:
 +        "On the Open Source Village apps page choose Connect to Nostr App, then paste the bunker URL here",
        signInWithExtension: "Sign in with Nostr Extension (NIP-07)",
        signInWithNsec: "Sign in with nsec",
        signInWithApp: "Sign in with {name}",
-@@ -959,7 +962,9 @@ const dictionary: NestedObject = {
+@@ -959,7 +964,12 @@ const dictionary: NestedObject = {
        stayHere: "Hier bleiben",
      },
      login: {
 -      signInToFormstr: "Bei Calendar anmelden",
 +      signInToFormstr: "Beim Open Source Village Kalender anmelden",
++      signInWithOsv: "Mit Open Source Village anmelden",
++      signInWithOsvDescription:
++        "Dein Village-Konto: E-Mail-Link oder Pass, kein Schlüssel zum Kopieren",
 +      remoteSignerHint:
 +        "Wähle auf der Open Source Village App-Seite Connect to Nostr App und füge die Bunker-URL hier ein",
        chooseLoginMethod: "Wählen Sie Ihre bevorzugte Anmeldemethode",
        signInWithExtension: "Mit Nostr-Erweiterung anmelden (NIP-07)",
        signInWithNsec: "Mit nsec anmelden",
 diff --git a/src/components/LoginModal.tsx b/src/components/LoginModal.tsx
-index 9d7ef81..821f57b 100644
+index 9d7ef81..1d4b66e 100644
 --- a/src/components/LoginModal.tsx
 +++ b/src/components/LoginModal.tsx
-@@ -187,6 +187,20 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
+@@ -27,6 +27,8 @@ import { CreateAccountFlow } from "../features/auth/components/CreateAccountFlow
+ import { NativeNsecPanel } from "../features/auth/components/NativeNsecPanel";
+ import { NcryptsecPanel } from "../features/auth/components/NcryptsecPanel";
+ import { RemoteSignerPanel } from "../features/auth/components/RemoteSignerPanel";
++import LoginOutlinedIcon from "@mui/icons-material/LoginOutlined";
++import { ssoEnabled, startSso } from "../belfry/sso";
+ 
+ interface LoginModalProps {
+   open: boolean;
+@@ -187,6 +189,30 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
              )}
            </Box>
            <Stack divider={<Divider />} sx={{ overflowY: "auto" }}>
++            {ssoEnabled && (
++              <AuthOption
++                icon={<LoginOutlinedIcon />}
++                title={intl.formatMessage({ id: "login.signInWithOsv" })}
++                description={intl.formatMessage({
++                  id: "login.signInWithOsvDescription",
++                })}
++                onClick={() => void startSso(false)}
++              />
++            )}
 +            <Box>
 +              <AuthOption
 +                icon={<HubOutlinedIcon />}
@@ -611,7 +842,7 @@ index 9d7ef81..821f57b 100644
              {!isNative && (
                <AuthOption
                  icon={<VpnKeyOutlinedIcon />}
-@@ -243,45 +257,36 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
+@@ -243,45 +269,36 @@ const LoginModal: React.FC<LoginModalProps> = ({ open, onClose }) => {
                  )}
                </Box>
              )}
