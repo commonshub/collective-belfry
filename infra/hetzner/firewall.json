@@ -1,0 +1,6 @@
+[
+  {"description": "ssh", "direction": "in", "protocol": "tcp", "port": "22", "source_ips": ["0.0.0.0/0", "::/0"]},
+  {"description": "http (ACME, redirect)", "direction": "in", "protocol": "tcp", "port": "80", "source_ips": ["0.0.0.0/0", "::/0"]},
+  {"description": "https", "direction": "in", "protocol": "tcp", "port": "443", "source_ips": ["0.0.0.0/0", "::/0"]},
+  {"description": "http/3", "direction": "in", "protocol": "udp", "port": "443", "source_ips": ["0.0.0.0/0", "::/0"]}
+]

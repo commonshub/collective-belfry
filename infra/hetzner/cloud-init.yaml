@@ -1,0 +1,35 @@
+#cloud-config
+# Belfry VM on Hetzner Cloud (infra/hetzner/provision.sh). Installs Docker and Compose, creates
+# the belfry user (sudo, docker, the SSH key Hetzner injects for root is copied over), turns off
+# password and root login over SSH. The repo itself is cloned over SSH afterwards
+# (infra/DEPLOY.md, "Hetzner").
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - jq
+  - make
+  - openssl
+  - python3
+  - unattended-upgrades
+users:
+  - name: belfry
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+write_files:
+  - path: /etc/ssh/sshd_config.d/10-belfry.conf
+    content: |
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      PermitRootLogin no
+runcmd:
+  - install -d -m 700 -o belfry -g belfry /home/belfry/.ssh
+  - install -m 600 -o belfry -g belfry /root/.ssh/authorized_keys /home/belfry/.ssh/authorized_keys
+  - curl -fsSL https://get.docker.com | sh
+  - usermod -aG docker belfry
+  - systemctl enable --now docker
+  - systemctl restart ssh
+  - touch /var/lib/belfry-cloud-init-done
