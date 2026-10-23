@@ -65,6 +65,17 @@ SMTP settings or the password, run bootstrap again. The admin `akadmin` signs in
 password at `https://login.<domain>/if/flow/default-authentication-flow/?next=/if/admin/`
 (the login page itself only offers e-mail and pass).
 
+## Stewards
+
+Stewards work on `https://pass.<domain>/steward` (invites, mark paid, re-send sign-in link,
+revoke), signed in through Authentik like participants (magic link or pass); Odoo's UI is for
+admins and accounting. Make someone a steward (creates a passwordless Authentik user if the
+e-mail has none, adds it to `belfry-stewards`):
+
+```bash
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-mail> "<name>"
+```
+
 ## Keycast and Authentik behind the proxy
 
 The overlay unsets `OIDC_BACKCHANNEL_URL` for Keycast: it fetches Authentik's discovery document, tokens and keys through the public `https://login.<domain>` instead of the Compose network, because Authentik derives the issuer from the request scheme and would publish `http://login.<domain>/...` for an internal request, which Keycast rejects against `OIDC_ISSUER`. The local stack keeps the backchannel (Authentik is only reachable as `http://localhost:9000` from the host there).

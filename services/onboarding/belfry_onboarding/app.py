@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import blossom, bridge, claim, core
+from . import blossom, bridge, claim, core, steward
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -87,6 +87,7 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
     app.state.bridge = bridge.BridgeStore()
+    steward.register(app)  # /steward: the steward pages (steward.py)
 
     def svc(request: Request) -> Services:
         return request.app.state.services

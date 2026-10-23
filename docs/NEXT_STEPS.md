@@ -184,6 +184,18 @@ Decision (user, 2026-10-23, before the real-user test): participants sign in by 
 
 Open from this slice: every new identification submit mails a known address again (authentik limits only the Resend button), so the Caddy rate limit for `login.<domain>`'s flow executor (open in §3g) is the lever against mail flooding; Keycast's 400 page for a link opened in another browser is bare (a friendlier message would be a fork patch); the akadmin password login is only reachable by its direct URL; passkeys for participants are not offered.
 
+## 3k. Steward pages: Belfry's own UI, Odoo as backend only — built 2026-10-23
+
+Decision (user, 2026-10-23, after the first real-user test report): stewards do not work in Odoo's back office; a small Belfry UI covers their tasks and talks to Odoo over JSON-RPC. Odoo's UI stays for admins and accounting. The test report also found the invite list failing with "Expected singleton" (fixed in 908da84, belfry_pass 19.0.1.4.1).
+
+- [x] `services/onboarding/belfry_onboarding/steward.py`, `/steward` on `pass.<domain>`: sign-in through Authentik (blueprint `belfry-steward-app.yaml`: OIDC provider and application `belfry-steward`, group `belfry-stewards`, policy binding), magic link like participants; code exchange and userinfo server to server (client secret + PKCE), HS256 session cookie on `/steward`, CSRF token per form. Invites: create with a note, copy link, revoke. Passes: mark paid, send a new sign-in link, revoke. CLI `add-steward <e-mail> [name]`.
+- [x] Odoo `models/belfry_steward.py`: `belfry.invite.belfry_steward_create` (invite with `steward_email`, `steward_id` = the Odoo user with that login if any), `belfry.pass.belfry_steward_mark_paid` (registers the invoice payment in sudo, writes `manual_paid_by`/`manual_paid_at`); both only for Belfry admins (the service user).
+- [x] Onboarding: a payment without a Stripe transaction is accepted when the pass carries a steward's `manual_paid_by` (also when a card attempt failed before); anonymous manual payments stay refused (`ALLOW_MANUAL_PAYMENTS` off). This also corrects the first test plan, whose step 3 ("Register Payment" in Odoo) would not have activated the pass.
+- [x] bootstrap re-applies `belfry-steward-app` on every run and waits for a newer `last_applied`: the worker applies a new blueprint file as soon as it appears, possibly before the container has `STEWARD_OIDC_CLIENT_SECRET`, and then keeps the placeholder secret.
+- [x] Tests: onboarding 90 (11 new: login with PKCE and client secret, non-steward refused, forged state, CSRF, invite, revoke, mark paid activates, mark counts after a failed card attempt, add-steward), Odoo 41 (4 new). Local end to end: steward magic-link login → invite → participant form → Mark paid → pass active with the sign-in mail; a participant is refused at Authentik's authorize step.
+
+Open from this slice: no smoke step for the steward pages yet (the end-to-end check is a scratch script); the pages have no search or paging (latest 50 invites, 100 passes); stewards cannot be added from the UI (CLI only); the Keycast 400 limitation of §3j applies to the steward login as well (open the magic link in the same browser).
+
 ## 4. Next
 
 1. The real-user happy-path test on `belfry.tofauti.net`, steps and results table in `docs/real-user-test.md` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.

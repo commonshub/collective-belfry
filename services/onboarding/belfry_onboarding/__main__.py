@@ -1,5 +1,6 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
-``... sync-participants``; and ``... login-link <pass id>`` for a new one-time sign-in link."""
+``... sync-participants``; ``... login-link <pass id>`` for a new one-time sign-in link and
+``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward)."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ import argparse
 import json
 import sys
 
-from . import core
+from . import core, steward
 from .app import build_services, configure_logging
 from .settings import Settings
 
@@ -28,6 +29,11 @@ def main(argv: list[str] | None = None) -> int:
         "login-link", help="mint and store a new one-time sign-in link for an active pass"
     )
     link.add_argument("pass_id", type=int)
+    add = sub.add_parser(
+        "add-steward", help="create or find the Authentik user and add it to the stewards group"
+    )
+    add.add_argument("email")
+    add.add_argument("name", nargs="?", default="")
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -42,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         result = core.sync_relay_whitelist(services, strict=True)
     elif args.command == "sync-participants":
         result = core.sync_participants(services, strict=True)
+    elif args.command == "add-steward":
+        result = steward.add_steward(services, args.email, args.name)
     elif args.command == "login-link":
         result = {"result": core.send_login_link(services, args.pass_id), "pass_id": args.pass_id}
     else:

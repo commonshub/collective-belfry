@@ -17,7 +17,13 @@ Status 2026-10-23: deployment ready, test not run yet. Results go in the table a
   2. wwWallet, https://demo.wwwallet.org (also in the browser), if walt.id fails.
   3. EUDI reference wallet (Android): later; it will most likely refuse Belfry as an issuer until
      Belfry's CA is published (NEXT_STEPS §3e open item 1).
-- The admin passwords, read in your own terminal (never paste them into a chat):
+- A steward account for yourself (once; the e-mail receives the steward magic links):
+
+  ```bash
+  ssh belfry@188.245.110.191 'cd belfry && docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding add-steward <your e-mail> "<your name>"'
+  ```
+
+- The admin passwords (only for Odoo/Authentik admin work, not needed for the test), read in your own terminal (never paste them into a chat):
 
   ```bash
   ssh belfry@188.245.110.191 "grep -E '^(ODOO_ADMIN_PASSWORD|AUTHENTIK_BOOTSTRAP_PASSWORD)=' belfry/infra/.env"
@@ -27,9 +33,9 @@ Status 2026-10-23: deployment ready, test not run yet. Results go in the table a
 
 | # | Who | Do | Expect |
 | --- | --- | --- | --- |
-| 1 | Steward | Log in at https://odoo.belfry.tofauti.net as `admin` (`ODOO_ADMIN_PASSWORD`). **Belfry › Invites › New**, save, copy the invite URL (`/belfry/invite/<token>`). | Invite in state Open. |
+| 1 | Steward | Open https://pass.belfry.tofauti.net/steward, enter your steward e-mail, open the magic link (same browser). Type a note, **Create invite**, **Copy link**. | Invite listed as `open`; the link is `odoo.belfry.tofauti.net/belfry/invite/<token>`. |
 | 2 | Participant | Open the invite URL. Pick a tier (day pass is cheapest), enter name and the real e-mail; `OSV10` gives 10 % off. Submit. | Redirect to Odoo's payment page. Stripe is not connected yet: stop here. |
-| 3 | Steward | **Invoicing › Customers › Invoices** → the new invoice → **Register Payment** → confirm. | Within seconds **Belfry › Passes** shows the pass `active` with member number, npub and sign-in link. |
+| 3 | Steward | Reload https://pass.belfry.tofauti.net/steward: the new pass is `pending` with its invoice. **Mark paid** → confirm (cash or bank transfer received). | "Payment registered. The pass is active…"; the row shows `active`, the invoice `paid`, "marked paid by <you>". |
 | 4 | Participant | Wait for the activation mail from `belfry@tofauti.net`. | Mail with "Sign in to Belfry" and "Add the pass to your wallet". Not there after a minute: spam folder, then Odoo **Settings › Technical › Emails** (developer mode) for the failure reason. |
 | 5 | Participant | Click **Sign in to Belfry** in the mail. | Signed in to Authentik without a password, user portal shown. The link works once (valid 7 days). |
 | 6 | Participant | Open https://apps.belfry.tofauti.net → **Sign in with Belfry**. If asked, enter the e-mail and open the mailed link **in the same browser**. | Back in Keycast, signed in, the Nostr key shown. |
@@ -45,8 +51,8 @@ Status 2026-10-23: deployment ready, test not run yet. Results go in the table a
   elsewhere Keycast answers with a bare HTTP 400 (safe, unfriendly).
 - An unknown e-mail on the login page gets "Failed to authenticate." and no mail.
 - The door only works with a wallet; the plan's printed-QR fallback is not built.
-- Stripe is not connected; payment is registered by hand (step 3).
-- The steward account is Odoo's `admin`; a separate steward user is created by hand later.
+- Stripe is not connected; a steward registers the payment by hand (step 3). A payment registered in Odoo's own UI does **not** activate the pass (no Stripe transaction, no steward mark; `ALLOW_MANUAL_PAYMENTS` is off).
+- Odoo's UI (`admin`) is for admins and accounting only; stewards use `/steward`.
 - Admin login to Authentik: https://login.belfry.tofauti.net/if/flow/default-authentication-flow/?next=/if/admin/
   (`akadmin`, `AUTHENTIK_BOOTSTRAP_PASSWORD`); the login page itself has no password field.
 

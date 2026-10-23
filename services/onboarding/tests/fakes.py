@@ -18,6 +18,7 @@ M2O: dict[str, set[str]] = {
     "payment.transaction": {"source_transaction_id"},
     "belfry.pass": {"partner_id", "product_id", "invoice_id", "transaction_id", "invite_id"},
     "belfry.stripe.event": {"pass_id"},
+    "belfry.invite": set(),
     "product.product": set(),
     "res.partner": set(),
 }
@@ -125,6 +126,35 @@ class FakeOdoo(OdooApi):
                 invoice_id=invoice_id,
                 state="pending",
             )
+        if model == "belfry.invite" and method == "belfry_steward_create":
+            email, note = args[0], args[1] if len(args) > 1 else False
+            inv_id = self.add(
+                "belfry.invite",
+                steward_email=email,
+                note=note,
+                state="open",
+                token=f"tok{len(self.tables[model]) + 1}",
+                expires_at="2026-11-06 10:00:00",
+                create_date="2026-10-23 10:00:00",
+                steward_id=False,
+            )
+            inv = self.tables[model][inv_id]
+            inv["url"] = f"http://odoo.test/belfry/invite/{inv['token']}"
+            return {"id": inv_id, "url": inv["url"], "token": inv["token"]}
+        if model == "belfry.invite" and method == "action_revoke":
+            for i in args[0]:
+                if self.tables[model][i]["state"] == "open":
+                    self.tables[model][i]["state"] = "revoked"
+            return True
+        if model == "belfry.pass" and method == "belfry_steward_mark_paid":
+            (pass_id,), email = args[0], args[1]
+            p = self.tables[model][pass_id]
+            invoice = self.tables["account.move"][p["invoice_id"]]
+            if p["state"] != "pending" or invoice["payment_state"] in ("paid", "in_payment"):
+                raise OdooError("UserError: only a pending pass with an unpaid invoice")
+            p["manual_paid_by"] = email
+            invoice["payment_state"] = "paid"
+            return "paid"
         raise OdooError(f"AttributeError: type object '{model}' has no attribute '{method}'")
 
     # -- internals ----------------------------------------------------------------------------

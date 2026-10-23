@@ -153,6 +153,16 @@ def _tier_from_invoice(svc: Services, invoice_id: int) -> tuple[str | None, int 
     return None, None, None
 
 
+def _steward_marked_paid(svc: Services, invoice_id: int) -> str | None:
+    """The steward who registered this invoice's payment by hand on the steward pages
+    (belfry.pass.manual_paid_by), or None. Such a payment counts like a Stripe transaction: it
+    is attributed to a signed-in steward, unlike a manual payment made anywhere in Odoo."""
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["invoice_id", "=", invoice_id]], ["manual_paid_by"], limit=1
+    )
+    return (rows[0].get("manual_paid_by") or None) if rows else None
+
+
 def _find_or_create_pass(svc: Services, invoice: dict[str, Any]) -> dict[str, Any]:
     invoice_id = invoice["id"]
     rows = svc.odoo.search_read(
@@ -468,16 +478,22 @@ def activate_pass(svc: Services, invoice_id: int) -> str:
     tx = _find_paid_transaction(svc, invoice)
     if tx is None:
         has_transactions = bool(invoice.get("transaction_ids"))
-        if has_transactions or not svc.settings.allow_manual_payments:
+        steward = _steward_marked_paid(svc, invoice_id)
+        if steward:
+            log.info(
+                "activate_pass: invoice %s paid by hand, marked by steward %s", invoice_id, steward
+            )
+        elif has_transactions or not svc.settings.allow_manual_payments:
             log.info(
                 "activate_pass: invoice %s has no done transaction with a provider reference",
                 invoice_id,
             )
             return "not_paid"
-        log.info(
-            "activate_pass: invoice %s paid without a transaction (manual payment accepted)",
-            invoice_id,
-        )
+        else:
+            log.info(
+                "activate_pass: invoice %s paid without a transaction (manual payment accepted)",
+                invoice_id,
+            )
 
     pass_row = _find_or_create_pass(svc, invoice)
     state = pass_row.get("state")

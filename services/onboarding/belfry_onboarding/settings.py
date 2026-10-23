@@ -101,5 +101,13 @@ class Settings(BaseSettings):
     # default so that the contract's "done transaction with provider_reference" rule applies.
     allow_manual_payments: bool = Field(default=False, alias="ALLOW_MANUAL_PAYMENTS")
 
+    # Steward pages (/steward, steward.py): Authentik application belfry-steward. Without the
+    # client secret and the session secret the pages answer 503.
+    steward_oidc_client_id: str = Field(default="belfry-steward", alias="STEWARD_OIDC_CLIENT_ID")
+    steward_oidc_client_secret: str = Field(default="", alias="STEWARD_OIDC_CLIENT_SECRET")
+    steward_session_secret: str = Field(default="", alias="STEWARD_SESSION_SECRET")
+    steward_session_hours: int = Field(default=12, alias="STEWARD_SESSION_HOURS")
+    steward_group: str = Field(default="belfry-stewards", alias="STEWARD_GROUP")
+
     log_level: str = Field(default="info", alias="LOG_LEVEL")
     reconcile_days: int = Field(default=30, alias="RECONCILE_DAYS")

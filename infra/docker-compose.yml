@@ -21,6 +21,10 @@ x-authentik-env: &authentik-env
   # Read by the keycast-provider blueprint (!Env): redirect URI and client secret.
   KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
   KEYCAST_OIDC_CLIENT_SECRET: ${KEYCAST_OIDC_CLIENT_SECRET:?}
+  # Read by the steward-app blueprint (!Env): the steward pages of the onboarding service.
+  BELFRY_STEWARD_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward
+  BELFRY_STEWARD_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward/callback
+  STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
 
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
@@ -394,6 +398,9 @@ services:
       BRIDGE_CLIENT_ID: belfry-authentik
       BRIDGE_CLIENT_SECRET: ${BRIDGE_CLIENT_SECRET:?}
       HOOK_TOKEN: ${HOOK_TOKEN:?}
+      # Steward pages (/steward): Authentik application belfry-steward and the session cookie key.
+      STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
+      STEWARD_SESSION_SECRET: ${STEWARD_SESSION_SECRET:?}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       EVENT_START: ${EVENT_START:-2027-01-25}
       EVENT_END: ${EVENT_END:-2027-01-31}
