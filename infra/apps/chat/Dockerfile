@@ -2,7 +2,7 @@
 # Community chat: Coracle (coracle-social/coracle, MIT) at a pinned commit, built with Belfry's
 # relays and the Open Source Village look, served by nginx (upstream's own nginx.conf).
 # Build args: CORACLE_COMMIT, CHAT_PUBLIC_URL, COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS,
-# BLOSSOM_PUBLIC_URL (see make-env.sh); build context "brand" = the repo's brand/ folder.
+# BLOSSOM_PUBLIC_URL, KEYCAST_APP_URL (see make-env.sh); build context "brand" = the repo's brand/ folder.
 
 FROM node:22-bookworm-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
@@ -16,6 +16,9 @@ RUN git init -q . \
     && git remote add origin https://github.com/coracle-social/coracle.git \
     && git fetch -q --depth 1 origin "$CORACLE_COMMIT" \
     && git checkout -q FETCH_HEAD
+# Belfry's patches (patches/): "Sign in with Open Source Village" and the silent sign-in check.
+COPY patches/ /tmp/patches/
+RUN for p in /tmp/patches/*.patch; do echo "applying $p"; git apply "$p" || exit 1; done
 RUN pnpm install --frozen-lockfile
 
 # Open Source Village look: logo, wordmark and the accent fix (the env below sets the palette).
@@ -34,6 +37,7 @@ ARG CHAT_PUBLIC_URL
 ARG COMMUNITY_RELAY_URL
 ARG BUNKER_PUBLIC_RELAYS
 ARG BLOSSOM_PUBLIC_URL
+ARG KEYCAST_APP_URL
 COPY make-env.sh /tmp/make-env.sh
 RUN CORACLE_COMMIT="$CORACLE_COMMIT" sh /tmp/make-env.sh > .env && cat .env
 

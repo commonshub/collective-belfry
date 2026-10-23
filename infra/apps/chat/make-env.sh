@@ -1,6 +1,8 @@
 #!/bin/sh
 # Renders Coracle's build-time .env for Belfry (Vite inlines VITE_* into the bundle).
-# Inputs (build args): CHAT_PUBLIC_URL, COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS, BLOSSOM_PUBLIC_URL.
+# Inputs (build args): CHAT_PUBLIC_URL, COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS, BLOSSOM_PUBLIC_URL,
+# KEYCAST_APP_URL (the signer for "Sign in with Open Source Village"; empty turns the button and the
+# silent sign-in off).
 # Palette: brand/tokens.css (Open Source Village, dark only; the light theme gets the same values).
 set -eu
 : "${CHAT_PUBLIC_URL:?}" "${COMMUNITY_RELAY_URL:?}" "${BUNKER_PUBLIC_RELAYS:?}" "${BLOSSOM_PUBLIC_URL:?}"
@@ -32,4 +34,6 @@ VITE_CLIENT_NAME=Coracle
 VITE_CLIENT_ID=31990:97c70a44366a6535c145b333f973ea86dfdc2d7a99da618c40c64705ad98e322:1685968093690
 VITE_BUILD_HASH=${CORACLE_COMMIT:-}
 VITE_LOG_LEVEL=info
+VITE_KEYCAST_URL=${KEYCAST_APP_URL:-}
+VITE_OAUTH_CLIENT_ID=belfry-chat
 ENV

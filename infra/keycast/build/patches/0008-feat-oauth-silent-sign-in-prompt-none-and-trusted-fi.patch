@@ -1,0 +1,455 @@
+From 2b36845a051e93cbe0306509bab95caeffe8e890 Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Fri, 23 Oct 2026 22:53:45 +0200
+Subject: [PATCH 8/8] feat(oauth): silent sign-in (prompt=none) and trusted
+ first-party clients
+
+prompt=none on /api/oauth/authorize never renders a page. Signed in and the
+app approved (or trusted): a code. Signed in otherwise: consent_required. Not
+signed in: one round through /api/auth/oidc/start?prompt=none at the upstream
+provider; its callback returns to the authorize request with a session or with
+oidc_failed=<reason>, which then answers login_required.
+
+KEYCAST_TRUSTED_CLIENTS (comma separated) skips the consent screen for those
+client ids, only while they are registered clients with redirect URIs. With
+OIDC_HIDE_PASSWORD_LOGIN, a trusted app's interactive request goes straight to
+the upstream login instead of a page with a second sign-in button.
+---
+ api/src/api/http/oauth.rs | 200 ++++++++++++++++++++++++++++++++++++++
+ api/src/api/http/oidc.rs  | 102 ++++++++++++++++++-
+ 2 files changed, 298 insertions(+), 4 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index b95280b..c02b103 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -259,6 +259,9 @@ pub struct AuthorizeRequest {
+     pub default_register: Option<bool>, // Legacy: show register form by default
+     pub authorization_handle: Option<String>, // For silent re-authentication
+     pub screen: Option<String>, // Internal auth-server UI state, e.g. "consent"
++    /// Belfry: set by the OIDC callback when a silent (`prompt=none`) upstream login failed,
++    /// so the retried request answers `login_required` instead of starting another round.
++    pub oidc_failed: Option<String>,
+ }
+ 
+ #[derive(Debug, Deserialize)]
+@@ -701,6 +704,87 @@ pub async fn auth_status(
+     }
+ }
+ 
++// ---------------------------------------------------------------------------------------------
++// Belfry: silent sign-in (prompt=none) and trusted first-party clients
++// ---------------------------------------------------------------------------------------------
++
++/// Client ids whose consent screen is skipped (`KEYCAST_TRUSTED_CLIENTS`, comma separated).
++/// A listed client only counts as trusted while it is also a registered client with at least
++/// one allowed redirect URI, so a trusted id can never send codes to an arbitrary origin.
++static TRUSTED_CLIENTS: once_cell::sync::Lazy<Vec<String>> = once_cell::sync::Lazy::new(|| {
++    parse_trusted_clients(std::env::var("KEYCAST_TRUSTED_CLIENTS").ok().as_deref())
++});
++
++pub fn parse_trusted_clients(raw: Option<&str>) -> Vec<String> {
++    raw.unwrap_or("")
++        .split(',')
++        .map(str::trim)
++        .filter(|s| !s.is_empty())
++        .map(str::to_string)
++        .collect()
++}
++
++async fn is_trusted_client(
++    pool: &sqlx::PgPool,
++    client_id: &str,
++    tenant_id: i64,
++) -> Result<bool, OAuthError> {
++    if !TRUSTED_CLIENTS.iter().any(|c| c == client_id) {
++        return Ok(false);
++    }
++    let repo = keycast_core::repositories::RegisteredClientRepository::new(pool.clone());
++    let registered = repo
++        .get_allowed_redirect_uris(client_id, tenant_id)
++        .await
++        .map_err(|e| OAuthError::ServerError(format!("registered client lookup: {e}")))?;
++    let trusted = registered.is_some_and(|uris| !uris.is_empty());
++    if !trusted {
++        tracing::warn!(
++            client_id,
++            "client is in KEYCAST_TRUSTED_CLIENTS but not registered with redirect URIs; consent stays on"
++        );
++    }
++    Ok(trusted)
++}
++
++/// `redirect_uri` with the given query parameters appended (properly encoded, keeping any
++/// query the URI already has).
++pub fn redirect_with_params(redirect_uri: &str, params: &[(&str, Option<&str>)]) -> String {
++    match reqwest::Url::parse(redirect_uri) {
++        Ok(mut url) => {
++            {
++                let mut q = url.query_pairs_mut();
++                for (k, v) in params {
++                    if let Some(v) = v {
++                        q.append_pair(k, v);
++                    }
++                }
++            }
++            url.to_string()
++        }
++        Err(_) => redirect_uri.to_string(),
++    }
++}
++
++/// The OAuth error answer of a silent request: back to the (already validated) redirect URI.
++fn silent_error(params: &AuthorizeRequest, error: &str) -> Response {
++    tracing::info!(client_id = %params.client_id, error, "prompt=none: answering with an error");
++    Redirect::to(&redirect_with_params(
++        &params.redirect_uri,
++        &[("error", Some(error)), ("state", params.state.as_deref())],
++    ))
++    .into_response()
++}
++
++/// The authorize request as a same-origin path, for the upstream login to come back to.
++fn authorize_return_path(uri: &axum::http::Uri) -> String {
++    let path = uri.path();
++    match uri.query() {
++        Some(q) => format!("{path}?{q}"),
++        None => path.to_string(),
++    }
++}
++
+ /// GET /oauth/authorize
+ /// Shows login form if not authenticated, auto-approves if already authorized for this app
+ /// with the same policy, or shows the approval page
+@@ -708,6 +792,7 @@ pub async fn authorize_get(
+     tenant: crate::api::tenant::TenantExtractor,
+     State(auth_state): State<super::routes::AuthState>,
+     headers: HeaderMap,
++    axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
+     Query(params): Query<AuthorizeRequest>,
+ ) -> Result<Response, OAuthError> {
+     use axum::response::Html;
+@@ -749,6 +834,8 @@ pub async fn authorize_get(
+     // Handle prompt=login: force fresh login by clearing cookie
+     let force_login = params.prompt.as_deref() == Some("login");
+     let force_consent = params.prompt.as_deref() == Some("consent");
++    // Belfry: prompt=none never renders a page; it answers with a code or an OAuth error.
++    let silent = params.prompt.as_deref() == Some("none");
+     let has_byok_pubkey = params.byok_pubkey.is_some();
+ 
+     // Validate that the user actually exists in the database
+@@ -944,6 +1031,91 @@ pub async fn authorize_get(
+         }
+     }
+ 
++    // Belfry: trusted first-party apps (KEYCAST_TRUSTED_CLIENTS, registered redirect URIs) get
++    // a code without the consent screen once the person is signed in, for the policy they ask
++    // for. Unknown or missing policies fall through to the usual screens.
++    if let (Some(ref pubkey), Some((scope, _)), false) =
++        (&user_pubkey, requested_policy, force_consent)
++    {
++        if is_trusted_client(pool, &params.client_id, tenant_id).await? {
++            tracing::info!(
++                client_id = %params.client_id,
++                "Auto-approving trusted client for user {}",
++                pubkey
++            );
++            let code: String = rand::thread_rng()
++                .sample_iter(&rand::distributions::Alphanumeric)
++                .take(32)
++                .map(char::from)
++                .collect();
++            store_oauth_code(
++                pool,
++                tenant_id,
++                &code,
++                pubkey,
++                &params.client_id,
++                &params.redirect_uri,
++                scope,
++                params.code_challenge.as_deref(),
++                params.code_challenge_method.as_deref(),
++                Utc::now() + Duration::minutes(10),
++                None,
++                params.state.as_deref(),
++                false,
++            )
++            .await?;
++            return Ok(Redirect::to(&redirect_with_params(
++                &params.redirect_uri,
++                &[("code", Some(&code)), ("state", params.state.as_deref())],
++            ))
++            .into_response());
++        }
++    }
++
++    // Belfry: silent sign-in. Signed in but not approved: consent_required. Not signed in: try
++    // the upstream provider with prompt=none once (it comes back here with a session, or with
++    // oidc_failed set), then login_required.
++    if silent {
++        if user_pubkey.is_some() {
++            return Ok(silent_error(&params, "consent_required"));
++        }
++        if params.oidc_failed.is_none() && super::oidc::provider().is_some() {
++            let return_to = authorize_return_path(&original_uri);
++            let start = redirect_with_params(
++                "http://sentinel.invalid/api/auth/oidc/start",
++                &[("prompt", Some("none")), ("return_to", Some(&return_to))],
++            );
++            let start = start.trim_start_matches("http://sentinel.invalid");
++            let mut response = Redirect::to(start).into_response();
++            if clear_cookie {
++                response.headers_mut().append(
++                    axum::http::header::SET_COOKIE,
++                    axum::http::HeaderValue::from_static(
++                        "keycast_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0",
++                    ),
++                );
++            }
++            return Ok(response);
++        }
++        return Ok(silent_error(&params, "login_required"));
++    }
++
++    // Belfry: a trusted app's button goes straight to the upstream login when it is the only
++    // login (OIDC_HIDE_PASSWORD_LOGIN), instead of a page with a second "Sign in with …" button.
++    if user_pubkey.is_none() && !force_login && !has_byok_pubkey {
++        let oidc_only = super::oidc::provider().is_some_and(|p| p.config.hide_password_login);
++        if oidc_only && is_trusted_client(pool, &params.client_id, tenant_id).await? {
++            let return_to = authorize_return_path(&original_uri);
++            let start = redirect_with_params(
++                "http://sentinel.invalid/api/auth/oidc/start",
++                &[("return_to", Some(&return_to))],
++            );
++            return Ok(
++                Redirect::to(start.trim_start_matches("http://sentinel.invalid")).into_response(),
++            );
++        }
++    }
++
+     // Load policy info from scope for display
+     // Default to "policy:full" if no scope provided (permissive for dev, can tighten later)
+     let scope_str = params.scope.as_deref().unwrap_or("policy:full");
+@@ -4920,6 +5092,34 @@ pub async fn poll(
+ 
+ #[cfg(test)]
+ mod tests {
++
++    #[test]
++    fn trusted_clients_parse_trims_and_skips_empty() {
++        assert_eq!(
++            super::parse_trusted_clients(Some(" belfry-chat, ,belfry-calendar ")),
++            vec!["belfry-chat".to_string(), "belfry-calendar".to_string()]
++        );
++        assert!(super::parse_trusted_clients(None).is_empty());
++        assert!(super::parse_trusted_clients(Some("")).is_empty());
++    }
++
++    #[test]
++    fn redirect_params_are_encoded_and_keep_the_query() {
++        assert_eq!(
++            super::redirect_with_params(
++                "https://chat.example/oauth/callback",
++                &[("error", Some("login_required")), ("state", Some("a b&c"))]
++            ),
++            "https://chat.example/oauth/callback?error=login_required&state=a+b%26c"
++        );
++        assert_eq!(
++            super::redirect_with_params(
++                "https://app.example/cb?x=1",
++                &[("code", Some("abc")), ("state", None)]
++            ),
++            "https://app.example/cb?x=1&code=abc"
++        );
++    }
+     use super::*;
+     use std::io::Write;
+     use std::sync::{Arc, Mutex};
+diff --git a/api/src/api/http/oidc.rs b/api/src/api/http/oidc.rs
+index c085664..d2c8084 100644
+--- a/api/src/api/http/oidc.rs
++++ b/api/src/api/http/oidc.rs
+@@ -13,6 +13,12 @@
+ //!    usual `keycast_session` cookie with a server-signed UCAN, then redirects to `return_to`
+ //!    (for the OAuth popup: back to `/api/oauth/authorize?…`, where consent continues).
+ //!
++//! Silent login (Belfry): `start?prompt=none` passes `prompt=none` to the provider. A
++//! `prompt=none` request to `/api/oauth/authorize` without a session goes this way once; the
++//! callback returns to it with a session, or with `oidc_failed=<reason>` on any refusal, and the
++//! authorize request then answers the app with `login_required`. Trusted first-party clients
++//! (`KEYCAST_TRUSTED_CLIENTS`, which must also be registered clients) skip the consent screen.
++//!
+ //! Accounts are never created here. The first login links the provider's subject to an existing
+ //! account whose `vine_id` equals the value of the configured link claim (`OIDC_LINK_CLAIM`);
+ //! later logins use the stored link (`oidc_identities`). Preloaded accounts need no claim step.
+@@ -327,6 +333,7 @@ impl OidcProvider {
+         state: &str,
+         nonce: &str,
+         challenge: &str,
++        prompt_none: bool,
+     ) -> Result<String, OidcError> {
+         let d = self.discovery().await?;
+         let mut url = reqwest::Url::parse(&d.authorization_endpoint)
+@@ -340,6 +347,9 @@ impl OidcProvider {
+             .append_pair("nonce", nonce)
+             .append_pair("code_challenge", challenge)
+             .append_pair("code_challenge_method", "S256");
++        if prompt_none {
++            url.query_pairs_mut().append_pair("prompt", "none");
++        }
+         Ok(url.to_string())
+     }
+ 
+@@ -541,6 +551,10 @@ pub struct FlowState {
+     pub redirect_origin: String,
+     #[serde(rename = "e")]
+     pub expires_at: u64,
++    /// Silent login (`prompt=none` at the provider): failures go back to `return_to` with
++    /// `oidc_failed=<reason>` instead of an error page.
++    #[serde(rename = "p", default)]
++    pub silent: bool,
+ }
+ 
+ fn cookie_key(server_secret: &[u8]) -> [u8; 32] {
+@@ -756,6 +770,20 @@ impl IntoResponse for OidcError {
+ #[derive(Debug, Deserialize)]
+ pub struct StartParams {
+     pub return_to: Option<String>,
++    /// Only `none` is passed on to the provider; it is meant for a `return_to` that is a
++    /// `prompt=none` authorize request (see `oauth::authorize_get`).
++    pub prompt: Option<String>,
++}
++
++/// `return_to` with `oidc_failed=<reason>` appended, for a silent login that did not work out.
++pub fn silent_failure_return(return_to: &str, reason: &str) -> String {
++    let sep = if return_to.contains('?') { '&' } else { '?' };
++    let reason: String = reason
++        .chars()
++        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
++        .take(64)
++        .collect();
++    format!("{return_to}{sep}oidc_failed={reason}")
+ }
+ 
+ /// GET /api/auth/oidc/start
+@@ -775,9 +803,15 @@ pub async fn oidc_start(
+         return_to,
+         redirect_origin,
+         expires_at: now_unix() + STATE_TTL_SECS,
++        silent: params.prompt.as_deref() == Some("none"),
+     };
+     let url = p
+-        .authorization_url(&flow.state, &flow.nonce, &pkce_challenge(&flow.verifier))
++        .authorization_url(
++            &flow.state,
++            &flow.nonce,
++            &pkce_challenge(&flow.verifier),
++            flow.silent,
++        )
+         .await?;
+     let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
+     let cookie = format!(
+@@ -804,8 +838,6 @@ pub async fn oidc_callback(
+ ) -> Result<Response, OidcError> {
+     let p = provider().ok_or(OidcError::Disabled)?;
+     let tenant_id = tenant.0.id;
+-    let pool = &auth_state.state.db;
+-    let endpoint = "/api/auth/oidc/callback";
+ 
+     let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
+     let flow = read_cookie(&headers, STATE_COOKIE)
+@@ -821,6 +853,43 @@ pub async fn oidc_callback(
+             "State mismatch. Please start the sign-in again.".to_string(),
+         ));
+     }
++    if !flow.silent {
++        return finish_callback(tenant_id, &auth_state, &headers, params, &p, flow).await;
++    }
++    // Silent login: anything short of a session goes back to the authorize request, which then
++    // answers the app with login_required. Infrastructure errors still show the error page.
++    let return_to = flow.return_to.clone();
++    match finish_callback(tenant_id, &auth_state, &headers, params, &p, flow).await {
++        Ok(response) => Ok(response),
++        Err(e @ (OidcError::Upstream(_) | OidcError::Internal(_))) => Err(e),
++        Err(e) => {
++            let reason = match &e {
++                OidcError::NoAccount(_) => "no_account",
++                _ => "login_required",
++            };
++            tracing::info!(reason, error = %e, "silent OIDC login did not sign in");
++            let clear = format!(
++                "{STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age=0"
++            );
++            Ok((
++                [(header::SET_COOKIE, clear)],
++                Redirect::to(&silent_failure_return(&return_to, reason)),
++            )
++                .into_response())
++        }
++    }
++}
++
++async fn finish_callback(
++    tenant_id: i64,
++    auth_state: &AuthState,
++    headers: &HeaderMap,
++    params: CallbackParams,
++    p: &OidcProvider,
++    flow: FlowState,
++) -> Result<Response, OidcError> {
++    let pool = &auth_state.state.db;
++    let endpoint = "/api/auth/oidc/callback";
+     if let Some(err) = params.error {
+         tracing::info!(error = %err, description = params.error_description.as_deref().unwrap_or(""), "OIDC provider returned an error");
+         return Err(OidcError::Unauthorized(format!(
+@@ -924,7 +993,7 @@ pub async fn oidc_callback(
+ 
+     super::auth_observability::record_auth_event_and_log(
+         pool,
+-        &headers,
++        headers,
+         None,
+         super::auth_observability::AuthEvent {
+             tenant_id,
+@@ -1022,6 +1091,7 @@ mod tests {
+             return_to: "/api/oauth/authorize?client_id=a".into(),
+             redirect_origin: "https://app.example".into(),
+             expires_at: 1_000,
++            silent: true,
+         };
+         let sealed = seal_flow_state(&flow, b"k1");
+         assert_eq!(open_flow_state(&sealed, b"k1", 999), Some(flow.clone()));
+@@ -1038,6 +1108,30 @@ mod tests {
+         assert_eq!(open_flow_state(payload, b"k1", 999), None, "no tag");
+     }
+ 
++    #[test]
++    fn flow_state_without_silent_flag_reads_as_interactive() {
++        // Cookies sealed before the silent login existed carry no "p" field.
++        let json = r#"{"s":"st","n":"no","v":"ve","r":"/","o":"https://a.example","e":5}"#;
++        let flow: FlowState = serde_json::from_str(json).unwrap();
++        assert!(!flow.silent);
++    }
++
++    #[test]
++    fn silent_failure_marker_is_appended_and_sanitised() {
++        assert_eq!(
++            silent_failure_return("/api/oauth/authorize?client_id=a&prompt=none", "no_account"),
++            "/api/oauth/authorize?client_id=a&prompt=none&oidc_failed=no_account"
++        );
++        assert_eq!(
++            silent_failure_return("/", "login_required"),
++            "/?oidc_failed=login_required"
++        );
++        assert_eq!(
++            silent_failure_return("/x?a=1", "bad&reason=<x>"),
++            "/x?a=1&oidc_failed=badreasonx"
++        );
++    }
++
+     #[test]
+     fn pkce_matches_rfc7636_example() {
+         assert_eq!(
+-- 
+2.53.0
+

@@ -70,6 +70,9 @@ x-keycast-env: &keycast-env
   OIDC_LINK_CLAIM: keycast_vine_id
   OIDC_PROVIDER_NAME: Open Source Village
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
+  # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
+  # each must also be a registered client (bootstrap writes their redirect URIs).
+  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar}
   # Belfry fork: the NIP-05 names shown on the dashboard live on the apex domain (the proxy
   # forwards its nostr.json to this tenant); same value as the onboarding service's.
   NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
@@ -361,7 +364,8 @@ services:
         condition: service_healthy
 
   # Community chat (NIP-17): Coracle at a pinned commit with Belfry's relays and the OSV look
-  # compiled in; participants sign in with a bunker URL from the apps dashboard. infra/apps/chat/README.md.
+  # compiled in; participants sign in with "Sign in with Open Source Village" (Keycast OAuth, silent
+  # when already signed in) or a bunker URL from the apps dashboard. infra/apps/chat/README.md.
   chat:
     image: belfry-chat:local
     build:
@@ -373,6 +377,7 @@ services:
         COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
+        KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
     profiles: ["app"]
     ports: ["3300:80"]
 

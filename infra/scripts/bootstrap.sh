@@ -300,6 +300,29 @@ echo "policy belfry-event applied: $("${COMPOSE[@]}" exec -T postgres psql -U ke
 kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
   || die "GET /api/policies does not list belfry-event"
 
+# Belfry's own apps as registered OAuth clients: Keycast then accepts only their own redirect URI,
+# and KEYCAST_TRUSTED_CLIENTS (compose) lets them skip the consent screen and sign in silently
+# (prompt=none, Keycast patch 0008). The URIs follow the public URLs, so re-run after changing them.
+"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q \
+  -v chat_cb="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" \
+  -v cal_cb="${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback" \
+  -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" <<'SQL'
+-- Keycast resolves the tenant from the Host header (KEYCAST_TENANT_DOMAIN), not the seed tenant 1.
+INSERT INTO registered_clients (tenant_id, client_id, name, allowed_redirect_uris)
+SELECT t.id, c.client_id, c.name, ARRAY[c.cb]::TEXT[]
+FROM tenants t,
+     (VALUES ('belfry-chat', 'Open Source Village chat', :'chat_cb'),
+             ('belfry-calendar', 'Open Source Village calendar', :'cal_cb')) AS c(client_id, name, cb)
+WHERE t.domain = :'tenant'
+ON CONFLICT (tenant_id, client_id) DO UPDATE
+SET name = EXCLUDED.name, allowed_redirect_uris = EXCLUDED.allowed_redirect_uris, updated_at = NOW()
+WHERE registered_clients.allowed_redirect_uris IS DISTINCT FROM EXCLUDED.allowed_redirect_uris
+   OR registered_clients.name IS DISTINCT FROM EXCLUDED.name;
+SQL
+echo "registered clients: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select string_agg(client_id || ' ' || array_to_string(allowed_redirect_uris, ','), '; ' order by client_id) from registered_clients where client_id like 'belfry-%' and tenant_id = (select id from tenants where domain = '${KEYCAST_TENANT_DOMAIN:-localhost}')")"
+[[ -n "$("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from registered_clients r join tenants t on t.id = r.tenant_id where t.domain = '${KEYCAST_TENANT_DOMAIN:-localhost}' and r.client_id = 'belfry-chat'")" ]] \
+  || die "belfry-chat is not registered for tenant ${KEYCAST_TENANT_DOMAIN:-localhost} (no tenant row yet?)"
+
 # ---------- 5. Authentik ----------
 log "5/6 Authentik"
 ak() { curl -sS -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' "$@"; }

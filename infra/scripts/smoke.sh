@@ -237,6 +237,9 @@ run_setup_flow() { # cookie jar -> prints the final component
 }
 AK_SESSION=$(mktemp)   # the participant's browser; 6d continues in it
 FINAL=$(run_setup_flow "$AK_SESSION")
+# SAVE_AK_JAR=<file>: keep the participant's Authentik session for the browser checks of the
+# apps' silent sign-in (chat-login-check.mjs, calendar-check.mjs with COOKIE_JAR).
+[[ -n "${SAVE_AK_JAR:-}" ]] && cp "$AK_SESSION" "$SAVE_AK_JAR"
 ME=$(curl -sS -b "$AK_SESSION" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
 [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "sign-in link: browser signed in as Authentik user $AK_UID, no password asked" || bad "sign-in flow ended with '$FINAL', session user '$ME'"
 AK_PW_LOGIN=$(curl -sS -c /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/" | jq -r '[.password_fields // false] | .[0]')
@@ -257,6 +260,15 @@ else
 fi
 CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
 [[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
+
+step "6l. silent sign-in for Belfry's apps: prompt=none through Keycast and Authentik, no consent for trusted apps"
+# Keycast patch 0008; the apps (chat, calendar) redirect once per tab with prompt=none and show
+# "Sign in with Open Source Village" on login_required. Same browser as 6c/6d (AK_SESSION).
+if OUT=$(KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
+  sed 's/^/  /' <<<"$OUT"; ok "silent sign-in and the sign-in button work for the chat app's client"
+else
+  sed 's/^/  /' <<<"$OUT" >&2; bad "silent sign-in"
+fi
 
 step "6h. magic link: the login page mails a one-time link that signs the participant in"
 MAGIC_EXEC="$AK_URL/api/v3/flows/executor/belfry-magic-link/"
