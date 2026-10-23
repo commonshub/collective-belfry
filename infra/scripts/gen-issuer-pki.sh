@@ -23,6 +23,10 @@ set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 KEYS="$INFRA_DIR/issuer/keys"
+# The SANs come from the environment or else from .env (prod-env.sh writes the public names there).
+env_value() { [[ -f "$INFRA_DIR/.env" ]] && sed -n "s/^$1=\([^#[:space:]]*\).*/\1/p" "$INFRA_DIR/.env" | tail -1; }
+ISSUER_SAN=${ISSUER_SAN:-$(env_value ISSUER_SAN)}
+VERIFIER_SAN=${VERIFIER_SAN:-$(env_value VERIFIER_SAN)}
 SAN=${ISSUER_SAN:-issuer.belfry.local}
 # The verifier's x509_san_dns client id. walt.id requires a dotted DNS name (no "localhost");
 # in production this is the verifier's public hostname.

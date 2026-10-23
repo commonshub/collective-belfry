@@ -60,6 +60,15 @@ wait_for() { # name url [seconds]
   done
   echo " ok"
 }
+wait_for_any() { # name url [seconds]: any HTTP answer counts (behind the proxy the path may be denied)
+  local name=$1 url=$2 timeout=${3:-300} i=0 code
+  printf 'waiting for %s (%s) ' "$name" "$url"
+  until code=$(curl -sS -o /dev/null -w '%{http_code}' "$url" 2>/dev/null) && [[ "$code" =~ ^[1-4] ]]; do
+    (( i += 5 )); [[ $i -ge $timeout ]] && die "$name not reachable after ${timeout}s"
+    printf '.'; sleep 5
+  done
+  echo " ok ($code)"
+}
 
 # ---------- Odoo JSON-RPC helpers ----------
 rpc() { # service method args_json
@@ -88,7 +97,7 @@ wait_for odoo "$ODOO_URL/web/health"
 wait_for authentik "$AK_URL/-/health/ready/"
 wait_for keycast "$KC_URL/health"
 wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/openid-credential-issuer/openid4vci"
-wait_for verifier "${VERIFIER_PUBLIC_URL:-http://localhost:7004}/transaction-data-profiles"
+wait_for_any verifier "${VERIFIER_PUBLIC_URL:-http://localhost:7004}/transaction-data-profiles"
 
 # ---------- 2. Odoo database ----------
 log "2/6 Odoo database"
@@ -207,7 +216,13 @@ echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_ur
 COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"limit":1}' | jq -r '.[0]')
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\"${COMPANY_NAME:-Belfry}\",\"email\":\"${MAIL_FROM:-belfry@belfry.local}\"}]" >/dev/null
 MS_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server search '[[["name","=","belfry"]]]' '{"limit":1}' | jq -r '.[0] // empty')
-MS_VALS="{\"name\":\"belfry\",\"smtp_host\":\"${SMTP_HOST:-mailpit}\",\"smtp_port\":${SMTP_PORT:-1025},\"smtp_encryption\":\"${SMTP_ENCRYPTION:-none}\",\"smtp_authentication\":\"login\",\"smtp_user\":\"${SMTP_USER:-}\",\"smtp_pass\":\"${SMTP_PASSWORD:-}\",\"from_filter\":\"${MAIL_FROM:-belfry@belfry.local}\",\"sequence\":1}"
+# The password comes from infra/secrets/smtp_password (scripts/put-secret.sh) unless SMTP_PASSWORD is set.
+SMTP_PASSWORD=${SMTP_PASSWORD:-$(cat "$INFRA_DIR/secrets/smtp_password" 2>/dev/null || true)}
+MS_VALS=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PORT:-1025}" \
+  --arg enc "${SMTP_ENCRYPTION:-none}" --arg user "${SMTP_USER:-}" --arg pass "$SMTP_PASSWORD" \
+  --arg from "${MAIL_FROM:-belfry@belfry.local}" \
+  '{name: "belfry", smtp_host: $host, smtp_port: $port, smtp_encryption: $enc, smtp_authentication: "login",
+    smtp_user: $user, smtp_pass: $pass, from_filter: $from, sequence: 1}')
 if [[ -z "$MS_ID" ]]; then
   odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server create "[$MS_VALS]" >/dev/null
   echo "outgoing mail server 'belfry' created (${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025})"
@@ -218,8 +233,10 @@ fi
 
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
-kc() { curl -sS -H 'Content-Type: application/json' -H "Origin: $KEYCAST_APP_URL" "$@"; }
-kc_is_admin() { [[ "$(kc "$KC_URL/api/admin/status" -H "Authorization: Bearer $1" | jq -r '.is_admin // false' 2>/dev/null)" == true ]]; }
+# Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
+# are denied, and the tenant is the Host header (ALLOWED_TENANT_DOMAINS). Paths are relative.
+kc() { "${COMPOSE[@]}" exec -T keycast curl -sS -H 'Content-Type: application/json' -H "Origin: $KEYCAST_APP_URL" -H "Host: ${KEYCAST_TENANT_DOMAIN:-localhost}" "${@/#\//http://localhost:3000/}"; }
+kc_is_admin() { [[ "$(kc /api/admin/status -H "Authorization: Bearer $1" | jq -r '.is_admin // false' 2>/dev/null)" == true ]]; }
 
 # The admin UCAN is signed by SERVER_NSEC, so it stays valid even after the database was wiped;
 # also require the admin's user row, otherwise re-register (web login needs the row).
@@ -227,26 +244,25 @@ kc_admin_row() { "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tA
 if [[ -n "${KEYCAST_ADMIN_TOKEN:-}" ]] && kc_is_admin "$KEYCAST_ADMIN_TOKEN" && kc_admin_row; then
   echo "KEYCAST_ADMIN_TOKEN in .env still works and the admin user exists"
 else
-  reg=$(kc -X POST "$KC_URL/api/auth/register" \
+  reg=$(kc -X POST /api/auth/register \
     -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\",\"nsec\":\"$KEYCAST_ADMIN_NSEC\"}")
   echo "register: $(jq -c 'del(.token)' <<<"$reg" 2>/dev/null || echo "$reg")"
-  COOKIES=$(mktemp)
-  login_out=$(kc -c "$COOKIES" -X POST "$KC_URL/api/auth/login" \
-    -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\"}")
+  kc_login() { # prints the response headers and body; the session cookie is read from Set-Cookie
+    kc -D - -X POST /api/auth/login -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\"}"
+  }
+  login_out=$(kc_login)
   if grep -q EMAIL_NOT_VERIFIED <<<"$login_out"; then
-    vtoken=$(kc "$KC_URL/api/dev/emails" | jq -r --arg to "$KEYCAST_ADMIN_EMAIL" \
+    vtoken=$(kc /api/dev/emails | jq -r --arg to "$KEYCAST_ADMIN_EMAIL" \
       '[.[] | select((.to // .recipient // "") | test($to)) | .verification_url // empty] | last // empty' | sed 's/.*token=//')
     [[ -n "$vtoken" ]] || die "no verification mail for $KEYCAST_ADMIN_EMAIL in /api/dev/emails"
-    kc -X POST "$KC_URL/api/auth/verify-email" -d "{\"token\":\"$vtoken\"}" >/dev/null
+    kc -X POST /api/auth/verify-email -d "{\"token\":\"$vtoken\"}" >/dev/null
     echo "admin e-mail verified through the dev inbox"
-    login_out=$(kc -c "$COOKIES" -X POST "$KC_URL/api/auth/login" \
-      -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\"}")
+    login_out=$(kc_login)
   fi
-  SESSION=$(awk '$6 == "keycast_session" {print $7}' "$COOKIES")
-  rm -f "$COOKIES"
-  [[ -n "$SESSION" ]] || { echo "$login_out" >&2; die "Keycast login failed"; }
+  SESSION=$(sed -n 's/^[Ss]et-[Cc]ookie: keycast_session=\([^;]*\).*/\1/p' <<<"$login_out" | tr -d '\r' | tail -n1)
+  [[ -n "$SESSION" ]] || { echo "$login_out" | tail -n 3 >&2; die "Keycast login failed"; }
   kc_is_admin "$SESSION" || die "the Keycast admin session is not an admin; is KEYCAST_ADMIN_PUBKEY in ALLOWED_PUBKEYS?"
-  tok=$(kc "$KC_URL/api/admin/token" -H "Authorization: Bearer $SESSION")
+  tok=$(kc /api/admin/token -H "Authorization: Bearer $SESSION")
   ADMIN_TOKEN=$(jq -r '.token // .admin_token // empty' <<<"$tok")
   [[ -n "$ADMIN_TOKEN" ]] || { echo "$tok" >&2; die "no admin token returned"; }
   kc_is_admin "$ADMIN_TOKEN" || die "the fetched admin token does not pass /api/admin/status"
@@ -258,7 +274,7 @@ fi
 # on every run.
 "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q < "$INFRA_DIR/keycast/policy.sql"
 echo "policy belfry-event applied: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select config from permissions where identifier='allowed_kinds_belfry_event'")"
-kc "$KC_URL/api/policies" | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
+kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
   || die "GET /api/policies does not list belfry-event"
 
 # ---------- 5. Authentik ----------
@@ -311,8 +327,8 @@ while :; do
 done
 SETUP_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-account-setup/" | jq -r '.pk // empty')
 [[ -n "$SETUP_FLOW" ]] || die "flow belfry-account-setup missing"
-ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '.results[] | select(.default) | .flow_recovery == $f' >/dev/null \
-  || die "the default brand's recovery flow is not belfry-account-setup"
+ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '[.results[] | select(.flow_recovery == $f and .default)] | length >= 1' >/dev/null \
+  || die "no default brand carries the recovery flow belfry-account-setup (blueprint belfry-account-setup-flow)"
 echo "blueprint belfry-account-setup-flow: successful, default brand recovery flow set"
 set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 

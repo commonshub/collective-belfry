@@ -9,6 +9,26 @@ layout; the local stack (`infra/README.md`) is the same Compose project without 
 - A domain and DNS records to the VM for `odoo.`, `login.`, `apps.`, `relay.`, `bunker.`, `issuer.`, `verifier.`, `pass.<domain>` and the apex `<domain>` (NIP-05 names are `<member>@<domain>`).
 - An SMTP relay for the activation mails (`SMTP_*`), and Stripe keys for Odoo's Stripe provider.
 
+## Hetzner Cloud (the test deployment, belfry.tofauti.net)
+
+`infra/hetzner/provision.sh` creates the VM with the `hcloud` CLI (active context = the project's
+API token): SSH key, firewall (22, 80, 443/tcp+udp) and a cx33 (4 vCPU, 8 GB) with
+`cloud-init.yaml` (Docker, user `belfry`, no password or root login). `DRY_RUN=1` prints the
+commands. Cloud-init needs about two minutes after the server is created before `belfry` can log
+in. The cheap CX types are often sold out per location (`hcloud server-type describe cx33`
+shows where they are available); ARM types do not work, `rnostr/rnostr` is amd64 only.
+
+DNS for a subdomain deployment is four records: A and AAAA for `<domain>` and `*.<domain>`. For
+a zone at OVH the `ovhcloud` CLI creates them with a token limited to the zone (rules GET, POST,
+PUT and DELETE on `/domain/zone/<zone>/*`):
+
+```bash
+ovhcloud domain-zone record create tofauti.net --sub-domain '*.belfry' --field-type A --target <ipv4> --ttl 300
+ovhcloud domain-zone refresh tofauti.net
+```
+
+Hetzner blocks outgoing ports 25 and 465; use SMTP submission on 587 (STARTTLS).
+
 ## Steps
 
 ```bash
@@ -18,7 +38,8 @@ infra/scripts/prod-env.sh belfry.example ops@belfry.example   # public URLs, SAN
 # the issuer and verifier certificates must carry the public hostnames: regenerate them
 rm infra/issuer/keys/issuer.* infra/issuer/keys/verifier.* infra/issuer/keys/ca.*   # only before the first real issuance!
 infra/scripts/gen-secrets.sh
-# SMTP relay and sender in infra/.env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASSWORD, SMTP_ENCRYPTION, MAIL_FROM)
+# SMTP relay and sender in infra/.env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_ENCRYPTION, MAIL_FROM);
+# the password from your machine, never through .env: infra/scripts/put-secret.sh <ssh target> smtp_password
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml build keycast     # ~15 min
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
 ODOO_URL=https://odoo.belfry.example AK_URL=https://login.belfry.example KC_URL=https://apps.belfry.example infra/scripts/bootstrap.sh
@@ -26,7 +47,9 @@ docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --pr
 ```
 
 `bootstrap.sh` talks to the services through their public hostnames here (the proxy is the only
-published port); it needs `ODOO_URL`, `AK_URL`, `KC_URL` set as above. Odoo's `web.base.url` is set
+published port); it needs `ODOO_URL`, `AK_URL`, `KC_URL` set as above. The paths the proxy denies
+are handled: the verifier probe accepts any HTTP answer and Keycast's dev mail inbox (admin
+confirmation) is read with `docker compose exec` inside the container. Odoo's `web.base.url` is set
 from `ODOO_PUBLIC_URL` and frozen.
 
 Then in Odoo: Invoicing › Configuration › Payment Providers › Stripe: keys and webhook (Odoo

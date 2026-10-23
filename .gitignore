@@ -10,6 +10,7 @@ infra/issuer/config/issuer-service.conf
 infra/verifier/config/verifier-service.conf
 infra/odoo/odoo.conf
 infra/certs/
+infra/secrets/
 *.key
 *.pem
 
