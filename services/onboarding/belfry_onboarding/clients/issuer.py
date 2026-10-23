@@ -36,3 +36,14 @@ class IssuerClient:
         r = self._client.post(f"{self.url}/issuer2/credential-offers", json=body)
         r.raise_for_status()
         return r.json()
+
+    def credential_issuer_metadata(self) -> dict[str, Any]:
+        """The issuer's OpenID4VCI metadata (``/.well-known/openid-credential-issuer/openid4vci``)
+        with ``authorization_servers`` filled in: Issuer2 omits it (it is its own authorization
+        server, which the spec allows), and walt.id's web wallet then has no token endpoint."""
+        r = self._client.get(f"{self.url}/.well-known/openid-credential-issuer/openid4vci")
+        r.raise_for_status()
+        doc = r.json()
+        if not doc.get("authorization_servers") and not doc.get("token_endpoint"):
+            doc["authorization_servers"] = [doc["credential_issuer"]]
+        return doc

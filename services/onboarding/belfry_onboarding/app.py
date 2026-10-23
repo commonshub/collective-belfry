@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -270,6 +271,20 @@ def create_app(services: Services | None = None) -> FastAPI:
             media_type="application/statuslist+jwt",
             headers={"Cache-Control": f"max-age={services.settings.status_list_ttl}"},
         )
+
+    @app.get("/issuer-metadata")
+    async def issuer_metadata(request: Request) -> JSONResponse:
+        """Issuer2's credential issuer metadata plus authorization_servers. The proxy serves
+        this for both metadata paths on issuer.<domain> (infra/proxy/Caddyfile)."""
+        issuer = svc(request).issuer
+        if issuer is None:
+            raise HTTPException(status_code=404, detail="no issuer configured")
+        try:
+            doc = await run_in_threadpool(issuer.credential_issuer_metadata)
+        except httpx.HTTPError as exc:
+            log.warning("issuer metadata: %s", exc)
+            raise HTTPException(status_code=502, detail="issuer unavailable") from exc
+        return JSONResponse(doc)
 
     @app.get("/vct/village-pass/v1")
     # walt.id's wallet looks the type up at <authority>/.well-known/vct<path of the vct>

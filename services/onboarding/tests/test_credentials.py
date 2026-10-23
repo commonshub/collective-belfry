@@ -397,3 +397,17 @@ def test_issuer_pinning_helpers():
         credentials.issued_by_belfry({"signed": "eyJ4NWMiOlsiTUlJQmZha2UiXX0.e30.c2ln"}, [])
         is False
     )
+
+
+def test_issuer_metadata_names_the_authorization_server(client, router):
+    """walt.id's web wallet needs authorization_servers (or token_endpoint) in the metadata."""
+    issuer = "http://localhost:7005/openid4vci"
+    route = router.get("http://issuer.test/.well-known/openid-credential-issuer/openid4vci")
+    route.respond(json={"credential_issuer": issuer, "credential_configurations_supported": {}})
+    doc = client.get("/issuer-metadata").json()
+    assert doc["authorization_servers"] == [issuer]
+    # an issuer that names one keeps its own
+    route.respond(json={"credential_issuer": issuer, "authorization_servers": ["https://as"]})
+    assert client.get("/issuer-metadata").json()["authorization_servers"] == ["https://as"]
+    route.respond(status_code=500)
+    assert client.get("/issuer-metadata").status_code == 502

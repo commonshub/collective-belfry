@@ -93,9 +93,15 @@ issuer.{$BELFRY_DOMAIN} {
 	respond @management 404
 	# Issuer2 serves its metadata only at the RFC 8615 place (/.well-known/<name>/openid4vci);
 	# walt.id's web wallet and other draft-13 wallets append it to the issuer URL instead.
-	rewrite /openid4vci/.well-known/openid-credential-issuer /.well-known/openid-credential-issuer/openid4vci
 	rewrite /openid4vci/.well-known/oauth-authorization-server /.well-known/oauth-authorization-server/openid4vci
 	rewrite /openid4vci/.well-known/openid-configuration /.well-known/oauth-authorization-server/openid4vci
+	# The credential issuer metadata comes through the onboarding service, which adds
+	# authorization_servers (Issuer2 omits it; walt.id's wallet then finds no token endpoint).
+	@issuermeta path /.well-known/openid-credential-issuer/openid4vci /openid4vci/.well-known/openid-credential-issuer
+	handle @issuermeta {
+		rewrite * /issuer-metadata
+		reverse_proxy onboarding:8100
+	}
 	reverse_proxy issuer:7005
 }
 
