@@ -215,13 +215,39 @@ FINAL=$(run_setup_flow "$SJAR" "evil-$(openssl rand -hex 8)")
 rm -f "$SJAR"
 
 step "6d. Keycast sign-in through Authentik (OIDC) with the chosen password"
-if OUT=$(KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$USERNAME" "$AK_PW" "$KC_PUB" 2>&1); then
+if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$USERNAME" "$AK_PW" "$KC_PUB" 2>&1); then
+  KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=' <<<"$OUT")
   sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
 else
   sed 's/^/  /' <<<"$OUT" >&2; bad "Keycast OIDC login"
 fi
 CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
 [[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
+
+step "6f. Blossom: uploads need a signed BUD-11 event from a key with an active pass"
+BLOSSOM_URL=${BLOSSOM_URL:-http://localhost:3100}
+blossom_auth() { # verb [sha256] -> Authorization header value, signed through Keycast with the participant's key
+  # BUD-02: an upload/delete token names the blob it is for in an "x" tag.
+  local ev; ev=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg v "$1" --arg x "${2:-}" --arg s "${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}" \
+    '{pubkey:$pk, created_at:$t, kind:24242, tags:([["t",$v],["expiration",(($t+300)|tostring)],["server",$s]] + (if $x != "" then [["x",$x]] else [] end)), content:("Authorize "+$v)}')
+  curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')" | jq -r '.result | @base64'
+}
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  BLOB=$(mktemp); printf 'belfry smoke %s' "$STAMP" > "$BLOB"; SHA=$(sha256sum "$BLOB" | cut -c1-64)
+  BAUTH=$(blossom_auth upload "$SHA")
+  [[ -n "$BAUTH" && "$BAUTH" != bnVsbA== ]] && ok "kind-24242 auth event signed through Keycast (policy allows it)" || bad "could not sign a kind-24242 event through Keycast: $BAUTH"
+  NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/upload" -H 'Content-Type: text/plain' --data-binary "@$BLOB")
+  [[ "$NOAUTH" == 401 ]] && ok "upload without authorization -> 401" || bad "upload without authorization -> $NOAUTH"
+  UP=$(curl -sS -X PUT "$BLOSSOM_URL/upload" -H "Authorization: Nostr $BAUTH" -H 'Content-Type: text/plain' --data-binary "@$BLOB")
+  [[ "$(jq -r '.sha256 // empty' <<<"$UP")" == "$SHA" ]] && ok "upload accepted: $(jq -r .url <<<"$UP")" || bad "upload: $UP"
+  [[ "$(curl -sS "$BLOSSOM_URL/$SHA")" == "belfry smoke $STAMP" ]] && ok "blob readable without auth (content-addressed)" || bad "blob not readable"
+  [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/mirror" -H "Authorization: Nostr $BAUTH" -H 'Content-Type: application/json' -d '{"url":"http://onboarding:8100/health"}')" == 404 ]] && ok "mirror endpoint blocked" || bad "mirror reachable"
+  DEL=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$BLOSSOM_URL/$SHA" -H "Authorization: Nostr $BAUTH")
+  [[ "$DEL" == 403 ]] && ok "delete with an upload token -> 403 (verb check)" || bad "delete with upload token -> $DEL"
+else
+  bad "no Keycast access token from step 6d"
+fi
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
@@ -310,6 +336,13 @@ for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq 
 [[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
 [[ "$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  # The signer is suspended and the pass is gone: a fresh Blossom token is refused twice over.
+  BAUTH2=$(blossom_auth upload "$(printf 'again' | sha256sum | cut -c1-64)")
+  if [[ -z "$BAUTH2" || "$BAUTH2" == bnVsbA== ]]; then ok "revoked key can no longer sign a Blossom auth event (Keycast suspended)"; else
+    UP2=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/upload" -H "Authorization: Nostr $BAUTH2" -H 'Content-Type: text/plain' --data-binary 'again')
+    [[ "$UP2" == 403 ]] && ok "upload with a revoked pass -> 403 (gate)" || bad "upload after revoke -> $UP2"; fi
+fi
 
 step "7. replay the webhook three times and check nothing was duplicated"
 # step 10 linked the pass-bridge source, so count the links as they are now

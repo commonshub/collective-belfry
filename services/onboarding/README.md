@@ -15,6 +15,7 @@ Glue between Odoo (registry and billing), Authentik (login), Keycast (Nostr sign
 | `belfry_onboarding/claim.py` | claim page and offer, status list endpoint, door session and result, the inline HTML pages |
 | `belfry_onboarding/bridge.py` | the OIDC provider over Verifier2 (authorize, poll, token, userinfo, jwks) for Authentik's pass-bridge source |
 | `belfry_onboarding/testwallet.py` | scripted SD-JWT VC holder for the smoke test (receive over OpenID4VCI, present over OpenID4VP) |
+| `belfry_onboarding/blossom.py` | Blossom gate: validates a BUD-11 (kind 24242) authorization and requires an active pass for its pubkey |
 | `belfry_onboarding/core.py` | `activate_pass`, `revoke_pass`, `revoke_for_refund`, `reactivate_pass`, `reconcile`, `expire`, `send_login_link`, dispute handlers |
 | `belfry_onboarding/app.py` | FastAPI routes; `handle_stripe_event` |
 | `belfry_onboarding/stripe_sig.py` | `Stripe-Signature` HMAC verification without the Stripe SDK |
@@ -85,6 +86,7 @@ Extras, not in the contract, all optional:
 | `GET /vct/village-pass/v1` | none | SD-JWT VC Type Metadata of the pass |
 | `GET /door`, `POST /door/sessions`, `GET /door/sessions/<id>` | none (put the door page behind the venue network or a proxy) | door check: a Verifier2 session asking for `pass_tier` only; the result is `valid` with tier and date or `invalid` with the failed policies |
 | `/bridge/.well-known/openid-configuration`, `GET /bridge/authorize`, `GET /bridge/poll/<sid>`, `POST /bridge/token`, `GET /bridge/userinfo`, `GET /bridge/jwks` | OIDC (client secret, PKCE S256) | the pass sign-in for Authentik: `sub` = member number, `preferred_username` = Authentik username, `npub`, `pass_tier` |
+| `GET /blossom/auth` | `Authorization: Nostr <event>` | forward-auth target of the Blossom gate (`infra/blossom/`): 200 with `X-Belfry-Pubkey` when the kind-24242 event is valid for the forwarded method (`X-Forwarded-Method`) and its pubkey holds an active pass; 401 bad token, 403 no pass or wrong verb. `BLOSSOM_HOSTS` lists the hostnames a `server` tag may name |
 | `POST /admin/passes/<id>/login-link?token=` | `HOOK_TOKEN` | mints a new account-setup link for the holder of an active pass and writes it on the pass, which makes Odoo mail it (the "Send new login link" button calls this). `{"result": "sent" / "not_active" / "no_user" / "not_found"}`; Authentik or Odoo errors are 500. |
 
 Result codes from `activate_pass`: `activated`, `already_active`, `already_revoked`, `already_expired`, `not_paid`, `not_found`.

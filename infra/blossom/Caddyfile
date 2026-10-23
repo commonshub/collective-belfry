@@ -1,0 +1,30 @@
+# Gate in front of blossom-server: every write is checked by the onboarding service first
+# (forward_auth -> /blossom/auth), which verifies the BUD-11 event and requires an active pass
+# for its pubkey. Reads (GET/HEAD /<sha256>) pass through. Plain HTTP; the public reverse proxy
+# (prod overlay) terminates TLS in front of this container.
+{
+	auto_https off
+	admin off
+}
+
+:80 {
+	# Not offered at all (mirror = SSRF surface, media processing, listing, reports, dashboard).
+	@denied path /mirror /media /list/* /admin /admin/* /report
+	handle @denied {
+		respond 404
+	}
+	@write {
+		method PUT DELETE
+	}
+	handle @write {
+		forward_auth onboarding:8100 {
+			uri /blossom/auth
+			copy_headers X-Belfry-Pubkey
+		}
+		reverse_proxy blossom:3000
+	}
+	# HEAD /upload is the BUD-06 preflight (needs auth upstream; nothing is written).
+	handle {
+		reverse_proxy blossom:3000
+	}
+}

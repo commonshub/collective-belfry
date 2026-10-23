@@ -13,7 +13,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import bridge, claim, core
+from . import blossom, bridge, claim, core
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -332,6 +332,19 @@ def create_app(services: Services | None = None) -> FastAPI:
             )
         except bridge.BridgeError as exc:
             return bridge_json_error(exc)
+
+    @app.api_route("/blossom/auth", methods=["GET", "HEAD", "PUT", "DELETE"])
+    async def blossom_auth(request: Request) -> Response:
+        """Forward-auth target of the Blossom gate: 200 when the Authorization: Nostr event is a
+        valid BUD-11 token for the original method and its pubkey holds an active pass."""
+        method = request.headers.get("x-forwarded-method", request.method)
+        try:
+            pubkey = await run_in_threadpool(
+                blossom.authorize, svc(request), request.headers.get("authorization"), method
+            )
+        except blossom.BlossomAuthError as exc:
+            return JSONResponse({"error": exc.reason}, status_code=exc.status)
+        return Response(status_code=200, headers={"X-Belfry-Pubkey": pubkey})
 
     @app.post("/hooks/stripe")
     async def stripe_hook(request: Request) -> dict[str, Any]:

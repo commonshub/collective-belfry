@@ -32,6 +32,7 @@ values = {
     "STATUS_LIST_URL": f"https://pass.{domain}/status/1",
     "STATUS_LIST_TTL": "300",
     "MAIL_FROM": f"belfry@{domain}",
+    "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
 }
 lines = open(path).read().splitlines(keepends=True)
 seen = set()

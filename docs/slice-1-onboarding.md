@@ -32,6 +32,8 @@ docs/                       plan snapshot, research notes, this contract
 | onboarding | built from `services/onboarding` | 8100 | Belfry's glue, claim pages, status list, door, pass bridge |
 | issuer | waltid/issuer-api2:1.2.0 | 7005 | OpenID4VCI issuer of the pass certificates (Phase 3); config `infra/issuer/` |
 | verifier | waltid/verifier-api2:1.2.0 | 7004 | OpenID4VP verifier for the door and the bridge (Phase 3); config `infra/verifier/` |
+| blossom, blossom-gate | hzrd149/blossom-server (digest), caddy:2 | 3100 (gate) | file server for the apps; the gate asks the onboarding service whether the uploader holds an active pass (Phase 2) |
+| mailpit | axllent/mailpit | 8025 | local SMTP sink for Odoo's mails |
 
 Test stacks used by module or service tests must use other ports (Odoo test stack: 8169) and their own compose project names.
 

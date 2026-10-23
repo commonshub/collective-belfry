@@ -1,7 +1,7 @@
-From 286ca694502f74b205ea0770efd2c83ca1f4ed99 Mon Sep 17 00:00:00 2001
+From 8c427f02fb289314f1949e2cebe043d0ecb6b099 Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 10:57:58 +0200
-Subject: [PATCH 1/3] feat(auth): sign in through an upstream OpenID Provider
+Subject: [PATCH 1/5] feat(auth): sign in through an upstream OpenID Provider
 
 Authorization code + PKCE login against OIDC_ISSUER (Belfry: Authentik).
 The callback verifies the ID token against the provider's JWKS (RS256 or
@@ -1517,6 +1517,3 @@ index 0000000..38d3863
 +);
 +
 +CREATE INDEX IF NOT EXISTS idx_oidc_identities_user ON public.oidc_identities(user_pubkey);
--- 
-2.53.0
-

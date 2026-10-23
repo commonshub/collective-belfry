@@ -25,6 +25,7 @@ Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `open
 | Keycast | http://localhost:3000 | `KEYCAST_ADMIN_EMAIL` / `KEYCAST_ADMIN_PASSWORD` |
 | Keycast relay (NIP-46) | ws://localhost:3080 | |
 | Community relay (rnostr) | ws://localhost:3090 | NIP-42 as a whitelisted pubkey, see `relay/README.md` |
+| Blossom (files) through its gate | http://localhost:3100 | writes need a kind-24242 token from a key with an active pass, see `blossom/README.md` |
 | Onboarding service | http://localhost:8100 (`/health`, `/door`, `/claim/<token>`, `/status/1`, `/bridge/...`) | |
 | Mailpit (local mail sink) | http://localhost:8025 | Odoo's outgoing mail server in the local stack |
 | Issuer (walt.id Issuer2) | http://localhost:7005 (`/.well-known/openid-credential-issuer/openid4vci`) | management API `/issuer2/*` unauthenticated: internal only |

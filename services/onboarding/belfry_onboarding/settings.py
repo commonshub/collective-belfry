@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     def effective_status_list_url(self) -> str:
         return self.status_list_url or self.public_url.rstrip("/") + "/status/1"
 
+    # Blossom gate: hostnames (host[:port], lower case) a BUD-11 "server" tag may name; empty
+    # accepts any. The gate itself (infra/blossom/Caddyfile) calls GET /blossom/auth.
+    blossom_hosts: str = Field(default="", alias="BLOSSOM_HOSTS")
+
     hook_token: str = Field(alias="HOOK_TOKEN")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
 

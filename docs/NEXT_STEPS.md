@@ -152,10 +152,23 @@ The public deployment itself needs a VM and a domain; everything up to that poin
 
 Open: the deployment run itself (and with it: Stripe test mode, a real wallet, publishing the CA); Caddy rate limiting for the public claim and bridge pages; the HTTP → HTTPS redirect is Caddy's default and untested here.
 
+## 3h. Phase 2: Keycast fork patches, Blossom, policy kinds — built 2026-10-23
+
+- [x] Keycast patch 0004: Belfry branding instead of Divine (API strings and e-mails, web brand, title, manifest, SVG logo and favicon, landing copy, navy theme; Divine icons, ATProto card and demo page removed). Patch 0005: key export for OIDC-only accounts (`auth_time` fact on sessions, export within `OIDC_REAUTH_WINDOW_SECS` of a fresh sign-in, `has_password` in the account status, "Sign in with Belfry to unlock" on the security page). Both compile (`cargo check -p keycast_api`), the API unit tests pass (oidc 9, reauth 1). **The image was not rebuilt** (per request); `make build-keycast` applies the series, then the smoke test's step 6c–6d exercise the login and a manual check of `/settings/security` the export. The seed tenant is renamed to Belfry by `policy.sql`.
+- [x] Blossom (`infra/blossom/`, hzrd149/blossom-server pinned by digest): internal server with `requireAuth`, 25 MB, MIME allowlist and retention, mirror/media/list/dashboard off; `blossom-gate` (Caddy) in front of it forwards every PUT/DELETE to the onboarding service's `GET /blossom/auth`, which validates the kind-24242 event (Schnorr via `coincurve`, verb, expiry ≤ 24 h, `server` tag) and requires an active pass; denied paths are not forwarded at all. Smoke step 6f: upload with a Keycast-signed token works, no auth 401, wrong verb 403, mirror 404, after revocation 403 (and Keycast refuses to sign). Production route `blossom.<domain>` in the proxy.
+- [x] Policy kinds: `belfry-event` now allows 0, 1, 5, 7, 22242, 24242, 27235, 30023 (deletion, Blossom auth and NIP-98 added). The app kinds are a decision, see below.
+
+**Policy kinds: what is needed.** Keycast authorizes signing per OAuth app through a policy (`policy:belfry-event` scope) whose `allowed_kinds` permission lists event kinds; other permission types are `content_filter`, `encrypt_to_self`, `decrypt_only`, `full_access`. NIP-44/NIP-04 encryption and decryption are separate RPC methods and are not gated by kinds. To finish the policy, decide:
+
+1. **Which apps and protocols.** For each of the plan's apps one kind set: profile 0 and relay lists 10002; notes 1, reactions 7, deletions 5; directory = profiles plus follow lists 3; calendar (NIP-52) 31922, 31923, 31924, 31925; proposals: NIP-88 polls 1068 and 1018, or long-form 30023 with 1 for discussion; marketplace: NIP-15 (30017, 30018, 4) or NIP-99 classifieds 30402; photos: NIP-68 pictures 20 plus Blossom 24242; links: NIP-B0 bookmarks 39701 or NIP-51 lists 10003/30001; chat: NIP-29 groups (9, 10, 11, 12 plus 39000–39003 by the relay) or NIP-17 DMs (14, 13 seals, 1059 gift wraps, 10050), which also needs `nip44_encrypt`/`nip44_decrypt`. Without the decision the policy stays at the current set and clients get `kind not allowed` for anything else.
+2. **One policy or one per app.** Keycast policies are global (`policies` table, no team); one `belfry-event` scope for all apps is simplest, a policy per app (chat may encrypt, the door app may only read) is tighter. The relay also needs its kind allowlist (rnostr `kinds` filter, currently open to whitelisted pubkeys).
+3. **Encryption.** NIP-17 chat means the signer decrypts for the app on every message; decide whether a managed key may do that (`decrypt_only`/`encrypt_to_self` permissions exist) and whether the chat should rather be NIP-29 public groups on the community relay.
+4. **Where the list lives.** `infra/keycast/policy.sql` (applied by bootstrap, idempotent) is the single source; the relay's `rnostr.toml` should carry the same kinds.
+
 ## 4. Next
 
 1. A public test deployment (HTTPS) following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
-2. Phase 2 (continued): key export for OIDC-only accounts, remove the Divine UI parts and branding (new patches in `infra/keycast/build/patches/`), Blossom, NIP-05 on Belfry's domain (Keycast serves it for its usernames), pick the community apps and extend the policy kinds, Odoo SMTP for the activation mail.
+2. Phase 2 (continued): build the Keycast image with patches 0004–0005 and check the login and the key export live; decide the community apps and their kinds (§3h) and put them into `policy.sql` and the relay config; NIP-05 on Belfry's domain is routed by the proxy.
 3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
 ## Notes

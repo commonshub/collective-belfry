@@ -1,0 +1,59 @@
+# Belfry Blossom server (hzrd149/blossom-server): photos and files of the community apps,
+# content-addressed. Hardened as follows:
+# - every write (upload, delete) needs a BUD-11 auth event (kind 24242) signed by the
+#   uploader; blossom-server verifies the signature, and the gate in front of it
+#   (blossom/Caddyfile -> onboarding /blossom/auth) additionally requires that the pubkey holds
+#   an active pass. Reads are public (content-addressed, no listing).
+# - no mirror (SSRF surface), no server-side media processing, no listing, no dashboard.
+# - size limit and MIME allowlist with retention.
+port: 3000
+host: 0.0.0.0
+publicDomain: "${BLOSSOM_PUBLIC_DOMAIN}"
+
+database:
+  path: data/sqlite.db
+
+storage:
+  backend: local
+  local:
+    dir: ./data/blobs
+  removeWhenNoOwners: true
+  # MIME allowlist and retention (unaccessed blobs are pruned after the period).
+  rules:
+    - type: "image/*"
+      expiration: 1 year
+    - type: "video/mp4"
+      expiration: 3 months
+    - type: "video/webm"
+      expiration: 3 months
+    - type: "audio/*"
+      expiration: 3 months
+    - type: "application/pdf"
+      expiration: 1 year
+    - type: "text/plain"
+      expiration: 1 year
+    - type: "text/markdown"
+      expiration: 1 year
+
+upload:
+  enabled: true
+  requireAuth: true
+  maxSize: 26214400 # 25 MB
+  workers: 1
+  maxJobsPerWorker: 4
+  requirePubkeyInRule: false # the gate checks the pass; rules stay MIME-only
+
+mirror:
+  enabled: false
+
+delete:
+  requireAuth: true
+
+list:
+  enabled: false
+
+media:
+  enabled: false
+
+dashboard:
+  enabled: false

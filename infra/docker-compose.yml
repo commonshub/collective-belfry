@@ -294,6 +294,41 @@ services:
         limits:
           memory: 1g
 
+  # Phase 2: Blossom file server (photos, files) for the community apps. Internal; reached only
+  # through blossom-gate, which asks the onboarding service whether the uploader holds an active
+  # pass. Image pinned by digest (the project has no releases). See blossom/config.yml.
+  blossom:
+    image: ghcr.io/hzrd149/blossom-server@sha256:2b23ba053b4e1ba780504e3c4b6d7057b545e51bfb2cfc034d5093e5d0c10ff3
+    environment:
+      BLOSSOM_REQUIRE_CONFIG: "1"
+      BLOSSOM_PUBLIC_DOMAIN: ${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}
+    volumes:
+      - ./blossom/config.yml:/app/config.yml:ro
+      - blossom-data:/app/data
+    healthcheck:
+      # The image has neither wget nor curl; a TCP connect to the listener is enough.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  blossom-gate:
+    image: caddy:2
+    profiles: ["app"]
+    ports: ["3100:80"]
+    volumes:
+      - ./blossom/Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      blossom:
+        condition: service_healthy
+      onboarding:
+        condition: service_healthy
+
   # Belfry's glue. Behind the "app" profile so the rest of the stack starts before
   # services/onboarding exists: `docker compose --profile app up -d` once it does.
   onboarding:
@@ -341,6 +376,8 @@ services:
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
       NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
+      # Blossom gate: hostnames a BUD-11 "server" tag may name (comma-separated), empty = any.
+      BLOSSOM_HOSTS: ${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}
       # Phase 3: credentials (issuer management API, verifier sessions, status list, bridge).
       ISSUER_URL: http://issuer:7005
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
@@ -365,6 +402,7 @@ services:
       retries: 10
 
 volumes:
+  blossom-data:
   postgres:
   odoo-data:
   authentik-media:

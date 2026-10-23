@@ -1,0 +1,2931 @@
+From 4a94dedd1d584b9c9ff10d44b6cf765898ebdbdc Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Fri, 23 Oct 2026 14:11:05 +0200
+Subject: [PATCH 4/5] chore(brand): Belfry branding instead of Divine
+
+Product name Belfry in the API (e-mail subjects and bodies, claim pages, default sender)
+and the web app (brand constants, title, manifest, logo and favicon as SVG, landing page
+copy, bunker modal, support admin). Belfry navy replaces Divine green as the primary colour
+(CSS variable names kept). Divine's PNG icons and logo, the ATProto/Bluesky settings card and
+the Divine demo page are removed. Internal names (vine_id, --color-divine-* variables) stay.
+---
+ api/src/api/http/claim.rs                     |   18 +-
+ api/src/brand.rs                              |    4 +-
+ api/src/email_service.rs                      |    2 +-
+ web/src/app.css                               |   10 +-
+ web/src/app.html                              |    7 +-
+ web/src/lib/atproto_status.svelte.ts          |  273 ----
+ web/src/lib/brand.ts                          |    6 +-
+ .../lib/components/AtprotoSettingsCard.svelte |  339 -----
+ .../lib/components/CreateBunkerModal.svelte   |    2 +-
+ web/src/lib/components/Header.svelte          |    2 +-
+ web/src/routes/+page.svelte                   |   16 +-
+ web/src/routes/app/callback/+page.svelte      |    2 +-
+ .../routes/cancel-email-change/+page.svelte   |    2 +-
+ .../routes/confirm-email-change/+page.svelte  |    2 +-
+ web/src/routes/demo/+page.svelte              | 1116 -----------------
+ .../email-verification/continue/+page.svelte  |    2 +-
+ web/src/routes/forgot-password/+page.svelte   |    2 +-
+ web/src/routes/login/+page.svelte             |    2 +-
+ web/src/routes/register/+page.svelte          |    2 +-
+ web/src/routes/reset-password/+page.svelte    |    2 +-
+ web/src/routes/settings/security/+page.svelte |    2 -
+ web/src/routes/support-admin/+page.svelte     |    2 +-
+ web/static/apple-touch-icon.png               |  Bin 5576 -> 0 bytes
+ web/static/belfry-logo.svg                    |    1 +
+ web/static/divine-logo.svg                    |   18 -
+ web/static/favicon-96x96.png                  |  Bin 3019 -> 0 bytes
+ web/static/favicon.ico                        |  Bin 15086 -> 0 bytes
+ web/static/favicon.svg                        |    4 +-
+ web/static/site.webmanifest                   |   21 +-
+ web/static/web-app-manifest-192x192.png       |  Bin 6477 -> 0 bytes
+ web/static/web-app-manifest-512x512.png       |  Bin 18627 -> 0 bytes
+ 31 files changed, 49 insertions(+), 1810 deletions(-)
+ delete mode 100644 web/src/lib/atproto_status.svelte.ts
+ delete mode 100644 web/src/lib/components/AtprotoSettingsCard.svelte
+ delete mode 100644 web/src/routes/demo/+page.svelte
+ delete mode 100644 web/static/apple-touch-icon.png
+ create mode 100644 web/static/belfry-logo.svg
+ delete mode 100644 web/static/divine-logo.svg
+ delete mode 100644 web/static/favicon-96x96.png
+ delete mode 100644 web/static/favicon.ico
+ delete mode 100644 web/static/web-app-manifest-192x192.png
+ delete mode 100644 web/static/web-app-manifest-512x512.png
+
+diff --git a/api/src/api/http/claim.rs b/api/src/api/http/claim.rs
+index e8159fb..9525719 100644
+--- a/api/src/api/http/claim.rs
++++ b/api/src/api/http/claim.rs
+@@ -1025,7 +1025,7 @@ fn claim_success_html(display_name: &str) -> String {
+         <a class="web-link" href="https://divine.video" target="_blank">
+             Open {brand} on Web
+         </a>
+-        <p class="note">You can also access your account at divine.video</p>
++        <p class="note">You can also sign in with your Belfry account in the Open Source Village apps.</p>
+     </div>
+ </body>
+ </html>"#,
+@@ -1219,35 +1219,35 @@ impl IntoResponse for ClaimError {
+             ),
+             ClaimError::TokenAlreadyClaimed => (
+                 "Account already claimed",
+-                "This account has already been claimed. If you set it up, sign in at divine.video. If you didn't, contact support, since someone else may have used this link.",
++                "This account has already been claimed. If you set it up, sign in with your Belfry account. If you didn't, contact your steward, since someone else may have used this link.",
+             ),
+             ClaimError::TokenAdminInvalidated => (
+                 "Link has been deactivated",
+-                "This claim link was deactivated by Divine support. Contact the person who sent it, or email support@divine.video, to learn more.",
++                "This claim link was deactivated by Divine support. Contact your Belfry steward to learn more.",
+             ),
+             ClaimError::TokenReplaced => (
+                 "Link has been replaced",
+-                "A newer claim link has been issued for this account. Check your email for the most recent message from Divine support, or contact the person who sent it for the current link.",
++                "A newer claim link has been issued for this account. Check your email for the most recent message, or contact your Belfry steward for the current link.",
+             ),
+             ClaimError::TokenExpired => (
+                 "Link has expired",
+-                "Claim links are valid for 14 days. This one is past its expiration. Contact the person who sent it, or email support@divine.video, for a fresh link.",
++                "Claim links are valid for 14 days. This one is past its expiration. Contact your Belfry steward for a fresh link.",
+             ),
+             ClaimError::ConfirmationUnrecognized => (
+                 "Link not recognized",
+-                "We don't recognize this confirmation link. It may have already been used. If you set up your account, sign in at divine.video.",
++                "We don't recognize this confirmation link. It may have already been used. If you set up your account, sign in with your Belfry account.",
+             ),
+             ClaimError::ConfirmationExpired => (
+                 "Confirmation link expired",
+-                "Confirmation links are valid for 24 hours. Open your original claim link again to restart, or email support@divine.video for a fresh one.",
++                "Confirmation links are valid for 24 hours. Open your original claim link again to restart, or contact your Belfry steward for a fresh one.",
+             ),
+             ClaimError::ConfirmationEmailTaken => (
+                 "Email no longer available",
+-                "The email address you entered was just claimed by another account. Open your claim link again and use a different address, or email support@divine.video for help.",
++                "The email address you entered was just claimed by another account. Open your claim link again and use a different address, or contact your Belfry steward for help.",
+             ),
+             ClaimError::ConfirmationSendLimitReached => (
+                 "Too many confirmation emails",
+-                "This claim link has sent as many confirmation emails as it can. Email support@divine.video and we'll send you a fresh claim link.",
++                "This claim link has sent as many confirmation emails as it can. Contact your Belfry steward for a fresh claim link.",
+             ),
+             ClaimError::UserNotFound => (
+                 "Account Not Found",
+diff --git a/api/src/brand.rs b/api/src/brand.rs
+index 4001919..0efc5b7 100644
+--- a/api/src/brand.rs
++++ b/api/src/brand.rs
+@@ -1 +1,3 @@
+-pub const BRAND_NAME: &str = "Divine";
++// Belfry fork: the product name shown in e-mails and the claim pages. Divine's upstream name
++// is replaced here; tenant rows carry their own name (bootstrap sets the seed tenant to Belfry).
++pub const BRAND_NAME: &str = "Belfry";
+diff --git a/api/src/email_service.rs b/api/src/email_service.rs
+index beefc64..ec577ce 100644
+--- a/api/src/email_service.rs
++++ b/api/src/email_service.rs
+@@ -526,7 +526,7 @@ pub struct SendGridEmailSender {
+ impl SendGridEmailSender {
+     pub fn new(api_key: String) -> Result<Self, String> {
+         let from_email =
+-            env::var("FROM_EMAIL").unwrap_or_else(|_| "noreply@divine.video".to_string());
++            env::var("FROM_EMAIL").unwrap_or_else(|_| "noreply@belfry.local".to_string());
+         let from_name = env::var("FROM_NAME").unwrap_or_else(|_| BRAND_NAME.to_string());
+         let base_url = env::var("BASE_URL")
+             .or_else(|_| env::var("APP_URL"))
+diff --git a/web/src/app.css b/web/src/app.css
+index e725382..6f63e6d 100644
+--- a/web/src/app.css
++++ b/web/src/app.css
+@@ -15,12 +15,12 @@
+   --color-divine-purple: #8B5CF6;
+   --color-divine-purple-dark: #7C3AED;
+   --color-divine-purple-light: #A78BFA;
+-  --color-divine-green: #27C58B;
+-  --color-divine-green-dark: #1AA575;
+-  --color-divine-green-light: #D0FBCB;
+-  --color-divine-green-muted: color-mix(in srgb, #27C58B 15%, transparent);
++  --color-divine-green: #1F2A44;
++  --color-divine-green-dark: #141C30;
++  --color-divine-green-light: #DCE3F2;
++  --color-divine-green-muted: color-mix(in srgb, #1F2A44 12%, transparent);
+   --color-divine-off-white: #F9F7F6;
+-  --color-divine-dark-green: #072218;
++  --color-divine-dark-green: #0B1226;
+ 
+   /* Status colors */
+   --color-divine-success: #10B981;
+diff --git a/web/src/app.html b/web/src/app.html
+index 056d887..9540212 100644
+--- a/web/src/app.html
++++ b/web/src/app.html
+@@ -2,17 +2,14 @@
+ <html lang="en" class="dark">
+ 	<head>
+ 		<meta charset="utf-8" />
+-		<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+ 		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+-		<link rel="shortcut icon" href="/favicon.ico" />
+-		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+-		<meta name="apple-mobile-web-app-title" content="Divine Login" />
++		<meta name="apple-mobile-web-app-title" content="Belfry" />
+ 		<link rel="manifest" href="/site.webmanifest" />
+ 		<meta name="viewport" content="width=device-width, initial-scale=1" />
+ 		<link rel="preconnect" href="https://fonts.googleapis.com">
+ 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ 		<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+-		<title>Divine Login</title>
++		<title>Belfry</title>
+ 		<meta name="description" content="Manage your Nostr identity" />
+ 		%sveltekit.head%
+ 	</head>
+diff --git a/web/src/lib/atproto_status.svelte.ts b/web/src/lib/atproto_status.svelte.ts
+deleted file mode 100644
+index 6988ce4..0000000
+--- a/web/src/lib/atproto_status.svelte.ts
++++ /dev/null
+@@ -1,273 +0,0 @@
+-import { KeycastApi } from "$lib/keycast_api.svelte";
+-
+-export type AtprotoLifecycleState = "pending" | "ready" | "failed" | "disabled" | null;
+-export type AtprotoUiState =
+-  | "claim_username"
+-  | "ready_to_enable"
+-  | "pending"
+-  | "ready"
+-  | "failed"
+-  | "disabled";
+-
+-type ProfileResponse = {
+-  username?: string | null;
+-};
+-
+-type AtprotoStatusResponse = {
+-  enabled: boolean;
+-  state?: AtprotoLifecycleState;
+-  did?: string | null;
+-  error?: string | null;
+-  username?: string | null;
+-};
+-
+-function normalizeUsername(username: string | null | undefined): string | null {
+-  const trimmed = username?.trim().toLowerCase() ?? "";
+-  return trimmed.length > 0 ? trimmed : null;
+-}
+-
+-function normalizeStatusResponse(
+-  status: AtprotoStatusResponse,
+-): Required<Pick<AtprotoStatusResponse, "enabled">> &
+-  Required<Pick<AtprotoStatusResponse, "state" | "did" | "error" | "username">> {
+-  return {
+-    enabled: status.enabled,
+-    state: status.state ?? null,
+-    did: status.did ?? null,
+-    error: status.error ?? null,
+-    username: normalizeUsername(status.username),
+-  };
+-}
+-
+-function getErrorMessage(error: unknown): string {
+-  if (error instanceof Error && error.message) {
+-    return error.message;
+-  }
+-
+-  return "Something went wrong. Please try again.";
+-}
+-
+-export class AtprotoSettingsModel {
+-  private readonly api: KeycastApi;
+-  private readonly pollIntervalMs: number;
+-  private pollTimeout: number | null = null;
+-  private disposed = false;
+-
+-  profile = $state<{ username: string | null } | null>(null);
+-  status = $state<ReturnType<typeof normalizeStatusResponse> | null>(null);
+-  isLoading = $state(false);
+-  isClaiming = $state(false);
+-  isEnabling = $state(false);
+-  isDisabling = $state(false);
+-  requestError = $state<string | null>(null);
+-
+-  constructor(api = new KeycastApi(), pollIntervalMs = 2_000) {
+-    this.api = api;
+-    this.pollIntervalMs = pollIntervalMs;
+-  }
+-
+-  get username(): string | null {
+-    return this.status?.username ?? this.profile?.username ?? null;
+-  }
+-
+-  get handle(): string | null {
+-    return this.username ? `${this.username}.divine.video` : null;
+-  }
+-
+-  get did(): string | null {
+-    return this.status?.did ?? null;
+-  }
+-
+-  get provisioningError(): string | null {
+-    return this.status?.error ?? null;
+-  }
+-
+-  get isBusy(): boolean {
+-    return (
+-      this.isLoading || this.isClaiming || this.isEnabling || this.isDisabling
+-    );
+-  }
+-
+-  get uiState(): AtprotoUiState {
+-    const username = this.username;
+-
+-    if (!username) {
+-      return "claim_username";
+-    }
+-
+-    if (!this.status) {
+-      return "ready_to_enable";
+-    }
+-
+-    if (this.status.enabled && this.status.state === "pending") {
+-      return "pending";
+-    }
+-
+-    if (this.status.enabled && this.status.state === "ready") {
+-      return "ready";
+-    }
+-
+-    // A failed enable rolls the opt-in back to `enabled: false`, so the failure
+-    // is reported by the state alone. Requiring `enabled` here would drop the
+-    // "last attempt failed" explanation and show the plain enable card instead.
+-    if (this.status.state === "failed") {
+-      return "failed";
+-    }
+-
+-    if (!this.status.enabled && this.status.state === "disabled") {
+-      return "disabled";
+-    }
+-
+-    return "ready_to_enable";
+-  }
+-
+-  async load(): Promise<void> {
+-    this.requestError = null;
+-    this.isLoading = true;
+-
+-    try {
+-      await Promise.all([this.refreshProfile(), this.refreshStatus()]);
+-    } catch (error) {
+-      this.requestError = getErrorMessage(error);
+-      throw error;
+-    } finally {
+-      this.isLoading = false;
+-      this.syncPolling();
+-    }
+-  }
+-
+-  async claimUsername(username: string): Promise<void> {
+-    const claimedUsername = normalizeUsername(username);
+-
+-    if (!claimedUsername) {
+-      throw new Error("Username is required");
+-    }
+-
+-    this.requestError = null;
+-    this.isClaiming = true;
+-
+-    try {
+-      await this.api.post("/user/profile", { username: claimedUsername });
+-      await Promise.all([this.refreshProfile(), this.refreshStatus()]);
+-    } catch (error) {
+-      this.requestError = getErrorMessage(error);
+-      throw error;
+-    } finally {
+-      this.isClaiming = false;
+-      this.syncPolling();
+-    }
+-  }
+-
+-  async enable(): Promise<void> {
+-    const username = this.username;
+-
+-    if (!username) {
+-      throw new Error("Claim a username before enabling Bluesky");
+-    }
+-
+-    this.requestError = null;
+-    this.isEnabling = true;
+-
+-    try {
+-      const response = await this.api.post<AtprotoStatusResponse>(
+-        "/user/atproto/enable",
+-        { username },
+-      );
+-
+-      if (!this.disposed) {
+-        this.status = normalizeStatusResponse(response);
+-      }
+-    } catch (error) {
+-      this.requestError = getErrorMessage(error);
+-      await this.refreshStatusAfterFailure();
+-      throw error;
+-    } finally {
+-      this.isEnabling = false;
+-      this.syncPolling();
+-    }
+-  }
+-
+-  async disable(): Promise<void> {
+-    this.requestError = null;
+-    this.isDisabling = true;
+-
+-    try {
+-      const response = await this.api.post<AtprotoStatusResponse>(
+-        "/user/atproto/disable",
+-      );
+-
+-      if (!this.disposed) {
+-        this.status = normalizeStatusResponse(response);
+-      }
+-    } catch (error) {
+-      this.requestError = getErrorMessage(error);
+-      await this.refreshStatusAfterFailure();
+-      throw error;
+-    } finally {
+-      this.isDisabling = false;
+-      this.syncPolling();
+-    }
+-  }
+-
+-  dispose(): void {
+-    this.disposed = true;
+-    this.clearPolling();
+-  }
+-
+-  private async refreshProfile(): Promise<void> {
+-    const response = await this.api.get<ProfileResponse>("/user/profile");
+-
+-    if (this.disposed) {
+-      return;
+-    }
+-
+-    this.profile = {
+-      username: normalizeUsername(response.username),
+-    };
+-  }
+-
+-  private async refreshStatus(): Promise<void> {
+-    const response = await this.api.get<AtprotoStatusResponse>(
+-      "/user/atproto/status",
+-    );
+-
+-    if (this.disposed) {
+-      return;
+-    }
+-
+-    this.status = normalizeStatusResponse(response);
+-  }
+-
+-  private async refreshStatusAfterFailure(): Promise<void> {
+-    try {
+-      await this.refreshStatus();
+-    } catch {
+-      // Preserve the original request error when status refresh also fails.
+-    }
+-  }
+-
+-  private syncPolling(): void {
+-    this.clearPolling();
+-
+-    if (this.disposed || this.uiState !== "pending" || typeof window === "undefined") {
+-      return;
+-    }
+-
+-    this.pollTimeout = window.setTimeout(async () => {
+-      try {
+-        await this.refreshStatus();
+-      } catch (error) {
+-        this.requestError = getErrorMessage(error);
+-      } finally {
+-        this.syncPolling();
+-      }
+-    }, this.pollIntervalMs);
+-  }
+-
+-  private clearPolling(): void {
+-    if (this.pollTimeout !== null) {
+-      clearTimeout(this.pollTimeout);
+-      this.pollTimeout = null;
+-    }
+-  }
+-}
+diff --git a/web/src/lib/brand.ts b/web/src/lib/brand.ts
+index 6ff185d..de4311f 100644
+--- a/web/src/lib/brand.ts
++++ b/web/src/lib/brand.ts
+@@ -1,5 +1,5 @@
+ export const BRAND = {
+-  name: 'Divine Login',
+-  shortName: 'Divine',
+-  tagline: 'Sign in to Nostr apps with your email',
++  name: 'Belfry',
++  shortName: 'Belfry',
++  tagline: 'Your key to the Open Source Village apps',
+ } as const;
+diff --git a/web/src/lib/components/AtprotoSettingsCard.svelte b/web/src/lib/components/AtprotoSettingsCard.svelte
+deleted file mode 100644
+index 08f7ebe..0000000
+--- a/web/src/lib/components/AtprotoSettingsCard.svelte
++++ /dev/null
+@@ -1,339 +0,0 @@
+-<script lang="ts">
+-  import { onDestroy, onMount } from "svelte";
+-  import { toast } from "svelte-hot-french-toast";
+-  import { AtprotoSettingsModel } from "$lib/atproto_status.svelte";
+-
+-  const settings = new AtprotoSettingsModel();
+-
+-  let usernameInput = $state("");
+-
+-  $effect(() => {
+-    if (settings.username && settings.username !== usernameInput && !settings.isBusy) {
+-      usernameInput = settings.username;
+-    }
+-  });
+-
+-  onMount(async () => {
+-    try {
+-      await settings.load();
+-    } catch (error) {
+-      toast.error(error instanceof Error ? error.message : "Failed to load Bluesky settings");
+-    }
+-  });
+-
+-  onDestroy(() => {
+-    settings.dispose();
+-  });
+-
+-  async function handleClaimUsername() {
+-    try {
+-      await settings.claimUsername(usernameInput);
+-      toast.success("Username claimed");
+-    } catch (error) {
+-      toast.error(error instanceof Error ? error.message : "Failed to claim username");
+-    }
+-  }
+-
+-  async function handleEnable() {
+-    try {
+-      await settings.enable();
+-      toast.success("Bluesky provisioning started");
+-    } catch (error) {
+-      toast.error(error instanceof Error ? error.message : "Failed to enable Bluesky");
+-    }
+-  }
+-
+-  async function handleDisable() {
+-    try {
+-      await settings.disable();
+-      toast.success("Bluesky cross-posting disabled");
+-    } catch (error) {
+-      toast.error(error instanceof Error ? error.message : "Failed to disable Bluesky");
+-    }
+-  }
+-</script>
+-
+-<div class="section bluesky-section" data-testid="bluesky-settings-card">
+-  <div class="section-header">
+-    <h2>Bluesky Account</h2>
+-    <p>
+-      Claim your Divine handle, provision your Bluesky identity, and control whether future
+-      cross-posts are allowed.
+-    </p>
+-  </div>
+-
+-  {#if settings.isLoading && !settings.status && !settings.profile}
+-    <div class="state-panel">
+-      <span class="state-badge neutral">Loading</span>
+-      <p>Checking your claimed username and Bluesky lifecycle.</p>
+-    </div>
+-  {:else}
+-    {#if settings.requestError}
+-      <div class="notice error" role="status">
+-        <strong>Request issue</strong>
+-        <p>{settings.requestError}</p>
+-      </div>
+-    {/if}
+-
+-    {#if settings.uiState === "claim_username"}
+-      <div class="state-panel">
+-        <span class="state-badge neutral">No username claimed</span>
+-        <p>Claim a <strong>username.divine.video</strong> handle before you enable Bluesky.</p>
+-
+-        <div class="claim-row">
+-          <label class="form-group" for="atproto-username">
+-            <span>Username</span>
+-            <div class="username-field">
+-              <input
+-                id="atproto-username"
+-                type="text"
+-                bind:value={usernameInput}
+-                autocomplete="off"
+-                autocapitalize="none"
+-                spellcheck="false"
+-                placeholder="yourname"
+-                disabled={settings.isClaiming}
+-              />
+-              <span class="domain-suffix">.divine.video</span>
+-            </div>
+-          </label>
+-
+-          <button
+-            class="btn-primary"
+-            onclick={handleClaimUsername}
+-            disabled={settings.isClaiming || !usernameInput.trim()}
+-          >
+-            {settings.isClaiming ? "Claiming..." : "Claim username"}
+-          </button>
+-        </div>
+-
+-        <p class="helper-copy">Use letters, numbers, and hyphens only.</p>
+-      </div>
+-    {:else if settings.uiState === "ready_to_enable"}
+-      <div class="state-panel">
+-        <span class="state-badge neutral">Bluesky disabled</span>
+-        <div class="handle-chip">{settings.handle}</div>
+-        <p>
+-          Enabling will provision a DID, publish your handle, and turn on future cross-posting once
+-          the lifecycle reaches ready.
+-        </p>
+-        <button class="btn-primary" onclick={handleEnable} disabled={settings.isEnabling}>
+-          {settings.isEnabling ? "Starting..." : "Enable Bluesky account"}
+-        </button>
+-      </div>
+-    {:else if settings.uiState === "pending"}
+-      <div class="state-panel">
+-        <span class="state-badge pending">Provisioning</span>
+-        <div class="handle-chip">@{settings.handle}</div>
+-        <p>Provisioning in progress. This page will keep checking until the lifecycle settles.</p>
+-      </div>
+-    {:else if settings.uiState === "ready"}
+-      <div class="state-panel">
+-        <span class="state-badge ready">Ready</span>
+-        <div class="handle-chip">@{settings.handle}</div>
+-        <dl class="details-grid">
+-          <div>
+-            <dt>DID</dt>
+-            <dd>{settings.did}</dd>
+-          </div>
+-        </dl>
+-        <p>Public handle resolution and future cross-posting are active.</p>
+-        <button class="btn-secondary" onclick={handleDisable} disabled={settings.isDisabling}>
+-          {settings.isDisabling ? "Disabling..." : "Disable Bluesky account"}
+-        </button>
+-      </div>
+-    {:else if settings.uiState === "failed"}
+-      <div class="state-panel">
+-        <span class="state-badge failed">Failed</span>
+-        <div class="handle-chip">{settings.handle}</div>
+-        <p>The last provisioning attempt failed. You can retry with the same claimed username.</p>
+-        {#if settings.provisioningError}
+-          <div class="notice error" role="status">
+-            <strong>Last error</strong>
+-            <p>{settings.provisioningError}</p>
+-          </div>
+-        {/if}
+-        <button class="btn-primary" onclick={handleEnable} disabled={settings.isEnabling}>
+-          {settings.isEnabling ? "Retrying..." : "Enable Bluesky account"}
+-        </button>
+-      </div>
+-    {:else if settings.uiState === "disabled"}
+-      <div class="state-panel">
+-        <span class="state-badge disabled">Disabled</span>
+-        <div class="handle-chip">{settings.handle}</div>
+-        <p>Public DID resolution and future cross-posting are disabled for this handle.</p>
+-        <button class="btn-primary" onclick={handleEnable} disabled={settings.isEnabling}>
+-          {settings.isEnabling ? "Starting..." : "Enable Bluesky account"}
+-        </button>
+-      </div>
+-    {/if}
+-  {/if}
+-</div>
+-
+-<style>
+-  .bluesky-section {
+-    border-color: color-mix(in srgb, var(--color-divine-green) 25%, var(--color-divine-border));
+-  }
+-
+-  .state-panel {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 1rem;
+-    padding: 1.25rem;
+-    border-radius: 10px;
+-    background:
+-      linear-gradient(135deg, color-mix(in srgb, var(--color-divine-green) 8%, transparent), transparent 45%),
+-      var(--color-divine-bg);
+-    border: 1px solid color-mix(in srgb, var(--color-divine-green) 18%, var(--color-divine-border));
+-  }
+-
+-  .state-panel p {
+-    margin: 0;
+-    color: var(--color-divine-text-secondary);
+-    font-size: 0.92rem;
+-    line-height: 1.5;
+-  }
+-
+-  .state-badge {
+-    display: inline-flex;
+-    align-self: flex-start;
+-    padding: 0.35rem 0.7rem;
+-    border-radius: 9999px;
+-    font-size: 0.75rem;
+-    font-weight: 700;
+-    letter-spacing: 0.04em;
+-    text-transform: uppercase;
+-  }
+-
+-  .state-badge.neutral {
+-    background: var(--color-divine-muted);
+-    color: var(--color-divine-text);
+-  }
+-
+-  .state-badge.pending {
+-    background: color-mix(in srgb, var(--color-divine-warning) 15%, transparent);
+-    color: var(--color-divine-warning);
+-  }
+-
+-  .state-badge.ready {
+-    background: color-mix(in srgb, var(--color-divine-green) 15%, transparent);
+-    color: var(--color-divine-green);
+-  }
+-
+-  .state-badge.failed {
+-    background: color-mix(in srgb, var(--color-divine-error) 14%, transparent);
+-    color: var(--color-divine-error);
+-  }
+-
+-  .state-badge.disabled {
+-    background: color-mix(in srgb, var(--color-divine-text-secondary) 14%, transparent);
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  .handle-chip {
+-    width: fit-content;
+-    max-width: 100%;
+-    padding: 0.55rem 0.85rem;
+-    border-radius: 9999px;
+-    background: color-mix(in srgb, var(--color-divine-bg) 70%, var(--color-divine-surface));
+-    border: 1px solid var(--color-divine-border);
+-    color: var(--color-divine-text);
+-    font-family: var(--font-mono);
+-    font-size: 0.88rem;
+-    overflow-wrap: anywhere;
+-  }
+-
+-  .claim-row {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 0.9rem;
+-  }
+-
+-  .username-field {
+-    display: grid;
+-    grid-template-columns: minmax(0, 1fr) auto;
+-    align-items: center;
+-    background: var(--color-divine-surface);
+-    border: 1px solid var(--color-divine-border);
+-    border-radius: var(--radius-md);
+-    overflow: hidden;
+-  }
+-
+-  .username-field input {
+-    border: 0;
+-    border-radius: 0;
+-    background: transparent;
+-  }
+-
+-  .username-field input:focus {
+-    border-color: transparent;
+-  }
+-
+-  .domain-suffix {
+-    padding: 0 0.85rem 0 0.3rem;
+-    color: var(--color-divine-text-secondary);
+-    font-size: 0.88rem;
+-    white-space: nowrap;
+-  }
+-
+-  .helper-copy {
+-    font-size: 0.8rem;
+-  }
+-
+-  .details-grid {
+-    display: grid;
+-    gap: 0.75rem;
+-    margin: 0;
+-  }
+-
+-  .details-grid dt {
+-    margin-bottom: 0.2rem;
+-    color: var(--color-divine-text-secondary);
+-    font-size: 0.76rem;
+-    font-weight: 600;
+-    letter-spacing: 0.04em;
+-    text-transform: uppercase;
+-  }
+-
+-  .details-grid dd {
+-    margin: 0;
+-    color: var(--color-divine-text);
+-    font-family: var(--font-mono);
+-    font-size: 0.88rem;
+-    overflow-wrap: anywhere;
+-  }
+-
+-  .notice {
+-    padding: 0.95rem 1rem;
+-    border-radius: 10px;
+-    border: 1px solid transparent;
+-  }
+-
+-  .notice strong {
+-    display: block;
+-    margin-bottom: 0.25rem;
+-    font-size: 0.82rem;
+-  }
+-
+-  .notice p {
+-    margin: 0;
+-  }
+-
+-  .notice.error {
+-    background: color-mix(in srgb, var(--color-divine-error) 10%, var(--color-divine-bg));
+-    border-color: color-mix(in srgb, var(--color-divine-error) 30%, transparent);
+-  }
+-
+-  .notice.error strong,
+-  .notice.error p {
+-    color: var(--color-divine-error);
+-  }
+-
+-  @media (min-width: 700px) {
+-    .claim-row {
+-      align-items: end;
+-      grid-template-columns: minmax(0, 1fr) auto;
+-      display: grid;
+-    }
+-  }
+-</style>
+diff --git a/web/src/lib/components/CreateBunkerModal.svelte b/web/src/lib/components/CreateBunkerModal.svelte
+index 56157ef..20f6981 100644
+--- a/web/src/lib/components/CreateBunkerModal.svelte
++++ b/web/src/lib/components/CreateBunkerModal.svelte
+@@ -129,7 +129,7 @@
+ 				<div class="modal-body">
+ 					<div class="info-box">
+ 						<strong>You probably don't need this</strong>
+-						<p>The Divine app and any app with "Sign in with Divine" already work with your email and password. This is only for Nostr apps that need a connection URL. Browse them at <a href="https://nostrapps.com" target="_blank" rel="noopener noreferrer">nostrapps.com</a>.</p>
++						<p>The Open Source Village apps already work with "Sign in with Belfry". This is only for Nostr apps that need a connection URL. Browse them at <a href="https://nostrapps.com" target="_blank" rel="noopener noreferrer">nostrapps.com</a>.</p>
+ 					</div>
+ 
+ 					<p class="description">
+diff --git a/web/src/lib/components/Header.svelte b/web/src/lib/components/Header.svelte
+index cfe9760..b71ced9 100644
+--- a/web/src/lib/components/Header.svelte
++++ b/web/src/lib/components/Header.svelte
+@@ -34,7 +34,7 @@ onMount(async () => {
+ 
+ <div class="container flex flex-row items-center justify-between mb-8">
+ 	<a href="/" class="flex flex-col items-start gap-0 group transition-opacity hover:opacity-85">
+-		<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="h-[22px]" />
++		<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="h-[22px]" />
+ 		<span class="text-[10px] font-medium tracking-[3px] uppercase text-[var(--color-divine-green)] opacity-60">Login</span>
+ 	</a>
+ 
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index c32084c..75c42bd 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -447,13 +447,13 @@ $effect(() => {
+ 
+ 						<div class="learn-block">
+ 							<h4><ShieldCheck size={16} weight="fill" /> Where Is Your Key?</h4>
+-							<p>When you sign up with email and password, Divine generates a Nostr key for you and stores it on <a href="https://login.divine.video" target="_blank" rel="noopener noreferrer">login.divine.video</a>, encrypted using the same standards banks and password managers rely on (<a href="https://en.wikipedia.org/wiki/Advanced_Encryption_Standard" target="_blank" rel="noopener noreferrer">1</a>,<a href="https://cloud.google.com/security/products/security-key-management" target="_blank" rel="noopener noreferrer">2</a>). Your key is only decrypted in memory when an app needs to sign on your behalf, and is never stored in plain text.</p>
+-							<p>Any Nostr app that supports Divine Login, like <a href="https://privdm.com" target="_blank" rel="noopener noreferrer" class="inline-link">Priv DM <ArrowSquareOut size={12} /></a>, can use your identity with just your email and password. No copying keys between apps, no manual setup.</p>
++							<p>When your pass was activated, Belfry generated a Nostr key for you and keeps it here, encrypted using the same standards banks and password managers rely on (<a href="https://en.wikipedia.org/wiki/Advanced_Encryption_Standard" target="_blank" rel="noopener noreferrer">1</a>,<a href="https://cloud.google.com/security/products/security-key-management" target="_blank" rel="noopener noreferrer">2</a>). Your key is only decrypted in memory when an app needs to sign on your behalf, and is never stored in plain text.</p>
++							<p>The Open Source Village apps use your identity through "Sign in with Belfry". No copying keys between apps, no manual setup.</p>
+ 						</div>
+ 
+ 						<div class="learn-block">
+ 							<h4><Key size={16} weight="fill" /> Already Have a Nostr Key?</h4>
+-							<p>You don't need a Divine account at all. Import your nsec into the Divine app and everything stays on your device.</p>
++							<p>Full-access members can export the key Belfry holds and use their own signer instead; see below.</p>
+ 						</div>
+ 
+ 						<div class="learn-block">
+@@ -463,12 +463,12 @@ $effect(() => {
+ 								<li><strong>Your phone:</strong> <a href="https://primal.net" target="_blank" rel="noopener noreferrer" class="inline-link">Primal <ArrowSquareOut size={12} /></a> (iOS & Android), <a href="https://github.com/greenart7c3/Amber" target="_blank" rel="noopener noreferrer" class="inline-link">Amber <ArrowSquareOut size={12} /></a> (Android), or <a href="https://nsec.app" target="_blank" rel="noopener noreferrer" class="inline-link">nsec.app <ArrowSquareOut size={12} /></a> (any browser) turn your device into a personal signing server. When a Nostr app needs your signature, it asks your device and your key never leaves it.</li>
+ 								<li><strong>Your browser:</strong> Extensions like <a href="https://getalby.com" target="_blank" rel="noopener noreferrer" class="inline-link">Alby <ArrowSquareOut size={12} /></a> or <a href="https://chromewebstore.google.com/detail/soapboxpub-signer/nnodjkgakfpkckcnbacpcjbpmlmbihdd" target="_blank" rel="noopener noreferrer" class="inline-link">Soapbox Signer <ArrowSquareOut size={12} /></a> (Chrome, Firefox) keep your key in the browser itself. <a href="https://apps.apple.com/app/nostash/id6499558903" target="_blank" rel="noopener noreferrer" class="inline-link">Nostash <ArrowSquareOut size={12} /></a> does the same for Safari on iOS.</li>
+ 							</ul>
+-							<p>With these options, each app that needs your signature must connect to your signer individually. Divine Login handles that for you automatically.</p>
++							<p>With these options, each app that needs your signature must connect to your signer individually. Belfry handles that for you automatically.</p>
+ 						</div>
+ 
+ 						<div class="learn-block highlight">
+ 							<h4><ShieldCheck size={16} weight="fill" /> Why This Matters</h4>
+-							<p>Unlike Twitter or Facebook, <strong>no company owns your Nostr identity</strong>. Even if Divine disappeared tomorrow, your identity and content would still exist on the network. Export your key and continue anywhere.</p>
++							<p>Unlike Twitter or Facebook, <strong>no company owns your Nostr identity</strong>. Even if Belfry disappeared tomorrow, your identity and content would still exist on the network. Export your key and continue anywhere.</p>
+ 							<p class="learn-cta">That's the power of Nostr.</p>
+ 							<div class="learn-explore">
+ 								<a href="https://nostrapps.com" target="_blank" rel="noopener noreferrer">Explore Nostr apps at nostrapps.com <ArrowSquareOut size={12} /></a>
+@@ -494,7 +494,7 @@ $effect(() => {
+ 					<div class="empty-state">
+ 						<p>No app connections yet.</p>
+ 						<p class="hint">
+-							The Divine app and any app with "Sign in with Divine" already work with your email and password. Use this to connect to other Nostr apps. Browse them at <a href="https://nostrapps.com" target="_blank" rel="noopener noreferrer">nostrapps.com</a>.
++							The Open Source Village apps already work with "Sign in with Belfry". Use this to connect other Nostr apps. Browse them at <a href="https://nostrapps.com" target="_blank" rel="noopener noreferrer">nostrapps.com</a>.
+ 						</p>
+ 					</div>
+ 				{:else}
+@@ -725,7 +725,7 @@ $effect(() => {
+ 		<div class="landing-content">
+ 			<!-- Logo/Branding -->
+ 			<a href="/" class="landing-logo">
+-				<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="landing-logo-img" />
++				<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="landing-logo-img" />
+ 				<span class="landing-logo-sub">Login</span>
+ 			</a>
+ 
+@@ -764,7 +764,7 @@ $effect(() => {
+ 						<PlugsConnected size={24} weight="fill" />
+ 					</div>
+ 					<h3>Works across apps</h3>
+-					<p>Sign in to any Nostr app that supports Divine Login. One account, everywhere.</p>
++					<p>Sign in to the Open Source Village apps and any Nostr app that supports Belfry. One account, everywhere.</p>
+ 				</div>
+ 
+ 				<div class="feature-card">
+diff --git a/web/src/routes/app/callback/+page.svelte b/web/src/routes/app/callback/+page.svelte
+index f7523dc..eec7a50 100644
+--- a/web/src/routes/app/callback/+page.svelte
++++ b/web/src/routes/app/callback/+page.svelte
+@@ -8,7 +8,7 @@ const currentUrl = $derived(browser ? $page.url.href : "");
+ </script>
+ 
+ <svelte:head>
+-    <title>Returning to App - Divine Login</title>
++    <title>Returning to App - Belfry</title>
+     <meta name="robots" content="noindex">
+ </svelte:head>
+ 
+diff --git a/web/src/routes/cancel-email-change/+page.svelte b/web/src/routes/cancel-email-change/+page.svelte
+index bece703..cf88d86 100644
+--- a/web/src/routes/cancel-email-change/+page.svelte
++++ b/web/src/routes/cancel-email-change/+page.svelte
+@@ -37,7 +37,7 @@
+ <div class="auth-page">
+ 	<div class="auth-container">
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt={BRAND.shortName} class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt={BRAND.shortName} class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/confirm-email-change/+page.svelte b/web/src/routes/confirm-email-change/+page.svelte
+index 0e037a9..26253b8 100644
+--- a/web/src/routes/confirm-email-change/+page.svelte
++++ b/web/src/routes/confirm-email-change/+page.svelte
+@@ -36,7 +36,7 @@
+ <div class="auth-page">
+ 	<div class="auth-container">
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt={BRAND.shortName} class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt={BRAND.shortName} class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/demo/+page.svelte b/web/src/routes/demo/+page.svelte
+deleted file mode 100644
+index c02ffe2..0000000
+--- a/web/src/routes/demo/+page.svelte
++++ /dev/null
+@@ -1,1116 +0,0 @@
+-<script lang="ts">
+-  import { onMount } from "svelte";
+-  import { browser } from "$app/environment";
+-  import { page } from "$app/stores";
+-  import { replaceState } from "$app/navigation";
+-  import DemoSection from "$lib/components/demo/DemoSection.svelte";
+-  import ResultDisplay from "$lib/components/demo/ResultDisplay.svelte";
+-  import Copy from "$lib/components/Copy.svelte";
+-  import {
+-    Key,
+-    Lightning,
+-    Lock,
+-    LockOpen,
+-    ArrowRight,
+-    Plugs,
+-    Code,
+-  } from "phosphor-svelte";
+-
+-  // Import @divinevideo/login library
+-  import { createKeycastClient, KeycastRpc, generatePkce } from "@divinevideo/login";
+-  import { getViteDomain } from "$lib/utils/env";
+-
+-  // Configuration
+-  const SERVER_URL = getViteDomain();
+-  const CLIENT_ID = "Divine Login Demo";
+-  console.log(
+-    "SERVER_URL:",
+-    SERVER_URL,
+-    "VITE_DOMAIN:",
+-    getViteDomain(),
+-  );
+-
+-  // Create Keycast client (initialized in onMount for SSR safety)
+-  let client: ReturnType<typeof createKeycastClient> | null = null;
+-  let rpc: KeycastRpc | null = null;
+-
+-  // State
+-  type Status = "idle" | "loading" | "success" | "error";
+-
+-  let identity: { nsec: string; npub: string; pubkey: string } | null =
+-    $state(null);
+-  let credentials: {
+-    bunkerUrl: string;
+-    accessToken: string;
+-    nostrApi: string;
+-    authorizationHandle?: string;
+-  } | null = $state(null);
+-  let connected = $derived(credentials !== null);
+-
+-  // OAuth state
+-  let oauthStatus: Status = $state("idle");
+-  let oauthError: string | null = $state(null);
+-
+-  // RPC states
+-  let pubkeyStatus: Status = $state("idle");
+-  let pubkeyResult: string | null = $state(null);
+-  let pubkeyError: string | null = $state(null);
+-
+-  let signStatus: Status = $state("idle");
+-  let signResult: object | null = $state(null);
+-  let signError: string | null = $state(null);
+-  let signContent = $state("Hello from Keycast demo!");
+-
+-  // Encrypt/Decrypt states for NIP-44
+-  let encryptMethod: "nip44" | "nip04" = $state("nip44");
+-  let encryptPubkey = $state("");
+-  let encryptInput = $state("Secret message");
+-  let encryptStatus: Status = $state("idle");
+-  let encryptResult: string | null = $state(null);
+-  let encryptError: string | null = $state(null);
+-
+-  let decryptInput = $state("");
+-  let decryptStatus: Status = $state("idle");
+-  let decryptResult: string | null = $state(null);
+-  let decryptError: string | null = $state(null);
+-
+-  // Initialize Keycast client (must be called in browser)
+-  function initClient() {
+-    if (!browser || client) return;
+-
+-    const redirectUri = window.location.origin + window.location.pathname;
+-    client = createKeycastClient({
+-      serverUrl: SERVER_URL,
+-      clientId: CLIENT_ID,
+-      redirectUri,
+-      storage: localStorage,
+-    });
+-  }
+-
+-  // Generate test identity using nostr-tools
+-  async function generateIdentity() {
+-    if (!browser) return;
+-
+-    const { generateSecretKey, getPublicKey } = await import(
+-      "nostr-tools/pure"
+-    );
+-    const { nsecEncode, npubEncode } = await import("nostr-tools/nip19");
+-
+-    const sk = generateSecretKey();
+-    const pk = getPublicKey(sk);
+-
+-    identity = {
+-      nsec: nsecEncode(sk),
+-      npub: npubEncode(pk),
+-      pubkey: pk,
+-    };
+-
+-    sessionStorage.setItem("demo_identity", JSON.stringify(identity));
+-  }
+-
+-  // OAuth: Connect with server-generated key
+-  async function connectWithKeycast() {
+-    initClient();
+-    if (!client) return;
+-
+-    oauthStatus = "loading";
+-    oauthError = null;
+-
+-    try {
+-      // Library auto-loads authorization handle from storage for silent re-auth
+-      const { url, pkce } = await client.oauth.getAuthorizationUrl({
+-        scopes: ["policy:social"],
+-        defaultRegister: true,
+-      });
+-
+-      console.log("OAuth URL:", url); // Debug
+-      // Library stores PKCE in localStorage automatically
+-      sessionStorage.setItem("byok_used", "false");
+-
+-      window.location.href = url;
+-    } catch (e) {
+-      oauthStatus = "error";
+-      oauthError = e instanceof Error ? e.message : "OAuth error";
+-    }
+-  }
+-
+-  // OAuth: Connect with existing key (BYOK)
+-  async function connectWithBYOK() {
+-    initClient();
+-    if (!client) return;
+-
+-    if (!identity) {
+-      oauthError = "Generate an identity first";
+-      return;
+-    }
+-
+-    oauthStatus = "loading";
+-    oauthError = null;
+-
+-    try {
+-      // Pubkey is derived automatically from nsec inside the library
+-      const { url, pkce } = await client.oauth.getAuthorizationUrl({
+-        scopes: ["policy:social"],
+-        defaultRegister: true,
+-        nsec: identity.nsec,
+-      });
+-
+-      // Library stores PKCE in localStorage automatically
+-      sessionStorage.setItem("byok_used", "true");
+-      sessionStorage.setItem("byok_pubkey", identity.pubkey);
+-
+-      window.location.href = url;
+-    } catch (e) {
+-      oauthStatus = "error";
+-      oauthError = e instanceof Error ? e.message : "OAuth error";
+-    }
+-  }
+-
+-  // Exchange authorization code for tokens
+-  async function exchangeCode(code: string) {
+-    initClient();
+-    if (!client) return;
+-
+-    oauthStatus = "loading";
+-
+-    try {
+-      // Library auto-loads PKCE from storage and saves session after exchange
+-      const tokens = await client.oauth.exchangeCode(code);
+-
+-      credentials = {
+-        bunkerUrl: tokens.bunker_url,
+-        accessToken: tokens.access_token ?? "",
+-        nostrApi: `${SERVER_URL}/api/nostr`,
+-        authorizationHandle: tokens.authorization_handle,
+-      };
+-
+-      // Create RPC client from tokens
+-      rpc = client.createRpc(tokens);
+-
+-      oauthStatus = "success";
+-
+-      // Clean URL (remove code/state params after exchange)
+-      replaceState(window.location.pathname, {});
+-    } catch (e) {
+-      oauthStatus = "error";
+-      oauthError = e instanceof Error ? e.message : "Token exchange failed";
+-    }
+-  }
+-
+-  // Initialize RPC client from stored credentials
+-  function initRpc() {
+-    if (rpc || !credentials?.accessToken) return;
+-
+-    rpc = new KeycastRpc({
+-      nostrApi: credentials.nostrApi,
+-      accessToken: credentials.accessToken,
+-    });
+-  }
+-
+-  // RPC: Get public key
+-  async function rpcGetPublicKey() {
+-    initRpc();
+-    if (!rpc) {
+-      pubkeyError = "Not connected";
+-      pubkeyStatus = "error";
+-      return;
+-    }
+-
+-    pubkeyStatus = "loading";
+-    pubkeyResult = null;
+-    pubkeyError = null;
+-
+-    try {
+-      const result = await rpc.getPublicKey();
+-      pubkeyResult = result;
+-      pubkeyStatus = "success";
+-
+-      // Auto-populate encrypt pubkey only if empty
+-      if (!encryptPubkey) {
+-        encryptPubkey = result;
+-      }
+-    } catch (e) {
+-      pubkeyStatus = "error";
+-      pubkeyError = e instanceof Error ? e.message : "RPC error";
+-    }
+-  }
+-
+-  // RPC: Sign event
+-  async function rpcSignEvent() {
+-    initRpc();
+-    if (!rpc) {
+-      signError = "Not connected";
+-      signStatus = "error";
+-      return;
+-    }
+-
+-    signStatus = "loading";
+-    signResult = null;
+-    signError = null;
+-
+-    try {
+-      const unsignedEvent = {
+-        kind: 1,
+-        content: signContent,
+-        tags: [],
+-        created_at: Math.floor(Date.now() / 1000),
+-        pubkey:
+-          pubkeyResult ||
+-          "0000000000000000000000000000000000000000000000000000000000000000",
+-      };
+-
+-      const result = await rpc.signEvent(unsignedEvent);
+-      signResult = result;
+-      signStatus = "success";
+-    } catch (e) {
+-      signStatus = "error";
+-      signError = e instanceof Error ? e.message : "Signing failed";
+-    }
+-  }
+-
+-  // RPC: Encrypt
+-  async function rpcEncrypt() {
+-    initRpc();
+-    if (!rpc) {
+-      encryptError = "Not connected";
+-      encryptStatus = "error";
+-      return;
+-    }
+-
+-    if (!encryptPubkey) {
+-      encryptError = "Enter a recipient pubkey";
+-      encryptStatus = "error";
+-      return;
+-    }
+-
+-    encryptStatus = "loading";
+-    encryptResult = null;
+-    encryptError = null;
+-
+-    try {
+-      const result =
+-        encryptMethod === "nip44"
+-          ? await rpc.nip44Encrypt(encryptPubkey, encryptInput)
+-          : await rpc.nip04Encrypt(encryptPubkey, encryptInput);
+-      encryptResult = result;
+-      encryptStatus = "success";
+-    } catch (e) {
+-      encryptStatus = "error";
+-      encryptError = e instanceof Error ? e.message : "Encryption failed";
+-    }
+-  }
+-
+-  // RPC: Decrypt
+-  async function rpcDecrypt() {
+-    initRpc();
+-    if (!rpc) {
+-      decryptError = "Not connected";
+-      decryptStatus = "error";
+-      return;
+-    }
+-
+-    if (!encryptPubkey) {
+-      decryptError = "Enter the sender pubkey";
+-      decryptStatus = "error";
+-      return;
+-    }
+-
+-    decryptStatus = "loading";
+-    decryptResult = null;
+-    decryptError = null;
+-
+-    try {
+-      const result =
+-        encryptMethod === "nip44"
+-          ? await rpc.nip44Decrypt(encryptPubkey, decryptInput)
+-          : await rpc.nip04Decrypt(encryptPubkey, decryptInput);
+-      decryptResult = result;
+-      decryptStatus = "success";
+-    } catch (e) {
+-      decryptStatus = "error";
+-      decryptError = e instanceof Error ? e.message : "Decryption failed";
+-    }
+-  }
+-
+-  // Use encrypted result as decrypt input
+-  function useAsDecryptInput() {
+-    if (encryptResult) {
+-      decryptInput = encryptResult;
+-    }
+-  }
+-
+-  // Clear everything and sign out
+-  async function disconnect() {
+-    initClient();
+-
+-    // Library handles session storage and logout API call
+-    if (client) {
+-      client.oauth.logout();
+-    }
+-
+-    // Clear demo-specific sessionStorage (library clears its own PKCE/session)
+-    sessionStorage.removeItem("byok_used");
+-
+-    // Clear in-memory state
+-    credentials = null;
+-    rpc = null;
+-    oauthStatus = "idle";
+-    sessionStorage.removeItem("byok_pubkey");
+-    sessionStorage.removeItem("demo_identity");
+-
+-    // Reload page to show fresh state
+-    window.location.reload();
+-  }
+-
+-  // Initialize on mount
+-  onMount(async () => {
+-    initClient();
+-
+-    // Load stored identity
+-    const storedIdentity = sessionStorage.getItem("demo_identity");
+-    if (storedIdentity) {
+-      identity = JSON.parse(storedIdentity);
+-    } else {
+-      await generateIdentity();
+-    }
+-
+-    // Load stored session from library
+-    if (client) {
+-      const storedSession = client.oauth.getSession();
+-      if (storedSession) {
+-        credentials = {
+-          bunkerUrl: storedSession.bunkerUrl,
+-          accessToken: storedSession.accessToken ?? "",
+-          nostrApi: `${SERVER_URL}/api/nostr`,
+-          authorizationHandle: storedSession.authorizationHandle,
+-        };
+-        oauthStatus = "success";
+-      }
+-    }
+-
+-    // Check for OAuth callback
+-    const urlParams = new URLSearchParams(window.location.search);
+-    const code = urlParams.get("code");
+-    const error = urlParams.get("error");
+-
+-    if (error) {
+-      oauthStatus = "error";
+-      oauthError = urlParams.get("error_description") || error;
+-      window.history.replaceState({}, document.title, window.location.pathname);
+-    } else if (code) {
+-      await exchangeCode(code);
+-    }
+-  });
+-</script>
+-
+-<svelte:head>
+-  <title>Integration Demo - Keycast</title>
+-</svelte:head>
+-
+-<div class="max-w-3xl mx-auto py-8">
+-  <!-- Header -->
+-  <header class="mb-8">
+-    <h1 class="text-3xl font-bold font-heading flex items-center gap-3">
+-      <Plugs size={32} weight="duotone" class="text-divine-green" />
+-      Integration Demo
+-    </h1>
+-    <p class="mt-2" style="color: var(--color-divine-text-secondary);">
+-      Test Keycast OAuth and REST signing APIs.
+-      <a href="/docs" class="text-link">View API documentation</a>
+-    </p>
+-  </header>
+-
+-  <!-- Step 1: Connect -->
+-  <DemoSection
+-    title="1. Connect"
+-    description="Authenticate with Keycast to get signing credentials"
+-    tooltip="OAuth 2.0 with PKCE security"
+-  >
+-    {#if connected}
+-      <div class="connected-banner">
+-        <span class="connected-text">Connected</span>
+-        <button class="btn btn-secondary" onclick={disconnect}>
+-          Disconnect
+-        </button>
+-      </div>
+-
+-      <p class="hint-text">
+-        To test the OAuth approval flow again, first <a
+-          href="/"
+-          class="text-link">revoke the "Divine Login Demo" authorization</a
+-        > in your dashboard, then click Disconnect above.
+-      </p>
+-
+-      {#if credentials?.bunkerUrl}
+-        <div class="credential-display">
+-          <div class="credential-label">Bunker URL</div>
+-          <div class="credential-value">
+-            <code>{credentials.bunkerUrl.substring(0, 60)}...</code>
+-            <Copy value={credentials.bunkerUrl} size="16" />
+-          </div>
+-        </div>
+-      {/if}
+-    {:else}
+-      <div class="connect-options">
+-        <div class="connect-option">
+-          <h3>
+-            <Key size={20} weight="duotone" />
+-            New Registration
+-          </h3>
+-          <p>Keycast will generate a new Nostr identity for you.</p>
+-          <button
+-            class="btn btn-primary"
+-            onclick={connectWithKeycast}
+-            disabled={oauthStatus === "loading"}
+-          >
+-            {oauthStatus === "loading"
+-              ? "Connecting..."
+-              : "Connect with Keycast"}
+-          </button>
+-        </div>
+-
+-        <div class="divider">or</div>
+-
+-        <div class="connect-option">
+-          <h3>
+-            <Lock size={20} weight="duotone" />
+-            Bring Your Own Key
+-          </h3>
+-          <p>
+-            Use an existing Nostr identity. Your key is securely transferred via
+-            PKCE.
+-          </p>
+-
+-          {#if identity}
+-            <div class="identity-display">
+-              <div class="identity-row">
+-                <span class="identity-label">npub</span>
+-                <code>{identity.npub.substring(0, 20)}...</code>
+-                <Copy value={identity.npub} size="14" />
+-              </div>
+-            </div>
+-            <div class="button-group">
+-              <button
+-                class="btn btn-primary"
+-                onclick={connectWithBYOK}
+-                disabled={oauthStatus === "loading"}
+-              >
+-                {oauthStatus === "loading"
+-                  ? "Connecting..."
+-                  : "Connect with This Key"}
+-              </button>
+-              <button class="btn btn-secondary" onclick={generateIdentity}>
+-                Generate New
+-              </button>
+-            </div>
+-          {/if}
+-        </div>
+-      </div>
+-
+-      {#if oauthStatus === "error" && oauthError}
+-        <div class="error-banner">{oauthError}</div>
+-      {/if}
+-    {/if}
+-  </DemoSection>
+-
+-  <!-- Step 2: Sign Events (only shown when connected) -->
+-  {#if connected}
+-    <DemoSection
+-      title="2. Sign Events"
+-      description="Sign Nostr events using the REST RPC API"
+-      tooltip="Low-latency signing without relays"
+-    >
+-      <div class="action-group">
+-        <button class="btn btn-primary" onclick={rpcGetPublicKey}>
+-          <Lightning size={16} weight="fill" />
+-          Get Public Key
+-        </button>
+-        <ResultDisplay
+-          status={pubkeyStatus}
+-          result={pubkeyResult}
+-          error={pubkeyError}
+-          label="Public Key"
+-        />
+-      </div>
+-
+-      <div class="action-group">
+-        <div class="form-group">
+-          <label for="sign-content">Event Content</label>
+-          <textarea
+-            id="sign-content"
+-            bind:value={signContent}
+-            rows="2"
+-            placeholder="Enter your message..."
+-          ></textarea>
+-        </div>
+-        <button class="btn btn-primary" onclick={rpcSignEvent}>
+-          <Lightning size={16} weight="fill" />
+-          Sign Event
+-        </button>
+-        <ResultDisplay
+-          status={signStatus}
+-          result={signResult}
+-          error={signError}
+-          label="Signed Event"
+-        />
+-      </div>
+-    </DemoSection>
+-
+-    <!-- Step 3: Encrypt/Decrypt -->
+-    <DemoSection
+-      title="3. Encrypt / Decrypt"
+-      description="NIP-44 (modern) and NIP-04 (legacy) encryption"
+-      tooltip="Choose encryption method for private messages"
+-    >
+-      <!-- Method selector -->
+-      <div class="method-selector">
+-        <button
+-          class="method-btn"
+-          class:active={encryptMethod === "nip44"}
+-          onclick={() => (encryptMethod = "nip44")}
+-        >
+-          NIP-44 (Modern)
+-        </button>
+-        <button
+-          class="method-btn"
+-          class:active={encryptMethod === "nip04"}
+-          onclick={() => (encryptMethod = "nip04")}
+-        >
+-          NIP-04 (Legacy)
+-        </button>
+-      </div>
+-
+-      <div class="form-group">
+-        <label for="encrypt-pubkey">Recipient/Sender Pubkey (hex)</label>
+-        <input
+-          id="encrypt-pubkey"
+-          type="text"
+-          bind:value={encryptPubkey}
+-          placeholder="Auto-filled with your key for testing"
+-        />
+-      </div>
+-
+-      <!-- Encrypt/Decrypt Row -->
+-      <div class="encrypt-decrypt-row">
+-        <div class="action-group flex-1">
+-          <label for="encrypt-input" class="form-label">Plaintext</label>
+-          <textarea
+-            id="encrypt-input"
+-            bind:value={encryptInput}
+-            rows="2"
+-            placeholder="Enter message to encrypt..."
+-          ></textarea>
+-          <button class="btn btn-primary" onclick={rpcEncrypt}>
+-            <Lock size={16} weight="fill" />
+-            Encrypt
+-          </button>
+-          <ResultDisplay
+-            status={encryptStatus}
+-            result={encryptResult}
+-            error={encryptError}
+-            label="Ciphertext"
+-          />
+-          {#if encryptStatus === "success" && encryptResult}
+-            <button
+-              class="btn btn-sm btn-ghost mt-2"
+-              onclick={useAsDecryptInput}
+-            >
+-              <ArrowRight size={14} />
+-              Use as decrypt input
+-            </button>
+-          {/if}
+-        </div>
+-
+-        <div class="action-group flex-1">
+-          <label for="decrypt-input" class="form-label">Ciphertext</label>
+-          <textarea
+-            id="decrypt-input"
+-            bind:value={decryptInput}
+-            rows="2"
+-            placeholder="Paste ciphertext to decrypt..."
+-          ></textarea>
+-          <button class="btn btn-primary" onclick={rpcDecrypt}>
+-            <LockOpen size={16} weight="fill" />
+-            Decrypt
+-          </button>
+-          <ResultDisplay
+-            status={decryptStatus}
+-            result={decryptResult}
+-            error={decryptError}
+-            label="Plaintext"
+-          />
+-        </div>
+-      </div>
+-    </DemoSection>
+-
+-    <!-- Code Examples -->
+-    <DemoSection
+-      title="Code Examples"
+-      description="Using @divinevideo/login library"
+-    >
+-      <div class="code-example">
+-        <div class="code-header">
+-          <Code size={16} />
+-          <span>1. Setup OAuth Client</span>
+-        </div>
+-        <pre><code
+-            >import {"{"} createKeycastClient {"}"} from '@divinevideo/login';
+-
+-const client = createKeycastClient({"{"}
+-  serverUrl: '${SERVER_URL}',
+-  clientId: 'your-app',
+-  redirectUri: window.location.origin + '/callback',
+-{"}"});
+-
+-// Start OAuth flow (PKCE auto-stored in localStorage)
+-const {"{"} url {"}"} = await client.oauth.getAuthorizationUrl({"{"}
+-  scopes: ['policy:social'],
+-{"}"});
+-window.location.href = url;</code
+-          ></pre>
+-      </div>
+-
+-      <div class="code-example">
+-        <div class="code-header">
+-          <Code size={16} />
+-          <span>2. Exchange Code for Tokens</span>
+-        </div>
+-        <pre><code
+-            >// On callback page (PKCE auto-loaded from localStorage)
+-const code = new URLSearchParams(location.search).get('code');
+-const tokens = await client.oauth.exchangeCode(code);
+-// tokens.bunker_url  - NIP-46 bunker URL
+-// tokens.access_token - UCAN for REST RPC</code
+-          ></pre>
+-      </div>
+-
+-      <div class="code-example">
+-        <div class="code-header">
+-          <Code size={16} />
+-          <span>3a. REST RPC (Low Latency)</span>
+-        </div>
+-        <pre><code
+-            >// Create RPC client from tokens
+-const rpc = client.createRpc(tokens);
+-
+-// Or create directly
+-import {"{"} KeycastRpc {"}"} from '@divinevideo/login';
+-const rpc = new KeycastRpc({"{"}
+-  nostrApi: '${SERVER_URL}/api/nostr',
+-  accessToken: tokens.access_token,
+-{"}"});
+-
+-const pubkey = await rpc.getPublicKey();
+-const signed = await rpc.signEvent(unsignedEvent);
+-const cipher = await rpc.nip44Encrypt(pubkey, 'secret');</code
+-          ></pre>
+-      </div>
+-
+-      <div class="code-example">
+-        <div class="code-header">
+-          <Code size={16} />
+-          <span>3b. NIP-46 Bunker (via nostr-tools)</span>
+-        </div>
+-        <pre><code
+-            >// Use bunker URL with nostr-tools directly
+-import {"{"} BunkerSigner {"}"} from 'nostr-tools/nip46';
+-
+-const bunkerUrl = tokens.bunker_url;
+-// bunker://&lt;pubkey&gt;?relay=...&amp;secret=...
+-
+-const signer = new BunkerSigner(pool, bunkerUrl);
+-await signer.connect();
+-
+-const pubkey = await signer.getPublicKey();
+-const signed = await signer.signEvent(unsignedEvent);</code
+-          ></pre>
+-      </div>
+-    </DemoSection>
+-  {/if}
+-
+-  <!-- Library Info -->
+-  <aside class="library-info">
+-    <h3>Using @divinevideo/login</h3>
+-    <p>Install the TypeScript client for easier integration:</p>
+-    <code class="install-command">npm install @divinevideo/login</code>
+-    <a
+-      href="https://github.com/divinevideo/keycast/tree/main/@divinevideo/login"
+-      class="text-link"
+-    >
+-      View documentation on GitHub →
+-    </a>
+-  </aside>
+-</div>
+-
+-<style>
+-  /* Links */
+-  .text-link {
+-    color: var(--color-divine-green);
+-    text-decoration: none;
+-  }
+-  .text-link:hover {
+-    text-decoration: underline;
+-  }
+-
+-  /* Buttons */
+-  .btn {
+-    display: inline-flex;
+-    align-items: center;
+-    justify-content: center;
+-    gap: 0.5rem;
+-    padding: 0.625rem 1.25rem;
+-    font-size: 0.875rem;
+-    font-weight: 500;
+-    border-radius: var(--radius-md);
+-    border: 1px solid transparent;
+-    cursor: pointer;
+-    transition: all 0.15s ease;
+-  }
+-
+-  .btn:disabled {
+-    opacity: 0.5;
+-    cursor: not-allowed;
+-  }
+-
+-  .btn-primary {
+-    background: var(--color-divine-green) !important;
+-    color: var(--color-divine-bg) !important;
+-    border-color: var(--color-divine-green) !important;
+-  }
+-
+-  .btn-primary:hover:not(:disabled) {
+-    background: #00a87a !important;
+-    box-shadow: 0 2px 8px rgba(0, 180, 136, 0.3);
+-  }
+-
+-  .btn-secondary {
+-    background: var(--color-divine-muted);
+-    color: var(--color-divine-text);
+-    border-color: var(--color-divine-border);
+-  }
+-
+-  .btn-secondary:hover:not(:disabled) {
+-    background: var(--color-divine-surface);
+-    border-color: var(--color-divine-text-tertiary);
+-  }
+-
+-
+-  .btn-ghost {
+-    background: transparent;
+-    color: var(--color-divine-text-secondary);
+-    border: none;
+-  }
+-
+-  .btn-ghost:hover:not(:disabled) {
+-    background: var(--color-divine-muted);
+-    color: var(--color-divine-text);
+-  }
+-
+-  .btn-sm {
+-    padding: 0.375rem 0.75rem;
+-    font-size: 0.8125rem;
+-  }
+-
+-  /* Connected Banner */
+-  .connected-banner {
+-    display: flex;
+-    align-items: center;
+-    justify-content: space-between;
+-    padding: 1rem;
+-    background: rgba(0, 180, 136, 0.1);
+-    border: 1px solid var(--color-divine-green);
+-    border-radius: var(--radius-lg);
+-  }
+-
+-  .connected-text {
+-    display: flex;
+-    align-items: center;
+-    gap: 0.5rem;
+-    font-weight: 600;
+-    color: var(--color-divine-green);
+-  }
+-
+-  .connected-text::before {
+-    content: "";
+-    width: 8px;
+-    height: 8px;
+-    background: var(--color-divine-green);
+-    border-radius: 50%;
+-  }
+-
+-  /* Credentials */
+-  .credential-display {
+-    margin-top: 1rem;
+-  }
+-
+-  .credential-display .credential-label {
+-    display: block;
+-    font-size: 0.75rem;
+-    font-weight: 500;
+-    text-transform: uppercase;
+-    letter-spacing: 0.05em;
+-    color: var(--color-divine-text-secondary);
+-    margin-bottom: 0.25rem;
+-  }
+-
+-  .credential-value {
+-    display: flex;
+-    align-items: center;
+-    gap: 0.5rem;
+-    padding: 0.5rem;
+-    background: var(--color-divine-muted);
+-    border-radius: var(--radius-md);
+-    font-family: var(--font-mono);
+-    font-size: 0.875rem;
+-  }
+-
+-  .credential-value code {
+-    flex: 1;
+-    word-break: break-all;
+-  }
+-
+-  /* Connect Options */
+-  .connect-options {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 1.5rem;
+-  }
+-
+-  .connect-option {
+-    padding: 1.25rem;
+-    background: var(--color-divine-muted);
+-    border-radius: var(--radius-lg);
+-  }
+-
+-  .connect-option h3 {
+-    display: flex;
+-    align-items: center;
+-    gap: 0.5rem;
+-    margin: 0 0 0.5rem 0;
+-    font-size: 1rem;
+-    font-weight: 600;
+-  }
+-
+-  .connect-option p {
+-    margin: 0 0 1rem 0;
+-    font-size: 0.875rem;
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  .divider {
+-    text-align: center;
+-    color: var(--color-divine-text-tertiary);
+-    font-size: 0.875rem;
+-  }
+-
+-  /* Identity Display */
+-  .identity-display {
+-    margin-bottom: 1rem;
+-    padding: 0.75rem;
+-    background: var(--color-divine-surface);
+-    border: 1px solid var(--color-divine-border);
+-    border-radius: var(--radius-md);
+-  }
+-
+-  .identity-row {
+-    display: flex;
+-    align-items: center;
+-    gap: 0.5rem;
+-    font-family: var(--font-mono);
+-    font-size: 0.75rem;
+-  }
+-
+-  .identity-label {
+-    font-family: var(--font-sans);
+-    font-weight: 500;
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  .button-group {
+-    display: flex;
+-    gap: 0.5rem;
+-    flex-wrap: wrap;
+-  }
+-
+-  /* Error Banner */
+-  .error-banner {
+-    margin-top: 1rem;
+-    padding: 0.75rem 1rem;
+-    background: rgba(239, 68, 68, 0.1);
+-    border: 1px solid var(--color-divine-error);
+-    border-radius: var(--radius-md);
+-    color: var(--color-divine-error);
+-    font-size: 0.875rem;
+-  }
+-
+-  /* Form Elements */
+-  .action-group {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 0.75rem;
+-  }
+-
+-  .form-group {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 0.25rem;
+-  }
+-
+-  .form-group label,
+-  .form-label {
+-    font-size: 0.875rem;
+-    font-weight: 500;
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  input,
+-  textarea {
+-    background: var(--color-divine-muted);
+-    color: var(--color-divine-text);
+-    border: 1px solid var(--color-divine-border);
+-    border-radius: var(--radius-md);
+-    padding: 0.75rem;
+-    font-size: 0.875rem;
+-    font-family: var(--font-mono);
+-  }
+-
+-  textarea {
+-    resize: vertical;
+-  }
+-
+-  input:focus,
+-  textarea:focus {
+-    outline: none;
+-    border-color: var(--color-divine-green);
+-    box-shadow: 0 0 0 2px rgba(0, 180, 136, 0.2);
+-  }
+-
+-  /* Method Selector */
+-  .method-selector {
+-    display: flex;
+-    gap: 0.5rem;
+-    padding: 0.25rem;
+-    background: var(--color-divine-muted);
+-    border-radius: var(--radius-md);
+-    width: fit-content;
+-  }
+-
+-  .method-btn {
+-    padding: 0.5rem 1rem;
+-    font-size: 0.8125rem;
+-    font-weight: 500;
+-    background: transparent;
+-    color: var(--color-divine-text-secondary);
+-    border: none;
+-    border-radius: var(--radius-sm);
+-    cursor: pointer;
+-    transition: all 0.15s ease;
+-  }
+-
+-  .method-btn:hover {
+-    background: var(--color-divine-surface);
+-    color: var(--color-divine-text);
+-  }
+-
+-  .method-btn.active {
+-    background: var(--color-divine-green);
+-    color: var(--color-divine-bg);
+-  }
+-
+-  /* Encrypt/Decrypt Row */
+-  .encrypt-decrypt-row {
+-    display: grid;
+-    grid-template-columns: 1fr 1fr;
+-    gap: 1.5rem;
+-  }
+-
+-  @media (max-width: 640px) {
+-    .encrypt-decrypt-row {
+-      grid-template-columns: 1fr;
+-    }
+-  }
+-
+-  .flex-1 {
+-    flex: 1;
+-  }
+-
+-  .mt-2 {
+-    margin-top: 0.5rem;
+-  }
+-
+-  /* Code Examples */
+-  .code-example {
+-    background: var(--color-divine-muted);
+-    border: 1px solid var(--color-divine-border);
+-    border-radius: var(--radius-md);
+-    overflow: hidden;
+-  }
+-
+-  .code-header {
+-    display: flex;
+-    align-items: center;
+-    gap: 0.5rem;
+-    padding: 0.5rem 0.75rem;
+-    background: var(--color-divine-surface);
+-    border-bottom: 1px solid var(--color-divine-border);
+-    font-size: 0.8125rem;
+-    font-weight: 500;
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  .code-example pre {
+-    margin: 0;
+-    padding: 0.75rem;
+-    overflow-x: auto;
+-  }
+-
+-  .code-example code {
+-    font-family: var(--font-mono);
+-    font-size: 0.8125rem;
+-    line-height: 1.5;
+-    color: var(--color-divine-text);
+-  }
+-
+-  /* Library Info */
+-  .library-info {
+-    margin-top: 3rem;
+-    padding: 1.5rem;
+-    background: var(--color-divine-surface);
+-    border: 1px solid var(--color-divine-border);
+-    border-radius: var(--radius-xl);
+-  }
+-
+-  .library-info h3 {
+-    margin: 0 0 0.5rem 0;
+-    font-size: 1rem;
+-    font-weight: 600;
+-  }
+-
+-  .library-info p {
+-    margin: 0 0 1rem 0;
+-    font-size: 0.875rem;
+-    color: var(--color-divine-text-secondary);
+-  }
+-
+-  .install-command {
+-    display: block;
+-    padding: 0.75rem 1rem;
+-    background: var(--color-divine-muted);
+-    border-radius: var(--radius-md);
+-    font-family: var(--font-mono);
+-    font-size: 0.875rem;
+-    margin-bottom: 1rem;
+-  }
+-
+-  :global(.text-divine-green) {
+-    color: var(--color-divine-green);
+-  }
+-
+-  /* Hint text */
+-  .hint-text {
+-    margin-top: 0.75rem;
+-    font-size: 0.8125rem;
+-    color: var(--color-divine-text-tertiary);
+-    line-height: 1.5;
+-  }
+-</style>
+diff --git a/web/src/routes/email-verification/continue/+page.svelte b/web/src/routes/email-verification/continue/+page.svelte
+index 6b08da0..b738231 100644
+--- a/web/src/routes/email-verification/continue/+page.svelte
++++ b/web/src/routes/email-verification/continue/+page.svelte
+@@ -157,7 +157,7 @@
+ 	<div class="verify-container">
+ 		<!-- Logo/Branding -->
+ 		<a href="/" class="verify-branding">
+-			<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="verify-logo-img" />
++			<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="verify-logo-img" />
+ 			<span class="verify-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/forgot-password/+page.svelte b/web/src/routes/forgot-password/+page.svelte
+index 9e906ef..c1097e9 100644
+--- a/web/src/routes/forgot-password/+page.svelte
++++ b/web/src/routes/forgot-password/+page.svelte
+@@ -38,7 +38,7 @@
+ <div class="auth-page">
+ 	<div class="auth-container">
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/login/+page.svelte b/web/src/routes/login/+page.svelte
+index 0c7f08b..52c83ed 100644
+--- a/web/src/routes/login/+page.svelte
++++ b/web/src/routes/login/+page.svelte
+@@ -179,7 +179,7 @@
+ 	<div class="auth-container">
+ 		<!-- Logo/Branding -->
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/register/+page.svelte b/web/src/routes/register/+page.svelte
+index aba7417..cb7a178 100644
+--- a/web/src/routes/register/+page.svelte
++++ b/web/src/routes/register/+page.svelte
+@@ -84,7 +84,7 @@
+ 	<div class="auth-container">
+ 		<!-- Logo/Branding -->
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/reset-password/+page.svelte b/web/src/routes/reset-password/+page.svelte
+index 3b2cdbb..ef4b09f 100644
+--- a/web/src/routes/reset-password/+page.svelte
++++ b/web/src/routes/reset-password/+page.svelte
+@@ -56,7 +56,7 @@
+ <div class="auth-page">
+ 	<div class="auth-container">
+ 		<a href="/" class="auth-branding">
+-			<img src="/divine-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
++			<img src="/belfry-logo.svg" alt="{BRAND.shortName}" class="auth-logo-img" />
+ 			<span class="auth-logo-sub">Login</span>
+ 		</a>
+ 
+diff --git a/web/src/routes/settings/security/+page.svelte b/web/src/routes/settings/security/+page.svelte
+index 87134b9..b294a79 100644
+--- a/web/src/routes/settings/security/+page.svelte
++++ b/web/src/routes/settings/security/+page.svelte
+@@ -2,7 +2,6 @@
+ 	import { getCurrentUser, setCurrentUser } from '$lib/current_user.svelte';
+ 	import { getAccountStatus, isEmailVerified, fetchAccountStatus } from '$lib/account_status.svelte';
+ 	import { KeycastApi } from '$lib/keycast_api.svelte';
+-	import AtprotoSettingsCard from '$lib/components/AtprotoSettingsCard.svelte';
+ 	import PasswordInput from '$lib/components/PasswordInput.svelte';
+ 	import { BRAND } from '$lib/brand';
+ 	import { toast } from 'svelte-hot-french-toast';
+@@ -254,7 +253,6 @@
+ 			<a href="/" class="btn-primary">Go to Dashboard</a>
+ 		</div>
+ 	{:else}
+-	<AtprotoSettingsCard />
+ 
+ 	<!-- Password Verification Section (Always Visible) -->
+ 	<div class="section">
+diff --git a/web/src/routes/support-admin/+page.svelte b/web/src/routes/support-admin/+page.svelte
+index bcf5607..cd57265 100644
+--- a/web/src/routes/support-admin/+page.svelte
++++ b/web/src/routes/support-admin/+page.svelte
+@@ -300,7 +300,7 @@
+ 					<input
+ 						type="text"
+ 						bind:value={searchQuery}
+-						placeholder="Email, Divine username, Vine ID, or pubkey"
++						placeholder="Email, username, Odoo partner id (vine_id), or pubkey"
+ 						class="search-input"
+ 						disabled={isSearching}
+ 					/>
+diff --git a/web/static/apple-touch-icon.png b/web/static/apple-touch-icon.png
+deleted file mode 100644
+index 11cb695163dabd40f63596af5fdfba06e998a202..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 5576
+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
+Wp+5Wh!X0M-0000<MNUMnLSTY%{gb``
+
+diff --git a/web/static/belfry-logo.svg b/web/static/belfry-logo.svg
+new file mode 100644
+index 0000000..7c7ea82
+--- /dev/null
++++ b/web/static/belfry-logo.svg
+@@ -0,0 +1 @@
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 44" role="img" aria-label="Belfry"><title>Belfry</title><g fill="#1F2A44"><path d="M22 4c-1.6 0-3 1.3-3 3v1.2C13 9.6 9 15 9 21.5V29l-4 4v2h34v-2l-4-4v-7.5C35 15 31 9.6 25 8.2V7c0-1.7-1.4-3-3-3zm0 36a4 4 0 0 0 4-4h-8a4 4 0 0 0 4 4z"/><text x="48" y="31" font-family="system-ui, -apple-system, Segoe UI, sans-serif" font-size="26" font-weight="600" letter-spacing="1">Belfry</text></g></svg>
+diff --git a/web/static/divine-logo.svg b/web/static/divine-logo.svg
+deleted file mode 100644
+index 853a46a..0000000
+--- a/web/static/divine-logo.svg
++++ /dev/null
+@@ -1,18 +0,0 @@
+-<?xml version="1.0" encoding="UTF-8"?>
+-<svg id="Lager_1" data-name="Lager 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1411.74 370.99">
+-  <defs>
+-    <style>
+-      .cls-1 {
+-        fill: #27c58b;
+-      }
+-    </style>
+-  </defs>
+-  <path class="cls-1" d="M263.98,9.82v352.87c0,1.68-1.36,3.05-3.05,3.05h-65.85c-1.68,0-3.05-1.36-3.05-3.05v-28.88h-.95c-7.62,11.12-18.03,20.09-31.21,26.92-13.18,6.82-27.56,10.25-43.13,10.25-21.6,0-41.3-5.64-59.08-16.92-17.79-11.27-31.77-26.92-41.93-46.93C5.24,286.79,0,263.84,0,238.27s5.39-48.68,16.2-69.33c10.16-19.69,24.22-35.09,42.17-46.21,17.94-11.12,37.56-16.68,58.85-16.68,14.29.32,27.95,3.33,40.98,9.05,13.02,5.72,23.98,13.99,32.88,24.78h.95V9.82c0-1.68,1.36-3.05,3.05-3.05h65.85c1.68,0,3.05,1.36,3.05,3.05ZM182.26,201.81c-5.24-11.11-12.47-19.84-21.68-26.19-9.21-6.36-19.38-9.54-30.49-9.54s-21.29,3.18-30.5,9.54c-9.21,6.35-16.44,15.08-21.68,26.19-5.24,11.13-7.86,23.35-7.86,36.7s2.62,25.57,7.86,36.68c5.24,11.13,12.46,19.85,21.68,26.21,9.21,6.36,19.37,9.52,30.5,9.52s21.28-3.16,30.49-9.52c9.21-6.36,16.44-15.08,21.68-26.21,5.24-11.11,7.86-23.34,7.86-36.68s-2.62-25.57-7.86-36.7Z"/>
+-  <path class="cls-1" d="M1126.44,365.73h-65.85c-1.68,0-3.05-1.36-3.05-3.05v-135.61c0-20.01-3.5-34.94-10.49-44.79-7.62-10.8-19.85-16.21-36.68-16.21s-29.39,6.51-37.64,19.54c-7.63,11.12-11.44,26.68-11.44,46.69v130.37c0,1.68-1.36,3.05-3.05,3.05h-65.85c-1.68,0-3.05-1.36-3.05-3.05V114.33c0-1.68,1.36-3.05,3.05-3.05h65.85c1.68,0,3.05,1.36,3.05,3.05v25.54h1.43c6.67-10.48,16.68-18.74,30.02-24.78,13.34-6.03,28.59-9.05,45.74-9.05,16.21.32,30.65,3.5,43.36,9.53,14.61,7.31,25.89,18.27,33.83,32.88,9.21,17.15,13.82,38.76,13.82,64.8v149.43c0,1.68-1.36,3.05-3.05,3.05Z"/>
+-  <path class="cls-1" d="M772.88,114.33v248.35c0,1.68,1.36,3.05,3.05,3.05h65.85c1.68,0,3.05-1.36,3.05-3.05V114.33c0-1.68-1.36-3.05-3.05-3.05h-65.85c-1.68,0-3.05,1.36-3.05,3.05Z"/>
+-  <circle class="cls-1" cx="808.85" cy="41.29" r="41.29"/>
+-  <circle class="cls-1" cx="343.27" cy="41.29" r="41.29"/>
+-  <path class="cls-1" d="M307.3,114.33v248.35c0,1.68,1.36,3.05,3.05,3.05h65.85c1.68,0,3.05-1.36,3.05-3.05V114.33c0-1.68-1.36-3.05-3.05-3.05h-65.85c-1.68,0-3.05,1.36-3.05,3.05Z"/>
+-  <path class="cls-1" d="M575.23,368.83c-88.27,0-165.75-167.4-166.57-359.01,0-1.69,1.36-3.06,3.05-3.06h64.38c1.68,0,3.04,1.36,3.05,3.04.8,180.96,72.37,286.49,96.19,288.54,25.34,0,95.99-93.04,95.99-187.07,0-22.5-18.27-40.8-40.73-40.8-19.01,0-39.3,15.12-40.88,37.94-.11,1.61-1.43,2.86-3.04,2.86h-64.44c-1.71,0-3.1-1.41-3.05-3.12,1.66-59.93,51-108.17,111.42-108.17s111.21,49.92,111.21,111.28c0,110.08-82.35,257.55-166.57,257.55Z"/>
+-  <path class="cls-1" d="M1411.74,245.39c0-26.37-5.32-56.43-15.96-76.45-10.64-20.01-25.5-35.49-44.56-46.46-19.06-10.96-40.82-16.44-65.28-16.44s-46.46,5.48-65.99,16.44-34.87,26.13-45.98,45.51c-11.44,20.66-17.16,44.08-17.16,70.28s5.87,49.64,17.63,70.28c11.11,19.06,26.45,34.07,45.98,45.03,19.53,10.95,41.38,16.75,65.51,17.39,27.32.31,51.15-4.61,71.48-14.77,17.12-8.41,31.69-20.36,43.7-35.88,1.11-1.44.71-3.53-.85-4.46l-43.99-26.48c-1.26-.76-2.88-.5-3.85.59-8.73,9.81-17.94,16.87-27.64,21.2-10.32,4.6-22.31,6.43-35.98,6.43-25.62,0-58.67-21.38-60.99-53.15h180.19c1.59,0,2.91-1.22,3.04-2.8.46-5.42.69-10.84.69-16.26ZM1285.95,159.89c14.3,0,26.65,4.68,36.5,15,8.41,8.83,17.08,22.89,17.72,42.55h-112.41c.85-17.84,10.06-32.88,19.98-41.9,11.3-10.28,23.91-15.65,38.2-15.65Z"/>
+-</svg>
+\ No newline at end of file
+diff --git a/web/static/favicon-96x96.png b/web/static/favicon-96x96.png
+deleted file mode 100644
+index c7a653c5ca642d2a06d0c4886e0c9cf8439d9e9d..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 3019
+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
+N002ovPDHLkV1nmVc;^5B
+
+diff --git a/web/static/favicon.ico b/web/static/favicon.ico
+deleted file mode 100644
+index b9998e728c242aa75ae1ee185777e5463f3b5355..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 15086
+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
+QjwNM+I$wxYj!WDB0sbw}sQ>@~
+
+diff --git a/web/static/favicon.svg b/web/static/favicon.svg
+index 85b1ee9..1628263 100644
+--- a/web/static/favicon.svg
++++ b/web/static/favicon.svg
+@@ -1,3 +1 @@
+-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svgjs="http://svgjs.dev/svgjs" width="466" height="466" viewBox="0 0 466 466"><image width="466" height="466" xlink:href="data:image/png;base64,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"></image><style>@media (prefers-color-scheme: light) { :root { filter: none; } }
+-@media (prefers-color-scheme: dark) { :root { filter: invert(100%); } }
+-</style></svg>
+\ No newline at end of file
++<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 44"><rect width="44" height="44" rx="10" fill="#1F2A44"/><path fill="#fff" d="M22 6c-1.6 0-3 1.3-3 3v1.2C13 11.6 9 17 9 23.5V31l-4 4v2h34v-2l-4-4v-7.5C35 17 31 11.6 25 10.2V9c0-1.7-1.4-3-3-3zm0 36a4 4 0 0 0 4-4h-8a4 4 0 0 0 4 4z"/></svg>
+diff --git a/web/static/site.webmanifest b/web/static/site.webmanifest
+index 502c174..ec1bf2d 100644
+--- a/web/static/site.webmanifest
++++ b/web/static/site.webmanifest
+@@ -1,21 +1,10 @@
+ {
+-  "name": "Divine Login",
+-  "short_name": "Divine",
++  "name": "Belfry",
++  "short_name": "Belfry",
+   "icons": [
+-    {
+-      "src": "/web-app-manifest-192x192.png",
+-      "sizes": "192x192",
+-      "type": "image/png",
+-      "purpose": "maskable"
+-    },
+-    {
+-      "src": "/web-app-manifest-512x512.png",
+-      "sizes": "512x512",
+-      "type": "image/png",
+-      "purpose": "maskable"
+-    }
++    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+   ],
+-  "theme_color": "#ffffff",
++  "theme_color": "#1F2A44",
+   "background_color": "#ffffff",
+   "display": "standalone"
+-}
+\ No newline at end of file
++}
+diff --git a/web/static/web-app-manifest-192x192.png b/web/static/web-app-manifest-192x192.png
+deleted file mode 100644
+index 1c0879fe02f8d9d123dd5bdadd811577ac02c323..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 6477
+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
+DE@3;Y
+
+diff --git a/web/static/web-app-manifest-512x512.png b/web/static/web-app-manifest-512x512.png
+deleted file mode 100644
+index 1d14053da009b187c554b6c386679a5bca2fbaea..0000000000000000000000000000000000000000
+GIT binary patch
+literal 0
+HcmV?d00001
+
+literal 18627
+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
+KJLR{n!~ZWyf5eIa
+

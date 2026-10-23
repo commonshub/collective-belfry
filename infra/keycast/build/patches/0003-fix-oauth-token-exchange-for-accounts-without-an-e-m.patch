@@ -1,7 +1,7 @@
-From febaf4c589cd8171c66ed69309953873f878dd8d Mon Sep 17 00:00:00 2001
+From 022fb7baf641923733da55e66deee02fbf547a8c Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 11:11:44 +0200
-Subject: [PATCH 3/3] fix(oauth): token exchange for accounts without an e-mail
+Subject: [PATCH 3/5] fix(oauth): token exchange for accounts without an e-mail
 
 The authorization-code grant read users.email as non-null, so a preloaded,
 unclaimed account (email NULL) got 503 'Service temporarily unavailable'
@@ -59,6 +59,3 @@ index f58fb6c..2be28f6 100644
      // =========================================================================
      // Key change methods
      // =========================================================================
--- 
-2.53.0
-

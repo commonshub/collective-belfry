@@ -98,6 +98,8 @@ TOKEN_RESP=$(curl -sS -X POST "$KC_URL/api/oauth/token" -H 'Content-Type: applic
 TOKEN=$(jq -r '.access_token // empty' <<<"$TOKEN_RESP" 2>/dev/null || true)
 [[ -n "$TOKEN" ]] || fail "token exchange returned no access_token: $(head -c 300 <<<"$TOKEN_RESP")"
 say "code -> access token"
+# PRINT_TOKEN=1: hand the access token to the caller (the smoke test signs a Blossom auth event with it).
+[[ "${PRINT_TOKEN:-}" == 1 ]] && echo "ACCESS_TOKEN=$TOKEN"
 
 # 7. Sign with the participant's key.
 EVENT=$(jq -nc --arg pk "$EXPECT_PUB" --argjson t "$(date +%s)" \

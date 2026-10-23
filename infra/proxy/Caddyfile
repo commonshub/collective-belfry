@@ -69,6 +69,15 @@ relay.{$BELFRY_DOMAIN} {
 	reverse_proxy relay:8080
 }
 
+# Blossom file server through its gate (writes need an active pass; reads are public).
+blossom.{$BELFRY_DOMAIN} {
+	import security
+	request_body {
+		max_size 25MB
+	}
+	reverse_proxy blossom-gate:80
+}
+
 # Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
 bunker.{$BELFRY_DOMAIN} {
 	import security

@@ -50,6 +50,11 @@ services:
   relay:
     ports: !reset []
     restart: unless-stopped
+  blossom:
+    restart: unless-stopped
+  blossom-gate:
+    ports: !reset []
+    restart: unless-stopped
   issuer:
     ports: !reset []
     restart: unless-stopped

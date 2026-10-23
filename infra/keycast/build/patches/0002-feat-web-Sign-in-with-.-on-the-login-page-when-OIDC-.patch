@@ -1,7 +1,7 @@
-From 9e2bceff74de9006edb1bc405d9ab5e4d3835b2d Mon Sep 17 00:00:00 2001
+From b4b030011dc96d9397ab1bd88d1d38e5aac6a748 Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 10:57:58 +0200
-Subject: [PATCH 2/3] feat(web): 'Sign in with ...' on the login page when OIDC
+Subject: [PATCH 2/5] feat(web): 'Sign in with ...' on the login page when OIDC
  login is configured
 
 Reads GET /api/auth/oidc/config; continues automatically after the OIDC
@@ -95,6 +95,3 @@ index 301cee8..0c7f08b 100644
  	.auth-divider {
  		display: flex;
  		align-items: center;
--- 
-2.53.0
-
