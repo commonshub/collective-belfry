@@ -49,7 +49,7 @@ To move to a newer upstream commit, rebase the branch onto it, regenerate the pa
 | --- | --- |
 | `master.key` | 32 random bytes, base64, written by `scripts/gen-secrets.sh`. Gitignored. AES-256-GCM key for every stored Nostr secret: losing it makes all participant keys unreadable, so back it up with the database. |
 | `build/Dockerfile`, `build/patches/` | Image build: upstream at the pinned commit plus the Belfry patch series (see "The Belfry fork"). |
-| `policy.sql` | The `belfry-event` policy (kinds 0, 1, 7, 22242, 30023: profile, note, reaction, relay AUTH, long-form). Applied by `scripts/bootstrap.sh` on every run, idempotent, updates the kinds of an existing permission. |
+| `policy.sql` | The `belfry-event` policy: base kinds (0, 1, 5, 7, 10002, 22242, 27235), calendar NIP-52, photos NIP-68 + Blossom 24242, proposals NIP-88 and NIP-23 with NIP-22 comments, NIP-17 chat (13, 1059, 10050); the seed tenant's name. Applied by `scripts/bootstrap.sh` on every run, idempotent, updates the kinds of an existing permission. NIP-44 encrypt/decrypt are not kind-gated in Keycast. |
 
 ## The master.key path gotcha
 

@@ -249,6 +249,27 @@ else
   bad "no Keycast access token from step 6d"
 fi
 
+step "6g. policy kinds: calendar, photos, proposals and NIP-17 chat sign; others are refused"
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  kc_sign() { # kind [tags json] -> "ok" or the error
+    local ev; ev=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$1" --argjson tags "${2:-[]}" '{pubkey:$pk, created_at:$t, kind:$k, tags:$tags, content:"smoke"}')
+    local r; r=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')")
+    [[ -n "$(jq -r '.result.sig // empty' <<<"$r")" ]] && echo ok || jq -r '.error // .message // .' <<<"$r" | head -c 120
+  }
+  for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list"; do
+    k=${spec%%:*}; name=${spec#*:}; res=$(kc_sign "$k")
+    [[ "$res" == ok ]] && ok "kind $k ($name) signed" || bad "kind $k ($name): $res"
+  done
+  res=$(kc_sign 9735); [[ "$res" != ok ]] && ok "kind 9735 (zap receipt, not allowed) refused: $res" || bad "kind 9735 was signed although it is not in the policy"
+  ENC=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$KC_PUB" '{method:"nip44_encrypt", params:[$pk, "hello village"]}')")
+  CT=$(jq -r '.result // empty' <<<"$ENC")
+  [[ -n "$CT" ]] && ok "nip44_encrypt through the signer works (NIP-17 chat)" || bad "nip44_encrypt: $ENC"
+  DEC=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$KC_PUB" --arg ct "$CT" '{method:"nip44_decrypt", params:[$pk, $ct]}')")
+  [[ "$(jq -r '.result // empty' <<<"$DEC")" == "hello village" ]] && ok "nip44_decrypt round trip" || bad "nip44_decrypt: $DEC"
+else
+  bad "no Keycast access token from step 6d"
+fi
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(curl -sS -X POST "$ONB_URL/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"

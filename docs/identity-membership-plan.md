@@ -1,6 +1,6 @@
 # Belfry Identity & Membership Plan
 
-> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions; see docs/NEXT_STEPS.md §3b–§3e). The live doc is the source of truth.
+> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions, rev 47 the community app protocols; see docs/NEXT_STEPS.md §3b–§3h). The live doc is the source of truth.
 
 2026-10-20
 
@@ -209,6 +209,7 @@ The most urgent open decision is the event date, because it determines which EUD
 - [ ] Belfry as required witness for advanced members (recommended), or watcher only.
 - [x] Issuer stack: walt.id Issuer2 + Verifier2 (community), built 2026-10-23 as the spike recommended; provisional until the steward's check with the DIDroom maintainer, which can still add Credimi for testing. Belfry hosts the status list and the type metadata itself.
 - [x] Pass sign-in bridge: Belfry's own Python OIDC bridge over Verifier2 instead of the SUNET patch (decision of 2026-10-22 superseded 2026-10-23): the SUNET OIDC path verifies nothing and its HEAD does not build locally, Verifier2 runs anyway for the door, and Belfry's code is Python. Authentik links the pass source by username on the first login (`username_link`).
+- [x] Community app protocols, decided 2026-10-23: calendar NIP-52, photos NIP-68 with Blossom (gated by an active pass), proposals both NIP-88 polls and NIP-23 long-form with NIP-22 comments, chat NIP-17 (the managed key encrypts and decrypts through the signer). Keycast's `belfry-event` policy carries these kinds. Marketplace and links protocols are still open.
 - [x] Nostr keys are created eagerly at payment through preload-user, decided 2026-10-22, so the certificate carries the npub.
 - [ ] Directory and profile defaults: what is visible to other participants without opt-in.
 - [ ] Whether to request PID at checkout, and which attributes.
