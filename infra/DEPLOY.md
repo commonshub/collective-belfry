@@ -6,7 +6,7 @@ layout; the local stack (`infra/README.md`) is the same Compose project without 
 ## What you need
 
 - A VM with Docker and Compose v2, about 8 GB RAM, ports 80 and 443 open.
-- A domain and DNS records to the VM for `odoo.`, `login.`, `apps.`, `relay.`, `bunker.`, `issuer.`, `verifier.`, `pass.<domain>` and the apex `<domain>` (NIP-05 names are `<member>@<domain>`).
+- A domain and DNS records to the VM for `shop.` (Odoo), `login.`, `apps.`, `relay.`, `bunker.`, `issuer.`, `verifier.`, `pass.<domain>` and the apex `<domain>` (NIP-05 names are `<member>@<domain>`).
 - An SMTP relay for the activation mails (`SMTP_*`), and Stripe keys for Odoo's Stripe provider.
 
 ## Hetzner Cloud (the test deployment, belfry.tofauti.net)
@@ -42,7 +42,7 @@ infra/scripts/gen-secrets.sh
 # the password from your machine, never through .env: infra/scripts/put-secret.sh <ssh target> smtp_password
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml build keycast     # ~15 min
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
-ODOO_URL=https://odoo.belfry.example AK_URL=https://login.belfry.example KC_URL=https://apps.belfry.example infra/scripts/bootstrap.sh
+ODOO_URL=https://shop.belfry.example AK_URL=https://login.belfry.example KC_URL=https://apps.belfry.example infra/scripts/bootstrap.sh
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app up -d --build
 ```
 
@@ -84,10 +84,10 @@ The overlay unsets `OIDC_BACKCHANNEL_URL` for Keycast: it fetches Authentik's di
 
 | Host | Upstream | Blocked |
 | --- | --- | --- |
-| `odoo.` | Odoo | `/web/database/*` (master password protects it anyway) |
+| `shop.` | Odoo (`ODOO_HOST_PREFIX`, default `shop`; belfry.tofauti.net keeps `odoo.`) | `/web/database/*` (master password protects it anyway) |
 | `login.` | Authentik | |
 | `apps.` | Keycast web app and API | `/api/admin/*` (onboarding service only) |
-| apex | NIP-05 `/.well-known/nostr.json` → Keycast (with the tenant host); everything else redirects to `odoo.` | |
+| apex | NIP-05 `/.well-known/nostr.json` → Keycast (with the tenant host); everything else redirects to `shop.` | |
 | `relay.` | community relay (rnostr, NIP-42) | |
 | `bunker.` | Keycast's NIP-46 relay | |
 | `issuer.` | Issuer2 wallet-facing API | `/issuer2/*` (management API, no auth upstream) |

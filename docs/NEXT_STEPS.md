@@ -171,6 +171,8 @@ Open: the deployment run itself (and with it: Stripe test mode, a real wallet, p
 
 Found and fixed on the way: bootstrap's verifier probe and Keycast admin calls hit paths the proxy denies (now a lenient probe and `docker compose exec` inside the Keycast container); the Authentik seed brand was not flagged default on the fresh install (blueprint pins it); Keycast's backchannel to Authentik produced an `http://` issuer, so the overlay unsets `OIDC_BACKCHANNEL_URL` and Keycast uses the public HTTPS issuer; the proxy also denies Keycast's dev inbox. The activation mail reaches the OVH relay; the smoke address's fake domain is refused (expected), a real recipient is part of the real-user test.
 
+New setups name Odoo's host `shop.<domain>` instead of `odoo.` (decided 2026-10-23; `ODOO_HOST_PREFIX`, default `shop`, set by `prod-env.sh`); belfry.tofauti.net keeps `odoo.` through `ODOO_HOST_PREFIX=odoo` in its `.env`.
+
 Open there: a real wallet against the public issuer and door, the HTTP→HTTPS redirect is Caddy's default, Stripe test mode on the public Odoo, publishing the CA for wallets.
 
 ## 3j. Participant login by magic link, no passwords — built 2026-10-23

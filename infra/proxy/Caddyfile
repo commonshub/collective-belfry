@@ -22,8 +22,9 @@
 	encode zstd gzip
 }
 
-# Registry and billing: invite pages, Odoo payment links, back office.
-odoo.{$BELFRY_DOMAIN} {
+# Registry and billing: invite pages, Odoo payment links, back office. Host shop.<domain>
+# (ODOO_HOST_PREFIX; the first test deployment, belfry.tofauti.net, keeps odoo.).
+{$ODOO_HOST_PREFIX:shop}.{$BELFRY_DOMAIN} {
 	import security
 	# Database management is guarded by the master password; keep it off the internet anyway.
 	@dbmanager path /web/database/*
@@ -60,7 +61,7 @@ apps.{$BELFRY_DOMAIN} {
 	}
 	# Everything else on the apex: the invite/registry front door.
 	handle {
-		redir https://odoo.{$BELFRY_DOMAIN}{uri}
+		redir https://{$ODOO_HOST_PREFIX:shop}.{$BELFRY_DOMAIN}{uri}
 	}
 }
 

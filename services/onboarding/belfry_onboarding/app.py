@@ -101,7 +101,7 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def brand_cors(request: Request, call_next):
-        """Authentik (login.<domain>) and Odoo (odoo.<domain>) load the fonts from here; font
+        """Authentik (login.<domain>) and Odoo (shop.<domain>) load the fonts from here; font
         files are CORS-checked, so /brand answers every origin and may be cached for a day."""
         response = await call_next(request)
         if request.url.path.startswith("/brand/"):

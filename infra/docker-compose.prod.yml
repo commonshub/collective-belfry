@@ -17,6 +17,7 @@ services:
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       CADDY_TLS_ARG: ${CADDY_TLS_ARG:-${ACME_EMAIL}}
       KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
+      ODOO_HOST_PREFIX: ${ODOO_HOST_PREFIX:-shop}
     volumes:
       - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data

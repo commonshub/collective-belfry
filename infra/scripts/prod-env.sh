@@ -3,7 +3,7 @@
 #
 #   infra/scripts/prod-env.sh <domain> <acme e-mail>
 #
-# Hostnames (proxy/Caddyfile): odoo., login., apps., relay., bunker., issuer., verifier.,
+# Hostnames (proxy/Caddyfile): shop. (Odoo; ODOO_HOST_PREFIX=odoo keeps the old name), login., apps., relay., bunker., issuer., verifier.,
 # pass.<domain>; NIP-05 names are <member>@<domain>. Re-run gen-secrets.sh afterwards so the
 # issuer and verifier certificates carry the public hostnames, then bootstrap.
 set -euo pipefail
@@ -13,13 +13,14 @@ INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$INFRA_DIR/.env"
 [[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE; run scripts/gen-secrets.sh first" >&2; exit 1; }
 
-python3 - "$ENV_FILE" "$DOMAIN" "$ACME" <<'PY'
+python3 - "$ENV_FILE" "$DOMAIN" "$ACME" "${ODOO_HOST_PREFIX:-shop}" <<'PY'
 import re, sys
-path, domain, acme = sys.argv[1:]
+path, domain, acme, shop = sys.argv[1:]
 values = {
     "BELFRY_DOMAIN": domain,
     "ACME_EMAIL": acme,
-    "ODOO_PUBLIC_URL": f"https://odoo.{domain}",
+    "ODOO_HOST_PREFIX": shop,
+    "ODOO_PUBLIC_URL": f"https://{shop}.{domain}",
     "AUTHENTIK_PUBLIC_URL": f"https://login.{domain}",
     "KEYCAST_APP_URL": f"https://apps.{domain}",
     "KEYCAST_TENANT_DOMAIN": f"apps.{domain}",
