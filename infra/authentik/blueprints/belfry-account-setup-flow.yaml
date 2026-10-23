@@ -108,9 +108,12 @@ entries:
       stage: !KeyOf belfry-account-setup-login
       order: 30
 
-  # The recovery-link API uses the default brand's recovery flow.
+  # The recovery-link API uses the recovery flow of the brand matching the request host, falling
+  # back to the default brand. The seed brand is not always flagged default (seen on a fresh
+  # 2026.8.5 install behind a proxy), so it is pinned here; Belfry runs one brand.
   - model: authentik_brands.brand
     identifiers:
       domain: authentik-default
     attrs:
+      default: true
       flow_recovery: !KeyOf belfry-account-setup
