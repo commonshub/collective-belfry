@@ -21,10 +21,13 @@ set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a; . "$INFRA_DIR/.env"; set +a
+# Public deployment: set the public URLs (ODOO_URL, AK_URL, KC_URL, ONB_URL, BLOSSOM_URL) and
+# WALLET_MAP="" (the test wallet then uses the public hostnames); MAILPIT_URL is optional there.
 ODOO_URL=${ODOO_URL:-http://localhost:8069}
 AK_URL=${AK_URL:-http://localhost:9000}
 KC_URL=${KC_URL:-http://localhost:3000}
 ONB_URL=${ONB_URL:-http://localhost:8100}
+WALLET_MAP=${WALLET_MAP-localhost:7005=issuer:7005,localhost:7004=verifier:7004,localhost:8100=onboarding:8100}
 ODOO_DB=odoo
 FORM_FIELD_NAME=${FORM_FIELD_NAME:-name}
 FORM_FIELD_EMAIL=${FORM_FIELD_EMAIL:-email}
@@ -176,8 +179,10 @@ fi
 MAILPIT_URL=${MAILPIT_URL:-http://localhost:8025}
 ox mail.mail send "[$(jq -c 'map(.id)' <<<"$MAILS")]" >/dev/null || true
 sleep 1
-MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=to:$EMAIL")
-if [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]]; then
+MP=$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/search?query=to:$EMAIL" 2>/dev/null || echo '{}')
+if [[ -z "$(jq -r '.messages_count // empty' <<<"$MP")" ]]; then
+  echo "  note Mailpit not reachable at $MAILPIT_URL (a real SMTP relay in production); mail state: $(ox mail.mail read "[$(jq -c 'map(.id)' <<<"$MAILS")]" '{"fields":["state","failure_reason"]}' | jq -c 'map({state, failure_reason})')"
+elif [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]]; then
   MP_ID=$(jq -r '.messages[0].ID' <<<"$MP")
   MP_BODY=$(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.HTML // .Text')
   grep -q "$SETUP_URL" <<<"$MP_BODY" && ok "mail delivered over SMTP to Mailpit with the setup link (from $(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.From.Address'))" || bad "delivered mail lacks the setup link"
@@ -283,8 +288,8 @@ RESEND=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/admin/passes/
 step "8. pass certificate: claim link in the mail, offer minted, SD-JWT VC received by the test wallet"
 # The test wallet (python -m belfry_onboarding.testwallet) runs inside the onboarding container
 # and rewrites the public hosts of the offer and verifier URLs to the Compose service names.
-WALLET=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.testwallet
-        --map "localhost:7005=issuer:7005,localhost:7004=verifier:7004,localhost:8100=onboarding:8100")
+WALLET=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.testwallet)
+[[ -n "$WALLET_MAP" ]] && WALLET+=(--map "$WALLET_MAP")
 CLAIM_TOKEN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["claim_token","credential_status_index"]}' | jq -r '.[0].claim_token // empty')
 [[ -n "$CLAIM_TOKEN" ]] && ok "pass carries a claim token (status list index $(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["credential_status_index"]}' | jq -r '.[0].credential_status_index'))" || die "no claim_token on the pass"
 MAIL1=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]" '{"fields":["body_html"],"order":"id asc","limit":1}' | jq -r '.[0].body_html')

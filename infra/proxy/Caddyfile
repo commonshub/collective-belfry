@@ -40,8 +40,9 @@ login.{$BELFRY_DOMAIN} {
 # Community apps / signer (Keycast web app and API, NIP-05 for its usernames).
 apps.{$BELFRY_DOMAIN} {
 	import security
-	# Admin API only for the onboarding service (Compose network).
-	@admin path /api/admin/*
+	# Admin API only for the onboarding service (Compose network); the dev mail inbox
+	# (ENABLE_DEV_EMAIL_INBOX, read by bootstrap to confirm the admin) must never be public.
+	@admin path /api/admin/* /api/dev/*
 	respond @admin 404
 	reverse_proxy keycast:3000
 }

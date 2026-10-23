@@ -77,6 +77,13 @@ read -r CODE_STATUS BACK < <(kc -o "$JAR/cb.html" -w '%{http_code} %{redirect_ur
 grep -q keycast_session "$KC_JAR" || fail "no keycast_session cookie after the callback"
 say "callback -> session cookie, back to /api/oauth/authorize"
 
+# 5b. Belfry fork, patch 0005: the account has no password, so the fresh OIDC session alone
+#     unlocks the key export (within OIDC_REAUTH_WINDOW_SECS) and the account status says so.
+ACCT=$(kc "$KC_URL/api/user/account")
+[[ "$(jq -r '.has_password' <<<"$ACCT")" == false ]] && say "account status: has_password=false (OIDC-only account)" || fail "account status: $(head -c 200 <<<"$ACCT")"
+EXPORT=$(kc -X POST "$KC_URL/api/user/export-key" -H 'Content-Type: application/json' -d '{}')
+[[ "$(jq -r '.key // empty' <<<"$EXPORT")" == nsec1* ]] && say "key export with the fresh session returns the nsec (not printed)" || fail "export-key: $(head -c 200 <<<"$EXPORT")"
+
 # 6. Consent, or an immediate redirect with a code when this app is already approved for the
 #    participant (Keycast remembers authorizations per origin and policy).
 read -r AZ_STATUS AZ_LOC < <(kc -o "$JAR/authz.html" -w '%{http_code} %{redirect_url}\n' "$KC_URL$AUTHZ")
