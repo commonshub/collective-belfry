@@ -173,3 +173,41 @@ def test_add_steward_creates_or_reuses_the_user(services, authentik):
     assert authentik.members("belfry-stewards") == {first["authentik_user"]}
     with pytest.raises(ValueError):
         steward.add_steward(services, "not-an-address")
+
+
+def test_concurrent_activation_runs_once(services, odoo, authentik, keycast, monkeypatch):
+    """Mark paid and Odoo's invoice-paid webhook arrive together: one activation, one link."""
+    import threading
+    import time
+
+    ids = seed_paid_invoice(odoo, payment_state="paid", with_transaction=False)
+    pass_id = odoo.add(
+        "belfry.pass",
+        partner_id=ids["partner"],
+        tier="week",
+        invoice_id=ids["invoice"],
+        state="pending",
+        manual_paid_by="sam@belfry.test",
+    )
+    links = []
+    login_link = core._login_link
+
+    def slow_login_link(svc, user_id):
+        links.append(user_id)
+        time.sleep(0.05)  # widen the window between reading the pass and writing it
+        return login_link(svc, user_id)
+
+    monkeypatch.setattr(core, "_login_link", slow_login_link)
+    results = []
+
+    def run():
+        results.append(core.activate_pass(services, ids["invoice"]))
+
+    threads = [threading.Thread(target=run) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(results) == ["activated", "already_active"]
+    assert len(links) == 1
+    assert odoo.get("belfry.pass", pass_id)["state"] == "active"

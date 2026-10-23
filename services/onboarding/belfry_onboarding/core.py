@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import logging
 import secrets
+import threading
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -443,8 +444,23 @@ def publish_profile(
     return True
 
 
+_activation_locks: dict[int, threading.Lock] = {}
+_activation_locks_guard = threading.Lock()
+
+
 def activate_pass(svc: Services, invoice_id: int) -> str:
-    """Activate the pass of a paid invoice. Returns a short result code."""
+    """Activate the pass of a paid invoice. Returns a short result code.
+
+    Serialized per invoice: a steward's "Mark paid" and Odoo's invoice-paid webhook arrive at the
+    same moment, and two concurrent runs would both see the pass pending (two sign-in links, two
+    activation mails)."""
+    with _activation_locks_guard:
+        lock = _activation_locks.setdefault(invoice_id, threading.Lock())
+    with lock:
+        return _activate_pass(svc, invoice_id)
+
+
+def _activate_pass(svc: Services, invoice_id: int) -> str:
     invoice = svc.odoo.read_one(
         "account.move",
         invoice_id,

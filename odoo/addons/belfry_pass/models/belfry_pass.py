@@ -146,6 +146,7 @@ class BelfryPass(models.Model):
         template = self.env.ref('belfry_pass.mail_template_pass_activated', raise_if_not_found=False)
         if not template:
             return
+        queued = False
         for record in self:
             if not record.partner_id.email:
                 _logger.warning("Belfry pass %s: holder %s has no e-mail, login link not mailed",
@@ -153,7 +154,14 @@ class BelfryPass(models.Model):
                 continue
             template.sudo().send_mail(record.id, force_send=False)
             record.write({'login_mail_sent_at': fields.Datetime.now()})
+            queued = True
             _logger.info("Belfry pass %s: sign-in mail queued for %s", record.id, record.partner_id.email)
+        if queued:
+            # The queue cron runs hourly; wake it now, so the mail leaves right after this commit
+            # (the sign-in link is what the participant waits for).
+            cron = self.env.ref('mail.ir_cron_mail_scheduler_action', raise_if_not_found=False)
+            if cron:
+                cron.sudo()._trigger()
 
     def action_revoke(self):
         """Steward decision: the onboarding service revokes the pass (relay, signer, Authentik

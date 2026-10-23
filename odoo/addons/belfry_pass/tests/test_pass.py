@@ -102,6 +102,9 @@ class TestPass(BelfryCase):
         self.assertIn(belfry_pass.belfry_login_url(), mails.body_html)
         self.assertNotIn('password', mails.body_html.lower().replace('without a password', ''))
         self.assertTrue(belfry_pass.login_mail_sent_at)
+        # the hourly queue cron is woken at once
+        cron = self.env.ref('mail.ir_cron_mail_scheduler_action')
+        self.assertTrue(self.env['ir.cron.trigger'].search([('cron_id', '=', cron.id)]))
         # other writes do not resend; a new link does
         belfry_pass.write({'date_end': '2027-02-02'})
         self.assertEqual(len(self._login_mails(belfry_pass)), 1)
