@@ -21,11 +21,16 @@
                 h1, h2, h3, h4, h5, h6, .h1, .h2, .h3, .h4, .h5, .h6 { color: #ffffff; font-family: var(--osv-font-sans, Geist, system-ui, sans-serif); letter-spacing: -0.01em; }
                 .text-muted, .text-body-secondary, .form-text { color: #c9d1cb !important; }
                 a { color: #d6ff52; } a:hover { color: #c5ee41; }
-                header.o_header_standard, .navbar, .o_footer, footer, #footer, .o_portal_wrap .o_portal_navbar { background: #1a231d !important; border-color: #44534a !important; color: #ffffff; }
+                .o_footer, footer, #footer { background: #1a231d !important; border-color: #44534a !important; color: #ffffff; }
                 .navbar .nav-link, .navbar-brand, .o_portal_navbar a, .breadcrumb-item, .breadcrumb-item a { color: #ffffff !important; }
                 .card, .o_portal_wrap .card, .list-group-item, .o_portal_sidebar .o_portal_html_view, .modal-content, .dropdown-menu, .table, .o_portal_wrap .table { background-color: #1a231d; color: #ffffff; border-color: #44534a; }
                 .table > :not(caption) > * > * { background-color: transparent; color: #ffffff; border-color: #44534a; }
-                .card-header, .card-footer, .bg-light, .bg-white, .bg-100, .bg-200, .bg-body, .o_portal_wrap .bg-light { background-color: #243128 !important; color: #ffffff !important; }
+                /* Odoo's frontend forces black text on plain list-group items (specificity 0,3,0). */
+                #wrapwrap .list-group-item, #wrapwrap .list-group-item strong { color: #ffffff; }
+                /* The portal chatter boots a separate bundle with Odoo's light theme, and its messages
+                   reach nobody (stewards do not work in Odoo). Hide it and the sidebar's "Send message". */
+                #invoice_communication, .o_portal_chatter, a[href="#discussion"] { display: none !important; }
+                .card-header, .card-footer, .bg-light, .text-bg-light, .bg-white, .bg-100, .bg-200, .bg-body, .o_portal_wrap .bg-light { background-color: #243128 !important; color: #ffffff !important; }
                 .form-control, .form-select { background-color: #243128; color: #ffffff; border-color: #44534a; }
                 .form-control:focus, .form-select:focus { background-color: #243128; color: #ffffff; border-color: #d6ff52; box-shadow: 0 0 0 .25rem rgba(214, 255, 82, .25); }
                 .form-control::placeholder { color: #8e9a91; }
@@ -44,6 +49,8 @@
                 .o_portal_html_view, .o_portal_html_view.bg-white { background-color: #ffffff !important; color: #212529; }
                 .bg-body-tertiary, .bg-body-secondary, .bg-light-subtle, .bg-secondary-subtle, .bg-dark-subtle, .o_payment_summary_separator, .modal-body .card { background-color: #243128 !important; color: #ffffff !important; }
                 .modal-content, .modal-header, .modal-footer { background-color: #1a231d; color: #ffffff; border-color: #44534a; }
+                /* After the .bg-* rules, which also carry !important. The navbar keeps the page background: the company logo is a PNG on #2b3a31 (brand/README.md). */
+                header.o_header_standard, .navbar, .o_portal_wrap .o_portal_navbar { background: #2b3a31 !important; border-bottom: 1px solid #44534a !important; color: #ffffff; }
                 .modal-header .btn-close { filter: invert(1) grayscale(1); }
                 .o_portal_wrap .o_portal_my_home .o_portal_category .o_portal_doc_card, .o_payment_form .o_payment_option_card { background-color: #1a231d !important; border-color: #44534a !important; }
                 .o_payment_form .o_payment_option_card.o_payment_option_card_checked, .o_payment_form input:checked + label { border-color: #d6ff52 !important; }

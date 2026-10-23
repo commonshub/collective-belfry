@@ -222,6 +222,21 @@ COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"lim
 # Company logo (invoices, portal navbar): the Open Source Village wordmark on the dark background.
 COMPANY_LOGO=$(base64 -w0 "$INFRA_DIR/../brand/osv-logo-horizontal-dark.png")
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\"${COMPANY_NAME:-Belfry}\",\"email\":\"${MAIL_FROM:-belfry@belfry.local}\",\"logo\":\"$COMPANY_LOGO\"}]" >/dev/null
+# Company currency (the passes are priced in euro; a database created without a country starts in
+# USD). Odoo refuses to change it once journal items exist, so only a fresh database is switched.
+COMPANY_CURRENCY=${COMPANY_CURRENCY:-EUR}
+CUR_NOW=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company read "[[$COMPANY_ID]]" '{"fields":["currency_id"]}' | jq -r '.[0].currency_id[1]')
+if [[ "$CUR_NOW" != "$COMPANY_CURRENCY" ]]; then
+  if [[ "$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" account.move.line search_count '[[]]')" == "0" ]]; then
+    CUR_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.currency search "[[[\"name\",\"=\",\"$COMPANY_CURRENCY\"]]]" '{"limit":1,"context":{"active_test":false}}' | jq -r '.[0] // empty')
+    [[ -n "$CUR_ID" ]] || die "currency $COMPANY_CURRENCY not found in Odoo"
+    odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.currency write "[[$CUR_ID],{\"active\":true}]" >/dev/null
+    odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"currency_id\":$CUR_ID}]" >/dev/null
+    echo "company currency set to $COMPANY_CURRENCY"
+  else
+    echo "WARNING: company currency is $CUR_NOW, not $COMPANY_CURRENCY, and journal items exist; Odoo cannot change it any more (fresh database needed)" >&2
+  fi
+fi
 MS_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server search '[[["name","=","belfry"]]]' '{"limit":1}' | jq -r '.[0] // empty')
 # The password comes from infra/secrets/smtp_password (scripts/put-secret.sh) unless SMTP_PASSWORD is set.
 SMTP_PASSWORD=${SMTP_PASSWORD:-$(cat "$INFRA_DIR/secrets/smtp_password" 2>/dev/null || true)}
