@@ -64,6 +64,9 @@ x-keycast-env: &keycast-env
   OIDC_LINK_CLAIM: keycast_vine_id
   OIDC_PROVIDER_NAME: Open Source Village
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
+  # Belfry fork: the dashboard's "Your pass" card, from the onboarding service (internal network).
+  BELFRY_PASS_INFO_URL: http://onboarding:8100
+  PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
 
 services:
   postgres:
@@ -411,6 +414,8 @@ services:
       # Steward pages (/steward): Authentik application belfry-steward and the session cookie key.
       STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
       STEWARD_SESSION_SECRET: ${STEWARD_SESSION_SECRET:?}
+      # Keycast's "Your pass" card reads GET /admin/partners/<id>/pass with this bearer token.
+      PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       EVENT_START: ${EVENT_START:-2027-01-25}
       EVENT_END: ${EVENT_END:-2027-01-31}

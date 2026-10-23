@@ -109,5 +109,9 @@ class Settings(BaseSettings):
     steward_session_hours: int = Field(default=12, alias="STEWARD_SESSION_HOURS")
     steward_group: str = Field(default="belfry-stewards", alias="STEWARD_GROUP")
 
+    # Pass info for the community apps (Keycast's "Your pass" card): bearer token of
+    # GET /admin/partners/<id>/pass. Empty: the endpoint answers 503.
+    pass_info_token: str = Field(default="", alias="PASS_INFO_TOKEN")
+
     log_level: str = Field(default="info", alias="LOG_LEVEL")
     reconcile_days: int = Field(default=30, alias="RECONCILE_DAYS")

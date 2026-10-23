@@ -201,6 +201,21 @@ def create_app(services: Services | None = None) -> FastAPI:
         result = await run_in_threadpool(core.revoke_pass, svc(request), pass_id, "steward")
         return {"result": result, "pass_id": pass_id}
 
+    @app.get("/admin/partners/{partner_id}/pass")
+    async def admin_partner_pass(partner_id: int, request: Request) -> dict[str, Any]:
+        """The partner's pass for the community apps (Keycast's "Your pass" card), server to
+        server with PASS_INFO_TOKEN as bearer token; read only, unlike the hook token."""
+        expected = svc(request).settings.pass_info_token
+        if not expected:
+            raise HTTPException(status_code=503, detail="pass info not configured")
+        given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        if not given or not hmac.compare_digest(given, expected):
+            raise HTTPException(status_code=401, detail="invalid token")
+        info = await run_in_threadpool(claim.pass_info, svc(request), partner_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="no pass")
+        return info
+
     # -- Phase 3: claim page, status list, type metadata, door ------------------------------------
 
     def claim_error(exc: claim.ClaimError) -> HTMLResponse:

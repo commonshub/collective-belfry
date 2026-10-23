@@ -64,6 +64,40 @@ def page(title: str, body: str) -> str:
 </main></body></html>"""
 
 
+# -- pass info for the community apps ------------------------------------------------------------
+
+PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}
+
+
+def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
+    """The partner's pass as the community apps show it (Keycast's "Your pass" card): the active
+    pass if there is one, else the newest. None when the partner has no pass."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", partner_id]],
+        ["state", "tier", "date_start", "date_end", "npub", "claim_token"],
+        order="id desc",
+    )
+    if not rows:
+        return None
+    row = min(rows, key=lambda r: PASS_STATE_ORDER.get(r.get("state"), 9))
+    partners = svc.odoo.read("res.partner", [partner_id], ["belfry_member_number"])
+    base = svc.settings.public_url.rstrip("/")
+    active = row.get("state") == "active"
+    return {
+        "state": row.get("state"),
+        "tier": row.get("tier") or None,
+        "tier_name": TIER_NAMES.get(row.get("tier"), row.get("tier")) or None,
+        "date_start": row.get("date_start") or None,
+        "date_end": row.get("date_end") or None,
+        "member_number": (partners[0].get("belfry_member_number") if partners else None) or None,
+        "npub": row.get("npub") or None,
+        "claim_url": f"{base}/claim/{row['claim_token']}"
+        if active and row.get("claim_token")
+        else None,
+    }
+
+
 # -- claim page ------------------------------------------------------------------------------------
 
 
