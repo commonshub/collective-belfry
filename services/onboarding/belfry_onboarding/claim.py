@@ -28,22 +28,40 @@ class ClaimError(Exception):
 
 
 def qr_svg(data: str) -> str:
-    """Inline SVG data URI of a QR code."""
-    return segno.make(data, error="m").svg_data_uri(scale=6, border=2, dark="#1F2A44")
+    """Inline SVG data URI of a QR code: dark modules on white, the pages put it on a white tile
+    so phone cameras read it against the dark theme."""
+    return segno.make(data, error="m").svg_data_uri(
+        scale=6, border=2, dark="#1a231d", light="#ffffff"
+    )
 
 
 def page(title: str, body: str) -> str:
+    """Open Source Village page frame, dark theme (brand/tokens.css, served at /brand): wordmark,
+    one card, footer "run by Belfry". Mail clients never see this; the pages are small."""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark"><meta name="theme-color" content="#2b3a31">
+<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml"><link rel="icon" href="/brand/favicon.ico" sizes="any">
+<link rel="stylesheet" href="/brand/fonts.css"><link rel="stylesheet" href="/brand/tokens.css">
 <title>{html.escape(title)}</title>
 <style>
- body {{ font: 16px/1.5 system-ui, sans-serif; margin: 0; background: #f4f5f7; color: #1F2A44; }}
- main {{ max-width: 640px; margin: 0 auto; padding: 32px 16px; }}
- .card {{ background: #fff; border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }}
- h1 {{ font-size: 1.5rem; margin: 0 0 4px; }} .muted {{ color: #667; }} .qr img {{ width: 280px; max-width: 100%; }}
- .btn {{ display: inline-block; background: #1F2A44; color: #fff; padding: 10px 18px; border-radius: 8px; text-decoration: none; }}
- .ok {{ color: #1b7f3b; font-weight: 600; }} .bad {{ color: #b3261e; font-weight: 600; }} code {{ word-break: break-all; }}
-</style></head><body><main>{body}</main></body></html>"""
+ body {{ font: 16px/1.5 var(--osv-font-sans); margin: 0; background: var(--osv-background); color: var(--osv-foreground); }}
+ main {{ max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }}
+ header {{ margin: 0 0 24px; }} header img {{ height: 28px; width: auto; display: block; }}
+ .card {{ background: var(--osv-surface); border: 1px solid var(--osv-border); border-radius: 12px; padding: 24px; }}
+ h1 {{ font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }}
+ .muted {{ color: var(--osv-foreground-muted); }} a {{ color: var(--osv-accent); }}
+ .qr {{ margin: 20px 0; }} .qr img {{ display: block; width: 280px; max-width: 100%; background: #fff; padding: 12px; border-radius: 12px; box-sizing: border-box; }}
+ .btn {{ display: inline-block; background: var(--osv-accent); color: var(--osv-on-accent); font-weight: 600; padding: 10px 18px; border-radius: 8px; text-decoration: none; }}
+ .btn:hover {{ background: var(--osv-accent-hover); }}
+ .ok {{ color: var(--osv-accent); font-weight: 600; }} .bad {{ color: var(--osv-accent-2); font-weight: 600; }}
+ code {{ font-family: var(--osv-font-mono); word-break: break-all; background: var(--osv-surface-deep); padding: 2px 6px; border-radius: 4px; }}
+ footer {{ margin-top: 24px; font-size: 0.85rem; color: var(--osv-foreground-faint); }}
+</style></head><body><main>
+<header><a href="https://opensourcevillage.org"><img src="/brand/osv-logo-horizontal-white.svg" alt="Open Source Village"></a></header>
+{body}
+<footer>Open Source Village, run by Belfry</footer>
+</main></body></html>"""
 
 
 # -- claim page ------------------------------------------------------------------------------------
@@ -144,7 +162,8 @@ def status_list_jwt(svc: Services) -> str:
 
 
 def type_metadata(svc: Services) -> dict[str, Any]:
-    return credentials.type_metadata(svc.settings.vct)
+    logo = svc.settings.public_url.rstrip("/") + "/brand/apple-touch-icon.png"
+    return credentials.type_metadata(svc.settings.vct, logo_uri=logo)
 
 
 # -- door -------------------------------------------------------------------------------------------
@@ -216,7 +235,6 @@ def door_page(session: dict[str, Any]) -> str:
     body = f"""
 <div class="card" id="door" data-session="{html.escape(session["session_id"])}">
 <h1>Door check</h1>
-<p class="muted">Open Source Village · Belfry</p>
 <p>Ask the participant to scan this code with their wallet. Only the pass tier is requested;
 validity and revocation are checked by the verifier.</p>
 <p class="qr"><img alt="QR code with the verification request" src="{qr_svg(url)}"></p>

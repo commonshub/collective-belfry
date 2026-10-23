@@ -298,7 +298,7 @@ if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/
     [[ -n "$ML" ]] && break
   done
   if [[ -n "$ML" ]]; then
-    ok "magic-link mail delivered (subject 'Your Belfry sign-in link')"
+    ok "magic-link mail delivered (subject 'Your Open Source Village sign-in link')"
     FINAL=$(magic_open "$MJAR" "$ML")
     ME=$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
     [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "magic link signed the browser in as Authentik user $AK_UID" || bad "magic link ended with '$FINAL', session user '$ME'"

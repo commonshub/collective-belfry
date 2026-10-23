@@ -5,12 +5,14 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import blossom, bridge, claim, core, steward
@@ -88,6 +90,12 @@ def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
     app.state.bridge = bridge.BridgeStore()
     steward.register(app)  # /steward: the steward pages (steward.py)
+    # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
+    # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
+    # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
+    brand_dir = Path(os.environ.get("BRAND_DIR") or Path(__file__).resolve().parents[3] / "brand")
+    if brand_dir.is_dir():
+        app.mount("/brand", StaticFiles(directory=str(brand_dir)), name="brand")
 
     def svc(request: Request) -> Services:
         return request.app.state.services

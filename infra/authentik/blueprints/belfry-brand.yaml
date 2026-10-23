@@ -1,0 +1,85 @@
+# Belfry: the look of authentik's participant pages (login, magic link, consent, user settings).
+#
+# Open Source Village, run by Belfry (decided 2026-10-23): title, logo, favicon and page
+# background come from the repo's brand/ folder, served by the onboarding service at
+# BELFRY_BRAND_URL (pass.<domain>/brand, http://localhost:8100/brand locally; set in
+# docker-compose.yml from ONBOARDING_PUBLIC_URL). The theme is forced to dark
+# (attributes.settings.theme.base) and the custom CSS maps PatternFly's and authentik's
+# variables to brand/tokens.css. A re-apply (file watcher) resets any UI edit: the brand is
+# maintained here, not in the admin UI.
+#
+# The other two brand entries (belfry-account-setup-flow.yaml: default + recovery flow,
+# belfry-magic-link-flow.yaml: authentication flow) set only their own attributes.
+version: 1
+metadata:
+  name: belfry-brand
+  labels:
+    blueprints.goauthentik.io/description: "Open Source Village branding of the default brand"
+entries:
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      branding_title: Open Source Village
+      branding_logo: !Format ["%s/osv-logo-horizontal-white.svg", !Env [BELFRY_BRAND_URL, "http://localhost:8100/brand"]]
+      branding_favicon: !Format ["%s/favicon.svg", !Env [BELFRY_BRAND_URL, "http://localhost:8100/brand"]]
+      branding_default_flow_background: !Format ["%s/flow-background.svg", !Env [BELFRY_BRAND_URL, "http://localhost:8100/brand"]]
+      attributes:
+        settings:
+          theme:
+            base: dark
+      branding_custom_css: !Format
+        - |
+          @import url("%s/fonts.css");
+          :root, :root[theme="dark"], .pf-theme-dark, [data-theme="dark"] {
+            --pf-global--FontFamily--sans-serif: 'Geist', system-ui, -apple-system, sans-serif;
+            --pf-global--FontFamily--heading--sans-serif: 'Geist', system-ui, -apple-system, sans-serif;
+            --pf-global--FontFamily--monospace: 'Geist Mono', ui-monospace, monospace;
+            --ak-dark-background: #2b3a31;
+            --ak-dark-background-darker: #1a231d;
+            --ak-dark-background-light: #1a231d;
+            --ak-dark-background-light-ish: #243128;
+            --ak-dark-background-lighter: #243128;
+            --ak-dark-foreground: #ffffff;
+            --ak-dark-foreground-darker: #c9d1cb;
+            --ak-dark-foreground-link: #d6ff52;
+            --ak-accent: #d6ff52;
+            --pf-global--primary-color--100: #d6ff52;
+            --pf-global--primary-color--200: #c5ee41;
+            --pf-global--primary-color--light-100: #d6ff52;
+            --pf-global--primary-color--dark-100: #c5ee41;
+            --pf-global--active-color--100: #d6ff52;
+            --pf-global--link--Color: #d6ff52;
+            --pf-global--link--Color--hover: #c5ee41;
+            --pf-global--link--Color--dark: #d6ff52;
+            --pf-global--link--Color--dark--hover: #c5ee41;
+            --pf-global--BackgroundColor--dark-100: #1a231d;
+            --pf-global--BackgroundColor--dark-200: #2b3a31;
+            --pf-global--BackgroundColor--dark-300: #1a231d;
+            --pf-global--BackgroundColor--dark-400: #243128;
+            --pf-global--BackgroundColor--dark-transparent-100: rgba(26, 35, 29, 0.9);
+            --pf-global--BorderColor--100: #44534a;
+            --pf-global--BorderColor--dark-100: #44534a;
+            --pf-global--Color--100: #ffffff;
+            --pf-global--Color--200: #c9d1cb;
+            --pf-global--Color--light-100: #ffffff;
+            --pf-global--Color--light-200: #c9d1cb;
+            --pf-global--success-color--100: #d6ff52;
+            --pf-global--warning-color--100: #f89b0e;
+            --pf-global--danger-color--100: #f87171;
+          }
+          .pf-c-background-image, .pf-c-login { background-color: #2b3a31; }
+          .pf-c-login__main, .pf-c-login__footer, .pf-c-card { background-color: #1a231d; color: #ffffff; }
+          .pf-c-button.pf-m-primary {
+            --pf-c-button--m-primary--BackgroundColor: #d6ff52;
+            --pf-c-button--m-primary--hover--BackgroundColor: #c5ee41;
+            --pf-c-button--m-primary--focus--BackgroundColor: #c5ee41;
+            --pf-c-button--m-primary--active--BackgroundColor: #c5ee41;
+            --pf-c-button--m-primary--Color: #1a231d;
+            --pf-c-button--m-primary--hover--Color: #1a231d;
+            --pf-c-button--m-primary--focus--Color: #1a231d;
+            --pf-c-button--m-primary--active--Color: #1a231d;
+          }
+          .pf-c-form-control { background-color: #243128; color: #ffffff; border-color: #44534a; }
+          .pf-c-login__main-header img, .pf-c-brand { max-height: 36px; }
+        - !Env [BELFRY_BRAND_URL, "http://localhost:8100/brand"]

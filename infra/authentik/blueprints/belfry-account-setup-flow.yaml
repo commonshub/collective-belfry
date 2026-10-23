@@ -24,8 +24,8 @@ entries:
     identifiers:
       slug: belfry-account-setup
     attrs:
-      name: Belfry sign-in link
-      title: Sign in to Belfry
+      name: Open Source Village sign-in link
+      title: Sign in to Open Source Village
       designation: recovery
       # "none", not require_unauthenticated: a participant who is already signed in (magic link)
       # and opens the activation link again should simply be signed in, not shown "denied".

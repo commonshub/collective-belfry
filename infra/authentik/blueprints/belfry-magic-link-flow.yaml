@@ -35,8 +35,8 @@ entries:
     identifiers:
       slug: belfry-magic-link
     attrs:
-      name: Belfry sign-in
-      title: Sign in to Belfry
+      name: Open Source Village sign-in
+      title: Sign in to Open Source Village
       designation: authentication
       authentication: none
       denied_action: message_continue
@@ -64,7 +64,7 @@ entries:
       use_global_settings: false
       activate_user_on_success: false
       token_expiry: minutes=10
-      subject: Your Belfry sign-in link
+      subject: Your Open Source Village sign-in link
       template: belfry/magic_link.html
   - model: authentik_stages_user_login.userloginstage
     id: belfry-magic-link-login

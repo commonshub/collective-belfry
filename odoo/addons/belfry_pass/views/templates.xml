@@ -1,20 +1,77 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
-    <template id="invite_layout" name="Belfry invite layout">
+    <!-- Open Source Village look for every Odoo frontend page a participant sees: the invite page
+         below, the payment page (portal) and the portal itself. Dark theme; the palette, fonts and
+         logos are the repo's brand/ folder, served by the onboarding service at
+         <belfry.public_url>/brand (brand/tokens.css holds the values repeated here as fallbacks).
+         Odoo's back office (stewards' admin and accounting) is not touched. -->
+    <template id="brand_frontend_layout" name="Open Source Village frontend layout" inherit_id="web.frontend_layout">
+        <xpath expr="//head" position="inside">
+            <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>
+            <meta name="color-scheme" content="dark"/>
+            <meta name="theme-color" content="#2b3a31"/>
+            <link rel="icon" type="image/svg+xml" t-att-href="belfry_brand_url + '/favicon.svg'"/>
+            <link rel="stylesheet" t-att-href="belfry_brand_url + '/fonts.css'"/>
+            <link rel="stylesheet" t-att-href="belfry_brand_url + '/tokens.css'"/>
+            <style>
+                body, #wrapwrap { background: var(--osv-background, #2b3a31); color: var(--osv-foreground, #fff); font-family: var(--osv-font-sans, Geist, system-ui, sans-serif); }
+                body { --bs-body-bg: #2b3a31; --bs-body-color: #ffffff; --bs-secondary-color: #c9d1cb; --bs-tertiary-color: #8e9a91;
+                       --bs-border-color: #44534a; --bs-tertiary-bg: #243128; --bs-secondary-bg: #1a231d; --bs-emphasis-color: #ffffff;
+                       --bs-link-color: #d6ff52; --bs-link-hover-color: #c5ee41; --bs-link-color-rgb: 214, 255, 82; --bs-link-hover-color-rgb: 197, 238, 65; }
+                h1, h2, h3, h4, h5, h6, .h1, .h2, .h3, .h4, .h5, .h6 { color: #ffffff; font-family: var(--osv-font-sans, Geist, system-ui, sans-serif); letter-spacing: -0.01em; }
+                .text-muted, .text-body-secondary, .form-text { color: #c9d1cb !important; }
+                a { color: #d6ff52; } a:hover { color: #c5ee41; }
+                header.o_header_standard, .navbar, .o_footer, footer, #footer, .o_portal_wrap .o_portal_navbar { background: #1a231d !important; border-color: #44534a !important; color: #ffffff; }
+                .navbar .nav-link, .navbar-brand, .o_portal_navbar a, .breadcrumb-item, .breadcrumb-item a { color: #ffffff !important; }
+                .card, .o_portal_wrap .card, .list-group-item, .o_portal_sidebar .o_portal_html_view, .modal-content, .dropdown-menu, .table, .o_portal_wrap .table { background-color: #1a231d; color: #ffffff; border-color: #44534a; }
+                .table > :not(caption) > * > * { background-color: transparent; color: #ffffff; border-color: #44534a; }
+                .card-header, .card-footer, .bg-light, .bg-white, .bg-100, .bg-200, .bg-body, .o_portal_wrap .bg-light { background-color: #243128 !important; color: #ffffff !important; }
+                .form-control, .form-select { background-color: #243128; color: #ffffff; border-color: #44534a; }
+                .form-control:focus, .form-select:focus { background-color: #243128; color: #ffffff; border-color: #d6ff52; box-shadow: 0 0 0 .25rem rgba(214, 255, 82, .25); }
+                .form-control::placeholder { color: #8e9a91; }
+                .form-check-input { background-color: #243128; border-color: #8e9a91; }
+                .form-check-input:checked { background-color: #d6ff52; border-color: #d6ff52; }
+                .btn-primary, .btn-primary:disabled, .o_payment_form .btn-primary, a.btn.btn-primary { background-color: #d6ff52; border-color: #d6ff52; color: #1a231d; font-weight: 600; }
+                .btn-primary:hover, .btn-primary:focus, .btn-primary:active, .btn-primary:first-child:active { background-color: #c5ee41; border-color: #c5ee41; color: #1a231d; }
+                .btn-secondary, .btn-light, .btn-outline-secondary { background-color: #243128; border-color: #44534a; color: #ffffff; }
+                .btn-link { color: #d6ff52; }
+                .alert-success { background-color: rgba(214, 255, 82, .12); border-color: #d6ff52; color: #ffffff; }
+                .alert-warning, .alert-danger { background-color: rgba(248, 155, 14, .14); border-color: #f89b0e; color: #ffffff; }
+                .alert-info { background-color: #243128; border-color: #44534a; color: #ffffff; }
+                .text-decoration-line-through { color: #8e9a91 !important; }
+                hr { border-color: #44534a; opacity: 1; }
+                /* The invoice preview (iframe) is a paper document: keep it white with dark text. */
+                .o_portal_html_view, .o_portal_html_view.bg-white { background-color: #ffffff !important; color: #212529; }
+                .bg-body-tertiary, .bg-body-secondary, .bg-light-subtle, .bg-secondary-subtle, .bg-dark-subtle, .o_payment_summary_separator, .modal-body .card { background-color: #243128 !important; color: #ffffff !important; }
+                .modal-content, .modal-header, .modal-footer { background-color: #1a231d; color: #ffffff; border-color: #44534a; }
+                .modal-header .btn-close { filter: invert(1) grayscale(1); }
+                .o_portal_wrap .o_portal_my_home .o_portal_category .o_portal_doc_card, .o_payment_form .o_payment_option_card { background-color: #1a231d !important; border-color: #44534a !important; }
+                .o_payment_form .o_payment_option_card.o_payment_option_card_checked, .o_payment_form input:checked + label { border-color: #d6ff52 !important; }
+                .o_payment_form label, .o_payment_form .o_payment_option_label { color: #ffffff; }
+                img.o_payment_logo, img.img-fluid.payment_icon, .o_payment_form img { background: #ffffff; border-radius: 4px; padding: 2px; }
+            </style>
+        </xpath>
+    </template>
+
+    <template id="invite_layout" name="Open Source Village invite layout">
         <t t-call="web.frontend_layout">
             <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
             <t t-set="pageName" t-value="'belfry_invite'"/>
+            <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>
             <div id="wrap" class="oe_structure">
                 <div class="container py-5" style="max-width: 760px;">
-                    <h1 class="mb-1">Open Source Village</h1>
-                    <p class="text-muted mb-4">Your pass, issued by Belfry</p>
+                    <p class="mb-4"><a href="https://opensourcevillage.org"><img t-att-src="belfry_brand_url + '/osv-logo-horizontal-white.svg'" alt="Open Source Village" style="height: 28px; width: auto;"/></a></p>
+                    <h1 class="mb-1">Your pass</h1>
+                    <p class="text-muted mb-4">Open Source Village, run by Belfry</p>
                     <t t-out="0"/>
+                    <p class="mt-5 small" style="color: #8e9a91;">Open Source Village, run by Belfry</p>
                 </div>
             </div>
         </t>
     </template>
 
-    <template id="invite_error" name="Belfry invite error">
+    <template id="invite_error" name="Open Source Village invite error">
         <t t-call="belfry_pass.invite_layout">
             <div class="alert alert-warning" role="alert">
                 <h4 class="alert-heading">Invite not available</h4>
@@ -24,7 +81,7 @@
         </t>
     </template>
 
-    <template id="invite_page" name="Belfry invite page">
+    <template id="invite_page" name="Open Source Village invite page">
         <t t-call="belfry_pass.invite_layout">
             <p>
                 You were invited by <strong t-esc="invite.steward_id.name"/>.

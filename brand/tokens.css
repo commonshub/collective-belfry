@@ -1,0 +1,21 @@
+/* Open Source Village palette (opensourcevillage.org, read 2026-10-23), dark theme only.
+   The same values are repeated where a surface cannot load this file (Keycast's app.css and
+   popup pages, the Odoo mail template, the credential display metadata); brand/README.md lists
+   them. Change a colour here first, then in those copies. */
+:root {
+  --osv-background: #2b3a31;        /* page background, theme colour */
+  --osv-surface: #1a231d;           /* cards, inputs */
+  --osv-surface-deep: #121914;      /* code blocks, footers */
+  --osv-border: #ffffff29;          /* 16 % white */
+  --osv-border-strong: #ffffff57;   /* 34 % white */
+  --osv-foreground: #ffffff;
+  --osv-foreground-muted: #c9d1cb;  /* secondary text */
+  --osv-foreground-faint: #8e9a91;  /* tertiary text, placeholders */
+  --osv-accent: #d6ff52;            /* lime: primary buttons, links, success */
+  --osv-accent-hover: #c5ee41;
+  --osv-on-accent: #1a231d;         /* text on a lime button */
+  --osv-accent-2: #f89b0e;          /* orange: warnings, refusals */
+  --osv-font-sans: 'Geist', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --osv-font-mono: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}

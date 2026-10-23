@@ -1,4 +1,4 @@
-From 8c427f02fb289314f1949e2cebe043d0ecb6b099 Mon Sep 17 00:00:00 2001
+From 58ccb31fbf1729ebfd4e7c2f6e2c97b3d50370bb Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 10:57:58 +0200
 Subject: [PATCH 1/5] feat(auth): sign in through an upstream OpenID Provider
@@ -1517,3 +1517,6 @@ index 0000000..38d3863
 +);
 +
 +CREATE INDEX IF NOT EXISTS idx_oidc_identities_user ON public.oidc_identities(user_pubkey);
+-- 
+2.53.0
+

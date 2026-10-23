@@ -98,7 +98,7 @@ class TestPass(BelfryCase):
         self.assertIn('npub1example', mails.body_html)
         self.assertIn(belfry_pass.belfry_apps_url(), mails.body_html)
         # passwordless: the mail offers a sign-in, never a password
-        self.assertIn('Sign in to Belfry', mails.body_html)
+        self.assertIn('Sign in to Open Source Village', mails.body_html)
         self.assertIn(belfry_pass.belfry_login_url(), mails.body_html)
         self.assertNotIn('password', mails.body_html.lower().replace('without a password', ''))
         self.assertTrue(belfry_pass.login_mail_sent_at)

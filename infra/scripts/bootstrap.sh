@@ -219,7 +219,9 @@ echo "config parameters belfry.onboarding_url, belfry.hook_token, belfry.apps_ur
 
 # Outgoing mail: the company (sender) and one ir.mail_server from SMTP_* (Mailpit locally).
 COMPANY_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company search '[[]]' '{"limit":1}' | jq -r '.[0]')
-odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\"${COMPANY_NAME:-Belfry}\",\"email\":\"${MAIL_FROM:-belfry@belfry.local}\"}]" >/dev/null
+# Company logo (invoices, portal navbar): the Open Source Village wordmark on the dark background.
+COMPANY_LOGO=$(base64 -w0 "$INFRA_DIR/../brand/osv-logo-horizontal-dark.png")
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" res.company write "[[$COMPANY_ID],{\"name\":\"${COMPANY_NAME:-Belfry}\",\"email\":\"${MAIL_FROM:-belfry@belfry.local}\",\"logo\":\"$COMPANY_LOGO\"}]" >/dev/null
 MS_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.mail_server search '[[["name","=","belfry"]]]' '{"limit":1}' | jq -r '.[0] // empty')
 # The password comes from infra/secrets/smtp_password (scripts/put-secret.sh) unless SMTP_PASSWORD is set.
 SMTP_PASSWORD=${SMTP_PASSWORD:-$(cat "$INFRA_DIR/secrets/smtp_password" 2>/dev/null || true)}
@@ -336,6 +338,18 @@ SETUP_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-account-setup/" | jq -r '
 ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '[.results[] | select(.flow_recovery == $f and .default)] | length >= 1' >/dev/null \
   || die "no default brand carries the recovery flow belfry-account-setup (blueprint belfry-account-setup-flow)"
 echo "blueprint belfry-account-setup-flow: successful, default brand recovery flow set"
+# Branding (blueprint belfry-brand): the worker may have applied the file before the container
+# had BELFRY_BRAND_URL (then the !Env fallback, localhost, is stored), so re-apply when the
+# brand's logo does not point at the configured brand URL.
+BRAND_URL="${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand"
+BRAND_BP=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-brand" | jq -r '.results[] | select(.name|test("belfry-brand")) | .pk' | head -n1)
+[[ -n "$BRAND_BP" ]] || die "blueprint belfry-brand not found (infra/authentik/blueprints/belfry-brand.yaml)"
+brand_logo() { ak "$AK_URL/api/v3/core/brands/" | jq -r '.results[] | select(.domain=="authentik-default") | .branding_logo'; }
+if [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; then
+  ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$BRAND_BP/apply/" || die "could not re-apply blueprint belfry-brand"
+  i=0; while [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; do (( i += 3 )); [[ $i -ge 90 ]] && die "brand logo still not under $BRAND_URL after re-applying belfry-brand"; printf '.'; sleep 3; done
+fi
+echo "blueprint belfry-brand: Open Source Village branding from $BRAND_URL"
 # Participants sign in by magic link (blueprint belfry-magic-link-flow): the flow must be the
 # default brand's authentication flow, and its e-mail stage gets the SMTP settings here (the
 # blueprint leaves them out so a re-apply never resets them; same values as Odoo's mail server).

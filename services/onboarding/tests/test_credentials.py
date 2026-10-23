@@ -134,6 +134,23 @@ def test_type_metadata(client):
     paths = [c["path"][0] for c in doc["claims"]]
     assert paths == ["pass_tier", "display_name", "member_number", "npub"]
     assert doc["claims"][0]["sd"] == "never"
+    simple = doc["display"][0]["rendering"]["simple"]
+    assert simple["background_color"] == "#2b3a31"
+    assert simple["logo"] == {
+        "uri": "https://belfry.test/brand/apple-touch-icon.png",
+        "alt_text": "Open Source Village",
+    }
+
+
+def test_brand_assets_are_served(client):
+    r = client.get("/brand/tokens.css")
+    assert r.status_code == 200
+    assert "--osv-accent: #d6ff52" in r.text
+    assert client.get("/brand/osv-logo-horizontal-white.svg").status_code == 200
+    page = client.get("/door")
+    assert page.status_code == 200
+    assert "/brand/tokens.css" in page.text
+    assert "Open Source Village, run by Belfry" in page.text
 
 
 # -- door ------------------------------------------------------------------------------------------

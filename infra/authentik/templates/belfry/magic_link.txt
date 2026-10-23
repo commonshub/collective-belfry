@@ -1,10 +1,12 @@
-{% autoescape off %}Sign in to Belfry
+{% autoescape off %}Sign in to Open Source Village
 
-Someone asked to sign in to Belfry with this e-mail address. Open the link below in the same
-browser where you started; it signs you in once:
+Someone asked to sign in to Open Source Village with this e-mail address. Open the link below
+in the same browser where you started; it signs you in once:
 
 {{ url }}
 
 The link is valid for {{ expires|timeuntil }}. If you did not try to sign in, ignore this mail;
 nobody can sign in without opening the link.
+
+Open Source Village, run by Belfry
 {% endautoescape %}

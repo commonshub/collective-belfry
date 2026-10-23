@@ -28,8 +28,8 @@ WHERE identifier = 'allowed_kinds_belfry_event'
 UPDATE policies SET description = 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH', updated_at = NOW()
 WHERE slug = 'belfry-event' AND description <> 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH';
 
--- Branding of the seed tenant (shown by the OAuth popup and the e-mails): Divine -> Belfry.
-UPDATE tenants SET name = 'Belfry', updated_at = NOW() WHERE id = 1 AND name <> 'Belfry';
+-- Branding of the seed tenant (shown by the OAuth popup and the e-mails): Divine -> Open Source Village (run by Belfry).
+UPDATE tenants SET name = 'Open Source Village', updated_at = NOW() WHERE id = 1 AND name <> 'Open Source Village';
 
 INSERT INTO policies (name, team_id, slug, display_name, description, created_at, updated_at)
 SELECT 'Belfry Event Apps', NULL, 'belfry-event', 'Belfry event apps',

@@ -119,22 +119,31 @@ def status_list_token(
 # -- Type Metadata -------------------------------------------------------------------------------
 
 
-def type_metadata(vct: str) -> dict[str, Any]:
+def type_metadata(vct: str, logo_uri: str | None = None) -> dict[str, Any]:
     """SD-JWT VC Type Metadata for the village pass (served at ``vct``). One type for every
     tier; the tier and the validity are claims. Name, member number and npub are selectively
     disclosable; the door asks for the tier only."""
     return {
         "vct": vct,
         "name": "Open Source Village Pass",
-        "description": "Pass for Open Source Village, issued by Belfry. One credential type for "
+        "description": "Pass for Open Source Village, run by Belfry. One credential type for "
         "day, week and full-access passes; the tier and the validity period are claims.",
         "display": [
             {
                 "lang": "en",
                 "name": "Open Source Village Pass",
                 "description": "Your pass for Open Source Village",
+                # brand/tokens.css: --osv-background; the logo is the square OSV mark.
                 "rendering": {
-                    "simple": {"background_color": "#1F2A44", "text_color": "#FFFFFF"},
+                    "simple": {
+                        "background_color": "#2b3a31",
+                        "text_color": "#FFFFFF",
+                        **(
+                            {"logo": {"uri": logo_uri, "alt_text": "Open Source Village"}}
+                            if logo_uri
+                            else {}
+                        ),
+                    },
                 },
             }
         ],

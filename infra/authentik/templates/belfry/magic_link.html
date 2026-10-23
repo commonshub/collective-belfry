@@ -1,40 +1,49 @@
-{% extends "email/base.html" %}
 {% comment %}
-Belfry magic-link mail (e-mail stage belfry-magic-link-email, blueprint belfry-magic-link-flow).
-Mounted at /templates in authentik-server and authentik-worker; plain-text twin magic_link.txt.
-{% endcomment %}
-{% load humanize %}
-
-{% block content %}
-<tr>
-  <td align="center">
-    <h1>Sign in to Belfry</h1>
-  </td>
-</tr>
-<tr>
-  <td align="center">
-    <table border="0">
-      <tr>
-        <td align="center" style="max-width: 300px; padding: 20px 0; color: #212124;">
-          Someone asked to sign in to Belfry with this e-mail address. Open the link below in the
-          same browser where you started; it signs you in once.
-        </td>
-      </tr>
-      <tr>
-        <td align="center" class="btn btn-primary">
-          <a id="confirm" href="{{ url }}" rel="noopener noreferrer" target="_blank">Sign in to Belfry</a>
-        </td>
-      </tr>
-    </table>
-  </td>
-</tr>
-{% endblock %}
-
-{% block sub_content %}
-<tr>
-  <td style="padding: 20px; font-size: 12px; color: #212124;" align="center">
-    The link is valid for {{ expires|timeuntil }}. If you did not try to sign in, ignore this mail;
-    nobody can sign in without opening the link.
-  </td>
-</tr>
-{% endblock %}
+Open Source Village magic-link mail (e-mail stage belfry-magic-link-email, blueprint
+belfry-magic-link-flow). Standalone, not authentik's email/base.html (its light frame and
+"Powered by authentik" footer). Dark card, the brand palette inline (brand/tokens.css values:
+mail clients load no stylesheet). The logo is cid:logo, which authentik attaches from
+/web/dist/assets/icons/icon_left_brand.png; docker-compose.yml mounts
+brand/osv-logo-horizontal-dark.png over that path. Mounted at /templates; plain-text twin
+magic_link.txt. Context: url, user, expires, token.
+{% endcomment %}<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta name="viewport" content="width=device-width">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in to Open Source Village</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #2b3a31; font-family: Geist, -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #ffffff;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #2b3a31;">
+    <tr>
+      <td align="center" style="padding: 40px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width: 480px; background-color: #1a231d; border: 1px solid #44534a; border-radius: 12px;">
+          <tr>
+            <td style="padding: 28px 28px 8px;">
+              <img src="cid:logo" alt="Open Source Village" width="240" style="display: block; width: 240px; max-width: 100%; height: auto; border: 0;">
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 28px 0;">
+              <h1 style="margin: 0 0 12px; font-size: 22px; line-height: 1.3; font-weight: 600; color: #ffffff;">Sign in to Open Source Village</h1>
+              <p style="margin: 0 0 20px; color: #c9d1cb;">Someone asked to sign in to Open Source Village with this e-mail address. Open the link below in the same browser where you started; it signs you in once.</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 0 28px 24px;">
+              <a id="confirm" href="{{ url }}" rel="noopener noreferrer" target="_blank" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; text-decoration: none; padding: 12px 22px; border-radius: 8px;">Sign in to Open Source Village</a>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 0 28px 28px; font-size: 13px; color: #8e9a91;">
+              The link is valid for {{ expires|timeuntil }}. If you did not try to sign in, ignore this mail; nobody can sign in without opening the link.
+            </td>
+          </tr>
+        </table>
+        <p style="margin: 20px 0 0; font-size: 12px; color: #8e9a91;">Open Source Village, run by Belfry</p>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

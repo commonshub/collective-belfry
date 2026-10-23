@@ -25,6 +25,9 @@ x-authentik-env: &authentik-env
   BELFRY_STEWARD_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward
   BELFRY_STEWARD_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward/callback
   STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
+  # Read by the brand blueprint (!Env): logo, favicon, background and fonts come from the
+  # repo's brand/ folder as served by the onboarding service (pass.<domain>/brand).
+  BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
 
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
@@ -59,7 +62,7 @@ x-keycast-env: &keycast-env
   OIDC_BACKCHANNEL_URL: http://authentik-server:9000
   OIDC_SCOPES: openid email profile keycast
   OIDC_LINK_CLAIM: keycast_vine_id
-  OIDC_PROVIDER_NAME: Belfry
+  OIDC_PROVIDER_NAME: Open Source Village
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
 
 services:
@@ -141,6 +144,8 @@ services:
       - ./authentik/blueprints:/blueprints/custom:ro
       # Custom e-mail templates (belfry/magic_link.html for the magic-link stage).
       - ./authentik/templates:/templates:ro
+      # The PNG authentik attaches to every mail as cid:logo (stages/email/utils.py).
+      - ../brand/osv-logo-horizontal-dark.png:/web/dist/assets/icons/icon_left_brand.png:ro
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s
@@ -161,6 +166,7 @@ services:
       - authentik-certs:/certs
       - ./authentik/blueprints:/blueprints/custom:ro
       - ./authentik/templates:/templates:ro
+      - ../brand/osv-logo-horizontal-dark.png:/web/dist/assets/icons/icon_left_brand.png:ro
     healthcheck:
       test: ["CMD", "ak", "healthcheck"]
       interval: 10s
@@ -267,6 +273,7 @@ services:
     environment:
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
       BELFRY_VCT: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/vct/village-pass/v1
+      BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
     ports: ["7005:7005"]
     volumes:
       - ./issuer/config:/waltid-issuer-api2/config:ro
@@ -361,7 +368,10 @@ services:
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro
+      # Open Source Village brand assets, served at /brand (pages, authentik, issuer, wallets).
+      - ../brand:/brand:ro
     environment:
+      BRAND_DIR: /brand
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
       ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}

@@ -296,7 +296,6 @@ def authorize_page(auth: AuthSession) -> str:
     body = f"""
 <div class="card" id="login" data-sid="{html.escape(auth.sid)}">
 <h1>Sign in with your pass</h1>
-<p class="muted">Open Source Village · Belfry</p>
 <p>Scan this code with the wallet that holds your Open Source Village pass and share your
 member number. You will be signed in as soon as the pass is verified.</p>
 <p class="qr"><img alt="QR code with the verification request" src="{qr_svg(url)}"></p>
