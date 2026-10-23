@@ -1,0 +1,506 @@
+From 6eff3b3adc2f7e33ea302dda37d8b0eaf49d7f25 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@belfry.local>
+Date: Fri, 23 Oct 2026 19:18:42 +0200
+Subject: [PATCH 6/6] feat(belfry): e-mail from the ID token; the participant's
+ pass on the dashboard
+
+Preloaded accounts have no e-mail, so the dashboard asked them to verify
+"()" and the UCAN carried an empty address. On OIDC login the ID token's
+`email` is now stored on the account as verified (OIDC_TRUST_EMAIL, default
+true): the provider only lets a participant in through a magic link to that
+address. An address held by another account of the tenant is left alone.
+
+GET /api/user/pass (session auth) reads the pass behind the account's
+vine_id (`odoo-partner-<id>`) from the onboarding service
+(BELFRY_PASS_INFO_URL + PASS_INFO_TOKEN, `GET /admin/partners/<id>/pass`)
+and the dashboard shows a "Your pass" card: tier, validity, state, member
+number and "Add to your wallet" (the claim link) while the pass is active
+and unclaimed. 404 without a pass, 503 when the service is not configured;
+the card is hidden in both cases.
+---
+ api/src/api/http/auth.rs      |  12 ++-
+ api/src/api/http/mod.rs       |   1 +
+ api/src/api/http/oidc.rs      |  25 ++++++-
+ api/src/api/http/pass.rs      | 137 ++++++++++++++++++++++++++++++++++
+ api/src/api/http/routes.rs    |   3 +-
+ core/src/repositories/user.rs |  28 +++++++
+ web/src/routes/+page.svelte   | 136 ++++++++++++++++++++++++++++++++-
+ 7 files changed, 337 insertions(+), 5 deletions(-)
+ create mode 100644 api/src/api/http/pass.rs
+
+diff --git a/api/src/api/http/auth.rs b/api/src/api/http/auth.rs
+index eb43b82..a11e199 100644
+--- a/api/src/api/http/auth.rs
++++ b/api/src/api/http/auth.rs
+@@ -119,11 +119,19 @@ pub fn generate_secure_token() -> String {
+ /// or `DOMAIN` override a real tenant would make verification fail (profile claims one host while
+ /// discovery lives on another). Those env vars apply only when the tenant host is `localhost` or
+ /// `127.0.0.1` (local dev), with `DEFAULT_NIP05_DOMAIN` as the final fallback.
++/// Belfry: `NIP05_DOMAIN` wins whenever it is set, because the names live on the apex domain
++/// whose `/.well-known/nostr.json` the proxy forwards to this tenant (the onboarding service
++/// publishes `<member>@<NIP05_DOMAIN>` in the kind-0 profiles).
+ fn resolve_nip05_domain(tenant_domain: &str) -> String {
++    let configured = std::env::var("NIP05_DOMAIN")
++        .ok()
++        .filter(|value| !value.trim().is_empty());
++    if let Some(domain) = configured {
++        return domain;
++    }
+     if tenant_domain == "localhost" || tenant_domain == "127.0.0.1" {
+-        return std::env::var("NIP05_DOMAIN")
++        return std::env::var("DOMAIN")
+             .ok()
+-            .or_else(|| std::env::var("DOMAIN").ok())
+             .filter(|value| !value.trim().is_empty())
+             .unwrap_or_else(|| DEFAULT_NIP05_DOMAIN.to_string());
+     }
+diff --git a/api/src/api/http/mod.rs b/api/src/api/http/mod.rs
+index ce7d738..cedaa6d 100644
+--- a/api/src/api/http/mod.rs
++++ b/api/src/api/http/mod.rs
+@@ -18,6 +18,7 @@ pub mod oauth;
+ pub mod og_diviner;
+ pub mod oidc;
+ pub mod openid_configuration;
++pub mod pass;
+ pub mod policies;
+ pub mod request_panics;
+ pub mod retention;
+diff --git a/api/src/api/http/oidc.rs b/api/src/api/http/oidc.rs
+index 0771540..c085664 100644
+--- a/api/src/api/http/oidc.rs
++++ b/api/src/api/http/oidc.rs
+@@ -29,6 +29,7 @@
+ //! | `OIDC_LINK_CLAIM` | ID token claim matched against `users.vine_id` on first login. Default `keycast_vine_id`. |
+ //! | `OIDC_PROVIDER_NAME` | Button label, "Sign in with …". Default `single sign-on`. |
+ //! | `OIDC_HIDE_PASSWORD_LOGIN` | `true` hides the e-mail/password and registration forms in the login pages. The API endpoints stay (admins use them). |
++//! | `OIDC_TRUST_EMAIL` | Default `true`: the ID token's `email` is stored on the account as verified (the provider only lets a participant in through a magic link to that address). `false` leaves the account's e-mail alone. |
+ 
+ use axum::{
+     extract::{Query, State},
+@@ -75,6 +76,8 @@ pub struct OidcConfig {
+     pub link_claim: String,
+     pub provider_name: String,
+     pub hide_password_login: bool,
++    /// Store the ID token's `email` on the account, verified (`OIDC_TRUST_EMAIL`, default true).
++    pub trust_email: bool,
+     /// Origin of this server's web app (`APP_URL`), the session's `redirect_origin` for logins
+     /// that do not continue an OAuth request.
+     pub app_origin: String,
+@@ -118,6 +121,9 @@ impl OidcConfig {
+             hide_password_login: get("OIDC_HIDE_PASSWORD_LOGIN")
+                 .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                 .unwrap_or(false),
++            trust_email: get("OIDC_TRUST_EMAIL")
++                .map(|v| !matches!(v.to_ascii_lowercase().as_str(), "0" | "false" | "no"))
++                .unwrap_or(true),
+             app_origin: origin_of(&app_url)?,
+             issuer,
+         };
+@@ -883,7 +889,24 @@ pub async fn oidc_callback(
+ 
+     let user_pk = nostr_sdk::PublicKey::from_hex(&pubkey)
+         .map_err(|e| OidcError::Internal(format!("stored pubkey: {e}")))?;
+-    let email = account.email.clone().unwrap_or_default();
++    let mut email = account.email.clone().unwrap_or_default();
++    // Preloaded accounts have no e-mail; the provider's address is trusted (see the module header).
++    if p.config.trust_email {
++        if let Some(claimed) = claims.email.as_deref().filter(|e| !e.is_empty()) {
++            let stored = user_repo
++                .set_email_from_idp(&pubkey, claimed, tenant_id)
++                .await
++                .map_err(db_err)?;
++            if stored {
++                tracing::info!(pubkey = %pubkey, "OIDC login: e-mail taken from the ID token");
++            } else if account.email.as_deref() != Some(claimed) {
++                tracing::warn!(pubkey = %pubkey, "OIDC login: ID token e-mail not stored (held by another account)");
++            }
++            if stored || account.email.as_deref() == Some(claimed) {
++                email = claimed.to_string();
++            }
++        }
++    }
+     let status = (!account.status.is_active()).then_some(&account.status);
+     let ucan = super::auth::generate_server_signed_ucan(
+         &user_pk,
+diff --git a/api/src/api/http/pass.rs b/api/src/api/http/pass.rs
+new file mode 100644
+index 0000000..5359863
+--- /dev/null
++++ b/api/src/api/http/pass.rs
+@@ -0,0 +1,137 @@
++//! Belfry: the signed-in participant's pass (tier, validity, state, claim link), read server to
++//! server from the onboarding service so the dashboard can show it before and after the claim.
++//!
++//! | Variable | Meaning |
++//! | --- | --- |
++//! | `BELFRY_PASS_INFO_URL` | Base URL of the onboarding service, e.g. `http://onboarding:8100`. Unset: `GET /api/user/pass` answers 503. |
++//! | `PASS_INFO_TOKEN` | Bearer token for `GET <base>/admin/partners/<id>/pass`. |
++//!
++//! The account's `vine_id` is `odoo-partner-<id>`; the id is the partner the pass belongs to.
++//! The onboarding service's JSON is passed through unchanged: `state`, `tier`, `tier_name`,
++//! `date_start`, `date_end`, `member_number`, `npub`, `claim_url` (null once claimed or closed).
++
++use axum::{
++    extract::State,
++    http::{header, HeaderMap, StatusCode},
++    response::{IntoResponse, Response},
++    Json,
++};
++use once_cell::sync::Lazy;
++use sqlx::PgPool;
++use std::time::Duration;
++
++use super::auth::AuthError;
++
++struct PassInfoConfig {
++    base_url: String,
++    token: String,
++    client: reqwest::Client,
++}
++
++static CONFIG: Lazy<Option<PassInfoConfig>> = Lazy::new(|| {
++    let get = |name: &str| {
++        std::env::var(name)
++            .ok()
++            .map(|v| v.trim().to_string())
++            .filter(|v| !v.is_empty())
++    };
++    let (Some(base_url), Some(token)) = (get("BELFRY_PASS_INFO_URL"), get("PASS_INFO_TOKEN"))
++    else {
++        tracing::warn!("BELFRY_PASS_INFO_URL/PASS_INFO_TOKEN unset: /api/user/pass is unavailable");
++        return None;
++    };
++    let client = reqwest::Client::builder()
++        .timeout(Duration::from_secs(5))
++        .build()
++        .expect("reqwest client");
++    Some(PassInfoConfig {
++        base_url: base_url.trim_end_matches('/').to_string(),
++        token,
++        client,
++    })
++});
++
++/// The Odoo partner id behind a `vine_id`, if it has Belfry's shape.
++pub(crate) fn partner_id(vine_id: &str) -> Option<&str> {
++    vine_id
++        .strip_prefix("odoo-partner-")
++        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
++}
++
++fn json_status(status: StatusCode, error: &str) -> Response {
++    (
++        status,
++        [(header::CACHE_CONTROL, "no-store")],
++        Json(serde_json::json!({ "error": error })),
++    )
++        .into_response()
++}
++
++/// `GET /api/user/pass` (session cookie or bearer): the participant's pass, 404 without one.
++pub async fn get_pass(
++    tenant: crate::api::tenant::TenantExtractor,
++    State(pool): State<PgPool>,
++    headers: HeaderMap,
++) -> Result<Response, AuthError> {
++    let tenant_id = tenant.0.id;
++    let pubkey = super::auth::extract_user_from_token(&headers, tenant_id).await?;
++    let Some(cfg) = CONFIG.as_ref() else {
++        return Ok(json_status(
++            StatusCode::SERVICE_UNAVAILABLE,
++            "pass_info_not_configured",
++        ));
++    };
++    let vine_id: Option<Option<String>> =
++        sqlx::query_scalar("SELECT vine_id FROM users WHERE pubkey = $1 AND tenant_id = $2")
++            .bind(&pubkey)
++            .bind(tenant_id)
++            .fetch_optional(&pool)
++            .await
++            .map_err(AuthError::Database)?;
++    let Some(partner) = vine_id.flatten().as_deref().and_then(partner_id).map(str::to_owned)
++    else {
++        return Ok(json_status(StatusCode::NOT_FOUND, "no_pass"));
++    };
++    let url = format!("{}/admin/partners/{}/pass", cfg.base_url, partner);
++    let resp = cfg
++        .client
++        .get(&url)
++        .bearer_auth(&cfg.token)
++        .send()
++        .await
++        .map_err(|e| AuthError::Internal(format!("pass info service: {e}")))?;
++    match resp.status() {
++        StatusCode::OK => {
++            let body: serde_json::Value = resp
++                .json()
++                .await
++                .map_err(|e| AuthError::Internal(format!("pass info service: {e}")))?;
++            Ok((
++                StatusCode::OK,
++                [(header::CACHE_CONTROL, "no-store")],
++                Json(body),
++            )
++                .into_response())
++        }
++        StatusCode::NOT_FOUND => Ok(json_status(StatusCode::NOT_FOUND, "no_pass")),
++        status => {
++            tracing::warn!(%status, "pass info service answered");
++            Err(AuthError::Internal(format!(
++                "pass info service answered {status}"
++            )))
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::partner_id;
++
++    #[test]
++    fn partner_id_accepts_belfry_shape_only() {
++        assert_eq!(partner_id("odoo-partner-42"), Some("42"));
++        assert_eq!(partner_id("odoo-partner-"), None);
++        assert_eq!(partner_id("odoo-partner-4/../x"), None);
++        assert_eq!(partner_id("vine-123"), None);
++    }
++}
+diff --git a/api/src/api/http/routes.rs b/api/src/api/http/routes.rs
+index 614a92f..71bdf71 100644
+--- a/api/src/api/http/routes.rs
++++ b/api/src/api/http/routes.rs
+@@ -12,7 +12,7 @@ use tower::{timeout::error::Elapsed, ServiceBuilder};
+ 
+ use crate::api::http::{
+     admin, ap, atproto, atproto_oauth, auth, claim, email_marketing, expensive_work, headless,
+-    metrics, nostr_rpc, oauth, og_diviner, oidc, policies, retention, service_deletion,
++    metrics, nostr_rpc, oauth, og_diviner, oidc, pass, policies, retention, service_deletion,
+     service_provisioning, teams,
+ };
+ use crate::email_delivery::EmailDeliveryService;
+@@ -196,6 +196,7 @@ pub fn api_routes(
+         .route("/user/bunker", get(auth::get_bunker_url))
+         .route("/user/pubkey", get(auth::get_pubkey))
+         .route("/user/account", get(auth::get_account_status))
++        .route("/user/pass", get(pass::get_pass))
+         .route("/user/profile", get(auth::get_profile))
+         .route("/user/atproto/status", get(atproto::atproto_status))
+         .route("/user/sessions", get(auth::list_sessions))
+diff --git a/core/src/repositories/user.rs b/core/src/repositories/user.rs
+index b86b5d9..a934b15 100644
+--- a/core/src/repositories/user.rs
++++ b/core/src/repositories/user.rs
+@@ -960,6 +960,34 @@ impl UserRepository {
+         Ok(())
+     }
+ 
++    /// Store an e-mail the OpenID Provider vouched for (Belfry: the participant signed in through a
++    /// magic link to that address), already verified. Returns `false` when nothing changed: the
++    /// row already holds the verified address, or another account of the tenant holds it (the
++    /// unique index would refuse the update).
++    pub async fn set_email_from_idp(
++        &self,
++        pubkey: &str,
++        email: &str,
++        tenant_id: i64,
++    ) -> Result<bool, RepositoryError> {
++        let result = sqlx::query(
++            "UPDATE users
++             SET email = $1, email_verified = true, updated_at = $2
++             WHERE pubkey = $3 AND tenant_id = $4
++               AND (email IS DISTINCT FROM $1 OR email_verified IS NOT TRUE)
++               AND NOT EXISTS (
++                   SELECT 1 FROM users o WHERE o.tenant_id = $4 AND o.email = $1 AND o.pubkey <> $3
++               )",
++        )
++        .bind(email)
++        .bind(Utc::now())
++        .bind(pubkey)
++        .bind(tenant_id)
++        .execute(&self.pool)
++        .await?;
++        Ok(result.rows_affected() > 0)
++    }
++
+     /// Get email verification status.
+     pub async fn get_verification_status(
+         &self,
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index 1a41e70..7b8fec0 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -50,6 +50,35 @@ let isNip07Loading = $state(false);
+ let hasExtension = $state(false);
+ let adminRole = $state<string | null>(null);
+ 
++/** Belfry: the participant's pass from the onboarding service (`GET /api/user/pass`). */
++interface PassInfo {
++	state: 'active' | 'pending' | 'revoked' | 'expired' | string;
++	tier: string;
++	tier_name: string;
++	date_start: string;
++	date_end: string;
++	member_number: string;
++	npub: string | null;
++	claim_url: string | null;
++}
++let pass = $state<PassInfo | null>(null);
++
++const PASS_STATE_LABELS: Record<string, string> = {
++	active: 'Active',
++	pending: 'Awaiting payment',
++	revoked: 'Revoked',
++	expired: 'Expired'
++};
++
++function passStateLabel(state: string): string {
++	return PASS_STATE_LABELS[state] ?? state;
++}
++
++function formatPassDate(iso: string): string {
++	const d = new Date(`${iso}T00:00:00`);
++	return isNaN(d.getTime()) ? iso : d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
++}
++
+ const groupedSessions = $derived.by(() => {
+ 	const groups = new Map<string, GroupedSession>();
+ 	for (const session of sessions) {
+@@ -271,7 +300,7 @@ async function loadDashboardData() {
+ 		userNpub = user.pubkey;
+ 	}
+ 
+-	const loads: Promise<void>[] = [loadSessions(), loadProfile()];
++	const loads: Promise<void>[] = [loadSessions(), loadProfile(), loadPass()];
+ 	if (isTeamsEnabled()) loads.push(loadTeams());
+ 	loads.push(checkAdminStatus());
+ 	await Promise.all(loads);
+@@ -295,6 +324,19 @@ async function loadProfile() {
+ 	}
+ }
+ 
++async function loadPass() {
++	if (!currentUser?.pubkey || authMethod === 'nip07') return;
++	try {
++		pass = await api.get<PassInfo>('/user/pass');
++	} catch (err: any) {
++		// 404: no pass for this account (admins); 503: the pass service is not configured
++		if (err?.status !== 404 && err?.status !== 503) {
++			console.error('Failed to load the pass:', err);
++		}
++		pass = null;
++	}
++}
++
+ // Reactively load dashboard when user logs in after page mount (e.g. NIP-07)
+ $effect(() => {
+ 	if (currentUser?.pubkey && isLoadingDashboard && !isCheckingAuth) {
+@@ -424,6 +466,32 @@ $effect(() => {
+ 				</div>
+ 			</section>
+ 
++			<!-- Your pass (Belfry): shown before and after the wallet claim -->
++			{#if pass}
++			<section class="pass-section">
++				<h2 class="section-title">Your pass</h2>
++				<div class="identity-card pass-card">
++					<div class="pass-head">
++						<span class="pass-tier">{pass.tier_name}</span>
++						<span class="status-badge {pass.state === 'active' ? 'success' : pass.state === 'pending' ? 'warning' : 'closed'}">{passStateLabel(pass.state)}</span>
++					</div>
++					<dl class="pass-facts">
++						<div><dt>Valid</dt><dd>{formatPassDate(pass.date_start)} to {formatPassDate(pass.date_end)}</dd></div>
++						<div><dt>Member number</dt><dd class="mono">{pass.member_number}</dd></div>
++					</dl>
++					{#if pass.claim_url && pass.state === 'active'}
++						<a class="pass-claim" href={pass.claim_url}>
++							<ArrowSquareOut size={16} />
++							<span>Add to your wallet</span>
++						</a>
++						<p class="pass-hint">Opens the claim page: scan its QR code with your EUDI wallet, or open the link on your phone.</p>
++					{:else if pass.state === 'active'}
++						<p class="pass-hint">The pass is in your wallet. Show it at the door and use it to sign in.</p>
++					{/if}
++				</div>
++			</section>
++			{/if}
++
+ 			<!-- Learn More Section (not for NIP-07 admins) -->
+ 			{#if authMethod !== 'nip07'}
+ 			<section class="learn-section">
+@@ -974,6 +1042,72 @@ $effect(() => {
+ 	}
+ 
+ 	/* Learn More Section */
++	/* Your pass (Belfry) */
++	.pass-section {
++		margin-bottom: 2rem;
++	}
++
++	.pass-head {
++		display: flex;
++		align-items: center;
++		justify-content: space-between;
++		gap: 0.75rem;
++		margin-bottom: 1rem;
++	}
++
++	.pass-tier {
++		font-size: 1.125rem;
++		font-weight: 600;
++		color: var(--color-divine-text);
++	}
++
++	.status-badge.closed {
++		background: color-mix(in srgb, var(--color-divine-error, #ff6b6b) 20%, transparent);
++		color: var(--color-divine-error, #ff6b6b);
++	}
++
++	.pass-facts {
++		display: grid;
++		grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
++		gap: 0.75rem 1.5rem;
++		margin: 0 0 1rem 0;
++	}
++
++	.pass-facts dt {
++		font-size: 0.75rem;
++		text-transform: uppercase;
++		letter-spacing: 0.04em;
++		color: var(--color-divine-text-tertiary);
++	}
++
++	.pass-facts dd {
++		margin: 0.125rem 0 0 0;
++		color: var(--color-divine-text);
++	}
++
++	.pass-claim {
++		display: inline-flex;
++		align-items: center;
++		gap: 0.5rem;
++		padding: 0.625rem 1.25rem;
++		background: var(--color-divine-green);
++		color: var(--color-divine-on-accent);
++		border-radius: 9999px;
++		font-weight: 600;
++		text-decoration: none;
++	}
++
++	.pass-claim:hover {
++		background: var(--color-divine-green-dark);
++		color: var(--color-divine-on-accent);
++	}
++
++	.pass-hint {
++		margin: 0.75rem 0 0 0;
++		font-size: 0.875rem;
++		color: var(--color-divine-text-secondary);
++	}
++
+ 	.learn-section {
+ 		margin-bottom: 2rem;
+ 	}
+-- 
+2.53.0
+

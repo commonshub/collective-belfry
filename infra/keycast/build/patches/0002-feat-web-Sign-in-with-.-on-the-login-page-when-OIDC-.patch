@@ -1,7 +1,7 @@
-From c3489da7e3b66957ac9f5a3dfdd0dc803ad01efa Mon Sep 17 00:00:00 2001
+From f7b450517e0ef28fd147767cdd28699a7d5f08f5 Mon Sep 17 00:00:00 2001
 From: friedger <mail@friedger.de>
 Date: Fri, 23 Oct 2026 10:57:58 +0200
-Subject: [PATCH 2/5] feat(web): 'Sign in with ...' on the login page when OIDC
+Subject: [PATCH 2/6] feat(web): 'Sign in with ...' on the login page when OIDC
  login is configured
 
 Reads GET /api/auth/oidc/config; continues automatically after the OIDC

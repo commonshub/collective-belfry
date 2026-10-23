@@ -1,7 +1,7 @@
-From b08fe4566bff1165fb862011d88b6f2b3d600b97 Mon Sep 17 00:00:00 2001
+From 6f320ddcdd2316ccb57937a41d4338863503de32 Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@localhost>
 Date: Fri, 23 Oct 2026 14:11:05 +0200
-Subject: [PATCH 4/5] chore(brand): Belfry branding instead of Divine
+Subject: [PATCH 4/6] chore(brand): Belfry branding instead of Divine
 
 Product name Belfry in the API (e-mail subjects and bodies, claim pages, default sender)
 and the web app (brand constants, title, manifest, logo and favicon as SVG, landing page
@@ -14,31 +14,31 @@ the Divine demo page are removed. Internal names (vine_id, --color-divine-* vari
  api/src/api/http/oauth.rs                     |  178 ++-
  api/src/brand.rs                              |    4 +-
  api/src/email_service.rs                      |   38 +-
- web/src/app.css                               |  118 +-
+ web/src/app.css                               |  122 +-
  web/src/app.html                              |   11 +-
  web/src/lib/atproto_status.svelte.ts          |  273 ----
  web/src/lib/brand.ts                          |    6 +-
  .../lib/components/AtprotoSettingsCard.svelte |  339 -----
- .../lib/components/CreateBunkerModal.svelte   |    2 +-
+ .../lib/components/CreateBunkerModal.svelte   |    6 +-
  web/src/lib/components/Header.svelte          |    4 +-
  .../InvalidateClaimTokenModal.svelte          |   24 +-
  web/src/lib/components/PasswordInput.svelte   |    2 +-
  web/src/lib/components/QRCode.svelte          |    6 +-
- web/src/routes/+page.svelte                   |   39 +-
- web/src/routes/admin/+page.svelte             |    2 +-
- .../admin/registered-clients/+page.svelte     |    2 +-
- web/src/routes/app/callback/+page.svelte      |    4 +-
- .../routes/cancel-email-change/+page.svelte   |   10 +-
- .../routes/confirm-email-change/+page.svelte  |   10 +-
+ web/src/routes/+page.svelte                   |   43 +-
+ web/src/routes/admin/+page.svelte             |    6 +-
+ .../admin/registered-clients/+page.svelte     |    4 +-
+ web/src/routes/app/callback/+page.svelte      |    6 +-
+ .../routes/cancel-email-change/+page.svelte   |   12 +-
+ .../routes/confirm-email-change/+page.svelte  |   12 +-
  web/src/routes/demo/+page.svelte              | 1116 -----------------
  web/src/routes/docs/+page.svelte              |   14 +-
- .../email-verification/continue/+page.svelte  |   10 +-
- web/src/routes/forgot-password/+page.svelte   |   16 +-
- web/src/routes/login/+page.svelte             |   12 +-
- web/src/routes/register/+page.svelte          |   12 +-
- web/src/routes/reset-password/+page.svelte    |   10 +-
- web/src/routes/settings/security/+page.svelte |    2 -
- web/src/routes/support-admin/+page.svelte     |   20 +-
+ .../email-verification/continue/+page.svelte  |   12 +-
+ web/src/routes/forgot-password/+page.svelte   |   18 +-
+ web/src/routes/login/+page.svelte             |   14 +-
+ web/src/routes/register/+page.svelte          |   14 +-
+ web/src/routes/reset-password/+page.svelte    |   12 +-
+ web/src/routes/settings/security/+page.svelte |    4 +-
+ web/src/routes/support-admin/+page.svelte     |   24 +-
  web/static/apple-touch-icon.png               |  Bin 5576 -> 4696 bytes
  web/static/divine-logo.svg                    |   18 -
  web/static/favicon-96x96.png                  |  Bin 3019 -> 2519 bytes
@@ -58,7 +58,7 @@ the Divine demo page are removed. Internal names (vine_id, --color-divine-* vari
  web/static/site.webmanifest                   |   29 +-
  web/static/web-app-manifest-192x192.png       |  Bin 6477 -> 4945 bytes
  web/static/web-app-manifest-512x512.png       |  Bin 18627 -> 13635 bytes
- 49 files changed, 581 insertions(+), 2144 deletions(-)
+ 49 files changed, 602 insertions(+), 2163 deletions(-)
  delete mode 100644 web/src/lib/atproto_status.svelte.ts
  delete mode 100644 web/src/lib/components/AtprotoSettingsCard.svelte
  delete mode 100644 web/src/routes/demo/+page.svelte
@@ -1104,7 +1104,7 @@ index beefc64..9177a0d 100644
                      </a>
                  </div>
 diff --git a/web/src/app.css b/web/src/app.css
-index e725382..b6eaed9 100644
+index e725382..e234505 100644
 --- a/web/src/app.css
 +++ b/web/src/app.css
 @@ -7,37 +7,50 @@
@@ -1181,7 +1181,7 @@ index e725382..b6eaed9 100644
  }
  
  @utility container {
-@@ -58,63 +71,32 @@
+@@ -58,63 +71,34 @@
    ::before,
    ::backdrop,
    ::file-selector-button {
@@ -1232,6 +1232,8 @@ index e725382..b6eaed9 100644
 +    --color-divine-text-secondary: #c9d1cb;
 +    --color-divine-text-tertiary: #8e9a91;
 +    --color-divine-muted: #243128;
++    /* text on the lime accent (buttons) */
++    --color-divine-on-accent: #1a231d;
  
      color-scheme: dark;
      background-color: var(--color-divine-bg);
@@ -1258,7 +1260,7 @@ index e725382..b6eaed9 100644
  h1, h2, h3, h4, h5, h6 {
      font-family: var(--font-heading);
      letter-spacing: -0.02em;
-@@ -149,7 +131,7 @@ a.bordered:hover {
+@@ -149,7 +133,7 @@ a.bordered:hover {
  
  .button-primary {
      background: var(--color-divine-green);
@@ -1267,6 +1269,15 @@ index e725382..b6eaed9 100644
      border-color: var(--color-divine-green);
  }
  
+@@ -207,7 +191,7 @@ a.bordered:hover {
+ .pill {
+     @apply rounded-full px-2 py-1 text-xs font-medium self-start;
+     background: var(--color-divine-green);
+-    color: white;
++    color: var(--color-divine-on-accent);
+ }
+ 
+ .form-group {
 diff --git a/web/src/app.html b/web/src/app.html
 index 056d887..f9b8e01 100644
 --- a/web/src/app.html
@@ -1932,7 +1943,7 @@ index 08f7ebe..0000000
 -  }
 -</style>
 diff --git a/web/src/lib/components/CreateBunkerModal.svelte b/web/src/lib/components/CreateBunkerModal.svelte
-index 56157ef..23f17a7 100644
+index 56157ef..c5ecf00 100644
 --- a/web/src/lib/components/CreateBunkerModal.svelte
 +++ b/web/src/lib/components/CreateBunkerModal.svelte
 @@ -129,7 +129,7 @@
@@ -1944,6 +1955,24 @@ index 56157ef..23f17a7 100644
  					</div>
  
  					<p class="description">
+@@ -373,7 +373,7 @@
+ 
+ 	.btn-create {
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: 1px solid var(--color-divine-green);
+ 	}
+ 
+@@ -414,7 +414,7 @@
+ 		width: 100%;
+ 		padding: 0.625rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: 1px solid var(--color-divine-green);
+ 		border-radius: var(--radius-md);
+ 		font-size: 0.875rem;
 diff --git a/web/src/lib/components/Header.svelte b/web/src/lib/components/Header.svelte
 index cfe9760..7fbb0fd 100644
 --- a/web/src/lib/components/Header.svelte
@@ -2060,7 +2089,7 @@ index 1f5d8b7..a6972bf 100644
  	</div>
  	{#if downloadable}
 diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
-index c32084c..3472d5b 100644
+index c32084c..1a41e70 100644
 --- a/web/src/routes/+page.svelte
 +++ b/web/src/routes/+page.svelte
 @@ -447,13 +447,13 @@ $effect(() => {
@@ -2104,6 +2133,15 @@ index c32084c..3472d5b 100644
  						</p>
  					</div>
  				{:else}
+@@ -507,7 +507,7 @@ $effect(() => {
+ 										<p class="app-name">
+ 											{group.application_name}
+ 											{#if group.isOAuth}
+-												<span class="connection-badge oauth">Divine Login</span>
++												<span class="connection-badge oauth">App login</span>
+ 											{:else}
+ 												<span class="connection-badge manual">Bunker</span>
+ 											{/if}
 @@ -725,18 +725,17 @@ $effect(() => {
  		<div class="landing-content">
  			<!-- Logo/Branding -->
@@ -2169,6 +2207,15 @@ index c32084c..3472d5b 100644
  	}
  
  	.copy-btn {
+@@ -1122,7 +1121,7 @@ $effect(() => {
+ 		gap: 0.5rem;
+ 		padding: 0.5rem 1rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 0.875rem;
 @@ -1471,7 +1470,7 @@ $effect(() => {
  	}
  
@@ -2179,9 +2226,18 @@ index c32084c..3472d5b 100644
  		font-size: 12px;
  		letter-spacing: 3px;
 diff --git a/web/src/routes/admin/+page.svelte b/web/src/routes/admin/+page.svelte
-index 9775e1f..27c83bc 100644
+index 9775e1f..c6e47ff 100644
 --- a/web/src/routes/admin/+page.svelte
 +++ b/web/src/routes/admin/+page.svelte
+@@ -718,7 +718,7 @@
+ 	.btn-primary {
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 0.875rem;
 @@ -846,7 +846,7 @@
  
  	.code-block {
@@ -2191,8 +2247,17 @@ index 9775e1f..27c83bc 100644
  		padding: 1rem;
  		border-radius: 8px;
  		font-family: var(--font-mono);
+@@ -911,7 +911,7 @@
+ 		gap: 0.375rem;
+ 		padding: 0.625rem 1rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 8px;
+ 		font-size: 0.85rem;
 diff --git a/web/src/routes/admin/registered-clients/+page.svelte b/web/src/routes/admin/registered-clients/+page.svelte
-index 1ed9d1c..e5fde3d 100644
+index 1ed9d1c..4aab911 100644
 --- a/web/src/routes/admin/registered-clients/+page.svelte
 +++ b/web/src/routes/admin/registered-clients/+page.svelte
 @@ -687,7 +687,7 @@
@@ -2204,8 +2269,17 @@ index 1ed9d1c..e5fde3d 100644
  	}
  
  	input[type='text']:disabled {
+@@ -733,7 +733,7 @@
+ 		gap: 0.4rem;
+ 		padding: 0.65rem 1.15rem;
+ 		background: var(--color-divine-green);
+-		color: white;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 0.9rem;
 diff --git a/web/src/routes/app/callback/+page.svelte b/web/src/routes/app/callback/+page.svelte
-index f7523dc..a2e5233 100644
+index f7523dc..b9836cf 100644
 --- a/web/src/routes/app/callback/+page.svelte
 +++ b/web/src/routes/app/callback/+page.svelte
 @@ -8,7 +8,7 @@ const currentUrl = $derived(browser ? $page.url.href : "");
@@ -2226,8 +2300,17 @@ index f7523dc..a2e5233 100644
          color: var(--color-divine-green);
          margin-bottom: 1.5rem;
      }
+@@ -85,7 +85,7 @@ const currentUrl = $derived(browser ? $page.url.href : "");
+         padding: 0.875rem 2rem;
+         font-size: 1rem;
+         font-weight: 600;
+-        color: white;
++        color: var(--color-divine-on-accent);
+         background: var(--color-divine-green);
+         border-radius: 9999px;
+         text-decoration: none;
 diff --git a/web/src/routes/cancel-email-change/+page.svelte b/web/src/routes/cancel-email-change/+page.svelte
-index bece703..110b9c5 100644
+index bece703..f1ae7c2 100644
 --- a/web/src/routes/cancel-email-change/+page.svelte
 +++ b/web/src/routes/cancel-email-change/+page.svelte
 @@ -37,8 +37,8 @@
@@ -2259,6 +2342,15 @@ index bece703..110b9c5 100644
  		font-weight: 500;
  		font-size: 11px;
  		letter-spacing: 3px;
+@@ -140,7 +140,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -151,7 +151,7 @@
  
  	.btn-primary:hover {
@@ -2269,7 +2361,7 @@ index bece703..110b9c5 100644
  
  	.auth-link {
 diff --git a/web/src/routes/confirm-email-change/+page.svelte b/web/src/routes/confirm-email-change/+page.svelte
-index 0e037a9..81393e8 100644
+index 0e037a9..fd61112 100644
 --- a/web/src/routes/confirm-email-change/+page.svelte
 +++ b/web/src/routes/confirm-email-change/+page.svelte
 @@ -36,8 +36,8 @@
@@ -2301,6 +2393,15 @@ index 0e037a9..81393e8 100644
  		font-weight: 500;
  		font-size: 11px;
  		letter-spacing: 3px;
+@@ -136,7 +136,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -147,7 +147,7 @@
  
  	.btn-primary:hover {
@@ -3491,7 +3592,7 @@ index 756c377..ad6f23e 100644
  	}
  </style>
 diff --git a/web/src/routes/email-verification/continue/+page.svelte b/web/src/routes/email-verification/continue/+page.svelte
-index 6b08da0..cddd4ca 100644
+index 6b08da0..b7fb836 100644
 --- a/web/src/routes/email-verification/continue/+page.svelte
 +++ b/web/src/routes/email-verification/continue/+page.svelte
 @@ -157,8 +157,8 @@
@@ -3523,6 +3624,15 @@ index 6b08da0..cddd4ca 100644
  		font-weight: 500;
  		font-size: 11px;
  		letter-spacing: 3px;
+@@ -364,7 +364,7 @@
+ 		display: block;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -376,7 +376,7 @@
  
  	.btn-primary:hover {
@@ -3533,7 +3643,7 @@ index 6b08da0..cddd4ca 100644
  
  	.btn-secondary {
 diff --git a/web/src/routes/forgot-password/+page.svelte b/web/src/routes/forgot-password/+page.svelte
-index 9e906ef..76f26fe 100644
+index 9e906ef..11d6cd7 100644
 --- a/web/src/routes/forgot-password/+page.svelte
 +++ b/web/src/routes/forgot-password/+page.svelte
 @@ -38,8 +38,8 @@
@@ -3574,6 +3684,15 @@ index 9e906ef..76f26fe 100644
  	}
  
  	input::placeholder {
+@@ -187,7 +187,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: white;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -201,7 +201,7 @@
  
  	.btn-primary:hover:not(:disabled) {
@@ -3595,7 +3714,7 @@ index 9e906ef..76f26fe 100644
  		padding: 1rem;
  		margin-bottom: 1.5rem;
 diff --git a/web/src/routes/login/+page.svelte b/web/src/routes/login/+page.svelte
-index 0c7f08b..ecb831f 100644
+index 0c7f08b..c5c6b3d 100644
 --- a/web/src/routes/login/+page.svelte
 +++ b/web/src/routes/login/+page.svelte
 @@ -179,8 +179,8 @@
@@ -3636,6 +3755,15 @@ index 0c7f08b..ecb831f 100644
  	}
  
  	input::placeholder {
+@@ -407,7 +407,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: white;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -419,7 +419,7 @@
  
  	.btn-primary:hover:not(:disabled) {
@@ -3646,7 +3774,7 @@ index 0c7f08b..ecb831f 100644
  
  	.btn-primary:disabled {
 diff --git a/web/src/routes/register/+page.svelte b/web/src/routes/register/+page.svelte
-index aba7417..88b9807 100644
+index aba7417..1b01aa0 100644
 --- a/web/src/routes/register/+page.svelte
 +++ b/web/src/routes/register/+page.svelte
 @@ -84,8 +84,8 @@
@@ -3687,6 +3815,15 @@ index aba7417..88b9807 100644
  	}
  
  	input::placeholder {
+@@ -334,7 +334,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: white;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -346,7 +346,7 @@
  
  	.btn-primary:hover:not(:disabled) {
@@ -3697,7 +3834,7 @@ index aba7417..88b9807 100644
  
  	.btn-primary:disabled {
 diff --git a/web/src/routes/reset-password/+page.svelte b/web/src/routes/reset-password/+page.svelte
-index 3b2cdbb..72d6018 100644
+index 3b2cdbb..3a8b90a 100644
 --- a/web/src/routes/reset-password/+page.svelte
 +++ b/web/src/routes/reset-password/+page.svelte
 @@ -56,8 +56,8 @@
@@ -3729,6 +3866,15 @@ index 3b2cdbb..72d6018 100644
  		font-weight: 500;
  		font-size: 11px;
  		letter-spacing: 3px;
+@@ -189,7 +189,7 @@
+ 		width: 100%;
+ 		padding: 0.75rem 1.5rem;
+ 		background: var(--color-divine-green);
+-		color: white;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 9999px;
+ 		font-size: 1rem;
 @@ -203,7 +203,7 @@
  
  	.btn-primary:hover:not(:disabled) {
@@ -3739,7 +3885,7 @@ index 3b2cdbb..72d6018 100644
  
  	.btn-primary:disabled {
 diff --git a/web/src/routes/settings/security/+page.svelte b/web/src/routes/settings/security/+page.svelte
-index 87134b9..b294a79 100644
+index 87134b9..90e178f 100644
 --- a/web/src/routes/settings/security/+page.svelte
 +++ b/web/src/routes/settings/security/+page.svelte
 @@ -2,7 +2,6 @@
@@ -3758,8 +3904,17 @@ index 87134b9..b294a79 100644
  
  	<!-- Password Verification Section (Always Visible) -->
  	<div class="section">
+@@ -670,7 +668,7 @@
+ 
+ 	.btn-primary {
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 	}
+ 
+ 	.btn-primary:hover:not(:disabled) {
 diff --git a/web/src/routes/support-admin/+page.svelte b/web/src/routes/support-admin/+page.svelte
-index bcf5607..b69618b 100644
+index bcf5607..cb7f0ce 100644
 --- a/web/src/routes/support-admin/+page.svelte
 +++ b/web/src/routes/support-admin/+page.svelte
 @@ -300,7 +300,7 @@
@@ -3782,6 +3937,15 @@ index bcf5607..b69618b 100644
  	}
  
  	.tools-section {
+@@ -783,7 +783,7 @@
+ 	.btn-search {
+ 		padding: 0.625rem 1.25rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 8px;
+ 		font-size: 0.85rem;
 @@ -907,8 +907,8 @@
  	}
  
@@ -3824,6 +3988,15 @@ index bcf5607..b69618b 100644
  		font-weight: 700;
  	}
  
+@@ -1197,7 +1197,7 @@
+ 	.btn-generate-claim {
+ 		padding: 0.5rem 1rem;
+ 		background: var(--color-divine-green);
+-		color: #fff;
++		color: var(--color-divine-on-accent);
+ 		border: none;
+ 		border-radius: 6px;
+ 		font-size: 0.825rem;
 diff --git a/web/static/apple-touch-icon.png b/web/static/apple-touch-icon.png
 index 11cb695163dabd40f63596af5fdfba06e998a202..d1e18d43d9dee8763e45b871d77ea5bd8350e909 100644
 GIT binary patch

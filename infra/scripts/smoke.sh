@@ -249,7 +249,7 @@ ME2=$(curl -sS -b "$SJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // e
 rm -f "$SJAR"
 
 step "6d. Keycast sign-in through Authentik (OIDC) in the browser the sign-in link opened"
-if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
+if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" EXPECT_EMAIL="$EMAIL" EXPECT_MEMBER="$MEMBER" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
   KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=' <<<"$OUT")
   sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
 else

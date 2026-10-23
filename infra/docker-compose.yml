@@ -64,6 +64,9 @@ x-keycast-env: &keycast-env
   OIDC_LINK_CLAIM: keycast_vine_id
   OIDC_PROVIDER_NAME: Open Source Village
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
+  # Belfry fork: the NIP-05 names shown on the dashboard live on the apex domain (the proxy
+  # forwards its nostr.json to this tenant); same value as the onboarding service's.
+  NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
   # Belfry fork: the dashboard's "Your pass" card, from the onboarding service (internal network).
   BELFRY_PASS_INFO_URL: http://onboarding:8100
   PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}

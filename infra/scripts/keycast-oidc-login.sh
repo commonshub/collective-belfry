@@ -7,6 +7,8 @@
 #       -> consent -> code -> /api/oauth/token -> sign a kind-1 event with the participant's key
 #
 # Usage: keycast-oidc-login.sh <authentik session cookie jar> <expected pubkey hex>
+#   EXPECT_EMAIL / EXPECT_MEMBER: also check the account e-mail and the pass card endpoint;
+#   SAVE_KC_JAR=<file>: keep the Keycast session cookies (screenshots).
 # Participants have no password (magic link, blueprint belfry-magic-link-flow), so the caller
 # signs in first (the smoke test: the one-time sign-in link of the activation mail) and hands
 # over that browser's cookie jar; it is copied, not changed.
@@ -69,6 +71,21 @@ ACCT=$(kc "$KC_URL/api/user/account")
 [[ "$(jq -r '.has_password' <<<"$ACCT")" == false ]] && say "account status: has_password=false (OIDC-only account)" || fail "account status: $(head -c 200 <<<"$ACCT")"
 EXPORT=$(kc -X POST "$KC_URL/api/user/export-key" -H 'Content-Type: application/json' -d '{}')
 [[ "$(jq -r '.key // empty' <<<"$EXPORT")" == nsec1* ]] && say "key export with the fresh session returns the nsec (not printed)" || fail "export-key: $(head -c 200 <<<"$EXPORT")"
+
+# 5c. Belfry fork, patch 0006: the ID token's e-mail is stored verified (EXPECT_EMAIL), and the
+#     dashboard's "Your pass" card reads the pass from the onboarding service (EXPECT_MEMBER).
+if [[ -n "${EXPECT_EMAIL:-}" ]]; then
+  [[ "$(jq -r '.email // empty' <<<"$ACCT")" == "$EXPECT_EMAIL" && "$(jq -r '.email_verified' <<<"$ACCT")" == true ]] \
+    && say "account e-mail $EXPECT_EMAIL taken from the ID token, verified" \
+    || fail "account e-mail after the OIDC login: $(jq -c '{email, email_verified}' <<<"$ACCT")"
+fi
+if [[ -n "${EXPECT_MEMBER:-}" ]]; then
+  PASS=$(kc "$KC_URL/api/user/pass")
+  [[ "$(jq -r '.member_number // empty' <<<"$PASS")" == "$EXPECT_MEMBER" && "$(jq -r '.state' <<<"$PASS")" == active ]] \
+    && say "/api/user/pass: $(jq -r '.tier_name' <<<"$PASS") $EXPECT_MEMBER, active, claim link $(jq -r 'if .claim_url then "present" else "absent" end' <<<"$PASS")" \
+    || fail "/api/user/pass: $(head -c 300 <<<"$PASS")"
+fi
+[[ -n "${SAVE_KC_JAR:-}" ]] && cp "$KC_JAR" "$SAVE_KC_JAR"
 
 # 6. Consent, or an immediate redirect with a code when this app is already approved for the
 #    participant (Keycast remembers authorizations per origin and policy).
