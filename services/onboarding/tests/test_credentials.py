@@ -411,3 +411,71 @@ def test_issuer_metadata_names_the_authorization_server(client, router):
     assert client.get("/issuer-metadata").json()["authorization_servers"] == ["https://as"]
     route.respond(status_code=500)
     assert client.get("/issuer-metadata").status_code == 502
+
+
+def _issuer_meta(router):
+    router.get("http://issuer.test/.well-known/openid-credential-issuer/openid4vci").respond(
+        json={
+            "credential_issuer": "http://localhost:7005/openid4vci",
+            "credential_configurations_supported": {
+                "village_pass": {
+                    "format": "dc+sd-jwt",
+                    "vct": "https://belfry.test/vct/village-pass/v1",
+                }
+            },
+        }
+    )
+
+
+def test_issuer_shim_token_adds_c_nonce(client, router):
+    token = router.post("http://issuer.test/openid4vci/token").respond(
+        json={"access_token": "at", "token_type": "bearer"}
+    )
+    router.post("http://issuer.test/openid4vci/nonce").respond(json={"c_nonce": "n-1"})
+    r = client.post(
+        "/issuer-shim/token",
+        data={
+            "grant_type": "urn:ietf:params:oauth:grant-type:pre-authorized_code",
+            "pre-authorized_code": "pc",
+        },
+    )
+    assert (
+        r.status_code == 200 and r.json()["c_nonce"] == "n-1" and r.json()["access_token"] == "at"
+    )
+    assert b"pre-authorized_code=pc" in token.calls.last.request.content
+    token.respond(status_code=400, json={"error": "invalid_grant"})
+    r = client.post("/issuer-shim/token", data={"grant_type": "x"})
+    assert r.status_code == 400 and r.json() == {"error": "invalid_grant"}
+
+
+def test_issuer_shim_translates_draft13_credential_requests(client, router):
+    _issuer_meta(router)
+    cred = router.post("http://issuer.test/openid4vci/credential").respond(
+        json={"credentials": [{"credential": "sd-jwt~"}]}
+    )
+    r = client.post(
+        "/issuer-shim/credential",
+        headers={"Authorization": "Bearer at"},
+        json={
+            "format": "dc+sd-jwt",
+            "vct": "https://belfry.test/vct/village-pass/v1",
+            "proof": {"proof_type": "jwt", "jwt": "proof-jwt"},
+        },
+    )
+    assert r.status_code == 200
+    assert r.json() == {
+        "credentials": [{"credential": "sd-jwt~"}],
+        "credential": "sd-jwt~",
+        "format": "dc+sd-jwt",
+    }
+    sent = cred.calls.last.request
+    assert json.loads(sent.content) == {
+        "credential_configuration_id": "village_pass",
+        "proofs": {"jwt": ["proof-jwt"]},
+    }
+    assert sent.headers["authorization"] == "Bearer at"
+    # OpenID4VCI 1.0 requests pass through unchanged
+    body = {"credential_configuration_id": "village_pass", "proofs": {"jwt": ["p"]}}
+    r = client.post("/issuer-shim/credential", headers={"Authorization": "Bearer at"}, json=body)
+    assert r.json() == {"credentials": [{"credential": "sd-jwt~"}]}
+    assert json.loads(cred.calls.last.request.content) == body

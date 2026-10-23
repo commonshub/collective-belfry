@@ -286,6 +286,32 @@ def create_app(services: Services | None = None) -> FastAPI:
             raise HTTPException(status_code=502, detail="issuer unavailable") from exc
         return JSONResponse(doc)
 
+    @app.post("/issuer-shim/token")
+    async def issuer_token(request: Request) -> Response:
+        """Issuer2's token endpoint with c_nonce added (draft-13 wallets, clients/issuer.py)."""
+        issuer = svc(request).issuer
+        if issuer is None:
+            raise HTTPException(status_code=404, detail="no issuer configured")
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        r = await run_in_threadpool(issuer.token, form)
+        return Response(r.content, status_code=r.status_code, media_type="application/json")
+
+    @app.post("/issuer-shim/credential")
+    async def issuer_credential(request: Request) -> Response:
+        """Issuer2's credential endpoint, draft-13 requests translated (clients/issuer.py)."""
+        issuer = svc(request).issuer
+        if issuer is None:
+            raise HTTPException(status_code=404, detail="no issuer configured")
+        try:
+            body = await request.json()
+        except (json.JSONDecodeError, ValueError):
+            body = None
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "invalid_credential_request"}, status_code=400)
+        auth = request.headers.get("authorization", "")
+        r = await run_in_threadpool(issuer.credential, body, auth)
+        return Response(r.content, status_code=r.status_code, media_type="application/json")
+
     @app.get("/vct/village-pass/v1")
     # walt.id's wallet looks the type up at <authority>/.well-known/vct<path of the vct>
     # (an earlier SD-JWT VC draft), not at the vct URL itself.

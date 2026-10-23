@@ -6,3 +6,11 @@ enforcePushedAuthorizationRequests = false
 # Key that signs the issuer's own access tokens and nonces; scripts/gen-issuer-pki.sh renders
 # this template into config/issuer-service.conf (gitignored) with the key from keys/ci-token.jwk.json.
 ciTokenKey = """{"type":"jwk","jwk":@@CI_TOKEN_JWK@@}"""
+# Pre-authorized codes without a client_id: walt.id's web wallet (and others) send none, and
+# Issuer2 refuses that by default ("Anonymous pre-authorized code access is not supported").
+# The pre-authorized code is the secret, as it was before; the client_id was never authenticated.
+clientAuthenticationConfig {
+  supportedMethods = [
+    { type = "preauth-anonymous" }
+  ]
+}

@@ -102,6 +102,17 @@ issuer.{$BELFRY_DOMAIN} {
 		rewrite * /issuer-metadata
 		reverse_proxy onboarding:8100
 	}
+	# Issuer2 1.2.0 speaks OpenID4VCI 1.0 only; draft-13 wallets (walt.id's web wallet) need
+	# c_nonce in the token response and send {format, vct, proof}. The onboarding service
+	# translates (clients/issuer.py) and passes 1.0 requests through unchanged.
+	handle /openid4vci/token {
+		rewrite * /issuer-shim/token
+		reverse_proxy onboarding:8100
+	}
+	handle /openid4vci/credential {
+		rewrite * /issuer-shim/credential
+		reverse_proxy onboarding:8100
+	}
 	reverse_proxy issuer:7005
 }
 
