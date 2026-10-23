@@ -61,6 +61,9 @@ services:
   blossom-gate:
     ports: !reset []
     restart: unless-stopped
+  chat:
+    ports: !reset []
+    restart: unless-stopped
   issuer:
     ports: !reset []
     restart: unless-stopped

@@ -37,6 +37,8 @@ values = {
     "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
     "COMMUNITY_RELAY_URL": f"wss://relay.{domain}",
     "CALENDAR_PUBLIC_URL": f"https://calendar.{domain}",
+    "BLOSSOM_PUBLIC_URL": f"https://blossom.{domain}",
+    "CHAT_PUBLIC_URL": f"https://chat.{domain}",
 }
 lines = open(path).read().splitlines(keepends=True)
 seen = set()

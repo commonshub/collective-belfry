@@ -360,6 +360,22 @@ services:
       onboarding:
         condition: service_healthy
 
+  # Community chat (NIP-17): Coracle at a pinned commit with Belfry's relays and the OSV look
+  # compiled in; participants sign in with a bunker URL from the apps dashboard. infra/apps/chat/README.md.
+  chat:
+    image: belfry-chat:local
+    build:
+      context: ./apps/chat
+      additional_contexts:
+        brand: ../brand
+      args:
+        CHAT_PUBLIC_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
+        COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
+        BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+        BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
+    profiles: ["app"]
+    ports: ["3300:80"]
+
   # Belfry's glue. Behind the "app" profile so the rest of the stack starts before
   # services/onboarding exists: `docker compose --profile app up -d` once it does.
   onboarding:

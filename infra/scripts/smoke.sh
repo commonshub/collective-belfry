@@ -379,6 +379,23 @@ else
   bad "no bunker URL from step 6d"
 fi
 
+step "6j. chat app (Coracle): served, built against the community relay and the bunker relay"
+CHAT_URL=${CHAT_URL:-${CHAT_PUBLIC_URL:-http://localhost:3300}}
+CHAT_HTML=$(curl -sS -o - -w '\n%{http_code}' "$CHAT_URL/")
+[[ "${CHAT_HTML##*$'\n'}" == 200 && "$CHAT_HTML" == *"Open Source Village"* ]] && ok "chat app answers at $CHAT_URL with the Open Source Village title" || bad "chat app at $CHAT_URL: HTTP ${CHAT_HTML##*$'\n'}"
+CHAT_JS=$(grep -oE 'src="[^"]*/assets/index[^"]*\.js"' <<<"$CHAT_HTML" | head -n1 | sed 's/src="//;s/"$//')
+if [[ -n "$CHAT_JS" ]]; then
+  BUNDLE=$(curl -sS "$CHAT_URL$CHAT_JS" | tr -d '\n')
+  for want in "${COMMUNITY_RELAY_URL:-ws://localhost:3090}" "${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}"; do
+    [[ "$BUNDLE" == *"$want"* ]] && ok "chat bundle carries $want" || bad "chat bundle lacks $want"
+  done
+  [[ "$BUNDLE" != *"relay.damus.io"* ]] && ok "no upstream default relays in the chat bundle" || bad "the chat bundle still names relay.damus.io"
+else
+  bad "no index bundle in the chat page"
+fi
+[[ -n "${SAVE_BUNKER_URL:-}" && -n "${KC_BUNKER:-}" ]] && printf '%s\n' "$KC_BUNKER" > "$SAVE_BUNKER_URL"
+echo "  note the browser login is a separate check: infra/scripts/chat-login-check.mjs (needs Chromium)"
+
 step "6k. calendar app (Calendar by Form*): served, built against the community relay and the bunker relay"
 CAL_URL=${CALENDAR_URL:-${CALENDAR_PUBLIC_URL:-http://localhost:3200}}
 CAL_HTML=$(curl -sS -o - -w '\n%{http_code}' "$CAL_URL/")
@@ -507,6 +524,7 @@ LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__
 rm -f "$PJAR"
 
 step "11. revoke the pass: status list bit flips, the door refuses the certificate"
+if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then echo "  note SMOKE_KEEP_PASS set: pass $PASS_ID stays active (browser checks of the apps); revocation not tested"; else
 # (printed for the log only; python decodes, since base64 -d fails on unpadded base64url)
 STATUS_JWT=$(curl -sS "$ONB_URL/status/1"); python3 -c 'import sys,json,base64; t=sys.argv[1].split(".")[1]; p=json.loads(base64.urlsafe_b64decode(t+"="*(-len(t)%4))); print("  "+json.dumps({k: p.get(k) for k in ("iss","sub","ttl")} | {"bits": p["status_list"]["bits"]}))' "$STATUS_JWT" || true
 bit() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "import sys,json,base64; from belfry_onboarding import credentials as c; t=sys.argv[1].split('.')[1]; p=json.loads(base64.urlsafe_b64decode(t+'='*(-len(t)%4))); print(c.status_at(p['status_list']['lst'], int(sys.argv[2])))" "$1" "$2"; }
@@ -528,6 +546,8 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   if [[ -z "$BAUTH2" || "$BAUTH2" == bnVsbA== ]]; then ok "revoked key can no longer sign a Blossom auth event (Keycast suspended)"; else
     UP2=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/upload" -H "Authorization: Nostr $BAUTH2" -H 'Content-Type: text/plain' --data-binary 'again')
     [[ "$UP2" == 403 ]] && ok "upload with a revoked pass -> 403 (gate)" || bad "upload after revoke -> $UP2"; fi
+fi
+
 fi
 
 step "7. replay the webhook three times and check nothing was duplicated"

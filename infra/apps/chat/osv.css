@@ -1,0 +1,9 @@
+/* Open Source Village, run by Belfry (appended to Coracle's src/app.css by the image build).
+   Coracle puts white text on the accent; the OSV accent is lime, so text on it is dark. */
+.bg-accent,
+.bg-accent *,
+.btn.btn-accent,
+.btn.btn-accent:hover,
+.bg-accent.hover\:text-white:hover {
+  color: #1a231d !important;
+}

@@ -80,6 +80,13 @@ blossom.{$BELFRY_DOMAIN} {
 	reverse_proxy blossom-gate:80
 }
 
+# Community chat (Coracle, NIP-17): a static build; the browser talks to relay., bunker. and
+# blossom. directly (infra/apps/chat/README.md).
+chat.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy chat:80
+}
+
 # Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
 bunker.{$BELFRY_DOMAIN} {
 	import security
