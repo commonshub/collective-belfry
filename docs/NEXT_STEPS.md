@@ -1,6 +1,6 @@
 # Next steps (handoff from 2026-10-22, updated 2026-10-23)
 
-Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login), Phase 3 is built locally (§3e: pass certificates, door check, pass sign-in), a first hardening pass is in (§3f) and the public deployment is prepared (§3g: proxy overlay, public URLs, `infra/DEPLOY.md`). What is left before the event is in §4. The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
+Start here in the next session. Steps 0–3 are done, Phase 2 has started (§3b relay, §3c Keycast login, §3d participant login, §3h Keycast fork patches, Blossom and policy kinds), Phase 3 is built (§3e), hardened once (§3f) and **deployed on a public test VM** (§3g preparation, §3i the deployment itself: belfry.tofauti.net, smoke 79 green over TLS). What is left before the event is in §4. The plan's happy path (invite → pay → accounts → pass in the wallet → door and app sign-in with the pass) runs end to end against the local stack with a scripted wallet; continue with §4.
 
 ## 0. Sync with the live plan — done
 
@@ -165,9 +165,17 @@ Open: the deployment run itself (and with it: Stripe test mode, a real wallet, p
 3. **Encryption.** NIP-17 chat means the signer decrypts for the app on every message; decide whether a managed key may do that (`decrypt_only`/`encrypt_to_self` permissions exist) and whether the chat should rather be NIP-29 public groups on the community relay.
 4. **Where the list lives.** `infra/keycast/policy.sql` (applied by bootstrap, idempotent) is the single source; the relay's `rnostr.toml` should carry the same kinds.
 
+## 3i. Public test deployment on Hetzner — live 2026-10-23
+
+`belfry.tofauti.net` (Hetzner cx33, `infra/hetzner/`, deployed together with a second Claude session that owns the VM provisioning, secrets and SMTP relay). Bootstrap and the full smoke test run against the public hostnames (`ODOO_URL`, `AK_URL`, `KC_URL`, `ONB_URL`, `BLOSSOM_URL`, `WALLET_MAP=""`, `ONB_ADMIN_EXEC=1`): 79 checks green, including claim, door, pass sign-in, Blossom and revocation over TLS.
+
+Found and fixed on the way: bootstrap's verifier probe and Keycast admin calls hit paths the proxy denies (now a lenient probe and `docker compose exec` inside the Keycast container); the Authentik seed brand was not flagged default on the fresh install (blueprint pins it); Keycast's backchannel to Authentik produced an `http://` issuer, so the overlay unsets `OIDC_BACKCHANNEL_URL` and Keycast uses the public HTTPS issuer; the proxy also denies Keycast's dev inbox. The activation mail reaches the OVH relay; the smoke address's fake domain is refused (expected), a real recipient is part of the real-user test.
+
+Open there: a real wallet against the public issuer and door, the HTTP→HTTPS redirect is Caddy's default, Stripe test mode on the public Odoo, publishing the CA for wallets.
+
 ## 4. Next
 
-1. A public test deployment (HTTPS) following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
+1. The real-user happy-path test on `belfry.tofauti.net` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
 2. Phase 2 (continued): build the Keycast image with patches 0004–0005 and check the login and the key export live; pick the marketplace and links protocols (the other app kinds are decided, §3h); choose and deploy the actual client apps (calendar, photos, proposals, NIP-17 chat) against the relay, Blossom and the `belfry-event` scope.
 3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
