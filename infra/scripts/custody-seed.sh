@@ -9,9 +9,15 @@
 #   custody-seed.sh unlock <ssh host> <seed.age> [identity file]…
 #                                              decrypt with the YubiKey (touch/PIN) and put the seed
 #                                              into /run/belfry/custody-seed on the host (memory)
+#   custody-seed.sh rewrap <seed.age> <out.age> <identity file> <recipient>…
+#                                              the same seed for other keys (the YubiKey ceremony
+#                                              after mocked tokens; a replaced YubiKey): participant
+#                                              keys stay the same; destroy the old identities after
 #   custody-seed.sh status <ssh host>          is the seed unlocked on the host?
 #   custody-seed.sh lock <ssh host>            remove it from the host's memory
 #
+# Mocked tokens (until the ceremony): plain age keys stand in for the YubiKeys, `age-keygen -o
+# mock-token-a.txt`; their `age1…` public keys are the recipients, the files the identities.
 # Needs age (https://age-encryption.org, `apt install age`) and age-plugin-yubikey
 # (https://github.com/str4d/age-plugin-yubikey) with a PIV slot set up on each YubiKey:
 # `age-plugin-yubikey` (interactive) once per key, then `age-plugin-yubikey --identity > id.txt`
@@ -50,6 +56,18 @@ case "$cmd" in
     printf '%s\n' "$seed" | ssh "$host" 'sudo install -d -m 700 /run/belfry && sudo install -m 400 /dev/stdin /run/belfry/custody-seed && echo "unlocked on $(hostname)"'
     unset seed
     ;;
+  rewrap)
+    in=${1:?usage: rewrap <seed.age> <out.age> <identity file> <recipient>…}; out=${2:?out.age}; id=${3:?identity file}; shift 3
+    [[ $# -ge 1 ]] || die "name the new recipients"
+    [[ -e "$out" ]] && die "$out exists"
+    need "$AGE"
+    args=(); for r in "$@"; do args+=(-r "$r"); done
+    seed=$("$AGE" -d -i "$id" "$in") || die "could not decrypt $in"
+    [[ "$seed" =~ ^[0-9a-f]{64}$ ]] || die "$in does not hold a custody seed"
+    printf '%s\n' "$seed" | "$AGE" "${args[@]}" -o "$out"
+    unset seed
+    echo "wrote $out for $# recipient(s): the same seed. Check it with unlock, then destroy the old identities and $in."
+    ;;
   status)
     host=${1:?usage: status <ssh host>}
     ssh "$host" 'sudo test -s /run/belfry/custody-seed && echo "unlocked" || { echo "locked"; exit 1; }'
@@ -59,6 +77,6 @@ case "$cmd" in
     ssh "$host" 'sudo rm -f /run/belfry/custody-seed && echo locked'
     ;;
   *)
-    sed -n '2,21p' "$0"; exit 2
+    sed -n '2,/^set /{/^set /d;p}' "$0"; exit 2
     ;;
 esac

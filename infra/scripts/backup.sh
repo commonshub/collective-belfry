@@ -6,6 +6,9 @@
 #       a new backup key; its secret half is written encrypted to the YubiKeys (either one
 #       decrypts), the public half (age1…) is printed: put it into the VM's infra/.env as
 #       BACKUP_RECIPIENTS. The VM can encrypt backups but never read them.
+#   backup.sh rewrap <backup-identity.age> <out.age> <identity file> <recipient>…
+#       the same backup key for other keys (the YubiKey ceremony after mocked tokens; see
+#       custody-seed.sh): old backups stay readable
 #
 # On the VM (in the repo checkout):
 #   backup.sh run           one backup: Postgres (pg_dumpall), the data volumes, the secret files
@@ -98,6 +101,21 @@ cmd_keygen() {
   echo "wrote $out (keep it with every steward, like custody-seed.age)."
   echo "On the VM, in infra/.env:"
   echo "BACKUP_RECIPIENTS=$pub"
+}
+
+cmd_rewrap() {
+  local in=${1:?usage: rewrap <backup-identity.age> <out.age> <identity file> <recipient>…} out=${2:?out.age} id=${3:?identity file}
+  shift 3
+  [[ $# -ge 1 ]] || die "name the new recipients"
+  [[ -e "$out" ]] && die "$out exists"
+  need "$AGE"; need "$AGE_KEYGEN"
+  local key args=()
+  for r in "$@"; do args+=(-r "$r"); done
+  key=$("$AGE" -d -i "$id" "$in") || die "could not decrypt $in"
+  "$AGE_KEYGEN" -y <<<"$key" >/dev/null 2>&1 || die "$in does not hold an age key"
+  printf '%s\n' "$key" | "$AGE" "${args[@]}" -o "$out"
+  echo "wrote $out for $# recipient(s); the VM's BACKUP_RECIPIENTS stays $("$AGE_KEYGEN" -y <<<"$key")"
+  unset key
 }
 
 cmd_run() {
@@ -336,6 +354,6 @@ cmd_drill() {
 
 cmd=${1:-}; shift || true
 case "$cmd" in
-  keygen|run|install|status|list|decrypt|restore|drill) "cmd_$cmd" "$@" ;;
-  *) sed -n '2,40p' "$0"; exit 2 ;;
+  keygen|rewrap|run|install|status|list|decrypt|restore|drill) "cmd_$cmd" "$@" ;;
+  *) sed -n '2,/^set /{/^set /d;p}' "$0"; exit 2 ;;
 esac
