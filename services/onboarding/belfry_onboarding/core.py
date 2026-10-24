@@ -439,6 +439,18 @@ def _ensure_keycast_user(
     return pubkey, hex_to_npub(pubkey), result.get("token", "")
 
 
+def active_passes(svc: Services) -> list[dict[str, Any]]:
+    """Id and Keycast pubkey of every active pass (the vote service's electorate)."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey"],
+    )
+    return [
+        {"pass_id": r["id"], "pubkey": r["keycast_pubkey"]} for r in rows if r.get("keycast_pubkey")
+    ]
+
+
 def active_pubkeys(svc: Services) -> list[str]:
     """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo."""
     rows = svc.odoo.search_read(

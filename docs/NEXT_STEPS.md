@@ -288,6 +288,23 @@ Follow-up (2026-10-24): Coracle answered every sign-in with "We're having a hard
 
 Follow-up (2026-10-24): getting back to the apps page and installing the apps. The user chose a shared app bar and home-screen apps. `brand/osv-bar.js` is a 40 px Open Source Village bar fixed on top of the chat and the calendar: "Apps" goes back to Keycast's apps page in the same tab, then one link per app, the current one highlighted. Its list comes from `x-community-apps` in Compose, the same list as the dashboard's cards. Each app moves its own top parts down by `--osv-bar-h` (Coracle through `--safe-area-inset-top`, the calendar through `--safe-area-top`, calendar patch 0002). Each app also gets its own home-screen icon (`brand/apps/`, `brand/make-app-icons.py`: the app's symbol in lime with the OSV mark cut out, on the dark green) and a manifest named "Chat" / "Calendar". The calendar's sidebar "Apps" entry now opens in the same tab. Checked in headless Chromium at 1280 px and 390 px, signed in: both apps sit below the bar; dialogs and the chat's login modal cover it. The calendar logs out everywhere too (patch 0003, Keycast 0010's contract): checked with `calendar-check.mjs` `SSO=1 LOGOUT=1`.
 
+## 3r. Anonymous polls at vote.<domain> — built 2026-10-24
+
+User request (relayed by the other session, which took the Cashu mint, the wallet and self-custody): anonymous voting, any participant opens a poll, one anonymous vote per active pass (Semaphore, the plan's Phase 6 item). Details in `services/vote/README.md`. Decisions taken while building (recorded in the live doc):
+
+- One small Node service (`services/vote`, API and web app, SQLite) instead of Python: Semaphore's proof verification and Poseidon Merkle tree are JavaScript.
+- The voting key (Semaphore identity) stays on the device, with an export code for another device; no backup encrypted to the Nostr key, because Keycast holds managed keys and Belfry could then link votes to people.
+- One group per poll: registered identities of active passes join when it opens, later registrations join open polls; a pass's entry in a poll never changes (one nullifier per pass and poll even after a key change); all of the poll's roots are accepted while it is open.
+- Results only after the poll closes; then every proof is published for re-verification. Tree depth 10 (1024 voters per poll), artifacts served by the app with pinned hashes.
+- Votes are not Nostr events (a signature would deanonymise); the app needs only kinds 27235 (NIP-98) and nothing new in the policy.
+
+- [x] Onboarding `GET /admin/active-passes` (bearer `PASS_INFO_TOKEN`).
+- [x] `services/vote`: server (NIP-98, polls, groups, proof verification), web app (sign in with Open Source Village, silent once per tab, set-up, new poll, vote, results, voting-key export/import, logout everywhere, the app bar), icon `brand/apps/vote-*`.
+- [x] Compose `vote` (port 3500 locally), Caddy `vote.<domain>`, `VOTE_PUBLIC_URL`, Keycast client `belfry-vote` registered and trusted, "Vote" in `x-community-apps` (dashboard cards and app bar).
+- [x] Checks: `npm test` 5 tests with real proofs; smoke step 6n; `infra/scripts/vote-check.mjs` in Chromium at 390 px: silent sign-in, set-up, new poll, vote counted. Local smoke 115 ok / 0 failed.
+
+Open: Belfry sees IP addresses and request times, so it could correlate a vote with a signed request from the same address (a relay or a delay in the app would blur it); revoked passes stay in the groups of polls already open; no poll moderation or early close; polls are not announced on Nostr; the chat and calendar images need a rebuild to show "Vote" in their bar.
+
 ## 4. Next
 
 1. The real-user happy-path test on `belfry.tofauti.net`, steps and results table in `docs/real-user-test.md` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.

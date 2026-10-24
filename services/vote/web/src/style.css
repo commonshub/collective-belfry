@@ -1,0 +1,219 @@
+/* Open Source Village look (brand/tokens.css is loaded by index.html; fallbacks repeat it). */
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  padding-top: var(--osv-bar-h, 0px);
+  background: var(--osv-background, #2b3a31);
+  color: var(--osv-foreground, #fff);
+  font: 16px/1.5 var(--osv-font-sans, Geist, ui-sans-serif, system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
+}
+#app {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
+}
+a {
+  color: var(--osv-accent, #d6ff52);
+}
+h1 {
+  font-size: 1.5rem;
+  margin: 0;
+  flex: 1;
+}
+h2 {
+  font-size: 1.2rem;
+  margin: 0 0 0.5rem;
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+.back {
+  text-decoration: none;
+  font-size: 1.4rem;
+  line-height: 1;
+}
+.stack > * + * {
+  margin-top: 12px;
+}
+.card {
+  display: block;
+  background: var(--osv-surface, #1a231d);
+  border: 1px solid #44534a;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 12px;
+  color: inherit;
+}
+.poll-link {
+  text-decoration: none;
+}
+.poll-link:hover {
+  border-color: var(--osv-accent, #d6ff52);
+}
+.poll-title {
+  display: block;
+  font-weight: 600;
+  font-size: 1.05rem;
+}
+.meta,
+.muted {
+  color: var(--osv-foreground-muted, #c9d1cb);
+  font-size: 0.9rem;
+}
+.small {
+  font-size: 0.85rem;
+}
+.center {
+  text-align: center;
+}
+.desc {
+  white-space: pre-wrap;
+}
+.badge {
+  display: inline-block;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #44534a;
+  color: #fff;
+  font-size: 0.8rem;
+  margin-right: 4px;
+}
+.badge.open {
+  background: var(--osv-accent, #d6ff52);
+  color: var(--osv-on-accent, #1a231d);
+}
+button,
+.button {
+  font: inherit;
+  cursor: pointer;
+}
+.primary {
+  display: inline-block;
+  width: 100%;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--osv-accent, #d6ff52);
+  color: var(--osv-on-accent, #1a231d);
+  font-weight: 600;
+  text-align: center;
+  text-decoration: none;
+}
+.primary:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+.row-end .primary {
+  width: auto;
+}
+.row-end {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+.link {
+  background: none;
+  border: 0;
+  color: var(--osv-accent, #d6ff52);
+  padding: 4px 0;
+}
+label {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--osv-foreground-muted, #c9d1cb);
+}
+input,
+textarea,
+select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #44534a;
+  background: var(--osv-surface-deep, #121914);
+  color: #fff;
+  font: inherit;
+}
+fieldset {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+legend {
+  font-size: 0.9rem;
+  color: var(--osv-foreground-muted, #c9d1cb);
+  padding: 0;
+}
+#opts input + input {
+  margin-top: 8px;
+}
+.options {
+  margin-top: 12px;
+}
+.option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #44534a;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  color: #fff;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.option:has(input:checked) {
+  border-color: var(--osv-accent, #d6ff52);
+}
+.option input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--osv-accent, #d6ff52);
+}
+.result {
+  margin: 12px 0;
+}
+.result-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.bar {
+  height: 8px;
+  background: #44534a;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.bar span {
+  display: block;
+  height: 100%;
+  background: var(--osv-accent, #d6ff52);
+}
+.notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #243128;
+}
+.notice.good {
+  border-left: 3px solid var(--osv-accent, #d6ff52);
+}
+.notice.bad {
+  border-left: 3px solid var(--osv-accent-2, #f89b0e);
+}
+footer {
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--osv-foreground-faint, #8e9a91);
+  padding: 24px 16px;
+}
+footer a {
+  color: inherit;
+}

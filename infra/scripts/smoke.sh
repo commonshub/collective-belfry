@@ -439,6 +439,26 @@ else
 fi
 echo "  note the browser check (bunker sign-in, calendar and event read back) is infra/scripts/calendar-check.mjs"
 
+step "6n. polls app (services/vote): served with its artifacts; creating needs an active pass, votes need a valid proof"
+VOTE_URL=${VOTE_URL:-${VOTE_PUBLIC_URL:-http://localhost:3500}}
+VOTE_HTML=$(curl -sS -o - -w '\n%{http_code}' "$VOTE_URL/")
+[[ "${VOTE_HTML##*$'\n'}" == 200 && "$VOTE_HTML" == *"<title>Open Source Village polls</title>"* ]] && ok "polls app answers at $VOTE_URL" || bad "polls app at $VOTE_URL: HTTP ${VOTE_HTML##*$'\n'}"
+[[ "$(curl -sS "$VOTE_URL/api/health" | jq -r .ok 2>/dev/null)" == true ]] && ok "vote API healthy" || bad "vote API health"
+ZKEY=$(curl -sS -o /dev/null -w '%{http_code} %{size_download}' "$VOTE_URL/artifacts/semaphore-10.zkey")
+[[ "$ZKEY" == "200 2422238" ]] && ok "proving artifacts served by the app itself ($ZKEY)" || bad "artifacts: $ZKEY"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{}' "$VOTE_URL/api/polls")" == 401 ]] && ok "opening a poll without NIP-98 auth: 401" || bad "unauthenticated poll creation not refused"
+# a well-formed NIP-98 token of a key without a pass (made inside the container, which knows PUBLIC_URL)
+NOPASS=$("${COMPOSE[@]}" exec -T vote node --input-type=module -e '
+import { finalizeEvent, generateSecretKey } from "nostr-tools/pure"
+import { createHash } from "node:crypto"
+const body = JSON.stringify({ title: "x", options: ["a", "b"], closes_at: Math.floor(Date.now() / 1000) + 3600 })
+const ev = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), content: "", tags: [["u", process.env.PUBLIC_URL.replace(/\/$/, "") + "/api/polls"], ["method", "POST"], ["payload", createHash("sha256").update(body).digest("hex")]] }, generateSecretKey())
+const r = await fetch("http://127.0.0.1:8080/api/polls", { method: "POST", body, headers: { "Content-Type": "application/json", Authorization: "Nostr " + Buffer.from(JSON.stringify(ev)).toString("base64") } })
+console.log(r.status)' 2>/dev/null || true)
+[[ "$NOPASS" == 403 ]] && ok "a signed request from a key without an active pass: 403" || bad "key without a pass: ${NOPASS:-no answer}"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"proof":{}}' "$VOTE_URL/api/polls/nope/votes")" == 404 ]] && ok "a vote for an unknown poll: 404" || bad "vote for an unknown poll not refused"
+echo "  note the browser check (silent sign-in, set up voting, open a poll, vote with a real proof) is infra/scripts/vote-check.mjs"
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"

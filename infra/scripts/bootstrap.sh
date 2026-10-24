@@ -307,13 +307,15 @@ kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | len
 "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q \
   -v chat_cb="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" \
   -v cal_cb="${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback" \
+  -v vote_cb="${VOTE_PUBLIC_URL:-http://localhost:3500}/oauth/callback" \
   -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" <<'SQL'
 -- Keycast resolves the tenant from the Host header (KEYCAST_TENANT_DOMAIN), not the seed tenant 1.
 INSERT INTO registered_clients (tenant_id, client_id, name, allowed_redirect_uris)
 SELECT t.id, c.client_id, c.name, ARRAY[c.cb]::TEXT[]
 FROM tenants t,
      (VALUES ('belfry-chat', 'Open Source Village chat', :'chat_cb'),
-             ('belfry-calendar', 'Open Source Village calendar', :'cal_cb')) AS c(client_id, name, cb)
+             ('belfry-calendar', 'Open Source Village calendar', :'cal_cb'),
+             ('belfry-vote', 'Open Source Village polls', :'vote_cb')) AS c(client_id, name, cb)
 WHERE t.domain = :'tenant'
 ON CONFLICT (tenant_id, client_id) DO UPDATE
 SET name = EXCLUDED.name, allowed_redirect_uris = EXCLUDED.allowed_redirect_uris, updated_at = NOW()

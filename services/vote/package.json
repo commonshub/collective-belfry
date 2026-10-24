@@ -1,0 +1,20 @@
+{
+  "name": "belfry-vote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Anonymous polls for Open Source Village: one Semaphore vote per active pass",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test --test-force-exit \"test/*.test.js\"",
+    "build": "vite build web"
+  },
+  "dependencies": {
+    "@semaphore-protocol/core": "4.14.3",
+    "nostr-tools": "2.25.2"
+  },
+  "devDependencies": {
+    "vite": "7.1.12"
+  }
+}

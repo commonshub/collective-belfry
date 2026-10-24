@@ -34,7 +34,7 @@ x-authentik-env: &authentik-env
 
 # The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
 # the Open Source Village app bar (brand/osv-bar.js) in every app.
-x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars"
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass"
 
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
@@ -76,7 +76,7 @@ x-keycast-env: &keycast-env
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
   # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
   # each must also be a registered client (bootstrap writes their redirect URIs).
-  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar}
+  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote}
   # Belfry fork: the NIP-05 names shown on the dashboard live on the apex domain (the proxy
   # forwards its nostr.json to this tenant); same value as the onboarding service's.
   NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
@@ -523,8 +523,32 @@ services:
         VITE_COMMUNITY_APPS: *community-apps
     ports: ["3200:80"]
 
+  # Anonymous polls (Semaphore): one vote per active pass and poll, any participant opens polls.
+  # API and web app in one Node process at vote.<domain>; the electorate comes from the
+  # onboarding service. services/vote/README.md.
+  vote:
+    profiles: ["app"]
+    image: belfry-vote:local
+    build:
+      context: ..
+      dockerfile: services/vote/Dockerfile
+      args:
+        VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
+        VITE_COMMUNITY_APPS: *community-apps
+    environment:
+      PUBLIC_URL: ${VOTE_PUBLIC_URL:-http://localhost:3500}
+      ONBOARDING_URL: http://onboarding:8100
+      PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
+      TREE_DEPTH: "10"
+    volumes:
+      - vote-data:/data
+    ports: ["3500:8080"]
+
 volumes:
   blossom-data:
+  vote-data:
   mint-data:
   postgres:
   odoo-data:

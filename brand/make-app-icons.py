@@ -58,6 +58,28 @@ def calendar_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, (band + bottom) / 2 + r * 0.03, (bottom - band) * 0.66
 
 
+def vote_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """A ticked ballot dropping into the slot of a ballot box; returns the mark's centre and size."""
+    top = c - r * 0.15
+    d.rounded_rectangle((c - r * 0.95, top, c + r * 0.95, c + r * 0.9), radius=r * 0.18, fill=ACCENT)
+    # the slot, then the ballot standing in it, tilted by a few pixels' worth of offset
+    d.rounded_rectangle(
+        (c - r * 0.62, top + r * 0.05, c + r * 0.62, top + r * 0.2), radius=r * 0.07, fill=BG
+    )
+    bl, br, bt = c - r * 0.42, c + r * 0.42, c - r * 1.0
+    d.rounded_rectangle((bl, bt, br, top + r * 0.12), radius=r * 0.08, fill=ACCENT)
+    d.rectangle((bl, top + r * 0.04, br, top + r * 0.12), fill=ACCENT)
+    w = r * 0.1
+    d.line(
+        [(c - r * 0.2, bt + r * 0.5), (c - r * 0.04, bt + r * 0.66), (c + r * 0.24, bt + r * 0.32)],
+        fill=BG,
+        width=round(w),
+        joint="curve",
+    )
+    body_top = top + r * 0.2
+    return c, (body_top + c + r * 0.9) / 2, (c + r * 0.9 - body_top) * 0.66
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -88,3 +110,4 @@ if __name__ == "__main__":
     OUT.mkdir(exist_ok=True)
     render("chat", chat_symbol)
     render("calendar", calendar_symbol)
+    render("vote", vote_symbol)

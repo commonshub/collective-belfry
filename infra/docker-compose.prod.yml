@@ -79,6 +79,9 @@ services:
   calendar:
     ports: !reset []
     restart: unless-stopped
+  vote:
+    ports: !reset []
+    restart: unless-stopped
   postgres:
     restart: unless-stopped
   redis:

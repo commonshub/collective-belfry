@@ -39,6 +39,7 @@ values = {
     "CALENDAR_PUBLIC_URL": f"https://calendar.{domain}",
     "BLOSSOM_PUBLIC_URL": f"https://blossom.{domain}",
     "CHAT_PUBLIC_URL": f"https://chat.{domain}",
+    "VOTE_PUBLIC_URL": f"https://vote.{domain}",
     "MINT_PUBLIC_URL": f"https://mint.{domain}",
     "WALLET_PUBLIC_URL": f"https://wallet.{domain}",
 }
