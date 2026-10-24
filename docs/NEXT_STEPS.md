@@ -368,6 +368,19 @@ User: "Users should be able to show their pass as qr code on phone without a wal
 
 Open: the check page shows the server's time (UTC on the VM); the scan memory is per process (one onboarding instance); a pass can still be lent together with the phone (no device binding, unlike the wallet); no offline door check.
 
+## 3x. Hardening and the admin network — 2026-10-24
+
+User: rate limits on the login, claim and bridge pages (magic-link flooding), no root in containers, a split Docker network, a CSP for the browser apps, Mailpit removed, ZeroTier for the admin and steward pages. Decisions in the live doc (rev 75). Details: `infra/DEPLOY.md` ("Admin network", "What the proxy does").
+
+- [x] Proxy (`infra/proxy/Dockerfile`: Caddy 2.11.7 + caddy-ratelimit 0.1.0, user 10001): per-IP limits, generous for the venue NAT; CSP per browser app; Blossom files sandboxed; admin paths only from `ADMIN_NETS`. The proxy mounts `proxy/` (a git update of the Caddyfile is seen).
+- [x] Authentik: deny stage before the magic-link mail, five links per account in 30 minutes (expression policy, cache). Smoke 6h checks it.
+- [x] Containers non-root (10001; Keycast as `HOST_UID`, which owns `master.key` and the custody seed; `custody-seed.sh unlock` gives the seed to the SSH user), `no-new-privileges`, `cap_drop: ALL` where they start unprivileged; `perms-init` chowns old volumes once.
+- [x] Networks: `data` (internal: Postgres, Redis and their clients), `edge` (proxy, static apps; IPv6 so the proxy sees IPv6 visitors' addresses, which came as `172.18.0.1` before), `default`.
+- [x] Mailpit only with profile `dev` in production; ZeroTier on the VM (`scripts/zerotier.sh`, network in ZeroTier Central).
+- [x] Checks: local smoke 145 ok and every browser check (chat, calendar, vote, wallet, village, photos); on the VM public smoke 142 ok / 0 failed, the browser checks from outside with the CSP enforced, admin paths 403 from outside over IPv4 and IPv6, backup run OK. The only CSP violation: the wallet's Google Fonts link (blocked, harmless).
+
+Open: the VM's ZeroTier node must be authorised in ZeroTier Central, then `ADMIN_NETS` gets the ZeroTier subnet; steward phones need ZeroTier; image pinning and monitoring from the security review are still open.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).
