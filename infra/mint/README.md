@@ -1,7 +1,7 @@
 # Village token mint
 
 A Cashu mint ([cdk-mintd](https://github.com/cashubtc/cdk) 0.18.2, image `cashubtc/mintd`) for
-Open Source Village's tokens (decision 2026-10-24). The tokens have **no monetary value**: the
+Open Source Village's tokens. The tokens have **no monetary value**: the
 payment backend is cdk's fake wallet, the unit is `osv`, and nothing is ever paid in or out.
 
 | What | How |

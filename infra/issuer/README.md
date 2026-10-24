@@ -1,4 +1,4 @@
-# Pass certificates: issuer, verifier, status list (Phase 3)
+# Pass certificates: issuer, verifier, status list
 
 Every pass is an SD-JWT VC (`dc+sd-jwt`, `vct` `<public URL>/vct/village-pass/v1`) issued by walt.id **Issuer2 1.2.0** over OpenID4VCI with a pre-authorized code, signed with Belfry's P-256 key and an `x5c` chain (own CA + leaf). walt.id **Verifier2 1.2.0** checks presentations (OpenID4VP, DCQL, `direct_post`) for the door page and the pass bridge, both part of the onboarding service. Why walt.id: `docs/research/issuer-spike.md`.
 
@@ -16,9 +16,9 @@ Every pass is an SD-JWT VC (`dc+sd-jwt`, `vct` `<public URL>/vct/village-pass/v1
 | `verifier.key.pem`, `verifier.crt.pem`, `verifier.jwk.json`, `verifier.x5c.json` | Verifier2's request-signing key and certificate, SAN `verifier.belfry.local` (`VERIFIER_SAN`), rendered into `infra/verifier/config/verifier-service.conf` |
 | `ci-token.jwk.json` | Issuer2's own access-token and nonce key |
 
-and renders two config files with that material into `infra/issuer/config/` (also gitignored): `issuer2-profiles.conf` (profile `villagePass`) and `issuer-service.conf` (`ciTokenKey`). The committed files in `config/` are the rest of the Issuer2 configuration; `credential-issuer-metadata.conf` declares the `village_pass` configuration. **Rotating the issuer key invalidates every pass certificate signed with it** (the plan keeps old keys in the JWKS until their credentials expire; not implemented yet).
+and renders two config files with that material into `infra/issuer/config/` (also gitignored): `issuer2-profiles.conf` (profile `villagePass`) and `issuer-service.conf` (`ciTokenKey`). The committed files in `config/` are the rest of the Issuer2 configuration; `credential-issuer-metadata.conf` declares the `village_pass` configuration. **Rotating the issuer key invalidates every pass certificate signed with it**, unless the old certificate stays in the accepted list of the door and the bridge (below) until the last pass signed with it has expired.
 
-The leaf is what matters to verifiers: Verifier2's `signature` policy takes the key from whatever `x5c` leaf the credential carries, so on its own it would accept a credential signed by anyone. The door and the bridge therefore **pin Belfry's leaf**: after a successful session they read the presented credential's `x5c[0]` and accept only Belfry's own certificate (`ISSUER_X5C_PATH`; a rotation appends the old leaf to the accepted list). Verifier2 accepts a status list only when the list's `x5c` leaf is the credential's leaf (or the list's `iss` equals the credential's `iss`). The CA is not published anywhere yet; wallets that need a trust anchor get it with the public deployment.
+The leaf is what matters to verifiers: Verifier2's `signature` policy takes the key from whatever `x5c` leaf the credential carries, so on its own it would accept a credential signed by anyone. The door and the bridge therefore **pin Belfry's leaf**: after a successful session they read the presented credential's `x5c[0]` and accept only Belfry's own certificate (`ISSUER_X5C_PATH`; a rotation appends the old leaf to the accepted list). Verifier2 accepts a status list only when the list's `x5c` leaf is the credential's leaf (or the list's `iss` equals the credential's `iss`). The CA is not published for wallets; wallets that insist on a trust anchor for the issuer do not accept the pass.
 
 ## What is where
 
@@ -29,7 +29,7 @@ The leaf is what matters to verifiers: Verifier2's `signature` policy takes the 
 | Status | `status.status_list = {uri: STATUS_LIST_URL, idx: pass id}`; `GET /status/1` serves `application/statuslist+jwt` (1 bit per pass, 1 = revoked or expired, derived from Odoo on every request), `ttl`/`max-age` = `STATUS_LIST_TTL` | the revocation delay at the door; 5 s locally, 300 s is a sensible production value |
 | Type Metadata | `GET /vct/village-pass/v1` | the `vct` URL; Issuer2 only serves VCTM for its own `vct`s |
 | Door | `GET /door` (QR page), `POST /door/sessions`, `GET /door/sessions/<id>` | asks for `pass_tier` only; policies `signature`, `expiration`, `not-before`, `allowed-issuer`, `credential-status` (fail closed) |
-| Pass bridge | `GET /bridge/.well-known/openid-configuration`, `/bridge/authorize`, `/bridge/poll/<sid>`, `/bridge/token`, `/bridge/userinfo`, `/bridge/jwks` | the OpenID4VP-to-OIDC bridge for Authentik's `pass-bridge` source, `services/onboarding/belfry_onboarding/bridge.py` |
+| Pass bridge | `GET /bridge/.well-known/openid-configuration`, `/bridge/authorize`, `/bridge/poll/<sid>`, `/bridge/token`, `/bridge/userinfo`, `/bridge/jwks` | sign-in with the pass for Authentik's `pass-bridge` source (`docs/pass-sign-in.md`) |
 | Test wallet | `python -m belfry_onboarding.testwallet receive|present|show` | a scripted holder (fresh P-256 key, JWT proof, KB-JWT); `--map` rewrites hosts for use inside Compose |
 
 ## URLs

@@ -6,9 +6,8 @@ Flow: Authentik -> GET /bridge/authorize (QR page) -> wallet presents to Verifie
 polls GET /bridge/poll/<sid> -> redirect to Authentik with a code -> POST /bridge/token
 (client secret + PKCE) -> ID token and access token -> GET /bridge/userinfo.
 
-State is in memory (one instance; a restart only drops logins in progress). Decision 7 of the
-plan wanted the SUNET verifier patched for this; see docs/NEXT_STEPS.md §3e for why this is a
-few hundred lines over Verifier2 instead.
+State is in memory (one instance; a restart only drops logins in progress). How it fits
+together: docs/pass-sign-in.md.
 """
 
 from __future__ import annotations

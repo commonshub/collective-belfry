@@ -2,7 +2,7 @@
 
 Every page a participant sees says **Open Source Village, run by Belfry** and uses the look of
 [opensourcevillage.org](https://opensourcevillage.org): dark theme only, green greys, a lime
-accent, Geist. Decided 2026-10-23 (steward). Belfry stays the name of the operator (footers,
+accent, Geist. Belfry stays the name of the operator (footers,
 issuer display name, `iss`, internal identifiers); Odoo's back office keeps Odoo's look.
 
 This folder is the single source. The onboarding service serves it at `/brand/*`

@@ -1,8 +1,7 @@
 # Vote: anonymous polls for Open Source Village
 
 `vote.<domain>`: any participant with an active pass opens a poll; every active pass votes once
-per poll, anonymously. Built 2026-10-24 on the plan's Phase 6 item "anonymous voting for proposals
-(Semaphore groups built from the registry)".
+per poll, anonymously, with Semaphore zero-knowledge proofs over groups built from the registry.
 
 ## How it works
 

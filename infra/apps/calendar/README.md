@@ -47,17 +47,17 @@ Patch `0001-...patch`:
   Account" only with `VITE_LOCAL_KEYS=true` (participants have a managed key in Keycast).
 - Sidebar: Apps and About point to the deployment; Formstr's privacy policy and contact form are
   hidden.
-- `@formstr/local-relay` 0.6.0 -> 0.6.5. 0.6.0 never answers NIP-42 AUTH challenges, so on an
-  AUTH-only relay every read and write was refused (`auth-required`); found in the browser test.
+- `@formstr/local-relay` raised from 0.6.0 to 0.6.5: 0.6.0 never answers NIP-42 AUTH challenges,
+  and the community relay refuses every read and write without AUTH.
 
-Patch `0002-...patch` (2026-10-24): the Open Source Village app bar (`brand/osv-bar.js`, see
+Patch `0002-...patch`: the Open Source Village app bar (`brand/osv-bar.js`, see
 `brand/README.md`) in `index.html` with `VITE_APPS_URL` as its home and `VITE_COMMUNITY_APPS` as
 its links; `html.osv-bar` sets `--safe-area-top`, which every top offset of the app reads, to the
 bar's height, and the desktop sidebar pads by it; the sidebar's Apps entry opens the apps page in
 the same tab; the PWA manifest uses the bar's dark green and the calendar's own icons from
 `brand/apps/` (copied by the Dockerfile), with a separate maskable icon and `apple-touch-icon.png`.
 
-Patch `0003-...patch` (2026-10-24): logout ends the sign-in everywhere. The token exchange keeps
+Patch `0003-...patch`: logout ends the sign-in everywhere. The token exchange keeps
 the refresh token (localStorage); after the app's own logout `endSsoSession()` revokes it at
 Keycast (`POST /api/oauth/revoke`), sets the silent-try flag and goes through Keycast's
 `/api/auth/oidc/logout?return_to=<origin>/` (Keycast patch 0010), which ends the Keycast and

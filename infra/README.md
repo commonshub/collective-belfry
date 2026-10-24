@@ -1,89 +1,155 @@
-# Belfry local stack
+# The Belfry stack
 
-One Docker Compose project (`belfry`) with everything the event release needs so far: Postgres, Odoo 19, Authentik, Keycast (signer, Belfry fork with Authentik login) with its NIP-46 relay and Redis, the community relay (rnostr, whitelist from Odoo), the walt.id issuer and verifier for the pass certificates (`issuer/README.md`) and Belfry's onboarding service. Contract: `docs/slice-1-onboarding.md`.
+One Docker Compose project (`belfry`) with every service Belfry runs. Locally each service is
+published on its own port; a public deployment adds a reverse proxy in front and publishes nothing
+else (`DEPLOY.md`).
 
 ## Run
 
 ```
-make up           # generates infra/.env on first run, starts everything except the onboarding service
-make bootstrap    # database, users, tokens, policy; writes tokens into infra/.env
-make up-app       # builds and starts the onboarding service (needs services/onboarding and the tokens)
-make smoke        # invite -> pay -> accounts created exactly once
-make down         # stop, keep volumes
+make up           # first run: writes infra/.env and the keys, builds the patched signer
+                  # (about 15 minutes); starts the core services
+make bootstrap    # creates the Odoo database, users, API tokens, the signer's admin and policy,
+                  # applies Authentik's blueprints; writes the tokens into infra/.env
+make up-app       # builds and starts the onboarding service and the community apps
+make smoke        # end-to-end test (see "Checks")
+make logs         # follow the logs
+make down         # stop, keep the data
 ```
 
-Without `make`: `infra/scripts/gen-secrets.sh`, `docker compose -f infra/docker-compose.yml up -d`, `infra/scripts/bootstrap.sh`, `docker compose -f infra/docker-compose.yml --profile app up -d`.
+Without `make`: `infra/scripts/gen-secrets.sh`, then
+`docker compose -f infra/docker-compose.yml up -d`, `infra/scripts/bootstrap.sh`,
+`docker compose -f infra/docker-compose.yml --profile app up -d --build`.
 
-`make up` starts the stack without the `app` profile, so it works before `services/onboarding` exists; the onboarding service needs the tokens bootstrap writes anyway. `make up-app` builds only that service (the Keycast image is never rebuilt implicitly, see below).
+The onboarding service and the apps are in the Compose profile `app`, because they need the
+tokens bootstrap writes. Restart them after bootstrap changed a token (`make up-app`).
 
-Requirements on the host: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`. About 5 GB of RAM for the stack (Odoo is capped at 2 GB, Postgres at 512 MB; Authentik server + worker take about 1 GB; Keycast about 100 MB; the community relay is capped at 256 MB), more while building images.
+Host requirements: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`; about 6 GB of RAM
+while running (Odoo 2 GB, Authentik about 1 GB, the walt.id services 1 GB each, the rest small),
+more while images build.
 
-| Service | URL on the host | Login |
+## Services
+
+| Service | Local URL | What it is |
 | --- | --- | --- |
-| Odoo | http://localhost:8069 | `admin` / `ODOO_ADMIN_PASSWORD` |
-| Authentik | http://localhost:9000 | `akadmin` / `AUTHENTIK_BOOTSTRAP_PASSWORD` |
-| Keycast | http://localhost:3000 | `KEYCAST_ADMIN_EMAIL` / `KEYCAST_ADMIN_PASSWORD` |
-| Keycast relay (NIP-46) | ws://localhost:3080 | |
-| Community relay (rnostr) | ws://localhost:3090 | NIP-42 as a whitelisted pubkey, see `relay/README.md` |
-| Blossom (files) through its gate | http://localhost:3100 | writes need a kind-24242 token from a key with an active pass, see `blossom/README.md` |
-| Onboarding service | http://localhost:8100 (`/health`, `/door`, `/claim/<token>`, `/status/1`, `/bridge/...`) | |
-| Mailpit (local mail sink) | http://localhost:8025 | Odoo's outgoing mail server in the local stack |
-| Issuer (walt.id Issuer2) | http://localhost:7005 (`/.well-known/openid-credential-issuer/openid4vci`) | management API `/issuer2/*` unauthenticated: internal only |
-| Verifier (walt.id Verifier2) | http://localhost:7004 | session management unauthenticated: internal only |
+| `odoo` | http://localhost:8069 | registry and billing; `admin` / `ODOO_ADMIN_PASSWORD` |
+| `authentik-server`, `authentik-worker` | http://localhost:9000 | login; admin `akadmin` / `AUTHENTIK_BOOTSTRAP_PASSWORD` at `/if/flow/default-authentication-flow/?next=/if/admin/` |
+| `keycast` | http://localhost:3000 | the signer and the participants' account page (`keycast/README.md`) |
+| `keycast-relay` | ws://localhost:3080 | the relay the signer answers NIP-46 requests on |
+| `relay` | ws://localhost:3090 | the community relay, participants only (`relay/README.md`) |
+| `blossom-gate` → `blossom` | http://localhost:3100 | file uploads for participants (`blossom/README.md`) |
+| `mint` | http://localhost:3338 | the village token mint (`mint/README.md`) |
+| `issuer`, `verifier` | http://localhost:7005, http://localhost:7004 | walt.id Issuer2 and Verifier2 for the pass certificate (`issuer/README.md`); their management APIs have no authentication |
+| `onboarding` | http://localhost:8100 | the onboarding service (`../services/onboarding/README.md`); also serves `brand/` at `/brand` |
+| `calendar` | http://localhost:3200 | community calendar (`apps/calendar/README.md`) |
+| `chat` | http://localhost:3300 | community chat (`apps/chat/README.md`) |
+| `wallet` | http://localhost:3400 | village token wallet (`apps/wallet/README.md`) |
+| `vote` | http://localhost:3500 | anonymous polls (`../services/vote/README.md`) |
+| `village` | http://localhost:3600, :3700, :3800 | directory, marketplace, photos (`../services/village/README.md`) |
+| `mailpit` | http://localhost:8025 | catches every mail the local stack sends (not used in production) |
+| `postgres`, `redis` | internal | databases of Odoo, Authentik and Keycast; Keycast's cache. `docker compose exec postgres psql -U postgres` |
 
-Postgres and Redis are internal (`docker compose exec postgres psql -U postgres`).
+One-shot helpers: `keycast-migrate` (database migrations before Keycast starts), `relay-init`
+(seeds the relay's configuration), `perms-init` (hands the data volumes to the non-root users).
 
-## Public deployment
+Networks: `data` (internal) connects Postgres and Redis with their clients only; `edge` connects
+the proxy with the browser-facing services; `default` is everything else.
 
-`docker-compose.prod.yml` adds a Caddy reverse proxy with automatic TLS and one hostname per service (`proxy/Caddyfile`), and unpublishes every other port; `scripts/prod-env.sh <domain> <acme e-mail>` points the public URLs in `.env` at those hostnames. The proxy denies the management surfaces (Issuer2 `/issuer2/*`, Verifier2 session management, the onboarding service's `/admin/*` and `/hooks/odoo/*`, Keycast's `/api/admin/*`, Odoo's database manager) and serves NIP-05 on the apex domain. Step by step: `DEPLOY.md`. The routing rules were checked locally with Caddy's internal CA against the running stack (2026-10-23).
+## This directory
+
+| Path | What |
+| --- | --- |
+| `docker-compose.yml` | the stack; every setting comes from `.env` |
+| `docker-compose.prod.yml` | the public overlay: proxy, no published ports, restart policies (`DEPLOY.md`) |
+| `.env.example` | every variable with a comment; `gen-secrets.sh` turns it into `.env` |
+| `authentik/` | blueprints (flows, providers, sources, branding) and the mail template |
+| `keycast/` | the signer's build (upstream plus Belfry's patch series) and its policy |
+| `apps/` | builds of the chat, calendar and wallet: upstream apps at a pinned commit plus Belfry's patches |
+| `issuer/`, `verifier/` | walt.id configuration and the issuer's keys |
+| `relay/`, `blossom/`, `mint/` | configuration of the community relay, the file server and the mint |
+| `odoo/` | Odoo's configuration template |
+| `postgres/` | creates the databases and roles on first start |
+| `proxy/` | the public reverse proxy (Caddy with rate limiting) |
+| `hetzner/` | creating a VM on Hetzner Cloud |
+| `scripts/` | setup, bootstrap, checks, backups, the custody seed (below) |
+| `secrets/` | files that must not be in `.env` (SMTP password, the local custody seed); gitignored |
 
 ## Secrets and tokens
 
-`scripts/gen-secrets.sh` renders `odoo/odoo.conf` from `odoo/odoo.conf.tmpl` (with the Odoo master password `ODOO_MASTER_PASSWORD`) and runs `scripts/gen-issuer-pki.sh` (the issuer CA, signer, bridge and verifier keys, `issuer/README.md`); it writes `infra/.env` from `.env.example` (every variable has a comment there) with random passwords, the Keycast server key and admin Nostr keypair (`scripts/nostr_keys.py`, pure Python), and `infra/keycast/master.key`. Existing files are kept, and variables added to `.env.example` since are appended to an existing `.env` (generated ones with fresh values); `--force` regenerates `.env` with a backup. An empty variable must not carry an inline comment (`VAR=   # note`): Compose reads the comment as the value, so comments for empty variables sit on the line above. Everything is gitignored.
+`scripts/gen-secrets.sh` writes, once:
 
-`scripts/bootstrap.sh` fills the three values the services need and replaces them in `.env` in place:
+- `infra/.env` from `.env.example`, with random passwords and keys (the signer's server key and
+  admin key pair come from `scripts/nostr_keys.py`). Run again, it keeps existing values and only
+  appends variables that `.env.example` gained;
+- `infra/keycast/master.key`, which encrypts every key the signer stores (back it up);
+- `infra/odoo/odoo.conf` from `odoo/odoo.conf.tmpl` (with the Odoo master password);
+- the issuer's CA, signing, bridge and verifier keys (`scripts/gen-issuer-pki.sh`,
+  `issuer/README.md`);
+- locally, the custody seed participant keys derive from (`secrets/custody/custody-seed`; on a
+  server it is unlocked into memory instead, see `DEPLOY.md`).
+
+All of these are gitignored. An empty variable in `.env` must not carry an inline comment
+(`VAR=   # note`): Compose would read the comment as the value.
+
+`scripts/bootstrap.sh` creates three tokens and writes them into `.env`:
 
 | Variable | What | Lifetime |
 | --- | --- | --- |
-| `ODOO_API_KEY` | API key of the Odoo user `onboarding@belfry.local` (JSON-RPC password) | persistent |
-| `KEYCAST_ADMIN_TOKEN` | admin UCAN from `GET /api/admin/token` | 30 days, re-run bootstrap |
-| `AUTHENTIK_TOKEN` | the akadmin API token created by Authentik's bootstrap blueprint (`AUTHENTIK_BOOTSTRAP_TOKEN`) | non-expiring |
-
-Restart the onboarding service after bootstrap so it reads the new values (`make up-app`).
+| `ODOO_API_KEY` | API key of the Odoo service user `onboarding@belfry.local` | permanent |
+| `KEYCAST_ADMIN_TOKEN` | the signer's admin token, used to create participant accounts | 30 days; run bootstrap again |
+| `AUTHENTIK_TOKEN` | Authentik's API token | permanent |
 
 ## What bootstrap does
 
-Idempotent; each step checks before it changes anything (a second run takes two seconds).
+Every step checks before it changes anything, so bootstrap can run any number of times (a run on
+a set-up stack takes seconds). Run it again after changing public URLs, SMTP settings or anything
+in `authentik/` or `keycast/policy.sql`.
 
-1. Waits for `/web/health` (Odoo), `/-/health/ready/` (Authentik), `/health` (Keycast), the issuer metadata and the verifier.
-2. Creates the Odoo database `odoo` with `docker compose exec odoo odoo -d odoo -i base,belfry_pass --stop-after-init --without-demo` (the database must not exist beforehand: an empty database that matches the dbfilter makes Odoo answer 500 on every request). If `odoo/addons/belfry_pass` is missing, it installs the standard modules the contract lists instead and prints a notice; a later run installs `belfry_pass` once the directory exists. The full CLI output goes to `infra/.bootstrap-odoo.log`.
-3. Sets the admin password, creates the user `onboarding@belfry.local` with the least privilege the service needs (internal user, contact management, `belfry_pass.group_admin`; the module grants that group read access to invoices and payment transactions), creates or updates the outgoing mail server `belfry` from `SMTP_*` and sets the company name and e-mail (`COMPANY_NAME`, `MAIL_FROM`) and generates an API key for it through `odoo shell` (`res.users.apikeys._generate` in a sudo env; the public `generate()` RPC method needs an existing key of the same user, so it cannot create the first one). Stores `belfry.onboarding_url` and `belfry.hook_token`.
-4. Keycast: registers the admin with the key from `ALLOWED_PUBKEYS`, confirms the e-mail through the dev inbox (`GET /api/dev/emails`), logs in, fetches the admin token, applies `keycast/policy.sql` (idempotent, also updates the allowed kinds: 0, 1, 7, 22242, 30023) and checks `GET /api/policies` lists `belfry-event`.
-5. Authentik: waits until the bootstrap token works, then until the blueprint `belfry-pass-bridge-source` reports `successful`, and checks that the source `pass-bridge` and the group `belfry-participants` exist. Then waits for `belfry-keycast-provider` (the OIDC provider and application Keycast logs in with, bound to `belfry-participants`), re-applying it once if it ran before the group existed, and checks the issuer `/application/o/keycast/`. Then waits for `belfry-account-setup-flow` and checks that the default brand's recovery flow is `belfry-account-setup` (the onboarding service mints the participants' one-time sign-in links through it), and for `belfry-magic-link-flow`: the default brand's authentication flow must be `belfry-magic-link`, and the SMTP settings (`SMTP_*`, the password from `secrets/smtp_password`) are written into its e-mail stage over the API.
+1. Waits for Odoo, Authentik, Keycast, the issuer and the verifier.
+2. Creates the Odoo database with the module `belfry_pass`, or upgrades the module when its
+   version changed.
+3. Sets Odoo's admin password, creates the service user with the rights it needs and its API key,
+   the outgoing mail server, company name, currency (on a fresh database) and logo, and the
+   configuration the module reads (onboarding URL, webhook token, public URLs).
+4. Signer: registers its admin, fetches the admin token, applies the policy `belfry-event` (the
+   Nostr event kinds the apps may sign, `keycast/policy.sql`) and registers Belfry's apps as
+   OAuth clients with their redirect URIs.
+5. Authentik: applies and checks the blueprints: the pass sign-in source, the signer's OIDC
+   provider, the participants' sign-in link and magic-link flows (and writes the SMTP settings
+   into them), the branding, and the applications for the steward pages, the pass page and the
+   issuer.
 
-Step 2 also upgrades `belfry_pass` (`odoo -u`) when the manifest version differs from the installed one, and step 3 stores `belfry.apps_url` (= `KEYCAST_APP_URL`) and `belfry.public_url` (= `ONBOARDING_PUBLIC_URL`, claim links) for the activation mail.
+## Images built here
 
-## Keycast image
+| Image | Built from |
+| --- | --- |
+| `belfry-keycast:local` | upstream Keycast at a pinned commit plus `keycast/build/patches/` (about 15 minutes cold; `make build-keycast` rebuilds it, `up` never does on its own once it exists) |
+| `belfry-chat:local`, `belfry-calendar:local`, `belfry-wallet:local` | upstream apps at a pinned commit plus `apps/<app>/patches/`, with the deployment's URLs compiled in: rebuild after changing public URLs |
+| `belfry-onboarding:local`, `belfry-vote:local`, `belfry-village:local` | `services/*` |
+| the proxy | `proxy/Dockerfile`: Caddy with the rate-limit module (public deployment only) |
 
-`belfry-keycast:local` is built from `keycast/build/Dockerfile`, which clones divinevideo/keycast at the pinned commit in a first stage, applies the Belfry patch series `keycast/build/patches/` (Authentik login, see `keycast/README.md`, "The Belfry fork") and then runs the upstream Dockerfile stages (a plain git build context fails on upstream's dangling `divine-funnelcake` submodule entry). The build takes about 15 minutes cold and is only run explicitly: `make build-keycast`. `docker compose up` uses the existing image. See `keycast/README.md` for the environment and the `master.key` path gotcha.
+## Checks
 
-## Odoo notes
+| Check | What it covers |
+| --- | --- |
+| `make smoke` (`scripts/smoke.sh`) | the whole path against the running stack: invite, emulated card payment, activation exactly once, Authentik user, signer account, relay access, profile, activation mail, sign-in link, magic link, the signer's sign-in and single sign-on, policy kinds, NIP-46, the apps' presence, tokens, the pass certificate into a scripted wallet, door check, sign-in with the pass, the pass on the phone, key recovery, self-custody, revocation, webhook replays. On a server: `DEPLOY.md` |
+| `make test-onboarding`, `make test-odoo` | unit tests of the onboarding service and the Odoo module |
+| `npm test` in `services/vote`, `services/village` | unit tests of the polls and the village apps |
+| `scripts/*-check.mjs` | browser checks in headless Chromium (chat, calendar, wallet, vote, village, photos); each script's header says what it needs |
+| `scripts/silent-signin-check.sh`, `self-custody-check.sh`, `keycast-oidc-login.sh` | single sign-on, self-custody and the signer's sign-in, driven with curl (used by the smoke test) |
 
-- Config: `odoo/odoo.conf.tmpl`, rendered to the gitignored `odoo/odoo.conf` by `gen-secrets.sh` (addons path `/mnt/extra-addons` = `../odoo/addons`, `dbfilter ^odoo$`, `list_db = False`, the master password `admin_passwd`, `proxy_mode`, single process, memory limits). Database credentials reach Odoo as `PGHOST/PGUSER/PGPASSWORD`, so `docker compose exec odoo odoo -d odoo ...` and `odoo shell -d odoo` work without extra arguments.
-- RPC: `/jsonrpc` with `execute_kw` works but Odoo 19 logs it as deprecated (removal planned for 22). The replacement is `POST /json/2/<model>/<method>` with `Authorization: Bearer <api key>` and the kwargs as JSON body, which the same API key already works for.
-- `make test-odoo` drops `test_belfry`, then runs `odoo -d test_belfry -i belfry_pass --test-enable --test-tags /belfry_pass --stop-after-init` in a throwaway container (host port 8169) against the stack's Postgres.
+`SMOKE_KEEP_PASS=1 SAVE_AK_JAR=<file> make smoke` leaves the test participant active and saves
+its Authentik session for the browser checks.
 
-## Authentik notes
+## Notes
 
-- Blueprints in `authentik/blueprints/` are bind-mounted at `/blueprints/custom`; the worker applies them within seconds of a change. Status: `GET /api/v3/managed/blueprints/?search=belfry`.
-- The pass-bridge source uses placeholder `authorization_url` / `access_token_url` / `profile_url` under `https://bridge.belfry.example`. `oidc_well_known_url` cannot be used until the bridge exists: authentik fetches it on save and rejects the source (400, name resolution error).
-- Pre-linking a user to the source (`POST /api/v3/sources/user_connections/oauth/`): `source` is the source UUID, not the slug, and `user` is read-only in the serializer, so the request fails (400 for a slug, 500 IntegrityError on `user_id` for a UUID). The onboarding service therefore treats the pre-link as best effort (warning in its log) and the participant links the pass once from user settings; `smoke.sh` reports the missing link as a note. Revisit when the Phase 3 bridge exists (alternative: `user_matching_mode: username_link` with the bridge sending `preferred_username` = member number).
-- Participant login (2026-10-23, passwordless): participants never have a password. `belfry-magic-link-flow.yaml` makes the flow `belfry-magic-link` the default brand's authentication flow (login page and every OIDC authorize, Keycast's "Sign in with Open Source Village" included): identification by e-mail (the pass source on the same page), an e-mail stage that mails a one-time link valid 10 minutes (template `authentik/templates/belfry/magic_link.html`, mounted at `/templates`; SMTP set by bootstrap because the stage does not use the global settings), user login with a 14-day "remember me". Authentik inserts a "Continue" confirmation before it uses an e-mail token, so link scanners in mailboxes cannot consume it. Unknown addresses get "Failed to authenticate." and no mail. The link continues the flow in the browser that opens it; for an app login it must be the browser where the login started (Keycast's flow cookie lives there; another browser ends in Keycast's 400). `belfry-account-setup-flow.yaml` keeps the recovery flow `belfry-account-setup` for the one-time sign-in link of the activation mail (now only a user login stage; the password prompt, policy and user write of the first version are removed by the blueprint). akadmin keeps authentik's default authentication flow with its password: `/if/flow/default-authentication-flow/?next=/if/admin/`.
-
-## Branding
-
-Participants see "Open Source Village, run by Belfry" everywhere, dark theme, mobile first (decided 2026-10-23). The repo's `brand/` folder is the single source (`brand/README.md`: palette, fonts, assets, and which file carries a copy of the values). The onboarding service serves it at `/brand/*` (`pass.<domain>/brand`; Compose mounts `../brand`, env `BRAND_DIR`); `BELFRY_BRAND_URL` in the authentik and issuer environments points there. Authentik: blueprint `belfry-brand.yaml` (title, logo, favicon, flow background, theme dark, custom CSS) and the dark `templates/belfry/magic_link.html`; the `cid:logo` PNG authentik attaches to mails is `brand/osv-logo-horizontal-dark.png`, mounted over `/web/dist/assets/icons/icon_left_brand.png`. Bootstrap re-applies the brand blueprint when the stored logo URL is not under `BELFRY_BRAND_URL`. Keycast: patch 0004 (`keycast/README.md`). Odoo: `belfry_pass` `brand_frontend_layout`, the activation mail, and the company logo set by bootstrap.
-
-## Smoke test
-
-`scripts/smoke.sh` runs its own Odoo calls as `admin` (the service user is restricted), creates an invite over JSON-RPC, drives `/belfry/invite/<token>` with curl, emulates a Stripe payment (a `payment.transaction` in state `done` with a `provider_reference`, then a manual payment on the invoice, which fires the automation rule), waits for the pass to become `active`, checks the Authentik user and source link and the Keycast NIP-05 name, the relay whitelist and kind-0 profile, reads the login setup link from the pass and the queued activation mail, sends the queue and reads the delivered mail back from Mailpit, opens the one-time sign-in link with curl (no password asked, session is the participant's; the consumed link is refused), then signs in to Keycast through Authentik in that browser (`scripts/keycast-oidc-login.sh` with the session cookie jar: OAuth popup, Authentik authorize, callback, consent, token, a signed kind-1 event), requests a magic link on the login page and opens it from Mailpit (unknown address refused, the link works once), asks for a new link through `/admin/passes/<id>/login-link` (second mail); then Phase 3: reads the claim link from the mail, receives the pass certificate with the test wallet (`python -m belfry_onboarding.testwallet`, run inside the onboarding container), presents it to a door session (valid, tier), signs in to Authentik by presenting it through the bridge (session is the participant's, source link created), revokes the pass and checks that the status list bit flips and the door refuses the certificate; finally replays the webhook three times. Form field names and the emulated-payment approach are documented in its header.
+- **Odoo** reads its database credentials from `PGHOST`/`PGUSER`/`PGPASSWORD`, so
+  `docker compose exec odoo odoo shell -d odoo` works without arguments. The service user talks
+  JSON-RPC (`/jsonrpc`), which Odoo 19 marks as deprecated in favour of `/json/2/<model>/<method>`.
+- **Authentik** applies the blueprints in `authentik/blueprints/` (mounted at
+  `/blueprints/custom`) on its own when a file changes; bootstrap re-applies the ones that depend
+  on secrets. Participants have no passwords: the login page asks for an e-mail address and mails
+  a one-time link (valid 10 minutes, at most five per account in 30 minutes), or offers the pass
+  (`../docs/pass-sign-in.md`). The link must be opened in the browser that started the sign-in.
+- **Branding**: every participant-facing page carries the Open Source Village look from `brand/`
+  (`../brand/README.md`).

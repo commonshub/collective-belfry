@@ -2,9 +2,9 @@
 
 The Open Source Village wallet at `wallet.<domain>`: [cashu.me](https://github.com/cashubtc/cashu.me)
 (MIT, Vue/Quasar PWA) at commit `002a0a36` plus six Belfry patches, built with the village mint
-(`infra/mint/`) and served by Caddy. Decisions of 2026-10-24: tokens without monetary value, 50 per
-pass day at activation; cashu.me at `wallet.<domain>` plus nutzaps; the wallet derives from the
-participant's Nostr key.
+(`infra/mint/`) and served by Caddy. Village tokens have no monetary value; every pass brings 50 per
+pass day. Participants send them to each other as nutzaps (NIP-61), and the wallet's keys derive
+from the participant's Nostr key, so it restores on any device after signing in.
 
 | Patch | What it does |
 | --- | --- |

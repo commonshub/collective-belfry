@@ -1,7 +1,6 @@
 # Village: the directory, the marketplace and the photos
 
-Three community apps of Open Source Village, built 2026-10-24 on the user's choice of extras
-("Photos, Directory, Marketplace with tokens"):
+Three community apps of Open Source Village:
 
 - **Directory** at `people.<domain>`: who is here. Participants opt in; nobody is listed by default.
 - **Marketplace** at `market.<domain>`: things, food, help and skills offered between participants,

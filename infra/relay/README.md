@@ -4,10 +4,10 @@ The relay the community apps talk to. Participants only: reading and writing nee
 
 | | |
 | --- | --- |
-| Image | `rnostr/rnostr:latest` (0.4.9 when pinned here, 2026-06), LMDB storage, NIP-42 auth extension, config hot reload |
+| Image | `rnostr/rnostr:latest` (tested with 0.4.9), LMDB storage, NIP-42 auth extension, config hot reload |
 | Host port | 3090 (`ws://localhost:3090`); inside Compose `ws://relay:8080` |
-| Config | `rnostr.toml` here is the **template**. `relay-init` copies it into the `relay-config` volume on first start; afterwards the onboarding service rewrites `/relay-config/rnostr.toml` from the template whenever the set of active passes changes. |
-| Data | volume `relay-data` (`/rnostr/data`) |
+| Config | `rnostr.toml` here is the **template**. `relay-init` copies it into the `community-relay-config` volume on first start; afterwards the onboarding service rewrites `/relay-config/rnostr.toml` from the template whenever the set of active passes changes. |
+| Data | volume `community-relay-data` (`/rnostr/data`) |
 
 ## Whitelist sync
 

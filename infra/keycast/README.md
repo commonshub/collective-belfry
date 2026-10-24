@@ -1,100 +1,152 @@
-# Keycast in the Belfry stack
+# Keycast: the signer
 
-Keycast (Divine's fork, github.com/divinevideo/keycast @ `fe9c6460`) is the Nostr signer: it holds every participant's key encrypted at rest and signs over HTTPS or NIP-46. Details and the verified API behaviour are in `docs/research/keycast-spike.md`.
+[Keycast](https://github.com/divinevideo/keycast) (Divine's version, pinned at `fe9c6460`) holds
+every participant's Nostr key, encrypted at rest, and signs for the community apps over HTTPS
+(HTTP RPC) or NIP-46. It also serves the participants' account page at `apps.<domain>`: the
+community apps, the pass, the identity (npub, NIP-05 name), key export and self-custody. Belfry
+runs it with a series of patches. Background on the choice and its API:
+`docs/research/signing-server.md`, `docs/research/keycast-spike.md`.
 
-## Image
+## How participants use it
 
-`docker-compose.yml` builds `belfry-keycast:local` from `build/Dockerfile`: it clones upstream at that commit, applies the Belfry patch series in `build/patches/`, then runs the upstream build (Rust release build plus SvelteKit web build, about 15 minutes cold, 463 MB). If the image already exists locally, `docker compose up` does not rebuild; use `docker compose build keycast` to force it after changing a patch.
+- **Accounts are created by Belfry, never by participants.** When a pass is activated, the
+  onboarding service creates the account through Keycast's preload API, keyed by
+  `vine_id = odoo-partner-<Odoo partner id>`. The key is derived from the custody seed (below).
+- **Signing in goes through Authentik.** "Sign in with Open Source Village" runs OpenID Connect
+  against Authentik. Authentik's `keycast` scope carries the claim `keycast_vine_id`; on the first
+  sign-in Keycast links the Authentik user to the account with that `vine_id`, later sign-ins use
+  the stored link. Only members of the Authentik group `belfry-participants` (active passes) may
+  sign in, and an Authentik user without an account gets "No signing account".
+- **The community apps** are OAuth clients of Keycast: `belfry-chat`, `belfry-calendar`,
+  `belfry-vote`, `belfry-wallet`, `belfry-people`, `belfry-market`, `belfry-photos`. Bootstrap
+  registers them with their redirect URIs; as trusted clients they skip the consent screen and can
+  sign in silently (`prompt=none`) when the participant is already signed in. The token response
+  carries a `bunker://` URL the app connects to over NIP-46.
+- **What may be signed** is the policy `belfry-event` (`policy.sql`): a list of event kinds,
+  applied by bootstrap. Encryption and decryption (NIP-44, NIP-04) are not limited by kind.
+- **Logging out** of an app revokes that app's authorization and ends the Keycast and the
+  Authentik session, so the silent sign-in does not log the participant straight back in.
+- **Self-custody.** On the security page a participant can move their account to a key of their
+  own (proved by signing a challenge with it). Keycast then deletes the key it held, and the apps
+  sign in with the participant's own signer from then on.
 
-## The Belfry fork
+## Custody seed and recoverable keys
 
-The fork is a patch series on top of the pinned upstream commit, kept in this monorepo (decision 6) instead of a GitHub fork. Each file in `build/patches/` is one `git format-patch` commit; the Dockerfile applies them in name order and the build fails if one no longer applies.
+With `KEYCAST_CUSTODY_SEED_FILE` set (Compose: `/run/belfry/custody-seed`), a participant's key is
 
-| Patch | What it changes |
+```
+HKDF-SHA256(salt "belfry/custody/v1", IKM = seed, info "belfry/nostr/v1/<vine_id>/<version>")
+```
+
+with the version from Odoo (`res.partner.belfry_key_version`). The seed file is read on every use:
+a steward can unlock it without restarting Keycast, and while it is missing, account creation
+answers 503 instead of creating a key that could not be recovered. Keys are still stored
+encrypted for signing; the seed is needed only to create or recreate them. After losing Keycast's
+data, `python -m belfry_onboarding restore-keys` recreates every account with the same key.
+Because Belfry can recompute a derived key, self-custody always means moving to a new key.
+Handling the seed: `../DEPLOY.md`, "Custody seed".
+
+## The image and the patches
+
+`build/Dockerfile` clones upstream at the pinned commit, applies `build/patches/*.patch` in name
+order (the build fails if one does not apply) and runs the upstream build (Rust and SvelteKit,
+about 15 minutes cold). `docker compose up` does not rebuild an existing image; after changing a
+patch run `make build-keycast`.
+
+| Patch | What it adds or changes |
 | --- | --- |
-| `0001-feat-auth-sign-in-through-an-upstream-OpenID-Provide.patch` | New `api/src/api/http/oidc.rs`: `GET /api/auth/oidc/start`, `/callback`, `/config`. Authorization code + PKCE against `OIDC_ISSUER`; the ID token is verified against the provider's JWKS (RS256/ES256, `iss`, `aud`, `exp`, `nonce`). The subject is mapped to an existing account (never created) and a server-signed UCAN session cookie is set, then the browser returns to `/api/oauth/authorize` where consent continues. New table `oidc_identities` (migration `20261023120000`), repository `core/src/repositories/oidc_identity.rs`. The OAuth popup shows "Sign in with …" (`OIDC_PROVIDER_NAME`). |
-| `0002-feat-web-Sign-in-with-.-on-the-login-page-when-OIDC-.patch` | The web app's `/login` page: the same button, auto-continue after the callback, password form hidden with `OIDC_HIDE_PASSWORD_LOGIN`. |
-| `0003-fix-oauth-token-exchange-for-accounts-without-an-e-m.patch` | Upstream bug that only shows with this login: `/api/oauth/token` read `users.email` as non-null and answered 503 for preloaded (unclaimed) accounts, which have no e-mail. |
-| `0004-chore-brand-Belfry-branding-instead-of-Divine.patch` | Open Source Village, run by Belfry, instead of Divine (2026-10-23, see `brand/README.md`): product name `BRAND_NAME` = "Open Source Village" in the API (e-mail subjects and bodies, claim pages, default sender) and `brand.ts` in the web app; dark OSV theme only in `web/src/app.css` (Divine's `--color-divine-*` variable names keep their roles, the values are OSV's lime and green greys, Tailwind's grey scale remapped, `.dark`/`.light` change nothing); the server-rendered popup, claim and auth pages recoloured the same way; Google Fonts replaced by self-hosted Geist (`web/static/fonts/`, `/fonts.css`); OSV wordmark (`/osv-logo.svg`), favicons and manifest; captions "run by Belfry"; landing copy for passwordless accounts (no register button, no e-mail-and-password claims); Divine's PNG icons, the ATProto/Bluesky settings card and the Divine demo page removed. Internal names (`vine_id`, variable names) stay. The seed tenant's name is set by `policy.sql`; the OIDC button label is `OIDC_PROVIDER_NAME` (Compose: "Open Source Village"). |
-| `0005-feat-auth-key-export-for-accounts-without-a-password.patch` | Key export for OIDC-only accounts: every server-signed session carries an `auth_time` fact; `POST /api/user/export-key` accepts an account without a password when its browser session is younger than `OIDC_REAUTH_WINDOW_SECS` (default 300) instead of asking for a password (`reauth_is_fresh`, unit-tested). `GET /api/user/account` reports `has_password`; the security page offers "Sign in with Open Source Village to unlock" (re-authentication through `/api/auth/oidc/start`) and hides the password and e-mail sections for such accounts. `verify-password` answers 400 instead of a decode error for them. |
-| `0006-feat-belfry-e-mail-from-the-ID-token-the-participant.patch` | Two things the real-user test asked for (2026-10-23). The ID token's `email` is stored on the account as verified on every OIDC login (`OIDC_TRUST_EMAIL`, default true; the provider only admits a participant through a magic link to that address), so the "verify your e-mail" banner and the empty `email` UCAN fact are gone; an address held by another account of the tenant is left alone. `GET /api/user/pass` (session auth, new `api/src/api/http/pass.rs`) reads the pass behind the account's `vine_id` from the onboarding service (`BELFRY_PASS_INFO_URL` + `PASS_INFO_TOKEN`, `GET /admin/partners/<id>/pass`, 5 s timeout) and the dashboard shows a "Your pass" card: tier, validity, state, member number and "Add to your wallet" (the claim link) while the pass is active and unclaimed; hidden on 404 (no pass) and 503 (service not configured). Also folded into 0004 and 0005 the same day: text on the lime accent is dark (`--color-divine-on-accent`; every `.btn-primary` was white on lime), and the verification banner is hidden for accounts without an e-mail. |
-| `0007-feat-bunker-BUNKER_PUBLIC_RELAYS-for-the-relay-hande.patch` | NIP-46 for apps outside the network (2026-10-23). `BUNKER_PUBLIC_RELAYS` is the relay as clients reach it; it goes into every handed-out `bunker://` URL (OAuth token response, "create bunker", team and group bunkers) and into the NIP-05 discovery's `nip46.relay`, overriding the tenant's stored `relay` setting (seeded with the internal address at tenant creation). The signer keeps listening on `BUNKER_RELAYS`; both must name the same relay. Unset: behaves as upstream. |
-| `0008-feat-oauth-silent-sign-in-prompt-none-and-trusted-fi.patch` | Single sign-on for Belfry's apps (2026-10-23). `prompt=none` on `/api/oauth/authorize` never renders a page: signed in and the app approved or trusted, a code; signed in otherwise, `error=consent_required`; not signed in, one round through `/api/auth/oidc/start?prompt=none` to Authentik (`prompt=none` there too), whose callback comes back with a session or with `oidc_failed=<reason>`, then `error=login_required`. `KEYCAST_TRUSTED_CLIENTS` (Compose: `belfry-chat,belfry-calendar`) skips the consent screen for those client ids, only while they are registered clients with redirect URIs (bootstrap registers them for the `KEYCAST_TENANT_DOMAIN` tenant, see below); with `OIDC_HIDE_PASSWORD_LOGIN` their interactive request goes straight to Authentik instead of a page with a second button. Check: `scripts/silent-signin-check.sh`, smoke step 6l. |
-| `0009-feat-belfry-community-apps-on-the-dashboard.patch` | After signing in, participants land on the dashboard, which linked to no app (real-user test, 2026-10-24). `GET /api/user/apps` returns `BELFRY_COMMUNITY_APPS` (`Name\|URL\|Description` entries separated by `;`, only `http(s)://` URLs; Compose builds it from `CHAT_PUBLIC_URL` and `CALENDAR_PUBLIC_URL`) and the dashboard shows them first as "Community apps" cards. Unset: no card. |
-| `0010-feat-oidc-logout-through-the-provider-branded-sign-i.patch` | Logout ends the sign-in everywhere, and friendlier sign-in errors (2026-10-24). `GET /api/auth/oidc/logout?return_to=<url>` clears `keycast_session` and sends the browser to Authentik's end-session endpoint; the keycast provider's invalidation flow `belfry-signer-logout` (blueprint `belfry-keycast-provider.yaml`) ends the Authentik session and redirects to `GET /api/auth/oidc/logged-out`, which returns to `return_to` (a same-origin path or an origin of a registered client, else `/`). The dashboard's sign-out uses it. `POST /api/oauth/revoke` (RFC 7009, public CORS, `{token: <refresh token>, client_id}`) lets an app revoke its own authorization; the HTTP RPC notices within 5 s (its cache recheck). For trusted clients each token exchange revokes the user's authorizations that never connected within 10 minutes and the connected ones beyond the five most recently active. One flow cookie per sign-in (`keycast_oidc_<state prefix>`) instead of one per browser, so a silent try in a second tab no longer breaks a pending magic-link sign-in with "State mismatch"; sign-in error pages in the OSV look with "Sign in with Open Source Village" to start again. Check: `scripts/silent-signin-check.sh` (smoke 6l steps 7–9, 6m the logout). |
-| `0011-feat-belfry-derive_secret-per-purpose-secrets-from-t.patch` | Village wallet keys from the participant's Nostr key (2026-10-24). HTTP RPC `derive_secret [purpose]` returns HKDF-SHA256(IKM = the 32-byte secret key, salt `keycast/derive/v1`, info = purpose) as hex, only for OAuth clients and purposes in `KEYCAST_DERIVE_SECRETS` (`client:purpose|purpose;…`; Compose: `belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1`). The wallet takes its seed and its nutzap key from it (`infra/apps/wallet/`). Anyone holding the key reproduces the secrets. Check: smoke 6o. |
-| `0012-feat-belfry-self-custody-take-over-the-key-or-move-t.patch` | Self-custody (2026-10-24). `GET /api/user/self-custody/challenge` gives a stateless challenge bound to the account; `POST /api/user/self-custody {event}` takes a kind-27235 event carrying it, after a fresh sign-in like the key export. Signed by the account's own key: Keycast deletes its copy and all app authorizations ("take over"). Signed by another key: the account moves to it (new users row with username/NIP-05, e-mail, `vine_id`, status; the `oidc_identities` link moves; old row orphaned, old key deleted). Keycast then posts `{vine_id, old_pubkey, new_pubkey}` to `BELFRY_KEY_CHANGED_URL` with `BELFRY_HOOK_TOKEN` (onboarding `/hooks/keycast/key-changed`: pass npub, relay whitelist). `/api/oauth/authorize` answers accounts without a key with `access_denied`/`self_custody` (silent) or a "Use your own signer" page; `GET /api/user/account` gains `key_held`; the security page gets "Hold your own key" (sign with a browser extension or a pasted key that stays in the browser). Check: `scripts/self-custody-check.sh`, smoke 10b. |
-| `0013-feat-belfry-OIDC_LOGOUT_URL-instead-of-the-end_sessi.patch` | Logout ended on a blank page (real-user test, 2026-10-24): authentik's end-session view answers an empty 200 whenever the browser's session still holds an unfinished flow, e.g. a magic-link sign-in started and never completed. `OIDC_LOGOUT_URL` replaces the discovered `end_session_endpoint`; Compose points it at `<AUTHENTIK_PUBLIC_URL>/if/flow/belfry-signer-logout/`, the invalidation flow, which plans afresh. Check: `silent-signin-check.sh` part 10 leaves an unfinished magic-link flow in the session before logging out. |
-| `0014-feat-belfry-participant-keys-derived-from-a-custody-.patch` | Recoverable participant keys (2026-10-24, after the security review). With `KEYCAST_CUSTODY_SEED_FILE` (Compose: `/run/belfry/custody-seed`, the `CUSTODY_SEED_DIR` mount), preload-user creates the key as HKDF-SHA256(salt `belfry/custody/v1`, IKM = seed, info `belfry/nostr/v1/<vine_id>/<version>`), the version from the request's `key_version` (Odoo `res.partner.belfry_key_version`). The file is read on every use (a steward unlocks it without a restart, `scripts/custody-seed.sh`); configured but missing: 503 instead of an unrecoverable random key. preload-user with `pubkey` recreates a keyless account (a participant who holds their own key). Self-custody refuses "keep this key" (Belfry can recompute it). Recovery: onboarding `restore-keys`. Check: smoke 10a (account deleted, restored, same npub), 10b. |
-| `0015-fix-belfry-buttons-fit-phones-with-large-text.patch` | Phones with Android's larger text (real-user report, 2026-10-24): buttons wrap instead of overflowing (the global `.button` was `nowrap`, the landing button capped at 280px), use a 1.5rem radius (pills on one line, rounded boxes when wrapped, no ovals), the landing button is up to 22rem wide, the login card's padding shrinks on narrow screens, and the button rows of the consent and sign-in pages wrap. |
-| `0016-fix-belfry-dashboard-and-header-on-narrow-phones.patch` | Second mobile pass (real-user screenshots, 2026-10-24): "Sign out" stays on one line and the header wraps to a second row instead of squeezing the brand; e-mail, npub and NIP-05 name break inside the identity card instead of leaving it; "Add to your wallet" is a full-width button. |
-| `0017-feat-belfry-Show-your-pass-on-the-pass-card-QR-for-t.patch` | "Show your pass" on the dashboard's pass card (2026-10-24): links to the onboarding service's `/me` (`show_url` in the pass info), the pass as a renewing QR code for the door without a wallet; "Add to your wallet" becomes the outlined second choice. |
+| 0001 | sign-in through an upstream OpenID provider (`api/src/api/http/oidc.rs`): authorization code with PKCE against `OIDC_ISSUER`, ID token checked against the provider's keys, the subject linked to an existing account by `OIDC_LINK_CLAIM` (table `oidc_identities`), a server-signed session cookie; "Sign in with …" in the OAuth popup |
+| 0002 | the same button on the web app's `/login` page; `OIDC_HIDE_PASSWORD_LOGIN` hides the password form |
+| 0003 | fix: the token exchange failed for accounts without an e-mail address (all preloaded accounts) |
+| 0004 | the Open Source Village brand instead of Divine's: names, mails, colours (dark theme), self-hosted Geist font, logos, landing page copy for accounts without passwords |
+| 0005 | key export for accounts without a password: allowed within `OIDC_REAUTH_WINDOW_SECS` (300) of a fresh sign-in; "Sign in again to unlock" on the security page |
+| 0006 | the e-mail address from the ID token is stored as verified (`OIDC_TRUST_EMAIL`); "Your pass" card on the dashboard from the onboarding service (`BELFRY_PASS_INFO_URL`, `PASS_INFO_TOKEN`) |
+| 0007 | `BUNKER_PUBLIC_RELAYS`: the relay URL written into `bunker://` URLs and NIP-05 discovery, as clients reach it |
+| 0008 | silent sign-in (`prompt=none`) and trusted clients (`KEYCAST_TRUSTED_CLIENTS`) that skip the consent screen |
+| 0009 | "Community apps" cards on the dashboard (`BELFRY_COMMUNITY_APPS`) |
+| 0010 | logout through Authentik (`/api/auth/oidc/logout`, `/logged-out`), app-initiated revocation (`POST /api/oauth/revoke`), pruning of abandoned authorizations of trusted clients, branded sign-in error pages |
+| 0011 | `derive_secret`: per-purpose secrets derived from the participant's key, for allowed clients only (`KEYCAST_DERIVE_SECRETS`); the wallet's seed and nutzap key |
+| 0012 | self-custody: take over the key or move the account to another key; Keycast reports the change to `BELFRY_KEY_CHANGED_URL`; apps get `access_denied`/`self_custody` for accounts without a held key |
+| 0013 | `OIDC_LOGOUT_URL`: logout goes to Authentik's logout flow directly (the discovered end-session endpoint returns an empty page when an unfinished sign-in is pending) |
+| 0014 | participant keys derived from the custody seed (above); preload with a `pubkey` recreates an account without a key |
+| 0015, 0016 | layout for phones and large text: buttons wrap, the header wraps, long identity values break |
+| 0017 | "Show your pass" on the pass card: the pass as a renewing QR code (`/me` of the onboarding service) |
 
-**Who may sign in.** The Authentik application is bound to the group `belfry-participants`, which the onboarding service keeps equal to the Authentik users of active passes (added at activation and reactivation, removed when the last active pass closes, full sync at start and in `reconcile`, `python -m belfry_onboarding sync-participants`). A refund or expiry therefore blocks the Keycast login at Authentik, in addition to the Keycast suspension that blocks signing.
-
-**Account mapping.** Keycast accounts are only created by the onboarding service (`preload-user` with `vine_id = odoo-partner-<id>`). Authentik's `keycast` scope (blueprint `authentik/blueprints/belfry-keycast-provider.yaml`) puts the same value into the claim `keycast_vine_id`. On the first login Keycast links the Authentik subject to the account with that `vine_id`; later logins use the stored link. An Authentik user without an Odoo partner, or one whose account does not exist yet, gets "No signing account". This replaces the claim link and the Keycast password: a preloaded account never needs claiming.
-
-**Configuration** (set in `docker-compose.yml`): `OIDC_ISSUER` is Authentik's public URL plus `/application/o/keycast/` (it must equal the ID token's `iss`). `OIDC_BACKCHANNEL_URL=http://authentik-server:9000` sends discovery, token and JWKS calls through the Compose network while keeping the public `Host` header; Authentik then still names the public host but derives the *scheme* from the request, so with an `https://` issuer the discovery document says `http://` and Keycast refuses it. The production overlay therefore unsets the backchannel and Keycast uses the public HTTPS URL (a code fix would add `X-Forwarded-Proto` to the backchannel requests; Authentik honours it from the Compose network). `OIDC_CLIENT_SECRET` is `KEYCAST_OIDC_CLIENT_SECRET` from `.env`, shared with the blueprint. `KEYCAST_OIDC_ONLY=true` (default) hides the password forms; the password API stays, because `bootstrap.sh` registers the Keycast admin through it. The module header in `oidc.rs` lists every variable.
-
-**Changing a patch.**
+**Changing a patch:**
 
 ```bash
 git clone https://github.com/divinevideo/keycast.git && cd keycast
 git checkout -b belfry fe9c6460c89e82e22c3aab4ba1dc79b7f0dd54c0
-git am <belfry>/infra/keycast/build/patches/*.patch
-# edit, then: cargo test -p keycast_api --lib && cargo clippy -p keycast_api --lib
-# (brand changes: edit, then `git commit --fixup=<0004 sha>` and
-#  `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash fe9c6460` to fold them into 0004)
-git commit ...   # or git commit --amend / rebase -i to fold into an existing patch
-rm <belfry>/infra/keycast/build/patches/*.patch
-git format-patch fe9c6460..belfry -o <belfry>/infra/keycast/build/patches
-docker compose -f <belfry>/infra/docker-compose.yml build keycast
+git am <repo>/infra/keycast/build/patches/*.patch
+# edit, then: cargo test -p keycast_api --lib, and in web/: bun run check && bun run build
+git commit ...
+git format-patch -1 HEAD --start-number <next number> -o <repo>/infra/keycast/build/patches/
+make build-keycast
 ```
 
-To move to a newer upstream commit, rebase the branch onto it, regenerate the patches and update `KEYCAST_COMMIT` in the Dockerfile.
+Add new patches with the next number and leave the existing files untouched (`format-patch`
+over the whole range rewrites every header). To change an existing patch, fold the fix into it
+(`git commit --fixup`, `git rebase -i --autosquash`) and regenerate the series from that patch on.
+To move to a newer upstream commit, rebase the branch, regenerate the series and update
+`KEYCAST_COMMIT` in the Dockerfile.
 
-**Check it end to end:** `scripts/keycast-oidc-login.sh <authentik username> <password> <pubkey hex>` drives the whole browser flow with curl (popup, Authentik login over the flow executor API, callback, consent, token, a signed kind-1 event); `make smoke` runs it for a fresh participant (step 6c).
+## Configuration
 
-**Checks** (2026-10-23, after patch 0006): `cargo check -p keycast_api` and `cargo test -p keycast_api --lib` (the oidc, reauth and pass unit tests), `bun run check` (svelte-check, 0 errors) and `bun run build` in `web/`, then `make build-keycast` (about 15 minutes; the Dockerfile applies the series in order and fails if a patch no longer applies) and `make smoke` (step 6d checks the e-mail and the pass endpoint). Still Divine's: the `vine_id` column name, `--color-divine-*` CSS variable names, the minor-account and ATProto API modules (inert without their tokens and URLs).
-
-## Files in this directory
-
-| File | Purpose |
-| --- | --- |
-| `master.key` | 32 random bytes, base64, written by `scripts/gen-secrets.sh`. Gitignored. AES-256-GCM key for every stored Nostr secret: losing it makes all participant keys unreadable, so back it up with the database. |
-| `build/Dockerfile`, `build/patches/` | Image build: upstream at the pinned commit plus the Belfry patch series (see "The Belfry fork"). |
-| Registered clients | `scripts/bootstrap.sh` writes `belfry-chat` and `belfry-calendar` into `registered_clients` for the tenant whose domain is `KEYCAST_TENANT_DOMAIN` (Keycast picks the tenant from the Host header; the seed tenant 1 is Divine's `login.divine.video` and is not used), with `<CHAT_PUBLIC_URL>/oauth/callback` and `<CALENDAR_PUBLIC_URL>/oauth/callback` as the only redirect URIs. Re-run bootstrap after changing those URLs. |
-| `policy.sql` | The `belfry-event` policy: base kinds (0, 1, 5, 7, 10002, 22242, 27235), calendar NIP-52, photos NIP-68 + Blossom 24242, proposals NIP-88 and NIP-23 with NIP-22 comments, NIP-17 chat (13, 1059, 10050); the seed tenant's name. Applied by `scripts/bootstrap.sh` on every run (with `-v tenant=$KEYCAST_TENANT_DOMAIN`, so the served tenant is renamed, not only the seed tenant 1), idempotent, updates the kinds of an existing permission. NIP-44 encrypt/decrypt are not kind-gated in Keycast. |
-
-## The master.key path gotcha
-
-`MASTER_KEY_PATH` is only checked for presence. `core/src/encryption/file_key_manager.rs::load_key` opens `<CARGO_MANIFEST_DIR>/../master.key`, a path baked in at compile time, which resolves to `/app/master.key` inside the image. Mount the key exactly there (`./keycast/master.key:/app/master.key:ro`); any other path is silently ignored and Keycast fails to decrypt keys.
-
-## Environment (set in docker-compose.yml from `.env`)
+Set in `docker-compose.yml` from `.env`. Upstream settings:
 
 | Variable | Meaning |
 | --- | --- |
-| `DATABASE_URL` | `postgres://keycast:<KEYCAST_DB_PASSWORD>@postgres:5432/keycast`. Migrations are not run at startup; the one-shot `keycast-migrate` service runs `/app/keycast --migrate` first. |
-| `REDIS_URL` | Required even single-instance (cluster hashring). |
-| `KMS_PROVIDER=file`, `MASTER_KEY_PATH` | File-based KMS, see above. |
-| `SERVER_NSEC` | Hex secret that signs server-issued UCANs (admin sessions, preload tokens). Rotating it invalidates every admin token. |
-| `ALLOWED_PUBKEYS` | Full-admin whitelist for `/api/admin/*`; the admin registers with this key. |
-| `ALLOWED_ORIGINS` | CORS for the auth endpoints; the web app's origin. |
-| `ALLOWED_TENANT_DOMAINS` | Tenant = `Host` header without port. Unknown hosts get 400 "Invalid domain". Everything (browser, bootstrap, onboarding service) must present the same host, `localhost` locally; the onboarding service reaches `http://keycast:3000` and must set `Host: localhost`. |
-| `BUNKER_RELAYS` | `ws://keycast-relay:8080`; the relay the signer listens on for NIP-46. Host port 3080. |
-| `BUNKER_PUBLIC_RELAYS` | Belfry fork (patch 0007): the same relay as clients reach it, written into `bunker://` URLs and NIP-05 discovery. `ws://localhost:3080` locally, `wss://bunker.<domain>` in production (`prod-env.sh`). |
-| `SHUTDOWN_PRE_DRAIN_SECS`, `SHUTDOWN_HTTP_DRAIN_SECS`, `SHUTDOWN_SIGNER_DRAIN_SECS` | Upstream's graceful-shutdown phases (15, 40, 10 s by default); the shutdown ends by leaving the signer hashring in Redis. Compose sets `stop_grace_period: 90s` so Docker does not kill Keycast before that: a member killed without leaving stays in the ring for 30 s and NIP-46 requests hashed to it are dropped meanwhile. |
-| `APP_URL`, `BASE_URL` | Claim and e-mail links. |
-| `NODE_ENV=development`, `ENABLE_DEV_EMAIL_INBOX=true` | No SendGrid; captured mails are readable at `GET /api/dev/emails` (bootstrap uses it to verify the admin). Production needs `SENDGRID_API_KEY` or `DISABLE_EMAILS=true`. |
-| `KEYCAST_SERVICE_TOKEN` | Bearer for the service-token routes (`PUT /api/admin/users/<pubkey>/status`, minor accounts). |
-| `OIDC_*` | Belfry fork: login through Authentik, see "The Belfry fork". |
-| `BELFRY_PASS_INFO_URL`, `PASS_INFO_TOKEN` | Belfry fork (patch 0006): the onboarding service and its bearer token for the dashboard's "Your pass" card. Unset: `/api/user/pass` answers 503 and the card stays hidden. |
+| `DATABASE_URL` | Postgres. Keycast does not migrate at startup; the one-shot service `keycast-migrate` does. |
+| `REDIS_URL` | required even with one instance |
+| `KMS_PROVIDER=file`, `MASTER_KEY_PATH` | the file `master.key` encrypts every stored key (see below) |
+| `SERVER_NSEC` | signs server-issued tokens (admin tokens, preload tokens); changing it invalidates them |
+| `ALLOWED_PUBKEYS` | admins for `/api/admin/*` |
+| `ALLOWED_ORIGINS` | CORS for the web app |
+| `ALLOWED_TENANT_DOMAINS` | Keycast picks the tenant from the `Host` header; callers inside Compose must send the tenant's host (the onboarding service sets `KEYCAST_TENANT_DOMAIN`) |
+| `BUNKER_RELAYS` | the relay the signer listens on for NIP-46 (`ws://keycast-relay:8080`) |
+| `KEYCAST_SERVICE_TOKEN` | bearer for the service routes (account status) |
+| `APP_URL`, `BASE_URL` | links in pages and mails |
+
+Belfry's additions:
+
+| Variable | Meaning |
+| --- | --- |
+| `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL`, `OIDC_SCOPES`, `OIDC_LINK_CLAIM`, `OIDC_PROVIDER_NAME`, `OIDC_LOGOUT_URL` | sign-in through Authentik. `OIDC_ISSUER` must equal the ID token's `iss` |
+| `OIDC_BACKCHANNEL_URL` | reach Authentik through the Compose network (local stack only; on a server Keycast uses the public URL, see `../DEPLOY.md`) |
+| `OIDC_HIDE_PASSWORD_LOGIN`, `OIDC_TRUST_EMAIL`, `OIDC_REAUTH_WINDOW_SECS` | no password forms; trust the provider's e-mail; key export window |
+| `BUNKER_PUBLIC_RELAYS` | the NIP-46 relay as clients reach it (`wss://bunker.<domain>`) |
+| `KEYCAST_TRUSTED_CLIENTS`, `KEYCAST_DERIVE_SECRETS` | Belfry's apps; which client may derive which secrets |
+| `KEYCAST_CUSTODY_SEED_FILE` | the custody seed |
+| `BELFRY_PASS_INFO_URL`, `PASS_INFO_TOKEN`, `BELFRY_COMMUNITY_APPS`, `BELFRY_KEY_CHANGED_URL`, `BELFRY_HOOK_TOKEN` | the onboarding service for the pass card and key changes; the apps on the dashboard |
+| `NIP05_DOMAIN` | the domain of the NIP-05 names shown on the dashboard |
+
+Keycast sends no mails in Belfry (participants sign in through Authentik); its development mail
+inbox is only used by bootstrap to confirm the admin account.
+
+**Graceful shutdown.** Keycast leaves its signer ring in Redis at the end of a shutdown that takes
+about a minute. Compose gives it 90 s (`stop_grace_period`); if it were killed earlier, NIP-46
+requests for its keys would be dropped for 30 s.
+
+## Files here
+
+| File | Purpose |
+| --- | --- |
+| `master.key` | 32 random bytes (base64) from `gen-secrets.sh`, gitignored. The AES-256-GCM key of every stored Nostr secret: back it up. It must be mounted exactly at `/app/master.key`: Keycast ignores `MASTER_KEY_PATH` beyond checking it is set and reads a path fixed at compile time. |
+| `policy.sql` | the `belfry-event` policy (allowed event kinds) and the tenant's name; bootstrap applies it on every run |
+| `build/` | the image build and the patch series |
 
 ## Tokens
 
-- `KEYCAST_ADMIN_TOKEN` (`.env`, written by bootstrap): a 30-day admin UCAN from `GET /api/admin/token`, used for `POST /api/admin/preload-user`. Re-run `make bootstrap` to refresh it; it is re-issued when the stored one no longer passes `/api/admin/status`.
+- `KEYCAST_ADMIN_TOKEN`: a 30-day admin token for creating accounts, written by bootstrap and
+  renewed when bootstrap runs after it expired.
 - `KEYCAST_SERVICE_TOKEN`: static, from `.env`.
 
-## Things left from Divine
+## Checks
 
-`vine_id` (the preload idempotency key; Belfry uses `odoo-partner-<id>`), minor accounts (inert unless `create-minor-account` is called) and the ATProto settings card (fails closed without `DIVINE_SKY_ATPROTO_CONTROL_PLANE_URL`). See the spike note, section 5.
+The smoke test signs a participant in through Authentik (`scripts/keycast-oidc-login.sh`), signs
+events of every allowed kind and is refused one outside the policy, checks NIP-46, single sign-on
+and logout (`scripts/silent-signin-check.sh`), key recovery from the seed and self-custody
+(`scripts/self-custody-check.sh`).
+
+Left over from Divine and unused by Belfry: the `vine_id` name, the `--color-divine-*` CSS
+variable names, minor accounts and the ATProto settings (inactive without their settings).
