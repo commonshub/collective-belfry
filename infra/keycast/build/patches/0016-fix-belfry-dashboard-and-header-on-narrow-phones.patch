@@ -1,0 +1,89 @@
+From f6f3c1467e8db8a164b75d35b9ab9c9de1aaeffb Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sat, 24 Oct 2026 21:03:28 +0200
+Subject: [PATCH] fix(belfry): dashboard and header on narrow phones
+
+"Sign out" stays on one line (icon buttons nowrap) and the header wraps to a second row
+instead of squeezing the brand; e-mail, npub and NIP-05 name break inside the identity card;
+"Add to your wallet" is a full-width button (up to 22rem) with a 1.5rem radius.
+---
+ web/src/app.css                      |  2 ++
+ web/src/lib/components/Header.svelte |  8 ++++----
+ web/src/routes/+page.svelte          | 15 ++++++++++++---
+ 3 files changed, 18 insertions(+), 7 deletions(-)
+
+diff --git a/web/src/app.css b/web/src/app.css
+index c4faa17..95caf84 100644
+--- a/web/src/app.css
++++ b/web/src/app.css
+@@ -170,6 +170,8 @@ a.bordered:hover {
+ 
+ .button-icon {
+     @apply flex flex-row items-center gap-2;
++    /* Belfry: short icon buttons (Sign out) keep their label on one line */
++    white-space: nowrap;
+ }
+ 
+ .card-grid {
+diff --git a/web/src/lib/components/Header.svelte b/web/src/lib/components/Header.svelte
+index e9f67ef..a6c99a1 100644
+--- a/web/src/lib/components/Header.svelte
++++ b/web/src/lib/components/Header.svelte
+@@ -32,13 +32,13 @@ onMount(async () => {
+ </script>
+ 
+ 
+-<div class="container flex flex-row items-center justify-between mb-8">
+-	<a href="/" class="flex flex-col items-start gap-0 group transition-opacity hover:opacity-85">
++<div class="container flex flex-row flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-8">
++	<a href="/" class="flex flex-col items-start gap-0 shrink-0 group transition-opacity hover:opacity-85">
+ 		<img src="/osv-logo.svg" alt="{BRAND.shortName}" class="h-[22px]" />
+-		<span class="text-[10px] font-medium tracking-[3px] uppercase text-[var(--color-divine-green)] opacity-80">run by Belfry</span>
++		<span class="whitespace-nowrap text-[10px] font-medium tracking-[3px] uppercase text-[var(--color-divine-green)] opacity-80">run by Belfry</span>
+ 	</a>
+ 
+-    <nav class="flex flex-row items-center justify-start gap-4">
++    <nav class="flex flex-row items-center justify-start gap-3 ml-auto">
+         {#if user}
+             {#if activePage !== '/'}
+                 <a class="nav-link bordered" href="/">Dashboard</a>
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index 1b06f34..e9a6539 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -971,6 +971,9 @@ $effect(() => {
+ 	.identity-value {
+ 		color: var(--color-divine-text);
+ 		font-size: 0.95rem;
++		/* Belfry: long e-mails, npubs and NIP-05 names break instead of leaving the card */
++		min-width: 0;
++		overflow-wrap: anywhere;
+ 	}
+ 
+ 	.identity-value.mono {
+@@ -1153,13 +1156,19 @@ $effect(() => {
+ 	}
+ 
+ 	.pass-claim {
+-		display: inline-flex;
++		display: flex;
++		width: 100%;
++		max-width: 22rem;
++		box-sizing: border-box;
+ 		align-items: center;
++		justify-content: center;
+ 		gap: 0.5rem;
+-		padding: 0.625rem 1.25rem;
++		padding: 0.75rem 1rem;
+ 		background: var(--color-divine-green);
+ 		color: var(--color-divine-on-accent);
+-		border-radius: 9999px;
++		border-radius: 1.5rem;
++		line-height: 1.25;
++		text-align: center;
+ 		font-weight: 600;
+ 		text-decoration: none;
+ 	}
+-- 
+2.53.0
+

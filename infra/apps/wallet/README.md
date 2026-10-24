@@ -1,7 +1,7 @@
 # Village token wallet
 
 The Open Source Village wallet at `wallet.<domain>`: [cashu.me](https://github.com/cashubtc/cashu.me)
-(MIT, Vue/Quasar PWA) at commit `002a0a36` plus four Belfry patches, built with the village mint
+(MIT, Vue/Quasar PWA) at commit `002a0a36` plus five Belfry patches, built with the village mint
 (`infra/mint/`) and served by Caddy. Decisions of 2026-10-24: tokens without monetary value, 50 per
 pass day at activation; cashu.me at `wallet.<domain>` plus nutzaps; the wallet derives from the
 participant's Nostr key.
@@ -12,6 +12,7 @@ participant's Nostr key.
 | `0002-…` | "Sign in with Open Source Village" (Keycast OAuth + PKCE, client `belfry-wallet`, silent `prompt=none` once per tab, never on a `#token=` link) and the account: the wallet seed and the nutzap key derive from the participant's Nostr key (Keycast `derive_secret`, patch 0011: purposes `cashu-wallet-v1`, first 16 bytes as BIP39 entropy, and `cashu-nutzap-v1`, normalised to an even Y). Tokens received before signing in are swapped onto the derived seed; a fresh device restores from the mint (NUT-09). Kind 10019 on the community relay announces the relay, the mint and the nutzap key; incoming kind 9321 nutzaps are redeemed automatically; "Send to a participant" (npub or NIP-05 name) locks tokens to the recipient's 10019 key and publishes a nutzap. Signing (10019, 9321, NIP-42 AUTH) goes over Keycast's HTTP RPC with the token response's access token (24 h, refreshed with the 30-day refresh token). Sign out revokes the authorization and ends the single sign-on (Keycast patch 0010). No bitcoin price, no mint audits, the community relay as the only Nostr relay. |
 | `0003-…` | Pay requests from the other village apps: `/?pay=<npub>&amount=<n>&memo=…&ref=<kind:pubkey:d>&return=<url>` opens "Send to a participant" filled in once the account is ready (the query survives the silent sign-in); the nutzap carries `ref` as an `a` tag, so the marketplace sees what was paid for; after sending, the wallet goes back to `return` if it is on the same deployment (`*.<parent of the wallet's host>`). |
 | `0004-…` | A pay request's `ref` may also be an event id (64 hex): the nutzap names it in an `e` tag (NIP-61), so the photos app sees tips for a picture. |
+| `0005-…` | Receive and Send fit narrow phones (and Android's larger text): below 400px they drop upstream's 140px minimum and margins and leave room for the scan button, instead of running off both screen edges. |
 
 `brand.mjs` (run by the Dockerfile) sets the PWA name "Open Source Village wallet"/"Wallet", the
 colours, the home-screen icons (`brand/apps/wallet-*`, from `brand/make-app-icons.py`) and the app bar

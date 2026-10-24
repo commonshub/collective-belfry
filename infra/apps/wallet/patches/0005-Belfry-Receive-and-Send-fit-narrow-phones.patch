@@ -1,0 +1,35 @@
+From f1001a0b5a3f1649e48ace603b9328542e6f5e8f Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sat, 24 Oct 2026 21:04:18 +0200
+Subject: [PATCH] Belfry: Receive and Send fit narrow phones
+
+Upstream sizes them at 140px plus margins, so on narrow screens or with larger text they
+ran off both screen edges.
+---
+ src/css/base.scss | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/src/css/base.scss b/src/css/base.scss
+index c56784c..e2b8de8 100644
+--- a/src/css/base.scss
++++ b/src/css/base.scss
+@@ -275,3 +275,16 @@ html.osv-bar .q-header {
+ html.osv-bar .q-layout {
+   padding-top: var(--osv-bar-h, 0px);
+ }
++
++/* Belfry: on narrow phones (and with Android's larger text) Receive and Send shrink to fit
++   beside the scan button instead of running off the screen edges; upstream fixes them at
++   140px plus margins. The inline width set by equalizeButtonWidths is capped too. */
++@media (max-width: 400px) {
++  .wallet-action-btn {
++    min-width: 0 !important;
++    max-width: calc(100% - 52px) !important;
++    margin-left: 0 !important;
++    margin-right: 0 !important;
++    font-size: 1rem !important;
++  }
++}
+-- 
+2.53.0
+

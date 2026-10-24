@@ -98,7 +98,8 @@ button,
   width: 100%;
   padding: 12px 16px;
   border: 0;
-  border-radius: 999px;
+  border-radius: 1.5rem;
+  line-height: 1.25;
   background: var(--osv-accent, #d6ff52);
   color: var(--osv-on-accent, #1a231d);
   font-weight: 600;
@@ -114,8 +115,14 @@ button,
 }
 .row-end {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+  gap: 8px;
   margin-bottom: 12px;
+}
+.row-end > .button,
+.row-end > button {
+  white-space: nowrap;
 }
 .link {
   background: none;
