@@ -1,0 +1,809 @@
+From 6e60cdb0ed0a2c1769dde871037fc8fb7b9d31e9 Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 13:48:15 +0200
+Subject: [PATCH] feat(belfry): self-custody, take over the key or move to a
+ key of one's own
+
+Decisions of 2026-10-24: participants can hold their own Nostr key.
+
+- GET /api/user/self-custody/challenge: a stateless challenge (HMAC with
+  the server key) bound to the account, valid ten minutes.
+- POST /api/user/self-custody {event}: a kind-27235 event carrying the
+  challenge, after a fresh sign-in (OIDC_REAUTH_WINDOW_SECS, like the key
+  export). Signed by the account's own key: Keycast deletes its copy and
+  every app authorization. Signed by another key: the account moves to it
+  (new users row with username, e-mail, vine_id and status; the
+  oidc_identities link moves; the old row is orphaned) and the old key and
+  authorizations are deleted; the session cookie is cleared.
+  With BELFRY_KEY_CHANGED_URL and BELFRY_HOOK_TOKEN Keycast tells the
+  onboarding service (pass npub, relay whitelist).
+- /api/oauth/authorize: an account without a key held by Keycast gets
+  access_denied (error_description self_custody) for prompt=none and a
+  branded "Use your own signer" page otherwise.
+- GET /api/user/account: key_held. Security page: "Hold your own key"
+  (sign the challenge with a browser extension or a pasted key that stays
+  in the browser); export only while Keycast holds the key; upstream's
+  custodial "Change Private Key" only for password accounts.
+---
+ api/src/api/http/auth.rs                      |  34 +-
+ api/src/api/http/mod.rs                       |   1 +
+ api/src/api/http/oauth.rs                     |  33 ++
+ api/src/api/http/routes.rs                    |   4 +-
+ api/src/api/http/self_custody.rs              | 440 ++++++++++++++++++
+ web/src/lib/account_status.svelte.ts          |   2 +
+ web/src/routes/settings/security/+page.svelte | 127 ++++-
+ 7 files changed, 629 insertions(+), 12 deletions(-)
+ create mode 100644 api/src/api/http/self_custody.rs
+
+diff --git a/api/src/api/http/auth.rs b/api/src/api/http/auth.rs
+index a11e199..0cfc362 100644
+--- a/api/src/api/http/auth.rs
++++ b/api/src/api/http/auth.rs
+@@ -451,6 +451,9 @@ pub struct AccountStatusResponse {
+     /// False for accounts that sign in through the OpenID Provider only (Belfry fork); the
+     /// security page then unlocks by re-authenticating instead of asking for a password.
+     pub has_password: bool,
++    /// Belfry: false once the participant took custody of their key or moved the account to
++    /// their own key (self_custody.rs); the dashboard then shows the self-custody state.
++    pub key_held: bool,
+     pub public_key: String,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub account_status: Option<String>,
+@@ -487,6 +490,7 @@ impl AccountStatusResponse {
+             email: email.unwrap_or_default(),
+             email_verified: email_verified.unwrap_or(false),
+             has_password,
++            key_held: true,
+             public_key,
+             account_status: if active {
+                 None
+@@ -3436,16 +3440,26 @@ pub async fn get_account_status(
+             suspended_reason,
+             verified_minor,
+             verified_minor_at,
+-        }) => Ok(Json(AccountStatusResponse::from_account_row(
+-            user_pubkey,
+-            email,
+-            email_verified,
+-            has_password,
+-            status,
+-            suspended_reason,
+-            verified_minor,
+-            verified_minor_at,
+-        ))),
++        }) => {
++            let mut response = AccountStatusResponse::from_account_row(
++                user_pubkey.clone(),
++                email,
++                email_verified,
++                has_password,
++                status,
++                suspended_reason,
++                verified_minor,
++                verified_minor_at,
++            );
++            response.key_held = sqlx::query_scalar(
++                "SELECT EXISTS (SELECT 1 FROM personal_keys WHERE user_pubkey = $1)",
++            )
++            .bind(&user_pubkey)
++            .fetch_one(&pool)
++            .await
++            .map_err(AuthError::Database)?;
++            Ok(Json(response))
++        }
+         None => Err(AuthError::UserNotFound),
+     }
+ }
+diff --git a/api/src/api/http/mod.rs b/api/src/api/http/mod.rs
+index 07db99b..1f3afc7 100644
+--- a/api/src/api/http/mod.rs
++++ b/api/src/api/http/mod.rs
+@@ -20,6 +20,7 @@ pub mod oidc;
+ pub mod openid_configuration;
+ pub mod apps;
+ pub mod pass;
++pub mod self_custody;
+ pub mod policies;
+ pub mod request_panics;
+ pub mod retention;
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index 36325e0..17a2d1a 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -964,6 +964,39 @@ pub async fn authorize_get(
+         (None, false, None)
+     };
+ 
++    // Belfry: an account whose key the participant holds (self-custody, self_custody.rs) cannot
++    // sign through Keycast; the app signs in with the participant's own signer instead.
++    if let Some(ref pubkey) = user_pubkey {
++        let holds_key: bool = sqlx::query_scalar(
++            "SELECT EXISTS (SELECT 1 FROM personal_keys WHERE user_pubkey = $1)",
++        )
++        .bind(pubkey)
++        .fetch_one(pool)
++        .await
++        .map_err(|e| OAuthError::Database(e.to_string()))?;
++        if !holds_key {
++            tracing::info!(client_id = %params.client_id, "self-custodial account: no Keycast sign-in");
++            if silent {
++                return Ok(Redirect::to(&redirect_with_params(
++                    &params.redirect_uri,
++                    &[
++                        ("error", Some("access_denied")),
++                        ("error_description", Some("self_custody")),
++                        ("state", params.state.as_deref()),
++                    ],
++                ))
++                .into_response());
++            }
++            return Ok(super::oidc::error_page(
++                StatusCode::FORBIDDEN,
++                "Use your own signer",
++                "Your Nostr key is in your own signer now, so Open Source Village cannot sign in to \
++                 apps for you. In this app, choose the login with a signer app (for example Amber \
++                 or nsec.app) or a browser extension.",
++            ));
++        }
++    }
++
+     let mut has_existing_authorization = false;
+ 
+     // A returning app skips the consent screen only when it asks for the policy
+diff --git a/api/src/api/http/routes.rs b/api/src/api/http/routes.rs
+index a21ce19..afa34e9 100644
+--- a/api/src/api/http/routes.rs
++++ b/api/src/api/http/routes.rs
+@@ -12,7 +12,7 @@ use tower::{timeout::error::Elapsed, ServiceBuilder};
+ 
+ use crate::api::http::{
+     admin, ap, apps, atproto, atproto_oauth, auth, claim, email_marketing, expensive_work,
+-    headless, metrics, nostr_rpc, oauth, og_diviner, oidc, pass, policies, retention,
++    headless, metrics, nostr_rpc, oauth, og_diviner, oidc, pass, policies, retention, self_custody,
+     service_deletion, service_provisioning, teams,
+ };
+ use crate::email_delivery::EmailDeliveryService;
+@@ -252,6 +252,8 @@ pub fn api_routes(
+     // Key export route (needs AuthState for key_manager)
+     let key_export_routes = Router::new()
+         .route("/user/export-key", post(auth::export_key))
++        .route("/user/self-custody/challenge", get(self_custody::challenge))
++        .route("/user/self-custody", post(self_custody::complete))
+         .layer(auth_cors.clone())
+         .with_state(auth_state.clone());
+ 
+diff --git a/api/src/api/http/self_custody.rs b/api/src/api/http/self_custody.rs
+new file mode 100644
+index 0000000..5682f0a
+--- /dev/null
++++ b/api/src/api/http/self_custody.rs
+@@ -0,0 +1,440 @@
++// ABOUTME: Belfry: participants take custody of their Nostr key or move the account to a key of their own
++// ABOUTME: Proof by a signed challenge; Keycast deletes its copy and tells the onboarding service
++
++//! Self-custody (decisions of 2026-10-24).
++//!
++//! 1. `GET /api/user/self-custody/challenge` (session): a challenge bound to the account and
++//!    valid for ten minutes, stateless (HMAC with the server key).
++//! 2. `POST /api/user/self-custody` (session, signed in within `OIDC_REAUTH_WINDOW_SECS` like the
++//!    key export) with `{"event": <kind 27235 event>}` carrying `["challenge", …]`, signed by the
++//!    key the participant wants:
++//!    - the account's own key ("take over"): Keycast deletes its encrypted copy and every app
++//!      authorization. The pubkey, the NIP-05 name and the pass stay as they are.
++//!    - another key ("bring a new key"): the account moves to it. A new users row with the new
++//!      pubkey takes over the username (NIP-05), the e-mail, the `vine_id` (the Odoo partner) and
++//!      the status; the sign-in link (`oidc_identities`) moves along; the old row is orphaned
++//!      and its key and authorizations deleted. The session cookie is cleared (sign in again).
++//!
++//! Either way Keycast no longer holds a key for the account: apps sign in with the participant's
++//! own signer (`/api/oauth/authorize` answers such accounts with `access_denied`, see
++//! `oauth.rs`), and `derive_secret` stops (no key). With `BELFRY_KEY_CHANGED_URL` and
++//! `BELFRY_HOOK_TOKEN` set, Keycast posts `{vine_id, old_pubkey, new_pubkey}` to the onboarding
++//! service, which moves the pass's npub and the relay whitelist.
++
++use axum::{
++    extract::State,
++    http::{header, HeaderMap},
++    response::{IntoResponse, Response},
++    Json,
++};
++use hmac::{Hmac, Mac};
++use nostr_sdk::{Event, JsonUtil, Kind};
++use once_cell::sync::Lazy;
++use serde::{Deserialize, Serialize};
++use sha2::Sha256;
++use std::time::Duration;
++
++use super::auth::{
++    extract_user_from_token, oidc_reauth_window_secs, reauth_is_fresh, session_auth_time, AuthError,
++};
++use super::routes::AuthState;
++
++const CHALLENGE_TTL_SECS: u64 = 600;
++const MAX_EVENT_SKEW_SECS: i64 = 600;
++
++fn now_unix() -> u64 {
++    std::time::SystemTime::now()
++        .duration_since(std::time::UNIX_EPOCH)
++        .map(|d| d.as_secs())
++        .unwrap_or(0)
++}
++
++fn challenge_mac(secret: &[u8], tenant_id: i64, pubkey: &str, expires: u64) -> String {
++    let mut mac = Hmac::<Sha256>::new_from_slice(secret).expect("any key size");
++    mac.update(format!("keycast/self-custody/v1|{tenant_id}|{pubkey}|{expires}").as_bytes());
++    hex::encode(mac.finalize().into_bytes())
++}
++
++/// `<expires>.<hmac>` for this account.
++pub fn make_challenge(secret: &[u8], tenant_id: i64, pubkey: &str, now: u64) -> String {
++    let expires = now + CHALLENGE_TTL_SECS;
++    format!(
++        "{expires}.{}",
++        challenge_mac(secret, tenant_id, pubkey, expires)
++    )
++}
++
++pub fn challenge_valid(
++    secret: &[u8],
++    tenant_id: i64,
++    pubkey: &str,
++    challenge: &str,
++    now: u64,
++) -> bool {
++    let Some((expires, mac)) = challenge.split_once('.') else {
++        return false;
++    };
++    let Ok(expires) = expires.parse::<u64>() else {
++        return false;
++    };
++    expires > now
++        && expires <= now + CHALLENGE_TTL_SECS
++        && subtle::ConstantTimeEq::ct_eq(
++            challenge_mac(secret, tenant_id, pubkey, expires).as_bytes(),
++            mac.as_bytes(),
++        )
++        .into()
++}
++
++#[derive(Serialize)]
++pub struct ChallengeResponse {
++    challenge: String,
++    kind: u16,
++    expires_in: u64,
++}
++
++/// GET /api/user/self-custody/challenge
++pub async fn challenge(
++    tenant: crate::api::tenant::TenantExtractor,
++    State(auth_state): State<AuthState>,
++    headers: HeaderMap,
++) -> Result<Json<ChallengeResponse>, AuthError> {
++    let pubkey = extract_user_from_token(&headers, tenant.0.id).await?;
++    let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
++    Ok(Json(ChallengeResponse {
++        challenge: make_challenge(&secret, tenant.0.id, &pubkey, now_unix()),
++        kind: Kind::HttpAuth.as_u16(),
++        expires_in: CHALLENGE_TTL_SECS,
++    }))
++}
++
++#[derive(Deserialize)]
++pub struct CompleteRequest {
++    event: serde_json::Value,
++}
++
++#[derive(Serialize)]
++pub struct CompleteResponse {
++    outcome: &'static str,
++    pubkey: String,
++    authorizations_revoked: usize,
++    pass_updated: bool,
++}
++
++/// The key the event proves, if the event is a valid answer to this account's challenge.
++pub fn proven_key(
++    event_json: &str,
++    secret: &[u8],
++    tenant_id: i64,
++    account: &str,
++    now: u64,
++) -> Result<String, &'static str> {
++    let event = Event::from_json(event_json).map_err(|_| "not a Nostr event")?;
++    if event.kind != Kind::HttpAuth {
++        return Err("the event must be of kind 27235");
++    }
++    event
++        .verify()
++        .map_err(|_| "the signature does not verify")?;
++    if (now as i64 - event.created_at.as_secs() as i64).abs() > MAX_EVENT_SKEW_SECS {
++        return Err("the event is too old or from the future");
++    }
++    let challenge = event
++        .tags
++        .iter()
++        .find(|t| t.as_slice().first().map(String::as_str) == Some("challenge"))
++        .and_then(|t| t.as_slice().get(1).cloned())
++        .ok_or("the event carries no challenge")?;
++    if !challenge_valid(secret, tenant_id, account, &challenge, now) {
++        return Err("the challenge is invalid or expired; start again");
++    }
++    Ok(event.pubkey.to_hex())
++}
++
++/// POST /api/user/self-custody
++pub async fn complete(
++    tenant: crate::api::tenant::TenantExtractor,
++    State(auth_state): State<AuthState>,
++    headers: HeaderMap,
++    Json(req): Json<CompleteRequest>,
++) -> Result<Response, AuthError> {
++    let tenant_id = tenant.0.id;
++    let account = extract_user_from_token(&headers, tenant_id).await?;
++    let auth_time = session_auth_time(&headers, tenant_id).await?;
++    if !reauth_is_fresh(auth_time, now_unix(), oidc_reauth_window_secs()) {
++        return Err(AuthError::Forbidden(
++            "Sign in again through your identity provider, then repeat this step".to_string(),
++        ));
++    }
++    let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
++    let target = proven_key(
++        &req.event.to_string(),
++        &secret,
++        tenant_id,
++        &account,
++        now_unix(),
++    )
++    .map_err(|m| AuthError::BadRequest(m.to_string()))?;
++
++    let pool = &auth_state.state.db;
++    let mut tx = pool.begin().await.map_err(AuthError::Database)?;
++    let bunkers: Vec<String> = sqlx::query_scalar(
++        "SELECT bunker_public_key FROM oauth_authorizations WHERE user_pubkey = $1 AND tenant_id = $2",
++    )
++    .bind(&account)
++    .bind(tenant_id)
++    .fetch_all(&mut *tx)
++    .await
++    .map_err(AuthError::Database)?;
++    let had_key: bool = sqlx::query_scalar(
++        "SELECT EXISTS (SELECT 1 FROM personal_keys WHERE user_pubkey = $1 AND tenant_id = $2)",
++    )
++    .bind(&account)
++    .bind(tenant_id)
++    .fetch_one(&mut *tx)
++    .await
++    .map_err(AuthError::Database)?;
++
++    let outcome = if target == account {
++        if !had_key {
++            return Err(AuthError::BadRequest(
++                "Belfry holds no key for this account any more".to_string(),
++            ));
++        }
++        "took_custody"
++    } else {
++        let taken: bool =
++            sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE pubkey = $1)")
++                .bind(&target)
++                .fetch_one(&mut *tx)
++                .await
++                .map_err(AuthError::Database)?;
++        if taken {
++            return Err(AuthError::BadRequest(
++                "That key already belongs to an account".to_string(),
++            ));
++        }
++        move_identity(&mut tx, tenant_id, &account, &target).await?;
++        "moved_to_own_key"
++    };
++    sqlx::query("DELETE FROM oauth_authorizations WHERE user_pubkey = $1 AND tenant_id = $2")
++        .bind(&account)
++        .bind(tenant_id)
++        .execute(&mut *tx)
++        .await
++        .map_err(AuthError::Database)?;
++    sqlx::query("DELETE FROM personal_keys WHERE user_pubkey = $1")
++        .bind(&account)
++        .execute(&mut *tx)
++        .await
++        .map_err(AuthError::Database)?;
++    let vine_id: Option<String> =
++        sqlx::query_scalar("SELECT vine_id FROM users WHERE pubkey = $1 AND tenant_id = $2")
++            .bind(&target)
++            .bind(tenant_id)
++            .fetch_optional(&mut *tx)
++            .await
++            .map_err(AuthError::Database)?
++            .flatten();
++    tx.commit().await.map_err(AuthError::Database)?;
++
++    if let Some(tx) = &auth_state.auth_tx {
++        use keycast_core::authorization_channel::AuthorizationCommand;
++        for bunker_pubkey in &bunkers {
++            let _ = tx
++                .send(AuthorizationCommand::Remove {
++                    bunker_pubkey: bunker_pubkey.clone(),
++                })
++                .await;
++        }
++    }
++    tracing::info!(
++        event = "self_custody",
++        outcome,
++        tenant_id,
++        old_pubkey = %account,
++        new_pubkey = %target,
++        revoked = bunkers.len(),
++        "Keycast no longer holds this account's key"
++    );
++    let pass_updated = match vine_id {
++        Some(v) => notify_onboarding(&v, &account, &target).await,
++        None => false,
++    };
++
++    let body = Json(CompleteResponse {
++        outcome,
++        pubkey: target.clone(),
++        authorizations_revoked: bunkers.len(),
++        pass_updated,
++    });
++    if target != account {
++        // The session names the old pubkey; signing in again lands on the moved account.
++        let clear = "keycast_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0";
++        return Ok(([(header::SET_COOKIE, clear)], body).into_response());
++    }
++    Ok(body.into_response())
++}
++
++async fn move_identity(
++    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
++    tenant_id: i64,
++    old: &str,
++    new: &str,
++) -> Result<(), AuthError> {
++    #[derive(sqlx::FromRow)]
++    struct Identity {
++        username: Option<String>,
++        email: Option<String>,
++        email_verified: Option<bool>,
++        vine_id: Option<String>,
++        status: String,
++        suspended_reason: Option<String>,
++        suspended_at: Option<chrono::DateTime<chrono::Utc>>,
++    }
++    let identity: Identity = sqlx::query_as(
++        "SELECT username, email, email_verified, vine_id, status, suspended_reason, suspended_at
++         FROM users WHERE pubkey = $1 AND tenant_id = $2 FOR UPDATE",
++    )
++    .bind(old)
++    .bind(tenant_id)
++    .fetch_one(&mut **tx)
++    .await
++    .map_err(AuthError::Database)?;
++    // Orphan first: username, e-mail and vine_id are unique per tenant.
++    sqlx::query(
++        "UPDATE users SET username = NULL, email = NULL, password_hash = NULL, vine_id = NULL,
++                updated_at = NOW()
++         WHERE pubkey = $1 AND tenant_id = $2",
++    )
++    .bind(old)
++    .bind(tenant_id)
++    .execute(&mut **tx)
++    .await
++    .map_err(AuthError::Database)?;
++    sqlx::query(
++        "INSERT INTO users (pubkey, tenant_id, username, email, email_verified, vine_id, status,
++                            suspended_reason, suspended_at, created_at, updated_at)
++         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())",
++    )
++    .bind(new)
++    .bind(tenant_id)
++    .bind(identity.username)
++    .bind(identity.email)
++    .bind(identity.email_verified)
++    .bind(identity.vine_id)
++    .bind(identity.status)
++    .bind(identity.suspended_reason)
++    .bind(identity.suspended_at)
++    .execute(&mut **tx)
++    .await
++    .map_err(AuthError::Database)?;
++    sqlx::query(
++        "UPDATE oidc_identities SET user_pubkey = $1 WHERE user_pubkey = $2 AND tenant_id = $3",
++    )
++    .bind(new)
++    .bind(old)
++    .bind(tenant_id)
++    .execute(&mut **tx)
++    .await
++    .map_err(AuthError::Database)?;
++    Ok(())
++}
++
++static NOTIFY: Lazy<Option<(String, String, reqwest::Client)>> = Lazy::new(|| {
++    let get = |n: &str| {
++        std::env::var(n)
++            .ok()
++            .map(|v| v.trim().to_string())
++            .filter(|v| !v.is_empty())
++    };
++    let (Some(url), Some(token)) = (get("BELFRY_KEY_CHANGED_URL"), get("BELFRY_HOOK_TOKEN")) else {
++        tracing::warn!(
++            "BELFRY_KEY_CHANGED_URL/BELFRY_HOOK_TOKEN unset: key changes are not reported"
++        );
++        return None;
++    };
++    let client = reqwest::Client::builder()
++        .timeout(Duration::from_secs(10))
++        .build()
++        .expect("reqwest client");
++    Some((url, token, client))
++});
++
++/// Tells the onboarding service (pass npub, relay whitelist). Three tries; false on failure
++/// (the onboarding service's reconcile catches up from Keycast's account list later).
++async fn notify_onboarding(vine_id: &str, old: &str, new: &str) -> bool {
++    let Some((url, token, client)) = NOTIFY.as_ref() else {
++        return false;
++    };
++    let body = serde_json::json!({ "vine_id": vine_id, "old_pubkey": old, "new_pubkey": new });
++    for attempt in 0..3 {
++        match client
++            .post(url)
++            .query(&[("token", token)])
++            .json(&body)
++            .send()
++            .await
++        {
++            Ok(r) if r.status().is_success() => return true,
++            Ok(r) => tracing::warn!(status = %r.status(), attempt, "key-changed hook answered"),
++            Err(e) => tracing::warn!(error = %e, attempt, "key-changed hook failed"),
++        }
++        tokio::time::sleep(Duration::from_millis(500 * (attempt + 1))).await;
++    }
++    false
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use nostr_sdk::{EventBuilder, Keys, Tag, Timestamp};
++
++    #[test]
++    fn challenges_are_bound_to_the_account_and_expire() {
++        let secret = b"server";
++        let c = make_challenge(secret, 2, "aa", 1_000);
++        assert!(challenge_valid(secret, 2, "aa", &c, 1_000));
++        assert!(!challenge_valid(secret, 2, "bb", &c, 1_000));
++        assert!(!challenge_valid(secret, 3, "aa", &c, 1_000));
++        assert!(!challenge_valid(b"other", 2, "aa", &c, 1_000));
++        assert!(!challenge_valid(
++            secret,
++            2,
++            "aa",
++            &c,
++            1_000 + CHALLENGE_TTL_SECS
++        ));
++        assert!(!challenge_valid(secret, 2, "aa", "9999999999.00", 1_000));
++    }
++
++    #[test]
++    fn the_signed_challenge_proves_the_signing_key() {
++        let secret = b"server";
++        let now = Timestamp::now().as_secs();
++        let account = "cc".repeat(32);
++        let keys = Keys::generate();
++        let sign = |kind: Kind, challenge: &str| {
++            EventBuilder::new(kind, "")
++                .tag(Tag::parse(["challenge", challenge]).unwrap())
++                .sign_with_keys(&keys)
++                .unwrap()
++                .as_json()
++        };
++        let good = sign(Kind::HttpAuth, &make_challenge(secret, 2, &account, now));
++        assert_eq!(
++            proven_key(&good, secret, 2, &account, now),
++            Ok(keys.public_key().to_hex())
++        );
++        // a challenge for another account, the wrong kind, a tampered event
++        let other = sign(
++            Kind::HttpAuth,
++            &make_challenge(secret, 2, &"dd".repeat(32), now),
++        );
++        assert!(proven_key(&other, secret, 2, &account, now).is_err());
++        let wrong_kind = sign(Kind::TextNote, &make_challenge(secret, 2, &account, now));
++        assert!(proven_key(&wrong_kind, secret, 2, &account, now).is_err());
++        let tampered = good.replace("\"content\":\"\"", "\"content\":\"x\"");
++        assert!(proven_key(&tampered, secret, 2, &account, now).is_err());
++    }
++}
+diff --git a/web/src/lib/account_status.svelte.ts b/web/src/lib/account_status.svelte.ts
+index 79defde..b972f1a 100644
+--- a/web/src/lib/account_status.svelte.ts
++++ b/web/src/lib/account_status.svelte.ts
+@@ -5,6 +5,8 @@ export interface AccountStatus {
+     email_verified: boolean;
+     /** false for accounts that sign in through the OpenID Provider only (Belfry) */
+     has_password: boolean;
++    /** Belfry: false once the participant holds their own key (self-custody) */
++    key_held?: boolean;
+     public_key: string;
+ }
+ 
+diff --git a/web/src/routes/settings/security/+page.svelte b/web/src/routes/settings/security/+page.svelte
+index 6314cbf..5eb5399 100644
+--- a/web/src/routes/settings/security/+page.svelte
++++ b/web/src/routes/settings/security/+page.svelte
+@@ -6,6 +6,7 @@
+ 	import { BRAND } from '$lib/brand';
+ 	import { toast } from 'svelte-hot-french-toast';
+ 	import { goto } from '$app/navigation';
++	import { finalizeEvent, nip19 } from 'nostr-tools';
+ 
+ 	const api = new KeycastApi();
+ 	const currentUser = $derived(getCurrentUser());
+@@ -58,6 +59,74 @@
+ 	let newEmail = $state('');
+ 	let isChangingEmail = $state(false);
+ 
++	// Belfry: hold your own key (self-custody). The participant signs a challenge with the key
++	// they want to keep: their current key (Belfry deletes its copy) or another key they already
++	// hold (the account moves to it). A pasted key is used here only and never sent.
++	const keyHeld = $derived(accountStatus?.key_held ?? true);
++	let custodyKey = $state('');
++	let custodyBusy = $state(false);
++	let custodyPending = $state<{ event: any; pubkey: string } | null>(null);
++
++	function secretFromInput(input: string): Uint8Array {
++		const value = input.trim();
++		if (value.startsWith('nsec1')) return nip19.decode(value).data as Uint8Array;
++		if (/^[0-9a-f]{64}$/i.test(value)) {
++			return Uint8Array.from(value.match(/../g)!.map((h) => parseInt(h, 16)));
++		}
++		throw new Error('Enter an nsec or a 64-character hex key');
++	}
++
++	async function prepareCustody(useExtension: boolean) {
++		try {
++			custodyBusy = true;
++			const { challenge, kind } = await api.get<{ challenge: string; kind: number }>(
++				'/user/self-custody/challenge'
++			);
++			const template = {
++				kind,
++				created_at: Math.floor(Date.now() / 1000),
++				tags: [['challenge', challenge]],
++				content: ''
++			};
++			let event: any;
++			if (useExtension) {
++				const nostr = (window as any).nostr;
++				if (!nostr) throw new Error('No Nostr browser extension found');
++				event = await nostr.signEvent(template);
++			} else {
++				event = finalizeEvent(template, secretFromInput(custodyKey));
++			}
++			custodyPending = { event, pubkey: event.pubkey };
++		} catch (err: any) {
++			toast.error(err.message || 'Could not sign the challenge');
++		} finally {
++			custodyBusy = false;
++		}
++	}
++
++	async function completeCustody() {
++		if (!custodyPending) return;
++		try {
++			custodyBusy = true;
++			const result = await api.post<{ outcome: string; pubkey: string }>('/user/self-custody', {
++				event: custodyPending.event
++			});
++			custodyKey = '';
++			custodyPending = null;
++			if (result.outcome === 'moved_to_own_key') {
++				toast.success('Your account now uses your own key. Sign in again.');
++				window.location.href = '/login';
++			} else {
++				toast.success('Belfry deleted its copy of your key');
++				await fetchAccountStatus();
++			}
++		} catch (err: any) {
++			toast.error(err.message || 'Could not complete the change');
++		} finally {
++			custodyBusy = false;
++		}
++	}
++
+ 	// Change Key Section
+ 	let newNsec = $state('');
+ 	let confirmText = $state('');
+@@ -320,7 +389,8 @@
+ 	</div>
+ 
+ 	{#if isPasswordVerified}
+-		<!-- Export Private Key Section -->
++		<!-- Export Private Key Section (Belfry: only while Belfry holds the key) -->
++		{#if keyHeld}
+ 		<div class="section">
+ 			<div class="section-header">
+ 				<h2>🔑 Export Private Key</h2>
+@@ -356,6 +426,7 @@
+ 				{/if}
+ 			</div>
+ 		</div>
++		{/if}
+ 
+ 		{#if hasPassword}
+ 		<!-- Change Password Section -->
+@@ -430,6 +501,59 @@
+ 		<!-- Change Private Key Section -->
+ 		{/if}
+ 
++		<!-- Belfry: hold your own key -->
++		{#if !hasPassword}
++		<div class="section danger-section" data-testid="self-custody">
++			<div class="section-header">
++				<h2>🗝️ Hold your own key</h2>
++				{#if keyHeld}
++					<p>
++						Belfry keeps your Nostr key safe for you. You can hold it yourself instead: keep this key in
++						your own signer app, or use another key you already have.
++					</p>
++				{:else}
++					<p>Your Nostr key is in your own signer. Belfry holds no copy any more.</p>
++				{/if}
++			</div>
++			{#if keyHeld}
++				<div class="danger-warning">
++					<strong>Before you start</strong>
++					<ul>
++						<li>To keep this key: export it above and add it to your signer app (Amber, nsec.app) or browser extension.</li>
++						<li>Afterwards the apps sign you in with your signer, not with "Sign in with {BRAND.name}".</li>
++						<li>With another key, your name (NIP-05), relay access and pass move to it; your old profile and posts stay with the old key.</li>
++						<li>Belfry deletes its copy. This cannot be undone.</li>
++					</ul>
++				</div>
++				<div class="form-container">
++					<button class="btn-secondary" onclick={() => prepareCustody(true)} disabled={custodyBusy}>
++						Sign with my browser extension
++					</button>
++					<div class="form-group">
++						<label for="custody-key">Or paste the key you want to keep (it stays in this browser)</label>
++						<input id="custody-key" type="password" bind:value={custodyKey} placeholder="nsec1… or 64-char hex" disabled={custodyBusy} />
++					</div>
++					<button class="btn-secondary" onclick={() => prepareCustody(false)} disabled={custodyBusy || !custodyKey}>
++						Sign with this key
++					</button>
++					{#if custodyPending}
++						<div class="warning">
++							{#if custodyPending.pubkey === accountStatus?.public_key}
++								You keep your current key ({nip19.npubEncode(custodyPending.pubkey).slice(0, 16)}…). Belfry deletes its copy.
++							{:else}
++								Your account moves to {nip19.npubEncode(custodyPending.pubkey).slice(0, 16)}…. Belfry deletes the old key.
++							{/if}
++						</div>
++						<button class="btn-danger" data-testid="self-custody-confirm" onclick={completeCustody} disabled={custodyBusy}>
++							{custodyBusy ? 'Working…' : 'Confirm'}
++						</button>
++					{/if}
++				</div>
++			{/if}
++		</div>
++		{/if}
++
++		{#if hasPassword}
+ 		<div class="section danger-section">
+ 			<div class="section-header">
+ 				<h2>🔄 Change Private Key</h2>
+@@ -469,6 +593,7 @@
+ 				</button>
+ 			</div>
+ 		</div>
++		{/if}
+ 	{/if}
+ 	{/if}
+ </div>
+-- 
+2.53.0
+

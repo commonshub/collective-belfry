@@ -410,3 +410,37 @@ def test_npub_encoding_known_vector():
     # Test vector from NIP-19
     hex_pk = "7e7e9c42a91bfef19fa929e5fda1b72e0ebc1a4c1141673e2794234d86addf4e"
     assert hex_to_npub(hex_pk) == "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
+
+
+# -- self-custody (Keycast patch 0012) -------------------------------------------------------------
+
+
+def test_key_changed_moves_the_pass_and_the_whitelist(services, odoo, keycast, whitelist, client):
+    ids = seed_paid_invoice(odoo, tier="week")
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    p = active_pass(odoo, ids["invoice"])
+    old, new = p["keycast_pubkey"], "ab" * 32
+    vine = f"odoo-partner-{ids['partner']}"
+
+    assert client.post("/hooks/keycast/key-changed", json={}).status_code == 401
+    r = client.post(
+        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
+        json={"vine_id": vine, "old_pubkey": old, "new_pubkey": old},
+    )
+    assert r.json() == {"result": "took_custody"} and p["keycast_pubkey"] == old
+
+    r = client.post(
+        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
+        json={"vine_id": vine, "old_pubkey": old, "new_pubkey": new},
+    )
+    assert r.json() == {"result": "moved"}
+    assert p["keycast_pubkey"] == new and p["npub"] == hex_to_npub(new)
+    assert odoo.get("res.partner", ids["partner"])["belfry_npub"] == hex_to_npub(new)
+    rendered = whitelist.config_path.read_text()
+    assert new in rendered and old not in rendered
+
+    bad = client.post(
+        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
+        json={"vine_id": "vine-1", "old_pubkey": old, "new_pubkey": new},
+    )
+    assert bad.status_code == 400

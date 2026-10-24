@@ -176,6 +176,25 @@ def create_app(services: Services | None = None) -> FastAPI:
             return {"result": "error", "invoice_id": invoice_id, "error": str(exc)}
         return {"result": result, "invoice_id": invoice_id}
 
+    @app.post("/hooks/keycast/key-changed")
+    async def keycast_key_changed(
+        request: Request, token: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        """Keycast patch 0012: a participant took custody of their key or moved to their own."""
+        check_token(request, token)
+        body = await request.json()
+        try:
+            result = await run_in_threadpool(
+                core.key_changed,
+                svc(request),
+                str(body.get("vine_id") or ""),
+                str(body.get("old_pubkey") or ""),
+                str(body.get("new_pubkey") or ""),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"result": result}
+
     @app.post("/hooks/odoo/refund")
     async def refund(request: Request, token: str | None = Query(default=None)) -> dict[str, Any]:
         check_token(request, token)

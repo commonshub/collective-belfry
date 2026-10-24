@@ -602,6 +602,20 @@ LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__
 [[ "$LINKS" == "[\"$MEMBER\"]" ]] && ok "pass-bridge link created with identifier $MEMBER" || bad "links: $LINKS"
 rm -f "$PJAR"
 
+step "10b. self-custody: the participant takes their key, then moves to a key of their own"
+# Irreversible for the smoke participant, so it runs after everything that signs with the managed
+# key. Signing (export, challenge) happens in the onboarding container (onboarding-sign.sh).
+if OUT=$(SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
+  grep -v '^NEW_PUBKEY=' <<<"$OUT" | sed 's/^/  /'; ok "take over and bring a new key"
+  NEW_PUB=$(sed -n 's/^NEW_PUBKEY=//p' <<<"$OUT")
+  PASS_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["keycast_pubkey"]}' | jq -r '.[0].keycast_pubkey')
+  [[ "$PASS_KEY" == "$NEW_PUB" ]] && ok "the pass carries the new key (relay whitelist follows)" || bad "pass key after the move: $PASS_KEY"
+  KC_PUB=$NEW_PUB
+  NPUB=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["npub"]}' | jq -r '.[0].npub')  # step 7's baseline
+else
+  sed 's/^/  /' <<<"$OUT" >&2; bad "self-custody"
+fi
+
 step "11. revoke the pass: status list bit flips, the door refuses the certificate"
 if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then echo "  note SMOKE_KEEP_PASS set: pass $PASS_ID stays active (browser checks of the apps); revocation not tested"; else
 # (printed for the log only; python decodes, since base64 -d fails on unpadded base64url)

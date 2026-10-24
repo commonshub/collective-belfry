@@ -280,12 +280,22 @@ class MintClient:
             b_, r = blind(secret)
             pending.append((p.amount, secret, b_, r))
         body = {
-            "inputs": [{"amount": p.amount, "id": p.keyset_id, "secret": p.secret, "C": p.c} for p in proofs],
-            "outputs": [{"amount": a, "id": kid, "B_": b_.format().hex()} for a, _, b_, _ in pending],
+            "inputs": [
+                {"amount": p.amount, "id": p.keyset_id, "secret": p.secret, "C": p.c}
+                for p in proofs
+            ],
+            "outputs": [
+                {"amount": a, "id": kid, "B_": b_.format().hex()} for a, _, b_, _ in pending
+            ],
         }
         sigs = self._post("/v1/swap", body)["signatures"]
         fresh = [
-            Proof(a, sig["id"], secret, unblind(PublicKey(bytes.fromhex(sig["C_"])), r, keys[a]).format().hex())
+            Proof(
+                a,
+                sig["id"],
+                secret,
+                unblind(PublicKey(bytes.fromhex(sig["C_"])), r, keys[a]).format().hex(),
+            )
             for (a, secret, _, r), sig in zip(pending, sigs, strict=True)
         ]
         return encode_token(self.public_url, self.unit, fresh)

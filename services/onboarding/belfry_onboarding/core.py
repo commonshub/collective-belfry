@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -459,6 +460,42 @@ def active_pubkeys(svc: Services) -> list[str]:
         ["keycast_pubkey"],
     )
     return [r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")]
+
+
+def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -> str:
+    """Keycast's self-custody hook (Keycast patch 0012). The same key: the participant took
+    custody, nothing moves. Another key: the partner's passes and npub move to it and the relay
+    whitelist follows (the votes key on the pass id, the NIP-05 name moved inside Keycast)."""
+    hexkey = re.compile(r"^[0-9a-f]{64}$")
+    if not (hexkey.match(old_pubkey or "") and hexkey.match(new_pubkey or "")):
+        raise ValueError("pubkeys must be 64 hex characters")
+    match = re.fullmatch(r"odoo-partner-(\d+)", vine_id or "")
+    if match is None:
+        raise ValueError("vine_id is not odoo-partner-<id>")
+    partner_id = int(match.group(1))
+    if old_pubkey == new_pubkey:
+        log.info("self-custody: partner %s now holds their own key %s", partner_id, new_pubkey)
+        return "took_custody"
+    npub = hex_to_npub(new_pubkey)
+    passes = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", partner_id], ["keycast_pubkey", "=", old_pubkey]],
+        ["id"],
+    )
+    if passes:
+        svc.odoo.write(
+            "belfry.pass", [p["id"] for p in passes], {"keycast_pubkey": new_pubkey, "npub": npub}
+        )
+    svc.odoo.write("res.partner", [partner_id], {"belfry_npub": npub})
+    sync_relay_whitelist(svc)
+    log.info(
+        "self-custody: partner %s moved from %s to their own key %s (%d passes)",
+        partner_id,
+        old_pubkey,
+        new_pubkey,
+        len(passes),
+    )
+    return "moved"
 
 
 def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = False):

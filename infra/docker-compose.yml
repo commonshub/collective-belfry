@@ -86,6 +86,10 @@ x-keycast-env: &keycast-env
   # Belfry fork: the dashboard's "Your pass" card, from the onboarding service (internal network).
   BELFRY_PASS_INFO_URL: http://onboarding:8100
   PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
+  # Keycast patch 0012: self-custody changes go to the onboarding service (pass npub, relay
+  # whitelist), with the hook token like Odoo's hooks.
+  BELFRY_KEY_CHANGED_URL: http://onboarding:8100/hooks/keycast/key-changed
+  BELFRY_HOOK_TOKEN: ${HOOK_TOKEN:?}
   # Belfry fork (patch 0009): the dashboard's "Community apps" cards, Name|URL|Description;...
   BELFRY_COMMUNITY_APPS: *community-apps
 

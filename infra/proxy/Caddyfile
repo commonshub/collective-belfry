@@ -178,7 +178,7 @@ vote.{$BELFRY_DOMAIN} {
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {
 	import security
-	@internal path /admin/* /hooks/odoo/* /issuer-shim/* /docs /openapi.json /redoc
+	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
 	respond @internal 404
 	reverse_proxy onboarding:8100
 }
