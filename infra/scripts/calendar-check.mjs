@@ -3,6 +3,8 @@
 // creates a calendar (CALENDAR=<name>) and an event (CREATE=1 TITLE=<title>), and prints the
 // relay frames (OK/CLOSED/AUTH) and console errors. Screenshots: <out prefix>-*.png.
 // Usage: node calendar-check.mjs <app url> <file with a bunker URL> <out prefix>
+//   LOGOUT=1 (with SSO=1): log out from the account menu; expects the signed-out app and no
+//   silent sign-in afterwards (Keycast and Authentik sessions ended).
 //   SSO=1: no bunker URL (pass "-"): load COOKIE_JAR (a curl jar with the participant's Authentik
 //   session) into the browser and expect the silent "Sign in with Open Source Village" on load
 //   (Keycast prompt=none -> Authentik -> bunker URL) to sign in without the dialog.
@@ -49,6 +51,24 @@ if (process.env.SSO) {
   const where = await ev('location.href');
   const dialog = await ev(`!!document.querySelector('[role=dialog]')`);
   console.log('sso: at', where, '| dialog open:', dialog);
+  if (process.env.LOGOUT && !dialog) {
+    // Logout from the account menu must end the sign-in everywhere: back in the app signed out,
+    // and a fresh silent attempt (new tab state) must no longer sign in.
+    console.log('menu:', await ev(`(() => { const b=[...document.querySelectorAll('header button, nav button, button')].filter(b=>b.offsetParent && b.querySelector('.MuiAvatar-root, [data-testid=PersonIcon]')); if(!b.length) return false; b[b.length-1].click(); return true; })()`));
+    await sleep(800);
+    console.log('logout:', await ev(`(() => { const m=[...document.querySelectorAll('[role=menuitem]')].find(m=>/^log ?out/i.test(m.textContent.trim())); if(!m) return [...document.querySelectorAll('[role=menuitem]')].map(m=>m.textContent.trim()).join('|'); m.click(); return true; })()`));
+    await sleep(Number(process.env.WAIT || 15000));
+    await shot('logout');
+    const after = await ev('location.href');
+    const signedOut = await ev(`!!document.querySelector('[role=dialog]')`);
+    console.log('logout: at', after, '| sign-in dialog open:', signedOut);
+    await ev('sessionStorage.clear()');
+    await send('Page.navigate', {url}); await sleep(Number(process.env.WAIT || 15000));
+    await shot('after-logout-silent');
+    const again = await ev(`!!document.querySelector('[role=dialog]')`);
+    console.log('silent attempt after logout: at', await ev('location.href'), '| dialog open:', again);
+    ws.close(); p.kill(); process.exit(signedOut && again ? 0 : 1);
+  }
   console.log('frames:\n'+frames.filter(f=>/^WS|"OK"|"CLOSED"|AUTH/.test(f)).slice(-12).join('\n'));
   console.log('logs:', logs.slice(-8).join('\n'));
   ws.close(); p.kill(); process.exit(dialog ? 1 : 0);

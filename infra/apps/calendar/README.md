@@ -35,7 +35,7 @@ Source Village"). Keycast must know the client `belfry-calendar` with the redire
 `<CALENDAR_PUBLIC_URL>/oauth/callback` and trust it (no consent screen; Keycast patch 0008,
 bootstrap). `VITE_MAIL_API_BASE_URL` is empty, so the app never calls Formstr's mail API.
 
-The patch (one commit, `0001-...patch`):
+Patch `0001-...patch`:
 
 - OSV palette, lime accent and dark mode as defaults, Geist and favicon from `/brand`, OSV
   logo, titles and manifest.
@@ -50,8 +50,22 @@ The patch (one commit, `0001-...patch`):
 - `@formstr/local-relay` 0.6.0 -> 0.6.5. 0.6.0 never answers NIP-42 AUTH challenges, so on an
   AUTH-only relay every read and write was refused (`auth-required`); found in the browser test.
 
+Patch `0002-...patch` (2026-10-24): the Open Source Village app bar (`brand/osv-bar.js`, see
+`brand/README.md`) in `index.html` with `VITE_APPS_URL` as its home and `VITE_COMMUNITY_APPS` as
+its links; `html.osv-bar` sets `--safe-area-top`, which every top offset of the app reads, to the
+bar's height, and the desktop sidebar pads by it; the sidebar's Apps entry opens the apps page in
+the same tab; the PWA manifest uses the bar's dark green and the calendar's own icons from
+`brand/apps/` (copied by the Dockerfile), with a separate maskable icon and `apple-touch-icon.png`.
+
+Patch `0003-...patch` (2026-10-24): logout ends the sign-in everywhere. The token exchange keeps
+the refresh token (localStorage); after the app's own logout `endSsoSession()` revokes it at
+Keycast (`POST /api/oauth/revoke`), sets the silent-try flag and goes through Keycast's
+`/api/auth/oidc/logout?return_to=<origin>/` (Keycast patch 0010), which ends the Keycast and
+Authentik sessions and comes back to the signed-out calendar. Check: `calendar-check.mjs` with
+`SSO=1 LOGOUT=1`.
+
 To change the patch: clone the app, `git checkout <CALENDAR_COMMIT>`, `git apply` the patch,
-commit, edit, `git commit --amend`, `git format-patch -1 -o infra/apps/calendar/patches`. Run
+commit, edit, `git commit --amend` (or a new commit), `git format-patch <CALENDAR_COMMIT>.. -o infra/apps/calendar/patches`. Run
 Prettier on changed files: the build runs the app's lint and typecheck.
 
 ## Check it

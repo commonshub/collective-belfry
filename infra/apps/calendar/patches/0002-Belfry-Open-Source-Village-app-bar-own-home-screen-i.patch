@@ -1,0 +1,123 @@
+From f5d87856589ba6758dc37f52ec0bc8a8364b9230 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@belfry.local>
+Date: Sat, 24 Oct 2026 12:07:25 +0200
+Subject: [PATCH] Belfry: Open Source Village app bar, own home-screen icon
+
+- index.html loads osv-bar.js (brand/osv-bar.js, copied by the image build) with the apps page
+  (VITE_APPS_URL) and the app list (VITE_COMMUNITY_APPS, Name|URL|Description;...).
+- html.osv-bar sets --safe-area-top to the bar's height, which every top offset of the app
+  already reads; the desktop sidebar pads by it too.
+- The sidebar's Apps entry opens the apps page in the same tab.
+- PWA manifest: the bar's dark green as theme and background, a separate maskable icon, the
+  apple-touch-icon at /apple-touch-icon.png (the image build copies brand/apps/calendar-*).
+---
+ index.html                        | 10 ++++++++--
+ src/components/SidebarContent.tsx |  4 ++--
+ src/components/ui/Sidebar.tsx     |  3 +++
+ src/main.css                      |  6 ++++++
+ vite.config.ts                    | 10 +++++-----
+ 5 files changed, 24 insertions(+), 9 deletions(-)
+
+diff --git a/index.html b/index.html
+index 8fb84a7..4b78e4a 100644
+--- a/index.html
++++ b/index.html
+@@ -7,10 +7,16 @@
+       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+     />
+     <title>Open Source Village calendar</title>
+-    <meta name="theme-color" content="#2b3a31" />
++    <meta name="theme-color" content="#1a231d" />
+     <link rel="stylesheet" href="%VITE_BRAND_URL%/fonts.css" />
+     <link rel="icon" href="%VITE_BRAND_URL%/favicon.svg" type="image/svg+xml" />
+-    <link rel="apple-touch-icon" href="/pwa-192x192.png" />
++    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
++    <!-- Belfry: the Open Source Village app bar (brand/osv-bar.js, copied by the image build). -->
++    <script
++      src="/osv-bar.js"
++      data-home="%VITE_APPS_URL%"
++      data-apps="%VITE_COMMUNITY_APPS%"
++    ></script>
+   </head>
+   <body>
+     <div id="root"></div>
+diff --git a/src/components/SidebarContent.tsx b/src/components/SidebarContent.tsx
+index 2728bfb..5379484 100644
+--- a/src/components/SidebarContent.tsx
++++ b/src/components/SidebarContent.tsx
+@@ -184,9 +184,9 @@ export function SidebarContent({
+               component="button"
+               type="button"
+               onClick={(event) =>
+-                // Belfry: the deployment's apps page instead of Formstr's app desk.
++                // Belfry: the deployment's apps page (same tab) instead of Formstr's app desk.
+                 import.meta.env.VITE_APPS_URL
+-                  ? window.open(import.meta.env.VITE_APPS_URL, "_blank")
++                  ? window.location.assign(import.meta.env.VITE_APPS_URL)
+                   : openDesk(event.currentTarget)
+               }
+               sx={{
+diff --git a/src/components/ui/Sidebar.tsx b/src/components/ui/Sidebar.tsx
+index f21d8ad..b37587a 100644
+--- a/src/components/ui/Sidebar.tsx
++++ b/src/components/ui/Sidebar.tsx
+@@ -35,6 +35,9 @@ export function Sidebar({ onNewEvent, onImportEvent }: SidebarProps) {
+         height: "100vh",
+         position: "sticky",
+         top: 0,
++        // Belfry: below the Open Source Village app bar (0 without it).
++        pt: "var(--safe-area-top)",
++        boxSizing: "border-box",
+         bgcolor: "background.canvas",
+         borderRight: "1px solid",
+         borderColor: "divider",
+diff --git a/src/main.css b/src/main.css
+index a442b58..94797a8 100644
+--- a/src/main.css
++++ b/src/main.css
+@@ -7,6 +7,12 @@ html {
+   --iphone-safe-area-bottom: 16px;
+ }
+ 
++/* Belfry: the Open Source Village app bar (osv-bar.js) is fixed above the app; every top offset
++   of the app reads --safe-area-top. */
++html.osv-bar {
++  --safe-area-top: var(--osv-bar-h);
++}
++
+ html.ios-native {
+   --safe-area-top: max(env(safe-area-inset-top, 0px), 44px);
+   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+diff --git a/vite.config.ts b/vite.config.ts
+index be99eca..3fc56a7 100644
+--- a/vite.config.ts
++++ b/vite.config.ts
+@@ -20,9 +20,9 @@ export default defineConfig({
+       manifest: {
+         name: "Open Source Village calendar",
+         short_name: "Calendar",
+-        description: "A Nostr-based calendar application",
+-        theme_color: "#2b3a31",
+-        background_color: "#2b3a31",
++        description: "The Open Source Village calendar, run by Belfry",
++        theme_color: "#1a231d",
++        background_color: "#1a231d",
+         display: "standalone",
+         start_url: "/",
+         icons: [
+@@ -37,10 +37,10 @@ export default defineConfig({
+             type: "image/png",
+           },
+           {
+-            src: "pwa-512x512.png",
++            src: "pwa-maskable-512x512.png",
+             sizes: "512x512",
+             type: "image/png",
+-            purpose: "any maskable",
++            purpose: "maskable",
+           },
+         ],
+       },
+-- 
+2.53.0
+

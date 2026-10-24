@@ -32,6 +32,10 @@ x-authentik-env: &authentik-env
   # repo's brand/ folder as served by the onboarding service (pass.<domain>/brand).
   BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
 
+# The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
+# the Open Source Village app bar (brand/osv-bar.js) in every app.
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars"
+
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
   REDIS_URL: redis://redis:6379
@@ -80,7 +84,7 @@ x-keycast-env: &keycast-env
   BELFRY_PASS_INFO_URL: http://onboarding:8100
   PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
   # Belfry fork (patch 0009): the dashboard's "Community apps" cards, Name|URL|Description;...
-  BELFRY_COMMUNITY_APPS: "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars"
+  BELFRY_COMMUNITY_APPS: *community-apps
 
 services:
   postgres:
@@ -384,6 +388,7 @@ services:
         BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
         KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        COMMUNITY_APPS: *community-apps
     profiles: ["app"]
     ports: ["3300:80"]
 
@@ -488,6 +493,7 @@ services:
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_COMMUNITY_APPS: *community-apps
     ports: ["3200:80"]
 
 volumes:

@@ -1,0 +1,121 @@
+From a4dea9cfcf583029f7cb9bf3bc738bd2deea4809 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@belfry.local>
+Date: Sat, 24 Oct 2026 12:11:09 +0200
+Subject: [PATCH] Belfry: logout ends the Open Source Village sign-in
+
+The token exchange keeps the refresh token; after the app's own logout the
+authorization is revoked at Keycast (POST /api/oauth/revoke) and the browser
+goes through Keycast's /api/auth/oidc/logout, which ends the Keycast and
+Authentik sessions and returns to the app's start page. The silent-try flag
+is set first, so the return shows the sign-in dialog instead of signing the
+participant straight back in.
+---
+ src/belfry/sso.ts       | 47 +++++++++++++++++++++++++++++++++++++++++
+ src/components/Auth.tsx |  3 +++
+ 2 files changed, 50 insertions(+)
+
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+index 857c997..edcbd80 100644
+--- a/src/belfry/sso.ts
++++ b/src/belfry/sso.ts
+@@ -4,6 +4,11 @@
+  * participant never copies a bunker link. With `prompt=none` Keycast answers without showing a
+  * page (signed in and approved -> code, otherwise ?error=login_required and similar); the app
+  * tries that once per tab on load and shows the sign-in dialog when it fails.
++ *
++ * Logout ends the sign-in everywhere: the app revokes its own authorization at Keycast (with the
++ * token response's refresh token) and goes through Keycast's /api/auth/oidc/logout, which ends
++ * the Keycast and Authentik sessions and returns here; otherwise the silent check would sign the
++ * participant straight back in.
+  */
+ const KEYCAST_URL = (
+   import.meta.env.VITE_KEYCAST_URL as string | undefined
+@@ -14,6 +19,7 @@ const CLIENT_ID =
+ const SCOPE = "policy:belfry-event";
+ const PENDING_KEY = "belfry-sso-pending";
+ const TRIED_KEY = "belfry-sso-silent-tried";
++const REFRESH_KEY = "belfry-sso-refresh-token";
+ 
+ export const SSO_CALLBACK_PATH = "/oauth/callback";
+ export const ssoEnabled = Boolean(KEYCAST_URL);
+@@ -42,6 +48,14 @@ function session(): Storage | null {
+   }
+ }
+ 
++function local(): Storage | null {
++  try {
++    return window.localStorage;
++  } catch {
++    return null;
++  }
++}
++
+ /** Send the browser to Keycast's authorize endpoint; `silent` adds prompt=none. */
+ export async function startSso(silent: boolean): Promise<void> {
+   if (!KEYCAST_URL) return;
+@@ -115,8 +129,41 @@ export async function finishSso(search: string): Promise<SsoResult> {
+         returnTo,
+       };
+     }
++    if (typeof body.refresh_token === "string") {
++      local()?.setItem(REFRESH_KEY, body.refresh_token);
++    }
+     return { ok: true, bunkerUrl: body.bunker_url, returnTo };
+   } catch {
+     return { ok: false, error: "token_request_failed", returnTo };
+   }
+ }
++
++/**
++ * After the app's own logout: revoke the authorization and end the single sign-on session.
++ * Navigates away (Keycast, then Authentik, then back to the app's start page); does nothing
++ * when SSO is not configured.
++ */
++export async function endSsoSession(): Promise<void> {
++  if (!KEYCAST_URL) return;
++  const store = local();
++  const refreshToken = store?.getItem(REFRESH_KEY);
++  store?.removeItem(REFRESH_KEY);
++  if (refreshToken) {
++    try {
++      await fetch(`${KEYCAST_URL}/api/oauth/revoke`, {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({ token: refreshToken, client_id: CLIENT_ID }),
++        signal: AbortSignal.timeout(3000),
++      });
++    } catch (e) {
++      console.warn("Revoking the Open Source Village authorization failed", e);
++    }
++  }
++  // Back here signed out: show the sign-in dialog instead of trying the silent sign-in again.
++  session()?.setItem(TRIED_KEY, "1");
++  const params = new URLSearchParams({
++    return_to: `${window.location.origin}/`,
++  });
++  window.location.assign(`${KEYCAST_URL}/api/auth/oidc/logout?${params}`);
++}
+diff --git a/src/components/Auth.tsx b/src/components/Auth.tsx
+index 7ca4fe3..88b44be 100644
+--- a/src/components/Auth.tsx
++++ b/src/components/Auth.tsx
+@@ -4,6 +4,7 @@ import { useIntl } from "react-intl";
+ import { useEffect } from "react";
+ import { npubEncode } from "nostr-tools/nip19";
+ import { useNavigate } from "react-router";
++import { endSsoSession } from "../belfry/sso";
+ 
+ export const Auth = ({
+   onClose,
+@@ -35,6 +36,8 @@ export const Auth = ({
+     try {
+       // await nostrLogout();
+       await logout();
++      // Belfry: end the Open Source Village sign-in too (Keycast and Authentik).
++      await endSsoSession();
+     } catch (error) {
+       console.error("Logout failed:", error);
+     }
+-- 
+2.53.0
+

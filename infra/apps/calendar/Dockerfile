@@ -13,6 +13,12 @@ COPY infra/apps/calendar/patches /patches
 RUN git apply /patches/*.patch
 COPY brand/osv-logo-horizontal-white.svg public/osv-logo.svg
 COPY brand/osv-mark-white.svg public/icon.svg
+# Home-screen icons (brand/make-app-icons.py) and the Open Source Village app bar (patch 0002).
+COPY brand/apps/calendar-192.png public/pwa-192x192.png
+COPY brand/apps/calendar-512.png public/pwa-512x512.png
+COPY brand/apps/calendar-maskable-512.png public/pwa-maskable-512x512.png
+COPY brand/apps/calendar-180.png public/apple-touch-icon.png
+COPY brand/osv-bar.js public/osv-bar.js
 RUN pnpm install --frozen-lockfile
 # The community relay (NIP-42 whitelist of active passes) is the only relay for reading and
 # writing; VITE_TEST_RELAY is the app's single-relay switch. VITE_SIGNER_RELAYS: Keycast's NIP-46
@@ -24,12 +30,15 @@ ARG VITE_BRAND_URL=http://localhost:8100/brand
 # About link; with VITE_APPS_URL set, Formstr's privacy policy and contact form are hidden.
 ARG VITE_APPS_URL=http://localhost:3000
 ARG VITE_ABOUT_URL=https://opensourcevillage.org
+# The app bar's links to the other apps (Name|URL|Description;..., as Keycast's
+# BELFRY_COMMUNITY_APPS); the bar's home link is VITE_APPS_URL.
+ARG VITE_COMMUNITY_APPS=""
 # "Sign in with Open Source Village": Keycast's OAuth (client belfry-calendar, redirect URI
 # <origin>/oauth/callback) yields the bunker URL; empty disables the button and the silent check.
 ARG VITE_KEYCAST_URL=http://localhost:3000
 ENV VITE_TEST_RELAY=$VITE_TEST_RELAY VITE_SIGNER_RELAYS=$VITE_SIGNER_RELAYS \
     VITE_BRAND_URL=$VITE_BRAND_URL VITE_APPS_URL=$VITE_APPS_URL VITE_ABOUT_URL=$VITE_ABOUT_URL \
-    VITE_KEYCAST_URL=$VITE_KEYCAST_URL \
+    VITE_KEYCAST_URL=$VITE_KEYCAST_URL VITE_COMMUNITY_APPS=$VITE_COMMUNITY_APPS \
     VITE_MAIL_API_BASE_URL=""
 RUN pnpm typecheck && pnpm build
 
