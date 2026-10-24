@@ -63,10 +63,14 @@ $C --profile app up -d --build            # onboarding service and apps
 On a server, bootstrap reaches the services through their public hostnames and runs the calls
 the proxy blocks with `docker compose exec` inside the containers.
 
-Then, in Odoo (over the admin network): Invoicing › Configuration › Payment Providers › Stripe:
-the keys (Odoo registers its own webhook). Belfry's endpoint for disputes is
-`https://pass.<domain>/hooks/stripe` with `STRIPE_WEBHOOK_SECRET`. Add the first steward (see
-"Stewards"), set up the admin network and the backups.
+Stripe: put the publishable key into `infra/.env` (`STRIPE_PUBLISHABLE_KEY=pk_test_…`) and the
+secret key onto the server with `infra/scripts/put-secret.sh <ssh target> stripe_secret_key`, then
+run bootstrap again. It configures Odoo's Stripe provider (test keys: test mode, live keys:
+enabled), has Odoo create its own webhook, creates Belfry's dispute webhook
+(`https://pass.<domain>/hooks/stripe`, `charge.dispute.created` and `.closed`) and writes its
+signing secret into `.env` as `STRIPE_WEBHOOK_SECRET`; restart the onboarding service after that.
+Without keys, stewards mark payments by hand. Then add the first steward (see "Stewards"), set
+up the admin network and the backups.
 
 ### The smoke test on the server
 

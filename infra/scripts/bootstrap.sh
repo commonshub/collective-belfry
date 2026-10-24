@@ -254,6 +254,50 @@ else
   echo "outgoing mail server 'belfry' updated (${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025})"
 fi
 
+# Stripe: Odoo's own Stripe provider takes the card payments (payment links), Belfry's endpoint
+# /hooks/stripe the disputes. Keys: STRIPE_PUBLISHABLE_KEY in .env, the secret key in
+# infra/secrets/stripe_secret_key (scripts/put-secret.sh). Test keys (sk_test_) put the
+# provider in test mode, live keys enable it. Both webhooks are created through Stripe's API once
+# the public URLs are https: Odoo's (action_stripe_create_webhook) and Belfry's dispute endpoint,
+# whose signing secret goes into .env as STRIPE_WEBHOOK_SECRET (restart onboarding to read it).
+STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-$(cat "$INFRA_DIR/secrets/stripe_secret_key" 2>/dev/null || true)}
+export STRIPE_SECRET_KEY
+if [[ -n "${STRIPE_PUBLISHABLE_KEY:-}" && -n "$STRIPE_SECRET_KEY" ]]; then
+  case "$STRIPE_SECRET_KEY" in
+    sk_test_*) STRIPE_STATE=test; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_test_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a test key while the secret key is" ;;
+    sk_live_*) STRIPE_STATE=enabled; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_live_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a live key while the secret key is" ;;
+    *) die "infra/secrets/stripe_secret_key is not a Stripe secret key (sk_test_… or sk_live_…)" ;;
+  esac
+  SP_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider search '[[["code","=","stripe"]]]' '{"limit":1}' | jq -r '.[0] // empty')
+  [[ -n "$SP_ID" ]] || die "Odoo has no Stripe payment provider (module payment_stripe)"
+  SP_VALS=$(jq -cn --arg pk "$STRIPE_PUBLISHABLE_KEY" --arg state "$STRIPE_STATE" \
+    '{stripe_publishable_key: $pk, stripe_secret_key: $ENV.STRIPE_SECRET_KEY, state: $state, is_published: true}')
+  odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider write "[[$SP_ID],$SP_VALS]" >/dev/null
+  echo "Stripe provider: $STRIPE_STATE mode"
+  if [[ "${ODOO_PUBLIC_URL:-}" == https://* ]]; then
+    HAS_SECRET=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider read "[[$SP_ID],[\"stripe_webhook_secret\"]]" | jq -r '.[0].stripe_webhook_secret // empty')
+    if [[ -z "$HAS_SECRET" ]]; then
+      odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider action_stripe_create_webhook "[[$SP_ID]]" >/dev/null \
+        && echo "Stripe: Odoo's webhook created" || echo "WARNING: Odoo could not create its Stripe webhook (create it under Payment Providers › Stripe)" >&2
+    fi
+  fi
+  if [[ "${ONBOARDING_PUBLIC_URL:-}" == https://* && -z "${STRIPE_WEBHOOK_SECRET:-}" ]]; then
+    DISPUTE_URL="${ONBOARDING_PUBLIC_URL%/}/hooks/stripe"
+    WH=$(curl -sS -u "$STRIPE_SECRET_KEY:" https://api.stripe.com/v1/webhook_endpoints \
+      -d url="$DISPUTE_URL" -d "enabled_events[]=charge.dispute.created" -d "enabled_events[]=charge.dispute.closed" \
+      -d description="Belfry disputes (onboarding service)")
+    WH_SECRET=$(jq -r '.secret // empty' <<<"$WH")
+    if [[ -n "$WH_SECRET" ]]; then
+      set_env STRIPE_WEBHOOK_SECRET "$WH_SECRET"; STRIPE_WEBHOOK_SECRET=$WH_SECRET
+      echo "Stripe: dispute webhook for $DISPUTE_URL created; STRIPE_WEBHOOK_SECRET written to .env (restart onboarding)"
+    else
+      echo "WARNING: Stripe refused the dispute webhook: $(jq -r '.error.message // .' <<<"$WH" | head -c 200)" >&2
+    fi
+  fi
+else
+  echo "Stripe: no keys (STRIPE_PUBLISHABLE_KEY, infra/secrets/stripe_secret_key); payments are marked paid by stewards"
+fi
+
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
 # Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
