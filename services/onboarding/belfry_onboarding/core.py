@@ -22,6 +22,7 @@ import httpx
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
+from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
 from .clients.verifier import VerifierClient
 from .nostr import hex_to_npub
@@ -50,6 +51,7 @@ PASS_FIELDS = [
     "stripe_dispute_id",
     "claim_token",
     "credential_status_index",
+    "cashu_amount",
 ]
 
 
@@ -67,6 +69,7 @@ class Services:
     issuer_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs status lists
     issuer_x5c: list[str] = field(default_factory=list)
     bridge_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs ID tokens
+    mint: MintClient | None = None  # tokens; None when MINT_URL is unset
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -236,6 +239,61 @@ def _pass_dates(
     else:
         date_end = date_start + dt.timedelta(days=days)
     return date_start, date_end
+
+
+def token_allowance(
+    svc: Services, tier: str, duration_days: int | None, date_start: dt.date, date_end: dt.date
+) -> int:
+    """Tokens a pass brings: TOKENS_PER_DAY per day of the pass (day 1, week 7, full access every
+    event day from the start, both ends included)."""
+    days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
+    if tier == "full" or days <= 0:
+        days = (date_end - date_start).days + 1
+    return max(days, 1) * svc.settings.tokens_per_day
+
+
+def _mint_tokens(svc: Services, pass_id: int, amount: int) -> dict[str, Any]:
+    """The pass's tokens as Odoo values, or {} when the mint is off or fails (activation goes on;
+    ``reconcile`` mints for active passes without tokens later)."""
+    if svc.mint is None or amount <= 0:
+        return {}
+    try:
+        token = svc.mint.mint_token(amount)
+    except Exception:
+        log.exception("tokens: minting %s for pass %s failed; reconcile retries", amount, pass_id)
+        return {}
+    log.info("tokens: minted %s for pass %s", amount, pass_id)
+    return {"cashu_token": token, "cashu_amount": amount}
+
+
+def issue_missing_tokens(svc: Services) -> dict[int, int]:
+    """Mint the tokens of active passes that have none (the mint was down at activation, or the
+    pass predates the mint). Returns {pass id: amount}."""
+    if svc.mint is None:
+        return {}
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["cashu_amount", "=", 0]],
+        ["id", "tier", "product_id", "date_start", "date_end"],
+    )
+    issued: dict[int, int] = {}
+    for row in rows:
+        start, end = odoo_date(row.get("date_start")), odoo_date(row.get("date_end"))
+        if not start or not end:
+            continue
+        duration_days = None
+        product_id = m2o_id(row.get("product_id"))
+        if product_id:
+            products = svc.odoo.read("product.product", [product_id], ["belfry_duration_days"])
+            days = products[0].get("belfry_duration_days") if products else None
+            duration_days = int(days) if days not in (None, False) else None
+        vals = _mint_tokens(
+            svc, row["id"], token_allowance(svc, row.get("tier") or "", duration_days, start, end)
+        )
+        if vals:
+            svc.odoo.write("belfry.pass", [row["id"]], vals)
+            issued[row["id"]] = vals["cashu_amount"]
+    return issued
 
 
 def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number: str) -> int:
@@ -654,6 +712,15 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
     }
     if not pass_row.get("tier"):
         vals["tier"] = tier
+    # Tokens ride the same write, so the activation mail carries the tokens link.
+    if not pass_row.get("cashu_amount"):
+        vals.update(
+            _mint_tokens(
+                svc,
+                pass_row["id"],
+                token_allowance(svc, tier, duration_days, date_start, date_end),
+            )
+        )
     if tx:
         vals["transaction_id"] = tx["id"]
         vals["stripe_payment_intent"] = tx["provider_reference"]
@@ -896,7 +963,12 @@ def reconcile(svc: Services) -> dict[str, Any]:
             except Exception:
                 log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
                 revoked[pass_row["id"]] = "error"
-    return {"activated": activated, "revoked": revoked, "participants": sync_participants(svc)}
+    return {
+        "activated": activated,
+        "revoked": revoked,
+        "participants": sync_participants(svc),
+        "tokens": issue_missing_tokens(svc),
+    }
 
 
 # -- Stripe disputes ----------------------------------------------------------------------------

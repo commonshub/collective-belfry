@@ -166,6 +166,27 @@ class TestPass(BelfryCase):
         self.assertIn('https://belfry.test/claim/tok-abc', mails.body_html)
         self.assertIn('Add the pass to your wallet', mails.body_html)
 
+    def test_tokens_link_and_mail(self):
+        self.env['ir.config_parameter'].sudo().set_param('belfry.public_url', 'https://belfry.test/')
+        belfry_pass = self.env['belfry.pass'].create({'partner_id': self.alice.id, 'tier': 'week'})
+        belfry_pass.write({
+            'state': 'active', 'claim_token': 'tok-xyz', 'credential_status_index': belfry_pass.id,
+            'cashu_token': 'cashuBexample', 'cashu_amount': 350,
+            'login_setup_url': 'https://login.test/?flow_token=t',
+        })
+        self.assertEqual(belfry_pass.tokens_url, 'https://belfry.test/tokens/tok-xyz')
+        mails = self._login_mails(belfry_pass)
+        self.assertEqual(len(mails), 1)
+        self.assertIn('https://belfry.test/tokens/tok-xyz', mails.body_html)
+        self.assertIn('350', mails.body_html)
+        self.assertNotIn('cashuBexample', mails.body_html)
+
+    def test_no_tokens_link_without_tokens(self):
+        self.env['ir.config_parameter'].sudo().set_param('belfry.public_url', 'https://belfry.test/')
+        belfry_pass = self.env['belfry.pass'].create({'partner_id': self.alice.id, 'tier': 'day'})
+        belfry_pass.write({'state': 'active', 'claim_token': 'tok-1'})
+        self.assertFalse(belfry_pass.tokens_url)
+
     def test_revoke_button_calls_the_onboarding_service(self):
         from unittest.mock import MagicMock, patch
 

@@ -64,6 +64,9 @@ services:
   chat:
     ports: !reset []
     restart: unless-stopped
+  mint:
+    ports: !reset []
+    restart: unless-stopped
   issuer:
     ports: !reset []
     restart: unless-stopped

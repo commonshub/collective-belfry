@@ -65,6 +65,13 @@ class Settings(BaseSettings):
     verifier_url: str = Field(default="", alias="VERIFIER_URL")  # walt.id Verifier2, internal
     # This service as the browser sees it: claim pages, door, bridge, status list, vct.
     public_url: str = Field(default="http://localhost:8100", alias="PUBLIC_URL")
+    # Tokens (decision 2026-10-24): Belfry's Cashu mint (cdk-mintd, no monetary value). MINT_URL is
+    # the mint inside Compose (minting is only reachable there); empty turns tokens off.
+    mint_url: str = Field(default="", alias="MINT_URL")
+    mint_public_url: str = Field(default="http://localhost:3338", alias="MINT_PUBLIC_URL")
+    mint_unit: str = Field(default="osv", alias="MINT_UNIT")
+    tokens_per_day: int = Field(default=50, alias="TOKENS_PER_DAY")
+    wallet_public_url: str = Field(default="http://localhost:3400", alias="WALLET_PUBLIC_URL")
     # The landing page's links (pass.<domain>/); empty hides the link.
     apps_public_url: str = Field(default="", alias="APPS_PUBLIC_URL")
     chat_public_url: str = Field(default="", alias="CHAT_PUBLIC_URL")

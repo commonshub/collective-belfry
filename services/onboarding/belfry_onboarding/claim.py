@@ -117,7 +117,7 @@ def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["partner_id", "=", partner_id]],
-        ["state", "tier", "date_start", "date_end", "npub", "claim_token"],
+        ["state", "tier", "date_start", "date_end", "npub", "claim_token", "cashu_amount"],
         order="id desc",
     )
     if not rows:
@@ -136,6 +136,10 @@ def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
         "npub": row.get("npub") or None,
         "claim_url": f"{base}/claim/{row['claim_token']}"
         if active and row.get("claim_token")
+        else None,
+        "tokens": row.get("cashu_amount") or 0,
+        "tokens_url": f"{base}/tokens/{row['claim_token']}"
+        if active and row.get("claim_token") and row.get("cashu_amount")
         else None,
     }
 
@@ -234,8 +238,56 @@ The code is valid until {expires.strftime("%H:%M UTC")}; reload the page for a n
 <p class="muted">The pass shows your tier and validity to anyone who scans it at the door. Your name,
 member number and Nostr key are only shared when you choose to disclose them.</p>
 {switch}
-</div>"""
+</div>
+{tokens_card(pass_row)}"""
     return page("Claim your Open Source Village pass", body)
+
+
+# -- tokens ----------------------------------------------------------------------------------------
+
+
+def tokens_card(pass_row: dict[str, Any]) -> str:
+    amount = pass_row.get("cashu_amount") or 0
+    if not amount or not pass_row.get("claim_token"):
+        return ""
+    return f"""<div class="card" style="margin-top:16px">
+<h1>Your {amount} village tokens</h1>
+<p class="muted">Tokens to pass on to other participants. They have no monetary value.</p>
+<p><a class="btn" href="/tokens/{html.escape(pass_row["claim_token"])}">Get your tokens</a></p>
+</div>"""
+
+
+def tokens_page(svc: Services, pass_row: dict[str, Any]) -> str:
+    """The pass's token bundle: a button into the wallet (wallet.<domain>/#token=…), the token
+    to copy for any other Cashu wallet, or a note that it has been redeemed already."""
+    rows = svc.odoo.read("belfry.pass", [pass_row["id"]], ["cashu_token", "cashu_amount"])
+    token = rows[0].get("cashu_token") if rows else None
+    amount = (rows[0].get("cashu_amount") if rows else 0) or 0
+    if not token or svc.mint is None:
+        raise ClaimError(404, "There are no tokens for this pass yet. Try again later.")
+    state = svc.mint.token_state(token)
+    wallet = svc.settings.wallet_public_url.rstrip("/")
+    if state == "spent":
+        body = f"""<div class="card"><h1>Your {amount} tokens are in a wallet</h1>
+<p class="muted">They were added to a wallet already. Open it to see and send them.</p>
+<p><a class="btn" href="{html.escape(wallet)}/">Open the wallet</a></p></div>"""
+        return page("Your village tokens", body)
+    note = (
+        '<p class="bad">Some of these tokens are in a wallet already; the rest are added now.</p>'
+        if state == "partial"
+        else ""
+    )
+    body = f"""<div class="card">
+<h1>Your {amount} village tokens</h1>
+<p class="muted">Pass them on to other participants: as a payment at a stall, a thank-you, a vote of
+confidence. They have no monetary value and cannot be paid in or out.</p>
+{note}
+<p><a class="btn" href="{html.escape(wallet)}/#token={html.escape(token)}">Add them to your wallet</a></p>
+<p class="muted">Opens the Open Source Village wallet on this device. Using another Cashu wallet? Copy
+this token into it:</p>
+<p><code style="display:block;max-height:7em;overflow:auto">{html.escape(token)}</code></p>
+</div>"""
+    return page("Your village tokens", body)
 
 
 # -- status list and type metadata -----------------------------------------------------------------

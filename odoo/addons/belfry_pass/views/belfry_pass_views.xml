@@ -75,6 +75,10 @@
                             <field name="claim_url" widget="url" groups="belfry_pass.group_admin"/>
                             <field name="credential_status_index"/>
                         </group>
+                        <group string="Tokens">
+                            <field name="cashu_amount"/>
+                            <field name="tokens_url" widget="url" groups="belfry_pass.group_admin"/>
+                        </group>
                         <group string="Login (Authentik)">
                             <field name="login_setup_url" widget="url"/>
                             <field name="login_setup_expires_at"/>

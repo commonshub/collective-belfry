@@ -48,6 +48,7 @@ values = {
     "KEYCAST_SERVICE_TOKEN": "$(rand 32)",
     "HOOK_TOKEN": "$(rand 32)",
     "PASS_INFO_TOKEN": "$(rand 32)",
+    "MINT_SEED": "$(rand 32)",
 }
 example, target, mode = sys.argv[1:4]
 line_re = re.compile(r"^([A-Z0-9_]+)=(\S*)(\s*#.*)?$")

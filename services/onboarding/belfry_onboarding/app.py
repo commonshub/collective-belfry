@@ -23,6 +23,7 @@ from . import blossom, bridge, claim, core, steward
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
+from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
 from .clients.verifier import VerifierClient
 from .core import Services
@@ -57,6 +58,11 @@ def build_services(settings: Settings) -> Services:
         issuer_jwk=_load_json(settings.issuer_jwk_path) or {},
         issuer_x5c=_load_json(settings.issuer_x5c_path) or [],
         bridge_jwk=_load_json(settings.bridge_jwk_path) or {},
+        mint=(
+            MintClient(settings.mint_url, settings.mint_public_url, settings.mint_unit)
+            if settings.mint_url
+            else None
+        ),
         odoo=OdooClient(
             settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
         ),
@@ -256,6 +262,18 @@ def create_app(services: Services | None = None) -> FastAPI:
         except claim.ClaimError as exc:
             return claim_error(exc)
         return HTMLResponse(claim.claim_page(services, pass_row, partner, offer))
+
+    @app.get("/tokens/{token}", response_class=HTMLResponse)
+    async def tokens_page(token: str, request: Request):
+        """The pass's village tokens (claim token as the secret, like the claim page)."""
+        try:
+            pass_row, _ = await run_in_threadpool(claim.pass_for_claim, svc(request), token)
+            body = await run_in_threadpool(claim.tokens_page, svc(request), pass_row)
+        except claim.ClaimError as exc:
+            return claim_error(exc)
+        return HTMLResponse(
+            body, headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
+        )
 
     @app.get("/claim/{token}/offer")
     async def claim_offer(token: str, request: Request, signin: bool = False) -> JSONResponse:

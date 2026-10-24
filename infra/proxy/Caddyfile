@@ -87,6 +87,15 @@ chat.{$BELFRY_DOMAIN} {
 	reverse_proxy chat:80
 }
 
+# Village token mint (Cashu, no monetary value): wallets swap, read keys and check states; only
+# the onboarding service mints (internal network), and nothing is ever melted (paid out).
+mint.{$BELFRY_DOMAIN} {
+	import security
+	@closed path /v1/mint/* /v1/melt/*
+	respond @closed "Minting and melting are closed: tokens come with the pass." 403
+	reverse_proxy mint:8085
+}
+
 # Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
 bunker.{$BELFRY_DOMAIN} {
 	import security

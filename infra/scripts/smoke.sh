@@ -475,6 +475,29 @@ CRED=$(tail -n1 <<<"$CRED")
 [[ "$(jq -r .payload.status.status_list.idx <<<"$CRED")" == "$PASS_ID" ]] && ok "status list index = pass id" || bad "status idx $(jq -c .payload.status <<<"$CRED")"
 VCTM=$(curl -sS "$ONB_URL/vct/village-pass/v1" | jq -r .vct); [[ "$VCTM" == "$(jq -r .payload.vct <<<"$CRED")" ]] && ok "type metadata served at the vct URL" || bad "vctm: $VCTM"
 
+step "8c. village tokens: minted at activation (50 per pass day), redeemable once, minting closed"
+TOKENS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["cashu_amount"]}' | jq -r '.[0].cashu_amount // 0')
+[[ "$TOKENS" == 350 ]] && ok "week pass: 350 tokens minted at activation" || bad "cashu_amount on the pass: $TOKENS"
+grep -q "/tokens/$CLAIM_TOKEN" <<<"$MAIL1" && ok "activation mail links to the tokens page" || bad "activation mail has no tokens link"
+TPAGE=$(curl -sS "$ONB_URL/tokens/$CLAIM_TOKEN")
+CASHU=$(grep -o '#token=cashuB[A-Za-z0-9_-]*' <<<"$TPAGE" | head -n1 | cut -d= -f2)
+[[ -n "$CASHU" ]] && ok "tokens page links the wallet with the token (#token=cashuB…)" || bad "tokens page: $(sed 's/<[^>]*>/ /g' <<<"$TPAGE" | tr -s ' ' | head -c 200)"
+# A wallet's redeem (swap) inside the onboarding container, against the mint on the internal network.
+MINTPY=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c)
+REDEEM=$("${MINTPY[@]}" 'import os,sys
+from belfry_onboarding.clients.mint import MintClient, decode_token
+m = MintClient(os.environ["MINT_URL"], os.environ["MINT_PUBLIC_URL"])
+t = sys.argv[1]
+before = m.token_state(t)
+fresh = m.swap_token(t)
+print(before, m.token_state(t), sum(p.amount for p in decode_token(fresh)[2]))' "$CASHU" 2>&1 | tail -n1)
+[[ "$REDEEM" == "unspent spent 350" ]] && ok "redeemed like a wallet: 350 tokens swapped, the bundle is spent" || bad "redeem: $REDEEM"
+grep -q "are in a wallet" <<<"$(curl -sS "$ONB_URL/tokens/$CLAIM_TOKEN")" && ok "tokens page now says they are in a wallet" || bad "tokens page after redeem"
+if [[ "${MINT_PUBLIC_URL:-}" == https://* ]]; then
+  CODE=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$MINT_PUBLIC_URL/v1/mint/quote/belfry" -H 'Content-Type: application/json' -d '{"amount":1,"unit":"osv"}')
+  [[ "$CODE" == 403 ]] && ok "public mint: minting closed (403)" || bad "public mint quote -> $CODE"
+fi
+
 step "8b. sign-in offer (authorization code + issuer_state, as DIDroom uses it): Issuer2 login at Authentik"
 SOFFER=$(curl -sS "$ONB_URL/claim/$CLAIM_TOKEN/offer?signin=1" | jq -r '.credential_offer // empty')
 [[ "$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$SOFFER")" == *'"issuer_state"'* ]] \

@@ -339,6 +339,7 @@ def test_reconcile_activates_missed_invoices_and_revokes_refunds(
         "activated": {},
         "revoked": {},
         "participants": {"members": 1, "added": [], "removed": []},
+        "tokens": {},
     }
 
 
@@ -349,6 +350,7 @@ def test_reconcile_endpoint_requires_token(client):
         "activated": {},
         "revoked": {},
         "participants": {"members": 0, "added": [], "removed": []},
+        "tokens": {},
     }
 
 

@@ -76,6 +76,14 @@ class BelfryPass(models.Model):
                               groups="belfry_pass.group_admin")
     claim_url = fields.Char(string="Claim link", compute='_compute_claim_url',
                             groups="belfry_pass.group_admin")
+    # Tokens (decision 2026-10-24): 50 per pass day, minted by the onboarding service at
+    # activation at Belfry's mint (no monetary value). The cashuB token is a bearer secret until
+    # the participant redeems it into a wallet through the tokens link (/tokens/<claim token>).
+    cashu_token = fields.Text(string="Token bundle", copy=False, readonly=True,
+                              groups="belfry_pass.group_admin")
+    cashu_amount = fields.Integer(string="Tokens", copy=False, readonly=True)
+    tokens_url = fields.Char(string="Tokens link", compute='_compute_tokens_url',
+                             groups="belfry_pass.group_admin")
     credential_status_index = fields.Integer(
         string="Status list index",
         copy=False,
@@ -108,6 +116,13 @@ class BelfryPass(models.Model):
         base = (self.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')
         for record in self:
             record.claim_url = "%s/claim/%s" % (base, record.claim_token) if record.claim_token and base else False
+
+    @api.depends('claim_token', 'cashu_token')
+    def _compute_tokens_url(self):
+        base = (self.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')
+        for record in self:
+            record.tokens_url = ("%s/tokens/%s" % (base, record.claim_token)
+                                 if record.claim_token and record.cashu_token and base else False)
 
     @api.depends('tier')
     def _compute_tier_name(self):

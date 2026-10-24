@@ -1,0 +1,58 @@
+# Belfry: the Open Source Village token mint (cdk-mintd 0.18, cashubtc/mintd). Rendered by
+# entrypoint.sh into /data/config.toml (@MINT_PUBLIC_URL@, @BRAND_URL@) and imported into the
+# mint's database: `config init` on the first start, `config apply` on every later one.
+#
+# The tokens have no monetary value (decision 2026-10-24): the payment backend is cdk's fake
+# wallet, so no Lightning payment ever goes in or out. Minting is closed to the public by the
+# reverse proxy (only the onboarding service reaches /v1/mint/* on the internal network) and
+# melting is denied; participants only swap, i.e. pass tokens to each other.
+
+[info]
+url = "@MINT_PUBLIC_URL@"
+listen_host = "0.0.0.0"
+listen_port = 8085
+seed = "env:CDK_MINTD_SEED"  # MINT_SEED in .env (gen-secrets.sh); losing it loses the keys
+input_fee_ppk = 0
+enable_info_page = false
+
+[info.quote_ttl]
+mint_ttl = 600
+melt_ttl = 120
+
+[info.logging]
+output = "stderr"
+console_level = "info"
+
+[info.http_cache]
+backend = "memory"
+ttl = 60
+tti = 60
+
+[mint_info]
+name = "Open Source Village tokens"
+description = "Tokens for Open Source Village. They have no monetary value and cannot be paid in or out."
+description_long = "Every pass holder receives 50 tokens per day of their pass. Pass them on to other participants. Run by Belfry."
+icon_url = "@BRAND_URL@/apple-touch-icon.png"
+
+[database]
+engine = "sqlite"
+
+[payment_backend]
+backend = "fakewallet"
+unit = "@MINT_UNIT@"
+min_mint = 1
+max_mint = 100000
+min_melt = 1
+max_melt = 1
+
+[onchain]
+onchain_backend = "none"
+
+[fake_wallet]
+fee_percent = 0.0
+reserve_fee_min = 0
+# The fake backend cannot price a custom unit for bolt11 ("Unknown invoice amount"); a custom
+# method takes the amount in the unit itself. The onboarding service mints with it.
+custom_payment_methods = [{ method = "belfry", unit = "@MINT_UNIT@" }]
+min_delay_time = 0
+max_delay_time = 0

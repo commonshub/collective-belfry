@@ -61,6 +61,8 @@ def test_active_pass_wins_over_newer_ones(web, odoo):
         "member_number": "OSV-0007",
         "npub": "npub1alice",
         "claim_url": "https://belfry.test/claim/" + "c" * 32,
+        "tokens": 0,
+        "tokens_url": None,
     }
 
 

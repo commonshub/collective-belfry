@@ -361,6 +361,30 @@ services:
         limits:
           memory: 512m
 
+  # Village tokens (decision 2026-10-24): a Cashu mint (cdk-mintd) whose tokens have no monetary
+  # value: fake payment backend, unit "osv". The onboarding service mints 50 tokens per pass day
+  # at activation over the internal network; the production proxy (mint.<domain>) denies
+  # /v1/mint/* and /v1/melt/*, so participants can only pass tokens on (swap). Locally the host
+  # port is the mint itself, minting included. infra/mint/README.md.
+  mint:
+    image: cashubtc/mintd:0.18.2
+    entrypoint: ["/config/entrypoint.sh"]
+    environment:
+      MINT_PUBLIC_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
+      BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
+      MINT_UNIT: osv
+      CDK_MINTD_SEED: ${MINT_SEED:?}
+    ports: ["3338:8085"]
+    volumes:
+      - ./mint:/config:ro
+      - mint-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8085/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
   blossom-gate:
     image: caddy:2
     profiles: ["app"]
@@ -451,6 +475,9 @@ services:
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
       VERIFIER_URL: http://verifier:7004
       PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
+      MINT_URL: http://mint:8085
+      MINT_PUBLIC_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
+      WALLET_PUBLIC_URL: ${WALLET_PUBLIC_URL:-http://localhost:3400}
       # Links on the landing page at pass.<domain>/: the account page and the community apps.
       APPS_PUBLIC_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
       CHAT_PUBLIC_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
@@ -498,6 +525,7 @@ services:
 
 volumes:
   blossom-data:
+  mint-data:
   postgres:
   odoo-data:
   authentik-media:
