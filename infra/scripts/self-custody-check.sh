@@ -9,6 +9,8 @@
 #      the onboarding service moves the pass (checked by the caller).
 #
 # Usage: self-custody-check.sh <authentik session cookie jar> <pubkey hex> <nip05 name>
+#   DERIVED=1: the account's key derives from the custody seed (Keycast patch 0014), so keeping it
+#   must be refused.
 #   SIGN: command that reads {"secret": hex, "event": {...}} on stdin and prints the signed event
 #   (the smoke test: python in the onboarding container). Prints NEW_PUBKEY=<hex> at the end.
 # Irreversible for that participant: run it last.
@@ -55,15 +57,14 @@ custody() { # custody <secret: hex or nsec>
   kc -X POST "$KC_URL/api/user/self-custody" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{event:$e}')"
 }
 
-# 1. Take over: the same key signs. Keycast deletes its copy.
+# 1. "Keep this key". With derived keys (DERIVED=1, Keycast patch 0014) Belfry can recompute it,
+#    so it is refused; with random keys Keycast deletes its copy ("take over").
 R=$(custody "$NSEC")
-[[ "$(jq -r .outcome <<<"$R")" == took_custody ]] && say "take over: Keycast deleted its copy ($(jq -r .authorizations_revoked <<<"$R") app authorizations revoked)" || fail "take over: $R"
-[[ "$(kc "$KC_URL/api/user/account" | jq -r .key_held)" == false ]] && say "account status: key_held=false" || fail "key_held still true"
-[[ -z "$(kc -X POST "$KC_URL/api/user/export-key" -H 'Content-Type: application/json' -d '{}' | jq -r '.key // empty' 2>/dev/null)" ]] && say "no key export any more" || fail "export still works"
-LOC=$(kc -o /dev/null -w '%{redirect_url}' "$KC_URL/api/oauth/authorize?client_id=belfry-chat&redirect_uri=$(urlenc "$CHAT_CB")&scope=policy%3Abelfry-event&state=sc&code_challenge=x&code_challenge_method=S256&prompt=none")
-[[ "$LOC" == *error=access_denied*self_custody* ]] && say "apps: silent sign-in answers access_denied (self_custody)" || fail "authorize after custody: $LOC"
-CODE=$(kc -o "$JAR/page" -w '%{http_code}' "$KC_URL/api/oauth/authorize?client_id=belfry-chat&redirect_uri=$(urlenc "$CHAT_CB")&scope=policy%3Abelfry-event&state=sc&code_challenge=x&code_challenge_method=S256")
-[[ "$CODE" == 403 ]] && grep -q "Use your own signer" "$JAR/page" && say "apps: the button shows 'Use your own signer'" || fail "interactive authorize after custody: HTTP $CODE"
+if [[ -n "${DERIVED:-}" ]]; then
+  [[ "$R" == *recompute* ]] && say "keep this key: refused, Belfry could recompute a derived key" || fail "keep this key with a derived key: $R"
+else
+  [[ "$(jq -r .outcome <<<"$R")" == took_custody ]] && say "take over: Keycast deleted its copy ($(jq -r .authorizations_revoked <<<"$R") app authorizations revoked)" || fail "take over: $R"
+fi
 
 # 2. Bring a new key: another key signs. The account moves to it.
 NEW_SECRET=$(openssl rand -hex 32)
@@ -73,7 +74,8 @@ NEW_PUB=$(jq -r '.pubkey // empty' <<<"$R")
 [[ "$(jq -r .pass_updated <<<"$R")" == true ]] && say "the onboarding service took the change (pass_updated)" || fail "pass not updated: $R"
 [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$NAME" | jq -r --arg n "$NAME" '.names[$n] // empty')" == "$NEW_PUB" ]] \
   && say "NIP-05 $NAME now names the new key" || fail "NIP-05 after the move"
-# signing in again lands on the moved account
+
+# 3. Signing in again lands on the moved account, which Belfry holds no key for.
 rm -f "$JAR/kc"; touch "$JAR/kc"
 URL="$KC_URL/api/auth/oidc/start?return_to=%2F"
 for _ in $(seq 1 8); do
@@ -84,4 +86,9 @@ for _ in $(seq 1 8); do
 done
 [[ "$(kc "$KC_URL/api/user/account" | jq -r '.public_key + " " + (.key_held|tostring)')" == "$NEW_PUB false" ]] \
   && say "signing in again lands on the moved account (no key held)" || fail "sign-in after the move: $(kc "$KC_URL/api/user/account" | head -c 200)"
+[[ -z "$(kc -X POST "$KC_URL/api/user/export-key" -H 'Content-Type: application/json' -d '{}' | jq -r '.key // empty' 2>/dev/null)" ]] && say "no key export" || fail "export still works"
+LOC=$(kc -o /dev/null -w '%{redirect_url}' "$KC_URL/api/oauth/authorize?client_id=belfry-chat&redirect_uri=$(urlenc "$CHAT_CB")&scope=policy%3Abelfry-event&state=sc&code_challenge=x&code_challenge_method=S256&prompt=none")
+[[ "$LOC" == *error=access_denied*self_custody* ]] && say "apps: silent sign-in answers access_denied (self_custody)" || fail "authorize after custody: $LOC"
+CODE=$(kc -o "$JAR/page" -w '%{http_code}' "$KC_URL/api/oauth/authorize?client_id=belfry-chat&redirect_uri=$(urlenc "$CHAT_CB")&scope=policy%3Abelfry-event&state=sc&code_challenge=x&code_challenge_method=S256")
+[[ "$CODE" == 403 ]] && grep -q "Use your own signer" "$JAR/page" && say "apps: the button shows 'Use your own signer'" || fail "interactive authorize after custody: HTTP $CODE"
 echo "NEW_PUBKEY=$NEW_PUB"

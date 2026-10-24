@@ -108,9 +108,18 @@ be denied.
 - `https://<domain>/.well-known/nostr.json?name=<member>` after the first activation.
 - A test purchase with Stripe test mode: the activation mail arrives with both links, the claim page issues to a wallet, the door page accepts the pass, the pass signs in to Authentik.
 
+## Custody seed (participant keys, YubiKeys)
+
+Participant Nostr keys derive from one custody seed (Keycast patch 0014, `infra/keycast/README.md`). It is created on a steward's laptop, encrypted to the stewards' YubiKeys (either one decrypts), and on the VM it only ever lives in memory (`/run/belfry`, `CUSTODY_SEED_DIR=/run/belfry` from `prod-env.sh`). Needs `age` and `age-plugin-yubikey` on the laptop.
+
+1. Each YubiKey once: `age-plugin-yubikey` (interactive: creates the PIV key, PIN and touch policy), then `age-plugin-yubikey --identity > yubikey-<name>.txt` (names the slot; the secret stays on the key).
+2. Once, with all YubiKeys at hand: `infra/scripts/custody-seed.sh recipients` per key, then `infra/scripts/custody-seed.sh init custody-seed.age <recipient 1> <recipient 2>`. Copy `custody-seed.age` to each steward and into the backups; it is useless without a YubiKey.
+3. After every VM reboot (the seed is gone; signing keeps working, new accounts wait with 503 and the activation retries in `reconcile`): `infra/scripts/custody-seed.sh unlock belfry@<host> custody-seed.age yubikey-<name>.txt` (touch the key), `… status belfry@<host>`.
+4. Recovery after losing Keycast's database or master key: unlock the seed, start Keycast with an empty database, run `docker compose exec onboarding python -m belfry_onboarding restore-keys`. Derived keys come back with the same npubs; participants who moved to their own key get a keyless account with their npub; keys created before the custody seed are reported as `mismatch` and cannot come back.
+
 ## Backups and secrets
 
-Back up the Postgres volume (Odoo, Authentik, Keycast databases), `infra/.env`, `infra/keycast/master.key` (every participant key is unreadable without it) and `infra/issuer/keys/` (every pass certificate was signed with it; losing it means re-issuing every pass). Rotating the issuer key: keep the old leaf in the accepted list of the door and bridge until the last certificate signed with it has expired (`infra/issuer/README.md`).
+Back up the Postgres volume (Odoo, Authentik, Keycast databases), `infra/.env`, `custody-seed.age` (participant keys are recomputed from it and Odoo), `infra/keycast/master.key` (stored keys are unreadable without it; with the custody seed they can be recomputed instead) and `infra/issuer/keys/` (every pass certificate was signed with it; losing it means re-issuing every pass). Rotating the issuer key: keep the old leaf in the accepted list of the door and bridge until the last certificate signed with it has expired (`infra/issuer/README.md`).
 
 ## Not covered yet
 

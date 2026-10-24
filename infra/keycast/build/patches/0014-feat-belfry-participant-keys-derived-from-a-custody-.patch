@@ -1,0 +1,301 @@
+From 6d342a172085bd61780e5376a5dabc00d0ea471c Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 15:36:39 +0200
+Subject: [PATCH] feat(belfry): participant keys derived from a custody seed
+
+Decision of 2026-10-24: participant keys are recoverable from one custody
+seed plus Odoo.
+
+- With KEYCAST_CUSTODY_SEED_FILE (64 hex characters, kept in memory on the
+  VM and unlocked by a steward with a YubiKey), preload-user creates the
+  key as HKDF-SHA256(salt "belfry/custody/v1", IKM = seed,
+  info "belfry/nostr/v1/<vine_id>/<version>"), version from the request
+  (key_version, default 0). The file is read on every use; a configured
+  but missing seed answers 503 instead of creating an unrecoverable random
+  key. Unset: random keys as upstream.
+- preload-user with pubkey: recreates an account whose participant holds
+  their own key (recovery after a self-custody move), without a key.
+- Self-custody: with a custody seed, "keep this key" is refused (Belfry can
+  recompute it); the security page asks for a new key.
+---
+ api/src/api/http/admin.rs                     |  49 ++++++-
+ api/src/api/http/self_custody.rs              |   7 +
+ api/src/custody.rs                            | 122 ++++++++++++++++++
+ api/src/lib.rs                                |   1 +
+ web/src/routes/settings/security/+page.svelte |  12 +-
+ 5 files changed, 183 insertions(+), 8 deletions(-)
+ create mode 100644 api/src/custody.rs
+
+diff --git a/api/src/api/http/admin.rs b/api/src/api/http/admin.rs
+index 798da02..27b40b4 100644
+--- a/api/src/api/http/admin.rs
++++ b/api/src/api/http/admin.rs
+@@ -211,6 +211,13 @@ pub struct PreloadUserRequest {
+     pub vine_id: String,
+     pub username: String,
+     pub display_name: Option<String>,
++    /// Belfry: the key version for derived keys (custody.rs); 0 when absent.
++    #[serde(default)]
++    pub key_version: Option<u32>,
++    /// Belfry: recreate an account whose participant holds their own key (recovery after a
++    /// self-custody move): the account gets this pubkey and no key.
++    #[serde(default)]
++    pub pubkey: Option<String>,
+ }
+ 
+ #[derive(Debug, Serialize)]
+@@ -278,8 +285,46 @@ pub async fn preload_user(
+         )));
+     }
+ 
+-    // Generate new keypair
+-    let keys = Keys::generate();
++    // Belfry: an account whose participant holds their own key gets that pubkey and no key.
++    if let Some(external) = req.pubkey.as_deref() {
++        let pubkey = nostr_sdk::PublicKey::from_hex(external)
++            .map_err(|_| ApiError::bad_request("pubkey must be 64 hex characters"))?;
++        sqlx::query(
++            "INSERT INTO users (pubkey, tenant_id, vine_id, username, display_name, created_at, updated_at)
++             VALUES ($1, $2, $3, $4, $5, NOW(), NOW())",
++        )
++        .bind(pubkey.to_hex())
++        .bind(tenant_id)
++        .bind(&req.vine_id)
++        .bind(&req.username)
++        .bind(req.display_name.as_deref())
++        .execute(pool)
++        .await
++        .map_err(|e| ApiError::Internal(format!("Failed to create the account: {}", e)))?;
++        let token = generate_preload_ucan(&pubkey, tenant_id, &server_keys, &auth.pubkey).await?;
++        tracing::info!(vine_id = %req.vine_id, "Recreated a self-custodial account (no key)");
++        return Ok(Json(PreloadUserResponse {
++            pubkey: pubkey.to_hex(),
++            token,
++        }));
++    }
++
++    // Belfry: derived from the custody seed when configured (custody.rs), random otherwise. A
++    // configured but locked seed refuses, so no unrecoverable random key is created.
++    let keys = match crate::custody::seed() {
++        Ok(Some(seed)) => {
++            crate::custody::derive_keys(&seed, &req.vine_id, req.key_version.unwrap_or(0))
++        }
++        Ok(None) => Keys::generate(),
++        Err(crate::custody::SeedError::Locked) => {
++            return Err(ApiError::service_unavailable(
++                "The custody seed is locked: a steward has to unlock it before accounts are created",
++            ))
++        }
++        Err(crate::custody::SeedError::Malformed) => {
++            return Err(ApiError::internal("The custody seed file is malformed"))
++        }
++    };
+     let pubkey = keys.public_key();
+     let pubkey_hex = pubkey.to_hex();
+ 
+diff --git a/api/src/api/http/self_custody.rs b/api/src/api/http/self_custody.rs
+index 5682f0a..3c91077 100644
+--- a/api/src/api/http/self_custody.rs
++++ b/api/src/api/http/self_custody.rs
+@@ -196,6 +196,13 @@ pub async fn complete(
+     .map_err(AuthError::Database)?;
+ 
+     let outcome = if target == account {
++        if crate::custody::configured() {
++            return Err(AuthError::BadRequest(
++                "Belfry can recompute this key from its custody seed, so keeping it is not \
++                 self-custody. Create a new key in your signer and sign with that one."
++                    .to_string(),
++            ));
++        }
+         if !had_key {
+             return Err(AuthError::BadRequest(
+                 "Belfry holds no key for this account any more".to_string(),
+diff --git a/api/src/custody.rs b/api/src/custody.rs
+new file mode 100644
+index 0000000..919da60
+--- /dev/null
++++ b/api/src/custody.rs
+@@ -0,0 +1,122 @@
++// ABOUTME: Belfry: participant keys derived from a custody seed (recoverable from the seed + Odoo)
++// ABOUTME: The seed is read from a file in memory on every use, so a steward can unlock it live
++
++//! Derived participant keys (decision of 2026-10-24).
++//!
++//! With `KEYCAST_CUSTODY_SEED_FILE` set, preload-user creates a participant's key as
++//!
++//! `HKDF-SHA256(salt "belfry/custody/v1", IKM = seed, info "belfry/nostr/v1/<vine_id>/<version>")`
++//!
++//! (the version comes from Odoo; a leaked key is replaced by raising it). The file holds the
++//! 32-byte seed as 64 hex characters and lives in memory only (tmpfs, `/run/belfry` on the VM),
++//! unlocked by a steward with a YubiKey (`infra/scripts/custody-seed.sh`). It is read on every
++//! use: unlocking needs no restart, and a locked seed makes preload answer 503 instead of
++//! creating a random key that could not be recovered. Keys are still stored encrypted
++//! (`personal_keys`) for signing; the seed is only needed to create or recover them.
++//!
++//! Unset: keys are random, as upstream. Belfry can always recompute a derived key, so
++//! self-custody means moving to a new key (`self_custody.rs` refuses "keep this key").
++
++use hkdf::Hkdf;
++use nostr_sdk::{Keys, SecretKey};
++use sha2::Sha256;
++
++const SALT: &[u8] = b"belfry/custody/v1";
++
++/// True when derived keys are configured (whether or not the seed is unlocked right now).
++pub fn configured() -> bool {
++    seed_file().is_some()
++}
++
++fn seed_file() -> Option<String> {
++    std::env::var("KEYCAST_CUSTODY_SEED_FILE")
++        .ok()
++        .map(|v| v.trim().to_string())
++        .filter(|v| !v.is_empty())
++}
++
++#[derive(Debug, PartialEq, Eq)]
++pub enum SeedError {
++    /// Configured, but the file is not there: a steward has to unlock the seed.
++    Locked,
++    /// The file does not hold 64 hex characters.
++    Malformed,
++}
++
++/// The seed: `Ok(None)` when derived keys are not configured.
++pub fn seed() -> Result<Option<[u8; 32]>, SeedError> {
++    let Some(path) = seed_file() else {
++        return Ok(None);
++    };
++    let text = std::fs::read_to_string(&path).map_err(|_| SeedError::Locked)?;
++    parse_seed(&text).map(Some)
++}
++
++fn parse_seed(text: &str) -> Result<[u8; 32], SeedError> {
++    let bytes = hex::decode(text.trim()).map_err(|_| SeedError::Malformed)?;
++    bytes.try_into().map_err(|_| SeedError::Malformed)
++}
++
++/// The participant's key for `vine_id` and `version`.
++pub fn derive_keys(seed: &[u8; 32], vine_id: &str, version: u32) -> Keys {
++    let hk = Hkdf::<Sha256>::new(Some(SALT), seed);
++    // A value outside the curve order (probability ~2^-128) moves on to the next counter.
++    for counter in 0u32.. {
++        let info = if counter == 0 {
++            format!("belfry/nostr/v1/{vine_id}/{version}")
++        } else {
++            format!("belfry/nostr/v1/{vine_id}/{version}#{counter}")
++        };
++        let mut out = [0u8; 32];
++        hk.expand(info.as_bytes(), &mut out)
++            .expect("32 bytes is a valid HKDF-SHA256 output length");
++        if let Ok(secret) = SecretKey::from_slice(&out) {
++            return Keys::new(secret);
++        }
++    }
++    unreachable!("the counter space is never exhausted")
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn derivation_follows_the_documented_hkdf() {
++        // Reproducible with any HKDF-SHA256: seed 32 x 0x07, salt "belfry/custody/v1",
++        // info "belfry/nostr/v1/odoo-partner-42/0" (infra/scripts/custody-seed.sh derive).
++        let seed = [7u8; 32];
++        let keys = derive_keys(&seed, "odoo-partner-42", 0);
++        assert_eq!(
++            keys.secret_key().to_secret_hex(),
++            "67fe87d7cdac7cb85d61f170f6d898a157f6450f5b0c750a29442899fc186392"
++        );
++        // stable, per partner, per version
++        assert_eq!(
++            derive_keys(&seed, "odoo-partner-42", 0).public_key(),
++            keys.public_key()
++        );
++        assert_ne!(
++            derive_keys(&seed, "odoo-partner-43", 0).public_key(),
++            keys.public_key()
++        );
++        assert_ne!(
++            derive_keys(&seed, "odoo-partner-42", 1).public_key(),
++            keys.public_key()
++        );
++        assert_ne!(
++            derive_keys(&[8u8; 32], "odoo-partner-42", 0).public_key(),
++            keys.public_key()
++        );
++    }
++
++    #[test]
++    fn seed_files_are_64_hex_characters() {
++        assert_eq!(
++            parse_seed(&format!("{}\n", "ab".repeat(32))),
++            Ok([0xab; 32])
++        );
++        assert_eq!(parse_seed("abc"), Err(SeedError::Malformed));
++        assert_eq!(parse_seed(&"zz".repeat(32)), Err(SeedError::Malformed));
++    }
++}
+diff --git a/api/src/lib.rs b/api/src/lib.rs
+index 54d38b3..3d5c104 100644
+--- a/api/src/lib.rs
++++ b/api/src/lib.rs
+@@ -3,6 +3,7 @@ pub mod api;
+ pub mod atproto_provisioning;
+ pub mod auth_cleanup;
+ pub mod brand;
++pub mod custody;
+ pub mod divine_names;
+ pub mod email_delivery;
+ pub mod email_service;
+diff --git a/web/src/routes/settings/security/+page.svelte b/web/src/routes/settings/security/+page.svelte
+index 5eb5399..22aa66e 100644
+--- a/web/src/routes/settings/security/+page.svelte
++++ b/web/src/routes/settings/security/+page.svelte
+@@ -508,8 +508,8 @@
+ 				<h2>🗝️ Hold your own key</h2>
+ 				{#if keyHeld}
+ 					<p>
+-						Belfry keeps your Nostr key safe for you. You can hold it yourself instead: keep this key in
+-						your own signer app, or use another key you already have.
++						Belfry keeps your Nostr key safe for you, and can recover it if anything is lost. You can
++						hold a key yourself instead: your account then moves to a key that only you have.
+ 					</p>
+ 				{:else}
+ 					<p>Your Nostr key is in your own signer. Belfry holds no copy any more.</p>
+@@ -519,9 +519,9 @@
+ 				<div class="danger-warning">
+ 					<strong>Before you start</strong>
+ 					<ul>
+-						<li>To keep this key: export it above and add it to your signer app (Amber, nsec.app) or browser extension.</li>
++						<li>Create a new key in your signer app (Amber, nsec.app) or browser extension. Your current key cannot be kept: Belfry could always recompute it.</li>
+ 						<li>Afterwards the apps sign you in with your signer, not with "Sign in with {BRAND.name}".</li>
+-						<li>With another key, your name (NIP-05), relay access and pass move to it; your old profile and posts stay with the old key.</li>
++						<li>Your name (NIP-05), relay access and pass move to the new key; your old profile and posts stay with the old key.</li>
+ 						<li>Belfry deletes its copy. This cannot be undone.</li>
+ 					</ul>
+ 				</div>
+@@ -530,7 +530,7 @@
+ 						Sign with my browser extension
+ 					</button>
+ 					<div class="form-group">
+-						<label for="custody-key">Or paste the key you want to keep (it stays in this browser)</label>
++						<label for="custody-key">Or paste your new key (it stays in this browser)</label>
+ 						<input id="custody-key" type="password" bind:value={custodyKey} placeholder="nsec1… or 64-char hex" disabled={custodyBusy} />
+ 					</div>
+ 					<button class="btn-secondary" onclick={() => prepareCustody(false)} disabled={custodyBusy || !custodyKey}>
+@@ -539,7 +539,7 @@
+ 					{#if custodyPending}
+ 						<div class="warning">
+ 							{#if custodyPending.pubkey === accountStatus?.public_key}
+-								You keep your current key ({nip19.npubEncode(custodyPending.pubkey).slice(0, 16)}…). Belfry deletes its copy.
++								This is your current key. Sign with a new key instead.
+ 							{:else}
+ 								Your account moves to {nip19.npubEncode(custodyPending.pubkey).slice(0, 16)}…. Belfry deletes the old key.
+ 							{/if}
+-- 
+2.53.0
+

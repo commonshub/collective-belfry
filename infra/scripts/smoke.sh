@@ -602,10 +602,31 @@ LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__
 [[ "$LINKS" == "[\"$MEMBER\"]" ]] && ok "pass-bridge link created with identifier $MEMBER" || bad "links: $LINKS"
 rm -f "$PJAR"
 
+step "10a. derived keys: the participant's key comes from the custody seed and comes back after loss"
+# Keycast patch 0014. Needs the seed unlocked in Keycast (locally secrets/custody, written by
+# gen-secrets.sh; on a deployment /run/belfry, scripts/custody-seed.sh unlock).
+DC=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app)
+DERIVED=""
+if "${DC[@]}" exec -T keycast test -s /run/belfry/custody-seed 2>/dev/null; then
+  DERIVED=1
+  VINE="odoo-partner-$PARTNER_ID"
+  # Keycast's database row for the participant is lost (the account, its key, its links) ...
+  "${DC[@]}" exec -T postgres psql -U keycast -d keycast -qtAc "DELETE FROM users WHERE vine_id = '$VINE'" >/dev/null
+  [[ -z "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" ]] \
+    && ok "Keycast account of $USERNAME deleted (simulated loss)" || bad "account still resolves after the delete"
+  # ... and comes back from the seed and Odoo with the same key.
+  REST=$("${DC[@]}" exec -T onboarding python -m belfry_onboarding restore-keys 2>&1 | tail -n1)
+  [[ "$(jq -r --arg m "$MEMBER" '.partners[$m] // empty' <<<"$REST")" == ok ]] && ok "restore-keys: $MEMBER ok" || bad "restore-keys: $REST"
+  [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" == "$KC_PUB" ]] \
+    && ok "same npub after recovery (derived from the custody seed)" || bad "npub after recovery differs"
+else
+  echo "  note the custody seed is locked or not configured in Keycast: derived keys not checked"
+fi
+
 step "10b. self-custody: the participant takes their key, then moves to a key of their own"
 # Irreversible for the smoke participant, so it runs after everything that signs with the managed
 # key. Signing (export, challenge) happens in the onboarding container (onboarding-sign.sh).
-if OUT=$(SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
+if OUT=$(DERIVED="$DERIVED" SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
   grep -v '^NEW_PUBKEY=' <<<"$OUT" | sed 's/^/  /'; ok "take over and bring a new key"
   NEW_PUB=$(sed -n 's/^NEW_PUBKEY=//p' <<<"$OUT")
   PASS_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["keycast_pubkey"]}' | jq -r '.[0].keycast_pubkey')

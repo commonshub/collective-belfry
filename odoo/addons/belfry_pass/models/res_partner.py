@@ -14,6 +14,16 @@ class ResPartner(models.Model):
     )
     belfry_authentik_user_id = fields.Integer(string="Authentik user id", copy=False, index=True)
     belfry_npub = fields.Char(string="Nostr npub", copy=False, index=True)
+    # Keycast patch 0014: Belfry derives the partner's key from its custody seed with this
+    # version (raise it to replace a leaked key); after a self-custody move the partner holds
+    # their own key and recovery recreates a keyless account for it.
+    belfry_key_version = fields.Integer(string="Key version", default=0, copy=False)
+    belfry_key_custody = fields.Selection(
+        [('belfry', "Belfry (recoverable)"), ('self', "Own key")],
+        string="Key custody",
+        default='belfry',
+        copy=False,
+    )
     belfry_pass_ids = fields.One2many('belfry.pass', 'partner_id', string="Belfry passes")
     belfry_pass_count = fields.Integer(compute='_compute_belfry_pass_count')
 

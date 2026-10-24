@@ -434,6 +434,7 @@ def _ensure_keycast_user(
         vine_id=f"odoo-partner-{partner['id']}",
         username=member_number.lower(),
         display_name=partner.get("name") or member_number,
+        key_version=int(partner.get("belfry_key_version") or 0),
     )
     pubkey = result["pubkey"]
     svc.keycast.set_user_status(pubkey, "active")
@@ -486,7 +487,7 @@ def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -
         svc.odoo.write(
             "belfry.pass", [p["id"] for p in passes], {"keycast_pubkey": new_pubkey, "npub": npub}
         )
-    svc.odoo.write("res.partner", [partner_id], {"belfry_npub": npub})
+    svc.odoo.write("res.partner", [partner_id], {"belfry_npub": npub, "belfry_key_custody": "self"})
     sync_relay_whitelist(svc)
     log.info(
         "self-custody: partner %s moved from %s to their own key %s (%d passes)",
@@ -496,6 +497,49 @@ def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -
         len(passes),
     )
     return "moved"
+
+
+def restore_keys(svc: Services) -> dict[str, Any]:
+    """Recovery (Keycast patch 0014): recreate every partner's Keycast account from Odoo after
+    Keycast's database or key storage was lost. With the custody seed unlocked, a derived key comes
+    back from the partner's key version with the same npub; a partner who holds their own key gets
+    a keyless account with their npub. Idempotent: existing accounts are left as they are.
+    Returns per member number: ok (present or restored), own_key, or mismatch (a random key
+    from before the custody seed, which cannot be recomputed)."""
+    partners = svc.odoo.search_read(
+        "res.partner",
+        [["belfry_member_number", "!=", False], ["belfry_npub", "!=", False]],
+        ["name", "belfry_member_number", "belfry_key_version", "belfry_key_custody"],
+    )
+    report: dict[str, str] = {}
+    for partner in partners:
+        number = partner["belfry_member_number"]
+        passes = svc.odoo.search_read(
+            "belfry.pass",
+            [["partner_id", "=", partner["id"]], ["keycast_pubkey", "!=", False]],
+            ["keycast_pubkey", "state"],
+            order="id desc",
+        )
+        if not passes:
+            continue
+        expected = passes[0]["keycast_pubkey"]
+        own = partner.get("belfry_key_custody") == "self"
+        result = svc.keycast.preload_user(
+            vine_id=f"odoo-partner-{partner['id']}",
+            username=number.lower(),
+            display_name=partner.get("name") or number,
+            key_version=int(partner.get("belfry_key_version") or 0),
+            pubkey=expected if own else None,
+        )
+        got = result["pubkey"]
+        if got != expected:
+            report[number] = "mismatch"
+            log.error("restore-keys: %s got %s, Odoo has %s", number, got, expected)
+            continue
+        active = any(p.get("state") == "active" for p in passes)
+        svc.keycast.set_user_status(got, "active" if active else "suspended", "pass closed")
+        report[number] = "own_key" if own else "ok"
+    return {"partners": report}
 
 
 def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = False):
@@ -701,7 +745,14 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
     partner = svc.odoo.read(
         "res.partner",
         [partner_id],
-        ["name", "email", "belfry_member_number", "belfry_authentik_user_id", "belfry_npub"],
+        [
+            "name",
+            "email",
+            "belfry_member_number",
+            "belfry_authentik_user_id",
+            "belfry_npub",
+            "belfry_key_version",
+        ],
     )[0]
     member_number = _ensure_member_number(svc, partner)
 

@@ -444,3 +444,53 @@ def test_key_changed_moves_the_pass_and_the_whitelist(services, odoo, keycast, w
         json={"vine_id": "vine-1", "old_pubkey": old, "new_pubkey": new},
     )
     assert bad.status_code == 400
+
+
+# -- derived keys and recovery (Keycast patch 0014) ------------------------------------------------
+
+
+def test_activation_passes_the_key_version(services, odoo, keycast):
+    ids = seed_paid_invoice(odoo, tier="day")
+    odoo.get("res.partner", ids["partner"])["belfry_key_version"] = 2
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    assert keycast.preload_bodies[-1]["key_version"] == 2
+
+
+def test_restore_keys_recreates_accounts_with_the_same_npubs(services, odoo, keycast, client):
+    keycast.derived = True
+    a = seed_paid_invoice(odoo, tier="week")
+    assert core.activate_pass(services, a["invoice"]) == "activated"
+    pa = active_pass(odoo, a["invoice"])
+    odoo.get("res.partner", a["partner"])["belfry_key_custody"] = "belfry"
+
+    # a second participant moved to their own key
+    bob = odoo.add("res.partner", name="Bob Example", email="bob@example.com")
+    b = seed_paid_invoice(odoo, tier="day", partner_id=bob, provider_reference="pi_b")
+    assert core.activate_pass(services, b["invoice"]) == "activated"
+    pb = active_pass(odoo, b["invoice"])
+    own = "cd" * 32
+    core.key_changed(services, f"odoo-partner-{b['partner']}", pb["keycast_pubkey"], own)
+    assert odoo.get("res.partner", b["partner"])["belfry_key_custody"] == "self"
+
+    # Keycast's database is lost
+    keycast.users.clear()
+    keycast.status.clear()
+    report = core.restore_keys(services)
+    assert report["partners"] == {
+        odoo.get("res.partner", a["partner"])["belfry_member_number"]: "ok",
+        odoo.get("res.partner", b["partner"])["belfry_member_number"]: "own_key",
+    }
+    assert keycast.users[f"odoo-partner-{a['partner']}"]["pubkey"] == pa["keycast_pubkey"]
+    assert keycast.users[f"odoo-partner-{b['partner']}"]["pubkey"] == own
+    assert keycast.preload_bodies[-1].get("pubkey") in (own, None)
+    # running it again changes nothing
+    assert core.restore_keys(services) == report
+
+
+def test_restore_keys_reports_a_random_key_that_cannot_come_back(services, odoo, keycast):
+    ids = seed_paid_invoice(odoo, tier="day")
+    assert core.activate_pass(services, ids["invoice"]) == "activated"  # sequential = "random"
+    keycast.users.clear()
+    keycast.derived = True
+    report = core.restore_keys(services)
+    assert list(report["partners"].values()) == ["mismatch"]

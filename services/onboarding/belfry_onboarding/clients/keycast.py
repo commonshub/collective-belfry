@@ -54,13 +54,30 @@ class KeycastClient:
             raise RuntimeError(f"keycast sign_event failed: {data['error']}")
         return data["result"]
 
-    def preload_user(self, vine_id: str, username: str, display_name: str) -> dict[str, Any]:
-        """Returns ``{"pubkey": <hex>, "token": <UCAN>}``. The token is not needed by Belfry."""
+    def preload_user(
+        self,
+        vine_id: str,
+        username: str,
+        display_name: str,
+        key_version: int = 0,
+        pubkey: str | None = None,
+    ) -> dict[str, Any]:
+        """Returns ``{"pubkey": <hex>, "token": <UCAN>}``. The token is not needed by Belfry.
+        ``key_version``: the derived key's version (Keycast patch 0014); ``pubkey``: recreate a
+        keyless account for a participant who holds their own key."""
         if not vine_id:
             raise ValueError("vine_id must not be empty (Keycast does not check)")
+        body: dict[str, Any] = {
+            "vine_id": vine_id,
+            "username": username,
+            "display_name": display_name,
+            "key_version": key_version,
+        }
+        if pubkey:
+            body["pubkey"] = pubkey
         r = self._client.post(
             f"{self.url}/api/admin/preload-user",
-            json={"vine_id": vine_id, "username": username, "display_name": display_name},
+            json=body,
             headers=self._admin,
         )
         r.raise_for_status()

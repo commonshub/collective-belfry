@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -348,6 +349,9 @@ class FakeKeycast:
         self.users: dict[str, dict[str, Any]] = {}  # vine_id -> user
         self.status: dict[str, str] = {}  # pubkey -> status
         self.preloads = 0
+        self.preload_bodies: list[dict[str, Any]] = []
+        # derived=True: pubkeys depend on (vine_id, key_version) like Keycast patch 0014
+        self.derived = False
         self.status_calls: list[tuple[str, str]] = []
         self.signed: list[dict[str, Any]] = []
         base = base_url.rstrip("/")
@@ -362,13 +366,20 @@ class FakeKeycast:
     def _preload(self, request: httpx.Request) -> httpx.Response:
         self.preloads += 1
         body = json.loads(request.content)
+        self.preload_bodies.append(body)
         vine_id = body["vine_id"]
         if vine_id not in self.users:
             if any(u["username"].lower() == body["username"].lower() for u in self.users.values()):
                 return httpx.Response(
                     409, json={"error": f"User with username {body['username']} already exists"}
                 )
-            pubkey = f"{len(self.users) + 1:064x}"
+            if body.get("pubkey"):
+                pubkey = body["pubkey"]
+            elif self.derived:
+                seed = f"{vine_id}/{body.get('key_version', 0)}".encode()
+                pubkey = hashlib.sha256(seed).hexdigest()
+            else:
+                pubkey = f"{len(self.users) + 1:064x}"
             self.users[vine_id] = {"pubkey": pubkey, "username": body["username"]}
             self.status[pubkey] = "active"
         return httpx.Response(

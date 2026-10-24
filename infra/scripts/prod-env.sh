@@ -39,6 +39,8 @@ values = {
     "MAIL_FROM": f"belfry@{domain}",
     "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
     "COMMUNITY_RELAY_URL": f"wss://relay.{domain}",
+    # Keycast patch 0014: the custody seed lives in memory only (scripts/custody-seed.sh unlock)
+    "CUSTODY_SEED_DIR": "/run/belfry",
     "CALENDAR_PUBLIC_URL": f"https://calendar.{domain}",
     "BLOSSOM_PUBLIC_URL": f"https://blossom.{domain}",
     "CHAT_PUBLIC_URL": f"https://chat.{domain}",

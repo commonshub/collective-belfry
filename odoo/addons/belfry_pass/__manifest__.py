@@ -13,7 +13,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Activation mail with the one-time Authentik login setup link (Phase 2), "Send new login link" button
 - Pass certificate claim link and status list index (Phase 3), "Revoke pass" button
 """,
-    'version': '19.0.1.6.0',
+    'version': '19.0.1.7.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',

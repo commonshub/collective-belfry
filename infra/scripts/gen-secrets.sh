@@ -80,6 +80,15 @@ print(f"wrote {target}")
 PYEOF
 chmod 600 "$ENV_FILE"
 
+# Local development only: the custody seed in a file (Keycast patch 0014). A deployment keeps it
+# off the disk (CUSTODY_SEED_DIR=/run/belfry, scripts/custody-seed.sh).
+CUSTODY_SEED="$INFRA_DIR/secrets/custody/custody-seed"
+if [[ ! -f "$CUSTODY_SEED" && "$(grep -s '^CUSTODY_SEED_DIR=' "$ENV_FILE" | cut -d= -f2)" == "" ]]; then
+  mkdir -p "$(dirname "$CUSTODY_SEED")" && chmod 700 "$(dirname "$CUSTODY_SEED")"
+  openssl rand -hex 32 > "$CUSTODY_SEED" && chmod 600 "$CUSTODY_SEED"
+  echo "wrote $CUSTODY_SEED (local development; deployments unlock it from YubiKeys)"
+fi
+
 if [[ -f "$MASTER_KEY" ]]; then
   echo "$MASTER_KEY exists; keeping it (deleting it makes every stored Keycast key unreadable)."
 else

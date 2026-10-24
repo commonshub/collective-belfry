@@ -39,6 +39,10 @@ def main(argv: list[str] | None = None) -> int:
         "publish-starter-events",
         help="publish the missing profile, follow and relay lists of every active pass",
     )
+    sub.add_parser(
+        "restore-keys",
+        help="recreate every partner's Keycast account from Odoo (custody seed unlocked)",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -60,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         result = core.publish_starter_events(services)
     elif args.command == "add-steward":
         result = steward.add_steward(services, args.email, args.name)
+    elif args.command == "restore-keys":
+        result = core.restore_keys(services)
     elif args.command == "login-link":
         result = {"result": core.send_login_link(services, args.pass_id), "pass_id": args.pass_id}
     else:
