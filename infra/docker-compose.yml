@@ -203,6 +203,10 @@ services:
     image: ghcr.io/verse-pbc/relay_builder:latest
     environment:
       IDLE_TIMEOUT: "0"
+      # The relay's own URL as clients reach it. NIP-42 AUTH events name it in their relay tag,
+      # and the relay refuses one for another URL ("Relay URL mismatch", the calendar's
+      # volunteered AUTH). Default was ws://localhost:8080, the container port.
+      RELAY_URL: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
     ports: ["3080:8080"]
     volumes:
       - relay-data:/data
@@ -442,6 +446,10 @@ services:
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
       VERIFIER_URL: http://verifier:7004
       PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
+      # Links on the landing page at pass.<domain>/: the account page and the community apps.
+      APPS_PUBLIC_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+      CHAT_PUBLIC_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
+      CALENDAR_PUBLIC_URL: ${CALENDAR_PUBLIC_URL:-http://localhost:3200}
       STATUS_LIST_URL: ${STATUS_LIST_URL:-http://onboarding:8100/status/1}
       STATUS_LIST_TTL: ${STATUS_LIST_TTL:-300}
       ISSUER_JWK_PATH: /keys/issuer.jwk.json

@@ -21,8 +21,11 @@ screen does. On load without a session the app redirects once per tab with `prom
 (sessionStorage flag): a participant with a Keycast or Authentik session comes back signed in
 without a click (Keycast patch 0008; Belfry's apps skip the consent screen). Otherwise the login
 screen opens with "Sign in with Open Source Village" first, which goes straight to Authentik's
-sign-in page (magic link or pass). Build arg `KEYCAST_APP_URL` (empty turns both off). After
-logging out, a new tab signs in silently again while the Authentik session lasts (14 days).
+sign-in page (magic link or pass). Build arg `KEYCAST_APP_URL` (empty turns both off). Patch
+`0002-…`: Logout revokes the app's authorization at Keycast (`/api/oauth/revoke` with the token
+response's refresh token) and goes through Keycast's `/api/auth/oidc/logout`, which ends the
+Keycast and Authentik sessions and returns to `/notes` signed out (Keycast patch 0010); without
+that, the silent check would sign the participant straight back in.
 Participants can still paste a `bunker://` URL from the apps dashboard (`apps.<domain>`,
 "Connect to Nostr App" → copy the bunker URL) into Coracle's "Login with bunker" screen. Keycast's
 `belfry-event` policy (`infra/keycast/policy.sql`) lists the kinds Coracle signs; NIP-44 for the
@@ -33,4 +36,6 @@ authorizes per app and needs the bunker URL's secret.
 `infra/scripts/chat-login-check.mjs` drives a headless browser through the bunker login, and with
 `-` as the bunker URL through the single sign-on: with `COOKIE_JAR` (an Authentik session,
 `SAVE_AK_JAR=<file> make smoke`) the app must sign in silently, without it the login screen must
-offer the button (see the script's header). Smoke step 6l checks the Keycast side with curl.
+offer the button, and with `LOGOUT=1` as well the logout must end in the signed-out app with the
+Authentik session gone (see the script's header). Smoke steps 6l and 6m check the Keycast side
+with curl.

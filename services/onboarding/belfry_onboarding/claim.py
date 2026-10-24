@@ -64,6 +64,48 @@ def page(title: str, body: str) -> str:
 </main></body></html>"""
 
 
+def home_page(settings: Any) -> str:
+    """pass.<domain>/: what this site is, and where participants go from here."""
+    links = [
+        (
+            settings.apps_public_url,
+            "Your account",
+            "Your pass, your Nostr key and the apps you use.",
+        ),
+        (settings.chat_public_url, "Chat", "Talk to other participants."),
+        (settings.calendar_public_url, "Calendar", "Sessions and meetups at the village."),
+    ]
+    items = "".join(
+        f'<li><a href="{html.escape(url)}"><strong>{html.escape(name)}</strong>'
+        f'<span class="muted">{html.escape(text)}</span></a></li>'
+        for url, name, text in links
+        if url
+    )
+    nav = f'<ul class="links">{items}</ul>' if items else ""
+    body = f"""<div class="card">
+<h1>Your Open Source Village pass</h1>
+<p class="muted">This is where your pass goes into your wallet and where it is checked at the door.</p>
+<p>To add the pass to your wallet, open the <strong>claim link</strong> in the e-mail you got when
+your pass was paid. Lost the e-mail? Ask a steward to send it again.</p>
+</div>
+{nav}
+<style>
+ .links {{ list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; }}
+ .links a {{ display: block; background: var(--osv-surface); border: 1px solid var(--osv-border); border-radius: 12px; padding: 16px 20px; color: var(--osv-foreground); text-decoration: none; }}
+ .links a:hover {{ border-color: var(--osv-accent); }}
+ .links strong {{ display: block; color: var(--osv-accent); }}
+</style>"""
+    return page("Open Source Village pass", body)
+
+
+def not_found_page(home: str = "/") -> str:
+    body = f"""<div class="card"><h1>Page not found</h1>
+<p class="muted">This address does not lead anywhere. If it came from an e-mail, the link may be
+incomplete; copy the whole link, or ask a steward for a new one.</p>
+<p><a class="btn" href="{html.escape(home)}">Go to the start page</a></p></div>"""
+    return page("Page not found", body)
+
+
 # -- pass info for the community apps ------------------------------------------------------------
 
 PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}

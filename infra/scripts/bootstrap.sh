@@ -295,7 +295,8 @@ fi
 
 # policy.sql is idempotent and updates the allowed kinds of an existing permission, so apply it
 # on every run.
-"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q < "$INFRA_DIR/keycast/policy.sql"
+"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q \
+  -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" < "$INFRA_DIR/keycast/policy.sql"
 echo "policy belfry-event applied: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select config from permissions where identifier='allowed_kinds_belfry_event'")"
 kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
   || die "GET /api/policies does not list belfry-event"

@@ -1,0 +1,118 @@
+From 621f7d427e33bdeddce50838863966caaf7a171b Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 11:58:05 +0200
+Subject: [PATCH] Belfry: logout ends the Open Source Village sign-in and
+ revokes the app's authorization
+
+---
+ src/app/views/Logout.svelte | 15 +++++++++----
+ src/belfry/sso.ts           | 45 +++++++++++++++++++++++++++++++++++++
+ 2 files changed, 56 insertions(+), 4 deletions(-)
+
+diff --git a/src/app/views/Logout.svelte b/src/app/views/Logout.svelte
+index a8267b5..42c8bb3 100644
+--- a/src/app/views/Logout.svelte
++++ b/src/app/views/Logout.svelte
+@@ -2,14 +2,21 @@
+   import {fly} from "src/util/transition"
+   import {clearStorage} from "src/engine/storage"
+   import Content from "src/partials/Content.svelte"
++  import {prepareLogout} from "src/belfry/sso"
+ 
+-  clearStorage()
+-  localStorage.clear()
++  // Belfry: revoke the app's authorization and end the single sign-on session as well, or the
++  // silent sign-in would sign the participant straight back in.
++  const next = prepareLogout("/notes")
++
++  next.finally(() => {
++    clearStorage()
++    localStorage.clear()
++  })
+ 
+   // Do a hard refresh so everything gets totally cleared. Give them a moment to see the state
+   // transition. IndexedDB also apparently needs some time
+-  setTimeout(() => {
+-    window.location.href = "/notes"
++  setTimeout(async () => {
++    window.location.href = await next
+   }, 2000)
+ 
+   document.title = "Log Out"
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+index 1f18665..7529dfa 100644
+--- a/src/belfry/sso.ts
++++ b/src/belfry/sso.ts
+@@ -6,6 +6,11 @@
+ // app redirects once per tab with prompt=none: Keycast answers with a code when the participant
+ // is signed in (Keycast or Authentik session, Belfry's apps skip consent), otherwise with
+ // error=login_required and the login screen opens.
++//
++// Logout ends the sign-in everywhere: the app revokes its own authorization at Keycast (with the
++// refresh token of the token response) and goes through Keycast's /api/auth/oidc/logout, which
++// ends the Keycast and Authentik sessions and returns here; otherwise the silent check would
++// sign the participant straight back in.
+ 
+ import {Nip46Broker} from "@welshman/signer"
+ import {makeSecret} from "@welshman/util"
+@@ -19,6 +24,7 @@ const SCOPE = "policy:belfry-event"
+ const CALLBACK_PATH = "/oauth/callback"
+ const FLOW_KEY = "belfry-sso-flow"
+ const TRIED_KEY = "belfry-sso-silent-tried"
++const REFRESH_KEY = "belfry-sso-refresh-token"
+ 
+ type Flow = {state: string; verifier: string; silent: boolean; returnTo: string}
+ 
+@@ -161,6 +167,11 @@ export const finishSignIn = async (): Promise<SsoResult> => {
+     }
+ 
+     await connectBunker(body.bunker_url)
++    try {
++      if (body.refresh_token) window.localStorage.setItem(REFRESH_KEY, body.refresh_token)
++    } catch {
++      // storage unavailable: logout then only ends the sessions, not the authorization
++    }
+   } catch (e) {
+     console.error("Sign-in with Open Source Village failed", e)
+     return fail("connect_failed")
+@@ -168,3 +179,37 @@ export const finishSignIn = async (): Promise<SsoResult> => {
+ 
+   return {ok: true}
+ }
++
++/** Revokes this app's authorization and returns the URL that ends the single sign-on session
++ *  and comes back to `returnTo`. Call before clearing local storage. */
++export const prepareLogout = async (returnTo: string) => {
++  if (!ssoEnabled()) return returnTo
++
++  let refreshToken: string | null = null
++  try {
++    refreshToken = window.localStorage.getItem(REFRESH_KEY)
++    window.localStorage.removeItem(REFRESH_KEY)
++  } catch {
++    refreshToken = null
++  }
++
++  if (refreshToken) {
++    try {
++      await fetch(KEYCAST_URL + "/api/oauth/revoke", {
++        method: "POST",
++        headers: {"Content-Type": "application/json"},
++        body: JSON.stringify({token: refreshToken, client_id: CLIENT_ID}),
++        signal: AbortSignal.timeout(3000),
++      })
++    } catch (e) {
++      console.warn("Revoking the Open Source Village authorization failed", e)
++    }
++  }
++
++  // Back here signed out: show the login screen instead of trying the silent sign-in again.
++  store.set(TRIED_KEY, "1")
++
++  const url = new URL(KEYCAST_URL + "/api/auth/oidc/logout")
++  url.searchParams.set("return_to", new URL(returnTo, window.location.origin).toString())
++  return url.toString()
++}
+-- 
+2.53.0
+

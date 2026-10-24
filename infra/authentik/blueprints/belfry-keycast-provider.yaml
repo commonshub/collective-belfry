@@ -32,6 +32,43 @@ entries:
             return {}
         return {"keycast_vine_id": f"odoo-partner-{partner_id}"}
 
+  # 1b. Logout (Belfry, Keycast patch 0010): Keycast's /api/auth/oidc/logout sends the browser to
+  #     this provider's end-session endpoint. The invalidation flow really ends the authentik
+  #     session (authentik's default provider invalidation flow only says "you've logged out of
+  #     <app>"), then returns to Keycast, which sends the participant back to the app. Without
+  #     this, an app's silent sign-in would sign the participant straight back in.
+  - model: authentik_stages_user_logout.userlogoutstage
+    id: belfry-signer-logout-stage
+    identifiers:
+      name: belfry-signer-logout
+  - model: authentik_stages_redirect.redirectstage
+    id: belfry-signer-logout-return
+    identifiers:
+      name: belfry-signer-logout-return
+    attrs:
+      mode: static
+      target_static: !Format ["%s/api/auth/oidc/logged-out", !Context keycast_url]
+      keep_context: false
+  - model: authentik_flows.flow
+    id: belfry-signer-logout-flow
+    identifiers:
+      slug: belfry-signer-logout
+    attrs:
+      name: Sign out of Open Source Village
+      title: Signing you out of Open Source Village
+      designation: invalidation
+      authentication: none
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf belfry-signer-logout-flow
+      stage: !KeyOf belfry-signer-logout-stage
+      order: 0
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !KeyOf belfry-signer-logout-flow
+      stage: !KeyOf belfry-signer-logout-return
+      order: 10
+
   # 2. The provider. Confidential client; Keycast sends PKCE S256 as well.
   - model: authentik_providers_oauth2.oauth2provider
     id: belfry-keycast-oidc
@@ -39,7 +76,7 @@ entries:
       name: belfry-keycast-oidc
     attrs:
       authorization_flow: !Find [authentik_flows.flow, [slug, default-provider-authorization-implicit-consent]]
-      invalidation_flow: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      invalidation_flow: !KeyOf belfry-signer-logout-flow
       client_type: confidential
       # authentik 2026.8 leaves grant_types empty for blueprint-created providers, and the
       # authorize endpoint then refuses every request ("Invalid grant_type for provider").

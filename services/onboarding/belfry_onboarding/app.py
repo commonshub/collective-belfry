@@ -13,9 +13,11 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import http_exception_handler
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import blossom, bridge, claim, core, steward
 from .clients.authentik import AuthentikClient
@@ -137,6 +139,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         except (TypeError, ValueError):
             log.error("odoo hook: payload has no usable _id: %r", payload)
             return None
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def home(request: Request) -> HTMLResponse:
+        return HTMLResponse(claim.home_page(svc(request).settings))
+
+    @app.exception_handler(StarletteHTTPException)
+    async def html_not_found(request: Request, exc: StarletteHTTPException):
+        """Browsers get a page for unknown addresses; API clients keep FastAPI's JSON errors."""
+        if exc.status_code in (404, 405) and "text/html" in request.headers.get("accept", ""):
+            return HTMLResponse(claim.not_found_page(), status_code=404)
+        return await http_exception_handler(request, exc)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

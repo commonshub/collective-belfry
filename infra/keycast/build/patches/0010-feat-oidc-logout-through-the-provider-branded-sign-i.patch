@@ -1,0 +1,750 @@
+From cf7ce44820ba0897c7e8d7399fe8071b8fd3931e Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 11:56:53 +0200
+Subject: [PATCH 10/10] feat(oidc): logout through the provider, branded
+ sign-in errors, app revoke
+
+Belfry's apps sign in silently, so logging out of an app or of the
+dashboard has to end the provider session as well, or the next tab signs
+the participant straight back in.
+
+- GET /api/auth/oidc/logout?return_to=<url> clears keycast_session and
+  redirects to the provider's end_session_endpoint. The provider's
+  invalidation flow ends at GET /api/auth/oidc/logged-out, which returns
+  to return_to (a same-origin path, or an origin of one of the tenant's
+  registered clients; anything else goes to /). The dashboard's sign-out
+  uses it.
+- POST /api/oauth/revoke (RFC 7009, public CORS): an app revokes its own
+  authorization with the refresh token from the token response.
+- Trusted clients: each token exchange revokes the user's authorizations
+  for that client that never connected within 10 minutes and the
+  connected ones beyond the five most recently active, so silent
+  sign-ins on new browsers no longer pile up on the apps page.
+- One flow cookie per sign-in (keycast_oidc_<state prefix>), so a silent
+  try in a second tab no longer turns a pending magic-link sign-in into
+  "State mismatch". The single legacy cookie is still read.
+- Sign-in error pages in the Open Source Village look, with plain
+  messages and a button that starts the sign-in again.
+---
+ api/src/api/http/oauth.rs                    | 125 ++++++++
+ api/src/api/http/oidc.rs                     | 309 +++++++++++++++++--
+ api/src/api/http/routes.rs                   |   9 +-
+ core/src/repositories/oauth_authorization.rs |  44 +++
+ web/src/lib/components/Header.svelte         |   2 +-
+ web/src/lib/utils/auth.ts                    |   9 +-
+ 6 files changed, 465 insertions(+), 33 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index c02b103..36325e0 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -747,6 +747,106 @@ async fn is_trusted_client(
+     Ok(trusted)
+ }
+ 
++/// Connected authorizations a user keeps per trusted client (one per browser or device).
++const TRUSTED_CLIENT_KEEP_CONNECTED: i64 = 5;
++/// A trusted client's authorization that no NIP-46 client connected to within this time is an
++/// abandoned sign-in.
++const TRUSTED_CLIENT_UNCONNECTED_GRACE_SECS: f64 = 600.0;
++
++/// After an authorization was marked revoked: spend its refresh tokens and drop it from the
++/// signer's cache.
++async fn finish_revocation(auth_state: &super::routes::AuthState, id: i32, bunker_pubkey: String) {
++    let refresh_repo = RefreshTokenRepository::new(auth_state.state.db.clone());
++    if let Err(e) = refresh_repo.revoke_for_authorization(id).await {
++        tracing::warn!(authorization_id = id, "revoking refresh tokens failed: {e}");
++    }
++    METRICS.inc_oauth_revoked();
++    if let Some(tx) = &auth_state.auth_tx {
++        use keycast_core::authorization_channel::AuthorizationCommand;
++        if let Err(e) = tx
++            .send(AuthorizationCommand::Remove { bunker_pubkey })
++            .await
++        {
++            tracing::error!("Failed to send authorization remove command: {}", e);
++        }
++    }
++    tracing::info!(authorization_id = id, "revoked authorization");
++}
++
++#[derive(Debug, Deserialize)]
++pub struct RevokeRequest {
++    /// The refresh token from the token response.
++    pub token: String,
++    pub client_id: Option<String>,
++}
++
++/// POST /api/oauth/revoke (RFC 7009; Belfry): an app ends its own authorization when the
++/// participant logs out, with the refresh token it got from `/api/oauth/token`. Answers 200 for
++/// unknown, expired or foreign tokens as well, as the RFC asks.
++pub async fn revoke(
++    tenant: crate::api::tenant::TenantExtractor,
++    State(auth_state): State<super::routes::AuthState>,
++    request: Request,
++) -> Result<Response, OAuthError> {
++    let tenant_id = tenant.0.id;
++    let content_type = request
++        .headers()
++        .get(CONTENT_TYPE)
++        .and_then(|v| v.to_str().ok())
++        .unwrap_or_default()
++        .to_ascii_lowercase();
++    let req: RevokeRequest = if content_type.starts_with("application/json") {
++        let Json(req) = request
++            .extract::<Json<RevokeRequest>, _>()
++            .await
++            .map_err(|e| OAuthError::InvalidRequest(format!("Invalid JSON revoke request: {e}")))?;
++        req
++    } else {
++        let Form(req) = request
++            .extract::<Form<RevokeRequest>, _>()
++            .await
++            .map_err(|e| OAuthError::InvalidRequest(format!("Invalid revoke request: {e}")))?;
++        req
++    };
++    let pool = &auth_state.state.db;
++    let ok = || Ok(StatusCode::OK.into_response());
++
++    let refresh_repo = RefreshTokenRepository::new(pool.clone());
++    let Some(record) = refresh_repo
++        .find_by_token_hash(&hash_refresh_token(&req.token))
++        .await?
++    else {
++        return ok();
++    };
++    if record.tenant_id != tenant_id || record.expires_at <= Utc::now() {
++        return ok();
++    }
++    let Ok(authorization) = keycast_core::types::oauth_authorization::OAuthAuthorization::find(
++        pool,
++        tenant_id,
++        record.authorization_id,
++    )
++    .await
++    else {
++        return ok();
++    };
++    if req.client_id.is_some() && req.client_id != authorization.client_id {
++        return ok();
++    }
++    if authorization.revoked_at.is_none() {
++        OAuthAuthorizationRepository::new(pool.clone())
++            .revoke(authorization.id)
++            .await?;
++        finish_revocation(
++            &auth_state,
++            authorization.id,
++            authorization.bunker_public_key,
++        )
++        .await;
++    }
++    ok()
++}
++
+ /// `redirect_uri` with the given query parameters appended (properly encoded, keeping any
+ /// query the URI already has).
+ pub fn redirect_with_params(redirect_uri: &str, params: &[(&str, Option<&str>)]) -> String {
+@@ -3707,6 +3807,31 @@ async fn create_oauth_authorization_and_token(
+         );
+     }
+ 
++    // Belfry: a trusted app signs in silently on every new browser, so its authorizations would
++    // pile up on the account's apps page. Abandoned ones and the oldest beyond a few devices go.
++    if is_trusted_client(pool, client_id, tenant_id)
++        .await
++        .unwrap_or(false)
++    {
++        match oauth_auth_repo
++            .prune_for_client(
++                tenant_id,
++                user_pubkey,
++                client_id,
++                TRUSTED_CLIENT_KEEP_CONNECTED,
++                TRUSTED_CLIENT_UNCONNECTED_GRACE_SECS,
++            )
++            .await
++        {
++            Ok(revoked) => {
++                for (id, bunker_pubkey) in revoked {
++                    finish_revocation(&auth_state, id, bunker_pubkey).await;
++                }
++            }
++            Err(e) => tracing::warn!(client_id, "pruning old authorizations failed: {e}"),
++        }
++    }
++
+     // Signal signer daemon to reload via channel (instant notification)
+     if let Some(tx) = &auth_state.auth_tx {
+         use keycast_core::authorization_channel::AuthorizationCommand;
+diff --git a/api/src/api/http/oidc.rs b/api/src/api/http/oidc.rs
+index d2c8084..e5537a4 100644
+--- a/api/src/api/http/oidc.rs
++++ b/api/src/api/http/oidc.rs
+@@ -19,6 +19,17 @@
+ //! authorize request then answers the app with `login_required`. Trusted first-party clients
+ //! (`KEYCAST_TRUSTED_CLIENTS`, which must also be registered clients) skip the consent screen.
+ //!
++//! Each sign-in keeps its own flow cookie (`keycast_oidc_<state prefix>`), so two sign-ins in one
++//! browser (a silent try in a second tab while a magic link is pending) do not overwrite each
++//! other. Failed sign-ins end on a branded page that offers to start again.
++//!
++//! Logout (Belfry): `GET /api/auth/oidc/logout?return_to=<url>` clears the Keycast session and
++//! sends the browser through the provider's `end_session_endpoint`, so the provider session ends
++//! as well and an app's silent sign-in does not sign the participant straight back in. The
++//! provider's invalidation flow ends with a redirect to `GET /api/auth/oidc/logged-out`, which
++//! returns to `return_to` (a same-origin path, or an origin of one of the tenant's registered
++//! clients' redirect URIs).
++//!
+ //! Accounts are never created here. The first login links the provider's subject to an existing
+ //! account whose `vine_id` equals the value of the configured link claim (`OIDC_LINK_CLAIM`);
+ //! later logins use the stored link (`oidc_identities`). Preloaded accounts need no claim step.
+@@ -60,6 +71,8 @@ use super::html_safety::escape_html;
+ use super::routes::AuthState;
+ 
+ const STATE_COOKIE: &str = "keycast_oidc";
++const LOGOUT_COOKIE: &str = "keycast_oidc_logout";
++const LOGOUT_TTL_SECS: u64 = 600;
+ const STATE_TTL_SECS: u64 = 600;
+ const MAX_RETURN_TO_LEN: usize = 4096;
+ const JWKS_MAX_AGE: StdDuration = StdDuration::from_secs(3600);
+@@ -155,6 +168,8 @@ struct Discovery {
+     authorization_endpoint: String,
+     token_endpoint: String,
+     jwks_uri: String,
++    #[serde(default)]
++    end_session_endpoint: Option<String>,
+ }
+ 
+ #[derive(Debug, Clone, Deserialize)]
+@@ -648,6 +663,50 @@ fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+         .find_map(|c| c.strip_prefix(&prefix).map(str::to_string))
+ }
+ 
++/// The flow cookie of one sign-in, named after a prefix of its `state` (URL-safe base64). `None`
++/// for a `state` that is not of that alphabet.
++fn flow_cookie_name(state: &str) -> Option<String> {
++    let prefix: String = state.chars().take(12).collect();
++    (prefix.len() == 12
++        && prefix
++            .chars()
++            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
++    .then(|| format!("{STATE_COOKIE}_{prefix}"))
++}
++
++fn clear_cookie(name: &str) -> String {
++    format!("{name}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age=0")
++}
++
++fn logout_key(server_secret: &[u8]) -> [u8; 32] {
++    let mut h = Sha256::new();
++    h.update(b"keycast-oidc-logout-v1");
++    h.update(server_secret);
++    h.finalize().into()
++}
++
++/// `<expires_at>.<return_to b64>.<tag>`: where to go after the provider's logout.
++pub fn seal_logout_return(return_to: &str, expires_at: u64, server_secret: &[u8]) -> String {
++    let payload = format!("{expires_at}.{}", URL_SAFE_NO_PAD.encode(return_to));
++    let mut mac = HmacSha256::new_from_slice(&logout_key(server_secret)).expect("any key size");
++    mac.update(payload.as_bytes());
++    let tag = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
++    format!("{payload}.{tag}")
++}
++
++pub fn open_logout_return(value: &str, server_secret: &[u8], now: u64) -> Option<String> {
++    let (payload, tag) = value.rsplit_once('.')?;
++    let tag = URL_SAFE_NO_PAD.decode(tag).ok()?;
++    let mut mac = HmacSha256::new_from_slice(&logout_key(server_secret)).ok()?;
++    mac.update(payload.as_bytes());
++    mac.verify_slice(&tag).ok()?;
++    let (expires_at, encoded) = payload.split_once('.')?;
++    if expires_at.parse::<u64>().ok()? <= now {
++        return None;
++    }
++    String::from_utf8(URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()
++}
++
+ fn now_unix() -> u64 {
+     std::time::SystemTime::now()
+         .duration_since(std::time::UNIX_EPOCH)
+@@ -725,17 +784,48 @@ pub async fn oidc_config() -> Json<OidcPublicConfig> {
+ // Handlers
+ // ---------------------------------------------------------------------------------------------
+ 
+-fn error_page(status: StatusCode, title: &str, message: &str) -> Response {
++/// A sign-in page in the Open Source Village look (the same palette as the web app's app.css),
++/// with a button that starts the sign-in again and a link to the dashboard.
++pub fn error_page(status: StatusCode, title: &str, message: &str) -> Response {
++    let again = provider()
++        .map(|p| {
++            format!(
++                r#"<a class="btn" href="/api/auth/oidc/start?return_to=%2F">Sign in with {}</a>"#,
++                escape_html(&p.config.provider_name)
++            )
++        })
++        .unwrap_or_default();
+     let html = format!(
+-        r#"<!DOCTYPE html><html><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{t}</title>
+-<style>body{{font-family:system-ui,sans-serif;max-width:32rem;margin:4rem auto;padding:0 1rem;line-height:1.5}}a{{color:inherit}}</style></head>
+-<body><h1>{t}</h1><p>{m}</p><p><a href="/">Back</a></p></body></html>"#,
++        r##"<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
++<title>{t}</title><meta name="theme-color" content="#2b3a31"><link rel="icon" href="/favicon.svg" type="image/svg+xml"><link rel="stylesheet" href="/fonts.css">
++<style>
++:root{{color-scheme:dark}}
++body{{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#2b3a31;color:#fff;font-family:'Geist',system-ui,-apple-system,'Segoe UI',sans-serif;line-height:1.5;-webkit-font-smoothing:antialiased}}
++main{{box-sizing:border-box;width:100%;max-width:28rem;margin:1rem;padding:2rem 1.5rem;background:#1a231d;border:1px solid #ffffff29;border-radius:1rem}}
++.logo{{display:block;height:2.5rem;margin-bottom:1.5rem}}
++h1{{font-size:1.4rem;line-height:1.3;margin:0 0 .75rem}}
++p{{margin:0 0 1rem;color:#c9d1cb}}
++.btn{{display:block;box-sizing:border-box;width:100%;margin:1.5rem 0 .75rem;padding:.8rem 1rem;border-radius:.6rem;background:#d6ff52;color:#1a231d;font-weight:600;text-align:center;text-decoration:none}}
++.btn:hover{{background:#c5ee41}}
++.alt{{display:block;text-align:center;color:#c9d1cb;font-size:.95rem}}
++footer{{margin-top:1.5rem;color:#8e9a91;font-size:.8rem;text-align:center}}
++</style></head>
++<body><main><img class="logo" src="/osv-logo.svg" alt="Open Source Village">
++<h1>{t}</h1><p>{m}</p>{again}<a class="alt" href="/">Go to your account page</a>
++<footer>Open Source Village, run by Belfry</footer></main></body></html>"##,
+         t = escape_html(title),
+         m = escape_html(message),
+     );
+-    let clear =
+-        format!("{STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age=0");
+-    (status, [(header::SET_COOKIE, clear)], Html(html)).into_response()
++    let mut response = (
++        status,
++        [(header::SET_COOKIE, clear_cookie(STATE_COOKIE))],
++        Html(html),
++    )
++        .into_response();
++    response
++        .headers_mut()
++        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
++    response
+ }
+ 
+ impl IntoResponse for OidcError {
+@@ -744,23 +834,34 @@ impl IntoResponse for OidcError {
+             OidcError::Disabled => {
+                 error_page(StatusCode::NOT_FOUND, "Not available", &self.to_string())
+             }
+-            OidcError::BadRequest(m) => error_page(StatusCode::BAD_REQUEST, "Sign-in failed", m),
+-            OidcError::Unauthorized(m) => error_page(StatusCode::UNAUTHORIZED, "Sign-in failed", m),
+-            OidcError::NoAccount(m) => error_page(StatusCode::FORBIDDEN, "No account", m),
++            OidcError::BadRequest(m) => {
++                error_page(StatusCode::BAD_REQUEST, "Let's try that again", m)
++            }
++            OidcError::Unauthorized(m) => {
++                error_page(StatusCode::UNAUTHORIZED, "You are not signed in", m)
++            }
++            OidcError::NoAccount(m) => error_page(
++                StatusCode::FORBIDDEN,
++                "No account for this sign-in",
++                &format!(
++                    "{m} Your account is created when your pass is paid. If you have a pass, \
++                     sign in with the e-mail address you bought it with, or ask a steward."
++                ),
++            ),
+             OidcError::Upstream(m) => {
+                 tracing::error!("OIDC upstream error: {m}");
+                 error_page(
+                     StatusCode::BAD_GATEWAY,
+-                    "Sign-in unavailable",
+-                    "The sign-in provider could not be reached. Try again in a moment.",
++                    "Sign-in is unavailable",
++                    "The sign-in service could not be reached. Try again in a moment.",
+                 )
+             }
+             OidcError::Internal(m) => {
+                 tracing::error!("OIDC internal error: {m}");
+                 error_page(
+                     StatusCode::INTERNAL_SERVER_ERROR,
+-                    "Sign-in failed",
+-                    "Internal error.",
++                    "Something went wrong",
++                    "The sign-in could not be finished. Try again in a moment.",
+                 )
+             }
+         }
+@@ -814,13 +915,125 @@ pub async fn oidc_start(
+         )
+         .await?;
+     let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
++    let name = flow_cookie_name(&flow.state).expect("random_b64 state");
+     let cookie = format!(
+-        "{STATE_COOKIE}={}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age={STATE_TTL_SECS}",
++        "{name}={}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age={STATE_TTL_SECS}",
+         seal_flow_state(&flow, &secret)
+     );
+     Ok(([(header::SET_COOKIE, cookie)], Redirect::to(&url)).into_response())
+ }
+ 
++#[derive(Debug, Deserialize)]
++pub struct LogoutParams {
++    pub return_to: Option<String>,
++}
++
++/// Where a logout may return to: a same-origin path, or a URL on the origin of one of the
++/// tenant's registered clients (Belfry's apps). Anything else falls back to `/`.
++async fn logout_return_to(pool: &sqlx::PgPool, tenant_id: i64, raw: Option<&str>) -> String {
++    let Some(raw) = raw else {
++        return "/".to_string();
++    };
++    if let Some(path) = safe_return_to(Some(raw)) {
++        return path;
++    }
++    if raw.len() > MAX_RETURN_TO_LEN {
++        return "/".to_string();
++    }
++    let Ok(origin) = super::oauth::extract_origin(raw) else {
++        return "/".to_string();
++    };
++    let repo = keycast_core::repositories::RegisteredClientRepository::new(pool.clone());
++    let allowed = repo
++        .list(tenant_id)
++        .await
++        .map(|clients| {
++            clients
++                .iter()
++                .flat_map(|c| c.allowed_redirect_uris.iter())
++                .filter_map(|uri| super::oauth::extract_origin(uri).ok())
++                .any(|o| o == origin)
++        })
++        .unwrap_or(false);
++    if allowed {
++        raw.to_string()
++    } else {
++        tracing::info!(return_to = %raw, "logout return_to is not a registered client origin");
++        "/".to_string()
++    }
++}
++
++/// GET /api/auth/oidc/logout: end the Keycast session and the provider's session, then return.
++pub async fn oidc_logout(
++    tenant: crate::api::tenant::TenantExtractor,
++    State(auth_state): State<AuthState>,
++    Query(params): Query<LogoutParams>,
++) -> Result<Response, OidcError> {
++    let return_to = logout_return_to(
++        &auth_state.state.db,
++        tenant.0.id,
++        params.return_to.as_deref(),
++    )
++    .await;
++    let end_session = match provider() {
++        Some(p) => p
++            .discovery()
++            .await
++            .ok()
++            .and_then(|d| d.end_session_endpoint.clone()),
++        None => None,
++    };
++    let session_clear = "keycast_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0";
++    tracing::info!(
++        event = "logout",
++        method = "oidc",
++        provider_logout = end_session.is_some()
++    );
++    let mut response = match end_session {
++        Some(url) => {
++            let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
++            let cookie = format!(
++                "{LOGOUT_COOKIE}={}; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age={LOGOUT_TTL_SECS}",
++                seal_logout_return(&return_to, now_unix() + LOGOUT_TTL_SECS, &secret)
++            );
++            (
++                AppendHeaders([
++                    (header::SET_COOKIE, session_clear.to_string()),
++                    (header::SET_COOKIE, cookie),
++                ]),
++                Redirect::to(&url),
++            )
++                .into_response()
++        }
++        None => (
++            [(header::SET_COOKIE, session_clear.to_string())],
++            Redirect::to(&return_to),
++        )
++            .into_response(),
++    };
++    response
++        .headers_mut()
++        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
++    Ok(response)
++}
++
++/// GET /api/auth/oidc/logged-out: the provider's invalidation flow ends here.
++pub async fn oidc_logged_out(State(auth_state): State<AuthState>, headers: HeaderMap) -> Response {
++    let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
++    let return_to = read_cookie(&headers, LOGOUT_COOKIE)
++        .and_then(|v| open_logout_return(&v, &secret, now_unix()))
++        .unwrap_or_else(|| "/".to_string());
++    let mut response = (
++        [(header::SET_COOKIE, clear_cookie(LOGOUT_COOKIE))],
++        Redirect::to(&return_to),
++    )
++        .into_response();
++    response
++        .headers_mut()
++        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
++    response
++}
++
+ #[derive(Debug, Deserialize)]
+ pub struct CallbackParams {
+     pub code: Option<String>,
+@@ -840,17 +1053,23 @@ pub async fn oidc_callback(
+     let tenant_id = tenant.0.id;
+ 
+     let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
+-    let flow = read_cookie(&headers, STATE_COOKIE)
++    // The flow cookie named after the returned state; the single legacy cookie as a fallback for
++    // sign-ins started before per-flow cookies.
++    let state_param = params.state.as_deref().unwrap_or("");
++    let flow = flow_cookie_name(state_param)
++        .and_then(|name| read_cookie(&headers, &name))
++        .or_else(|| read_cookie(&headers, STATE_COOKIE))
+         .and_then(|v| open_flow_state(&v, &secret, now_unix()))
+         .ok_or_else(|| {
+             OidcError::BadRequest(
+-                "The sign-in took too long or was started elsewhere. Please start again."
++                "This sign-in was started in another browser, or it took longer than 10 minutes. \
++                 Open the sign-in link in the browser where you asked for it, or start again here."
+                     .to_string(),
+             )
+         })?;
+-    if !constant_time_eq(params.state.as_deref().unwrap_or(""), &flow.state) {
++    if !constant_time_eq(state_param, &flow.state) {
+         return Err(OidcError::BadRequest(
+-            "State mismatch. Please start the sign-in again.".to_string(),
++            "This page belongs to an older sign-in attempt. Start again to sign in.".to_string(),
+         ));
+     }
+     if !flow.silent {
+@@ -859,6 +1078,7 @@ pub async fn oidc_callback(
+     // Silent login: anything short of a session goes back to the authorize request, which then
+     // answers the app with login_required. Infrastructure errors still show the error page.
+     let return_to = flow.return_to.clone();
++    let flow_state = flow.state.clone();
+     match finish_callback(tenant_id, &auth_state, &headers, params, &p, flow).await {
+         Ok(response) => Ok(response),
+         Err(e @ (OidcError::Upstream(_) | OidcError::Internal(_))) => Err(e),
+@@ -868,9 +1088,9 @@ pub async fn oidc_callback(
+                 _ => "login_required",
+             };
+             tracing::info!(reason, error = %e, "silent OIDC login did not sign in");
+-            let clear = format!(
+-                "{STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age=0"
+-            );
++            let clear = flow_cookie_name(&flow_state)
++                .map(|name| clear_cookie(&name))
++                .unwrap_or_else(|| clear_cookie(STATE_COOKIE));
+             Ok((
+                 [(header::SET_COOKIE, clear)],
+                 Redirect::to(&silent_failure_return(&return_to, reason)),
+@@ -892,9 +1112,10 @@ async fn finish_callback(
+     let endpoint = "/api/auth/oidc/callback";
+     if let Some(err) = params.error {
+         tracing::info!(error = %err, description = params.error_description.as_deref().unwrap_or(""), "OIDC provider returned an error");
+-        return Err(OidcError::Unauthorized(format!(
+-            "The sign-in provider ended the login ({err})."
+-        )));
++        return Err(OidcError::Unauthorized(match err.as_str() {
++            "access_denied" => "The sign-in was cancelled or refused.".to_string(),
++            _ => format!("The sign-in service ended the sign-in ({err})."),
++        }));
+     }
+     let code = params
+         .code
+@@ -1014,10 +1235,15 @@ async fn finish_callback(
+ 
+     let session =
+         format!("keycast_session={ucan}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=86400");
+-    let clear =
+-        format!("{STATE_COOKIE}=; HttpOnly; Secure; SameSite=Lax; Path=/api/auth/oidc; Max-Age=0");
++    let clear = flow_cookie_name(&flow.state)
++        .map(|name| clear_cookie(&name))
++        .unwrap_or_else(|| clear_cookie(STATE_COOKIE));
+     let mut response = (
+-        AppendHeaders([(header::SET_COOKIE, session), (header::SET_COOKIE, clear)]),
++        AppendHeaders([
++            (header::SET_COOKIE, session),
++            (header::SET_COOKIE, clear),
++            (header::SET_COOKIE, clear_cookie(STATE_COOKIE)),
++        ]),
+         Redirect::to(&flow.return_to),
+     )
+         .into_response();
+@@ -1116,6 +1342,33 @@ mod tests {
+         assert!(!flow.silent);
+     }
+ 
++    #[test]
++    fn flow_cookie_names_follow_the_state_prefix() {
++        assert_eq!(
++            flow_cookie_name("abcdefghijkl_rest").as_deref(),
++            Some("keycast_oidc_abcdefghijkl")
++        );
++        assert_eq!(flow_cookie_name("short"), None);
++        assert_eq!(flow_cookie_name("abc;defghijkl"), None);
++        let a = random_b64(24);
++        let b = random_b64(24);
++        assert_ne!(flow_cookie_name(&a), flow_cookie_name(&b));
++    }
++
++    #[test]
++    fn logout_return_is_sealed_and_expires() {
++        let secret = b"server secret";
++        let sealed = seal_logout_return("https://chat.example/?a=b.c", 1000, secret);
++        assert_eq!(
++            open_logout_return(&sealed, secret, 999).as_deref(),
++            Some("https://chat.example/?a=b.c")
++        );
++        assert_eq!(open_logout_return(&sealed, secret, 1000), None);
++        assert_eq!(open_logout_return(&sealed, b"other", 999), None);
++        let forged = sealed.replacen("1000.", "9999.", 1);
++        assert_eq!(open_logout_return(&forged, secret, 999), None);
++    }
++
+     #[test]
+     fn silent_failure_marker_is_appended_and_sanitised() {
+         assert_eq!(
+diff --git a/api/src/api/http/routes.rs b/api/src/api/http/routes.rs
+index f7e6dd8..a21ce19 100644
+--- a/api/src/api/http/routes.rs
++++ b/api/src/api/http/routes.rs
+@@ -11,9 +11,9 @@ use std::{sync::Arc, time::Duration};
+ use tower::{timeout::error::Elapsed, ServiceBuilder};
+ 
+ use crate::api::http::{
+-    admin, ap, apps, atproto, atproto_oauth, auth, claim, email_marketing, expensive_work, headless,
+-    metrics, nostr_rpc, oauth, og_diviner, oidc, pass, policies, retention, service_deletion,
+-    service_provisioning, teams,
++    admin, ap, apps, atproto, atproto_oauth, auth, claim, email_marketing, expensive_work,
++    headless, metrics, nostr_rpc, oauth, og_diviner, oidc, pass, policies, retention,
++    service_deletion, service_provisioning, teams,
+ };
+ use crate::email_delivery::EmailDeliveryService;
+ use crate::state::KeycastState;
+@@ -105,6 +105,8 @@ pub fn api_routes(
+         .route("/auth/oidc/config", get(oidc::oidc_config))
+         .route("/auth/oidc/start", get(oidc::oidc_start))
+         .route("/auth/oidc/callback", get(oidc::oidc_callback))
++        .route("/auth/oidc/logout", get(oidc::oidc_logout))
++        .route("/auth/oidc/logged-out", get(oidc::oidc_logged_out))
+         .with_state(auth_state.clone());
+ 
+     // Logout route - public CORS so third-party OAuth apps can revoke sessions
+@@ -146,6 +148,7 @@ pub fn api_routes(
+         .route("/oauth/authorize", get(oauth::authorize_get))
+         .route("/oauth/authorize", post(oauth::authorize_post))
+         .route("/oauth/token", post(oauth::token))
++        .route("/oauth/revoke", post(oauth::revoke))
+         .route("/oauth/poll", get(oauth::poll)) // iOS PWA polling endpoint
+         .route("/oauth/connect", post(oauth::connect_post))
+         .layer(public_cors.clone())
+diff --git a/core/src/repositories/oauth_authorization.rs b/core/src/repositories/oauth_authorization.rs
+index 2e22fed..eb47a2d 100644
+--- a/core/src/repositories/oauth_authorization.rs
++++ b/core/src/repositories/oauth_authorization.rs
+@@ -262,6 +262,50 @@ impl OAuthAuthorizationRepository {
+         Ok(())
+     }
+ 
++    /// Belfry: revoke a user's stale authorizations for one client: those never connected and
++    /// older than `grace_secs` (an abandoned sign-in), and connected ones beyond the `keep` most
++    /// recently active. Returns the revoked (id, bunker_public_key) pairs.
++    pub async fn prune_for_client(
++        &self,
++        tenant_id: i64,
++        user_pubkey: &str,
++        client_id: &str,
++        keep: i64,
++        grace_secs: f64,
++    ) -> Result<Vec<(i32, String)>, RepositoryError> {
++        sqlx::query_as(
++            "WITH live AS (
++                 SELECT id, connected_at, created_at,
++                        COALESCE(last_activity, connected_at, created_at) AS seen
++                 FROM oauth_authorizations
++                 WHERE tenant_id = $1 AND user_pubkey = $2 AND client_id = $3
++                   AND revoked_at IS NULL
++             ),
++             ranked AS (
++                 SELECT id, row_number() OVER (ORDER BY seen DESC, id DESC) AS rn
++                 FROM live WHERE connected_at IS NOT NULL
++             ),
++             stale AS (
++                 SELECT id FROM live
++                 WHERE connected_at IS NULL AND created_at < NOW() - make_interval(secs => $5)
++                 UNION
++                 SELECT id FROM ranked WHERE rn > $4
++             )
++             UPDATE oauth_authorizations oa
++             SET revoked_at = NOW(), updated_at = NOW()
++             FROM stale WHERE oa.id = stale.id
++             RETURNING oa.id, oa.bunker_public_key",
++        )
++        .bind(tenant_id)
++        .bind(user_pubkey)
++        .bind(client_id)
++        .bind(keep)
++        .bind(grace_secs)
++        .fetch_all(&self.pool)
++        .await
++        .map_err(Into::into)
++    }
++
+     /// List active OAuth sessions for a user.
+     /// Returns (name, redirect_origin, bunker_public_key, client_pubkey, created_at, last_activity, activity_count).
+     pub async fn list_active_sessions(
+diff --git a/web/src/lib/components/Header.svelte b/web/src/lib/components/Header.svelte
+index 7fbb0fd..e9f67ef 100644
+--- a/web/src/lib/components/Header.svelte
++++ b/web/src/lib/components/Header.svelte
+@@ -47,7 +47,7 @@ onMount(async () => {
+             <a class="nav-link {activePage === '/teams' ? 'active' : ''} bordered" href="/teams">Teams</a>
+             {/if}
+             <button
+-                onclick={() => signout()}
++                onclick={() => signout({ endSingleSignOn: true })}
+                 class="button button-secondary button-icon"
+                 role="menuitem"
+                 tabindex="-1"
+diff --git a/web/src/lib/utils/auth.ts b/web/src/lib/utils/auth.ts
+index dd60c03..d286f3a 100644
+--- a/web/src/lib/utils/auth.ts
++++ b/web/src/lib/utils/auth.ts
+@@ -14,6 +14,9 @@ export enum SigninMethod {
+ interface SignoutOptions {
+     redirectTo?: string | null;
+     showToast?: boolean;
++    /** Belfry: also end the single sign-on session (the server answers with a plain redirect
++     *  when no upstream provider is configured). */
++    endSingleSignOn?: boolean;
+ }
+ 
+ // Guards against a burst of simultaneous 401s (e.g. several parallel requests failing
+@@ -155,7 +158,7 @@ async function nip07Login(): Promise<string | null> {
+ }
+ 
+ export async function signout(options: SignoutOptions = {}) {
+-    const { redirectTo = "/", showToast = true } = options;
++    const { redirectTo = "/", showToast = true, endSingleSignOn = false } = options;
+ 
+     try {
+         const response = await fetch(`${getViteDomain()}/api/auth/logout`, {
+@@ -170,6 +173,10 @@ export async function signout(options: SignoutOptions = {}) {
+     }
+ 
+     setCurrentUser(null);
++    if (endSingleSignOn) {
++        window.location.href = `${getViteDomain()}/api/auth/oidc/logout?return_to=${encodeURIComponent(redirectTo ?? "/")}`;
++        return;
++    }
+     if (showToast) {
+         toast.success("Signed out");
+     }
+-- 
+2.53.0
+

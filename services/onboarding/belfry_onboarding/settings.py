@@ -65,6 +65,10 @@ class Settings(BaseSettings):
     verifier_url: str = Field(default="", alias="VERIFIER_URL")  # walt.id Verifier2, internal
     # This service as the browser sees it: claim pages, door, bridge, status list, vct.
     public_url: str = Field(default="http://localhost:8100", alias="PUBLIC_URL")
+    # The landing page's links (pass.<domain>/); empty hides the link.
+    apps_public_url: str = Field(default="", alias="APPS_PUBLIC_URL")
+    chat_public_url: str = Field(default="", alias="CHAT_PUBLIC_URL")
+    calendar_public_url: str = Field(default="", alias="CALENDAR_PUBLIC_URL")
     # status_list.uri in the credential, as the verifier reaches it (Compose: service name).
     status_list_url: str = Field(default="", alias="STATUS_LIST_URL")
     # How long verifiers may cache the status list (ttl claim and Cache-Control max-age), in

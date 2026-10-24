@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
-# Silent sign-in for Belfry's apps (Keycast patch 0008), driven with curl like a browser:
+# Silent sign-in and logout for Belfry's apps (Keycast patches 0008, 0010), driven with curl like a
+# browser:
 #
 #   app -> Keycast /api/oauth/authorize?prompt=none
 #       -> no Keycast session: /api/auth/oidc/start?prompt=none -> Authentik authorize prompt=none
 #          -> Keycast callback (session, or oidc_failed) -> back to /api/oauth/authorize
 #       -> app redirect URI with ?code=… (trusted app, no consent screen) or ?error=login_required
+#   app logout -> POST /api/oauth/revoke, then Keycast /api/auth/oidc/logout -> Authentik
+#       end-session (invalidation flow belfry-signer-logout) -> Keycast /logged-out -> the app
 #
 # Usage: silent-signin-check.sh <authentik session cookie jar> <expected pubkey hex>
 #   CLIENT_ID / REDIRECT_URI: a trusted app (default belfry-chat at CHAT_PUBLIC_URL).
+#   LOGOUT_ONLY=1 LOGOUT_JAR=<jar>: only the logout check (10), in that Authentik session, which
+#   it ends; give it a session of its own (the smoke test: 6h's magic-link browser).
 # The jar is copied, not changed. Prints one line per check; exits non-zero at the first failure.
 # Needs curl, jq, openssl.
 set -euo pipefail
@@ -54,6 +59,7 @@ param() { sed -nE "s/.*[?&]$1=([^&]*).*/\1/p" <<<"$2"; }
 VERIFIER=$(openssl rand 32 | b64url)
 CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | b64url)
 
+if [[ -z "${LOGOUT_ONLY:-}" ]]; then
 # 1. A browser without any session: the silent request ends at the app with login_required,
 #    after one round through Authentik, without rendering a page.
 touch "$JAR/kc0" "$JAR/ak0"
@@ -104,3 +110,74 @@ read -r END HOPS < <(follow "$JAR/kc3" "$JAR/ak3" "$(authorize_url "$CLIENT_ID" 
 [[ -n "$(param code "$END")" && "$(param state "$END")" == s6 ]] \
   && say "button: Keycast -> Authentik -> code, no Keycast page and no consent screen ($HOPS)" \
   || fail "interactive sign-in ended at '$END' ($HOPS): $(sed 's/<[^>]*>/ /g' "$JAR/page" | tr -s ' ' | head -c 200)"
+
+# 7. Two sign-ins at once in one browser (a silent try in a second tab while a magic link is
+#    pending): each keeps its own flow cookie, so the first one still finishes.
+cp "$SESSION_JAR" "$JAR/ak4"; touch "$JAR/kc4"
+start_flow() {  # start_flow <state>: Keycast start -> the Authentik authorize URL (not followed)
+  local start
+  start=$(curl -sS -b "$JAR/kc4" -c "$JAR/kc4" -o /dev/null -w '%{redirect_url}' "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" "$1" "$CHALLENGE")")
+  curl -sS -b "$JAR/kc4" -c "$JAR/kc4" -o /dev/null -w '%{redirect_url}' "$start"
+}
+FIRST=$(start_flow s7a); SECOND=$(start_flow s7b)
+[[ "$FIRST" == "$AK_URL"* && "$SECOND" == "$AK_URL"* ]] || fail "parallel sign-ins did not reach Authentik: '$FIRST' '$SECOND'"
+[[ $(grep -c 'keycast_oidc_' "$JAR/kc4") -ge 2 ]] || fail "expected two flow cookies, jar has: $(grep -o 'keycast_oidc[^[:space:]]*' "$JAR/kc4" | tr '\n' ' ')"
+read -r END HOPS < <(follow "$JAR/kc4" "$JAR/ak4" "$FIRST")
+[[ -n "$(param code "$END")" && "$(param state "$END")" == s7a ]] \
+  && say "two sign-ins at once: the first one still finishes (own flow cookie)" \
+  || fail "first of two parallel sign-ins ended at '$END' ($HOPS): $(sed 's/<[^>]*>/ /g' "$JAR/page" | tr -s ' ' | head -c 200)"
+
+# 8. A callback this browser did not start (magic link opened elsewhere): a branded page that
+#    offers to sign in again, not a bare error.
+STATUS=$(curl -sS -o "$JAR/err.html" -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=nosuchflowstate1")
+[[ "$STATUS" == 400 ]] && grep -q 'osv-logo.svg' "$JAR/err.html" && grep -q 'href="/api/auth/oidc/start' "$JAR/err.html" \
+  && say "unknown sign-in: branded page with 'Sign in again' (HTTP 400)" \
+  || fail "unknown sign-in page: HTTP $STATUS $(sed 's/<[^>]*>/ /g' "$JAR/err.html" | tr -s ' ' | head -c 200)"
+
+# 9. App logout, part 1: the app revokes its own authorization with its refresh token.
+REFRESH=$(jq -r '.refresh_token // empty' <<<"$TOKEN_RESP")
+[[ -n "$REFRESH" ]] || fail "token response without refresh_token"
+STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$KC_URL/api/oauth/revoke" -H 'Content-Type: application/json' \
+  -H "Origin: ${REDIRECT_URI%/oauth/callback}" -d "$(jq -nc --arg t "$REFRESH" --arg c "$CLIENT_ID" '{token:$t, client_id:$c}')")
+[[ "$STATUS" == 200 ]] || fail "revoke answered HTTP $STATUS"
+# Keycast's HTTP RPC caches a token's authorization and rechecks it every 5 s, so allow for that.
+for i in $(seq 1 10); do
+  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg pk "$EXPECT_PUB" --argjson t "$(date +%s)" '{method:"sign_event", params:[{pubkey:$pk, created_at:$t, kind:1, tags:[], content:"after revoke"}]}')")
+  [[ -z "$(jq -r '.result.sig // empty' <<<"$SIGNED" 2>/dev/null)" ]] && break
+  sleep 1
+done
+[[ -z "$(jq -r '.result.sig // empty' <<<"$SIGNED" 2>/dev/null)" ]] \
+  && say "revoke: the app's authorization stops signing (after ${i}s at most)" || fail "still signing 10 s after revoke: $(head -c 200 <<<"$SIGNED")"
+
+fi
+
+[[ -n "${LOGOUT_JAR:-}" ]] || exit 0
+# 10. App logout, part 2: Keycast's logout ends the Keycast and the Authentik session and returns
+#     to the app. The Authentik invalidation flow is a JS page, so its executor API is driven here.
+APP_HOME="${REDIRECT_URI%/oauth/callback}/"
+[[ -s "$LOGOUT_JAR" ]] || fail "no cookie jar at $LOGOUT_JAR"
+cp "$LOGOUT_JAR" "$JAR/ak5"; touch "$JAR/kc5"
+read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s9 "$CHALLENGE" none)")
+[[ -n "$(param code "$END")" ]] && grep -q keycast_session "$JAR/kc5" || fail "logout check: no silent sign-in first ('$END', $HOPS)"
+LOC=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/logout?return_to=$(urlenc "$APP_HOME")")
+[[ "$LOC" == "$AK_URL"*end-session* ]] || fail "logout redirected to '$LOC'"
+grep -q $'keycast_session\t[^[:space:]]' "$JAR/kc5" && fail "keycast_session still set after logout" || true
+FLOW_URL=$(curl -sS -b "$JAR/ak5" -c "$JAR/ak5" -o /dev/null -w '%{redirect_url}' "$LOC")
+[[ "$FLOW_URL" == *"/if/flow/belfry-signer-logout/"* ]] || fail "end-session went to '$FLOW_URL' (invalidation flow not belfry-signer-logout?)"
+QUERY=${FLOW_URL#*\?}; [[ "$QUERY" == "$FLOW_URL" ]] && QUERY=""
+TO=""
+for _ in 1 2 3 4 5; do
+  CH=$(curl -sS -b "$JAR/ak5" -c "$JAR/ak5" "$AK_URL/api/v3/flows/executor/belfry-signer-logout/?query=$(urlenc "$QUERY")")
+  if [[ "$(jq -r '.component // empty' <<<"$CH")" == xak-flow-redirect ]]; then TO=$(jq -r '.to' <<<"$CH"); break; fi
+done
+[[ "$TO" == "$KC_URL/api/auth/oidc/logged-out" ]] || fail "invalidation flow ended with: $(head -c 300 <<<"$CH")"
+BACK=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$TO")
+[[ "$BACK" == "$APP_HOME" ]] && say "logout: Keycast -> Authentik end-session -> Keycast -> back at $APP_HOME" || fail "logged-out returned to '$BACK'"
+[[ -z "$(curl -sS -b "$JAR/ak5" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.username // empty' 2>/dev/null)" ]] \
+  && say "logout: the Authentik session has ended" || fail "Authentik session still alive after logout"
+read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s10 "$CHALLENGE" none)")
+[[ "$END" == "$REDIRECT_URI?error=login_required&state=s10" ]] \
+  && say "after logout the silent check answers login_required (no automatic sign-in)" || fail "after logout: '$END' ($HOPS)"
+STATUS=$(curl -sS -o /dev/null -w '%{redirect_url}' -b "$JAR/kc5" "$KC_URL/api/auth/oidc/logged-out")
+[[ "$STATUS" == "$KC_URL/" ]] && say "logged-out without a logout cookie returns to Keycast's own page" || fail "logged-out without cookie -> '$STATUS'"

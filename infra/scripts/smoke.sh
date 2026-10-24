@@ -327,6 +327,18 @@ if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/
 else
   echo "  note Mailpit not reachable at $MAILPIT_URL: the mail round trip is checked by hand on a public deployment"
 fi
+step "6m. logout from an app ends the Keycast and the Authentik session (no silent sign-in after it)"
+# In 6h's magic-link browser: the logout ends that Authentik session, and AK_SESSION is still
+# needed (8b).
+if [[ -n "${MJAR:-}" && -s "$MJAR" ]] && [[ -n "$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty' 2>/dev/null)" ]]; then
+  if OUT=$(LOGOUT_ONLY=1 LOGOUT_JAR="$MJAR" KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
+    sed 's/^/  /' <<<"$OUT"; ok "logout from an app signs the participant out everywhere"
+  else
+    sed 's/^/  /' <<<"$OUT" >&2; bad "logout"
+  fi
+else
+  echo "    (skipped: no magic-link session from 6h)"
+fi
 rm -f "$MJAR"
 
 step "6f. Blossom: uploads need a signed BUD-11 event from a key with an active pass"
