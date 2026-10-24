@@ -76,6 +76,19 @@ class AuthentikClient:
             page = int((data.get("pagination") or {}).get("next") or 0)
         return members
 
+    def group_member_emails(self, name: str) -> list[str]:
+        """E-mail addresses of the group's active members (the stewards, for report mails)."""
+        emails: set[str] = set()
+        page = 1
+        while page:
+            data = self._get(
+                "/api/v3/core/users/",
+                {"groups_by_name": name, "is_active": "true", "page": page, "page_size": 500},
+            )
+            emails.update(u["email"] for u in data.get("results", []) if u.get("email"))
+            page = int((data.get("pagination") or {}).get("next") or 0)
+        return sorted(emails)
+
     def _post_no_content(self, path: str, body: dict[str, Any]) -> None:
         r = self._client.post(f"{self.url}{path}", json=body, headers=self._headers)
         r.raise_for_status()

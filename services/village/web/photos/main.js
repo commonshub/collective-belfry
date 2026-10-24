@@ -19,6 +19,7 @@ import {
 } from "../shared/model.js"
 import { isMe, loadProfiles, participants, publish, query, queryAuthors, shrinkImageWithSize, uploadDescriptor } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
+import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
 const WHY = "Participants share their pictures of the village here. Sign in to see them and to add your own."
 const PEOPLE_URL = (import.meta.env.VITE_PEOPLE_URL || "").replace(/\/$/, "")
@@ -44,12 +45,12 @@ async function activePhotos(author = null) {
   const active = await participants()
   if (author && !active.has(author)) return []
   const authors = author ? [author] : [...active]
-  const events = await queryAuthors({ kinds: [PHOTO_KIND], limit: FEED_LIMIT }, authors)
+  const [events, hidden] = await Promise.all([queryAuthors({ kinds: [PHOTO_KIND], limit: FEED_LIMIT }, authors), hiddenRefs()])
   const byId = new Map(events.map(e => [e.id, e]))
   const posters = [...new Set(events.map(e => e.pubkey))]
   const gone = posters.length ? deletedIds(await queryAuthors({ kinds: [5], "#k": [String(PHOTO_KIND)] }, posters), byId) : new Set()
   return [...byId.values()]
-    .filter(e => !gone.has(e.id))
+    .filter(e => !gone.has(e.id) && !(hidden.has(e.id) && !isMe(e.pubkey)))
     .map(photoFromEvent)
     .filter(Boolean)
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -110,7 +111,7 @@ async function feedPage({ hashtag = "", author = null } = {}) {
 }
 
 /** Likes (unique authors, the newest reaction each), comments and tips of one post. */
-async function reactionsFor(p, active) {
+async function reactionsFor(p, active, hidden) {
   const [reactions, comments, zaps] = await Promise.all([
     query({ kinds: [7], "#e": [p.id] }),
     query({ kinds: [1111], "#E": [p.id] }),
@@ -125,7 +126,9 @@ async function reactionsFor(p, active) {
   const likers = [...newestReaction].filter(([, r]) => r.content !== "-").map(([pk]) => pk)
   return {
     likers,
-    comments: comments.filter(c => active.has(c.pubkey) && c.content.trim()).sort((a, b) => a.created_at - b.created_at),
+    comments: comments
+      .filter(c => active.has(c.pubkey) && c.content.trim() && !(hidden.has(c.id) && !isMe(c.pubkey)))
+      .sort((a, b) => a.created_at - b.created_at),
     // a tip counts only when it went to the photographer
     tips: zaps
       .filter(z => z.tags.some(t => t[0] === "p" && t[1] === p.pubkey))
@@ -138,7 +141,7 @@ async function photoPage(id) {
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
-  let p, active, r, profiles
+  let p, active, r, profiles, hidden
   try {
     active = await participants()
     const event = (await query({ ids: [id], kinds: [PHOTO_KIND] }))[0]
@@ -147,7 +150,9 @@ async function photoPage(id) {
     if (!active.has(p.pubkey)) throw Object.assign(new Error("The photographer has no active pass any more."), { status: 410 })
     const dels = await query({ kinds: [5], authors: [p.pubkey], "#e": [p.id] })
     if (deletedIds(dels, new Map([[p.id, event]])).has(p.id)) throw Object.assign(new Error("This photo is gone."), { status: 404 })
-    r = await reactionsFor(p, active)
+    hidden = await hiddenRefs()
+    if (hidden.has(p.id) && !isMe(p.pubkey)) throw Object.assign(new Error("The stewards hid this photo."), { status: 404 })
+    r = await reactionsFor(p, active, hidden)
     profiles = await loadProfiles([p.pubkey, ...r.comments.map(c => c.pubkey), ...r.tips.map(t => t.from)])
   } catch (e) {
     body.innerHTML = e.status === 403 ? failure(e) : `<p class="notice bad">${esc(e.message)}</p>`
@@ -178,8 +183,9 @@ async function photoPage(id) {
       <div class="actions">
         <button id="like" ${liked ? "disabled" : ""}>${liked ? "Liked" : "Like"}</button>
         <span class="muted small">${r.likers.length} like${r.likers.length === 1 ? "" : "s"}${allTips ? ` · ${tokens(allTips)} in tips` : ""}</span>
-        ${mine ? '<button class="danger" id="delete">Delete</button>' : ""}
+        ${mine ? '<button class="danger" id="delete">Delete</button>' : reportLink({ kind: "photo", ref: p.id, pubkey: p.pubkey, excerpt: [p.title, p.caption].filter(Boolean).join(" — ") })}
       </div>
+      ${mine && hidden.has(p.id) ? '<p class="notice bad">The stewards hid this photo after a report: other participants do not see it. Ask a steward if you think this is a mistake.</p>' : ""}
       ${
         tipLinks.length
           ? `<div class="actions tight"><span class="label">Tip the photographer</span>${tipLinks
@@ -203,7 +209,9 @@ async function photoPage(id) {
               .map(
                 c => `<div class="comment">${avatar(profiles.get(c.pubkey), 28)}<div><span class="small"><a href="#/u/${nip19.npubEncode(c.pubkey)}">${esc(
                   profileName(profiles.get(c.pubkey), "A participant"),
-                )}</a> <span class="muted">${esc(when(c.created_at))}</span></span><p class="pre">${esc(c.content)}</p></div></div>`,
+                )}</a> <span class="muted">${esc(when(c.created_at))}</span>${
+                  isMe(c.pubkey) ? "" : ` ${reportLink({ kind: "comment", ref: c.id, pubkey: c.pubkey, excerpt: c.content }, "Report")}`
+                }</span><p class="pre">${esc(c.content)}</p></div></div>`,
               )
               .join("")
           : '<p class="muted small">No comments yet.</p>'
@@ -213,6 +221,7 @@ async function photoPage(id) {
         <button type="submit">Comment</button>
       </form>
     </article>`
+  bindReports(body)
   document.getElementById("like").onclick = async e => {
     e.target.disabled = true
     try {

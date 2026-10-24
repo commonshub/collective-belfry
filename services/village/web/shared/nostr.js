@@ -43,17 +43,14 @@ async function sha256Hex(bytes) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("")
 }
 
-/** A NIP-98 header for this app's API. */
-export async function nip98(method, path) {
-  const event = await sign({
-    kind: 27235,
-    created_at: Math.floor(Date.now() / 1000),
-    tags: [
-      ["u", `${location.origin}${path}`],
-      ["method", method],
-    ],
-    content: "",
-  })
+/** A NIP-98 header for this app's API; with a body, its SHA-256 goes in the payload tag. */
+export async function nip98(method, path, body = null) {
+  const tags = [
+    ["u", `${location.origin}${path}`],
+    ["method", method],
+  ]
+  if (body) tags.push(["payload", await sha256Hex(new TextEncoder().encode(body))])
+  const event = await sign({ kind: 27235, created_at: Math.floor(Date.now() / 1000), tags, content: "" })
   return `Nostr ${btoa(JSON.stringify(event))}`
 }
 

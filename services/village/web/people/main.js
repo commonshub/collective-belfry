@@ -4,9 +4,10 @@
 import "../shared/style.css"
 import { nip19 } from "nostr-tools"
 import * as session from "../shared/session.js"
-import { ACTIVITY_KINDS, DIRECTORY_D, LISTING_KIND, activityFromEvent, deletedIds, directoryConsent, latestByAuthor, parseProfile, profileName } from "../shared/model.js"
+import { ACTIVITY_KINDS, DIRECTORY_D, LISTING_KIND, activityFromEvent, deletedIds, directoryConsent, isHidden, latestByAuthor, parseProfile, profileName } from "../shared/model.js"
 import { forgetProfile, isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, chatLink, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
+import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
 const WHY = "The directory lists the participants who chose to be listed. Sign in to see it and to add yourself."
 const appUrl = name => (import.meta.env[`VITE_${name}_URL`] || "").replace(/\/$/, "")
@@ -15,8 +16,11 @@ const ACTIVITY_DAYS = 14
 
 async function listed() {
   const active = [...(await participants())]
-  const consent = latestByAuthor(await queryAuthors({ kinds: [30078], "#d": [DIRECTORY_D] }, active))
-  const pubkeys = [...consent].filter(([, e]) => directoryConsent(e)).map(([pk]) => pk)
+  const [consent, hidden] = await Promise.all([
+    queryAuthors({ kinds: [30078], "#d": [DIRECTORY_D] }, active).then(latestByAuthor),
+    hiddenRefs(),
+  ])
+  const pubkeys = [...consent].filter(([pk, e]) => directoryConsent(e) && !hidden.has(pk)).map(([pk]) => pk)
   const profiles = await loadProfiles(pubkeys)
   return pubkeys
     .map(pk => ({ pk, profile: profiles.get(pk) }))
@@ -86,6 +90,7 @@ async function personPage(npubStr) {
   try {
     pk = nip19.decode(npubStr).data
     if (!(await participants()).has(pk)) throw Object.assign(new Error("not an active participant"), { status: 404 })
+    if ((await hiddenRefs()).has(pk) && !isMe(pk)) throw Object.assign(new Error("hidden"), { status: 404 })
   } catch (e) {
     body.innerHTML = e.status === 403 ? failure(e) : '<p class="notice bad">This is not a participant with an active pass.</p>'
     return
@@ -102,9 +107,11 @@ async function personPage(npubStr) {
       ${
         isMe(pk)
           ? '<a class="button" href="#/me">Edit your entry</a>'
-          : `<div class="actions">${chat ? `<a class="primary button" href="${esc(chat)}">Message</a>` : ""}${pay ? `<a class="button" href="${esc(pay)}">Send tokens</a>` : ""}</div>`
+          : `<div class="actions">${chat ? `<a class="primary button" href="${esc(chat)}">Message</a>` : ""}${pay ? `<a class="button" href="${esc(pay)}">Send tokens</a>` : ""}</div>
+             <p class="small">${reportLink({ kind: "profile", ref: pk, pubkey: pk, excerpt: [profileName(profile, ""), profile?.about || ""].join(" — ") })}</p>`
       }
     </div>`
+  bindReports(body)
 }
 
 async function mePage() {
@@ -215,9 +222,10 @@ function startText(start) {
 async function recentActivity() {
   const active = await participants()
   const since = Math.floor(Date.now() / 1000) - ACTIVITY_DAYS * 86400
-  const [events, deletions] = await Promise.all([
+  const [events, deletions, hidden] = await Promise.all([
     query({ kinds: ACTIVITY_KINDS, since, limit: 500 }),
     query({ kinds: [5], since, limit: 500 }),
+    hiddenRefs(),
   ])
   const byId = new Map(events.map(e => [e.id, e]))
   const gone = deletedIds(deletions, byId)
@@ -225,7 +233,9 @@ async function recentActivity() {
   // addressable events (offers, articles, calendar events, directory consent): the newest only
   const newest = new Map()
   for (const e of events) {
-    if (!active.has(e.pubkey) || gone.has(e.id)) continue
+    // hidden content, and comments on hidden content
+    if (!active.has(e.pubkey) || gone.has(e.id) || isHidden(hidden, e)) continue
+    if (e.kind === 1111 && e.tags.some(t => t[0] === "E" && hidden.has(t[1]))) continue
     const d = e.kind >= 30000 && e.kind < 40000 ? e.tags.find(t => t[0] === "d")?.[1] : null
     const key = d === null ? e.id : `${e.kind}:${e.pubkey}:${d}`
     if (goneCoords.has(key)) continue

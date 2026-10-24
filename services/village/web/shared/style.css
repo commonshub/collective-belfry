@@ -414,3 +414,14 @@ h3.day {
   color: var(--osv-foreground-muted, #c9d1cb);
   margin: 16px 0 8px;
 }
+/* Reports */
+button.link.small.report {
+  font-size: 0.8rem;
+  color: var(--osv-foreground-muted, #c9d1cb);
+}
+.report-form {
+  margin-top: 8px;
+}
+.report-form .chips {
+  flex-wrap: wrap;
+}

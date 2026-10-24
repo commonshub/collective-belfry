@@ -50,6 +50,15 @@ answers one question: which keys hold an active pass.
   post's id as `ref` (wallet patch 0004 puts it in an `e` tag of the nutzap). The post shows the
   tipper "You tipped N tokens" and the photographer each tip; only nutzaps to the photographer count.
 
+- **Reports.** A "Report" link on a person in the directory, an offer and a photo or comment opens
+  a short form (reason: spam, harassment or hate, illegal content, scam or fraud, other; an
+  optional note). `POST /api/report` takes it NIP-98 signed with the body's hash; the reporter is
+  the signer and must hold an active pass. The server passes it to the onboarding service, which
+  stores it in Odoo and mails the stewards; stewards handle it on the steward pages (hide the
+  content, dismiss, revoke the author's pass). `GET /api/hidden` lists what stewards hid; every
+  app filters it out (lists, pages, comments, "What's new"), except for the author, who sees a
+  notice instead. The content itself stays on the relay.
+
 Kinds signed: 0, 5, 7, 20, 1111, 22242, 24242, 27235, 30078, 30402 (all in the `belfry-event`
 policy). Keycast clients `belfry-people`, `belfry-market` and `belfry-photos`, registered by
 bootstrap with `<URL>/oauth/callback` and trusted (`KEYCAST_TRUSTED_CLIENTS`).

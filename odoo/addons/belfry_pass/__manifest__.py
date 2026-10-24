@@ -12,8 +12,9 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Automation rules that notify the onboarding service when an invoice is paid or a refund is done
 - Activation mail with the one-time Authentik login setup link (Phase 2), "Send new login link" button
 - Pass certificate claim link and status list index (Phase 3), "Revoke pass" button
+- belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.7.0',
+    'version': '19.0.1.8.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',

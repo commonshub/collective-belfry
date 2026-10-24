@@ -22,7 +22,8 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/credentials.py` | the pass claims, Token Status List, type metadata, reading a verified presentation |
 | `belfry_onboarding/bridge.py` | sign-in with the pass: an OIDC provider over Verifier2 (`../../docs/pass-sign-in.md`) |
 | `belfry_onboarding/mypass.py` | the pass on the phone (`/me`) and its door check (`/check`) |
-| `belfry_onboarding/steward.py` | the steward pages (`/steward`) |
+| `belfry_onboarding/steward.py` | the steward pages (`/steward`): invites, passes, reports |
+| `belfry_onboarding/reports.py` | reports from the village apps and the list of hidden content |
 | `belfry_onboarding/pages.py`, `content/*.md` | the text pages (privacy notice, terms, refund policy, community rules, help): edit the Markdown in `content/` |
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
@@ -94,6 +95,8 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `POST /admin/passes/<id>/revoke?token=`, `POST /admin/passes/<id>/login-link?token=` | `HOOK_TOKEN` | revoke a pass; mint a new sign-in link (Odoo's buttons) |
 | `GET /admin/partners/<id>/pass` | `PASS_INFO_TOKEN` | the partner's pass for Keycast's "Your pass" card |
 | `GET /admin/active-passes` | `PASS_INFO_TOKEN` | pass id and public key of every active pass (polls, village apps) |
+| `POST /admin/reports` | `PASS_INFO_TOKEN` | a participant's report of content, forwarded by the village server after its NIP-98 check (`reports.py`): checked (the reporter holds an active pass, known app, kind and reason, a valid reference), stored as `belfry.report` in Odoo and mailed to every member of the stewards group |
+| `GET /admin/moderation/hidden` | `PASS_INFO_TOKEN` | what stewards hid after a report: event ids, offer coordinates and the pubkeys of directory entries; the village apps do not show them |
 | `GET /claim/<token>`, `GET /claim/<token>/offer` | claim token from the activation mail | the claim page: a fresh credential offer as QR code and link (JSON for wallets and tests); 410 when the pass is not active |
 | `GET /tokens/<token>` | claim token | the village tokens of the pass: into the wallet, or as text for any Cashu wallet |
 | `GET /me`, `/me/qr`, `/me/login`, `/me/callback`, `POST /me/logout` | Authentik sign-in (application `belfry-pass`) | the pass on the phone: tier, dates and a QR code renewed every 30 s |

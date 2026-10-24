@@ -3,7 +3,8 @@
 //
 //   1. B opens the wallet once (publishes the receiving key, kind 10019), then shares a picture on
 //      photos: uploaded to Blossom, with alt text, title, caption and hashtags (NIP-68, kind 20).
-//   2. A (signed in silently) finds it in the feed and under its hashtag, likes it and comments.
+//   2. A (signed in silently) finds it in the feed and under its hashtag, likes it, comments and
+//      reports it to the stewards.
 //   3. A receives tokens (TOKEN_A, an unspent cashuB token) and tips 1 token: the wallet opens
 //      with the tip filled in, sends a nutzap naming the picture ("e" tag, wallet patch 0004) and
 //      returns to the picture, which then says "You tipped 1 token".
@@ -198,6 +199,14 @@ try {
   await a.click("#comment button")
   await a.waitFor(`document.querySelector("#comments")?.innerText.includes(${JSON.stringify(COMMENT)})`, 30000, "the comment")
   ok("A: liked it and commented")
+  await a.click("button.report[data-report]")
+  await a.waitFor(`!!document.querySelector(".report-form")`, 10000, "the report form")
+  await a.evaluate(`document.querySelector(".report-form input[value=spam]").click()`)
+  await a.fill(".report-form textarea", `check ${RUN}`)
+  await a.click(".report-form button[type=submit]")
+  await a.waitFor(`!!document.querySelector(".report-done")`, 30000, "the report confirmation")
+  ok("A: reported the picture to the stewards (report form, NIP-98 signed)")
+  await a.shot("reported")
 
   // 3. A gets tokens and tips 1 token through the wallet.
   await a.go(`${WALLET}/`)

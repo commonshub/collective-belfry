@@ -273,3 +273,25 @@ export function activityFromEvent(event) {
       return null
   }
 }
+
+// Moderation: what stewards hid after a report (event ids, offer coordinates, and pubkeys for
+// directory entries). The content stays on the relay; the apps do not show it.
+export const REPORT_REASONS = [
+  ["spam", "Spam"],
+  ["harassment", "Harassment or hate"],
+  ["illegal", "Illegal content"],
+  ["scam", "Scam or fraud"],
+  ["other", "Something else"],
+]
+
+/** True when a steward hid this event: by id, by its addressable coordinate, or (directory
+ * entries) by its author. */
+export function isHidden(hidden, event) {
+  if (!hidden?.size || !event) return false
+  if (hidden.has(event.id)) return true
+  if (event.kind >= 30000 && event.kind < 40000) {
+    const d = event.tags?.find(t => t[0] === "d")?.[1]
+    if (d !== undefined && hidden.has(`${event.kind}:${event.pubkey}:${d}`)) return true
+  }
+  return (event.kind === 0 || event.kind === 30078) && hidden.has(event.pubkey)
+}

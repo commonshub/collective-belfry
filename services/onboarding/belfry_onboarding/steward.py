@@ -177,6 +177,36 @@ PASS_FIELDS = [
 ]
 
 
+REPORT_FIELDS = [
+    "create_date",
+    "app",
+    "target_kind",
+    "reason",
+    "note",
+    "target_excerpt",
+    "target_url",
+    "target_pass_id",
+    "target_partner_id",
+    "reporter_partner_id",
+    "state",
+    "handled_by",
+]
+REPORT_LABELS = {
+    "spam": "Spam",
+    "harassment": "Harassment or hate",
+    "illegal": "Illegal content",
+    "scam": "Scam or fraud",
+    "other": "Other",
+    "profile": "directory entry",
+    "listing": "offer",
+    "photo": "photo",
+    "comment": "comment",
+    "people": "Directory",
+    "market": "Marketplace",
+    "photos": "Photos",
+}
+
+
 def dashboard_data(svc: Services) -> dict[str, Any]:
     odoo = svc.odoo
     invites = odoo.search_read("belfry.invite", [], INVITE_FIELDS, limit=50, order="id desc")
@@ -198,7 +228,14 @@ def dashboard_data(svc: Services) -> dict[str, Any]:
         if invoice_ids
         else {}
     )
-    return {"invites": invites, "passes": passes, "partners": partners, "invoices": invoices}
+    reports = odoo.search_read("belfry.report", [], REPORT_FIELDS, limit=50, order="id desc")
+    return {
+        "invites": invites,
+        "passes": passes,
+        "partners": partners,
+        "invoices": invoices,
+        "reports": reports,
+    }
 
 
 def create_invite(svc: Services, sess: dict[str, Any], note: str) -> dict[str, Any]:
@@ -219,6 +256,13 @@ def mark_paid(svc: Services, sess: dict[str, Any], pass_id: int) -> str:
     row = svc.odoo.read_one("belfry.pass", pass_id, ["invoice_id"])
     invoice_id = core.m2o_id(row["invoice_id"]) if row else None
     return core.activate_pass(svc, invoice_id) if invoice_id else "not_found"
+
+
+def handle_report(svc: Services, sess: dict[str, Any], report_id: int, action: str) -> str:
+    log.info("steward %s: report %s %s", sess["email"], report_id, action)
+    return svc.odoo.call(
+        "belfry.report", "belfry_report_handle", [[report_id], action, sess["email"]]
+    )
 
 
 def send_login_link(svc: Services, pass_id: int) -> str:
@@ -358,6 +402,68 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
     if err:
         parts.append(f'<div class="card err">{E(err)}</div>')
 
+    reports = data.get("reports") or []
+    rows = []
+    for r in reports:
+        label = REPORT_LABELS.get
+        target_pass = core.m2o_id(r.get("target_pass_id"))
+        author = r["target_partner_id"][1] if r.get("target_partner_id") else "no pass"
+        reporter = r["reporter_partner_id"][1] if r.get("reporter_partner_id") else ""
+        what = f"{label(r.get('app'), '')}: {label(r.get('target_kind'), '')}"
+        if r.get("target_url"):
+            what = f'<a href="{E(r["target_url"])}" target="_blank" rel="noopener">{E(what)}</a>'
+        else:
+            what = E(what)
+        detail = "".join(
+            f"<br><span class='muted'>{E(t)}</span>"
+            for t in (r.get("target_excerpt"), r.get("note") and f"Note: {r['note']}")
+            if t
+        )
+        actions = []
+        if r["state"] == "open":
+            actions.append(
+                _form(
+                    f"/steward/reports/{r['id']}/hide",
+                    sess,
+                    "Hide content",
+                    confirm="Hide this content in the directory, marketplace and photos?",
+                )
+            )
+            actions.append(
+                _form(f"/steward/reports/{r['id']}/dismiss", sess, "Dismiss", quiet=True)
+            )
+        else:
+            actions.append(_form(f"/steward/reports/{r['id']}/reopen", sess, "Reopen", quiet=True))
+        if target_pass:
+            actions.append(
+                _form(
+                    f"/steward/passes/{target_pass}/revoke",
+                    sess,
+                    "Revoke author's pass",
+                    quiet=True,
+                    confirm="Revoke the author's pass? Door, apps and relay access end, and "
+                    "their content disappears from the apps.",
+                )
+            )
+        state = E(r["state"]) + (
+            f"<br><span class='muted'>{E(r['handled_by'])}</span>" if r.get("handled_by") else ""
+        )
+        rows.append(
+            f"<tr><td>{_date(r.get('create_date'))}</td><td>{what}{detail}</td>"
+            f"<td>{E(label(r.get('reason'), ''))}</td><td>{E(author)}</td><td>{E(reporter)}</td>"
+            f"<td><span class='state'>{state}</span></td><td>{' '.join(actions)}</td></tr>"
+        )
+    open_count = sum(1 for r in reports if r["state"] == "open")
+    parts.append(
+        f"<section id='reports'><h2>Reports{f' ({open_count} open)' if open_count else ''}</h2>"
+        "<p class='muted'>Reports from the directory, marketplace and photos. Hidden content "
+        "stays on the relay but the apps stop showing it. Reporters are never told to the "
+        "author.</p><div class='wrap'><table><thead><tr><th>Date</th><th>What</th><th>Reason</th>"
+        "<th>Author</th><th>Reported by</th><th>State</th><th></th></tr></thead><tbody>"
+        + ("".join(rows) or "<tr><td colspan=7 class='muted'>No reports.</td></tr>")
+        + "</tbody></table></div></section>"
+    )
+
     rows = []
     for inv in data["invites"]:
         who = inv.get("steward_email") or (inv["steward_id"][1] if inv.get("steward_id") else "")
@@ -473,6 +579,9 @@ MESSAGES = {
     "paid-pending": "Payment registered. The pass activates in a moment; reload to see it.",
     "link": "A new sign-in link was mailed to the participant.",
     "revoked-pass": "Pass revoked.",
+    "report-hide": "The content is hidden in the apps.",
+    "report-dismiss": "Report dismissed.",
+    "report-reopen": "Report reopened.",
     "signed-out": "Signed out.",
 }
 
@@ -601,6 +710,14 @@ def register(app: FastAPI) -> None:
         services, _sess = signed_in(request, csrf)
         result = await run_in_threadpool(send_login_link, services, pass_id)
         return back("link") if result == "sent" else back(err=f"No link sent ({result}).")
+
+    @app.post("/steward/reports/{report_id}/{action}")
+    async def steward_report(report_id: int, action: str, request: Request, csrf: str = Form("")):
+        services, sess = signed_in(request, csrf)
+        if action not in ("hide", "dismiss", "reopen"):
+            raise StewardError(404, "Unknown action.")
+        await run_in_threadpool(handle_report, services, sess, report_id, action)
+        return back(f"report-{action}")
 
     @app.post("/steward/passes/{pass_id}/revoke")
     async def steward_revoke_pass(pass_id: int, request: Request, csrf: str = Form("")):

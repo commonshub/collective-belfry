@@ -20,6 +20,7 @@ M2O: dict[str, set[str]] = {
     "belfry.pass": {"partner_id", "product_id", "invoice_id", "transaction_id", "invite_id"},
     "belfry.stripe.event": {"pass_id"},
     "belfry.invite": set(),
+    "belfry.report": {"reporter_pass_id", "target_pass_id"},
     "product.product": set(),
     "res.partner": set(),
 }
@@ -126,6 +127,31 @@ class FakeOdoo(OdooApi):
                 product_id=product["id"],
                 invoice_id=invoice_id,
                 state="pending",
+            )
+        if model == "belfry.report" and method == "belfry_report_create":
+            vals, emails = args[0], args[1] if len(args) > 1 else []
+            by_key = {p.get("keycast_pubkey"): p["id"] for p in self.tables["belfry.pass"].values()}
+            rid = self.add(
+                "belfry.report",
+                **vals,
+                state="open",
+                reporter_pass_id=by_key.get(vals.get("reporter_pubkey")) or False,
+                target_pass_id=by_key.get(vals.get("target_pubkey")) or False,
+                mailed_to=list(emails),
+                create_date="2026-10-25 10:00:00",
+                handled_by=False,
+            )
+            return rid
+        if model == "belfry.report" and method == "belfry_report_handle":
+            (rid,), action, email = args[0], args[1], args[2]
+            states = {"hide": "hidden", "dismiss": "dismissed", "reopen": "open"}
+            if action not in states:
+                raise OdooError(f"UserError: Unknown action {action}.")
+            self.tables[model][rid].update(state=states[action], handled_by=email)
+            return states[action]
+        if model == "belfry.report" and method == "belfry_hidden_refs":
+            return sorted(
+                {r["target_ref"] for r in self.tables[model].values() if r.get("state") == "hidden"}
             )
         if model == "belfry.invite" and method == "belfry_steward_create":
             email, note = args[0], args[1] if len(args) > 1 else False

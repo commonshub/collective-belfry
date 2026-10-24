@@ -502,6 +502,7 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list ($(jq '.pubkeys | length' <<<"$LIST") active keys)" || bad "participants list for the participant: $(head -c 200 <<<"$LIST")"
 fi
 echo "  note the browser check (directory opt-in, an offer with a photo, paying it through the wallet) is infra/scripts/village-check.mjs"
+
 step "6s. text pages on pass.<domain>: privacy, terms, refunds, rules, help; linked from the landing page"
 for page in "privacy|Privacy notice" "terms|Terms of participation" "refunds|Refund policy" "rules|Community rules" "help|Help"; do
   p=${page%%|*}; t=${page#*|}; H=$(curl -sS -o - -w '\n%{http_code}' "$ONB_URL/$p")
@@ -536,31 +537,27 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
 fi
 echo "  note the browser check (upload, share, like, comment, tip through the wallet) is infra/scripts/photos-check.mjs"
 
-
-step "6q. photos (services/village): served on its own host; NIP-98 bound to it; pictures signed through the policy"
-PHOTOS_URL=${PHOTOS_URL:-${PHOTOS_PUBLIC_URL:-http://localhost:3800}}
-H=$(curl -sS -o - -w '\n%{http_code}' "$PHOTOS_URL/")
-[[ "${H##*$'\n'}" == 200 && "$H" == *"<title>Open Source Village photos</title>"* ]] && ok "Open Source Village photos answers at $PHOTOS_URL" || bad "photos at $PHOTOS_URL: HTTP ${H##*$'\n'}"
-JS=$(grep -o '/assets/index-[^"]*\.js' <<<"$H" | head -1)
-BUNDLE=$(curl -sS "$PHOTOS_URL$JS")
-[[ "$BUNDLE" == *"belfry-photos"* && "$BUNDLE" == *"${BLOSSOM_PUBLIC_URL:-http://localhost:3100}"* ]] && ok "bundle signs in as belfry-photos and uploads to ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}" || bad "photos bundle lacks the client id or the Blossom URL"
-[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PHOTOS_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
+step "6r. reports: a participant reports a photo, Odoo stores it, a steward hides it, the apps learn it"
 if [[ -n "${KC_TOKEN:-}" ]]; then
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  R_REF=$(openssl rand -hex 32); R_AUTHOR=$(openssl rand -hex 32)
+  R_BODY=$(jq -nc --arg r "$R_REF" --arg a "$R_AUTHOR" '{target_kind:"photo", target_ref:$r, target_pubkey:$a, reason:"spam", note:"smoke test report", target_excerpt:"Buy now"}')
+  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/report" --arg h "$(printf '%s' "$R_BODY" | sha256sum | cut -c1-64)" \
+    '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","POST"],["payload",$h]], content:""}')
   SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
-  LIST=$(curl -sS -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")
-  jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list from the photos host" || bad "participants list from the photos host: $(head -c 200 <<<"$LIST")"
-  # a token signed for the directory's URL is refused here (NIP-98 names the host)
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
-  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
-  [[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")" == 401 ]] && ok "a NIP-98 token for another app's URL: 401" || bad "photos accepted a token for the directory's URL"
-  for k in 20 7 1111; do
-    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
-    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
-    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (picture, like, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
-  done
+  RES=$(curl -sS -X POST "$PHOTOS_URL/api/report" -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" -H 'Content-Type: application/json' --data-binary "$R_BODY")
+  R_ID=$(jq -r '.id // empty' <<<"$RES")
+  [[ -n "$R_ID" ]] && ok "report sent through the photos app (report $R_ID)" || bad "report: $RES"
+  if [[ -n "$R_ID" ]]; then
+    REP=$(ox belfry.report read "[[$R_ID]]" '{"fields":["state","app","target_ref","reporter_pass_id","reason"]}' | jq -c '.[0]')
+    [[ "$(jq -r .state <<<"$REP")" == open && "$(jq -r .app <<<"$REP")" == photos && "$(jq -r '.reporter_pass_id[0]' <<<"$REP")" == "$PASS_ID" ]] \
+      && ok "Odoo holds the report: app photos, reporter's pass $PASS_ID, open" || bad "report in Odoo: $REP"
+    [[ "$(ox belfry.report belfry_report_handle "[[$R_ID],\"hide\",\"smoke@belfry.local\"]")" == '"hidden"' ]] && ok "a steward hides the content" || bad "hide the reported content"
+    for _ in 1 2 3 4 5 6 7; do curl -sS "$PHOTOS_URL/api/hidden" | jq -e --arg r "$R_REF" '.hidden | index($r)' >/dev/null && break; sleep 5; done
+    curl -sS "$PHOTOS_URL/api/hidden" | jq -e --arg r "$R_REF" '.hidden | index($r)' >/dev/null && ok "the apps' hidden list carries it" || bad "hidden list lacks the reported photo"
+    ox belfry.report belfry_report_handle "[[$R_ID],\"dismiss\",\"smoke@belfry.local\"]" >/dev/null || true
+  fi
+  [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$PHOTOS_URL/api/report" --data-binary "$R_BODY")" == 401 ]] && ok "an unsigned report: 401" || bad "unsigned report not refused"
 fi
-echo "  note the browser check (upload, share, like, comment, tip through the wallet) is infra/scripts/photos-check.mjs"
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")

@@ -8,7 +8,7 @@
 // | --- | --- |
 // | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT` | listen ports (8080, 8081, 8082) |
 // | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
-// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` | the active passes: `GET <ONBOARDING_URL>/admin/active-passes` |
+// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
 // | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist` and `photos/dist`) |
 import { createServer } from "node:http"
 import { readFile, stat } from "node:fs/promises"
@@ -27,6 +27,8 @@ const TYPES = {
   ".woff2": "font/woff2",
 }
 const PASSES_TTL_MS = 30_000
+const HIDDEN_TTL_MS = 30_000
+const MAX_REPORT_BYTES = 8192
 
 export class HttpError extends Error {
   constructor(status, message) {
@@ -55,12 +57,54 @@ export function onboardingPasses({ baseUrl, token, fetchImpl = fetch }) {
   }
 }
 
+/** Reports and hidden content, through the onboarding service (which stores them in Odoo and
+ * mails the stewards). The hidden list is cached for 30 s. */
+export function onboardingModeration({ baseUrl, token, fetchImpl = fetch }) {
+  const root = baseUrl.replace(/\/$/, "")
+  const headers = { Authorization: `Bearer ${token}` }
+  let cache = null
+  let cachedAt = 0
+  return {
+    async hidden() {
+      if (cache && Date.now() - cachedAt < HIDDEN_TTL_MS) return cache
+      const res = await fetchImpl(`${root}/admin/moderation/hidden`, { headers, signal: AbortSignal.timeout(5000) })
+      if (!res.ok) throw new Error(`onboarding answered ${res.status}`)
+      cache = (await res.json()).hidden || []
+      cachedAt = Date.now()
+      return cache
+    },
+    async report(body) {
+      const res = await fetchImpl(`${root}/admin/reports`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(10000),
+      })
+      const answer = await res.json().catch(() => ({}))
+      if (res.status === 400 || res.status === 403) throw new HttpError(res.status, answer.detail || "report refused")
+      if (!res.ok) throw new Error(`onboarding answered ${res.status}`)
+      return answer
+    },
+  }
+}
+
+async function readBody(req, limit) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > limit) throw new HttpError(413, "too large")
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 function send(res, status, body) {
   res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
   res.end(JSON.stringify(body))
 }
 
-export function createApp({ passes, publicUrl, staticDir }) {
+export function createApp({ passes, moderation, app, publicUrl, staticDir }) {
   const base = publicUrl.replace(/\/$/, "")
 
   async function api(req, res, path) {
@@ -71,6 +115,36 @@ export function createApp({ passes, publicUrl, staticDir }) {
       const active = await passes.activePubkeys()
       if (!active.has(pubkey)) throw new HttpError(403, "no active pass for this key")
       return send(res, 200, { pubkeys: [...active].sort() })
+    }
+    if (path === "/api/hidden" && req.method === "GET") {
+      // What stewards hid after a report: event ids, offer coordinates, pubkeys of directory
+      // entries. Only references, nothing to protect; the apps filter on it.
+      return send(res, 200, { hidden: moderation ? await moderation.hidden() : [] })
+    }
+    if (path === "/api/report" && req.method === "POST") {
+      if (!moderation) throw new HttpError(503, "reports are not configured")
+      const raw = await readBody(req, MAX_REPORT_BYTES)
+      const pubkey = verifyNip98(req.headers.authorization, { url: base + path, method: "POST", body: raw })
+      if (!(await passes.activePubkeys()).has(pubkey)) throw new HttpError(403, "no active pass for this key")
+      let report
+      try {
+        report = JSON.parse(raw.toString("utf8"))
+      } catch {
+        throw new HttpError(400, "body is not JSON")
+      }
+      const pick = k => (typeof report?.[k] === "string" ? report[k] : "")
+      const answer = await moderation.report({
+        reporter_pubkey: pubkey, // the signer, never what the body claims
+        app,
+        target_kind: pick("target_kind"),
+        target_ref: pick("target_ref"),
+        target_pubkey: pick("target_pubkey"),
+        target_url: pick("target_url"),
+        target_excerpt: pick("target_excerpt"),
+        reason: pick("reason"),
+        note: pick("note"),
+      })
+      return send(res, 200, { ok: true, id: answer.id })
     }
     throw new HttpError(404, "not found")
   }
@@ -115,13 +189,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     if (!env[name]) throw new Error(`${name} is not set`)
   }
   const passes = onboardingPasses({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
+  const moderation = onboardingModeration({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
   const root = env.STATIC_ROOT || fileURLToPath(new URL("../web", import.meta.url))
   for (const [app, port, publicUrl] of [
     ["people", Number(env.PEOPLE_PORT || 8080), env.PEOPLE_PUBLIC_URL],
     ["market", Number(env.MARKET_PORT || 8081), env.MARKET_PUBLIC_URL],
     ["photos", Number(env.PHOTOS_PORT || 8082), env.PHOTOS_PUBLIC_URL],
   ]) {
-    const handler = createApp({ passes, publicUrl, staticDir: join(root, app, "dist") })
+    const handler = createApp({ passes, moderation, app, publicUrl, staticDir: join(root, app, "dist") })
     createServer(handler).listen(port, () => console.log(`${app} on :${port}, public ${publicUrl}`))
   }
 }

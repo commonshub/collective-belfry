@@ -4,3 +4,4 @@ from . import test_pass
 from . import test_pricing
 from . import test_promo
 from . import test_steward
+from . import test_report

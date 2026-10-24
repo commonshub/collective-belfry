@@ -7,6 +7,7 @@ import * as session from "../shared/session.js"
 import { CATEGORIES, LISTING_KIND, listingFromEvent, listingTemplate, profileName } from "../shared/model.js"
 import { isMe, loadProfiles, participants, publish, query, queryAuthors, shrinkImage, uploadBlob } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, chatLink, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
+import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
 const WHY = "Participants offer things, food, help and skills here, paid in village tokens. Sign in to see the offers and to add your own."
 const PEOPLE_URL = (import.meta.env.VITE_PEOPLE_URL || "").replace(/\/$/, "")
@@ -35,9 +36,11 @@ async function deletedCoordinates(authors) {
 
 async function activeListings() {
   const active = [...(await participants())]
-  const listings = newest(await queryAuthors({ kinds: [LISTING_KIND] }, active))
+  const [listings, hidden] = await Promise.all([queryAuthors({ kinds: [LISTING_KIND] }, active).then(newest), hiddenRefs()])
   const gone = await deletedCoordinates([...new Set(listings.map(l => l.pubkey))])
-  return listings.filter(l => !gone.has(l.coordinate)).sort((a, b) => b.publishedAt - a.publishedAt)
+  return listings
+    .filter(l => !gone.has(l.coordinate) && !(hidden.has(l.coordinate) && !isMe(l.pubkey)))
+    .sort((a, b) => b.publishedAt - a.publishedAt)
 }
 
 function failure(e) {
@@ -137,6 +140,8 @@ async function listingPage(code) {
     if (!(await participants()).has(a.pubkey)) throw Object.assign(new Error("The seller has no active pass any more."), { status: 410 })
     l = newest(await query({ kinds: [LISTING_KIND], authors: [a.pubkey], "#d": [a.identifier] }))[0]
     if (!l || (await deletedCoordinates([a.pubkey])).has(l.coordinate)) throw Object.assign(new Error("This offer is gone."), { status: 404 })
+    l.hidden = (await hiddenRefs()).has(l.coordinate)
+    if (l.hidden && !isMe(l.pubkey)) throw Object.assign(new Error("The stewards hid this offer."), { status: 404 })
     seller = (await loadProfiles([l.pubkey])).get(l.pubkey)
     payments = await paymentsFor(l)
   } catch (e) {
@@ -167,6 +172,8 @@ async function listingPage(code) {
         ${mine ? `<a class="button" href="#/edit/${encodeURIComponent(l.d)}">Edit</a>` : ""}
       </div>
       ${pay ? '<p class="small muted">Paying opens your wallet with the amount filled in and comes back here.</p>' : ""}
+      ${mine && l.hidden ? '<p class="notice bad">The stewards hid this offer after a report: other participants do not see it. Ask a steward if you think this is a mistake.</p>' : ""}
+      ${mine ? "" : `<p class="small">${reportLink({ kind: "listing", ref: l.coordinate, pubkey: l.pubkey, excerpt: [l.title, l.summary].filter(Boolean).join(" — ") })}</p>`}
       ${
         mine
           ? `<h3>Payments</h3>${
@@ -177,6 +184,7 @@ async function listingPage(code) {
           : ""
       }
     </article>`
+  bindReports(body)
 }
 
 async function myListingsPage() {
