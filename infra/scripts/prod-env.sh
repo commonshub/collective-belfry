@@ -16,9 +16,15 @@ ENV_FILE="$INFRA_DIR/.env"
 # Odoo's host prefix: the environment, else the one already in .env (a deployment that kept
 # odoo. must not be moved to shop. by a re-run), else shop.
 CURRENT_PREFIX=$(sed -nE 's/^ODOO_HOST_PREFIX=([^#[:space:]]*).*/\1/p' "$ENV_FILE" | tail -n1)
-python3 - "$ENV_FILE" "$DOMAIN" "$ACME" "${ODOO_HOST_PREFIX:-${CURRENT_PREFIX:-shop}}" <<'PY'
+# The mail sender: the environment, else the one already in .env unless it is the local default,
+# else belfry@<domain>. It must be an address the SMTP relay may send for, on a domain whose SPF
+# (and ideally DKIM) covers the relay; otherwise recipients drop the mails silently. The SMTP
+# login's own address is the safe choice.
+CURRENT_FROM=$(sed -nE 's/^MAIL_FROM=([^#[:space:]]*).*/\1/p' "$ENV_FILE" | tail -n1)
+[[ "$CURRENT_FROM" == belfry@belfry.local ]] && CURRENT_FROM=
+python3 - "$ENV_FILE" "$DOMAIN" "$ACME" "${ODOO_HOST_PREFIX:-${CURRENT_PREFIX:-shop}}" "${MAIL_FROM:-${CURRENT_FROM:-belfry@$DOMAIN}}" <<'PY'
 import re, sys
-path, domain, acme, shop = sys.argv[1:]
+path, domain, acme, shop, mail_from = sys.argv[1:]
 values = {
     "BELFRY_DOMAIN": domain,
     "ACME_EMAIL": acme,
@@ -36,7 +42,7 @@ values = {
     "ONBOARDING_PUBLIC_URL": f"https://pass.{domain}",
     "STATUS_LIST_URL": f"https://pass.{domain}/status/1",
     "STATUS_LIST_TTL": "300",
-    "MAIL_FROM": f"belfry@{domain}",
+    "MAIL_FROM": mail_from,
     "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
     "COMMUNITY_RELAY_URL": f"wss://relay.{domain}",
     # Keycast patch 0014: the custody seed lives in memory only (scripts/custody-seed.sh unlock)

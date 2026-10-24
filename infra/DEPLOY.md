@@ -39,6 +39,9 @@ infra/scripts/prod-env.sh belfry.example ops@belfry.example   # public URLs, SAN
 rm infra/issuer/keys/issuer.* infra/issuer/keys/verifier.* infra/issuer/keys/ca.*   # only before the first real issuance!
 infra/scripts/gen-secrets.sh
 # SMTP relay and sender in infra/.env (SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_ENCRYPTION, MAIL_FROM);
+# MAIL_FROM must be on a domain whose SPF (ideally DKIM too) covers the relay, e.g. the SMTP
+# login's own address: prod-env.sh's default belfry@<domain> needs its own SPF record, or the
+# relay accepts the mails and recipients drop them without a bounce;
 # the password from your machine, never through .env: infra/scripts/put-secret.sh <ssh target> smtp_password
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml build keycast     # ~15 min
 docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
