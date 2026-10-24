@@ -426,9 +426,11 @@ services:
       KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
       KEYCAST_ADMIN_TOKEN: ${KEYCAST_ADMIN_TOKEN:-}
       KEYCAST_SERVICE_TOKEN: ${KEYCAST_SERVICE_TOKEN:?}
-      # Community relay: kind-0 profiles are published here; the whitelist is rendered from
+      # Community relay: profiles, follow and relay lists are published here; the whitelist is rendered from
       # the template into the shared config volume (rnostr reloads it).
       RELAY_URL: ws://relay:8080
+      # The same relay as clients reach it: written into the participants' relay lists.
+      COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
       RELAY_CONFIG_PATH: /relay-config/rnostr.toml
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}

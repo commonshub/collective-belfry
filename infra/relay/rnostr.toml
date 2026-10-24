@@ -22,8 +22,11 @@ db_query_timeout = "100ms"
 [network]
 host = "0.0.0.0"
 port = 8080
-# Set when the relay runs behind a reverse proxy that terminates TLS.
-# real_ip_header = "x-forwarded-for"
+# The rate limiter below counts per client IP. Behind Caddy every browser would share the proxy's
+# address (60 events a minute for the whole village), so the first X-Forwarded-For entry is the
+# client (Caddy replaces the header of untrusted clients). Connections without the header (the
+# onboarding service on the Compose network, a local browser) share one key.
+real_ip_header = "x-forwarded-for"
 
 [limitation]
 max_message_length = 524288

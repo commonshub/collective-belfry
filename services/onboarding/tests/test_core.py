@@ -66,21 +66,46 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     ids = seed_paid_invoice(odoo, tier="day")
     assert core.activate_pass(services, ids["invoice"]) == "activated"
 
-    assert len(relay.events) == 1
-    ev = relay.events[0]
+    by_kind = {e["kind"]: e for e in relay.events}
+    assert sorted(by_kind) == [0, 3, 10002, 10050]
+    ev = by_kind[0]
     partner = odoo.get("res.partner", ids["partner"])
-    assert ev["kind"] == 0
     assert ev["pubkey"] == active_pass(odoo, ids["invoice"])["keycast_pubkey"]
     assert json.loads(ev["content"]) == {
         "name": partner["name"],
         "display_name": partner["name"],
         "nip05": "osv-0001@belfry.local",
     }
-    # NIP-42: the challenge was signed with the same key, and both signatures went through Keycast
-    assert len(relay.auth_events) == 1
-    assert [e["kind"] for e in keycast.signed] == [0, 22242]
-    # the Keycast user token was used once and not written anywhere
+    # empty follow list; both relay lists name the community relay (RELAY_URL without a public one)
+    assert by_kind[3]["tags"] == []
+    assert by_kind[10002]["tags"] == [["r", relay.url]]
+    assert by_kind[10050]["tags"] == [["relay", relay.url]]
+    # NIP-42: the challenge was signed with the same key, and every signature went through Keycast
+    assert len(relay.auth_events) == 4
+    assert [e["kind"] for e in keycast.signed if e["kind"] != 22242] == [0, 3, 10002, 10050]
+    # the Keycast user token was used for this only and not written anywhere
     assert "ucan-token" not in json.dumps(odoo.tables["belfry.pass"])
+
+
+def test_starter_events_use_the_public_relay_and_never_overwrite(services, odoo, keycast, relay):
+    services.settings.community_relay_public_url = "wss://relay.belfry.test"
+    ids = seed_paid_invoice(odoo)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    by_kind = {e["kind"]: e for e in relay.events}
+    assert by_kind[10002]["tags"] == [["r", "wss://relay.belfry.test"]]
+    assert by_kind[10050]["tags"] == [["relay", "wss://relay.belfry.test"]]
+
+    # the participant's own follow list stays; the backfill only adds what is missing
+    pubkey = by_kind[0]["pubkey"]
+    relay.events = [e for e in relay.events if e["kind"] != 10050]
+    relay.events = [
+        {**e, "tags": [["p", "ab" * 32]]} if e["kind"] == 3 else e for e in relay.events
+    ]
+    assert core.publish_starter_events(services) == {"published": {"OSV-0001": [10050]}}
+    follows = [e for e in relay.events if e["kind"] == 3]
+    assert len(follows) == 1 and follows[0]["tags"] == [["p", "ab" * 32]]
+    assert [e["kind"] for e in relay.events if e["pubkey"] == pubkey].count(10050) == 1
+    assert core.publish_starter_events(services) == {"published": {"OSV-0001": []}}
 
 
 def test_relay_failure_does_not_block_activation(services, odoo, relay):

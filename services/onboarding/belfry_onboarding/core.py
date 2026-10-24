@@ -416,32 +416,101 @@ def profile_content(name: str, member_number: str, nip05_domain: str) -> dict[st
     }
 
 
+PROFILE_KIND = 0
+FOLLOWS_KIND = 3
+RELAYS_KIND = 10002
+DM_RELAYS_KIND = 10050
+
+
+def starter_events(
+    name: str, member_number: str, nip05_domain: str, relay_url: str
+) -> dict[int, dict[str, Any]]:
+    """The unsigned events a new participant starts with, by kind: the profile, an empty follow
+    list, the relay list and the NIP-17 DM relay list, both naming the community relay. Clients
+    such as Coracle wait for profile, relays and follows after sign-in and otherwise show "We're
+    having a hard time finding your profile"; NIP-17 senders deliver to the 10050 relays."""
+    now = int(time.time())
+    content = profile_content(name, member_number, nip05_domain)
+    return {
+        PROFILE_KIND: {
+            "kind": PROFILE_KIND,
+            "created_at": now,
+            "tags": [],
+            "content": json.dumps(content, separators=(",", ":")),
+        },
+        FOLLOWS_KIND: {"kind": FOLLOWS_KIND, "created_at": now, "tags": [], "content": ""},
+        RELAYS_KIND: {
+            "kind": RELAYS_KIND,
+            "created_at": now,
+            "tags": [["r", relay_url]],
+            "content": "",
+        },
+        DM_RELAYS_KIND: {
+            "kind": DM_RELAYS_KIND,
+            "created_at": now,
+            "tags": [["relay", relay_url]],
+            "content": "",
+        },
+    }
+
+
 def publish_profile(
     svc: Services, token: str, pubkey: str, partner: dict[str, Any], member_number: str
-) -> bool:
-    """Publish the participant's kind-0 profile to the community relay. Best effort."""
+) -> list[int]:
+    """Publish the participant's starter events (``starter_events``) to the community relay,
+    only the kinds the relay does not have yet for this key: a participant's own profile, follows
+    or relay choices made in an app are never overwritten (reactivation, backfill). Best effort;
+    returns the kinds published."""
     if svc.relay is None or not token:
-        return False
+        return []
     name = partner.get("name") or member_number
-    content = profile_content(name, member_number, svc.settings.nip05_domain)
+    relay_url = svc.settings.community_relay_public_url or svc.relay.url
+    wanted = starter_events(name, member_number, svc.settings.nip05_domain, relay_url)
 
     def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
         return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
 
+    published: list[int] = []
     try:
-        event = sign(
-            {
-                "kind": 0,
-                "created_at": int(time.time()),
-                "tags": [],
-                "content": json.dumps(content, separators=(",", ":")),
-            }
-        )
-        svc.relay.publish(event, sign)
+        existing = svc.relay.query([{"kinds": sorted(wanted), "authors": [pubkey]}], sign)
+        have = {e.get("kind") for e in existing if e.get("pubkey") == pubkey}
+        for kind, unsigned in wanted.items():
+            if kind in have:
+                continue
+            svc.relay.publish(sign(unsigned), sign)
+            published.append(kind)
     except Exception as exc:
-        log.warning("profile for %s not published to %s: %s", member_number, svc.relay.url, exc)
-        return False
-    return True
+        log.warning(
+            "starter events for %s not (all) published to %s: %s", member_number, svc.relay.url, exc
+        )
+    return published
+
+
+def publish_starter_events(svc: Services) -> dict[str, Any]:
+    """Backfill ``starter_events`` for every active pass (participants activated before the relay
+    lists existed). Keycast's preload is idempotent per partner and hands out a fresh UCAN."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
+        ["partner_id", "keycast_pubkey"],
+    )
+    done: dict[str, list[int]] = {}
+    for row in rows:
+        partner_id = m2o_id(row.get("partner_id"))
+        if not partner_id:
+            continue
+        partner = svc.odoo.read_one("res.partner", partner_id, ["name", "belfry_member_number"])
+        member_number = (partner or {}).get("belfry_member_number") or ""
+        if not member_number:
+            continue
+        pubkey, _npub, token = _ensure_keycast_user(svc, partner, member_number)
+        if pubkey != row["keycast_pubkey"]:
+            log.warning("pass of %s: Keycast pubkey differs from Odoo's, skipped", member_number)
+            continue
+        done[member_number] = publish_profile(
+            svc, token, pubkey, {"id": partner_id, **partner}, member_number
+        )
+    return {"published": done}
 
 
 _activation_locks: dict[int, threading.Lock] = {}

@@ -183,6 +183,9 @@ if [[ -n "$PROFILE" ]]; then
 else
   bad "no kind-0 event for $KC_PUB on the relay (check the onboarding log for 'not published')"
 fi
+# Coracle waits for profile, follows and relays after sign-in; NIP-17 senders need the DM relays.
+LISTS=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$KC_PUB\"],\"kinds\":[3,10002,10050]}" 2>/dev/null | jq -sc 'map({kind, tags}) | sort_by(.kind)' || true)
+[[ "$(jq -c 'map(.kind)' <<<"${LISTS:-[]}")" == "[3,10002,10050]" ]] && ok "follow, relay and DM relay lists on the relay: $LISTS" || bad "starter lists missing on the relay: ${LISTS:-none}"
 SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
 

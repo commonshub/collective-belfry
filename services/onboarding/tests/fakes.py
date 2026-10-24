@@ -548,3 +548,16 @@ class FakeRelay:
             assert auth["kind"] == 22242 and auth["pubkey"] == event["pubkey"]
             self.auth_events.append(auth)
         self.events.append(event)
+
+    def query(self, filters: list[dict[str, Any]], sign) -> list[dict[str, Any]]:
+        if self.fail:
+            raise RuntimeError("relay down")
+        return [
+            e
+            for e in self.events
+            if any(
+                e["kind"] in f.get("kinds", [e["kind"]])
+                and e["pubkey"] in f.get("authors", [e["pubkey"]])
+                for f in filters
+            )
+        ]

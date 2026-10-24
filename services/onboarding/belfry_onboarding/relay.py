@@ -66,3 +66,45 @@ class RelayPublisher:
                 elif kind == "NOTICE":
                     log.info("relay notice: %s", msg[1] if len(msg) > 1 else "")
             raise RelayError("timed out waiting for the relay's OK")
+
+    def query(self, filters: list[dict[str, Any]], sign: Signer) -> list[dict[str, Any]]:
+        """Events matching ``filters`` up to EOSE; answers an AUTH challenge once (the community
+        relay serves reads only to whitelisted, authenticated pubkeys)."""
+        sub_id = "belfry"
+        req = json.dumps(["REQ", sub_id, *filters])
+        events: list[dict[str, Any]] = []
+        with connect(self.url, open_timeout=self.timeout, close_timeout=self.timeout) as ws:
+            ws.send(req)
+            auth_id: str | None = None
+            deadline = time.monotonic() + self.timeout
+            while time.monotonic() < deadline:
+                msg = json.loads(ws.recv(timeout=max(0.1, deadline - time.monotonic())))
+                kind = msg[0]
+                if kind == "AUTH" and auth_id is None:
+                    auth = sign(
+                        {
+                            "kind": AUTH_KIND,
+                            "created_at": int(time.time()),
+                            "tags": [["relay", self.url], ["challenge", msg[1]]],
+                            "content": "",
+                        }
+                    )
+                    auth_id = auth["id"]
+                    ws.send(json.dumps(["AUTH", auth]))
+                elif kind == "OK" and auth_id is not None and msg[1] == auth_id:
+                    if not msg[2]:
+                        raise RelayError(f"AUTH rejected: {msg[3] if len(msg) > 3 else ''}")
+                    events.clear()
+                    ws.send(req)
+                elif kind == "EVENT" and msg[1] == sub_id:
+                    events.append(msg[2])
+                elif kind == "EOSE" and msg[1] == sub_id:
+                    return events
+                elif kind == "CLOSED" and msg[1] == sub_id:
+                    reason = msg[2] if len(msg) > 2 else ""
+                    if reason.startswith("auth-required"):
+                        continue
+                    raise RelayError(f"query closed: {reason}")
+                elif kind == "NOTICE":
+                    log.info("relay notice: %s", msg[1] if len(msg) > 1 else "")
+            raise RelayError("timed out waiting for the relay's EOSE")

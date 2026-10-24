@@ -93,7 +93,7 @@ def test_activation_whitelists_the_pubkey_before_the_profile_is_published(
     monkeypatch.setattr(relay, "publish", publish)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     pubkey = next(iter(odoo.tables["belfry.pass"].values()))["keycast_pubkey"]
-    assert seen == [[pubkey]]
+    assert seen == [[pubkey]] * 4  # profile, follows, relays, DM relays
     assert rendered(services) == [pubkey]
 
 

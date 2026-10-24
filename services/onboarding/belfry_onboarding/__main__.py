@@ -1,6 +1,7 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
 ``... sync-participants``; ``... login-link <pass id>`` for a new one-time sign-in link and
-``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward)."""
+``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward);
+``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay."""
 
 from __future__ import annotations
 
@@ -34,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     add.add_argument("email")
     add.add_argument("name", nargs="?", default="")
+    sub.add_parser(
+        "publish-starter-events",
+        help="publish the missing profile, follow and relay lists of every active pass",
+    )
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -48,6 +53,11 @@ def main(argv: list[str] | None = None) -> int:
         result = core.sync_relay_whitelist(services, strict=True)
     elif args.command == "sync-participants":
         result = core.sync_participants(services, strict=True)
+    elif args.command == "publish-starter-events":
+        if services.relay is None:
+            print("RELAY_URL is not set", file=sys.stderr)
+            return 2
+        result = core.publish_starter_events(services)
     elif args.command == "add-steward":
         result = steward.add_steward(services, args.email, args.name)
     elif args.command == "login-link":

@@ -37,6 +37,9 @@ class Settings(BaseSettings):
 
     # Community relay (ws:// or wss://). Empty: no kind-0 profile is published at provisioning.
     relay_url: str = Field(default="", alias="RELAY_URL")
+    # The same relay as Nostr clients reach it (wss://relay.<domain>); written into the
+    # participant's relay lists (kinds 10002 and 10050). Empty: RELAY_URL.
+    community_relay_public_url: str = Field(default="", alias="COMMUNITY_RELAY_URL")
     # Domain of the NIP-05 names (member number @ domain); Keycast serves nostr.json for it.
     nip05_domain: str = Field(default="belfry.local", alias="NIP05_DOMAIN")
     # Relay whitelist (Phase 2): the rnostr config is rendered from RELAY_CONFIG_TEMPLATE into

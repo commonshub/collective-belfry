@@ -22,7 +22,7 @@ Glue between Odoo (registry and billing), Authentik (login), Keycast (Nostr sign
 | `belfry_onboarding/nostr.py` | hex pubkey to `npub1...` (bech32, NIP-19) |
 | `belfry_onboarding/relay.py` | publishes an event to the community relay, answering its NIP-42 AUTH challenge through a signer callback |
 | `belfry_onboarding/relay_whitelist.py` | renders `infra/relay/rnostr.toml` (template) into the relay's config with the pubkeys of all active passes |
-| `belfry_onboarding/__main__.py` | `python -m belfry_onboarding reconcile` / `expire` / `sync-relay` / `sync-participants` / `login-link <pass id>` |
+| `belfry_onboarding/__main__.py` | `python -m belfry_onboarding reconcile` / `expire` / `sync-relay` / `sync-participants` / `login-link <pass id>` / `publish-starter-events` |
 | `tests/` | `FakeOdoo` (in-memory `execute_kw`), respx fakes for Authentik and Keycast, the contract's cases |
 
 ## Run
@@ -37,6 +37,7 @@ python -m belfry_onboarding reconcile              # cron: every few minutes
 python -m belfry_onboarding expire                 # cron: nightly
 python -m belfry_onboarding sync-relay             # rewrite the relay whitelist from Odoo (also runs at start and after every change)
 python -m belfry_onboarding sync-participants      # make the Authentik participants group match the active passes (also at start and in reconcile)
+python -m belfry_onboarding publish-starter-events # publish the missing profile, follow list and relay lists (10002, 10050) of every active pass; never overwrites, safe to repeat
 python -m belfry_onboarding login-link 42          # mint a new account-setup link for pass 42 (Odoo mails it)
 docker build -t belfry-onboarding:local .
 ```
