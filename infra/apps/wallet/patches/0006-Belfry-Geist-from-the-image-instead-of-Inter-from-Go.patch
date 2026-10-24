@@ -1,0 +1,34 @@
+From f2e3396fcc33ac48d8a5feb8ffd224be491de1a9 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sat, 24 Oct 2026 23:14:31 +0200
+Subject: [PATCH] Belfry: Geist from the image instead of Inter from Google
+ Fonts
+
+The deployment's Content-Security-Policy allows fonts only from the wallet itself and the
+brand host; the image build copies brand/fonts.css and the Geist files to /belfry/.
+---
+ src/css/app.scss | 8 +++-----
+ 1 file changed, 3 insertions(+), 5 deletions(-)
+
+diff --git a/src/css/app.scss b/src/css/app.scss
+index ba3933d..d3e3e9e 100644
+--- a/src/css/app.scss
++++ b/src/css/app.scss
+@@ -1,11 +1,9 @@
+ // app global css in SCSS form
+ 
+-// Import Inter font from Google Fonts
+-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap");
+-
+-// Apply Inter as the primary font throughout the application
++// Belfry: the village font Geist, self-hosted (/belfry/fonts.css, linked from index.html by
++// the image build) instead of Inter from Google Fonts, which the deployment's CSP blocks
+ body {
+-  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
++  font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+     Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue",
+     sans-serif;
+ }
+-- 
+2.53.0
+

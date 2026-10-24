@@ -13,6 +13,9 @@ RUN npm ci --no-audit --no-fund
 COPY brand/apps/wallet-180.png brand/apps/wallet-192.png brand/apps/wallet-512.png \
      brand/apps/wallet-maskable-512.png public/belfry/
 COPY brand/osv-bar.js public/osv-bar.js
+# The village font, self-hosted (patch 0006 uses it instead of Inter from Google Fonts).
+COPY brand/fonts.css public/belfry/fonts.css
+COPY brand/fonts public/belfry/fonts
 COPY infra/apps/wallet/brand.mjs /tmp/brand.mjs
 # The village mint (unit "osv"), Keycast for "Sign in with Open Source Village" (client
 # belfry-wallet, redirect URI <origin>/oauth/callback; derive_secret for the seed and the nutzap

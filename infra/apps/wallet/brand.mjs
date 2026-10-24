@@ -32,6 +32,7 @@ let html = readFileSync("index.html", "utf8")
 html = html.replaceAll("#000000", BG)
 const head = [
   `<link rel="apple-touch-icon" href="belfry/wallet-180.png" />`,
+  `<link rel="stylesheet" href="/belfry/fonts.css" />`,
   `<script src="/osv-bar.js" data-home="${esc(home)}" data-apps="${esc(apps)}"></script>`,
 ].join("\n    ")
 if (!html.includes("</head>")) throw new Error("index.html has no </head>")
