@@ -1,0 +1,19 @@
+{
+  "name": "belfry-village",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Open Source Village directory and marketplace (community relay apps)",
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test --test-force-exit \"test/*.test.js\"",
+    "build": "APP=people vite build -c web/vite.config.js && APP=market vite build -c web/vite.config.js"
+  },
+  "dependencies": {
+    "nostr-tools": "2.25.2"
+  },
+  "devDependencies": {
+    "vite": "7.1.12"
+  }
+}

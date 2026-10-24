@@ -333,6 +333,18 @@ Review findings, highest first: no backups at all (Postgres, Odoo filestore, mas
 
 Open (next): the YubiKey ceremony (rewrap, destroy the mock tokens); participants activated before the seed keep their random keys; the backups on the VM (backup key, Storage Box, timer) and a first drill there; the CA key off the VM; admin UIs behind an IP allowlist/VPN plus WebAuthn; network segmentation and non-root containers; pinned images; rate limits, monitoring, CSP; rotating a single participant's key (raising the version needs a Keycast move like self-custody, not built).
 
+## 3u. Directory and marketplace (services/village) — built 2026-10-24
+
+User: "Let's continue with more extras" after dropping DIDs; chose photos, a directory and a marketplace with tokens. Split: the other session builds photos, this one the directory and the marketplace. Decisions in the live doc (rev 72). Details: `services/village/README.md`.
+
+- [x] `services/village`: one Node process, two browser apps on the community relay (participant's signer, NIP-42 AUTH), `GET /api/participants` (NIP-98, active pass only) from the onboarding service's active passes. Keycast clients `belfry-people`, `belfry-market` (registered, trusted); Compose `village` (3600/3700), Caddy `people.`/`market.<domain>`, `PEOPLE_PUBLIC_URL`/`MARKET_PUBLIC_URL`, icons `brand/apps/people-*`, `market-*`; both in `x-community-apps`.
+- [x] Directory: opt-in by a kind-30078 consent event (`d` = `osv-directory`); "Your entry" edits it and the kind-0 profile; search; person page with "Message" (chat) and "Send tokens" (wallet).
+- [x] Marketplace: NIP-99 offers (kind 30402, price in `OSV` tokens, categories, location, photos uploaded to Blossom), mark as gone, delete (kind 5). "Pay" hands off to the wallet (patch 0003: `/?pay=…&amount=…&memo=…&ref=…&return=…`), whose nutzap names the offer in an `a` tag; buyer and seller see the payment on the offer. Policy `belfry-event` gains 30402.
+- [x] The app bar scrolls the current app into view (seven apps no longer fit a phone width).
+- [x] Checks: `npm test` 4 tests; smoke 6p and 6g (30402, 30078 signed); local smoke 120 ok / 0 failed twice; `infra/scripts/village-check.mjs` in Chromium at 390 px with two participants: opt-in and search, an offer with a photo, payment through the wallet and back, the payment shown to both. Smoke: `SMOKE_KEEP_PASS` now also skips 10b (a self-custodial participant cannot use "Sign in with Open Source Village" in browser checks).
+
+Open: chat, calendar and vote images need a rebuild to show Directory and Market in their app bar; no moderation or reports; no notifications for sellers; not deployed on the VM.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

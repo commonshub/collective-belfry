@@ -1,0 +1,188 @@
+From 6df14094f301293d5fef69225a18303ab08836a3 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sat, 24 Oct 2026 19:04:30 +0200
+Subject: [PATCH 3/3] =?UTF-8?q?Belfry:=20pay=20requests=20from=20the=20vil?=
+ =?UTF-8?q?lage=20apps=20(/=3Fpay=3D=E2=80=A6&amount=3D=E2=80=A6&memo=3D?=
+ =?UTF-8?q?=E2=80=A6&ref=3D=E2=80=A6&return=3D=E2=80=A6)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+The marketplace's "Pay" opens the send dialog filled in; the nutzap names what it pays for
+in an "a" tag; afterwards the wallet returns to the page that asked (same deployment only).
+---
+ src/belfry/nutzap.ts                  |  4 +-
+ src/belfry/village.ts                 |  8 ++-
+ src/components/belfry/VillageCard.vue | 70 ++++++++++++++++++++++++++-
+ 3 files changed, 78 insertions(+), 4 deletions(-)
+
+diff --git a/src/belfry/nutzap.ts b/src/belfry/nutzap.ts
+index 5b55dce..d0edea6 100644
+--- a/src/belfry/nutzap.ts
++++ b/src/belfry/nutzap.ts
+@@ -120,7 +120,8 @@ export async function publishNutzap(
+     secret: string;
+     dleq?: unknown;
+   }[],
+-  comment: string
++  comment: string,
++  extraTags: string[][] = []
+ ) {
+   const relay = await communityRelay();
+   const tags = [
+@@ -128,6 +129,7 @@ export async function publishNutzap(
+     ["unit", VILLAGE_UNIT],
+     ["u", VILLAGE_MINT_URL],
+     ["p", recipient],
++    ...extraTags,
+   ];
+   await relay.publish(
+     await sign({ kind: 9321, created_at: now(), tags, content: comment })
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index 9579ff7..63e5da2 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -180,7 +180,8 @@ export async function connectVillageAccount() {
+ export async function sendToParticipant(
+   pubkey: string,
+   amount: number,
+-  comment: string
++  comment: string,
++  ref = ""
+ ) {
+   const key = await recipientNutzapKey(pubkey);
+   if (!key) {
+@@ -207,7 +208,10 @@ export async function sendToParticipant(
+     secret: p.secret,
+     ...(p.dleq ? { dleq: p.dleq } : {}),
+   }));
+-  await publishNutzap(pubkey, proofs, comment);
++  // What the payment is for, e.g. a marketplace offer ("30402:<seller>:<d>"), so the
++  // marketplace can show it to the buyer and the seller.
++  const refTags = /^\d{1,5}:[0-9a-f]{64}:[^\s]{1,200}$/.test(ref) ? [["a", ref]] : [];
++  await publishNutzap(pubkey, proofs, comment, refTags);
+   useTokensStore().addPaidToken({
+     amount: -amount,
+     token: getEncodedToken({
+diff --git a/src/components/belfry/VillageCard.vue b/src/components/belfry/VillageCard.vue
+index 74eaefd..678bb22 100644
+--- a/src/components/belfry/VillageCard.vue
++++ b/src/components/belfry/VillageCard.vue
+@@ -66,6 +66,9 @@
+           class="q-mb-md"
+         />
+         <div v-if="sendError" class="text-warning q-mb-sm">{{ sendError }}</div>
++        <div v-if="returnUrl" class="text-caption q-mb-sm">
++          After sending you go back to {{ returnHost }}.
++        </div>
+         <q-btn
+           rounded
+           unelevated
+@@ -110,6 +113,46 @@ async function resolvePubkey(input: string): Promise<string> {
+   throw new Error("Enter an npub or a name like name@domain.");
+ }
+ 
++/** Pages of the same deployment (wallet.<domain> -> *.<domain>) may ask to come back. */
++function allowedReturn(raw: string | null): string {
++  if (!raw) return "";
++  try {
++    const url = new URL(raw);
++    const here = window.location.hostname;
++    const labels = here.split(".");
++    const parent = labels.length > 2 ? labels.slice(1).join(".") : "";
++    const sameSite =
++      url.hostname === here || (parent && url.hostname.endsWith(`.${parent}`));
++    return /^https?:$/.test(url.protocol) && sameSite ? url.toString() : "";
++  } catch {
++    return "";
++  }
++}
++
++/**
++ * A payment request from another village app: /?pay=<npub>&amount=<n>&memo=…&ref=…&return=…
++ * opens the send dialog filled in (Belfry wallet patch 0003, the marketplace's "Pay").
++ */
++function takePayIntent() {
++  const params = new URLSearchParams(window.location.search);
++  if (!params.has("pay")) return null;
++  const intent = {
++    recipient: params.get("pay") || "",
++    amount: Math.max(1, Math.floor(Number(params.get("amount")) || 0)),
++    memo: (params.get("memo") || "").slice(0, 200),
++    ref: params.get("ref") || "",
++    returnUrl: allowedReturn(params.get("return")),
++  };
++  for (const k of ["pay", "amount", "memo", "ref", "return"]) params.delete(k);
++  const rest = params.toString();
++  window.history.replaceState(
++    null,
++    "",
++    window.location.pathname + (rest ? `?${rest}` : "") + window.location.hash
++  );
++  return intent;
++}
++
+ export default defineComponent({
+   name: "VillageCard",
+   data() {
+@@ -123,12 +166,17 @@ export default defineComponent({
+       comment: "",
+       sending: false,
+       sendError: "",
++      ref: "",
++      returnUrl: "",
+     };
+   },
+   computed: {
+     enabled(): boolean {
+       return villageEnabled() && ssoEnabled();
+     },
++    returnHost(): string {
++      return this.returnUrl ? new URL(this.returnUrl).host : "";
++    },
+   },
+   async mounted() {
+     window.addEventListener(SESSION_EVENT, this.onSession);
+@@ -147,6 +195,15 @@ export default defineComponent({
+         await connectVillageAccount();
+         this.ready = true;
+         this.error = "";
++        const intent = takePayIntent();
++        if (intent) {
++          this.recipient = intent.recipient;
++          this.amount = intent.amount;
++          this.comment = intent.memo;
++          this.ref = intent.ref;
++          this.returnUrl = intent.returnUrl;
++          this.showSend = true;
++        }
+       } catch (e: any) {
+         this.error = "could not reach the village services";
+       }
+@@ -164,11 +221,22 @@ export default defineComponent({
+         if (!this.amount || this.amount < 1)
+           throw new Error("Enter a number of tokens.");
+         const pubkey = await resolvePubkey(this.recipient);
+-        await sendToParticipant(pubkey, Math.floor(this.amount), this.comment);
++        await sendToParticipant(
++          pubkey,
++          Math.floor(this.amount),
++          this.comment,
++          this.ref
++        );
+         notifySuccess(`Sent ${formatTokens(Math.floor(this.amount))}`);
+         this.showSend = false;
+         this.recipient = "";
+         this.comment = "";
++        this.ref = "";
++        if (this.returnUrl) {
++          const back = this.returnUrl;
++          this.returnUrl = "";
++          setTimeout(() => window.location.assign(back), 1200);
++        }
+       } catch (e: any) {
+         this.sendError = e?.message || String(e);
+       } finally {
+-- 
+2.53.0
+

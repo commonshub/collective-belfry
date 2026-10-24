@@ -174,6 +174,17 @@ vote.{$BELFRY_DOMAIN} {
 	reverse_proxy vote:8080
 }
 
+# Community apps: the directory and the marketplace (services/village, one process, two ports).
+people.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy village:8080
+}
+
+market.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy village:8081
+}
+
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {

@@ -382,7 +382,7 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
     local r; r=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')")
     [[ -n "$(jq -r '.result.sig // empty' <<<"$r")" ]] && echo ok || jq -r '.error // .message // .' <<<"$r" | head -c 120
   }
-  for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list"; do
+  for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list" "30402:marketplace offer (NIP-99)" "30078:directory consent (NIP-78)"; do
     k=${spec%%:*}; name=${spec#*:}; res=$(kc_sign "$k")
     [[ "$res" == ok ]] && ok "kind $k ($name) signed" || bad "kind $k ($name): $res"
   done
@@ -467,6 +467,29 @@ console.log(r.status)' 2>/dev/null || true)
 [[ "$NOPASS" == 403 ]] && ok "a signed request from a key without an active pass: 403" || bad "key without a pass: ${NOPASS:-no answer}"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"proof":{}}' "$VOTE_URL/api/polls/nope/votes")" == 404 ]] && ok "a vote for an unknown poll: 404" || bad "vote for an unknown poll not refused"
 echo "  note the browser check (silent sign-in, set up voting, open a poll, vote with a real proof) is infra/scripts/vote-check.mjs"
+
+step "6p. directory and marketplace (services/village): served; only active passes learn who the participants are"
+PEOPLE_URL=${PEOPLE_URL:-${PEOPLE_PUBLIC_URL:-http://localhost:3600}}
+MARKET_URL=${MARKET_URL:-${MARKET_PUBLIC_URL:-http://localhost:3700}}
+for app in "$PEOPLE_URL|Open Source Village directory" "$MARKET_URL|Open Source Village marketplace"; do
+  u=${app%%|*}; t=${app#*|}; H=$(curl -sS -o - -w '\n%{http_code}' "$u/")
+  [[ "${H##*$'\n'}" == 200 && "$H" == *"<title>$t</title>"* ]] && ok "$t answers at $u" || bad "$t at $u: HTTP ${H##*$'\n'}"
+done
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PEOPLE_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
+NOPASS=$("${COMPOSE[@]}" exec -T village node --input-type=module -e '
+import { finalizeEvent, generateSecretKey } from "nostr-tools/pure"
+const ev = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000), content: "", tags: [["u", process.env.PEOPLE_PUBLIC_URL.replace(/\/$/, "") + "/api/participants"], ["method", "GET"]] }, generateSecretKey())
+const r = await fetch("http://127.0.0.1:8080/api/participants", { headers: { Authorization: "Nostr " + Buffer.from(JSON.stringify(ev)).toString("base64") } })
+console.log(r.status)' 2>/dev/null || true)
+[[ "$NOPASS" == 403 ]] && ok "participants list for a key without an active pass: 403" || bad "key without a pass: ${NOPASS:-no answer}"
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  # the participant's own NIP-98 token, signed by Keycast like the app does
+  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+  LIST=$(curl -sS -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PEOPLE_URL/api/participants")
+  jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list ($(jq '.pubkeys | length' <<<"$LIST") active keys)" || bad "participants list for the participant: $(head -c 200 <<<"$LIST")"
+fi
+echo "  note the browser check (directory opt-in, an offer with a photo, paying it through the wallet) is infra/scripts/village-check.mjs"
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
@@ -626,7 +649,11 @@ fi
 step "10b. self-custody: the participant takes their key, then moves to a key of their own"
 # Irreversible for the smoke participant, so it runs after everything that signs with the managed
 # key. Signing (export, challenge) happens in the onboarding container (onboarding-sign.sh).
-if OUT=$(DERIVED="$DERIVED" SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
+# SMOKE_KEEP_PASS skips it: the kept participant is for browser checks with "Sign in with Open
+# Source Village", which a self-custodial account no longer has.
+if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then
+  echo "  note SMOKE_KEEP_PASS set: self-custody not tested (the participant stays managed for browser checks)"
+elif OUT=$(DERIVED="$DERIVED" SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
   grep -v '^NEW_PUBKEY=' <<<"$OUT" | sed 's/^/  /'; ok "take over and bring a new key"
   NEW_PUB=$(sed -n 's/^NEW_PUBKEY=//p' <<<"$OUT")
   PASS_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["keycast_pubkey"]}' | jq -r '.[0].keycast_pubkey')

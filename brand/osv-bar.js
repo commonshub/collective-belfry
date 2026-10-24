@@ -91,6 +91,18 @@
       nav.appendChild(a);
     });
     document.body.insertBefore(nav, document.body.firstChild);
+    // On a phone the list scrolls sideways: bring the current app into view.
+    // (after layout, and again once fonts and styles have loaded and widths changed)
+    var current = nav.querySelector("[aria-current=page]");
+    function reveal() {
+      if (current && current.offsetLeft + current.offsetWidth > nav.clientWidth) {
+        nav.scrollLeft = current.offsetLeft - 48;
+      }
+    }
+    if (current) {
+      requestAnimationFrame(reveal);
+      window.addEventListener("load", reveal);
+    }
   }
 
   if (document.body) mount();

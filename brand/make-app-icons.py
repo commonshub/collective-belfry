@@ -88,6 +88,30 @@ def wallet_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, c, r * 0.95
 
 
+def people_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """Two people, the one in front larger; returns the mark's centre and size (on the front body)."""
+    # behind, to the right
+    d.ellipse((c + r * 0.12, c - r * 0.9, c + r * 0.62, c - r * 0.4), fill=ACCENT)
+    d.rounded_rectangle((c - r * 0.05, c - r * 0.3, c + r * 0.95, c + r * 0.55), radius=r * 0.4, fill=ACCENT)
+    # in front, with a gap of background around it
+    gap = r * 0.07
+    d.ellipse((c - r * 0.78 - gap, c - r * 0.68 - gap, c - r * 0.12 + gap, c - r * 0.02 + gap), fill=BG)
+    d.rounded_rectangle((c - r * 1.0 - gap, c + r * 0.06 - gap, c + r * 0.22 + gap, c + r * 0.95 + gap), radius=r * 0.45, fill=BG)
+    d.ellipse((c - r * 0.78, c - r * 0.68, c - r * 0.12, c - r * 0.02), fill=ACCENT)
+    d.rounded_rectangle((c - r * 1.0, c + r * 0.06, c + r * 0.22, c + r * 0.95), radius=r * 0.42, fill=ACCENT)
+    return c - r * 0.39, c + r * 0.52, r * 0.62
+
+
+def market_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """A market basket with its handle; returns the mark's centre and size."""
+    w = r * 0.14
+    d.arc((c - r * 0.62, c - r * 1.0, c + r * 0.62, c + r * 0.2), start=180, end=360, fill=ACCENT, width=round(w))
+    top, bottom = c - r * 0.35, c + r * 0.9
+    d.polygon([(c - r * 1.0, top), (c + r * 1.0, top), (c + r * 0.72, bottom), (c - r * 0.72, bottom)], fill=ACCENT)
+    d.rectangle((c - r * 1.0, top - r * 0.02, c + r * 1.0, top + r * 0.18), fill=ACCENT)
+    return c, (top + bottom) / 2 + r * 0.06, (bottom - top) * 0.62
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -120,3 +144,5 @@ if __name__ == "__main__":
     render("calendar", calendar_symbol)
     render("vote", vote_symbol)
     render("wallet", wallet_symbol)
+    render("people", people_symbol)
+    render("market", market_symbol)
