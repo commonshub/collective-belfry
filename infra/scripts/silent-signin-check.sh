@@ -7,7 +7,7 @@
 #          -> Keycast callback (session, or oidc_failed) -> back to /api/oauth/authorize
 #       -> app redirect URI with ?code=… (trusted app, no consent screen) or ?error=login_required
 #   app logout -> POST /api/oauth/revoke, then Keycast /api/auth/oidc/logout -> Authentik
-#       end-session (invalidation flow belfry-signer-logout) -> Keycast /logged-out -> the app
+#       invalidation flow belfry-signer-logout (OIDC_LOGOUT_URL) -> Keycast /logged-out -> the app
 #
 # Usage: silent-signin-check.sh <authentik session cookie jar> <expected pubkey hex>
 #   CLIENT_ID / REDIRECT_URI: a trusted app (default belfry-chat at CHAT_PUBLIC_URL).
@@ -178,11 +178,14 @@ APP_HOME="${REDIRECT_URI%/oauth/callback}/"
 cp "$LOGOUT_JAR" "$JAR/ak5"; touch "$JAR/kc5"
 read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s9 "$CHALLENGE" none)")
 [[ -n "$(param code "$END")" ]] && grep -q keycast_session "$JAR/kc5" || fail "logout check: no silent sign-in first ('$END', $HOPS)"
+# A sign-in started in this browser and never finished leaves a flow plan in the Authentik
+# session; authentik's end-session view then answers an empty page (found 2026-10-24), so Keycast
+# goes to the invalidation flow itself (OIDC_LOGOUT_URL, patch 0013). Leave such a plan first.
+curl -sS -b "$JAR/ak5" -c "$JAR/ak5" -o /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/?query="
 LOC=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/logout?return_to=$(urlenc "$APP_HOME")")
-[[ "$LOC" == "$AK_URL"*end-session* ]] || fail "logout redirected to '$LOC'"
+[[ "$LOC" == "$AK_URL"*"/if/flow/belfry-signer-logout/"* ]] || fail "logout redirected to '$LOC' (OIDC_LOGOUT_URL not the invalidation flow?)"
 grep -q $'keycast_session\t[^[:space:]]' "$JAR/kc5" && fail "keycast_session still set after logout" || true
-FLOW_URL=$(curl -sS -b "$JAR/ak5" -c "$JAR/ak5" -o /dev/null -w '%{redirect_url}' "$LOC")
-[[ "$FLOW_URL" == *"/if/flow/belfry-signer-logout/"* ]] || fail "end-session went to '$FLOW_URL' (invalidation flow not belfry-signer-logout?)"
+FLOW_URL=$LOC
 QUERY=${FLOW_URL#*\?}; [[ "$QUERY" == "$FLOW_URL" ]] && QUERY=""
 TO=""
 for _ in 1 2 3 4 5; do
@@ -191,7 +194,7 @@ for _ in 1 2 3 4 5; do
 done
 [[ "$TO" == "$KC_URL/api/auth/oidc/logged-out" ]] || fail "invalidation flow ended with: $(head -c 300 <<<"$CH")"
 BACK=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$TO")
-[[ "$BACK" == "$APP_HOME" ]] && say "logout: Keycast -> Authentik end-session -> Keycast -> back at $APP_HOME" || fail "logged-out returned to '$BACK'"
+[[ "$BACK" == "$APP_HOME" ]] && say "logout (with an unfinished sign-in in the browser): Keycast -> Authentik invalidation flow -> Keycast -> back at $APP_HOME" || fail "logged-out returned to '$BACK'"
 [[ -z "$(curl -sS -b "$JAR/ak5" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.username // empty' 2>/dev/null)" ]] \
   && say "logout: the Authentik session has ended" || fail "Authentik session still alive after logout"
 read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s10 "$CHALLENGE" none)")

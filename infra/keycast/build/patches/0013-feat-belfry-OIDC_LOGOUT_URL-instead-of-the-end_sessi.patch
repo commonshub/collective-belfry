@@ -1,0 +1,57 @@
+From 88cf2647caee3587123fdf5c4dfa12a97201a01c Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@belfry.local>
+Date: Sat, 24 Oct 2026 14:36:20 +0200
+Subject: [PATCH] feat(belfry): OIDC_LOGOUT_URL instead of the
+ end_session_endpoint
+
+authentik's end-session view answers an empty 200 page whenever the
+browser's session still holds an unfinished flow (a sign-in started but not
+completed): a participant logging out of an app was left on a blank
+login.<domain>/application/o/keycast/end-session/. OIDC_LOGOUT_URL sends
+the logout to the invalidation flow itself, which plans afresh.
+---
+ api/src/api/http/oidc.rs | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/api/src/api/http/oidc.rs b/api/src/api/http/oidc.rs
+index e5537a4..1c564eb 100644
+--- a/api/src/api/http/oidc.rs
++++ b/api/src/api/http/oidc.rs
+@@ -46,6 +46,7 @@
+ //! | `OIDC_LINK_CLAIM` | ID token claim matched against `users.vine_id` on first login. Default `keycast_vine_id`. |
+ //! | `OIDC_PROVIDER_NAME` | Button label, "Sign in with …". Default `single sign-on`. |
+ //! | `OIDC_HIDE_PASSWORD_LOGIN` | `true` hides the e-mail/password and registration forms in the login pages. The API endpoints stay (admins use them). |
++//! | `OIDC_LOGOUT_URL` | Optional: logout goes here instead of the provider's `end_session_endpoint` (Belfry: authentik's invalidation flow URL, see `logout_url_override`). |
+ //! | `OIDC_TRUST_EMAIL` | Default `true`: the ID token's `email` is stored on the account as verified (the provider only lets a participant in through a magic link to that address). `false` leaves the account's e-mail alone. |
+ 
+ use axum::{
+@@ -976,6 +977,7 @@ pub async fn oidc_logout(
+     )
+     .await;
+     let end_session = match provider() {
++        Some(_) if logout_url_override().is_some() => logout_url_override(),
+         Some(p) => p
+             .discovery()
+             .await
+@@ -1017,6 +1019,18 @@ pub async fn oidc_logout(
+     Ok(response)
+ }
+ 
++/// `OIDC_LOGOUT_URL`: where logout sends the browser instead of the discovered
++/// `end_session_endpoint`. authentik's end-session view answers an empty 200 page whenever the
++/// browser's session still holds an unfinished flow (a sign-in that was started but not
++/// completed), so Belfry points this at the invalidation flow itself
++/// (`<authentik>/if/flow/belfry-signer-logout/`), which plans afresh in that case.
++fn logout_url_override() -> Option<String> {
++    std::env::var("OIDC_LOGOUT_URL")
++        .ok()
++        .map(|v| v.trim().to_string())
++        .filter(|v| v.starts_with("https://") || v.starts_with("http://"))
++}
++
+ /// GET /api/auth/oidc/logged-out: the provider's invalidation flow ends here.
+ pub async fn oidc_logged_out(State(auth_state): State<AuthState>, headers: HeaderMap) -> Response {
+     let secret = auth_state.state.server_keys.secret_key().to_secret_bytes();
+-- 
+2.53.0
+

@@ -74,6 +74,9 @@ x-keycast-env: &keycast-env
   OIDC_LINK_CLAIM: keycast_vine_id
   OIDC_PROVIDER_NAME: Open Source Village
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
+  # Logout goes to the invalidation flow itself, not authentik's end-session view, which answers
+  # an empty page while the browser holds an unfinished sign-in (Keycast patch 0013).
+  OIDC_LOGOUT_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-signer-logout/
   # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
   # each must also be a registered client (bootstrap writes their redirect URIs).
   KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet}
