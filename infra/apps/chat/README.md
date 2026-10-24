@@ -26,7 +26,8 @@ sign-in page (magic link or pass). Build arg `KEYCAST_APP_URL` (empty turns both
 `0002-…`: Logout revokes the app's authorization at Keycast (`/api/oauth/revoke` with the token
 response's refresh token) and goes through Keycast's `/api/auth/oidc/logout`, which ends the
 Keycast and Authentik sessions and returns to `/notes` signed out (Keycast patch 0010); without
-that, the silent check would sign the participant straight back in.
+that, the silent check would sign the participant straight back in. Patch `0003-…` puts "Log out" in the mobile
+menu (upstream hides it under the account name).
 Participants can still paste a `bunker://` URL from the apps dashboard (`apps.<domain>`,
 "Connect to Nostr App" → copy the bunker URL) into Coracle's "Login with bunker" screen. Keycast's
 `belfry-event` policy (`infra/keycast/policy.sql`) lists the kinds Coracle signs; NIP-44 for the
