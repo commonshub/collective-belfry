@@ -13,7 +13,10 @@ INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$INFRA_DIR/.env"
 [[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE; run scripts/gen-secrets.sh first" >&2; exit 1; }
 
-python3 - "$ENV_FILE" "$DOMAIN" "$ACME" "${ODOO_HOST_PREFIX:-shop}" <<'PY'
+# Odoo's host prefix: the environment, else the one already in .env (a deployment that kept
+# odoo. must not be moved to shop. by a re-run), else shop.
+CURRENT_PREFIX=$(sed -nE 's/^ODOO_HOST_PREFIX=([^#[:space:]]*).*/\1/p' "$ENV_FILE" | tail -n1)
+python3 - "$ENV_FILE" "$DOMAIN" "$ACME" "${ODOO_HOST_PREFIX:-${CURRENT_PREFIX:-shop}}" <<'PY'
 import re, sys
 path, domain, acme, shop = sys.argv[1:]
 values = {
