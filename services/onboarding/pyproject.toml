@@ -50,3 +50,4 @@ select = ["E", "F", "I", "UP", "B"]
 # inline HTML, CSS and JS of the claim, door and bridge pages
 "belfry_onboarding/claim.py" = ["E501"]
 "belfry_onboarding/bridge.py" = ["E501"]
+"belfry_onboarding/mypass.py" = ["E501"]

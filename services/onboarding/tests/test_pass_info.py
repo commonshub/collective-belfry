@@ -61,6 +61,7 @@ def test_active_pass_wins_over_newer_ones(web, odoo):
         "member_number": "OSV-0007",
         "npub": "npub1alice",
         "claim_url": "https://belfry.test/claim/" + "c" * 32,
+        "show_url": "https://belfry.test/me",
         "tokens": 0,
         "tokens_url": None,
     }
@@ -70,7 +71,7 @@ def test_no_claim_link_for_a_revoked_pass(web, odoo):
     partner = odoo.add("res.partner", name="Bob", email="bob@example.org")
     odoo.add("belfry.pass", partner_id=partner, tier="day", state="revoked", claim_token="d" * 32)
     info = web.get(f"/admin/partners/{partner}/pass", headers=auth()).json()
-    assert info["state"] == "revoked" and info["claim_url"] is None
+    assert info["state"] == "revoked" and info["claim_url"] is None and info["show_url"] is None
     assert info["member_number"] is None
 
 

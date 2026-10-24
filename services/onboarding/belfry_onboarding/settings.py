@@ -123,6 +123,13 @@ class Settings(BaseSettings):
     steward_session_hours: int = Field(default=12, alias="STEWARD_SESSION_HOURS")
     steward_group: str = Field(default="belfry-stewards", alias="STEWARD_GROUP")
 
+    # The pass on the phone (/me, /check, mypass.py): Authentik application belfry-pass, and the
+    # key of the session cookie and the QR codes. Without both the pages answer 503.
+    pass_page_oidc_client_id: str = Field(default="belfry-pass", alias="PASS_PAGE_OIDC_CLIENT_ID")
+    pass_page_oidc_client_secret: str = Field(default="", alias="PASS_PAGE_OIDC_CLIENT_SECRET")
+    pass_page_secret: str = Field(default="", alias="PASS_PAGE_SECRET")
+    pass_page_session_days: int = Field(default=14, alias="PASS_PAGE_SESSION_DAYS")
+
     # Pass info for the community apps (Keycast's "Your pass" card): bearer token of
     # GET /admin/partners/<id>/pass. Empty: the endpoint answers 503.
     pass_info_token: str = Field(default="", alias="PASS_INFO_TOKEN")

@@ -619,6 +619,27 @@ for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq 
 [[ "$(jq -r .status <<<"$RES")" == valid && "$(jq -r .tier <<<"$RES")" == week ]] && ok "door: valid pass, tier week, until $(jq -r .valid_until <<<"$RES")" || bad "door result: $RES"
 curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/door" | grep -q 200 && ok "GET /door -> 200 (QR page)" || bad "door page"
 
+step "9b. the pass on the phone without a wallet: /me signs in through Authentik, /check at the door"
+MEJAR=$(mktemp); cp "$AK_SESSION" "$MEJAR"
+ME_PAGE=$(curl -sS -L -b "$MEJAR" -c "$MEJAR" "$ONB_URL/me")
+[[ "$ME_PAGE" == *'id="qr"'* && "$ME_PAGE" == *"Week pass"* ]] && ok "/me: signed in through Authentik without a click, shows the renewing QR" || bad "/me: $(grep -o '<h1>[^<]*</h1>\|class="bad">[^<]*' <<<"$ME_PAGE" | head -2 | tr '\n' ' ')"
+[[ "$(curl -sS -b "$MEJAR" "$ONB_URL/me/qr" | jq -r '.svg // empty' | cut -c1-18)" == data:image/svg+xml ]] && ok "/me/qr renews the code" || bad "/me/qr gave no code"
+[[ "$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/me")" == */me/login ]] && ok "/me without a session goes to the sign-in" || bad "/me without a session not redirected"
+qr_token() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "from belfry_onboarding import mypass; from belfry_onboarding.settings import Settings; from types import SimpleNamespace as N; print(mypass.qr_token(N(settings=Settings()), int('$1'))[0])"; }
+QR_TOKEN=$(qr_token "$PASS_ID")
+CHECK=$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$QR_TOKEN")
+[[ "$(jq -c 'keys - ["date_end","date_start","reason","scanned_before","tier","tier_name","valid"]' <<<"$CHECK")" == "[]" ]] && ok "/check tells tier and dates only ($(jq -c 'keys' <<<"$CHECK"))" || bad "/check discloses more: $CHECK"
+if [[ "$(date -u +%F)" < "$(jq -r .date_start <<<"$CHECK")" ]]; then
+  # before the event the door must refuse the pass; valid passes and the second-scan warning are
+  # covered by tests/test_mypass.py
+  [[ "$(jq -r .valid <<<"$CHECK")" == false && "$(jq -r .reason <<<"$CHECK")" == "The pass starts on"* ]] && ok "/check: not valid yet ($(jq -r .reason <<<"$CHECK"))" || bad "/check before the start: $CHECK"
+else
+  [[ "$(jq -r .valid <<<"$CHECK")" == true && "$(jq -r .tier <<<"$CHECK")" == week && "$(jq -r .scanned_before <<<"$CHECK")" == null ]] && ok "/check: valid, week, first scan" || bad "/check: $CHECK"
+  [[ "$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$QR_TOKEN" | jq -r '.scanned_before != null')" == true ]] && ok "/check: a second scan of the same code says when it was first scanned" || bad "/check: second scan not noticed"
+fi
+[[ "$(curl -sS "$ONB_URL/check/${QR_TOKEN%.*}.AAAAAAAAAAAAAAAAAAAAAA")" == *"Not valid"* ]] && ok "/check: a forged code is not valid" || bad "/check accepted a forged code"
+rm -f "$MEJAR"
+
 step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"
 PJAR=$(mktemp); pj() { curl -sS -b "$PJAR" -c "$PJAR" "$@"; }
 pj -o /dev/null "$AK_URL/if/flow/default-authentication-flow/"
@@ -705,6 +726,8 @@ DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"
 for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
 [[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
+CHECK=$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$(qr_token "$PASS_ID")")
+[[ "$(jq -r .valid <<<"$CHECK")" == false && "$(jq -r .reason <<<"$CHECK")" == *revoked* ]] && ok "/check: the phone pass of a revoked pass is refused at once" || bad "/check after revoke: $CHECK"
 [[ "$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
 if [[ -n "${KC_TOKEN:-}" ]]; then
   # The signer is suspended and the pass is gone: a fresh Blossom token is refused twice over.

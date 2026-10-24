@@ -68,6 +68,11 @@ def home_page(settings: Any) -> str:
     """pass.<domain>/: what this site is, and where participants go from here."""
     links = [
         (
+            "/me",
+            "Show your pass",
+            "Your pass as a QR code for the door, no wallet needed.",
+        ),
+        (
             settings.apps_public_url,
             "Your account",
             "Your pass, your Nostr key and the apps you use.",
@@ -137,6 +142,8 @@ def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
         "claim_url": f"{base}/claim/{row['claim_token']}"
         if active and row.get("claim_token")
         else None,
+        # the pass as a renewing QR code for the door, no wallet needed (mypass.py)
+        "show_url": f"{base}/me" if active else None,
         "tokens": row.get("cashu_amount") or 0,
         "tokens_url": f"{base}/tokens/{row['claim_token']}"
         if active and row.get("claim_token") and row.get("cashu_amount")
@@ -238,6 +245,8 @@ The code is valid until {expires.strftime("%H:%M UTC")}; reload the page for a n
 <p class="muted">The pass shows your tier and validity to anyone who scans it at the door. Your name,
 member number and Nostr key are only shared when you choose to disclose them.</p>
 {switch}
+<p class="muted">No wallet? <a href="/me">Show your pass as a QR code</a> instead: sign in and show
+it at the door.</p>
 </div>
 {tokens_card(pass_row)}"""
     return page("Claim your Open Source Village pass", body)

@@ -358,6 +358,16 @@ The photos part of §3u's split. Built as a third app inside `services/village`,
 
 Open: animated GIFs become still JPEGs; no albums or event links (a NIP-52 calendar event could carry an `a` tag); no moderation or reports; Blossom keeps the files of deleted posts until its retention removes them.
 
+## 3w. The pass on the phone without a wallet — built 2026-10-24
+
+User: "Users should be able to show their pass as qr code on phone without a wallet, it would be enough to be signed in." Decisions (live doc): the QR is a short-lived signed link, not a credential; the door learns tier and validity only, like the wallet check.
+
+- [x] Onboarding `mypass.py`: `pass.<domain>/me` signs in through Authentik (blueprint `belfry-pass-app`: participants only, implicit consent, the `keycast` scope for the partner id), shows tier, dates and a QR renewed every 30 s (token `<pass id>.<expiry>.<HMAC>`, valid 90 s), a live clock against screenshots, and keeps the screen on (Wake Lock). `pass.<domain>/check/<token>`: door staff scan with any camera; valid/not valid, tier, dates; the pass is read from Odoo at scan time; a second scan of the same code says when it was first scanned. New secrets `PASS_PAGE_OIDC_CLIENT_SECRET`, `PASS_PAGE_SECRET` (gen-secrets appends them).
+- [x] Links: Keycast patch 0017 puts "Show your pass" first on the dashboard's pass card (`show_url` in the pass info), "Add to your wallet" second; the landing page and the claim page link `/me`.
+- [x] Checks: onboarding 161 tests (11 new); smoke step 9b (silent sign-in to `/me`, QR renewal, `/check` discloses tier and dates only, not valid before the pass starts, forged code refused) and a check in step 11 (revoked pass refused at once); local smoke 144 ok / 0 failed; screenshots at 390 px.
+
+Open: the check page shows the server's time (UTC on the VM); the scan memory is per process (one onboarding instance); a pass can still be lent together with the phone (no device binding, unlike the wallet); no offline door check.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

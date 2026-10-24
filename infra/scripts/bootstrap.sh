@@ -448,6 +448,12 @@ reapply_blueprint belfry-steward-app
 reapply_blueprint belfry-brand
 ak "$AK_URL/api/v3/core/groups/?name=belfry-stewards" | jq -e '.results | length == 1' >/dev/null || die "group belfry-stewards missing"
 echo "blueprint belfry-steward-app: successful (add stewards: docker compose exec onboarding python -m belfry_onboarding add-steward <e-mail> [name])"
+# The pass on the phone (/me): participants sign in to it like to the apps.
+reapply_blueprint belfry-pass-app
+ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-pass" \
+  | jq -e --arg s "${PASS_PAGE_OIDC_CLIENT_SECRET:-}" '.results[0].client_secret == $s and $s != ""' >/dev/null \
+  || die "provider belfry-pass missing or without PASS_PAGE_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
+echo "blueprint belfry-pass-app: successful (the pass on the phone at /me)"
 # Issuer2's login for authorization-code pass offers (DIDroom and other wallets that sign in).
 reapply_blueprint belfry-issuer-app
 ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-issuer" \

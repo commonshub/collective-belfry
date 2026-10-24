@@ -40,6 +40,8 @@ values = {
     "KEYCAST_OIDC_CLIENT_SECRET": "$(rand 24)",
     "STEWARD_OIDC_CLIENT_SECRET": "$(rand 24)",
     "STEWARD_SESSION_SECRET": "$(rand 32)",
+    "PASS_PAGE_OIDC_CLIENT_SECRET": "$(rand 24)",
+    "PASS_PAGE_SECRET": "$(rand 32)",
     "ISSUER_OIDC_CLIENT_SECRET": "$(rand 24)",
     "KEYCAST_SERVER_NSEC": "$server_nsec",
     "KEYCAST_ADMIN_NSEC": "$admin_nsec",

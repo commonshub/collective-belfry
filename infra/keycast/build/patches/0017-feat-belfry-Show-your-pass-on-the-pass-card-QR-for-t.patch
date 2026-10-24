@@ -1,0 +1,72 @@
+From 0da045555b9ea0be2709627b58cff48b44f66837 Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 22:08:15 +0200
+Subject: [PATCH] feat(belfry): "Show your pass" on the pass card (QR for the
+ door, no wallet)
+
+---
+ web/src/routes/+page.svelte | 26 ++++++++++++++++++++++++--
+ 1 file changed, 24 insertions(+), 2 deletions(-)
+
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index e9a6539..ce513bc 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -3,7 +3,7 @@ import { getCurrentUser, setCurrentUser } from "$lib/current_user.svelte";
+ import { KeycastApi } from "$lib/keycast_api.svelte";
+ import { BRAND } from "$lib/brand";
+ import type { TeamWithRelations, BunkerSession } from "$lib/types";
+-import { Key, ArrowRight, PlusCircle, Gear, Copy, Check, EnvelopeSimple, CaretDown, CaretUp, Question, ArrowSquareOut, ShieldCheck, Export, PlugsConnected } from "phosphor-svelte";
++import { Key, ArrowRight, PlusCircle, Gear, Copy, Check, EnvelopeSimple, CaretDown, CaretUp, Question, ArrowSquareOut, ShieldCheck, Export, PlugsConnected, QrCode } from "phosphor-svelte";
+ import Loader from "$lib/components/Loader.svelte";
+ import CreateBunkerModal from "$lib/components/CreateBunkerModal.svelte";
+ import { onMount } from "svelte";
+@@ -60,6 +60,8 @@ interface PassInfo {
+ 	member_number: string;
+ 	npub: string | null;
+ 	claim_url: string | null;
++	/** Belfry: the pass as a renewing QR code for the door, no wallet needed (null unless active) */
++	show_url?: string | null;
+ }
+ let pass = $state<PassInfo | null>(null);
+ 
+@@ -513,8 +515,15 @@ $effect(() => {
+ 						<div><dt>Valid</dt><dd>{formatPassDate(pass.date_start)} to {formatPassDate(pass.date_end)}</dd></div>
+ 						<div><dt>Member number</dt><dd class="mono">{pass.member_number}</dd></div>
+ 					</dl>
++					{#if pass.show_url && pass.state === 'active'}
++						<a class="pass-claim" href={pass.show_url}>
++							<QrCode size={16} />
++							<span>Show your pass</span>
++						</a>
++						<p class="pass-hint">A QR code to show at the door. No wallet needed.</p>
++					{/if}
+ 					{#if pass.claim_url && pass.state === 'active'}
+-						<a class="pass-claim" href={pass.claim_url}>
++						<a class="pass-claim pass-wallet" href={pass.claim_url}>
+ 							<ArrowSquareOut size={16} />
+ 							<span>Add to your wallet</span>
+ 						</a>
+@@ -1178,6 +1187,19 @@ $effect(() => {
+ 		color: var(--color-divine-on-accent);
+ 	}
+ 
++	/* the wallet is the second choice next to "Show your pass": outlined */
++	.pass-claim.pass-wallet {
++		margin-top: 1rem;
++		background: transparent;
++		color: var(--color-divine-green);
++		border: 1px solid var(--color-divine-green);
++	}
++
++	.pass-claim.pass-wallet:hover {
++		background: var(--color-divine-green);
++		color: var(--color-divine-on-accent);
++	}
++
+ 	.pass-hint {
+ 		margin: 0.75rem 0 0 0;
+ 		font-size: 0.875rem;
+-- 
+2.53.0
+

@@ -25,6 +25,10 @@ x-authentik-env: &authentik-env
   BELFRY_STEWARD_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward
   BELFRY_STEWARD_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward/callback
   STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
+  # Read by the pass-app blueprint (!Env): the pass on the phone (/me) of the onboarding service.
+  BELFRY_PASS_PAGE_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/me
+  BELFRY_PASS_PAGE_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/me/callback
+  PASS_PAGE_OIDC_CLIENT_SECRET: ${PASS_PAGE_OIDC_CLIENT_SECRET:?}
   # Read by the issuer-app blueprint (!Env): Issuer2's login for authorization-code offers.
   BELFRY_ISSUER_REDIRECT_URI: ${ISSUER_PUBLIC_URL:-http://localhost:7005}/openid4vci/external/oauth/callback
   ISSUER_OIDC_CLIENT_SECRET: ${ISSUER_OIDC_CLIENT_SECRET:?}
@@ -508,6 +512,9 @@ services:
       # Steward pages (/steward): Authentik application belfry-steward and the session cookie key.
       STEWARD_OIDC_CLIENT_SECRET: ${STEWARD_OIDC_CLIENT_SECRET:?}
       STEWARD_SESSION_SECRET: ${STEWARD_SESSION_SECRET:?}
+      # The pass on the phone (/me, /check): Authentik application belfry-pass, cookie and QR key.
+      PASS_PAGE_OIDC_CLIENT_SECRET: ${PASS_PAGE_OIDC_CLIENT_SECRET:?}
+      PASS_PAGE_SECRET: ${PASS_PAGE_SECRET:?}
       # Keycast's "Your pass" card reads GET /admin/partners/<id>/pass with this bearer token.
       PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
