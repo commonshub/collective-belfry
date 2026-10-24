@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import blossom, bridge, claim, core, mypass, steward
+from . import blossom, bridge, claim, core, mypass, pages, steward
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -106,6 +106,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     app.state.bridge = bridge.BridgeStore()
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.

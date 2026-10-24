@@ -9,6 +9,7 @@ RUN groupadd --gid 1000 belfry && useradd --uid 1000 --gid belfry --create-home 
 WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY belfry_onboarding ./belfry_onboarding
+COPY content ./content
 RUN pip install --no-cache-dir .
 
 USER belfry

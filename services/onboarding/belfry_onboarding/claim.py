@@ -57,10 +57,12 @@ def page(title: str, body: str) -> str:
  .ok {{ color: var(--osv-accent); font-weight: 600; }} .bad {{ color: var(--osv-accent-2); font-weight: 600; }}
  code {{ font-family: var(--osv-font-mono); word-break: break-all; background: var(--osv-surface-deep); padding: 2px 6px; border-radius: 4px; }}
  footer {{ margin-top: 24px; font-size: 0.85rem; color: var(--osv-foreground-faint); }}
+ footer nav {{ margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 14px; }} footer nav a {{ color: var(--osv-foreground-muted); }}
 </style></head><body><main>
 <header><a href="https://opensourcevillage.org"><img src="/brand/osv-logo-horizontal-white.svg" alt="Open Source Village"></a></header>
 {body}
-<footer>Open Source Village, run by Belfry</footer>
+<footer>Open Source Village, run by Belfry
+<nav><a href="/help">Help</a><a href="/rules">Community rules</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/refunds">Refunds</a></nav></footer>
 </main></body></html>"""
 
 
@@ -79,6 +81,7 @@ def home_page(settings: Any) -> str:
         ),
         (settings.chat_public_url, "Chat", "Talk to other participants."),
         (settings.calendar_public_url, "Calendar", "Sessions and meetups at the village."),
+        ("/help", "Help", "Signing in, your pass at the door, the apps, tokens, stewards."),
     ]
     items = "".join(
         f'<li><a href="{html.escape(url)}"><strong>{html.escape(name)}</strong>'

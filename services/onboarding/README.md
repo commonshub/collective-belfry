@@ -23,6 +23,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/bridge.py` | sign-in with the pass: an OIDC provider over Verifier2 (`../../docs/pass-sign-in.md`) |
 | `belfry_onboarding/mypass.py` | the pass on the phone (`/me`) and its door check (`/check`) |
 | `belfry_onboarding/steward.py` | the steward pages (`/steward`) |
+| `belfry_onboarding/pages.py`, `content/*.md` | the text pages (privacy notice, terms, refund policy, community rules, help): edit the Markdown in `content/` |
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
 | `belfry_onboarding/stripe_sig.py`, `nostr.py` | Stripe signature check; npub encoding |
@@ -104,6 +105,7 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `GET /issuer-metadata`, `/issuer-shim/*` | none | compatibility layer in front of Issuer2 for wallets on an older OpenID4VCI draft, and the gate that only lets authorization-code flows through with a claim page's `issuer_state` |
 | `GET /blossom/auth` | `Authorization: Nostr <event>` | forward-auth for the file server: 200 when the upload signature is valid and its key holds an active pass |
 | `/steward`, `/steward/*` | Authentik sign-in (application `belfry-steward`, group `belfry-stewards`), CSRF token per form | steward pages: invites (create, copy, revoke), passes (mark paid, new sign-in link, revoke) |
+| `GET /privacy`, `/terms`, `/refunds`, `/rules`, `/help` | none | the text pages, rendered from `content/*.md`; `[TO FILL: …]` is highlighted, `/help` lists the apps from `COMMUNITY_APPS` |
 | `GET /brand/*` | none | the shared brand files (`brand/`) |
 
 ## How the operations work

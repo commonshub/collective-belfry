@@ -502,6 +502,40 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list ($(jq '.pubkeys | length' <<<"$LIST") active keys)" || bad "participants list for the participant: $(head -c 200 <<<"$LIST")"
 fi
 echo "  note the browser check (directory opt-in, an offer with a photo, paying it through the wallet) is infra/scripts/village-check.mjs"
+step "6s. text pages on pass.<domain>: privacy, terms, refunds, rules, help; linked from the landing page"
+for page in "privacy|Privacy notice" "terms|Terms of participation" "refunds|Refund policy" "rules|Community rules" "help|Help"; do
+  p=${page%%|*}; t=${page#*|}; H=$(curl -sS -o - -w '\n%{http_code}' "$ONB_URL/$p")
+  [[ "${H##*$'\n'}" == 200 && "$H" == *"<title>$t</title>"* && "$H" != *"{{"* ]] && ok "/$p: $t" || bad "/$p: HTTP ${H##*$'\n'}"
+done
+HOME_PAGE=$(curl -sS "$ONB_URL/")
+[[ "$HOME_PAGE" == *'href="/help"'* && "$HOME_PAGE" == *'href="/privacy"'* && "$HOME_PAGE" == *'href="/rules"'* ]] && ok "the landing page links help, rules and the legal pages" || bad "landing page links"
+[[ "$(curl -sS "$ONB_URL/help")" == *"<strong>Chat</strong>"* ]] && ok "/help lists the community apps" || bad "/help has no app list (COMMUNITY_APPS)"
+
+step "6q. photos (services/village): served on its own host; NIP-98 bound to it; pictures signed through the policy"
+PHOTOS_URL=${PHOTOS_URL:-${PHOTOS_PUBLIC_URL:-http://localhost:3800}}
+H=$(curl -sS -o - -w '\n%{http_code}' "$PHOTOS_URL/")
+[[ "${H##*$'\n'}" == 200 && "$H" == *"<title>Open Source Village photos</title>"* ]] && ok "Open Source Village photos answers at $PHOTOS_URL" || bad "photos at $PHOTOS_URL: HTTP ${H##*$'\n'}"
+JS=$(grep -o '/assets/index-[^"]*\.js' <<<"$H" | head -1)
+BUNDLE=$(curl -sS "$PHOTOS_URL$JS")
+[[ "$BUNDLE" == *"belfry-photos"* && "$BUNDLE" == *"${BLOSSOM_PUBLIC_URL:-http://localhost:3100}"* ]] && ok "bundle signs in as belfry-photos and uploads to ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}" || bad "photos bundle lacks the client id or the Blossom URL"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PHOTOS_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+  LIST=$(curl -sS -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")
+  jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list from the photos host" || bad "participants list from the photos host: $(head -c 200 <<<"$LIST")"
+  # a token signed for the directory's URL is refused here (NIP-98 names the host)
+  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+  [[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")" == 401 ]] && ok "a NIP-98 token for another app's URL: 401" || bad "photos accepted a token for the directory's URL"
+  for k in 20 7 1111; do
+    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
+    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (picture, like, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+  done
+fi
+echo "  note the browser check (upload, share, like, comment, tip through the wallet) is infra/scripts/photos-check.mjs"
+
 
 step "6q. photos (services/village): served on its own host; NIP-98 bound to it; pictures signed through the policy"
 PHOTOS_URL=${PHOTOS_URL:-${PHOTOS_PUBLIC_URL:-http://localhost:3800}}

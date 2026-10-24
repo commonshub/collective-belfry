@@ -90,6 +90,8 @@ relay; that step is reported as a note. Test real mail delivery with a real addr
 - A test purchase in Stripe test mode: the activation mail arrives with its links, the claim page
   issues to a wallet, the door accepts the pass, the pass signs in.
 
+Day-to-day operation, scheduled jobs and incidents: `../docs/runbook.md`.
+
 ## Updating a deployment
 
 Pull or copy the new commits, rebuild what changed and start it:

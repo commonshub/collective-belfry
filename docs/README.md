@@ -15,6 +15,8 @@
 | `../infra/relay/README.md`, `../infra/blossom/README.md`, `../infra/mint/README.md` | community relay, file server, token mint |
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |
 | `../brand/README.md` | colours, fonts, logos and where copies of them live |
+| `runbook.md` | operating the server before and during the event, and what to do when something breaks |
+| `../services/onboarding/content/` | the texts of the pages on `pass.<domain>`: privacy notice, terms, refund policy, community rules, help (`/privacy`, `/terms`, `/refunds`, `/rules`, `/help`) |
 
 ## Plan
 
