@@ -57,7 +57,10 @@ the depth-10 proving artifacts (`scripts/fetch-artifacts.sh`, SHA-256 pinned) in
 browsers never load them from a third party, runs the tests and builds the web app with the
 Keycast URL, the brand URL and the app bar's links. Sign-in is "Sign in with Open Source Village"
 (Keycast client `belfry-vote`, registered and trusted by bootstrap and Compose), silent once per
-tab; logout ends the Keycast and Authentik sessions like the other apps.
+tab; logout ends the Keycast and Authentik sessions like the other apps. Participants who took
+their key into their own custody (Keycast patch 0012) get `error_description=self_custody` from
+the sign-in and land on "Use your own signer": a NIP-07 browser extension or a `bunker://` URL from
+their signer app (also linked from the sign-in card).
 
 ```bash
 cd services/vote && npm ci && scripts/fetch-artifacts.sh && npm test

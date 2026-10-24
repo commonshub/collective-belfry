@@ -56,6 +56,7 @@ function signInCard() {
       <p>Sign in to open polls and to vote. Your vote stays anonymous: it is a zero-knowledge proof
       that it comes from one of the village's passes, not from whom.</p>
       <button class="primary" id="signin">Sign in with Open Source Village</button>
+      <p class="small"><a href="#/signer">Use your own signer</a> (if you took your key into your own custody)</p>
     </div>`
 }
 
@@ -117,14 +118,15 @@ async function ensureRegistered(box) {
        <button class="primary" id="register">${registered ? "Use a new key on this device" : "Set up voting on this device"}</button>
      </div>`,
   )
-  document.getElementById("register").onclick = async () => {
-    const btn = document.getElementById("register")
+  const btn = box.querySelector("#register")
+  if (!btn) return me
+  btn.onclick = async () => {
     btn.disabled = true
     btn.textContent = "Setting up…"
     try {
       const id = session.identity() && !registered ? session.identity() : session.createIdentity()
       const r = await api.register(id.commitment.toString())
-      document.getElementById("register-card").remove()
+      box.querySelector("#register-card")?.remove()
       notice(r.joined.length ? `Ready. You can vote in ${r.joined.length} open poll(s).` : "Ready to vote.", "good")
     } catch (e) {
       btn.disabled = false
@@ -267,6 +269,44 @@ function newPage() {
   }
 }
 
+/** For participants who hold their own key: a NIP-07 extension or a bunker URL from their signer app. */
+function signerPage(selfCustody = false) {
+  render(`${header("Your own signer", true)}
+    <div class="card stack">
+      ${selfCustody ? "<p>Your Nostr key is in your own custody, so Open Source Village cannot sign for you any more. Sign in with your own signer.</p>" : "<p>If you hold your own Nostr key, sign in with your own signer.</p>"}
+      ${session.hasExtension() ? '<button class="primary" id="ext">Sign in with the browser extension</button>' : '<p class="muted small">No Nostr browser extension found (Alby, nos2x, Soapbox Signer…).</p>'}
+      <label>Or paste a bunker link from your signer app (Amber, nsec.app…)<textarea id="bunker" rows="3" placeholder="bunker://…"></textarea></label>
+      <button class="primary" id="connect">Connect</button>
+    </div>`)
+  bindCommon()
+  // the hashchange listener renders the polls page (calling route() as well would render it twice)
+  const done = () => {
+    if (location.hash === "#/" || location.hash === "") route()
+    else location.hash = "#/"
+  }
+  document.getElementById("ext")?.addEventListener("click", async () => {
+    try {
+      await session.connectExtension()
+      done()
+    } catch (e) {
+      notice(e.message, "bad")
+    }
+  })
+  document.getElementById("connect").onclick = async () => {
+    const btn = document.getElementById("connect")
+    btn.disabled = true
+    btn.textContent = "Connecting…"
+    try {
+      await session.connect(document.getElementById("bunker").value.trim())
+      done()
+    } catch (e) {
+      btn.disabled = false
+      btn.textContent = "Connect"
+      notice(`Could not connect: ${e.message}`, "bad")
+    }
+  }
+}
+
 function devicePage() {
   render(`${header("Voting key", true)}<div class="card stack" id="device"></div>`)
   bindCommon()
@@ -317,6 +357,8 @@ function route() {
   if ((m = hash.match(/^#\/poll\/([\w-]+)$/))) return pollPage(m[1])
   if (hash === "#/new") return newPage()
   if (hash === "#/device") return devicePage()
+  if (hash === "#/signer") return signerPage()
+  if (hash === "#/self-custody") return signerPage(true)
   return listPage()
 }
 
@@ -324,7 +366,7 @@ async function boot() {
   if (location.pathname === SSO_CALLBACK_PATH) {
     render('<p class="muted center">Signing in…</p>')
     const result = await finishSso(location.search)
-    history.replaceState(null, "", `/${result.returnTo}`)
+    history.replaceState(null, "", `/${result.description === "self_custody" ? "#/self-custody" : result.returnTo}`)
     if (result.ok) {
       try {
         await session.connect(result.bunkerUrl)

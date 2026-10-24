@@ -26,9 +26,33 @@ export function currentPubkey() {
   return pubkey
 }
 
+/** A browser extension (NIP-07), for participants who hold their own key. */
+const extensionSigner = {
+  signEvent: template => window.nostr.signEvent(template),
+  close: async () => {},
+}
+
+export const hasExtension = () => typeof window.nostr?.signEvent === "function"
+
+/** Sign in with the browser extension (NIP-07) and remember that choice. */
+export async function connectExtension() {
+  if (!hasExtension()) throw new Error("no Nostr extension in this browser")
+  const pk = await window.nostr.getPublicKey()
+  localStorage.setItem(SESSION_KEY, JSON.stringify({ type: "nip07", pubkey: pk }))
+  signer = extensionSigner
+  pubkey = pk
+  return pk
+}
+
 /** Restore a signer from an earlier sign-in on this device (no new connect needed). */
 export function restore() {
   const saved = load(SESSION_KEY)
+  if (saved?.type === "nip07" && saved.pubkey) {
+    if (!hasExtension()) return false
+    signer = extensionSigner
+    pubkey = saved.pubkey
+    return true
+  }
   if (!saved?.bp || !saved?.sk || !saved?.pubkey) return false
   signer = BunkerSigner.fromBunker(hexToBytes(saved.sk), saved.bp, { onauth: url => window.open(url, "_blank") })
   pubkey = saved.pubkey

@@ -2,6 +2,7 @@
 // silent sign-in with the participant's Authentik session, set up voting on this device, open a
 // poll, vote anonymously, and see the vote counted.
 // Usage: COOKIE_JAR=<curl jar with the Authentik session> node vote-check.mjs <app url> <out prefix>
+//   BUNKER_FILE=<file with a bunker:// URL> instead: sign in with "Use your own signer" (self-custody).
 //   CHROME: the Chromium binary (default: Playwright's); WIDTH (390), WAIT (ms per step, 12000).
 import { spawn } from "node:child_process"
 import { readFileSync, writeFileSync } from "node:fs"
@@ -38,16 +39,24 @@ const fail = async msg => { await shot("fail"); console.log("FAIL", msg, "\n", a
 
 await send("Page.enable"); await send("Runtime.enable"); await send("Network.enable")
 await send("Emulation.setDeviceMetricsOverride", { width, height: 844, deviceScaleFactor: 1, mobile: width < 600 })
-for (const line of readFileSync(process.env.COOKIE_JAR, "utf8").split("\n")) {
+for (const line of (process.env.COOKIE_JAR ? readFileSync(process.env.COOKIE_JAR, "utf8") : "").split("\n")) {
   if (!line || line.startsWith("# ")) continue
   const f = line.replace(/^#HttpOnly_/, "").split("\t")
   if (f.length < 7) continue
   await send("Network.setCookie", { name: f[5], value: f[6], domain: f[0].replace(/^\./, ""), path: f[2], httpOnly: line.startsWith("#HttpOnly_") })
 }
 
+const own = process.env.BUNKER_FILE ? readFileSync(process.env.BUNKER_FILE, "utf8").trim() : ""
 await send("Page.navigate", { url })
-if (!(await until("!!document.getElementById('signout')", 2 * wait))) await fail("not signed in silently")
-console.log("ok   signed in silently at", await ev("location.href"))
+if (own) {
+  // own signer (self-custody): wait for the silent attempt to come back, then paste the bunker URL
+  await until("!!document.getElementById('signin')", 2 * wait)
+  await ev("location.hash = '#/signer'")
+  await until("!!document.getElementById('bunker')")
+  await ev(`(() => { document.getElementById('bunker').value = ${JSON.stringify(own)}; document.getElementById('connect').click() })()`)
+}
+if (!(await until("!!document.getElementById('signout')", 2 * wait))) await fail("not signed in")
+console.log("ok   signed in at", await ev("location.href"), own ? "(own signer, bunker URL)" : "(silently)")
 if (await until("!!document.getElementById('register')", 4000)) {
   await ev("document.getElementById('register').click()")
   if (!(await until("/Ready/.test(document.getElementById('notice')?.textContent || '')"))) await fail("voting set-up did not finish")

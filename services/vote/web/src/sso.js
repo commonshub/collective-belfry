@@ -60,7 +60,11 @@ export async function finishSso(search) {
   const pending = raw ? JSON.parse(raw) : null
   const returnTo = pending?.returnTo || "#/"
   if (!pending || params.get("state") !== pending.state) return { ok: false, error: "state_mismatch", returnTo }
-  if (params.get("error")) return { ok: false, error: params.get("error"), returnTo }
+  if (params.get("error")) {
+    // error_description=self_custody (Keycast patch 0012): the participant holds their own key
+    // now, so the app signs in with their own signer instead.
+    return { ok: false, error: params.get("error"), description: params.get("error_description"), returnTo }
+  }
   const code = params.get("code")
   if (!code) return { ok: false, error: "no_code", returnTo }
   try {
