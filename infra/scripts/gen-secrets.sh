@@ -51,6 +51,9 @@ values = {
     "HOOK_TOKEN": "$(rand 32)",
     "PASS_INFO_TOKEN": "$(rand 32)",
     "MINT_SEED": "$(rand 32)",
+    # Keycast runs as the deploying user, the owner of master.key and the custody seed
+    "HOST_UID": "$(id -u)",
+    "HOST_GID": "$(id -g)",
 }
 example, target, mode = sys.argv[1:4]
 line_re = re.compile(r"^([A-Z0-9_]+)=(\S*)(\s*#.*)?$")

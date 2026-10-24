@@ -4,8 +4,22 @@
 # the Compose network. CADDY_TLS_ARG is the argument of the tls directive: the ACME e-mail in
 # production (docker-compose.prod.yml defaults it to ACME_EMAIL), "internal" for a local check
 # with Caddy's own CA.
+#
+# Hardening (2026-10-24):
+# - Admin pages (Odoo's back office, Authentik's admin and password login, the steward pages,
+#   Keycast's admin pages) answer only connections from ADMIN_NETS: the ZeroTier network's subnet
+#   plus the VM itself (Docker's address ranges, for bootstrap and the smoke test). Admins map the
+#   public hostnames to the VM's ZeroTier address in their hosts file (infra/DEPLOY.md). The
+#   check uses the connection's address (remote_ip), never X-Forwarded-For.
+# - Per-IP rate limits (module caddy-ratelimit, image infra/proxy/Dockerfile) on the pages anyone
+#   can hit without an account. They are generous on purpose: at the event most participants
+#   share the venue's address. Mail flooding is limited per account in Authentik
+#   (belfry-magic-link-flow.yaml), not here.
+# - A Content-Security-Policy per browser app (scripts and connections only to Belfry's own
+#   hosts). Odoo and Authentik bring their own inline code and get none.
 {
 	email {$ACME_EMAIL}
+	order rate_limit before basic_auth
 	servers {
 		trusted_proxies static private_ranges
 	}
@@ -17,24 +31,58 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options nosniff
 		Referrer-Policy strict-origin-when-cross-origin
+		X-Frame-Options SAMEORIGIN
 		-Server
 	}
 	encode zstd gzip
+}
+
+# import admin_only <path> [<path> ...]: those paths only from ADMIN_NETS (once per site).
+(admin_only) {
+	@outside_admin_net {
+		path {args[:]}
+		not remote_ip {$ADMIN_NETS:127.0.0.1/8 172.16.0.0/12}
+	}
+	respond @outside_admin_net "This page is only reachable over Belfry's admin network." 403
+}
+
+# import limit <zone> <events> <window> <path> [<path> ...]: per client address; 429 beyond.
+(limit) {
+	rate_limit {
+		zone {args[0]} {
+			match {
+				path {args[3:]}
+			}
+			key {client_ip}
+			events {args[1]}
+			window {args[2]}
+		}
+	}
+}
+
+# import csp "<policy>": the app's Content-Security-Policy, plus what every app shares.
+(csp) {
+	header Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 }
 
 # Registry and billing: invite pages, Odoo payment links, back office. Host shop.<domain>
 # (ODOO_HOST_PREFIX; the first test deployment, belfry.tofauti.net, keeps odoo.).
 {$ODOO_HOST_PREFIX:shop}.{$BELFRY_DOMAIN} {
 	import security
-	# Database management is guarded by the master password; keep it off the internet anyway.
-	@dbmanager path /web/database/*
-	respond @dbmanager 404
+	# The back office, its login and the database manager only over the admin network;
+	# participants keep the invite, payment and portal pages (access-token links).
+	import admin_only /odoo /odoo/* /web /web/ /web/login /web/login/* /web/reset_password* /web/signup* /web/database/* /web/session/* /web/become /xmlrpc/* /jsonrpc /json/*
+	import limit odoo-invite 120 1m /belfry/invite/*
 	reverse_proxy odoo:8069
 }
 
 # Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
 login.{$BELFRY_DOMAIN} {
 	import security
+	# Authentik's admin interface and akadmin's password login only over the admin network.
+	import admin_only /if/admin /if/admin/* /if/flow/default-authentication-flow /if/flow/default-authentication-flow/* /api/v3/flows/executor/default-authentication-flow /api/v3/flows/executor/default-authentication-flow/* /api/v3/admin/*
+	# Flow steps (e-mail entry, magic links, pass sign-in): bursts from the venue are fine.
+	import limit login-flows 300 1m /api/v3/flows/executor/*
 	reverse_proxy authentik-server:9000
 }
 
@@ -45,6 +93,8 @@ apps.{$BELFRY_DOMAIN} {
 	# (ENABLE_DEV_EMAIL_INBOX, read by bootstrap to confirm the admin) must never be public.
 	@admin path /api/admin/* /api/dev/*
 	respond @admin 404
+	import admin_only /admin /admin/*
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data:; connect-src 'self' https://login.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy keycast:3000
 }
 
@@ -77,6 +127,8 @@ blossom.{$BELFRY_DOMAIN} {
 	request_body {
 		max_size 25MB
 	}
+	# Files uploaded by participants: never run as a page on this origin.
+	header Content-Security-Policy "default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; sandbox"
 	reverse_proxy blossom-gate:80
 }
 
@@ -84,6 +136,9 @@ blossom.{$BELFRY_DOMAIN} {
 # blossom. directly (infra/apps/chat/README.md).
 chat.{$BELFRY_DOMAIN} {
 	import security
+	# Coracle's own <meta> policy applies as well (both must allow). Participants may add other
+	# relays and look up NIP-05 names elsewhere, so connections stay open to any https/wss host.
+	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
 	reverse_proxy chat:80
 }
 
@@ -99,6 +154,8 @@ mint.{$BELFRY_DOMAIN} {
 # Village token wallet (cashu.me, static); it talks to mint., apps. (Keycast) and relay. itself.
 wallet.{$BELFRY_DOMAIN} {
 	import security
+	# one inline script (brand.mjs: the dark background before the app loads)
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy wallet:80
 }
 
@@ -113,6 +170,7 @@ issuer.{$BELFRY_DOMAIN} {
 	import security
 	@management path /issuer2/*
 	respond @management 404
+	import limit issuer 300 1m /openid4vci/* /.well-known/*
 	# Issuer2 serves its metadata only at the RFC 8615 place (/.well-known/<name>/openid4vci);
 	# walt.id's web wallet and other draft-13 wallets append it to the issuer URL instead.
 	rewrite /openid4vci/.well-known/oauth-authorization-server /.well-known/oauth-authorization-server/openid4vci
@@ -165,12 +223,15 @@ verifier.{$BELFRY_DOMAIN} {
 # Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
 calendar.{$BELFRY_DOMAIN} {
 	import security
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy calendar:80
 }
 
 # Community app: anonymous polls (services/vote: API and web app in one process).
 vote.{$BELFRY_DOMAIN} {
 	import security
+	# the Semaphore prover runs WebAssembly
+	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy vote:8080
 }
 
@@ -178,16 +239,19 @@ vote.{$BELFRY_DOMAIN} {
 # three ports).
 people.{$BELFRY_DOMAIN} {
 	import security
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8080
 }
 
 market.{$BELFRY_DOMAIN} {
 	import security
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8081
 }
 
 photos.{$BELFRY_DOMAIN} {
 	import security
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8082
 }
 
@@ -197,5 +261,13 @@ pass.{$BELFRY_DOMAIN} {
 	import security
 	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
 	respond @internal 404
+	import admin_only /steward /steward/*
+	import limit pass-claim 120 1m /claim/* /tokens/*
+	import limit pass-me 120 1m /me/login /me/callback
+	import limit pass-check 600 1m /check/*
+	import limit pass-bridge 300 1m /bridge/*
+	import limit pass-door 60 1m /door /door/*
+	# the pages carry their own small inline scripts and the QR codes as data: images
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy onboarding:8100
 }

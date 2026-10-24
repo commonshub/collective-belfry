@@ -14,6 +14,12 @@
 # user, password (infra/secrets/smtp_password) and sender into the stage over the API. Those
 # fields are left out here so that re-applying the blueprint never resets them.
 #
+# Mail flooding (2026-10-24): a deny stage before the e-mail stage stops a sixth sign-in link for
+# the same account within 30 minutes (expression policy belfry-magic-link-limit, counted in
+# authentik's cache). Keyed on the account, not the IP: at the event most participants share the
+# venue's address. Unknown addresses never get a mail anyway. If the policy cannot be evaluated,
+# the deny stage is skipped and the e-mail stage still runs, so a fault never signs anyone in.
+#
 # Admins: akadmin keeps authentik's default-authentication-flow with a password, reachable at
 # /if/flow/default-authentication-flow/?next=/if/admin/ (that flow is not changed here).
 # Applied by the worker's file watcher (bind mount /blueprints/custom); re-applied on change.
@@ -66,6 +72,32 @@ entries:
       token_expiry: minutes=10
       subject: Your Open Source Village sign-in link
       template: belfry/magic_link.html
+  - model: authentik_stages_deny.denystage
+    id: belfry-magic-link-limit-deny
+    identifiers:
+      name: belfry-magic-link-limit-deny
+    attrs:
+      deny_message: Too many sign-in links were sent for this address. Try again in 30 minutes.
+  - model: authentik_policies_expression.expressionpolicy
+    id: belfry-magic-link-limit
+    identifiers:
+      name: belfry-magic-link-limit
+    attrs:
+      execution_logging: false
+      # True (deny) from the sixth link for one account within 30 minutes.
+      expression: |
+        from django.core.cache import cache
+        user = request.context.get("pending_user")
+        if not user or not getattr(user, "pk", None):
+            return False
+        key = f"belfry-magic-link-{user.pk}"
+        cache.add(key, 0, 1800)
+        try:
+            count = cache.incr(key)
+        except ValueError:
+            cache.set(key, 1, 1800)
+            count = 1
+        return count > 5
   - model: authentik_stages_user_login.userloginstage
     id: belfry-magic-link-login
     identifiers:
@@ -79,6 +111,26 @@ entries:
       target: !KeyOf belfry-magic-link
       stage: !KeyOf belfry-magic-link-identification
       order: 10
+  - model: authentik_flows.flowstagebinding
+    id: belfry-magic-link-limit-binding
+    identifiers:
+      target: !KeyOf belfry-magic-link
+      stage: !KeyOf belfry-magic-link-limit-deny
+      order: 15
+    attrs:
+      # decided when the stage is reached (the pending user is known then), not at planning
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: any
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf belfry-magic-link-limit-binding
+      policy: !KeyOf belfry-magic-link-limit
+    attrs:
+      order: 0
+      enabled: true
+      # a failing expression counts as "no" (the deny stage is skipped, the mail stage still runs)
+      failure_result: false
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf belfry-magic-link

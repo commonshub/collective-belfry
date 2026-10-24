@@ -336,6 +336,18 @@ if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/
 else
   echo "  note Mailpit not reachable at $MAILPIT_URL: the mail round trip is checked by hand on a public deployment"
 fi
+# Mail flooding: per account, at most five links in 30 minutes (deny stage before the mail stage).
+SENT=0; DENIED=""
+for _ in 1 2 3 4 5 6 7; do
+  LJAR=$(mktemp); REQ=$(magic_request "$LJAR" "$EMAIL"); rm -f "$LJAR"
+  case "$(jq -r .component <<<"$REQ")" in
+    ak-stage-email) SENT=$((SENT + 1)) ;;
+    ak-stage-access-denied) DENIED=$REQ; break ;;
+    *) DENIED="unexpected: $REQ"; break ;;
+  esac
+done
+[[ "$DENIED" == *"Too many sign-in links"* || "$(jq -r .component <<<"$DENIED" 2>/dev/null)" == ak-stage-access-denied ]] \
+  && ok "sign-in links are limited per account: denied after $SENT more (at most five in 30 minutes)" || bad "magic-link limit: $SENT sent, then '$DENIED'"
 step "6m. logout from an app ends the Keycast and the Authentik session (no silent sign-in after it)"
 # In 6h's magic-link browser: the logout ends that Authentik session, and AK_SESSION is still
 # needed (8b).

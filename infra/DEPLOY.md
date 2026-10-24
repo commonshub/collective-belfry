@@ -66,11 +66,41 @@ The magic-link mail goes out through the SMTP settings bootstrap writes into the
 (`SMTP_*`, `infra/secrets/smtp_password`), the same relay as Odoo's mails. After changing the
 SMTP settings or the password, run bootstrap again. The admin `akadmin` signs in with its
 password at `https://login.<domain>/if/flow/default-authentication-flow/?next=/if/admin/`
-(the login page itself only offers e-mail and pass).
+(the login page itself only offers e-mail and pass); that URL answers only over the admin network.
+Sign-in links are limited per account: at most five in 30 minutes (a deny stage in the flow).
+
+## Admin network (ZeroTier)
+
+The admin pages answer only over Belfry's admin network, a private ZeroTier network: Odoo's back
+office and its login (`/odoo`, `/web`, `/web/login`, the database manager, XML/JSON-RPC),
+Authentik's admin interface and akadmin's password login, the steward pages (`/steward`) and
+Keycast's admin pages. Everywhere else they answer 403. The proxy checks the connection's address
+against `ADMIN_NETS` (the ZeroTier subnet plus Docker's ranges, so bootstrap and the smoke test on
+the VM itself keep working). Participants' pages (invites, payment, portal links, sign-in,
+apps) are unaffected.
+
+1. In ZeroTier Central (https://my.zerotier.com) create a network, access control **private**,
+   with an IPv4 auto-assign pool (e.g. `10.147.17.0/24`). Note the network id.
+2. On the VM: `infra/scripts/zerotier.sh install`, then `infra/scripts/zerotier.sh join <network id>`.
+3. In ZeroTier Central authorise the VM's node (the id `join` printed), and give it a fixed address.
+4. On the VM: `infra/scripts/zerotier.sh status` prints the VM's ZeroTier address and an
+   `ADMIN_NETS=...` line: put it into `infra/.env`, then
+   `docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d proxy`.
+5. Each admin and steward device: install ZeroTier (desktop, Android, iOS), join the network,
+   get authorised in ZeroTier Central, and map the hostnames to the VM's ZeroTier address in the
+   hosts file, e.g. `10.147.17.10 odoo.<domain> login.<domain> pass.<domain> apps.<domain>`.
+   The certificates stay valid (same names). Phones without a hosts file: a ZeroTier DNS entry
+   (Central, "DNS") or a local resolver on the network does the same.
+6. Check from outside the network: `https://pass.<domain>/steward` answers 403; from inside it
+   signs in.
+
+Stewards working at the door from a phone need ZeroTier on that phone. The Hetzner firewall may
+allow UDP 9993 inbound for direct ZeroTier paths; without it traffic goes through ZeroTier's
+relays (slower, works).
 
 ## Stewards
 
-Stewards work on `https://pass.<domain>/steward` (invites, mark paid, re-send sign-in link,
+Stewards work on `https://pass.<domain>/steward` (over the admin network, see above) (invites, mark paid, re-send sign-in link,
 revoke), signed in through Authentik like participants (magic link or pass); Odoo's UI is for
 admins and accounting. Make someone a steward (creates a passwordless Authentik user if the
 e-mail has none, adds it to `belfry-stewards`):
@@ -87,18 +117,37 @@ The overlay unsets `OIDC_BACKCHANNEL_URL` for Keycast: it fetches Authentik's di
 
 | Host | Upstream | Blocked |
 | --- | --- | --- |
-| `shop.` | Odoo (`ODOO_HOST_PREFIX`, default `shop`; belfry.tofauti.net keeps `odoo.`) | `/web/database/*` (master password protects it anyway) |
-| `login.` | Authentik | |
-| `apps.` | Keycast web app and API | `/api/admin/*` (onboarding service only) |
+| `shop.` | Odoo (`ODOO_HOST_PREFIX`, default `shop`; belfry.tofauti.net keeps `odoo.`) | back office, login, database manager, RPC: admin network only |
+| `login.` | Authentik | admin interface, akadmin's password flow: admin network only |
+| `apps.` | Keycast web app and API | `/api/admin/*` (onboarding service only); `/admin` admin network only |
 | apex | NIP-05 `/.well-known/nostr.json` → Keycast (with the tenant host); everything else redirects to `shop.` | |
 | `relay.` | community relay (rnostr, NIP-42) | |
 | `chat.` | Community chat (Coracle, NIP-17), static build; `CHAT_PUBLIC_URL` and `BLOSSOM_PUBLIC_URL` are compiled in, rebuild `chat` after changing them | |
 | `bunker.` | Keycast's NIP-46 relay; `BUNKER_PUBLIC_RELAYS=wss://bunker.<domain>` (set by `prod-env.sh`) is what Keycast writes into bunker URLs | |
 | `issuer.` | Issuer2 wallet-facing API | `/issuer2/*` (management API, no auth upstream) |
 | `verifier.` | Verifier2 `request` and `response` of a session only | everything else (session management, no auth upstream) |
-| `pass.` | onboarding service: claim pages, door, bridge, status list, vct, Stripe webhook | `/admin/*`, `/hooks/odoo/*`, API docs |
+| `pass.` | onboarding service: claim pages, pass on the phone (`/me`, `/check`), door, bridge, status list, vct, Stripe webhook | `/admin/*`, `/hooks/odoo/*`, API docs; `/steward` admin network only |
 
-TLS: Let's Encrypt through Caddy (`ACME_EMAIL`). HSTS and the usual headers are set. Odoo's
+TLS: Let's Encrypt through Caddy (`ACME_EMAIL`). HSTS and the usual headers are set.
+
+Hardening (2026-10-24):
+
+- **Rate limits** per client address (Caddy with `caddy-ratelimit`, `proxy/Dockerfile`), generous
+  because the venue's Wi-Fi puts hundreds of participants behind one address: Authentik's flow
+  steps 300/min, claim and token pages 120/min, `/me` sign-in 120/min, `/check` 600/min, bridge
+  300/min, door 60/min, issuer 300/min, invite pages 120/min. Beyond: 429 with `Retry-After`.
+  Mail flooding is limited per account in Authentik, not by address.
+- **Content-Security-Policy** on every browser app: scripts only from the app itself, connections
+  only to Belfry's hosts (the chat may reach any relay), no framing. Odoo and Authentik ship
+  inline code and get none. Blossom's files are served sandboxed.
+- **Containers** run without root (the walt.id services, mint, Blossom, relays, static apps and the
+  proxy as user 10001; Keycast as the deploying user, `HOST_UID`, the owner of `master.key` and
+  the custody seed), with `no-new-privileges` and, where they start unprivileged, no capabilities.
+  `perms-init` hands their volumes to that user once.
+- **Networks**: Postgres and Redis sit on the internal `data` network with their clients only;
+  the static apps only on `edge` with the proxy. `edge` has IPv6 so that the proxy sees IPv6
+  visitors' own addresses (before, Docker's userland proxy showed them all as `172.18.0.1`).
+- **Mailpit** does not run in production (profile `dev`). Odoo's
 automation webhooks and the bridge's token/userinfo calls from Authentik stay inside the Compose
 network (`http://onboarding:8100`, `http://verifier:7004`), which is why the public paths can
 be denied.

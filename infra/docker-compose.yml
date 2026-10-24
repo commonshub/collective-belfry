@@ -2,6 +2,21 @@
 # Variables come from infra/.env (generate it with scripts/gen-secrets.sh).
 name: belfry
 
+# Hardening (2026-10-24): no container gains privileges after start; the ones that start as a
+# non-root user also drop every capability. Images that start as root get the user 10001
+# (APP_UID); perms-init hands the volumes they write to that user once. Keycast runs as the
+# deploying user (HOST_UID, written by gen-secrets.sh), the owner of master.key and the custody
+# seed. Web servers that listen on port 80 keep that one capability (caddy) or may bind it
+# unprivileged (the sysctl below, nginx).
+x-hardened: &hardened
+  security_opt: ["no-new-privileges:true"]
+x-nonroot: &nonroot
+  user: "10001:10001"
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: [ALL]
+x-low-ports: &low-ports
+  net.ipv4.ip_unprivileged_port_start: "0"
+
 x-authentik-env: &authentik-env
   AUTHENTIK_POSTGRESQL__HOST: postgres
   AUTHENTIK_POSTGRESQL__NAME: authentik
@@ -104,6 +119,9 @@ x-keycast-env: &keycast-env
 services:
   postgres:
     image: postgres:16
+    # the entrypoint starts as root and drops to the postgres user itself
+    <<: *hardened
+    networks: [data]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
@@ -126,6 +144,9 @@ services:
 
   odoo:
     image: odoo:19
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [default, data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -156,6 +177,7 @@ services:
   # Web UI and API on http://localhost:8025; production replaces it with a real SMTP relay.
   mailpit:
     image: axllent/mailpit:latest
+    <<: *nonroot
     ports: ["8025:8025"]
     environment:
       MP_SMTP_AUTH_ACCEPT_ANY: "1"
@@ -169,6 +191,9 @@ services:
   authentik-server:
     image: ghcr.io/goauthentik/server:2026.8.5
     command: server
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [default, data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,6 +217,9 @@ services:
   authentik-worker:
     image: ghcr.io/goauthentik/server:2026.8.5
     command: worker
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [default, data]
     depends_on:
       postgres:
         condition: service_healthy
@@ -212,14 +240,36 @@ services:
 
   redis:
     image: redis:7
+    <<: *hardened
+    networks: [data]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # One-shot: the volumes written by images that used to run as root belong to APP_UID 10001
+  # (chown only where needed, so a restart costs nothing). Runs as root with only the
+  # capabilities chown needs.
+  perms-init:
+    image: busybox:1.37
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_READ_SEARCH, FOWNER]
+    network_mode: none
+    volumes:
+      - mint-data:/v/mint
+      - blossom-data:/v/blossom
+      - relay-data:/v/keycast-relay
+    restart: "no"
+
   keycast-relay:
     image: ghcr.io/verse-pbc/relay_builder:latest
+    <<: *nonroot
+    depends_on:
+      perms-init:
+        condition: service_completed_successfully
     environment:
       IDLE_TIMEOUT: "0"
       # The relay's own URL as clients reach it. NIP-42 AUTH events name it in their relay tag,
@@ -236,6 +286,8 @@ services:
   # pubkeys of all active passes and rnostr (--watch) reloads it. See relay/README.md.
   relay-init:
     image: rnostr/rnostr:latest
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     # A fresh volume is populated with the image's default rnostr.toml, so test for the Belfry
     # marker rather than for the file.
     entrypoint: ["sh", "-c", "grep -q belfry:whitelist /rnostr/config/rnostr.toml 2>/dev/null || cp /template/rnostr.toml /rnostr/config/rnostr.toml"]
@@ -246,6 +298,8 @@ services:
 
   relay:
     image: rnostr/rnostr:latest
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     # The image's CMD already is: relay --watch -c ./config/rnostr.toml
     depends_on:
       relay-init:
@@ -274,6 +328,10 @@ services:
     build:
       context: ./keycast/build
     entrypoint: ["/app/keycast", "--migrate"]
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [default, data]
     environment:
       DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
     depends_on:
@@ -286,6 +344,11 @@ services:
     build:
       context: ./keycast/build
     command: unified
+    # the owner of master.key and the custody seed (scripts/custody-seed.sh unlock)
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [default, data]
     # Keycast's graceful shutdown (pre-drain 15 s, HTTP drain, signer drain) ends with leaving the
     # signer hashring in Redis. Docker's default 10 s would kill it during the pre-drain, the dead
     # instance would stay in the ring for 30 s and NIP-46 requests hashed to it would be dropped
@@ -319,6 +382,7 @@ services:
   # authentication: block it at the reverse proxy in production.
   issuer:
     image: waltid/issuer-api2:1.2.0
+    <<: *nonroot
     environment:
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
       BELFRY_VCT: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/vct/village-pass/v1
@@ -341,6 +405,7 @@ services:
   # through http://verifier:7004; wallets use VERIFIER_PUBLIC_URL).
   verifier:
     image: waltid/verifier-api2:1.2.0
+    <<: *nonroot
     environment:
       VERIFIER_PUBLIC_URL: ${VERIFIER_PUBLIC_URL:-http://localhost:7004}
     ports: ["7004:7004"]
@@ -362,6 +427,10 @@ services:
   # pass. Image pinned by digest (the project has no releases). See blossom/config.yml.
   blossom:
     image: ghcr.io/hzrd149/blossom-server@sha256:2b23ba053b4e1ba780504e3c4b6d7057b545e51bfb2cfc034d5093e5d0c10ff3
+    <<: *nonroot
+    depends_on:
+      perms-init:
+        condition: service_completed_successfully
     environment:
       BLOSSOM_REQUIRE_CONFIG: "1"
       BLOSSOM_PUBLIC_DOMAIN: ${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}
@@ -387,6 +456,10 @@ services:
   # port is the mint itself, minting included. infra/mint/README.md.
   mint:
     image: cashubtc/mintd:0.18.2
+    <<: *nonroot
+    depends_on:
+      perms-init:
+        condition: service_completed_successfully
     entrypoint: ["/config/entrypoint.sh"]
     environment:
       MINT_PUBLIC_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
@@ -407,6 +480,10 @@ services:
   blossom-gate:
     image: caddy:2
     profiles: ["app"]
+    <<: *nonroot
+    # caddy's binary carries the file capability to bind port 80; keep it in the bounding set
+    cap_add: [NET_BIND_SERVICE]
+    tmpfs: ["/config:uid=10001", "/data:uid=10001"]
     ports: ["3100:80"]
     volumes:
       - ./blossom/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -433,6 +510,13 @@ services:
         KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         COMMUNITY_APPS: *community-apps
     profiles: ["app"]
+    # nginx as its own unprivileged user (it owns its pid and temp directories in the image).
+    # Browser-only: no backend access.
+    user: "100:101"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    sysctls: *low-ports
+    networks: [edge]
     ports: ["3300:80"]
 
   # Belfry's glue. Behind the "app" profile so the rest of the stack starts before
@@ -440,6 +524,8 @@ services:
   onboarding:
     build: ../services/onboarding
     profiles: ["app"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     depends_on:
       odoo:
         condition: service_healthy
@@ -543,6 +629,12 @@ services:
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_COMMUNITY_APPS: *community-apps
+    # static files only: no backend access
+    <<: *nonroot
+    # caddy's binary carries the file capability to bind port 80; keep it in the bounding set
+    cap_add: [NET_BIND_SERVICE]
+    tmpfs: ["/config:uid=10001", "/data:uid=10001"]
+    networks: [edge]
     ports: ["3200:80"]
 
   # Village token wallet: cashu.me with the village mint built in, "Sign in with Open Source
@@ -560,6 +652,12 @@ services:
         BELFRY_COMMUNITY_RELAY: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         COMMUNITY_APPS: *community-apps
+    # static files only: no backend access
+    <<: *nonroot
+    # caddy's binary carries the file capability to bind port 80; keep it in the bounding set
+    cap_add: [NET_BIND_SERVICE]
+    tmpfs: ["/config:uid=10001", "/data:uid=10001"]
+    networks: [edge]
     ports: ["3400:80"]
 
   # Anonymous polls (Semaphore): one vote per active pass and poll, any participant opens polls.
@@ -581,6 +679,8 @@ services:
       ONBOARDING_URL: http://onboarding:8100
       PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
       TREE_DEPTH: "10"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     volumes:
       - vote-data:/data
     ports: ["3500:8080"]
@@ -614,7 +714,17 @@ services:
       PHOTOS_PUBLIC_URL: ${PHOTOS_PUBLIC_URL:-http://localhost:3800}
       ONBOARDING_URL: http://onboarding:8100
       PASS_INFO_TOKEN: ${PASS_INFO_TOKEN:?}
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
     ports: ["3600:8080", "3700:8081", "3800:8082"]
+
+# default: service to service. data (internal, no internet): Postgres and Redis with their
+# clients only. edge: what only the browser reaches (the static apps; the production proxy).
+networks:
+  default:
+  data:
+    internal: true
+  edge:
 
 volumes:
   blossom-data:

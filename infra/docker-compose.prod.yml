@@ -6,8 +6,22 @@ name: belfry
 
 services:
   proxy:
-    image: caddy:2
+    # Caddy with the rate-limit module (proxy/Dockerfile), as an unprivileged user
+    image: belfry-proxy:local
+    build: ./proxy
     restart: unless-stopped
+    user: "10001:10001"
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    networks:
+      # The proxy's published ports go to its edge address. edge has IPv6, so Docker forwards
+      # IPv6 like IPv4 (ip6tables) and the proxy sees every visitor's own address; without it
+      # IPv6 visitors came through Docker's userland proxy as the bridge address 172.18.0.1,
+      # which broke per-IP limits and would have let them past the admin allowlist.
+      edge:
+        gw_priority: 1
+      default:
     ports:
       - "80:80"
       - "443:443"
@@ -18,24 +32,45 @@ services:
       CADDY_TLS_ARG: ${CADDY_TLS_ARG:-${ACME_EMAIL}}
       KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
       ODOO_HOST_PREFIX: ${ODOO_HOST_PREFIX:-shop}
+      # Admin pages (Odoo back office, Authentik admin, /steward) only from these networks: the
+      # ZeroTier subnet and the VM itself (bootstrap and smoke run there). infra/DEPLOY.md.
+      ADMIN_NETS: ${ADMIN_NETS:-127.0.0.1/8 172.16.0.0/12}
     volumes:
-      - ./proxy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # the directory, not the file: a git update replaces the Caddyfile (new inode), which a
+      # single-file mount would never show; `caddy reload` then picks up the new one
+      - ./proxy:/etc/caddy:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
-      - odoo
-      - authentik-server
-      - keycast
-      - relay
-      - issuer
-      - verifier
+      perms-init:
+        condition: service_completed_successfully
+      odoo:
+        condition: service_started
+      authentik-server:
+        condition: service_started
+      keycast:
+        condition: service_started
+      relay:
+        condition: service_started
+      issuer:
+        condition: service_started
+      verifier:
+        condition: service_started
+
+  # the proxy's certificates and state belong to its user as well
+  perms-init:
+    volumes:
+      - caddy-data:/v/caddy-data
+      - caddy-config:/v/caddy-config
 
   odoo:
+
     ports: !reset []
     restart: unless-stopped
   mailpit:
-    # No local mail sink in production: SMTP_* point at a real relay. The service stays
-    # defined but unreachable from outside.
+    # No local mail sink in production: SMTP_* point at a real relay. Only started with the
+    # "dev" profile; remove a running one with `docker compose rm -sf mailpit`.
+    profiles: ["dev"]
     ports: !reset []
   authentik-server:
     ports: !reset []
@@ -92,6 +127,13 @@ services:
     restart: unless-stopped
   redis:
     restart: unless-stopped
+
+networks:
+  edge:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd42:be1f:7ed9::/64
 
 volumes:
   caddy-data:

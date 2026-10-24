@@ -53,7 +53,9 @@ case "$cmd" in
     seed=$("$AGE" -d "${ids[@]}" "$file") || die "could not decrypt $file"
     [[ "$seed" =~ ^[0-9a-f]{64}$ ]] || die "$file does not hold a custody seed"
     # /run is a tmpfs: the seed is gone after a reboot (signing keeps working, new accounts wait).
-    printf '%s\n' "$seed" | ssh "$host" 'sudo install -d -m 700 /run/belfry && sudo install -m 400 /dev/stdin /run/belfry/custody-seed && echo "unlocked on $(hostname)"'
+    # Keycast runs as the deploying user (HOST_UID, the SSH user here), so the directory and the
+    # file belong to that user, readable by nobody else.
+    printf '%s\n' "$seed" | ssh "$host" 'u=$(id -u); g=$(id -g); sudo install -d -m 700 -o "$u" -g "$g" /run/belfry && sudo install -m 400 -o "$u" -g "$g" /dev/stdin /run/belfry/custody-seed && echo "unlocked on $(hostname)"'
     unset seed
     ;;
   rewrap)
