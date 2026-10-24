@@ -102,8 +102,9 @@ $C --profile app build <services> && $C --profile app up -d <services>
   policy changed.
 - After restarting `keycast`, wait until it reports healthy before running the smoke test; it
   takes over a minute to start.
-- The proxy reads `proxy/Caddyfile` through a single-file mount. After the file changed, recreate
-  the container (`$C up -d --force-recreate --no-deps proxy`); a reload keeps reading the old file.
+- After a change to `proxy/Caddyfile` (the directory is mounted into the proxy), reload it:
+  `$C exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`, or
+  `$C restart proxy`. `$C up -d proxy` alone does nothing when only the Caddyfile changed.
 - Image builds leave a large build cache. `docker builder prune --keep-storage 10GB -f` keeps the
   recently used layers and frees the rest.
 
