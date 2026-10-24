@@ -226,3 +226,50 @@ export function deletedIds(deletions, eventsById) {
   }
   return out
 }
+
+// Activity ("What's new" in the directory): the readable events of the apps, one line each.
+// Left out on purpose: private messages and private calendar entries (encrypted), likes,
+// profile edits, opting out of the directory, and token payments (who paid whom stays in the
+// wallets and on the offer pages).
+export const ACTIVITY_KINDS = [1, 20, 1111, 30023, 30078, 30402, 31922, 31923]
+const firstLine = (s, max = 140) => {
+  const line = String(s || "").trim().split("\n")[0]
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+/** {app, text, detail, image, start} for an activity event, or null when it is not shown. */
+export function activityFromEvent(event) {
+  switch (event.kind) {
+    case 1:
+      if (event.tags.some(t => t[0] === "e")) return null // replies stay in the chat's threads
+      return { app: "chat", text: "posted a note", detail: firstLine(event.content) }
+    case 20: {
+      const p = photoFromEvent(event)
+      if (!p) return null
+      return { app: "photos", text: p.images.length > 1 ? `shared ${p.images.length} photos` : "shared a photo", detail: firstLine(p.title || p.caption), image: p.images[0].url }
+    }
+    case 1111:
+      if (!event.tags.some(t => t[0] === "K" && t[1] === String(PHOTO_KIND))) return null
+      return { app: "photos", text: "commented on a photo", detail: firstLine(event.content), photoId: event.tags.find(t => t[0] === "E")?.[1] }
+    case 30023:
+      return { app: "chat", text: "published an article", detail: firstLine(tag(event, "title") || event.content) }
+    case 30078:
+      if (tag(event, "d") !== DIRECTORY_D || !directoryConsent(event)) return null
+      return { app: "people", text: "joined the directory", detail: "" }
+    case LISTING_KIND: {
+      const l = listingFromEvent(event)
+      if (!l) return null
+      const price = l.price === null ? "" : l.price === 0 ? " (free)" : ` for ${l.price} token${l.price === 1 ? "" : "s"}`
+      return { app: "market", text: l.status === "sold" ? "marked an offer as gone" : `offers ${l.title}${price}`, detail: l.status === "sold" ? l.title : l.summary, image: l.images[0] || "", listing: l }
+    }
+    case 31922:
+    case 31923: {
+      const title = tag(event, "title") || tag(event, "name")
+      if (!title) return null
+      const start = tag(event, "start")
+      return { app: "calendar", text: `added an event: ${title}`, detail: firstLine(tag(event, "location") || event.content), start: event.kind === 31923 ? Number(start) || 0 : start || "" }
+    }
+    default:
+      return null
+  }
+}

@@ -9,6 +9,7 @@
 //      the wallet opens with the payment filled in, sends a 5-token nutzap that names the offer,
 //      and returns to the offer, which then says "You paid 5 tokens".
 //   4. B sees the payment under the offer.
+//   5. A's "What's new" in the directory lists B joining the directory and B's offer.
 //
 //   CHROME_BIN=~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome \
 //   JAR_A=a.jar JAR_B=b.jar TOKEN_A=cashuB… \
@@ -237,6 +238,12 @@ try {
   await b.waitFor(`document.body.innerText.includes("5 tokens from")`, 30000, "the payment under B's offer")
   ok("B: the payment shows under the offer")
   await b.shot("payments")
+
+  // 5. What's new.
+  await a.go(`${PEOPLE}/#/activity`)
+  await a.waitFor(`document.body.innerText.includes(${JSON.stringify(`offers ${TITLE} for 5 tokens`)}) && document.body.innerText.includes("joined the directory")`, 60000, "B's offer and directory entry in What's new")
+  ok("A: What's new lists B joining the directory and B's offer")
+  await a.shot("activity")
 
   const errs = [...a.errors, ...b.errors].filter(e => !/ResizeObserver/.test(e))
   if (errs.length) console.log(`  note page errors: ${errs.slice(0, 3).join(" | ")}`)

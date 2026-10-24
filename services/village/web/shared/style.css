@@ -378,3 +378,31 @@ a.listing:hover {
   flex: 1;
   min-width: 0;
 }
+
+.activity {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  text-decoration: none;
+  margin-bottom: 8px;
+}
+a.activity:hover {
+  border-color: var(--osv-accent, #d6ff52);
+}
+.activity-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+.thumb.small {
+  width: 56px;
+  height: 56px;
+}
+h3.day {
+  font-size: 0.9rem;
+  color: var(--osv-foreground-muted, #c9d1cb);
+  margin: 16px 0 8px;
+}

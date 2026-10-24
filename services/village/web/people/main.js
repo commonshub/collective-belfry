@@ -1,13 +1,17 @@
 // Open Source Village directory: who's here, opt-in. Hash routes: #/ (everyone listed),
-// #/p/<npub> (one person), #/me (your entry and the opt-in), #/signer.
+// #/p/<npub> (one person), #/me (your entry and the opt-in), #/activity (what's new in the
+// apps), #/signer.
 import "../shared/style.css"
 import { nip19 } from "nostr-tools"
 import * as session from "../shared/session.js"
-import { DIRECTORY_D, directoryConsent, latestByAuthor, parseProfile, profileName } from "../shared/model.js"
+import { ACTIVITY_KINDS, DIRECTORY_D, LISTING_KIND, activityFromEvent, deletedIds, directoryConsent, latestByAuthor, parseProfile, profileName } from "../shared/model.js"
 import { forgetProfile, isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, chatLink, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
 
 const WHY = "The directory lists the participants who chose to be listed. Sign in to see it and to add yourself."
+const appUrl = name => (import.meta.env[`VITE_${name}_URL`] || "").replace(/\/$/, "")
+const URLS = { chat: appUrl("CHAT"), market: appUrl("MARKET"), photos: appUrl("PHOTOS"), calendar: appUrl("CALENDAR") }
+const ACTIVITY_DAYS = 14
 
 async function listed() {
   const active = [...(await participants())]
@@ -46,7 +50,7 @@ async function listPage() {
     return bindCommon(route)
   }
   body.innerHTML = `
-    <div class="row-end"><a class="button" href="#/me">Your entry</a></div>
+    <div class="row-end"><a class="button" href="#/activity">What's new</a><a class="button" href="#/me">Your entry</a></div>
     <input id="search" type="search" placeholder="Search names and descriptions" aria-label="Search" />
     <div id="people" class="stack"><p class="muted">Loading…</p></div>`
   let people
@@ -168,11 +172,137 @@ async function mePage() {
   }
 }
 
+// -- what's new ------------------------------------------------------------------------------
+
+const APP_NAMES = { chat: "Chat", calendar: "Calendar", market: "Market", photos: "Photos", people: "Directory" }
+
+function activityLink(event, item) {
+  switch (item.app) {
+    case "chat":
+      if (!URLS.chat) return ""
+      return event.kind === 1
+        ? `${URLS.chat}/notes/${nip19.neventEncode({ id: event.id, author: event.pubkey })}`
+        : `${URLS.chat}/notes/${nip19.naddrEncode({ kind: event.kind, pubkey: event.pubkey, identifier: event.tags.find(t => t[0] === "d")?.[1] || "" })}`
+    case "photos":
+      return URLS.photos ? `${URLS.photos}/#/p/${item.photoId || event.id}` : ""
+    case "market":
+      return URLS.market ? `${URLS.market}/#/l/${nip19.naddrEncode({ kind: LISTING_KIND, pubkey: event.pubkey, identifier: item.listing.d })}` : ""
+    case "calendar":
+      return URLS.calendar ? `${URLS.calendar}/` : ""
+    case "people":
+      return `#/p/${nip19.npubEncode(event.pubkey)}`
+    default:
+      return ""
+  }
+}
+
+function dayLabel(ts) {
+  const d = new Date(ts * 1000)
+  const today = new Date()
+  const yesterday = new Date(Date.now() - 86400000)
+  if (d.toDateString() === today.toDateString()) return "Today"
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday"
+  return d.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
+}
+
+function startText(start) {
+  if (!start) return ""
+  if (typeof start === "number") return new Date(start * 1000).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })
+  return new Date(`${start}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })
+}
+
+/** The last two weeks of readable events from active participants, newest first. */
+async function recentActivity() {
+  const active = await participants()
+  const since = Math.floor(Date.now() / 1000) - ACTIVITY_DAYS * 86400
+  const [events, deletions] = await Promise.all([
+    query({ kinds: ACTIVITY_KINDS, since, limit: 500 }),
+    query({ kinds: [5], since, limit: 500 }),
+  ])
+  const byId = new Map(events.map(e => [e.id, e]))
+  const gone = deletedIds(deletions, byId)
+  const goneCoords = new Set(deletions.flatMap(d => d.tags.filter(t => t[0] === "a" && t[1].split(":")[1] === d.pubkey).map(t => t[1])))
+  // addressable events (offers, articles, calendar events, directory consent): the newest only
+  const newest = new Map()
+  for (const e of events) {
+    if (!active.has(e.pubkey) || gone.has(e.id)) continue
+    const d = e.kind >= 30000 && e.kind < 40000 ? e.tags.find(t => t[0] === "d")?.[1] : null
+    const key = d === null ? e.id : `${e.kind}:${e.pubkey}:${d}`
+    if (goneCoords.has(key)) continue
+    const prev = newest.get(key)
+    if (!prev || e.created_at > prev.created_at) newest.set(key, e)
+  }
+  return [...newest.values()]
+    .map(event => ({ event, item: activityFromEvent(event) }))
+    .filter(x => x.item)
+    .sort((a, b) => b.event.created_at - a.event.created_at)
+    .slice(0, 150)
+}
+
+async function activityPage() {
+  render(`${header("What's new", "#/")}<div id="body"></div>`)
+  bindCommon(route)
+  const body = document.getElementById("body")
+  if (!session.currentPubkey()) {
+    body.innerHTML = signInCard("What's new shows the last two weeks in the village's apps. Sign in to see it.")
+    return bindCommon(route)
+  }
+  body.innerHTML = `
+    <div class="chips" id="apps"><button class="chip on" data-app="">All</button>${Object.entries(APP_NAMES)
+      .map(([k, n]) => `<button class="chip" data-app="${k}">${n}</button>`)
+      .join("")}</div>
+    <div id="feed" class="stack"><p class="muted">Loading…</p></div>`
+  let entries, profiles
+  try {
+    entries = await recentActivity()
+    profiles = await loadProfiles([...new Set(entries.map(x => x.event.pubkey))])
+  } catch (e) {
+    document.getElementById("feed").innerHTML = failure(e)
+    return
+  }
+  const feed = document.getElementById("feed")
+  const show = app => {
+    const hits = entries.filter(x => !app || x.item.app === app)
+    if (!hits.length) {
+      feed.innerHTML = `<p class="muted">Nothing in the last ${ACTIVITY_DAYS} days.</p>`
+      return
+    }
+    let day = ""
+    feed.innerHTML = hits
+      .map(({ event, item }) => {
+        const label = dayLabel(event.created_at)
+        const heading = label !== day ? `<h3 class="day">${esc(label)}</h3>` : ""
+        day = label
+        const name = profileName(profiles.get(event.pubkey), "A participant")
+        const href = activityLink(event, item)
+        const time = new Date(event.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
+        const start = startText(item.start)
+        const inner = `
+          ${avatar(profiles.get(event.pubkey), 36)}
+          <span class="activity-text">
+            <span><strong>${esc(name)}</strong> ${esc(item.text)}</span>
+            ${item.detail ? `<span class="about">${esc(item.detail)}</span>` : ""}
+            <span class="small muted">${esc(APP_NAMES[item.app])} · ${esc(time)}${start ? ` · ${esc(start)}` : ""}</span>
+          </span>
+          ${item.image ? `<img class="thumb small" src="${esc(item.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" />` : ""}`
+        return `${heading}${href ? `<a class="card activity" href="${esc(href)}">${inner}</a>` : `<div class="card activity">${inner}</div>`}`
+      })
+      .join("")
+  }
+  show("")
+  for (const b of document.querySelectorAll("#apps .chip"))
+    b.onclick = () => {
+      for (const x of document.querySelectorAll("#apps .chip")) x.classList.toggle("on", x === b)
+      show(b.dataset.app)
+    }
+}
+
 function route() {
   const hash = location.hash || "#/"
   let m
   if ((m = hash.match(/^#\/p\/(npub1\w+)$/))) return personPage(m[1])
   if (hash === "#/me") return mePage()
+  if (hash === "#/activity") return activityPage()
   if (hash === "#/signer") return signerPage("Your own signer", () => (location.hash = "#/"))
   if (hash === "#/self-custody") return signerPage("Your own signer", () => (location.hash = "#/"), true)
   return listPage()

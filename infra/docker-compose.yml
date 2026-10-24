@@ -595,6 +595,9 @@ services:
         VITE_CHAT_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
         VITE_WALLET_URL: ${WALLET_PUBLIC_URL:-http://localhost:3400}
         VITE_PEOPLE_URL: ${PEOPLE_PUBLIC_URL:-http://localhost:3600}
+        VITE_MARKET_URL: ${MARKET_PUBLIC_URL:-http://localhost:3700}
+        VITE_PHOTOS_URL: ${PHOTOS_PUBLIC_URL:-http://localhost:3800}
+        VITE_CALENDAR_URL: ${CALENDAR_PUBLIC_URL:-http://localhost:3200}
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_COMMUNITY_APPS: *community-apps

@@ -343,6 +343,8 @@ User: "Let's continue with more extras" after dropping DIDs; chose photos, a dir
 - [x] The app bar scrolls the current app into view (seven apps no longer fit a phone width).
 - [x] Checks: `npm test` 4 tests; smoke 6p and 6g (30402, 30078 signed); local smoke 120 ok / 0 failed twice; `infra/scripts/village-check.mjs` in Chromium at 390 px with two participants: opt-in and search, an offer with a photo, payment through the wallet and back, the payment shown to both. Smoke: `SMOKE_KEEP_PASS` now also skips 10b (a self-custodial participant cannot use "Sign in with Open Source Village" in browser checks).
 
+- [x] "What's new" (2026-10-24, user: "a good place to view the latest nostr events across the apps"): `people.<domain>/#/activity`, the last 14 days of readable events of active participants by day and app (notes, articles, photos and comments, offers, public calendar events, directory opt-ins; no DMs, private calendar entries, likes or payments). Checked in `village-check.mjs` step 5.
+
 Open: chat, calendar and vote images need a rebuild to show Directory and Market in their app bar; no moderation or reports; no notifications for sellers; not deployed on the VM.
 
 ## 3v. Photos at photos.<domain> — built 2026-10-24

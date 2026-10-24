@@ -55,6 +55,16 @@ Kinds signed: 0, 5, 7, 20, 1111, 22242, 24242, 27235, 30078, 30402 (all in the `
 policy). Keycast clients `belfry-people`, `belfry-market` and `belfry-photos`, registered by
 bootstrap with `<URL>/oauth/callback` and trusted (`KEYCAST_TRUSTED_CLIENTS`).
 
+## What's new
+
+`people.<domain>/#/activity` (linked from the directory as "What's new"): the last 14 days of
+readable events from participants with an active pass, newest first, grouped by day, filterable
+by app, each linking into its app. Shown: chat notes (not replies) and articles, photos and photo
+comments, offers (and offers marked as gone), public calendar events, directory opt-ins. Left out
+on purpose: private messages and private calendar entries (encrypted), likes, profile edits,
+opting out of the directory, and token payments (who paid whom stays in the wallets and on the
+offer pages); deleted events are dropped. The rules are `activityFromEvent` in `web/shared/model.js`.
+
 ## Build and run
 
 Node 24, no framework, like `services/vote` (whose NIP-98 check and Keycast sign-in are copied
