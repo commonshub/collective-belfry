@@ -1,0 +1,188 @@
+From b7304236a7020fc6afcdf93883ecbfaedfd67324 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sat, 24 Oct 2026 19:37:25 +0200
+Subject: [PATCH] fix(belfry): buttons fit phones with large text
+
+Android's text scaling (and narrow screens) made the pill buttons overflow (landing page,
+nowrap with a fixed max-width) or wrap into ovals (login card, 9999px radius). Buttons now
+wrap, use a 1.5rem radius (pills on one line, rounded boxes on two), the landing button
+is up to 22rem wide, the login card's padding shrinks on narrow screens, and the consent
+and sign-in pages' button rows wrap.
+---
+ api/src/api/http/oauth.rs         | 17 ++++++++++++-----
+ web/src/app.css                   |  8 ++++++--
+ web/src/routes/+page.svelte       |  6 ++++--
+ web/src/routes/login/+page.svelte | 15 +++++++++------
+ 4 files changed, 31 insertions(+), 15 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index 17a2d1a..853e8f0 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -1393,7 +1393,8 @@ pub async fn authorize_get(
+         button {{
+             width: 100%;
+             border: none;
+-            border-radius: 9999px;
++            border-radius: 1.5rem;
++            line-height: 1.25;
+             padding: 0.9rem 1.1rem;
+             font-size: 0.95rem;
+             font-weight: 600;
+@@ -1673,12 +1674,14 @@ pub async fn authorize_get(
+         }}
+         .buttons {{
+             display: flex;
++            flex-wrap: wrap;
+             gap: 0.75rem;
+         }}
+         button {{
+             flex: 1;
+             padding: 0.875rem 1.25rem;
+-            border-radius: 9999px;
++            border-radius: 1.5rem;
++            line-height: 1.25;
+             font-size: 0.9rem;
+             font-weight: 600;
+             cursor: pointer;
+@@ -2190,7 +2193,8 @@ pub async fn authorize_get(
+             transform: translateY(-50%);
+             padding: 0.375rem 0.625rem;
+             border: 1px solid var(--border);
+-            border-radius: 9999px;
++            border-radius: 1.5rem;
++            line-height: 1.25;
+             background: transparent;
+             color: var(--divine-green);
+             font-size: 0.75rem;
+@@ -2203,7 +2207,8 @@ pub async fn authorize_get(
+         .btn_primary {{
+             width: 100%;
+             padding: 0.75rem 1.5rem;
+-            border-radius: 9999px;
++            border-radius: 1.5rem;
++            line-height: 1.25;
+             font-size: 1rem;
+             font-weight: 600;
+             cursor: pointer;
+@@ -4775,6 +4780,7 @@ pub async fn connect_get(
+         }}
+         .buttons {{
+             display: flex;
++            flex-wrap: wrap;
+             gap: 0.75rem;
+             margin-top: 1rem;
+         }}
+@@ -4783,7 +4789,8 @@ pub async fn connect_get(
+             padding: 0.75rem 1.5rem;
+             font-size: 1rem;
+             border: none;
+-            border-radius: 9999px;
++            border-radius: 1.5rem;
++            line-height: 1.25;
+             cursor: pointer;
+             font-weight: 600;
+             transition: all 0.2s;
+diff --git a/web/src/app.css b/web/src/app.css
+index e234505..c4faa17 100644
+--- a/web/src/app.css
++++ b/web/src/app.css
+@@ -126,8 +126,12 @@ a.bordered:hover {
+ }
+ 
+ .button {
+-    @apply whitespace-nowrap shrink px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200;
+-    border-radius: 9999px;
++    @apply shrink px-4 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200;
++    /* Belfry: labels wrap rather than overflow (phones with Android's larger text); a fixed
++       radius keeps one-line buttons pills and makes wrapped ones rounded boxes, not ovals. */
++    text-align: center;
++    line-height: 1.25;
++    border-radius: 1.5rem;
+     border: 1px solid transparent;
+ }
+ 
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index 5e92db7..1b06f34 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -1734,7 +1734,7 @@ $effect(() => {
+ 		}
+ 
+ 		.landing-title {
+-			font-size: 2rem;
++			font-size: 1.75rem;
+ 		}
+ 
+ 		.landing-ctas {
+@@ -1744,7 +1744,9 @@ $effect(() => {
+ 
+ 		.landing-ctas .button {
+ 			width: 100%;
+-			max-width: 280px;
++			max-width: 22rem;
++			padding: 0.75rem 1rem;
++			font-size: 1rem;
+ 		}
+ 	}
+ 
+diff --git a/web/src/routes/login/+page.svelte b/web/src/routes/login/+page.svelte
+index c5c6b3d..ccefa52 100644
+--- a/web/src/routes/login/+page.svelte
++++ b/web/src/routes/login/+page.svelte
+@@ -304,7 +304,7 @@
+ 		display: flex;
+ 		align-items: center;
+ 		justify-content: center;
+-		padding: 1rem;
++		padding: 0.75rem;
+ 		background: var(--color-divine-bg);
+ 	}
+ 
+@@ -312,7 +312,7 @@
+ 		background: var(--color-divine-surface);
+ 		border: 1px solid var(--color-divine-border);
+ 		border-radius: 1rem;
+-		padding: 2rem;
++		padding: clamp(1.25rem, 6vw, 2rem);
+ 		max-width: 420px;
+ 		width: 100%;
+ 		box-shadow: 0 2px 8px rgba(214, 255, 82, 0.08);
+@@ -405,11 +405,12 @@
+ 
+ 	.btn-primary {
+ 		width: 100%;
+-		padding: 0.75rem 1.5rem;
++		padding: 0.75rem 1rem;
+ 		background: var(--color-divine-green);
+ 		color: var(--color-divine-on-accent);
+ 		border: none;
+-		border-radius: 9999px;
++		border-radius: 1.5rem;
++		line-height: 1.25;
+ 		font-size: 1rem;
+ 		font-weight: 600;
+ 		cursor: pointer;
+@@ -433,7 +434,8 @@
+ 		background: transparent;
+ 		color: var(--color-divine-text);
+ 		border: 1px solid var(--color-divine-border);
+-		border-radius: 9999px;
++		border-radius: 1.5rem;
++		line-height: 1.25;
+ 		font-size: 1rem;
+ 		font-weight: 600;
+ 		cursor: pointer;
+@@ -530,7 +532,8 @@
+ 		padding: 0.75rem 1.5rem;
+ 		background: transparent;
+ 		border: 1px solid var(--color-divine-border);
+-		border-radius: 9999px;
++		border-radius: 1.5rem;
++		line-height: 1.25;
+ 		color: var(--color-divine-text-secondary);
+ 		font-size: 0.95rem;
+ 		font-weight: 500;
+-- 
+2.53.0
+

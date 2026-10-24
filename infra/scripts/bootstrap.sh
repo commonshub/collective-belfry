@@ -443,6 +443,9 @@ reapply_blueprint() {
 }
 # Steward pages (/steward in the onboarding service): their OIDC application and the group.
 reapply_blueprint belfry-steward-app
+# The brand's custom CSS changes with the repo (mobile fixes 2026-10-24); the worker does not
+# always notice an edited file, so apply it on every run.
+reapply_blueprint belfry-brand
 ak "$AK_URL/api/v3/core/groups/?name=belfry-stewards" | jq -e '.results | length == 1' >/dev/null || die "group belfry-stewards missing"
 echo "blueprint belfry-steward-app: successful (add stewards: docker compose exec onboarding python -m belfry_onboarding add-steward <e-mail> [name])"
 # Issuer2's login for authorization-code pass offers (DIDroom and other wallets that sign in).
