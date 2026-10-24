@@ -1,0 +1,58 @@
+name: Sync from ngit.dev
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "5 6 * * *" # once a day
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://relay.ngit.dev/npub1hlw2enn647n0dc04l4tydv44n4s7z83f9vhz6dpe4qzfwq39jp8swu9ecz/collective-belfry.git || true
+          git fetch upstream --prune
+
+      - name: Detect default branch
+        id: default_branch
+        run: |
+          BRANCH="${{ github.event.repository.default_branch }}"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "Using default branch: $BRANCH"
+
+      - name: Sync branch from upstream
+        run: |
+          set -euo pipefail
+          BRANCH="${{ steps.default_branch.outputs.branch }}"
+
+          # Ensure local branch exists and is checked out
+          git checkout "$BRANCH" || git checkout -b "$BRANCH"
+
+          # Fetch target branch from upstream
+          git fetch upstream "$BRANCH":"refs/remotes/upstream/$BRANCH" || {
+            echo "Upstream branch '$BRANCH' not found."
+            echo "Available upstream branches:"
+            git branch -r | sed 's/^/  /'
+            exit 1
+          }
+
+          # Mirror exactly (force local branch to upstream branch)
+          git reset --hard "upstream/$BRANCH"
+
+          # Push mirror to GitHub
+          git push origin "$BRANCH" --force-with-lease
