@@ -1,6 +1,6 @@
 # Collective Belfry
 
-Belfry (the Collective Bunker) runs access and identity for Open Source Village: EUDI-wallet pass certificates (SD-JWT VC via OpenID4VCI/VP), Nostr-based community apps behind a Keycast signer (Divine's fork), did:webvh identifiers for long-term members, and Odoo as the registry of who holds which pass.
+Belfry (the Collective Bunker) runs access and identity for Open Source Village: EUDI-wallet pass certificates (SD-JWT VC via OpenID4VCI/VP), Nostr-based community apps behind a Keycast signer (Divine's fork), and Odoo as the registry of who holds which pass.
 
 ## Current status
 
@@ -18,9 +18,9 @@ Before relying on details from the snapshot, re-read the live doc with the Claud
 
 ## Key rules from the plan
 
-- Identity and membership stay separate: a did:webvh belongs to the member; membership (Odoo record + signed certificate) belongs to Belfry. Revoking membership never touches the identifier.
+- Identity and membership stay separate: the Nostr key belongs to the member (managed, recoverable or self-custodied); membership (Odoo record + signed certificate) belongs to Belfry. Revoking membership never touches the key.
 - Odoo is the single source of truth for passes; the relay whitelist and certificates are derived from it.
 - Payment runs through Odoo's own Stripe provider and Odoo payment links. Belfry's onboarding glue is idempotent, keyed on the Odoo invoice and the Stripe PaymentIntent; Belfry's own Stripe endpoint (disputes only) is keyed on the Stripe event id. Access only after the invoice is paid.
 - One credential type (`vct` `village-pass/v1`) for all tiers; tier and dates are claims. Door checks disclose only tier, validity and status.
-- Every did:webvh uses pre-rotation from day one, with Belfry as witness.
-- Event release = Phases 0–3 (governance, onboarding/registry, Collective Bunker, EUDI pass certificates). DIDs and self-custody come after the event.
+- No DIDs: did:webvh and the id.<domain> endpoint were dropped on 2026-10-24 (Phase 4); the issuer key is published through jwt-vc-issuer metadata and x5c.
+- Event release = Phases 0–3 (governance, onboarding/registry, Collective Bunker, EUDI pass certificates). Self-custody is built already; DIDs are dropped.

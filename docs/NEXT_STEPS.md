@@ -128,7 +128,7 @@ Open from this slice (not blocking the local happy path):
 4. Bridge state is in memory (one instance); Authentik's OIDC source does not verify the ID token signature (it uses userinfo), so `/bridge/jwks` is unused for now.
 5. The management APIs of Issuer2 and Verifier2 are unauthenticated: the production reverse proxy must block `/issuer2/*` and `/verification-session/create|info`.
 6. Issuer key rotation (old keys in the JWKS until their credentials expire) and HSM/KMS for the key: not done.
-7. Day-pass `exp` is the end of the day (UTC); the plan's `role` claim and the `sub` = did:webvh variant (Phase 4) are not in the credential yet.
+7. Day-pass `exp` is the end of the day (UTC); the plan's `role` claim and the `sub` = did:webvh variant is not in the credential (DIDs dropped 2026-10-24).
 
 ## 3f. Hardening: Odoo mail and privileges, issuer pinning, signed verifier requests — built 2026-10-23
 
@@ -307,7 +307,7 @@ Open: Belfry sees IP addresses and request times, so it could correlate a vote w
 
 ## 3s. Village tokens and the wallet — built 2026-10-24
 
-User request: "voting, self custodian nostr key and a cashu mint with tokens without value. With the pass each holder receives a certain amount of cashu tokens, 50 tokens per day"; then "The cashu wallet should be derived from the same source as the user's nostr key. Users can also bring their own. The relevant pub key is shared via the DID". Decisions (live doc rev 60–61): tokens have no monetary value, minted all at once at activation (50 × pass days), wallet = cashu.me at `wallet.<domain>` plus nutzaps; the wallet derives from the Nostr key and restores on sign-in; the receiving key is published as kind 10019 now and goes into the member's DID document with Phase 4. Voting is the other session's (§3r, polls).
+User request: "voting, self custodian nostr key and a cashu mint with tokens without value. With the pass each holder receives a certain amount of cashu tokens, 50 tokens per day"; then "The cashu wallet should be derived from the same source as the user's nostr key. Users can also bring their own. The relevant pub key is shared via the DID". Decisions (live doc rev 60–61): tokens have no monetary value, minted all at once at activation (50 × pass days), wallet = cashu.me at `wallet.<domain>` plus nutzaps; the wallet derives from the Nostr key and restores on sign-in; the receiving key is published as kind 10019 (it was to go into the member's DID document with Phase 4; DIDs were dropped on 2026-10-24, so kind 10019 stays the only place). Voting is the other session's (§3r, polls).
 
 - [x] Mint (`infra/mint/`, 980ae57): cdk-mintd 0.18.2, fake payment backend, unit `osv`, custom NUT-04 method `belfry`; the proxy closes `/v1/mint/*` and `/v1/melt/*` at `mint.<domain>`, so only the onboarding service mints and participants only swap. `MINT_SEED` in `.env`.
 - [x] Issuance (onboarding `clients/mint.py`, Odoo `belfry_pass` 19.0.1.6.0): activation mints 50 × pass days onto the pass (`cashu_token`, `cashu_amount`), `reconcile` retries; the activation mail and the claim page link `pass.<domain>/tokens/<claim token>`, which opens the wallet with the token or says it is in a wallet already. Smoke 8c.
@@ -317,7 +317,7 @@ User request: "voting, self custodian nostr key and a cashu mint with tokens wit
 
 - [x] Self-custody (Keycast patch 0012, decisions in the live doc rev 62): on the dashboard's security page the participant signs a challenge with the key they want to keep (browser extension, or a pasted key that never leaves the browser). Their current key: Keycast deletes its copy ("take over"). Another key: the account moves to it (NIP-05 name, sign-in link, e-mail, Odoo link), the old key is deleted, and the onboarding service (`/hooks/keycast/key-changed`) moves the pass's npub and the relay whitelist; votes key on the pass id. Afterwards the apps sign in with the participant's own signer; "Sign in with Open Source Village" answers `access_denied`/`self_custody` (silent) or "Use your own signer". Smoke 10b (`self-custody-check.sh`): export, take over (key_held false, export refused, apps refused), move to a new key (NIP-05 and pass follow, signing in again lands on the moved account). Onboarding 147 tests.
 
-Open: a self-custodial participant keeps the derived wallet only by computing the HKDF themselves (README shows it), the wallet has no "use my own key" path (nutzaps need the participant's own signer for kind 10019/9321); the 10019 key is not yet in a DID document (Phase 4); kind 7376 redemption history (NIP-60) is not published, the wallet remembers redeemed nutzaps locally and skips spent ones; not deployed on the VM yet (the mint is).
+Open: a self-custodial participant keeps the derived wallet only by computing the HKDF themselves (README shows it), the wallet has no "use my own key" path (nutzaps need the participant's own signer for kind 10019/9321); kind 7376 redemption history (NIP-60) is not published, the wallet remembers redeemed nutzaps locally and skips spent ones; not deployed on the VM yet (the mint is).
 
 ## 3t. Security review; recoverable participant keys — 2026-10-24
 
@@ -334,6 +334,9 @@ Review findings, highest first: no backups at all (Postgres, Odoo filestore, mas
 Open (next): the YubiKey ceremony (rewrap, destroy the mock tokens); participants activated before the seed keep their random keys; the backups on the VM (backup key, Storage Box, timer) and a first drill there; the CA key off the VM; admin UIs behind an IP allowlist/VPN plus WebAuthn; network segmentation and non-root containers; pinned images; rate limits, monitoring, CSP; rotating a single participant's key (raising the version needs a Keycast move like self-custody, not built).
 
 ## 4. Next
+
+Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).
+
 
 1. The real-user happy-path test on `belfry.tofauti.net`, steps and results table in `docs/real-user-test.md` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
 2. Phase 2 (continued): check the login, the key export, the pass card (§3m) and a phone NIP-46 client against `wss://bunker.<domain>` (§3n, e.g. Amethyst or Coracle with a bunker URL from "create bunker", or nostr-login via the NIP-05 discovery) live on the VM; pick the marketplace and links protocols (the other app kinds are decided, §3h); choose and deploy the actual client apps (calendar, photos, proposals, NIP-17 chat) against the relay, Blossom and the `belfry-event` scope.

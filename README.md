@@ -1,6 +1,6 @@
 # Collective Belfry
 
-Access and identity for Open Source Village: EUDI-wallet pass certificates, a Nostr-based community behind a managed signer, and did:webvh identifiers for long-term members. Odoo is the registry of who holds which pass.
+Access and identity for Open Source Village: EUDI-wallet pass certificates, and a Nostr-based community behind a managed signer whose keys participants can take into their own custody. Odoo is the registry of who holds which pass.
 
 - Plan: `docs/identity-membership-plan.md` (snapshot of the live Claude Doc) and `docs/NEXT_STEPS.md`
 - Research and spike notes: `docs/research/`
