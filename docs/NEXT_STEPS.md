@@ -268,6 +268,8 @@ User request: a "Sign in with Open Source Village" button in the apps, and an au
 
 Open from this slice: logging out of an app does not end the Authentik session, so a new tab signs in silently again (a logout through Authentik's end-session endpoint would be one more patch per app); every silent sign-in on a new browser creates another authorization in Keycast (they pile up on the apps page); Keycast's bunker relay answers the calendar's volunteered NIP-42 AUTH with "relay mismatch" (it compares the tag with its internal URL; NIP-46 needs no AUTH there, so harmless); `policy.sql` renames tenant 1 for the branding, not the `KEYCAST_TENANT_DOMAIN` tenant Keycast actually serves, so check the tenant name shown in Keycast's pages; not yet deployed on the VM (the other session deploys it).
 
+Follow-up (2026-10-24, real-user test): after signing in, participants land on Keycast's dashboard at `apps.<domain>`, which linked to neither app. Keycast patch 0009 adds "Community apps" cards (Chat, Calendar) at the top of the dashboard, from `BELFRY_COMMUNITY_APPS` (Compose builds it from `CHAT_PUBLIC_URL` and `CALENDAR_PUBLIC_URL`).
+
 ## 4. Next
 
 1. The real-user happy-path test on `belfry.tofauti.net`, steps and results table in `docs/real-user-test.md` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
