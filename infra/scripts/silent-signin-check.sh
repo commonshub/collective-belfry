@@ -88,6 +88,24 @@ SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $TOKEN" 
   -d "$(jq -nc --arg pk "$EXPECT_PUB" --argjson t "$(date +%s)" '{method:"sign_event", params:[{pubkey:$pk, created_at:$t, kind:1, tags:[], content:"silent sign-in check"}]}')")
 [[ "$(jq -r '.result.pubkey // empty' <<<"$SIGNED")" == "$EXPECT_PUB" ]] && say "the new authorization signs for $EXPECT_PUB" || fail "sign_event: $(head -c 300 <<<"$SIGNED")"
 
+# 2b. Keycast patch 0011: derive_secret only for the wallet client. CLIENT_ID=belfry-wallet (the
+#     smoke test's 6o, WALLET_ONLY=1): the derived secret is 32 bytes and stable; any other client
+#     is refused.
+derive() { curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d "$(jq -nc --arg p "$1" '{method:"derive_secret", params:[$p]}')"; }
+D1=$(derive cashu-wallet-v1)
+if [[ "$CLIENT_ID" == belfry-wallet ]]; then
+  D2=$(derive cashu-wallet-v1); N=$(derive cashu-nutzap-v1); X=$(derive something-else)
+  [[ "$(jq -r '.result // empty' <<<"$D1")" =~ ^[0-9a-f]{64}$ && "$(jq -r .result <<<"$D1")" == "$(jq -r .result <<<"$D2")" ]] \
+    && say "derive_secret: the wallet gets a stable 32-byte seed secret" || fail "derive_secret for the wallet: $(head -c 200 <<<"$D1")"
+  [[ "$(jq -r '.result // empty' <<<"$N")" =~ ^[0-9a-f]{64}$ && "$(jq -r .result <<<"$N")" != "$(jq -r .result <<<"$D1")" ]] \
+    && say "derive_secret: a separate nutzap key secret" || fail "derive_secret nutzap: $(head -c 200 <<<"$N")"
+  [[ -z "$(jq -r '.result // empty' <<<"$X" 2>/dev/null)" ]] && say "derive_secret: a purpose not configured is refused" || fail "derive_secret other purpose: $X"
+  [[ -n "${WALLET_ONLY:-}" ]] && exit 0
+else
+  [[ -z "$(jq -r '.result // empty' <<<"$D1" 2>/dev/null)" ]] && say "derive_secret refused for $CLIENT_ID (wallet only)" || fail "derive_secret for $CLIENT_ID: $D1"
+fi
+
 # 3. Same browser, Keycast session now present: a code straight away, Authentik not involved.
 touch "$JAR/ak2"
 read -r END HOPS < <(follow "$JAR/kc1" "$JAR/ak2" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s3 "$CHALLENGE" none)")

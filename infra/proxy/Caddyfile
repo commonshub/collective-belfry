@@ -96,6 +96,12 @@ mint.{$BELFRY_DOMAIN} {
 	reverse_proxy mint:8085
 }
 
+# Village token wallet (cashu.me, static); it talks to mint., apps. (Keycast) and relay. itself.
+wallet.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy wallet:80
+}
+
 # Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
 bunker.{$BELFRY_DOMAIN} {
 	import security

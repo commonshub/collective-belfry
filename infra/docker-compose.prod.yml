@@ -67,6 +67,9 @@ services:
   mint:
     ports: !reset []
     restart: unless-stopped
+  wallet:
+    ports: !reset []
+    restart: unless-stopped
   issuer:
     ports: !reset []
     restart: unless-stopped

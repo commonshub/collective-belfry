@@ -273,6 +273,15 @@ else
   sed 's/^/  /' <<<"$OUT" >&2; bad "silent sign-in"
 fi
 
+step "6o. village wallet: signs in silently, derives its seed and nutzap key from the participant's key"
+if OUT=$(WALLET_ONLY=1 CLIENT_ID=belfry-wallet KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
+  sed 's/^/  /' <<<"$OUT"; ok "the wallet's keys derive from the participant's Nostr key"
+else
+  sed 's/^/  /' <<<"$OUT" >&2; bad "wallet sign-in and derive_secret"
+fi
+WCODE=$(curl -sS -o /dev/null -w '%{http_code}' "${WALLET_PUBLIC_URL:-http://localhost:3400}/")
+[[ "$WCODE" == 200 ]] && ok "wallet app served (${WALLET_PUBLIC_URL:-http://localhost:3400})" || bad "wallet app -> $WCODE"
+
 step "6h. magic link: the login page mails a one-time link that signs the participant in"
 MAGIC_EXEC="$AK_URL/api/v3/flows/executor/belfry-magic-link/"
 magic_request() { # cookie jar, e-mail -> component after the identification stage

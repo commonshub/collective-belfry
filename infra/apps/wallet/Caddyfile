@@ -1,0 +1,7 @@
+# Static single-page app (Vue Router history mode): unknown paths fall back to index.html.
+:80 {
+	root * /srv
+	encode zstd gzip
+	try_files {path} /index.html
+	file_server
+}

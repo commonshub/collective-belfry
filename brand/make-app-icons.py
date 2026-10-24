@@ -80,6 +80,14 @@ def vote_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, (body_top + c + r * 0.9) / 2, (c + r * 0.9 - body_top) * 0.66
 
 
+def wallet_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """A village token: a coin with a rim; returns the mark's centre and size."""
+    d.ellipse((c - r * 0.95, c - r * 0.95, c + r * 0.95, c + r * 0.95), fill=ACCENT)
+    w = r * 0.08
+    d.ellipse((c - r * 0.8, c - r * 0.8, c + r * 0.8, c + r * 0.8), outline=BG, width=round(w))
+    return c, c, r * 0.95
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -111,3 +119,4 @@ if __name__ == "__main__":
     render("chat", chat_symbol)
     render("calendar", calendar_symbol)
     render("vote", vote_symbol)
+    render("wallet", wallet_symbol)

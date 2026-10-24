@@ -1,0 +1,1118 @@
+From 61310da9530c50c85a52ba35be97fd474d7519ce Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 13:26:20 +0200
+Subject: [PATCH 2/2] Belfry: sign in with Open Source Village, keys derived
+ from the Nostr key, nutzaps
+
+---
+ quasar.config.js                      |   6 +-
+ src/belfry/keys.ts                    |  51 ++++++
+ src/belfry/nutzap.ts                  | 200 +++++++++++++++++++++
+ src/belfry/sso.ts                     | 240 ++++++++++++++++++++++++++
+ src/belfry/village.ts                 | 170 ++++++++++++++++++
+ src/components/belfry/VillageCard.vue | 187 ++++++++++++++++++++
+ src/css/base.scss                     |   9 +
+ src/pages/WalletPage.vue              |  10 ++
+ src/router/routes.js                  |   8 +
+ src/stores/migrations.ts              |   2 +
+ src/stores/restore.ts                 |   8 +-
+ src/stores/settings.ts                |  18 +-
+ 12 files changed, 896 insertions(+), 13 deletions(-)
+ create mode 100644 src/belfry/keys.ts
+ create mode 100644 src/belfry/nutzap.ts
+ create mode 100644 src/belfry/sso.ts
+ create mode 100644 src/components/belfry/VillageCard.vue
+
+diff --git a/quasar.config.js b/quasar.config.js
+index c573701..58ed44d 100644
+--- a/quasar.config.js
++++ b/quasar.config.js
+@@ -78,7 +78,11 @@ module.exports = configure(function (/* ctx */) {
+       // publicPath: '/',
+       // analyze: true,
+       // Belfry: the village mint (empty: plain cashu.me)
+-      env: { BELFRY_MINT_URL: process.env.BELFRY_MINT_URL || "" },
++      env: {
++        BELFRY_MINT_URL: process.env.BELFRY_MINT_URL || "",
++        BELFRY_KEYCAST_URL: process.env.BELFRY_KEYCAST_URL || "",
++        BELFRY_COMMUNITY_RELAY: process.env.BELFRY_COMMUNITY_RELAY || "",
++      },
+       // rawDefine: {}
+       // ignorePublicFolder: true,
+       // minify: false,
+diff --git a/src/belfry/keys.ts b/src/belfry/keys.ts
+new file mode 100644
+index 0000000..e13b16e
+--- /dev/null
++++ b/src/belfry/keys.ts
+@@ -0,0 +1,51 @@
++// Belfry: the wallet's keys derive from the participant's Nostr key (Keycast derive_secret,
++// HKDF-SHA256 per purpose; decision 2026-10-24):
++//
++// - "cashu-wallet-v1": the first 16 bytes are the entropy of the wallet's 12-word seed (NUT-13
++//   deterministic secrets), so signing in on another device restores the tokens from the mint.
++// - "cashu-nutzap-v1": the P2PK key nutzaps are locked to (NIP-61 forbids the main key),
++//   normalised to an even Y so that senders' "02" + x-only key is exactly this key.
++//
++// A participant who takes custody of their Nostr key can reproduce both with any HKDF
++// implementation (salt "keycast/derive/v1", info = the purpose).
++
++import { entropyToMnemonic } from "@scure/bip39";
++import { wordlist } from "@scure/bip39/wordlists/english";
++import { getPublicKey } from "nostr-tools";
++import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
++import { secp256k1 } from "@noble/curves/secp256k1";
++import { rpc } from "./sso";
++
++const CURVE_ORDER = BigInt(
++  "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
++);
++
++async function derive(purpose: string): Promise<Uint8Array> {
++  const hex = (await rpc("derive_secret", [purpose])) as string;
++  if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error("derive_secret: bad answer");
++  return hexToBytes(hex);
++}
++
++export async function deriveWalletMnemonic(): Promise<string> {
++  return entropyToMnemonic(
++    (await derive("cashu-wallet-v1")).slice(0, 16),
++    wordlist
++  );
++}
++
++/** The nutzap key as {privateKey, publicKey: "02" + x-only}, with an even Y. */
++export async function deriveNutzapKey(): Promise<{
++  privateKey: string;
++  publicKey: string;
++}> {
++  const secret = await derive("cashu-nutzap-v1");
++  let d = BigInt("0x" + bytesToHex(secret)) % CURVE_ORDER;
++  if (d === 0n) throw new Error("derived key out of range");
++  // BIP340 x-only keys stand for the even-Y point; negate d when its point is odd.
++  const compressed = bytesToHex(
++    secp256k1.getPublicKey(d.toString(16).padStart(64, "0"), true)
++  );
++  if (compressed.startsWith("03")) d = CURVE_ORDER - d;
++  const privateKey = d.toString(16).padStart(64, "0");
++  return { privateKey, publicKey: "02" + getPublicKey(hexToBytes(privateKey)) };
++}
+diff --git a/src/belfry/nutzap.ts b/src/belfry/nutzap.ts
+new file mode 100644
+index 0000000..5b55dce
+--- /dev/null
++++ b/src/belfry/nutzap.ts
+@@ -0,0 +1,200 @@
++// Belfry: nutzaps (NIP-61) between participants, over the community relay.
++//
++// - kind 10019 announces where the participant receives: the community relay, the village mint
++//   with its unit, and the nutzap key (derived from the Nostr key, see keys.ts).
++// - kind 9321 carries tokens P2PK-locked to the recipient's 10019 key; the wallet redeems the
++//   ones addressed to the participant and remembers which it has seen.
++// The community relay only talks to whitelisted pubkeys after NIP-42 AUTH, which Keycast signs.
++
++import { Relay } from "nostr-tools";
++import type { Event, EventTemplate, VerifiedEvent } from "nostr-tools";
++import { getEncodedToken } from "@cashu/cashu-ts";
++import { rpc, getSession } from "./sso";
++import { VILLAGE_MINT_URL, VILLAGE_UNIT } from "./village";
++
++export const COMMUNITY_RELAY =
++  (process.env.BELFRY_COMMUNITY_RELAY as string) || "";
++const SEEN_KEY = "belfry.nutzaps.seen";
++
++async function sign(template: EventTemplate): Promise<VerifiedEvent> {
++  const session = getSession();
++  if (!session) throw new Error("not signed in");
++  return (await rpc("sign_event", [
++    { ...template, pubkey: session.pubkey },
++  ])) as VerifiedEvent;
++}
++
++let relayPromise: Promise<Relay> | null = null;
++
++/** The community relay, connected and authenticated (NIP-42). */
++export function communityRelay(): Promise<Relay> {
++  if (!relayPromise) {
++    relayPromise = (async () => {
++      const relay = await Relay.connect(COMMUNITY_RELAY);
++      relay.onclose = () => {
++        relayPromise = null;
++      };
++      for (let i = 0; i < 50 && !relay.challenge; i++) {
++        await new Promise((r) => setTimeout(r, 100));
++      }
++      if (relay.challenge) await relay.auth(sign);
++      return relay;
++    })().catch((e) => {
++      relayPromise = null;
++      throw e;
++    });
++  }
++  return relayPromise;
++}
++
++async function fetchOne(
++  relay: Relay,
++  filter: Record<string, unknown>
++): Promise<Event | null> {
++  return new Promise((resolve) => {
++    let found: Event | null = null;
++    const sub = relay.subscribe([filter as any], {
++      onevent(e) {
++        if (!found || e.created_at > found.created_at) found = e;
++      },
++      oneose() {
++        sub.close();
++        resolve(found);
++      },
++    });
++    setTimeout(() => {
++      sub.close();
++      resolve(found);
++    }, 5000);
++  });
++}
++
++/** Publishes the participant's 10019 unless an identical one is there. */
++export async function announceNutzapInfo(nutzapPubkey: string) {
++  const session = getSession();
++  if (!session || !COMMUNITY_RELAY) return;
++  const relay = await communityRelay();
++  const xonly = nutzapPubkey.slice(2);
++  const tags = [
++    ["relay", COMMUNITY_RELAY],
++    ["mint", VILLAGE_MINT_URL, VILLAGE_UNIT],
++    ["pubkey", xonly],
++  ];
++  const current = await fetchOne(relay, {
++    kinds: [10019],
++    authors: [session.pubkey],
++    limit: 1,
++  });
++  if (current && JSON.stringify(current.tags) === JSON.stringify(tags)) return;
++  await relay.publish(
++    await sign({ kind: 10019, created_at: now(), tags, content: "" })
++  );
++}
++
++/** The recipient's nutzap key ("02" + x-only) for the village mint, or null. */
++export async function recipientNutzapKey(
++  pubkey: string
++): Promise<string | null> {
++  const relay = await communityRelay();
++  const info = await fetchOne(relay, {
++    kinds: [10019],
++    authors: [pubkey],
++    limit: 1,
++  });
++  if (!info) return null;
++  const acceptsVillage = info.tags.some(
++    (t) => t[0] === "mint" && t[1] === VILLAGE_MINT_URL
++  );
++  const key = info.tags.find((t) => t[0] === "pubkey")?.[1];
++  if (!acceptsVillage || !key || !/^[0-9a-f]{64}$/.test(key)) return null;
++  return "02" + key;
++}
++
++/** Publishes a nutzap carrying `proofs` (already locked to the recipient). */
++export async function publishNutzap(
++  recipient: string,
++  proofs: {
++    amount: number;
++    C: string;
++    id: string;
++    secret: string;
++    dleq?: unknown;
++  }[],
++  comment: string
++) {
++  const relay = await communityRelay();
++  const tags = [
++    ...proofs.map((p) => ["proof", JSON.stringify(p)]),
++    ["unit", VILLAGE_UNIT],
++    ["u", VILLAGE_MINT_URL],
++    ["p", recipient],
++  ];
++  await relay.publish(
++    await sign({ kind: 9321, created_at: now(), tags, content: comment })
++  );
++}
++
++function seen(): Set<string> {
++  try {
++    return new Set(JSON.parse(window.localStorage.getItem(SEEN_KEY) || "[]"));
++  } catch {
++    return new Set();
++  }
++}
++
++function markSeen(ids: Set<string>) {
++  try {
++    window.localStorage.setItem(SEEN_KEY, JSON.stringify([...ids].slice(-500)));
++  } catch {
++    // not remembered: redeeming a spent nutzap again only fails at the mint
++  }
++}
++
++/** Calls `redeem` with a token for every nutzap to the participant not seen before. */
++export async function listenForNutzaps(
++  redeem: (
++    token: string,
++    from: string,
++    amount: number,
++    comment: string,
++    proofs: { secret: string; id: string }[]
++  ) => Promise<void>
++) {
++  const session = getSession();
++  if (!session || !COMMUNITY_RELAY) return;
++  const relay = await communityRelay();
++  const known = seen();
++  relay.subscribe([{ kinds: [9321], "#p": [session.pubkey] } as any], {
++    async onevent(e: Event) {
++      if (known.has(e.id)) return;
++      known.add(e.id);
++      markSeen(known);
++      const mint = e.tags.find((t) => t[0] === "u")?.[1];
++      if (mint !== VILLAGE_MINT_URL) return;
++      const unit = e.tags.find((t) => t[0] === "unit")?.[1] || "sat";
++      const proofs = e.tags
++        .filter((t) => t[0] === "proof")
++        .map((t) => {
++          try {
++            return JSON.parse(t[1]);
++          } catch {
++            return null;
++          }
++        })
++        .filter(Boolean);
++      if (!proofs.length) return;
++      const amount = proofs.reduce(
++        (s: number, p: any) => s + Number(p.amount),
++        0
++      );
++      const token = getEncodedToken({ mint, unit, proofs });
++      try {
++        await redeem(token, e.pubkey, amount, e.content, proofs);
++      } catch (err) {
++        console.warn("Could not redeem nutzap", e.id, err);
++      }
++    },
++  });
++}
++
++const now = () => Math.floor(Date.now() / 1000);
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+new file mode 100644
+index 0000000..86561b9
+--- /dev/null
++++ b/src/belfry/sso.ts
+@@ -0,0 +1,240 @@
++// Belfry: "Sign in with Open Source Village" for the wallet.
++//
++// OAuth 2.0 authorization code + PKCE against Keycast (client belfry-wallet, a trusted app: no
++// consent screen). The wallet keeps the token response's access and refresh tokens and talks to
++// Keycast over HTTP RPC: get_public_key, sign_event (kind 10019, 9321, NIP-42 AUTH) and
++// derive_secret (Keycast patch 0011) for the wallet seed and the nutzap key. On load the wallet
++// tries a silent sign-in once per tab (prompt=none), like the chat and the calendar.
++
++const KEYCAST_URL = ((process.env.BELFRY_KEYCAST_URL as string) || "").replace(
++  /\/+$/,
++  ""
++);
++const CLIENT_ID = "belfry-wallet";
++const SCOPE = "policy:belfry-event";
++const CALLBACK_PATH = "/oauth/callback";
++const FLOW_KEY = "belfry-sso-flow";
++const TRIED_KEY = "belfry-sso-silent-tried";
++const SESSION_KEY = "belfry.session";
++/** Fired on window when a sign-in finished (components mounted before it update). */
++export const SESSION_EVENT = "belfry:session";
++
++type Flow = {
++  state: string;
++  verifier: string;
++  silent: boolean;
++  returnTo: string;
++};
++
++export type Session = {
++  pubkey: string;
++  accessToken: string;
++  refreshToken: string;
++};
++
++export const ssoEnabled = () => Boolean(KEYCAST_URL);
++export const isSsoCallback = () => window.location.pathname === CALLBACK_PATH;
++const redirectUri = () => window.location.origin + CALLBACK_PATH;
++
++const tab = {
++  get: (k: string) => {
++    try {
++      return window.sessionStorage.getItem(k);
++    } catch {
++      return null;
++    }
++  },
++  set: (k: string, v: string) => {
++    try {
++      window.sessionStorage.setItem(k, v);
++      return true;
++    } catch {
++      return false;
++    }
++  },
++  remove: (k: string) => {
++    try {
++      window.sessionStorage.removeItem(k);
++    } catch {
++      // nothing to remove
++    }
++  },
++};
++
++export function getSession(): Session | null {
++  try {
++    const raw = window.localStorage.getItem(SESSION_KEY);
++    return raw ? (JSON.parse(raw) as Session) : null;
++  } catch {
++    return null;
++  }
++}
++
++function setSession(s: Session | null) {
++  try {
++    if (s) window.localStorage.setItem(SESSION_KEY, JSON.stringify(s));
++    else window.localStorage.removeItem(SESSION_KEY);
++  } catch {
++    // storage unavailable: the session lasts as long as the page
++  }
++}
++
++const b64url = (bytes: Uint8Array) =>
++  btoa(String.fromCharCode(...bytes))
++    .replace(/\+/g, "-")
++    .replace(/\//g, "_")
++    .replace(/=+$/, "");
++const randomString = (n = 32) =>
++  b64url(crypto.getRandomValues(new Uint8Array(n)));
++const challengeFor = async (verifier: string) =>
++  b64url(
++    new Uint8Array(
++      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))
++    )
++  );
++
++/** Redirects to Keycast. Interactive by default; `silent` adds prompt=none. */
++export async function startSignIn(silent = false) {
++  const flow: Flow = {
++    state: randomString(),
++    verifier: randomString(48),
++    silent,
++    returnTo: isSsoCallback()
++      ? "/"
++      : window.location.pathname +
++        window.location.search +
++        window.location.hash,
++  };
++  if (!tab.set(FLOW_KEY, JSON.stringify(flow))) return false;
++  const url = new URL(KEYCAST_URL + "/api/oauth/authorize");
++  url.searchParams.set("client_id", CLIENT_ID);
++  url.searchParams.set("redirect_uri", redirectUri());
++  url.searchParams.set("scope", SCOPE);
++  url.searchParams.set("state", flow.state);
++  url.searchParams.set("code_challenge", await challengeFor(flow.verifier));
++  url.searchParams.set("code_challenge_method", "S256");
++  if (silent) url.searchParams.set("prompt", "none");
++  window.location.assign(url.toString());
++  return true;
++}
++
++/** One silent attempt per tab, only without a session. True when the page is redirecting. */
++export async function trySilentSignIn() {
++  if (!ssoEnabled() || getSession() || tab.get(TRIED_KEY)) return false;
++  // A token link waits for the user: never redirect away from it.
++  if (window.location.hash.includes("token=")) return false;
++  if (!tab.set(TRIED_KEY, "1")) return false;
++  return startSignIn(true);
++}
++
++/** Handles /oauth/callback. Returns the new session, or null (error or silent miss). */
++export async function finishSignIn(): Promise<Session | null> {
++  const params = new URLSearchParams(window.location.search);
++  const raw = tab.get(FLOW_KEY);
++  tab.remove(FLOW_KEY);
++  let flow: Flow | undefined;
++  try {
++    flow = raw ? (JSON.parse(raw) as Flow) : undefined;
++  } catch {
++    flow = undefined;
++  }
++  window.history.replaceState(null, "", flow?.returnTo || "/");
++  if (!flow || params.get("state") !== flow.state || params.get("error"))
++    return null;
++  const code = params.get("code");
++  if (!code) return null;
++  const tokens = await tokenRequest({
++    grant_type: "authorization_code",
++    code,
++    client_id: CLIENT_ID,
++    redirect_uri: redirectUri(),
++    code_verifier: flow.verifier,
++  });
++  if (!tokens) return null;
++  const session: Session = { pubkey: "", ...tokens };
++  setSession(session);
++  session.pubkey = (await rpc("get_public_key", [])) as string;
++  setSession(session);
++  window.dispatchEvent(new Event(SESSION_EVENT));
++  return session;
++}
++
++async function tokenRequest(
++  body: Record<string, string>
++): Promise<{ accessToken: string; refreshToken: string } | null> {
++  const r = await fetch(KEYCAST_URL + "/api/oauth/token", {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify(body),
++  });
++  const json = await r.json().catch(() => ({}));
++  if (!r.ok || !json.access_token) return null;
++  return {
++    accessToken: json.access_token,
++    refreshToken: json.refresh_token || "",
++  };
++}
++
++async function refresh(session: Session): Promise<boolean> {
++  if (!session.refreshToken) return false;
++  const tokens = await tokenRequest({
++    grant_type: "refresh_token",
++    refresh_token: session.refreshToken,
++    client_id: CLIENT_ID,
++  });
++  if (!tokens) return false;
++  setSession({ ...session, ...tokens });
++  return true;
++}
++
++/** Keycast HTTP RPC with the session's access token; refreshes it once on 401. */
++export async function rpc(method: string, params: unknown[]): Promise<unknown> {
++  for (let attempt = 0; attempt < 2; attempt++) {
++    const session = getSession();
++    if (!session) throw new Error("not signed in");
++    const r = await fetch(KEYCAST_URL + "/api/nostr", {
++      method: "POST",
++      headers: {
++        "Content-Type": "application/json",
++        Authorization: `Bearer ${session.accessToken}`,
++      },
++      body: JSON.stringify({ method, params }),
++    });
++    if (r.status === 401 && attempt === 0 && (await refresh(session))) continue;
++    const json = await r.json().catch(() => ({}));
++    if (!r.ok || json.error) {
++      throw new Error(json.error || `Keycast ${method}: HTTP ${r.status}`);
++    }
++    return json.result;
++  }
++  throw new Error("Keycast session expired");
++}
++
++/** Revokes the wallet's authorization and returns the URL that ends the single sign-on. */
++export async function prepareLogout(returnTo: string) {
++  const session = getSession();
++  setSession(null);
++  tab.set(TRIED_KEY, "1");
++  if (!ssoEnabled()) return returnTo;
++  if (session?.refreshToken) {
++    try {
++      await fetch(KEYCAST_URL + "/api/oauth/revoke", {
++        method: "POST",
++        headers: { "Content-Type": "application/json" },
++        body: JSON.stringify({
++          token: session.refreshToken,
++          client_id: CLIENT_ID,
++        }),
++        signal: AbortSignal.timeout(3000),
++      });
++    } catch (e) {
++      console.warn("Revoking the wallet's authorization failed", e);
++    }
++  }
++  const url = new URL(KEYCAST_URL + "/api/auth/oidc/logout");
++  url.searchParams.set(
++    "return_to",
++    new URL(returnTo, window.location.origin).toString()
++  );
++  return url.toString();
++}
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index c2ec920..9579ff7 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -5,6 +5,23 @@
+ 
+ import { useWelcomeStore } from "src/stores/welcome";
+ import { useMintsStore } from "src/stores/mints";
++import { Amount, getEncodedToken } from "@cashu/cashu-ts";
++import type { Proof } from "@cashu/cashu-ts";
++import { useWalletStore } from "src/stores/wallet";
++import { useProofsStore } from "src/stores/proofs";
++import { useP2PKStore } from "src/stores/p2pk";
++import { useRestoreStore } from "src/stores/restore";
++import { useReceiveTokensStore } from "src/stores/receiveTokensStore";
++import { useTokensStore } from "src/stores/tokens";
++import { notifySuccess } from "src/js/notify";
++import { getSession } from "./sso";
++import { deriveWalletMnemonic, deriveNutzapKey } from "./keys";
++import {
++  announceNutzapInfo,
++  listenForNutzaps,
++  publishNutzap,
++  recipientNutzapKey,
++} from "./nutzap";
+ 
+ export const VILLAGE_MINT_URL = (process.env.BELFRY_MINT_URL || "").replace(
+   /\/+$/,
+@@ -50,3 +67,156 @@ export function formatTokens(value: number | bigint, locale?: string) {
+   const n = new Intl.NumberFormat(locale).format(value as number);
+   return `${n} ${value === 1 || value === 1n ? "token" : "tokens"}`;
+ }
++
++// -- the participant's account (after "Sign in with Open Source Village") -----------------------
++
++function villageMint() {
++  return useMintsStore().mints.find((m) => m.url === VILLAGE_MINT_URL);
++}
++
++function heldProofs() {
++  const mint = villageMint();
++  return mint ? useMintsStore().mintUnitProofs(mint, VILLAGE_UNIT) : [];
++}
++
++const asProofs = (proofs: { amount: number; [k: string]: any }[]): Proof[] =>
++  proofs.map(({ reserved, quote, amount, ...rest }) => ({
++    ...(rest as any),
++    amount: Amount.from(amount),
++  }));
++
++/** Moves the wallet onto the seed derived from the Nostr key. Tokens it holds are swapped onto
++ *  the new seed (so they can be restored elsewhere); a fresh wallet restores from the mint. */
++async function adoptDerivedSeed() {
++  const walletStore = useWalletStore();
++  const mnemonic = await deriveWalletMnemonic();
++  if (walletStore.mnemonic === mnemonic) return;
++  const held = heldProofs().filter((p) => !p.reserved);
++  walletStore.oldMnemonicCounters.push({
++    mnemonic: walletStore.mnemonic,
++    keysetCounters: walletStore.keysetCounters,
++  });
++  walletStore.keysetCounters = [];
++  walletStore.sharedCounterSource = null;
++  walletStore.mnemonic = mnemonic;
++
++  if (held.length) {
++    const proofsStore = useProofsStore();
++    const token = getEncodedToken({
++      mint: VILLAGE_MINT_URL,
++      unit: VILLAGE_UNIT,
++      proofs: asProofs(held),
++    });
++    await proofsStore.removeProofs(held);
++    try {
++      const wallet = await walletStore.mintWallet(
++        VILLAGE_MINT_URL,
++        VILLAGE_UNIT,
++        true
++      );
++      const fresh = await wallet.ops.receive(token).asDeterministic().run();
++      await proofsStore.addProofs(fresh);
++    } catch (e) {
++      // the swap did not happen: the old proofs are still good
++      await proofsStore.addProofs(held);
++      console.warn("Could not move the tokens onto the derived seed", e);
++    }
++  } else {
++    const restore = useRestoreStore();
++    restore.mnemonicToRestore = mnemonic;
++    // quiet: a first sign-in finds nothing, which is not news
++    await restore.restoreMint(VILLAGE_MINT_URL, true);
++  }
++}
++
++/** Receives a token without the dialog (nutzaps); P2PK keys come from the key store. */
++async function receiveQuietly(token: string) {
++  const receive = useReceiveTokensStore();
++  receive.receiveData.tokensBase64 = token;
++  receive.receiveData.p2pkPrivateKey = "";
++  await receive.receiveToken(token);
++}
++
++let connected = false;
++
++/** After signing in (and on every load while signed in): derived seed, nutzap key, 10019,
++ *  incoming nutzaps. */
++export async function connectVillageAccount() {
++  if (connected || !villageEnabled() || !getSession()) return;
++  connected = true;
++  try {
++    await ensureVillageMint();
++    await adoptDerivedSeed();
++    const key = await deriveNutzapKey();
++    const p2pk = useP2PKStore();
++    if (!p2pk.haveThisKey(key.publicKey)) {
++      p2pk.p2pkKeys = p2pk.p2pkKeys.concat({
++        ...key,
++        used: false,
++        usedCount: 0,
++      });
++    }
++    await announceNutzapInfo(key.publicKey);
++    await listenForNutzaps(async (token, _from, amount, _comment, proofs) => {
++      // On a new device old nutzaps come in again: skip the ones already redeemed.
++      const wallet = await useWalletStore().mintWallet(
++        VILLAGE_MINT_URL,
++        VILLAGE_UNIT,
++        true
++      );
++      const states = await wallet.checkProofsStates(proofs);
++      if (states.some((s: any) => s.state !== "UNSPENT")) return;
++      await receiveQuietly(token);
++      notifySuccess(`Received ${formatTokens(amount)}`);
++    });
++  } catch (e) {
++    connected = false;
++    console.warn("Open Source Village account setup failed", e);
++    throw e;
++  }
++}
++
++/** Sends `amount` tokens to a participant (hex pubkey) as a nutzap. */
++export async function sendToParticipant(
++  pubkey: string,
++  amount: number,
++  comment: string
++) {
++  const key = await recipientNutzapKey(pubkey);
++  if (!key) {
++    throw new Error(
++      "This participant has not opened the wallet yet. Send them a token link instead."
++    );
++  }
++  const walletStore = useWalletStore();
++  const wallet = await walletStore.mintWallet(
++    VILLAGE_MINT_URL,
++    VILLAGE_UNIT,
++    true
++  );
++  const { sendProofs } = await walletStore.sendToLock(
++    heldProofs(),
++    wallet,
++    amount,
++    key
++  );
++  const proofs = sendProofs.map((p: any) => ({
++    amount: Amount.from(p.amount).toNumber(),
++    C: p.C,
++    id: p.id,
++    secret: p.secret,
++    ...(p.dleq ? { dleq: p.dleq } : {}),
++  }));
++  await publishNutzap(pubkey, proofs, comment);
++  useTokensStore().addPaidToken({
++    amount: -amount,
++    token: getEncodedToken({
++      mint: VILLAGE_MINT_URL,
++      unit: VILLAGE_UNIT,
++      proofs: asProofs(proofs as any),
++    }),
++    mint: VILLAGE_MINT_URL,
++    unit: VILLAGE_UNIT,
++    label: comment || "Sent to a participant",
++  } as any);
++}
+diff --git a/src/components/belfry/VillageCard.vue b/src/components/belfry/VillageCard.vue
+new file mode 100644
+index 0000000..74eaefd
+--- /dev/null
++++ b/src/components/belfry/VillageCard.vue
+@@ -0,0 +1,187 @@
++<template>
++  <!-- Belfry: the participant's Open Source Village account in the wallet -->
++  <div v-if="enabled" class="village-card q-pa-md q-mx-md text-left">
++    <template v-if="!signedIn">
++      <div class="text-body2 q-mb-sm">
++        Sign in to keep your tokens on every device and to receive tokens from
++        other participants.
++      </div>
++      <q-btn
++        rounded
++        unelevated
++        color="primary"
++        class="full-width"
++        data-testid="village-sign-in"
++        label="Sign in with Open Source Village"
++        @click="signIn"
++      />
++    </template>
++    <template v-else>
++      <div class="row items-center no-wrap">
++        <div class="col text-body2">
++          Signed in<span v-if="ready"> · others can send you tokens</span>
++          <span v-else-if="error" class="text-warning"> · {{ error }}</span>
++          <span v-else> · setting up…</span>
++        </div>
++        <q-btn flat dense no-caps size="sm" label="Sign out" @click="signOut" />
++      </div>
++      <q-btn
++        rounded
++        unelevated
++        color="primary"
++        class="full-width q-mt-sm"
++        data-testid="village-send"
++        label="Send to a participant"
++        :disable="!ready"
++        @click="showSend = true"
++      />
++    </template>
++
++    <q-dialog v-model="showSend">
++      <q-card class="q-pa-md" style="min-width: 300px; max-width: 420px">
++        <div class="text-h6 q-mb-md">Send tokens to a participant</div>
++        <q-input
++          v-model="recipient"
++          outlined
++          dense
++          label="Their npub or name (name@domain)"
++          data-testid="village-recipient"
++          class="q-mb-sm"
++        />
++        <q-input
++          v-model.number="amount"
++          outlined
++          dense
++          type="number"
++          min="1"
++          label="Tokens"
++          data-testid="village-amount"
++          class="q-mb-sm"
++        />
++        <q-input
++          v-model="comment"
++          outlined
++          dense
++          label="Note (optional)"
++          class="q-mb-md"
++        />
++        <div v-if="sendError" class="text-warning q-mb-sm">{{ sendError }}</div>
++        <q-btn
++          rounded
++          unelevated
++          color="primary"
++          class="full-width"
++          data-testid="village-send-confirm"
++          :loading="sending"
++          label="Send"
++          @click="send"
++        />
++      </q-card>
++    </q-dialog>
++  </div>
++</template>
++
++<script lang="ts">
++import { defineComponent } from "vue";
++import { nip05, nip19 } from "nostr-tools";
++import { notifySuccess } from "src/js/notify";
++import {
++  ssoEnabled,
++  getSession,
++  startSignIn,
++  prepareLogout,
++  SESSION_EVENT,
++} from "src/belfry/sso";
++import {
++  villageEnabled,
++  connectVillageAccount,
++  sendToParticipant,
++  formatTokens,
++} from "src/belfry/village";
++
++async function resolvePubkey(input: string): Promise<string> {
++  const value = input.trim();
++  if (/^[0-9a-f]{64}$/.test(value)) return value;
++  if (value.startsWith("npub1")) return nip19.decode(value).data as string;
++  if (value.includes("@")) {
++    const profile = await nip05.queryProfile(value);
++    if (profile?.pubkey) return profile.pubkey;
++  }
++  throw new Error("Enter an npub or a name like name@domain.");
++}
++
++export default defineComponent({
++  name: "VillageCard",
++  data() {
++    return {
++      signedIn: Boolean(getSession()),
++      ready: false,
++      error: "",
++      showSend: false,
++      recipient: "",
++      amount: 10 as number,
++      comment: "",
++      sending: false,
++      sendError: "",
++    };
++  },
++  computed: {
++    enabled(): boolean {
++      return villageEnabled() && ssoEnabled();
++    },
++  },
++  async mounted() {
++    window.addEventListener(SESSION_EVENT, this.onSession);
++    if (this.signedIn) await this.connect();
++  },
++  beforeUnmount() {
++    window.removeEventListener(SESSION_EVENT, this.onSession);
++  },
++  methods: {
++    async onSession() {
++      this.signedIn = Boolean(getSession());
++      if (this.signedIn) await this.connect();
++    },
++    async connect() {
++      try {
++        await connectVillageAccount();
++        this.ready = true;
++        this.error = "";
++      } catch (e: any) {
++        this.error = "could not reach the village services";
++      }
++    },
++    signIn() {
++      startSignIn(false);
++    },
++    async signOut() {
++      window.location.href = await prepareLogout("/");
++    },
++    async send() {
++      this.sendError = "";
++      this.sending = true;
++      try {
++        if (!this.amount || this.amount < 1)
++          throw new Error("Enter a number of tokens.");
++        const pubkey = await resolvePubkey(this.recipient);
++        await sendToParticipant(pubkey, Math.floor(this.amount), this.comment);
++        notifySuccess(`Sent ${formatTokens(Math.floor(this.amount))}`);
++        this.showSend = false;
++        this.recipient = "";
++        this.comment = "";
++      } catch (e: any) {
++        this.sendError = e?.message || String(e);
++      } finally {
++        this.sending = false;
++      }
++    },
++  },
++});
++</script>
++
++<style scoped>
++.village-card {
++  border: 1px solid rgba(255, 255, 255, 0.16);
++  border-radius: 12px;
++}
++</style>
+diff --git a/src/css/base.scss b/src/css/base.scss
+index a47dfdb..c56784c 100644
+--- a/src/css/base.scss
++++ b/src/css/base.scss
+@@ -266,3 +266,12 @@ body[data-theme="village"].body--dark {
+ [data-theme="village"] .q-badge.bg-primary {
+   color: #1a231d !important;
+ }
++
++// Belfry: the Open Source Village app bar (brand/osv-bar.js) sits on top; move the wallet's own
++// header and page below it.
++html.osv-bar .q-header {
++  top: var(--osv-bar-h, 0px);
++}
++html.osv-bar .q-layout {
++  padding-top: var(--osv-bar-h, 0px);
++}
+diff --git a/src/pages/WalletPage.vue b/src/pages/WalletPage.vue
+index 877f930..fcc2cba 100644
+--- a/src/pages/WalletPage.vue
++++ b/src/pages/WalletPage.vue
+@@ -3,6 +3,7 @@
+     <div class="col-12 col-sm-11 col-md-8 text-center q-gutter-y-md">
+       <NoMintWarnBanner v-if="mints.length == 0" />
+       <BalanceView v-else :set-tab="setTab" />
++      <VillageCard />
+       <div
+         class="row items-center justify-center no-wrap q-mb-none q-mx-none q-px-none q-pt-lg q-pb-md position-relative"
+       >
+@@ -209,6 +210,7 @@
+ </style>
+ <script lang="ts">
+ import { skipOnboarding, ensureVillageMint } from "src/belfry/village";
++import { isSsoCallback, finishSignIn, trySilentSignIn } from "src/belfry/sso";
+ import { date } from "quasar";
+ import * as _ from "underscore";
+ import { shortenString } from "src/js/string-utils";
+@@ -227,6 +229,7 @@ import InvoiceDetailDialog from "components/InvoiceDetailDialog.vue";
+ import CreateInvoiceDialog from "components/CreateInvoiceDialog.vue";
+ import SendDialog from "components/SendDialog.vue";
+ import ReceiveDialog from "components/ReceiveDialog.vue";
++import VillageCard from "components/belfry/VillageCard.vue";
+ import QrcodeReader from "components/QrcodeReader.vue";
+ import iOSPWAPrompt from "components/iOSPWAPrompt.vue";
+ import AndroidPWAPrompt from "components/AndroidPWAPrompt.vue";
+@@ -283,6 +286,7 @@ export default {
+     QrcodeReader,
+     SendDialog,
+     ReceiveDialog,
++    VillageCard,
+     iOSPWAPrompt,
+     AndroidPWAPrompt,
+     ScanIcon,
+@@ -616,6 +620,12 @@ export default {
+ 
+     // Belfry: the village wallet skips the onboarding (before anything reads its state).
+     skipOnboarding();
++    // Belfry: back from "Sign in with Open Source Village", or one silent try per tab.
++    if (isSsoCallback()) {
++      await finishSignIn().catch((e) => console.warn("sign-in failed", e));
++    } else if (await trySilentSignIn()) {
++      return;
++    }
+ 
+     // Initialize and run migrations
+     const migrationsStore = useMigrationsStore();
+diff --git a/src/router/routes.js b/src/router/routes.js
+index 2ef426e..f3b1a81 100644
+--- a/src/router/routes.js
++++ b/src/router/routes.js
+@@ -6,6 +6,14 @@ const routes = [
+       { path: "", component: () => import("src/pages/WalletPage.vue") },
+     ],
+   },
++  {
++    // Belfry: "Sign in with Open Source Village" returns here; the wallet page finishes it.
++    path: "/oauth/callback",
++    component: () => import("layouts/MainLayout.vue"),
++    children: [
++      { path: "", component: () => import("src/pages/WalletPage.vue") },
++    ],
++  },
+   {
+     path: "/settings",
+     component: () => import("layouts/FullscreenLayout.vue"),
+diff --git a/src/stores/migrations.ts b/src/stores/migrations.ts
+index 1bfedd7..f3d4965 100644
+--- a/src/stores/migrations.ts
++++ b/src/stores/migrations.ts
+@@ -93,6 +93,8 @@ export const useMigrationsStore = defineStore("migrations", {
+ 
+     // Migration v2: add "wss://relay.primal.net " relay, enable nostrMintBackup, clear mint recs cache
+     async migrateAddPrimalRelayAndEnableBackupAndClearMintRecs() {
++      // Belfry: the village wallet keeps the community relay only and no Nostr mint backup.
++      if (process.env.BELFRY_MINT_URL) return;
+       const { useSettingsStore } = await import("./settings");
+       const settings = useSettingsStore();
+ 
+diff --git a/src/stores/restore.ts b/src/stores/restore.ts
+index 01191d0..6c6f79a 100644
+--- a/src/stores/restore.ts
++++ b/src/stores/restore.ts
+@@ -31,14 +31,14 @@ export const useRestoreStore = defineStore("restore", {
+   }),
+   getters: {},
+   actions: {
+-    restoreMint: async function (url: string) {
++    restoreMint: async function (url: string, quiet = false) {
+       this.restoringState = true;
+       this.restoringMint = url;
+       this.restoreProgress = 0;
+       this.restoreCounter = 0;
+       this.restoreStatus = "";
+       try {
+-        await this._restoreMint(url);
++        await this._restoreMint(url, quiet);
+       } catch (error) {
+         notifyError(
+           i18n.global.t("restore.restore_mint_error_text", { error })
+@@ -49,7 +49,7 @@ export const useRestoreStore = defineStore("restore", {
+         this.restoreProgress = 0;
+       }
+     },
+-    _restoreMint: async function (url: string) {
++    _restoreMint: async function (url: string, quiet = false) {
+       if (this.mnemonicToRestore.length === 0) {
+         notifyError(i18n.global.t("restore.mnemonic_error_text"));
+         return;
+@@ -191,7 +191,7 @@ export const useRestoreStore = defineStore("restore", {
+           restoredSomething = true;
+         }
+       }
+-      if (!restoredSomething) {
++      if (!restoredSomething && !quiet) {
+         notify(i18n.global.t("restore.no_proofs_info_text"));
+       }
+     },
+diff --git a/src/stores/settings.ts b/src/stores/settings.ts
+index d720c08..aba6b64 100644
+--- a/src/stores/settings.ts
++++ b/src/stores/settings.ts
+@@ -1,18 +1,20 @@
+ import { defineStore } from "pinia";
+ import { useLocalStorage } from "@vueuse/core";
+ 
+-const defaultNostrRelays = [
+-  "wss://relay.damus.io",
+-  "wss://nos.lol",
+-  "wss://relay.primal.net",
+-];
++// Belfry: the village wallet talks to the community relay only and fetches no bitcoin price and
++// no mint audits (the tokens have no monetary value and come from one known mint).
++const VILLAGE = Boolean(process.env.BELFRY_MINT_URL);
++const defaultNostrRelays =
++  VILLAGE && process.env.BELFRY_COMMUNITY_RELAY
++    ? [process.env.BELFRY_COMMUNITY_RELAY as string]
++    : ["wss://relay.damus.io", "wss://nos.lol", "wss://relay.primal.net"];
+ 
+ export const useSettingsStore = defineStore("settings", {
+   state: () => {
+     return {
+       getBitcoinPrice: useLocalStorage<boolean>(
+         "cashu.settings.getBitcoinPrice",
+-        true
++        !VILLAGE
+       ),
+       bitcoinPriceCurrency: useLocalStorage<string>(
+         "cashu.settings.bitcoinPriceCurrency",
+@@ -68,7 +70,7 @@ export const useSettingsStore = defineStore("settings", {
+       ),
+       auditorEnabled: useLocalStorage<boolean>(
+         "cashu.settings.auditorEnabled",
+-        true
++        !VILLAGE
+       ),
+       auditorUrl: useLocalStorage<string>(
+         "cashu.settings.auditorUrl",
+@@ -88,7 +90,7 @@ export const useSettingsStore = defineStore("settings", {
+       ),
+       nostrMintBackupEnabled: useLocalStorage<boolean>(
+         "cashu.settings.nostrMintBackupEnabled",
+-        true
++        !VILLAGE
+       ),
+     };
+   },
+-- 
+2.53.0
+

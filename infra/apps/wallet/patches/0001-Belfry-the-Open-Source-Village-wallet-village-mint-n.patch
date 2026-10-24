@@ -1,0 +1,343 @@
+From 68d68388f6a42012dd5190fba7bb6d863985c5bc Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 13:10:43 +0200
+Subject: [PATCH 1/2] Belfry: the Open Source Village wallet (village mint, no
+ onboarding, tokens unit, village theme)
+
+---
+ quasar.config.js                 |  3 +-
+ src/belfry/village.ts            | 52 ++++++++++++++++++++++++++++++++
+ src/boot/base.js                 |  5 ++-
+ src/components/ReceiveDialog.vue | 37 ++++++++++++++---------
+ src/components/SendDialog.vue    | 37 ++++++++++++++---------
+ src/css/base.scss                | 18 +++++++++++
+ src/js/format-currency.ts        |  3 ++
+ src/pages/WalletPage.vue         |  5 +++
+ src/stores/ui.ts                 |  3 ++
+ 9 files changed, 133 insertions(+), 30 deletions(-)
+ create mode 100644 src/belfry/village.ts
+
+diff --git a/quasar.config.js b/quasar.config.js
+index 5ba0d1e..c573701 100644
+--- a/quasar.config.js
++++ b/quasar.config.js
+@@ -77,7 +77,8 @@ module.exports = configure(function (/* ctx */) {
+ 
+       // publicPath: '/',
+       // analyze: true,
+-      // env: {},
++      // Belfry: the village mint (empty: plain cashu.me)
++      env: { BELFRY_MINT_URL: process.env.BELFRY_MINT_URL || "" },
+       // rawDefine: {}
+       // ignorePublicFolder: true,
+       // minify: false,
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+new file mode 100644
+index 0000000..c2ec920
+--- /dev/null
++++ b/src/belfry/village.ts
+@@ -0,0 +1,52 @@
++// Belfry: the Open Source Village wallet. Built with BELFRY_MINT_URL, the app is a wallet for the
++// village tokens (Belfry's mint, unit "osv", no monetary value): it skips cashu.me's onboarding
++// (seed phrase and mint choice; the seed can still be backed up from the settings), adds the
++// village mint, makes it active and shows the unit as "tokens".
++
++import { useWelcomeStore } from "src/stores/welcome";
++import { useMintsStore } from "src/stores/mints";
++
++export const VILLAGE_MINT_URL = (process.env.BELFRY_MINT_URL || "").replace(
++  /\/+$/,
++  ""
++);
++export const VILLAGE_UNIT = "osv";
++
++export const villageEnabled = () => Boolean(VILLAGE_MINT_URL);
++
++/** Marks the onboarding as done; call before the wallet page decides whether to show it. */
++export function skipOnboarding() {
++  if (!villageEnabled()) return;
++  const welcome = useWelcomeStore();
++  if (welcome.termsAccepted && !welcome.showWelcome) return;
++  welcome.termsAccepted = true;
++  welcome.onboardingPath = "new";
++  welcome.seedPhraseValidated = true;
++  welcome.mintSetupCompleted = true;
++  welcome.showWelcome = false;
++}
++
++/** Adds the village mint once and makes it (with the token unit) the active one. */
++export async function ensureVillageMint() {
++  if (!villageEnabled()) return;
++  const mints = useMintsStore();
++  try {
++    if (!mints.mints.some((m) => m.url === VILLAGE_MINT_URL)) {
++      await mints.addMint({
++        url: VILLAGE_MINT_URL,
++        nickname: "Open Source Village",
++      });
++    }
++    if (!mints.activeMintUrl || mints.activeMintUrl === VILLAGE_MINT_URL) {
++      await mints.activateMintUrl(VILLAGE_MINT_URL, false, true, VILLAGE_UNIT);
++    }
++  } catch (e) {
++    console.warn("Could not add the Open Source Village mint", e);
++  }
++}
++
++/** "1 token", "50 tokens". */
++export function formatTokens(value: number | bigint, locale?: string) {
++  const n = new Intl.NumberFormat(locale).format(value as number);
++  return `${n} ${value === 1 || value === 1n ? "token" : "tokens"}`;
++}
+diff --git a/src/boot/base.js b/src/boot/base.js
+index 3c155a5..12c4717 100644
+--- a/src/boot/base.js
++++ b/src/boot/base.js
+@@ -1,3 +1,4 @@
++import { formatTokens } from "src/belfry/village";
+ import { copyToClipboard } from "quasar";
+ import { useUiStore } from "stores/ui";
+ import { Clipboard } from "@capacitor/clipboard";
+@@ -156,6 +157,7 @@ window.windowMixin = {
+       }
+       if (currency == "sat") return this.formatSat(value);
+       if (currency == "msat") return this.fromMsat(value);
++      if (currency == "osv") return formatTokens(value, window.LOCALE);
+       if (currency == "usd") value = value / 100;
+       if (currency == "eur") value = value / 100;
+       try {
+@@ -332,7 +334,8 @@ window.windowMixin = {
+         this.$q.localStorage.getItem("cashu.theme")
+       );
+     } else {
+-      this.changeColor("monochrome");
++      // Belfry: the village theme by default when built for the village mint
++      this.changeColor(process.env.BELFRY_MINT_URL ? "village" : "monochrome");
+     }
+ 
+     // Initial status bar sync and observers for changes
+diff --git a/src/components/ReceiveDialog.vue b/src/components/ReceiveDialog.vue
+index a8ffeaf..e59e81c 100644
+--- a/src/components/ReceiveDialog.vue
++++ b/src/components/ReceiveDialog.vue
+@@ -101,6 +101,7 @@
+ </template>
+ 
+ <script lang="ts">
++import { VILLAGE_UNIT } from "src/belfry/village";
+ import { defineComponent } from "vue";
+ import { useReceiveTokensStore } from "src/stores/receiveTokensStore";
+ import { mapActions, mapState, mapWritableState } from "pinia";
+@@ -178,24 +179,32 @@ export default defineComponent({
+       }
+     },
+     canReceiveLightning: function (): boolean {
+-      return Boolean(
+-        firstMintSupportingPaymentMethods(
+-          this.mints as any,
+-          this.activeMintUrl as string,
+-          [PaymentMethod.Bolt11, PaymentMethod.Bolt12],
+-          "mint",
+-          this.activeUnit as string
++      // Belfry: village tokens never go through Lightning or on-chain
++      return (
++        this.activeUnit !== VILLAGE_UNIT &&
++        Boolean(
++          firstMintSupportingPaymentMethods(
++            this.mints as any,
++            this.activeMintUrl as string,
++            [PaymentMethod.Bolt11, PaymentMethod.Bolt12],
++            "mint",
++            this.activeUnit as string
++          )
+         )
+       );
+     },
+     canReceiveOnchain: function (): boolean {
+-      return Boolean(
+-        firstMintSupportingPaymentMethods(
+-          this.mints as any,
+-          this.activeMintUrl as string,
+-          [PaymentMethod.Onchain],
+-          "mint",
+-          this.activeUnit as string
++      // Belfry: village tokens never go through Lightning or on-chain
++      return (
++        this.activeUnit !== VILLAGE_UNIT &&
++        Boolean(
++          firstMintSupportingPaymentMethods(
++            this.mints as any,
++            this.activeMintUrl as string,
++            [PaymentMethod.Onchain],
++            "mint",
++            this.activeUnit as string
++          )
+         )
+       );
+     },
+diff --git a/src/components/SendDialog.vue b/src/components/SendDialog.vue
+index 2542a6c..41902cd 100644
+--- a/src/components/SendDialog.vue
++++ b/src/components/SendDialog.vue
+@@ -97,6 +97,7 @@
+ </template>
+ 
+ <script lang="ts">
++import { VILLAGE_UNIT } from "src/belfry/village";
+ import { defineComponent } from "vue";
+ import { useReceiveTokensStore } from "src/stores/receiveTokensStore";
+ import { mapActions, mapState, mapWritableState } from "pinia";
+@@ -164,24 +165,32 @@ export default defineComponent({
+       }
+     },
+     canSendLightning: function (): boolean {
+-      return Boolean(
+-        firstMintSupportingPaymentMethods(
+-          this.mints as any,
+-          this.activeMintUrl as string,
+-          [PaymentMethod.Bolt11, PaymentMethod.Bolt12],
+-          "melt",
+-          this.activeUnit as string
++      // Belfry: village tokens never go through Lightning or on-chain
++      return (
++        this.activeUnit !== VILLAGE_UNIT &&
++        Boolean(
++          firstMintSupportingPaymentMethods(
++            this.mints as any,
++            this.activeMintUrl as string,
++            [PaymentMethod.Bolt11, PaymentMethod.Bolt12],
++            "melt",
++            this.activeUnit as string
++          )
+         )
+       );
+     },
+     canSendOnchain: function (): boolean {
+-      return Boolean(
+-        firstMintSupportingPaymentMethods(
+-          this.mints as any,
+-          this.activeMintUrl as string,
+-          [PaymentMethod.Onchain],
+-          "melt",
+-          this.activeUnit as string
++      // Belfry: village tokens never go through Lightning or on-chain
++      return (
++        this.activeUnit !== VILLAGE_UNIT &&
++        Boolean(
++          firstMintSupportingPaymentMethods(
++            this.mints as any,
++            this.activeMintUrl as string,
++            [PaymentMethod.Onchain],
++            "melt",
++            this.activeUnit as string
++          )
+         )
+       );
+     },
+diff --git a/src/css/base.scss b/src/css/base.scss
+index 28da7d3..a47dfdb 100644
+--- a/src/css/base.scss
++++ b/src/css/base.scss
+@@ -1,4 +1,13 @@
+ $themes: (
++  // Belfry: Open Source Village (brand/tokens.css): lime on green greys
++  "village": (
++    primary: #d6ff52,
++    secondary: #c5ee41,
++    dark: #2b3a31,
++    info: #1a231d,
++    marginal-bg: #2b3a31,
++    marginal-text: #fff,
++  ),
+   "classic": (
+     primary: #935af5,
+     secondary: #b45af5,
+@@ -248,3 +257,12 @@ video {
+ ::-webkit-scrollbar {
+   display: none;
+ }
++
++// Belfry: the village theme keeps the page background (no darkening) and puts dark text on lime.
++body[data-theme="village"].body--dark {
++  background: #2b3a31 !important;
++}
++[data-theme="village"] .q-btn.bg-primary,
++[data-theme="village"] .q-badge.bg-primary {
++  color: #1a231d !important;
++}
+diff --git a/src/js/format-currency.ts b/src/js/format-currency.ts
+index e8b1e85..fdcf945 100644
+--- a/src/js/format-currency.ts
++++ b/src/js/format-currency.ts
+@@ -1,3 +1,4 @@
++import { formatTokens } from "src/belfry/village";
+ /** Format integer Cashu amounts without converting large values to numbers. */
+ export function formatBigIntCurrency(
+   value: bigint,
+@@ -15,6 +16,8 @@ export function formatBigIntCurrency(
+     return `${numberFormat.format(value)} sat`;
+   }
+   if (currency === "msat") return `${numberFormat.format(value)} msat`;
++  // Belfry: the village tokens' unit
++  if (currency === "osv") return formatTokens(value, locale);
+ 
+   try {
+     const formatter = new Intl.NumberFormat(locale, {
+diff --git a/src/pages/WalletPage.vue b/src/pages/WalletPage.vue
+index a29ef4f..877f930 100644
+--- a/src/pages/WalletPage.vue
++++ b/src/pages/WalletPage.vue
+@@ -208,6 +208,7 @@
+ }
+ </style>
+ <script lang="ts">
++import { skipOnboarding, ensureVillageMint } from "src/belfry/village";
+ import { date } from "quasar";
+ import * as _ from "underscore";
+ import { shortenString } from "src/js/string-utils";
+@@ -613,6 +614,9 @@ export default {
+       console.log(`Git commit: ${GIT_COMMIT}`);
+     }
+ 
++    // Belfry: the village wallet skips the onboarding (before anything reads its state).
++    skipOnboarding();
++
+     // Initialize and run migrations
+     const migrationsStore = useMigrationsStore();
+     migrationsStore.initMigrations();
+@@ -633,6 +637,7 @@ export default {
+       this.showAddMintDialog = true;
+       this.addMintData = { url: addMintUrl };
+     }
++    await ensureVillageMint();
+     if (!localStorage.getItem("cashu.activeMintUrl")) {
+       this.setTab("mints");
+     }
+diff --git a/src/stores/ui.ts b/src/stores/ui.ts
+index eedcec8..85c84c4 100644
+--- a/src/stores/ui.ts
++++ b/src/stores/ui.ts
+@@ -1,3 +1,4 @@
++import { formatTokens } from "src/belfry/village";
+ import { defineStore } from "pinia";
+ import { useMintsStore } from "./mints";
+ import { useLocalStorage } from "@vueuse/core";
+@@ -56,6 +57,7 @@ const unitTickerShortMap = {
+   usd: "USD",
+   eur: "EUR",
+   msat: "msats",
++  osv: "tokens",
+ };
+ 
+ export const useUiStore = defineStore("ui", {
+@@ -177,6 +179,7 @@ export const useUiStore = defineStore("ui", {
+       }
+       if (currency == "sat") return this.formatSat(value);
+       if (currency == "msat") return this.fromMsat(value);
++      if (currency == "osv") return formatTokens(value, navigator.language);
+       if (currency == "usd") value = value / 100;
+       if (currency == "eur") value = value / 100;
+       try {
+-- 
+2.53.0
+

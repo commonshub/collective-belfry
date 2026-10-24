@@ -34,7 +34,7 @@ x-authentik-env: &authentik-env
 
 # The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
 # the Open Source Village app bar (brand/osv-bar.js) in every app.
-x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass"
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on"
 
 x-keycast-env: &keycast-env
   DATABASE_URL: postgres://keycast:${KEYCAST_DB_PASSWORD:?}@postgres:5432/keycast
@@ -76,7 +76,10 @@ x-keycast-env: &keycast-env
   OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
   # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
   # each must also be a registered client (bootstrap writes their redirect URIs).
-  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote}
+  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet}
+  # Keycast patch 0011: the village wallet derives its backup seed and nutzap key from the
+  # participant's key (HKDF per purpose); no other app may derive anything.
+  KEYCAST_DERIVE_SECRETS: ${KEYCAST_DERIVE_SECRETS:-belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1}
   # Belfry fork: the NIP-05 names shown on the dashboard live on the apex domain (the proxy
   # forwards its nostr.json to this tenant); same value as the onboarding service's.
   NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
@@ -522,6 +525,23 @@ services:
         VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_COMMUNITY_APPS: *community-apps
     ports: ["3200:80"]
+
+  # Village token wallet: cashu.me with the village mint built in, "Sign in with Open Source
+  # Village" (keys derived from the participant's Nostr key, Keycast patch 0011) and nutzaps over
+  # the community relay. infra/apps/wallet/README.md.
+  wallet:
+    profiles: ["app"]
+    image: belfry-wallet:local
+    build:
+      context: ..
+      dockerfile: infra/apps/wallet/Dockerfile
+      args:
+        BELFRY_MINT_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
+        BELFRY_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        BELFRY_COMMUNITY_RELAY: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
+        APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        COMMUNITY_APPS: *community-apps
+    ports: ["3400:80"]
 
   # Anonymous polls (Semaphore): one vote per active pass and poll, any participant opens polls.
   # API and web app in one Node process at vote.<domain>; the electorate comes from the
