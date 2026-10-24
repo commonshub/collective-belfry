@@ -1,0 +1,35 @@
+From 30f5c124e6c6c33ebce1ea132213a4097a89e6a6 Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sat, 24 Oct 2026 19:20:53 +0200
+Subject: [PATCH] Belfry: pay requests may name an event (ref=<event id>
+ becomes an e tag)
+
+---
+ src/belfry/village.ts | 11 ++++++++---
+ 1 file changed, 8 insertions(+), 3 deletions(-)
+
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index 63e5da2..5fba3bf 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -208,9 +208,14 @@ export async function sendToParticipant(
+     secret: p.secret,
+     ...(p.dleq ? { dleq: p.dleq } : {}),
+   }));
+-  // What the payment is for, e.g. a marketplace offer ("30402:<seller>:<d>"), so the
+-  // marketplace can show it to the buyer and the seller.
+-  const refTags = /^\d{1,5}:[0-9a-f]{64}:[^\s]{1,200}$/.test(ref) ? [["a", ref]] : [];
++  // What the payment is for, so the app that asked can show it to both sides: a marketplace
++  // offer as an "a" tag ("30402:<seller>:<d>"), or an event id as an "e" tag (NIP-61), e.g. a
++  // photo tipped in the photos app.
++  const refTags = /^\d{1,5}:[0-9a-f]{64}:[^\s]{1,200}$/.test(ref)
++    ? [["a", ref]]
++    : /^[0-9a-f]{64}$/.test(ref)
++    ? [["e", ref]]
++    : [];
+   await publishNutzap(pubkey, proofs, comment, refTags);
+   useTokensStore().addPaidToken({
+     amount: -amount,
+-- 
+2.53.0
+

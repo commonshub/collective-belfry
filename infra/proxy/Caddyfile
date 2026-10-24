@@ -174,7 +174,8 @@ vote.{$BELFRY_DOMAIN} {
 	reverse_proxy vote:8080
 }
 
-# Community apps: the directory and the marketplace (services/village, one process, two ports).
+# Community apps: the directory, the marketplace and the photos (services/village, one process,
+# three ports).
 people.{$BELFRY_DOMAIN} {
 	import security
 	reverse_proxy village:8080
@@ -183,6 +184,11 @@ people.{$BELFRY_DOMAIN} {
 market.{$BELFRY_DOMAIN} {
 	import security
 	reverse_proxy village:8081
+}
+
+photos.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy village:8082
 }
 
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status

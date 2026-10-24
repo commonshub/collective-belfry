@@ -1,14 +1,15 @@
-// Belfry village apps: the directory (people.<domain>) and the marketplace (market.<domain>).
+// Belfry village apps: the directory (people.<domain>), the marketplace (market.<domain>) and the
+// photos (photos.<domain>).
 // Both are browser apps that read and write the community relay with the participant's signer;
 // this process serves them, one port each, and tells signed-in participants which keys hold an
 // active pass (the relay keeps the events of expired passes, the apps hide them).
 //
 // | Variable | Meaning |
 // | --- | --- |
-// | `PEOPLE_PORT`, `MARKET_PORT` | listen ports (8080, 8081) |
-// | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
+// | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT` | listen ports (8080, 8081, 8082) |
+// | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
 // | `ONBOARDING_URL`, `PASS_INFO_TOKEN` | the active passes: `GET <ONBOARDING_URL>/admin/active-passes` |
-// | `STATIC_ROOT` | the built web apps (`web`, with `people/dist` and `market/dist`) |
+// | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist` and `photos/dist`) |
 import { createServer } from "node:http"
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize } from "node:path"
@@ -110,7 +111,7 @@ export function createApp({ passes, publicUrl, staticDir }) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const env = process.env
-  for (const name of ["PEOPLE_PUBLIC_URL", "MARKET_PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]) {
+  for (const name of ["PEOPLE_PUBLIC_URL", "MARKET_PUBLIC_URL", "PHOTOS_PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]) {
     if (!env[name]) throw new Error(`${name} is not set`)
   }
   const passes = onboardingPasses({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
@@ -118,6 +119,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const [app, port, publicUrl] of [
     ["people", Number(env.PEOPLE_PORT || 8080), env.PEOPLE_PUBLIC_URL],
     ["market", Number(env.MARKET_PORT || 8081), env.MARKET_PUBLIC_URL],
+    ["photos", Number(env.PHOTOS_PORT || 8082), env.PHOTOS_PUBLIC_URL],
   ]) {
     const handler = createApp({ passes, publicUrl, staticDir: join(root, app, "dist") })
     createServer(handler).listen(port, () => console.log(`${app} on :${port}, public ${publicUrl}`))

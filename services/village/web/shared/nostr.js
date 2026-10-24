@@ -88,7 +88,12 @@ export const npub = pk => nip19.npubEncode(pk)
 export const isMe = pk => pk === currentPubkey()
 
 /** Upload a file to Belfry's Blossom server (BUD-02, kind-24242 authorization); returns its URL. */
-export async function uploadBlob(blob) {
+export async function uploadBlob(blob, content = "Upload a listing photo") {
+  return (await uploadDescriptor(blob, content)).url
+}
+
+/** The same upload, returning Blossom's blob descriptor ({url, sha256, type, size}). */
+export async function uploadDescriptor(blob, content) {
   if (!BLOSSOM) throw new Error("file uploads are not configured")
   const bytes = await blob.arrayBuffer()
   const x = await sha256Hex(bytes)
@@ -101,7 +106,7 @@ export async function uploadBlob(blob) {
       ["x", x],
       ["expiration", String(now + 300)],
     ],
-    content: "Upload a listing photo",
+    content,
   })
   const res = await fetch(`${BLOSSOM}/upload`, {
     method: "PUT",
@@ -110,16 +115,22 @@ export async function uploadBlob(blob) {
   })
   const body = await res.json().catch(() => ({}))
   if (!res.ok || !body.url) throw new Error(res.headers.get("x-reason") || body.message || `upload failed (${res.status})`)
-  return body.url
+  return { ...body, sha256: body.sha256 || x, type: body.type || blob.type, size: body.size ?? bytes.byteLength }
 }
 
-/** Shrink a photo to at most `max` pixels on its long side, as JPEG. */
+/** Shrink a photo to at most `max` pixels on its long side, as JPEG (which also drops EXIF and GPS). */
 export async function shrinkImage(file, max = 1600) {
-  const img = await createImageBitmap(file)
+  return (await shrinkImageWithSize(file, max)).blob
+}
+
+/** shrinkImage plus the result's width and height (for NIP-68's "dim"). */
+export async function shrinkImageWithSize(file, max = 1600) {
+  const img = await createImageBitmap(file, { imageOrientation: "from-image" })
   const scale = Math.min(1, max / Math.max(img.width, img.height))
   const canvas = document.createElement("canvas")
   canvas.width = Math.round(img.width * scale)
   canvas.height = Math.round(img.height * scale)
   canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height)
-  return new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.85))
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.85))
+  return { blob, width: canvas.width, height: canvas.height }
 }

@@ -1,14 +1,14 @@
-// Two web apps from one tree: APP=people or APP=market picks the root (web/<app>); both import
+// Three web apps from one tree: APP=people, market or photos picks the root (web/<app>); all import
 // web/shared. Built into web/<app>/dist and served by server/index.js.
 import { defineConfig } from "vite"
 
 const app = process.env.APP
-if (!["people", "market"].includes(app)) throw new Error("set APP=people or APP=market")
+if (!["people", "market", "photos"].includes(app)) throw new Error("set APP=people, APP=market or APP=photos")
 
 export default defineConfig({
   root: `${import.meta.dirname}/${app}`,
   envDir: import.meta.dirname,
-  // Keycast clients belfry-people and belfry-market (registered and trusted by bootstrap/Compose)
+  // Keycast clients belfry-people, belfry-market and belfry-photos (registered and trusted by bootstrap/Compose)
   define: {
     "import.meta.env.VITE_APP_NAME": JSON.stringify(app),
     "import.meta.env.VITE_OAUTH_CLIENT_ID": JSON.stringify(`belfry-${app}`),

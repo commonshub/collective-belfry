@@ -112,6 +112,18 @@ def market_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, (top + bottom) / 2 + r * 0.06, (bottom - top) * 0.62
 
 
+def photos_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """A camera body with its viewfinder bump and a lens ring; returns the mark's centre and size (in the lens)."""
+    top, bottom = c - r * 0.55, c + r * 0.75
+    d.rounded_rectangle((c - r, top, c + r, bottom), radius=r * 0.2, fill=ACCENT)
+    d.rounded_rectangle((c - r * 0.42, top - r * 0.28, c + r * 0.22, top + r * 0.1), radius=r * 0.08, fill=ACCENT)
+    lc, lr = (top + bottom) / 2 + r * 0.04, r * 0.5
+    # the lens: a dark ring with the accent glass inside, the mark cut into the glass
+    d.ellipse((c - lr, lc - lr, c + lr, lc + lr), fill=(0, 0, 0, 0))
+    d.ellipse((c - lr * 0.78, lc - lr * 0.78, c + lr * 0.78, lc + lr * 0.78), fill=ACCENT)
+    return c, lc, lr * 1.0
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -146,3 +158,4 @@ if __name__ == "__main__":
     render("wallet", wallet_symbol)
     render("people", people_symbol)
     render("market", market_symbol)
+    render("photos", photos_symbol)

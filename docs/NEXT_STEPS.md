@@ -345,6 +345,17 @@ User: "Let's continue with more extras" after dropping DIDs; chose photos, a dir
 
 Open: chat, calendar and vote images need a rebuild to show Directory and Market in their app bar; no moderation or reports; no notifications for sellers; not deployed on the VM.
 
+## 3v. Photos at photos.<domain> — built 2026-10-24
+
+The photos part of §3u's split. Built as a third app inside `services/village`, reusing its sign-in, signer, relay (NIP-42) and Blossom code, rather than patching an upstream NIP-68 client for Keycast SSO, the pass-gated Blossom and the AUTH-only relay (no upstream client was evaluated). Details: `services/village/README.md`, "Photos".
+
+- [x] Posts are NIP-68 pictures (kind 20): up to 8 images as `imeta` tags (`url`, `m`, `x`, `dim`, `alt`) plus `m`/`x` tags, title, caption, hashtags (`t`), place. Images are shrunk in the browser to 2048 px JPEG (drops EXIF/GPS) and uploaded to Blossom (kind 24242). Likes NIP-25 (kind 7 with `k` 20), comments NIP-22 (kind 1111), delete kind 5 with `k` 20. Feed of active passes only, hashtag filters, one person's photos. No new kinds in the policy (20, 7, 1111, 5, 24242 were in).
+- [x] Tips: 1, 5 or 10 tokens through the wallet's pay request; wallet patch 0004 turns a 64-hex `ref` into an `e` tag (NIP-61), so the picture shows "You tipped …" to the tipper and the list of tips to the photographer (only nutzaps to the photographer count).
+- [x] Compose `village` gains port 3800/8082 and `PHOTOS_PUBLIC_URL`; Caddy `photos.<domain>`; Keycast client `belfry-photos` (registered, trusted); "Photos" in `x-community-apps`; icon `brand/apps/photos-*` (a camera). The prod overlay now also closes the village's host ports (it had none for `village`).
+- [x] Checks: `npm test` 10 tests (6 new); smoke step 6q (served, bundle carries the client id and Blossom, NIP-98 bound to the photos host, kinds 20/7/1111 signed); local smoke 128 ok / 0 failed twice; `infra/scripts/photos-check.mjs` in Chromium at 390 px with two participants: upload with alt text, share, feed and hashtag, like, comment, a 1-token tip through the wallet and back, the photographer sees all three, delete.
+
+Open: animated GIFs become still JPEGs; no albums or event links (a NIP-52 calendar event could carry an `a` tag); no moderation or reports; Blossom keeps the files of deleted posts until its retention removes them.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

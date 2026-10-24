@@ -311,6 +311,7 @@ kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | len
   -v wallet_cb="${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback" \
   -v people_cb="${PEOPLE_PUBLIC_URL:-http://localhost:3600}/oauth/callback" \
   -v market_cb="${MARKET_PUBLIC_URL:-http://localhost:3700}/oauth/callback" \
+  -v photos_cb="${PHOTOS_PUBLIC_URL:-http://localhost:3800}/oauth/callback" \
   -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" <<'SQL'
 -- Keycast resolves the tenant from the Host header (KEYCAST_TENANT_DOMAIN), not the seed tenant 1.
 INSERT INTO registered_clients (tenant_id, client_id, name, allowed_redirect_uris)
@@ -321,7 +322,8 @@ FROM tenants t,
              ('belfry-vote', 'Open Source Village polls', :'vote_cb'),
              ('belfry-wallet', 'Open Source Village wallet', :'wallet_cb'),
              ('belfry-people', 'Open Source Village directory', :'people_cb'),
-             ('belfry-market', 'Open Source Village marketplace', :'market_cb')) AS c(client_id, name, cb)
+             ('belfry-market', 'Open Source Village marketplace', :'market_cb'),
+             ('belfry-photos', 'Open Source Village photos', :'photos_cb')) AS c(client_id, name, cb)
 WHERE t.domain = :'tenant'
 ON CONFLICT (tenant_id, client_id) DO UPDATE
 SET name = EXCLUDED.name, allowed_redirect_uris = EXCLUDED.allowed_redirect_uris, updated_at = NOW()

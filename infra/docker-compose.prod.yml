@@ -85,6 +85,9 @@ services:
   vote:
     ports: !reset []
     restart: unless-stopped
+  village:
+    ports: !reset []
+    restart: unless-stopped
   postgres:
     restart: unless-stopped
   redis:
