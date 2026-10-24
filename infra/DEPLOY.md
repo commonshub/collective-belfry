@@ -75,8 +75,9 @@ The admin pages answer only over Belfry's admin network, a private ZeroTier netw
 office and its login (`/odoo`, `/web`, `/web/login`, the database manager, XML/JSON-RPC),
 Authentik's admin interface and akadmin's password login, the steward pages (`/steward`) and
 Keycast's admin pages. Everywhere else they answer 403. The proxy checks the connection's address
-against `ADMIN_NETS` (the ZeroTier subnet plus Docker's ranges, so bootstrap and the smoke test on
-the VM itself keep working). Participants' pages (invites, payment, portal links, sign-in,
+against `ADMIN_NETS`: the ZeroTier subnet plus the VM's own addresses (its public IPv4 and IPv6
+and Docker's ranges), so bootstrap and the smoke test on the VM itself keep working; since the
+proxy sees real source addresses, the VM's own requests arrive from its public addresses. Participants' pages (invites, payment, portal links, sign-in,
 apps) are unaffected.
 
 1. In ZeroTier Central (https://my.zerotier.com) create a network, access control **private**,

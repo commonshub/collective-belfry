@@ -17,8 +17,11 @@ set -euo pipefail
 ZT_KEY_FPR=74A5E9C458E1A431F1DA57A71657198823E52A61
 ZT_KEY_URL="https://download.zerotier.com/contact%40zerotier.com.gpg"
 KEYRING=/usr/share/keyrings/zerotier.gpg
-# Docker's address ranges: bootstrap and the smoke test on the VM reach the proxy from there
-LOCAL_NETS="127.0.0.1/8 172.16.0.0/12"
+# The VM itself: bootstrap and the smoke test on the VM reach the proxy from its own public
+# addresses (the proxy sees real source addresses) or from Docker's ranges
+local_nets() {
+  echo "127.0.0.1/8 172.16.0.0/12 $(ip -o addr show scope global | awk '$3 == "inet" && $2 !~ /^(zt|docker|br-|veth)/ {split($4, a, "/"); printf "%s/32 ", a[1]} $3 == "inet6" && $2 !~ /^(zt|docker|br-|veth)/ {split($4, a, "/"); printf "%s/128 ", a[1]}')"
+}
 
 die() { echo "zerotier.sh: $*" >&2; exit 1; }
 
@@ -62,7 +65,7 @@ case "${1:-}" in
       echo "VM's ZeroTier addresses (admins map the public hostnames to it in their hosts file):"
       awk '{print "  " $1 "  " $2}' <<<"$nets"
       echo "Put this into infra/.env, then restart the proxy:"
-      echo "  ADMIN_NETS=\"$(awk '{print $3}' <<<"$nets" | sort -u | tr '\n' ' ')$LOCAL_NETS\""
+      echo "  ADMIN_NETS=\"$(awk '{print $3}' <<<"$nets" | sort -u | tr '\n' ' ')$(local_nets | sed 's/ *$//')\""
     else
       echo "No ZeroTier address yet: authorise this node in ZeroTier Central (and give the network an IPv4 pool)."
     fi
