@@ -13,8 +13,10 @@
 #   check uses the connection's address (remote_ip), never X-Forwarded-For.
 # - Per-IP rate limits (module caddy-ratelimit, image infra/proxy/Dockerfile) on the pages anyone
 #   can hit without an account. They are generous on purpose: at the event most participants
-#   share the venue's address. Mail flooding is limited per account in Authentik
-#   (belfry-magic-link-flow.yaml), not here.
+#   share the venue's address, which RATE_LIMIT_EXEMPT (the venue WiFi's public addresses, CIDR,
+#   space-separated) takes out of every limit. Pages that poll every 1.5 s (the door's session,
+#   pass sign-in) count about 40 requests a minute per open page. Mail flooding is limited per
+#   account in Authentik (belfry-magic-link-flow.yaml), not here.
 # - A Content-Security-Policy per browser app (scripts and connections only to Belfry's own
 #   hosts). Odoo and Authentik bring their own inline code and get none.
 {
@@ -47,11 +49,13 @@
 }
 
 # import limit <zone> <events> <window> <path> [<path> ...]: per client address; 429 beyond.
+# Addresses in RATE_LIMIT_EXEMPT are never limited (default: a documentation address, i.e. none).
 (limit) {
 	rate_limit {
 		zone {args[0]} {
 			match {
 				path {args[3:]}
+				not remote_ip {$RATE_LIMIT_EXEMPT:192.0.2.1/32}
 			}
 			key {client_ip}
 			events {args[1]}
@@ -265,8 +269,8 @@ pass.{$BELFRY_DOMAIN} {
 	import limit pass-claim 120 1m /claim/* /tokens/*
 	import limit pass-me 120 1m /me/login /me/callback
 	import limit pass-check 600 1m /check/*
-	import limit pass-bridge 300 1m /bridge/*
-	import limit pass-door 60 1m /door /door/*
+	import limit pass-bridge 1200 1m /bridge/*
+	import limit pass-door 600 1m /door /door/*
 	# the pages carry their own small inline scripts and the QR codes as data: images
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy onboarding:8100

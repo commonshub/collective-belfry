@@ -60,15 +60,15 @@ class TestMollie(BelfryCase):
         self.assertEqual(self.calls, [])
 
     def test_refund_from_mollies_dashboard_becomes_a_done_refund(self):
-        self._refunds({'id': 're_1', 'status': 'pending', 'amount': {'value': '100.00'}})
+        self._refunds({'id': 're_1', 'status': 'queued', 'amount': {'value': '100.00'}})
         self._webhook(amountRefunded={'value': '100.00'}, _links={'refunds': {}})
         refund = self.source.child_transaction_ids
         self.assertEqual(len(refund), 1)
         self.assertEqual((refund.operation, refund.provider_reference, refund.amount), ('refund', 're_1', -100.0))
         self.assertEqual(refund.state, 'pending')
         self.assertFalse(self._matches('belfry_pass.automation_refund_done', refund))
-        # Mollie processes it: the same transaction is done, which notifies the onboarding service
-        self._refunds({'id': 're_1', 'status': 'refunded', 'amount': {'value': '100.00'}})
+        # Mollie accepts it: the same transaction is done, which notifies the onboarding service
+        self._refunds({'id': 're_1', 'status': 'pending', 'amount': {'value': '100.00'}})
         self._webhook(amountRefunded={'value': '100.00'}, _links={'refunds': {}})
         self.assertEqual(self.source.child_transaction_ids, refund)
         self.assertEqual(refund.state, 'done')
@@ -80,11 +80,11 @@ class TestMollie(BelfryCase):
         self.assertFalse(self.source.child_transaction_ids)
 
     def test_refund_from_odoo_is_sent_to_mollie(self):
-        self.api[('POST', '/payments/tr_1/refunds')] = {'id': 're_2', 'status': 'pending'}
+        self.api[('POST', '/payments/tr_1/refunds')] = {'id': 're_2', 'status': 'queued'}
         refund = self.source._refund(amount_to_refund=40.0)
         self.assertEqual(self.calls[0][2]['amount']['value'], '40.00')
         self.assertEqual((refund.provider_reference, refund.state), ('re_2', 'pending'))
-        self._refunds({'id': 're_2', 'status': 'processing', 'amount': {'value': '40.00'}})
+        self._refunds({'id': 're_2', 'status': 'pending', 'amount': {'value': '40.00'}})
         self._webhook(amountRefunded={'value': '40.00'})
         self.assertEqual(self.source.child_transaction_ids, refund)
         self.assertEqual(refund.state, 'done')

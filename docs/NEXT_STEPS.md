@@ -389,7 +389,11 @@ User: "Let's do B avatars. Also add what is needed for mollie. Including the web
 - [x] Mollie: `belfry_pass` 19.0.1.9.0 depends on `payment_mollie` and adds refunds from Odoo, and on each webhook call for a paid payment reads its refunds and chargebacks from Mollie's API: refunds become refund transactions (keyed on the refund id, done when Mollie processes them, so the existing refund webhook revokes the pass; dashboard refunds included), chargebacks set `belfry_chargeback_state`, whose new automation posts to the onboarding service's `/hooks/odoo/chargeback` (open: revoke; reversed: give back a pass revoked for it); reconcile revokes open chargebacks it finds. Bootstrap configures the provider from `infra/secrets/mollie_api_key` (`test_`/`live_`) with `MOLLIE_METHODS` and re-syncs the webhook URLs on every run (new webhooks of a module upgrade got the placeholder URL before). No webhook to register at Mollie: Odoo names its own per payment.
 - [x] Checks: onboarding 189 tests, village 18, Odoo 54 (7 new, Mollie's API mocked); bootstrap with a dummy test key (module upgrade, provider in test mode, card/iDEAL/Bancontact linked, chargeback webhook URL set; disabled again afterwards); local smoke 159 ok / 0 failed (6b checks the picture and the PNG).
 
-Open: a real Mollie test payment, refund and chargeback on the VM (needs the test key; Mollie's test mode can simulate chargebacks only for some methods); the pass field `stripe_payment_intent` holds Mollie's `tr_…` id for Mollie payments (name kept); the VM's participants get the avatar with `publish-starter-events`.
+On the VM (Mollie test key, test card in headless Chromium): payment → Mollie's webhook → invoice paid, pass active; a chargeback from Mollie's test page → pass revoked ("chargeback"). Mollie keeps refunds `pending` (test mode always, live mode until the next business day), so a pending refund now counts as done and revokes the pass. Only "Card" is offered while the VM's Odoo is in USD (iDEAL and Bancontact need EUR).
+
+Rate limits (user, 2026-10-25: about 100 participants a day, one venue WiFi): `RATE_LIMIT_EXEMPT` (the venue's public addresses) takes them out of every per-IP limit; the door (`/door`, polled every 1.5 s, about 40 requests a minute per open page) goes from 60 to 600 a minute, pass sign-in (`/bridge`) from 300 to 1200.
+
+Open: the pass field `stripe_payment_intent` holds Mollie's `tr_…` id for Mollie payments (name kept); the VM's participants get the avatar with `publish-starter-events`.
 
 ## 4. Next
 

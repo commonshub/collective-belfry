@@ -6,10 +6,12 @@ from odoo.addons.payment.const import CURRENCY_MINOR_UNITS
 
 _logger = logging.getLogger(__name__)
 
-# Mollie refund statuses (https://docs.mollie.com/reference/get-refund): money on its way back
-# counts as a done refund (the pass is revoked), queued and pending ones can still be canceled.
-REFUND_DONE = {'processing', 'refunded'}
-REFUND_PENDING = {'queued', 'pending'}
+# Mollie refund statuses (https://docs.mollie.com/reference/get-refund): a refund Mollie accepted
+# counts as done (the pass is revoked at once; Mollie usually pays it out the next business day,
+# and test mode leaves refunds pending); queued ones wait for balance. A refund canceled later
+# leaves the pass revoked, a steward reactivates it.
+REFUND_DONE = {'pending', 'processing', 'refunded'}
+REFUND_PENDING = {'queued'}
 REFUND_CANCELED = {'failed', 'canceled'}
 
 
@@ -32,7 +34,7 @@ class PaymentTransaction(models.Model):
     payment, the refunds and chargebacks are read as well:
 
     - every Mollie refund becomes a refund transaction (child of the payment, keyed on the refund
-      id), done once Mollie processes it, so the automation "refund done" notifies the onboarding
+      id), done once Mollie accepted it, so the automation "refund done" notifies the onboarding
       service (refunds made in Mollie's dashboard as well as from Odoo);
     - an open chargeback sets ``belfry_chargeback_state`` to ``open``, a reversed one to
       ``reversed``; the automation "chargeback" notifies the onboarding service, which revokes the
