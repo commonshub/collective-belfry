@@ -171,12 +171,20 @@ bootstrap and the smoke test on the VM reach the proxy through the public hostna
 4. On the VM: `infra/scripts/zerotier.sh status` prints the VM's ZeroTier address and an
    `ADMIN_NETS=…` line. Put that line into `infra/.env` and recreate the proxy
    (`$C up -d proxy`).
-5. On each admin's and steward's device: install ZeroTier (desktop, Android, iOS), join the
-   network, authorise the device in ZeroTier Central, and point the hostnames at the VM's
-   ZeroTier address in the hosts file, for example
-   `10.147.17.10 shop.<domain> login.<domain> pass.<domain> apps.<domain>`. The TLS certificates
-   stay valid (same names). On phones without a hosts file, use ZeroTier's DNS setting in Central.
-6. Check from outside the network: `https://pass.<domain>/steward` answers 403; from inside it
+5. On the VM: `infra/scripts/zerotier.sh dns`. It runs dnsmasq on the ZeroTier interface only
+   (never on the public one): every `*.<domain>` name answers with the VM's ZeroTier address,
+   other names are forwarded to the VM's resolver. It prints the DNS settings for the network;
+   enter them in ZeroTier Central (network › DNS: search domain `<domain>`, server the VM's
+   ZeroTier address). `zerotier.sh status` checks that it answers.
+6. On each admin's and steward's device: install ZeroTier (desktop, Android, iOS), join the
+   network, authorise the device in ZeroTier Central and allow DNS for the network in the
+   ZeroTier app. The devices then reach every Belfry hostname over ZeroTier, with the same TLS
+   certificates (same names). If the network's DNS setting is not available, set the VM's
+   ZeroTier address as custom DNS in the device's ZeroTier app, or on a laptop map the names in
+   the hosts file (`10.147.17.10 shop.<domain> login.<domain> pass.<domain> apps.<domain>`).
+   On Android, "Private DNS" with a fixed hostname and Chrome's "Use secure DNS" with another
+   provider bypass ZeroTier's DNS: set them to Automatic/Off and "your current provider".
+7. Check from outside the network: `https://pass.<domain>/steward` answers 403; from inside it
    leads to the sign-in.
 
 Stewards who work at the door from a phone need ZeroTier on that phone. Opening UDP 9993 in the
