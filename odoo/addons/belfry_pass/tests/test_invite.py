@@ -75,6 +75,19 @@ class TestInviteFlow(HttpCase):
         self.assertIn('240.00', response.text, "company price shown")
         self.assertIn('csrf_token', response.text)
 
+    def test_share_preview_names_the_village(self):
+        # link previews (Signal, WhatsApp) read the title and the Open Graph tags
+        self.invite.inviter_name = "Steward Sam"
+        page = self._get(self.invite.token).text
+        self.assertIn('<title>You are invited to Open Source Village</title>', page)
+        self.assertNotIn('<title>Odoo</title>', page)
+        self.assertIn('property="og:title" content="You are invited to Open Source Village"', page)
+        self.assertIn('property="og:description" content="Steward Sam invited you.', page)
+        self.assertRegex(page, r'property="og:image" content="[^"]*/brand/web-app-manifest-512x512\.png"')
+        gone = self._get('no-such-token').text
+        self.assertIn('<title>You are invited to Open Source Village</title>', gone)
+        self.assertIn('content="An invitation to Open Source Village.', gone)
+
     def test_unknown_token(self):
         self.assertEqual(self._get('no-such-token').status_code, 404)
 

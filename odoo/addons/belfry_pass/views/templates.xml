@@ -6,8 +6,23 @@
          <belfry.public_url>/brand (brand/tokens.css holds the values repeated here as fallbacks).
          Odoo's back office (stewards' admin and accounting) is not touched. -->
     <template id="brand_frontend_layout" name="Open Source Village frontend layout" inherit_id="web.frontend_layout">
+        <!-- Odoo falls back to the title "Odoo", which is what link previews (Signal, WhatsApp,
+             mail clients) showed for a shared invite link. Pages may set title and share_description. -->
+        <xpath expr="//title" position="replace">
+            <title t-esc="title or 'Open Source Village'"/>
+        </xpath>
         <xpath expr="//head" position="inside">
             <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>
+            <meta property="og:site_name" content="Open Source Village"/>
+            <meta property="og:type" content="website"/>
+            <meta property="og:title" t-att-content="title or 'Open Source Village'"/>
+            <meta property="og:description" t-att-content="share_description or 'Open Source Village, run by Belfry'"/>
+            <meta name="description" t-att-content="share_description or 'Open Source Village, run by Belfry'"/>
+            <meta property="og:image" t-att-content="belfry_brand_url + '/web-app-manifest-512x512.png'"/>
+            <meta property="og:image:width" content="512"/>
+            <meta property="og:image:height" content="512"/>
+            <meta property="og:image:alt" content="Open Source Village"/>
+            <meta name="twitter:card" content="summary"/>
             <meta name="color-scheme" content="dark"/>
             <meta name="theme-color" content="#2b3a31"/>
             <link rel="icon" type="image/svg+xml" t-att-href="belfry_brand_url + '/favicon.svg'"/>
@@ -73,6 +88,8 @@
             <t t-set="no_header" t-value="True"/>
             <t t-set="no_footer" t-value="True"/>
             <t t-set="pageName" t-value="'belfry_invite'"/>
+            <t t-set="title" t-value="'You are invited to Open Source Village'"/>
+            <t t-set="share_description" t-value="'%s invited you. Pick a pass to join the village.' % invite.inviter_name if invite and invite.inviter_name else 'An invitation to Open Source Village. Pick a pass to join the village.'"/>
             <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>
             <div id="wrap" class="oe_structure">
                 <div class="container py-5" style="max-width: 760px;">

@@ -16,7 +16,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Invites from participants (a limited number per active pass), belfry.feedback from the feedback page
 - belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.11.0',
+    'version': '19.0.1.13.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',
