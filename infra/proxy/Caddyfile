@@ -17,6 +17,10 @@
 #   space-separated) takes out of every limit. Pages that poll every 1.5 s (the door's session,
 #   pass sign-in) count about 40 requests a minute per open page. Mail flooding is limited per
 #   account in Authentik (belfry-magic-link-flow.yaml), not here.
+# - Errors the proxy answers itself (admin pages from outside ADMIN_NETS, closed paths, rate
+#   limits, a service that is down) are a branded page for browsers (errors/error.html, rendered
+#   by Caddy's templates) and the plain message for other clients. Errors a service answers
+#   itself pass through.
 # - A Content-Security-Policy per browser app (scripts and connections only to Belfry's own
 #   hosts). Odoo and Authentik bring their own inline code and get none.
 {
@@ -37,6 +41,27 @@
 		-Server
 	}
 	encode zstd gzip
+	import errors
+}
+
+# Browsers (Accept: text/html) get errors/error.html with the status code; API clients, wallets
+# and relays get the message as plain text, as before.
+(errors) {
+	handle_errors {
+		@page header Accept *text/html*
+		handle @page {
+			root * /etc/caddy/errors
+			rewrite * /error.html
+			header Cache-Control no-store
+			templates
+			file_server {
+				status {err.status_code}
+			}
+		}
+		handle {
+			respond "{err.message}" {err.status_code}
+		}
+	}
 }
 
 # import admin_only <path> [<path> ...]: those paths only from ADMIN_NETS (once per site).
@@ -45,7 +70,7 @@
 		path {args[:]}
 		not remote_ip {$ADMIN_NETS:127.0.0.1/8 172.16.0.0/12}
 	}
-	respond @outside_admin_net "This page is only reachable over Belfry's admin network." 403
+	error @outside_admin_net "This page is for stewards and admins and opens only over Belfry's admin network. Connect to it and reload the page." 403
 }
 
 # import limit <zone> <events> <window> <path> [<path> ...]: per client address; 429 beyond.
@@ -73,7 +98,7 @@
 # (for the start page) on the apex; the same rules on both hosts.
 (onboarding_site) {
 	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
-	respond @internal 404
+	error @internal 404
 	import admin_only /steward /steward/*
 	import limit {args[0]}-claim 120 1m /claim/* /tokens/*
 	import limit {args[0]}-me 120 1m /me/login /me/callback /me/invites /me/invites/*
@@ -113,7 +138,7 @@ apps.{$BELFRY_DOMAIN} {
 	# Admin API only for the onboarding service (Compose network); the dev mail inbox
 	# (ENABLE_DEV_EMAIL_INBOX, read by bootstrap to confirm the admin) must never be public.
 	@admin path /api/admin/* /api/dev/*
-	respond @admin 404
+	error @admin 404
 	import admin_only /admin /admin/*
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data:; connect-src 'self' https://login.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy keycast:3000
@@ -169,7 +194,7 @@ chat.{$BELFRY_DOMAIN} {
 mint.{$BELFRY_DOMAIN} {
 	import security
 	@closed path /v1/mint/* /v1/melt/*
-	respond @closed "Minting and melting are closed: tokens come with the pass." 403
+	error @closed "Minting and melting are closed: tokens come with the pass." 403
 	reverse_proxy mint:8085
 }
 
@@ -191,7 +216,7 @@ bunker.{$BELFRY_DOMAIN} {
 issuer.{$BELFRY_DOMAIN} {
 	import security
 	@management path /issuer2/*
-	respond @management 404
+	error @management 404
 	import limit issuer 300 1m /openid4vci/* /.well-known/*
 	# Issuer2 serves its metadata only at the RFC 8615 place (/.well-known/<name>/openid4vci);
 	# walt.id's web wallet and other draft-13 wallets append it to the issuer URL instead.
@@ -238,7 +263,7 @@ verifier.{$BELFRY_DOMAIN} {
 		reverse_proxy verifier:7004
 	}
 	handle {
-		respond 404
+		error 404
 	}
 }
 

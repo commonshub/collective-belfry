@@ -49,3 +49,38 @@ def test_api_errors_stay_json(client):
     r = client.post("/hooks/odoo/invoice-paid", headers={"Accept": "text/html"}, json={})
     assert r.status_code == 401
     assert r.json() == {"detail": "invalid token"}
+
+
+def test_page_errors_are_branded_for_browsers(client):
+    # A GET a browser opens: the branded page with the route's status; API clients keep JSON.
+    r = client.get("/admin/partners/1/pass", headers={"Accept": "text/html"})
+    assert r.status_code in (401, 503)
+    assert r.headers["content-type"].startswith("text/html")
+    assert f"Error {r.status_code}" in r.text and "run by Belfry" in r.text
+    r = client.get("/admin/partners/1/pass", headers={"Accept": "application/json"})
+    assert "detail" in r.json()
+
+
+def test_malformed_link_is_branded_for_browsers(client):
+    r = client.get("/admin/partners/not-a-number/pass", headers={"Accept": "text/html"})
+    assert r.status_code == 400 and "This request did not work" in r.text
+    r = client.get("/admin/partners/not-a-number/pass")
+    assert r.status_code == 422
+
+
+def test_server_error_is_branded_for_browsers(services):
+    from fastapi.testclient import TestClient
+
+    from belfry_onboarding.app import create_app
+
+    app = create_app(services)
+
+    @app.get("/boom")
+    async def boom():
+        raise RuntimeError("boom")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        r = client.get("/boom", headers={"Accept": "text/html"})
+        assert r.status_code == 500 and "Something went wrong" in r.text
+        r = client.get("/boom")
+        assert r.status_code == 500 and r.json() == {"detail": "Internal Server Error"}

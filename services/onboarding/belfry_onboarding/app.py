@@ -13,7 +13,11 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.exception_handlers import http_exception_handler
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -161,12 +165,37 @@ def create_app(services: Services | None = None) -> FastAPI:
             return RedirectResponse(str(site), status_code=302)
         return HTMLResponse(claim.home_page(settings))
 
+    def wants_html(request: Request) -> bool:
+        return "text/html" in request.headers.get("accept", "")
+
+    def is_page(request: Request) -> bool:
+        """A browser opening a page; POSTs (hooks, the API) keep their JSON errors."""
+        return request.method in ("GET", "HEAD") and wants_html(request)
+
     @app.exception_handler(StarletteHTTPException)
-    async def html_not_found(request: Request, exc: StarletteHTTPException):
-        """Browsers get a page for unknown addresses; API clients keep FastAPI's JSON errors."""
-        if exc.status_code in (404, 405) and "text/html" in request.headers.get("accept", ""):
-            return HTMLResponse(claim.not_found_page(), status_code=404)
+    async def html_errors(request: Request, exc: StarletteHTTPException):
+        """Browsers get a page for unknown addresses (as 404) and for errors of the pages they
+        open; API clients keep FastAPI's JSON errors."""
+        status = exc.status_code
+        if (status in (404, 405) and wants_html(request)) or (status >= 400 and is_page(request)):
+            status = 404 if status == 405 else status
+            return HTMLResponse(claim.error_page(status), status_code=status, headers=exc.headers)
         return await http_exception_handler(request, exc)
+
+    @app.exception_handler(RequestValidationError)
+    async def html_validation_error(request: Request, exc: RequestValidationError):
+        """A link with missing or malformed parameters (a cut-off callback URL, say)."""
+        if is_page(request):
+            return HTMLResponse(claim.error_page(400), status_code=400)
+        return await request_validation_exception_handler(request, exc)
+
+    @app.exception_handler(Exception)
+    async def html_server_error(request: Request, exc: Exception):
+        """Unhandled errors (Starlette re-raises them afterwards, so the traceback is still logged):
+        browsers get the page, others FastAPI's JSON 500."""
+        if is_page(request):
+            return HTMLResponse(claim.error_page(500), status_code=500)
+        return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
 
     @app.get("/health")
     async def health() -> dict[str, str]:

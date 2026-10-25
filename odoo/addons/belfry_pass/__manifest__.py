@@ -14,9 +14,10 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Pass certificate claim link and status list index (Phase 3), "Revoke pass" button
 - Mollie next to Stripe: refunds from Odoo, refunds and chargebacks from Mollie's webhook
 - Invites from participants (a limited number per active pass), belfry.feedback from the feedback page
+- Odoo's frontend error pages in the Open Source Village look
 - belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.13.0',
+    'version': '19.0.1.14.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',
@@ -30,6 +31,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
         'sale_loyalty',
         'base_automation',
         'portal',
+        'http_routing',
         'mail',
     ],
     'data': [
@@ -50,6 +52,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
         'views/res_partner_views.xml',
         'views/menus.xml',
         'views/templates.xml',
+        'views/error_pages.xml',
     ],
     'post_init_hook': 'post_init_hook',
     'installable': True,

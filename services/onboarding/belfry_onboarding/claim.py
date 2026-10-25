@@ -141,6 +141,61 @@ incomplete; copy the whole link, or ask a steward for a new one.</p>
     return page("Page not found", body)
 
 
+ERROR_TEXTS = {
+    400: (
+        "This request did not work",
+        "Something in the link or the form was missing or wrong. Go back and try again; if "
+        "the link came from an e-mail, copy the whole link.",
+    ),
+    401: (
+        "Sign in first",
+        "This page needs you to be signed in. Open it again from the start page.",
+    ),
+    403: (
+        "Not available here",
+        "This page is not open to you.",
+    ),
+    409: (
+        "Not possible right now",
+        "This cannot be done in the pass's current state.",
+    ),
+    429: (
+        "Too many requests",
+        "Your network sent more requests than this page takes in a minute. Wait a minute "
+        "and try again.",
+    ),
+    502: (
+        "Not reachable right now",
+        "A part of Open Source Village did not answer. Try again in a minute.",
+    ),
+    503: (
+        "Not reachable right now",
+        "This part of Open Source Village is not available right now. Try again in a minute.",
+    ),
+}
+
+
+def error_page(status: int, home: str = "/") -> str:
+    """Browsers' page for an error without a page of its own (the API keeps its JSON errors).
+    Generic texts per status: error details are for API clients and logs, not for this page."""
+    if status in (404, 405):
+        return not_found_page(home)
+    title, text = ERROR_TEXTS.get(
+        status,
+        (
+            "Something went wrong",
+            "The page could not be shown. Try again in a minute; if it keeps happening, tell us"
+            " through the feedback page.",
+        ),
+    )
+    body = f"""<div class="card" style="border-left: 4px solid var(--osv-accent-2)">
+<h1>{html.escape(title)}</h1>
+<p class="muted">{html.escape(text)}</p>
+<p><a class="btn" href="{html.escape(home)}">Go to the start page</a></p>
+<p class="muted"><small>Error {status}</small></p></div>"""
+    return page(title, body)
+
+
 # -- pass info for the community apps ------------------------------------------------------------
 
 PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}

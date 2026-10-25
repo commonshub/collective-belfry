@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Odoo's frontend error pages (http_routing) in the Open Source Village look: the same card as
+     the onboarding service's error pages (claim.error_page) and the proxy's (infra/proxy/errors),
+     no Odoo header with its "Sign in" link (the back office is for admins), a link to the start
+     page. Odoo's 500 page loads no assets by design and stays as it is. -->
+<odoo>
+    <template id="error_card" name="Open Source Village error card">
+        <t t-set="belfry_public_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '/').rstrip('/') or '/'"/>
+        <div class="container py-5" style="max-width: 640px;">
+            <p class="mb-4"><a href="https://opensourcevillage.org"><img t-att-src="(belfry_public_url if belfry_public_url != '/' else '') + '/brand/osv-logo-horizontal-white.svg'" alt="Open Source Village" style="height: 28px; width: auto;"/></a></p>
+            <div class="card p-4" style="border-left: 4px solid #f89b0e; border-radius: 12px;">
+                <h1 class="h3 mb-2" t-esc="belfry_title"/>
+                <p class="text-muted" t-esc="belfry_text"/>
+                <p class="text-muted small" t-if="error_message and not (editable or debug)" t-esc="error_message"/>
+                <p class="mb-0"><a class="btn btn-primary" t-att-href="belfry_public_url">Go to the start page</a></p>
+                <p class="small mt-3 mb-0" style="color: #8e9a91;" t-if="status_code or belfry_code">Error <t t-esc="status_code or belfry_code"/></p>
+            </div>
+            <t t-if="editable or debug"><t t-call="http_routing.http_error_debug"/></t>
+            <p class="mt-4 small" style="color: #8e9a91;">Open Source Village, run by Belfry</p>
+        </div>
+    </template>
+
+    <template id="error_400" inherit_id="http_routing.400" name="Open Source Village error 400">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="'400'"/>
+                <t t-set="belfry_title">This request did not work</t>
+                <t t-set="belfry_text">Something in the link or the form was missing or wrong. Go back and try again; if the link came from an e-mail, copy the whole link.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_403" inherit_id="http_routing.403" name="Open Source Village error 403">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="'403'"/>
+                <t t-set="belfry_title">Not available here</t>
+                <t t-set="belfry_text">This page is not open to you. If it came from an e-mail, sign in from the start page and open it again.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_404" inherit_id="http_routing.404" name="Open Source Village error 404">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="'404'"/>
+                <!-- werkzeug's "The requested URL was not found on the server..." says the same -->
+                <t t-set="error_message" t-value="False"/>
+                <t t-set="belfry_title">Page not found</t>
+                <t t-set="belfry_text">This address does not lead anywhere. If it came from an e-mail, the link may be incomplete; copy the whole link, or ask a steward for a new one.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_415" inherit_id="http_routing.415" name="Open Source Village error 415">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="'415'"/>
+                <t t-set="belfry_title">This request did not work</t>
+                <t t-set="belfry_text">The page cannot handle what was sent. Go back and try again.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_422" inherit_id="http_routing.422" name="Open Source Village error 422">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="'422'"/>
+                <t t-set="belfry_title">This request did not work</t>
+                <t t-set="belfry_text">Something in the form was not accepted. Go back and try again.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_4xx" inherit_id="http_routing.4xx" name="Open Source Village error 4xx">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_code" t-value="''"/>
+                <t t-set="belfry_title">This request did not work</t>
+                <t t-set="belfry_text">The page could not be shown. Go back and try again; if it keeps happening, tell us through the feedback page.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+
+    <template id="error_http" inherit_id="http_routing.http_error" name="Open Source Village HTTP error">
+        <xpath expr="//div[@id='wrap']" position="replace">
+            <t t-set="no_header" t-value="True"/>
+            <t t-set="no_footer" t-value="True"/>
+            <div id="wrap">
+                <t t-set="belfry_title">Something went wrong</t>
+                <t t-set="belfry_text">The page could not be shown. Try again in a minute; if it keeps happening, tell us through the feedback page.</t>
+                <t t-call="belfry_pass.error_card"/>
+            </div>
+        </xpath>
+    </template>
+</odoo>

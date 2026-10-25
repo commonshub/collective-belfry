@@ -490,6 +490,17 @@ Open: only NIP-07 extensions, on the invite page and in the wallet (no bunker or
 those join with a managed key and move later); the other apps' own-signer sign-in was there
 before (§3s) and was not re-tested with a participant who joined with their key.
 
+## 3zc. Branded error pages — built 2026-10-25
+
+User: the plain-text "This page is only reachable over Belfry's admin network." on `pass.<domain>/steward` should look like the rest; review the other error pages too.
+
+- [x] Proxy: every error Caddy answers itself (admin paths from outside `ADMIN_NETS`, closed internal paths, the mint's closed mint/melt, rate limits, a service that is down) goes through `handle_errors` in the `security` snippet: browsers (`Accept: text/html`) get `infra/proxy/errors/error.html` (Caddy template, status-specific title and text, the `error` directive's message for 403s, logo inline because most hosts' CSP allows no images from `pass.`), other clients the plain message as before. `respond` became `error` for those paths. Errors a service answers itself pass through.
+- [x] Onboarding service: browsers opening a page (GET with `text/html`) get `claim.error_page(status)` for every HTTP error, malformed parameters (400 instead of FastAPI's 422 JSON) and unhandled exceptions (500); POSTs and API clients keep the JSON errors. 3 new tests (205).
+- [x] Odoo `belfry_pass` 19.0.1.14.0: `views/error_pages.xml` replaces http_routing's 400/403/404/415/422/4xx and generic pages with the same card, without Odoo's header and its "Sign in" link (the back office is admin-only). Odoo's 500 page loads no assets by design and stays. 1 new test.
+- Checked: a throwaway proxy with `tls internal` on the stack's network (403 admin page, 404 closed paths on four hosts, 429 after the feedback limit, 502 for a missing upstream; plain text for curl without `Accept: text/html`; the host's CSP kept on the error page); screenshots at 390 px of the proxy, onboarding and Odoo pages.
+
+Not changed: Keycast's error pages were branded in patch 0010; Authentik's own denial page (a participant at the steward app) uses the brand blueprint's CSS; the village and vote apps answer unknown paths with their app; an Odoo portal link with a wrong access token redirects to `/my` → the admin-only login, which now shows the branded admin-network 403.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

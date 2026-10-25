@@ -8,3 +8,4 @@ from . import test_report
 from . import test_mollie
 from . import test_friends
 from . import test_own_key
+from . import test_error_pages
