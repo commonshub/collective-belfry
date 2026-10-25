@@ -312,6 +312,18 @@ if [[ -n "$MOLLIE_API_KEY" ]]; then
   MP_VALS=$(jq -cn --arg state "$MOLLIE_STATE" '{mollie_api_key: $ENV.MOLLIE_API_KEY, state: $state, is_published: true}')
   odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider write "[[$MP_ID],$MP_VALS]" >/dev/null
   METHODS=$(jq -cn --arg m "${MOLLIE_METHODS:-card,ideal,bancontact}" '$m | split(",") | map(select(length > 0))')
+  # Offer only what the Mollie account has enabled (Mollie refuses the others at checkout with
+  # "The payment method is not enabled in your website profile"); Odoo codes differ for a few.
+  ENABLED=$(curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$MOLLIE_API_KEY") \
+    "https://api.mollie.com/v2/methods?amount%5Bvalue%5D=10.00&amount%5Bcurrency%5D=${COMPANY_CURRENCY:-EUR}" | jq -c '[._embedded.methods[]?.id]' 2>/dev/null || echo '[]')
+  MOLLIE_CODE='{"card":"creditcard","apple_pay":"applepay","bank_transfer":"banktransfer","kbc_cbc":"kbc","p24":"przelewy24","sepa_direct_debit":"directdebit"}'
+  SKIPPED=$(jq -cn --argjson m "$METHODS" --argjson e "$ENABLED" --argjson c "$MOLLIE_CODE" '$m | map(select(($c[.] // .) as $x | $e | index($x) | not))')
+  if [[ "$ENABLED" != "[]" && "$SKIPPED" != "[]" ]]; then
+    echo "WARNING: not enabled in the Mollie account, not offered: $(jq -r 'join(", ")' <<<"$SKIPPED") (enable them in Mollie's dashboard, Settings › Payment methods, then run bootstrap again)" >&2
+    SKIP_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.method search "[[[\"code\",\"in\",$SKIPPED],[\"active\",\"in\",[true,false]]]]" | jq -c '.')
+    [[ "$SKIP_IDS" == "[]" ]] || odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider write "[[$MP_ID],{\"payment_method_ids\":$(jq -c 'map([3, .])' <<<"$SKIP_IDS")}]" >/dev/null
+    METHODS=$(jq -cn --argjson m "$METHODS" --argjson s "$SKIPPED" '$m - $s')
+  fi
   PM_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.method search "[[[\"code\",\"in\",$METHODS],[\"active\",\"in\",[true,false]]]]" | jq -c '.')
   if [[ "$PM_IDS" != "[]" ]]; then
     odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.method write "[$PM_IDS,{\"active\":true}]" >/dev/null
