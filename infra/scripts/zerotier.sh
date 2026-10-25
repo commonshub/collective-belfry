@@ -122,12 +122,14 @@ case "${1:-}" in
     [[ -n "$dev" ]] || die "no interface for network $nwid"
     # Only on the ZeroTier interface, never the public one (no open resolver); bind-dynamic, so
     # dnsmasq starts at boot before ZeroTier has brought the interface up. Other names go to
-    # systemd-resolved's stub. Written before dnsmasq is installed: its first start then does not
+    # systemd-resolved's stub. `local=` keeps the domain's other record types from being
+    # forwarded: an AAAA query would get the public IPv6 address, the device would prefer it
+    # and the proxy would see a public source. Written before dnsmasq is installed: its first start then does not
     # try port 53 on every address.
     sudo mkdir -p /etc/dnsmasq.d
     printf '%s\n' "# Written by infra/scripts/zerotier.sh dns: the admin network's DNS (infra/DEPLOY.md)." \
       "interface=$dev" except-interface=lo bind-dynamic no-resolv no-hosts server=127.0.0.53 \
-      domain-needed bogus-priv cache-size=1000 "address=/$domain/$ip" \
+      domain-needed bogus-priv cache-size=1000 "local=/$domain/" "address=/$domain/$ip" \
       | sudo tee "$DNS_CONF" >/dev/null
     if ! dpkg -s dnsmasq >/dev/null 2>&1; then
       sudo apt-get update -q && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q dnsmasq
