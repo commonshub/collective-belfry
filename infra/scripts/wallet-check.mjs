@@ -3,7 +3,9 @@
 //   1. A opens the wallet with their Authentik session (COOKIE_JAR): silent sign-in, the seed and
 //      the nutzap key derive from A's Nostr key, kind 10019 is published ("others can send you
 //      tokens"); with PASS_TOKENS=<n> the pass's n tokens come in on their own (and only once);
-//      a token link (TOKEN=cashuB…, e.g. from the pass's tokens page) is received.
+//      a token link (TOKEN=cashuB…, e.g. from the pass's tokens page) is received; Receive shows
+//      the pay-link QR; with PICK=1, A sends 1 token to the first participant listed in the
+//      directory (after village-check.mjs, that is B).
 //   2. With SECOND_JAR (B's Authentik session) and SECOND_PUB (B's pubkey hex): B opens the
 //      wallet too, A sends B 5 tokens with "Send to a participant" (a NIP-61 nutzap), and B's
 //      wallet redeems it.
@@ -138,6 +140,31 @@ try {
     console.log(`  ok   A: token link received (balance ${before} -> ${await balance(a)})`)
     await a.shot("received")
   }
+  // Receive: a QR of the participant's pay link (patch 0009)
+  await a.evaluate(`[...document.querySelectorAll("button")].find(b => b.innerText.trim() === "RECEIVE").click()`)
+  await a.waitFor(`document.body.innerText.includes("Receive tokens") && !!document.querySelector(".village-qr canvas, .village-qr img")`, 15000, "the receive dialog with the QR")
+  console.log("  ok   A: Receive shows the pay-link QR")
+  await sleep(800) // the dialog's fade-in
+  await a.shot("receive")
+  await a.send("Page.navigate", {url: walletUrl})
+  await a.waitFor(READY, 60000, "the signed-in card again")
+  if (process.env.PICK) {
+    // Send: pick a participant listed in the directory (someone must be listed and have opened
+    // the wallet, e.g. B after infra/scripts/village-check.mjs)
+    await a.evaluate(`document.querySelector('[data-testid="village-send"]').click()`)
+    await a.waitFor(`[...document.querySelectorAll(".village-people .q-item")].some(i => !i.classList.contains("disabled"))`, 20000, "the directory list in the send dialog")
+    await sleep(500)
+    await a.shot("pick")
+    const picked = await a.evaluate(`(() => { const i = [...document.querySelectorAll(".village-people .q-item")].find(i => !i.classList.contains("disabled")); const name = i.querySelector(".q-item__label").innerText.trim(); i.click(); return name })()`)
+    await a.waitFor(`!!document.querySelector(".village-chosen")`, 5000, "the chosen participant")
+    await a.evaluate(`(() => { const i = document.querySelector('input[data-testid="village-amount"], [data-testid="village-amount"] input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, "1"); i.dispatchEvent(new Event("input", {bubbles: true})); return true })()`)
+    await a.evaluate(`document.querySelector('[data-testid="village-send-confirm"]').click()`)
+    await a.waitFor(`document.body.innerText.includes("Sent 1 token")`, 30000, "the sent notice")
+    console.log(`  ok   A: picked ${JSON.stringify(picked)} from the directory and sent 1 token`)
+    await sleep(6000)
+    if (!(await text(a)).includes(`To ${picked}`)) throw new Error("A's history does not name the recipient")
+    console.log("  ok   A: history says whom it went to")
+  }
   if (process.env.SECOND_JAR && process.env.SECOND_PUB) {
     const b = await openSignedIn("B", process.env.SECOND_JAR)
     const bBefore = (await balance(b)) ?? 0
@@ -151,12 +178,15 @@ try {
     await a.evaluate(`document.querySelector('[data-testid="village-send-confirm"]').click()`)
     await a.waitFor(`document.body.innerText.includes("Sent 5 tokens")`, 30000, "the sent notice")
     console.log("  ok   A: sent 5 tokens to B as a nutzap (kind 9321 on the community relay)")
-    await b.waitFor(`document.body.innerText.includes("Received 5 tokens")`, 45000, "B redeeming the nutzap")
+    await b.waitFor(`document.body.innerText.includes("Received 5 tokens from")`, 45000, "B redeeming the nutzap")
     await sleep(1500)
     console.log(`  ok   B: nutzap redeemed (balance ${bBefore} -> ${await balance(b)})`)
     await b.shot("nutzap")
     await sleep(7000) // notifications gone: the layout under the app bar
     await b.shot("settled")
+    // the history names the sender instead of "Ecash"
+    if (!/From \S/.test(await text(b))) throw new Error("B's history does not name the sender")
+    console.log("  ok   B: history says who sent it")
     const spentErrors = (await text(b)).includes("Already Spent")
     if (spentErrors) throw new Error("B: an old nutzap was redeemed again (Already Spent)")
   }

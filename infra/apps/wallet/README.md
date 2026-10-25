@@ -1,7 +1,7 @@
 # Village token wallet
 
 The Open Source Village wallet at `wallet.<domain>`: [cashu.me](https://github.com/cashubtc/cashu.me)
-(MIT, Vue/Quasar PWA) at commit `002a0a36` plus eight Belfry patches, built with the village mint
+(MIT, Vue/Quasar PWA) at commit `002a0a36` plus nine Belfry patches, built with the village mint
 (`infra/mint/`) and served by Caddy. Village tokens have no monetary value; every pass brings 50 per
 pass day. Participants send them to each other as nutzaps (NIP-61), and the wallet's keys derive
 from the participant's Nostr key, so it restores on any device after signing in. Participants who
@@ -17,6 +17,7 @@ hold their own key sign in with their own signer instead (patch 0007).
 | `0006-…` | Geist, self-hosted from `brand/` (the image build copies it to `/belfry/` and `brand.mjs` links it), instead of Inter from Google Fonts, which the deployment's CSP blocks. |
 | `0007-…` | The participant's own signer, for those who joined with their own key or moved to it: "Use your own signer" (a NIP-07 browser extension with NIP-44) next to "Sign in with Open Source Village", which Keycast answers with `self_custody` for them (the card then says so). Nothing derives the wallet's keys from an own key, so the wallet makes a random seed and nutzap key once and keeps them on the community relay as kind 30078 (`d` = `osv-wallet`), the content NIP-44-encrypted to the participant's own key; another device signed in with the same signer reads it back (a backup it cannot read is never replaced). Signing (NIP-42 AUTH, 10019, 9321) goes to the extension; sign out only forgets the session. |
 | `0008-…` | The pass's tokens arrive on sign-in: after signing in (Keycast or own signer) the wallet asks the onboarding service (`BELFRY_PASS_URL`, `GET /wallet/pass-tokens`, a NIP-98 event signed with the participant's key) for the token bundles of the key's active passes that are still unspent and redeems them, so the separate "Get your tokens" link is no longer needed (it still works, and for other Cashu wallets). The settings drop cashu.me's Lightning address (npub.cash), its Nostr keys, relays and web of trust, Nostr Wallet Connect and Nostr payment requests. |
+| `0009-…` | Receive and Send between participants. Send picks someone from the Directory (the kind-30078 `osv-directory` opt-ins on the community relay, with name and picture; people whose wallet has no 10019 yet are shown but cannot be chosen) or takes an npub or name@domain as before. Receive shows a QR of `<wallet>/?pay=<npub>`, which opens the payer's wallet ready to send (phone camera, or the wallet's scan button, which now recognises it). Token strings stay one tap further ("… a token string instead"). History says "From your day pass", "From <name>" and "To <name>" instead of "Ecash"; a line under the account explains the tokens; the Mints tab is hidden. |
 
 `brand.mjs` (run by the Dockerfile) sets the PWA name "Open Source Village wallet"/"Wallet", the
 colours, the home-screen icons (`brand/apps/wallet-*`, from `brand/make-app-icons.py`) and the app bar

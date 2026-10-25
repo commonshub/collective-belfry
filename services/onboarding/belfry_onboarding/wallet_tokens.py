@@ -68,7 +68,7 @@ def pass_tokens(svc: Services, pubkey: str) -> list[dict[str, Any]]:
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["cashu_token", "!=", False]],
-        ["id", "cashu_token", "cashu_amount"],
+        ["id", "cashu_token", "cashu_amount", "tier"],
     )
     out = []
     for row in rows:
@@ -82,6 +82,7 @@ def pass_tokens(svc: Services, pubkey: str) -> list[dict[str, Any]]:
                 "pass_id": row["id"],
                 "amount": row["cashu_amount"] or 0,
                 "token": row["cashu_token"],
+                "tier": row.get("tier") or "",
                 "state": state,
             }
         )
@@ -127,6 +128,10 @@ def register(app: FastAPI) -> None:
                 "wallet: pass tokens for %s (passes %s)", pubkey, [t["pass_id"] for t in tokens]
             )
         return JSONResponse(
-            {"tokens": [{"amount": t["amount"], "token": t["token"]} for t in tokens]},
+            {
+                "tokens": [
+                    {"amount": t["amount"], "token": t["token"], "tier": t["tier"]} for t in tokens
+                ]
+            },
             headers=cors(request),
         )

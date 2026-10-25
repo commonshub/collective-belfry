@@ -290,7 +290,7 @@ def test_wallet_gets_the_pass_tokens_once(mint_services, odoo, mint, client):
 
     r = client.get("/wallet/pass-tokens", headers={"Authorization": nip98(key, url)})
     assert r.status_code == 200
-    assert r.json() == {"tokens": [{"amount": 50, "token": p["cashu_token"]}]}
+    assert r.json() == {"tokens": [{"amount": 50, "token": p["cashu_token"], "tier": "day"}]}
     assert r.headers["access-control-allow-origin"] == "https://wallet.belfry.test"
     pre = client.options("/wallet/pass-tokens")
     assert pre.status_code == 204 and "Authorization" in pre.headers["access-control-allow-headers"]

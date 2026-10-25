@@ -1,0 +1,889 @@
+From 22c6e559024264ddc05c225bfa02e0599e3c9baa Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sun, 25 Oct 2026 18:09:10 +0100
+Subject: [PATCH 9/9] Belfry: send to someone from the directory, receive by
+ QR, clearer history
+
+Receive and Send on the wallet page are between participants: Send picks someone from the
+Directory (kind-30078 opt-ins on the community relay, with name and picture; those whose wallet
+has no 10019 yet are shown but cannot be chosen), or takes an npub or name@domain as before;
+Receive shows a QR of <wallet>/?pay=<npub> that opens the payer's wallet (phone camera or the
+wallet's scan button, which now recognises it) ready to send to this participant. Token strings
+stay one tap further. History says "From your day pass", "From <name>" and "To <name>"
+instead of "Ecash"; a line under the account explains the tokens; the Mints tab is hidden.
+---
+ src/belfry/people.ts                  | 126 +++++++++
+ src/belfry/village.ts                 |  45 ++-
+ src/components/belfry/VillageCard.vue | 379 ++++++++++++++++++++++----
+ src/pages/WalletPage.vue              |  66 ++++-
+ 4 files changed, 547 insertions(+), 69 deletions(-)
+ create mode 100644 src/belfry/people.ts
+
+diff --git a/src/belfry/people.ts b/src/belfry/people.ts
+new file mode 100644
+index 0000000..4dd8d96
+--- /dev/null
++++ b/src/belfry/people.ts
+@@ -0,0 +1,126 @@
++// Belfry: the participants to send tokens to, from the Directory (services/village): those who
++// chose to be listed (kind 30078, d = "osv-directory", content {"listed": true}; the newest per
++// author counts), with their kind-0 profile and whether their wallet can receive (a kind 10019).
++// Read from the community relay the wallet is connected to anyway (nutzap.ts).
++
++import type { Event } from "nostr-tools";
++import { nip19 } from "nostr-tools";
++import { getSession } from "./sso";
++import { communityRelay } from "./nutzap";
++
++export type Participant = {
++  pubkey: string;
++  name: string;
++  picture: string;
++  nip05: string;
++  canReceive: boolean;
++};
++
++const DIRECTORY_D = "osv-directory";
++
++async function fetchAll(filter: Record<string, unknown>): Promise<Event[]> {
++  const relay = await communityRelay();
++  return new Promise((resolve) => {
++    const events: Event[] = [];
++    const done = () => {
++      sub.close();
++      resolve(events);
++    };
++    const sub = relay.subscribe([filter as any], {
++      onevent: (e) => events.push(e),
++      oneose: done,
++    });
++    setTimeout(done, 6000);
++  });
++}
++
++function newestByAuthor(events: Event[]): Map<string, Event> {
++  const out = new Map<string, Event>();
++  for (const e of events) {
++    const prev = out.get(e.pubkey);
++    if (!prev || e.created_at > prev.created_at) out.set(e.pubkey, e);
++  }
++  return out;
++}
++
++function parseProfile(event?: Event) {
++  try {
++    const c = JSON.parse(event?.content || "{}") || {};
++    const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
++    const picture = str(c.picture);
++    return {
++      name: str(c.display_name) || str(c.displayName) || str(c.name),
++      picture: /^https:\/\//.test(picture) ? picture : "",
++      nip05: str(c.nip05),
++    };
++  } catch {
++    return { name: "", picture: "", nip05: "" };
++  }
++}
++
++export function shortNpub(pubkey: string): string {
++  const npub = nip19.npubEncode(pubkey);
++  return `${npub.slice(0, 10)}…${npub.slice(-4)}`;
++}
++
++const names = new Map<string, string>();
++
++/** A participant's display name (their profile), or a shortened npub. */
++export async function participantName(pubkey: string): Promise<string> {
++  if (names.has(pubkey)) return names.get(pubkey) as string;
++  let name = "";
++  try {
++    const [profile] = [
++      ...newestByAuthor(
++        await fetchAll({ kinds: [0], authors: [pubkey] })
++      ).values(),
++    ];
++    const p = parseProfile(profile);
++    name = p.name || p.nip05.split("@")[0];
++  } catch {
++    // the relay is not reachable: the npub will do
++  }
++  name = name || shortNpub(pubkey);
++  names.set(pubkey, name);
++  return name;
++}
++
++/** The listed participants (not the signed-in one), by name. */
++export async function listedParticipants(): Promise<Participant[]> {
++  const me = getSession()?.pubkey;
++  const consents = newestByAuthor(
++    await fetchAll({ kinds: [30078], "#d": [DIRECTORY_D] })
++  );
++  const listed = [...consents.values()]
++    .filter((e) => {
++      try {
++        return JSON.parse(e.content || "{}").listed === true;
++      } catch {
++        return false;
++      }
++    })
++    .map((e) => e.pubkey)
++    .filter((pk) => pk !== me);
++  if (!listed.length) return [];
++  const [profiles, wallets] = await Promise.all([
++    fetchAll({ kinds: [0], authors: listed }),
++    fetchAll({ kinds: [10019], authors: listed }),
++  ]);
++  const byAuthor = newestByAuthor(profiles);
++  const receiving = new Set(wallets.map((e) => e.pubkey));
++  const people = listed.map((pubkey) => {
++    const p = parseProfile(byAuthor.get(pubkey));
++    const name = p.name || p.nip05.split("@")[0] || shortNpub(pubkey);
++    names.set(pubkey, name);
++    return {
++      pubkey,
++      name,
++      picture: p.picture,
++      nip05: p.nip05,
++      canReceive: receiving.has(pubkey),
++    };
++  });
++  return people.sort((a, b) =>
++    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
++  );
++}
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index c0d3302..b644ba9 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -22,6 +22,7 @@ import {
+   publishNutzap,
+   recipientNutzapKey,
+ } from "./nutzap";
++import { participantName } from "./people";
+ 
+ export const VILLAGE_MINT_URL = (process.env.BELFRY_MINT_URL || "").replace(
+   /\/+$/,
+@@ -133,12 +134,25 @@ async function adoptSeed(mnemonic: string) {
+   }
+ }
+ 
+-/** Receives a token without the dialog (nutzaps); P2PK keys come from the key store. */
+-async function receiveQuietly(token: string) {
++/** Receives a token without the dialog (nutzaps); P2PK keys come from the key store. The
++ *  history entry gets `label` (where it came from) instead of cashu.me's "Ecash". */
++async function receiveQuietly(token: string, label = "") {
+   const receive = useReceiveTokensStore();
+   receive.receiveData.tokensBase64 = token;
+   receive.receiveData.p2pkPrivateKey = "";
+   await receive.receiveToken(token);
++  if (label) labelHistory(token, label);
++}
++
++/** History lives in IndexedDB (a live query refreshes the list), so the label is written there. */
++function labelHistory(token: string, label: string) {
++  const tokens = useTokensStore();
++  const entry = tokens.historyTokens.find(
++    (t: any) => t.token === token && t.amount > 0
++  ) as any;
++  if (!entry) return;
++  entry.label = label;
++  tokens.persistHistoryToken(entry);
+ }
+ 
+ let connected = false;
+@@ -165,7 +179,7 @@ export async function connectVillageAccount() {
+     claimPassTokens().catch((e) =>
+       console.warn("Could not fetch the pass's tokens", e)
+     );
+-    await listenForNutzaps(async (token, _from, amount, _comment, proofs) => {
++    await listenForNutzaps(async (token, from, amount, comment, proofs) => {
+       // On a new device old nutzaps come in again: skip the ones already redeemed.
+       const wallet = await useWalletStore().mintWallet(
+         VILLAGE_MINT_URL,
+@@ -174,8 +188,12 @@ export async function connectVillageAccount() {
+       );
+       const states = await wallet.checkProofsStates(proofs);
+       if (states.some((s: any) => s.state !== "UNSPENT")) return;
+-      await receiveQuietly(token);
+-      notifySuccess(`Received ${formatTokens(amount)}`);
++      const name = await participantName(from);
++      await receiveQuietly(
++        token,
++        comment ? `From ${name} · ${comment}` : `From ${name}`
++      );
++      notifySuccess(`Received ${formatTokens(amount)} from ${name}`);
+     });
+   } catch (e) {
+     connected = false;
+@@ -187,6 +205,12 @@ export async function connectVillageAccount() {
+ /** The tokens a pass brings (50 per pass day), minted at activation and kept on the pass until a
+  *  wallet redeems them: asked for with a NIP-98 signature of the participant's key, so they land
+  *  in this wallet without the separate "Get your tokens" link. Nothing comes back once redeemed. */
++const PASS_NAMES: Record<string, string> = {
++  day: "day pass",
++  week: "week pass",
++  full: "full access pass",
++};
++
+ export async function claimPassTokens() {
+   if (!PASS_URL) return;
+   const url = `${PASS_URL}/wallet/pass-tokens`;
+@@ -204,10 +228,11 @@ export async function claimPassTokens() {
+   });
+   if (!response.ok) throw new Error(`pass tokens: HTTP ${response.status}`);
+   const { tokens } = (await response.json()) as {
+-    tokens: { token: string; amount: number }[];
++    tokens: { token: string; amount: number; tier?: string }[];
+   };
+-  for (const { token, amount } of tokens || []) {
+-    await receiveQuietly(token);
++  for (const { token, amount, tier } of tokens || []) {
++    const pass = PASS_NAMES[tier || ""] || "pass";
++    await receiveQuietly(token, `From your ${pass}`);
+     notifySuccess(`Your pass brought ${formatTokens(amount)}`);
+   }
+ }
+@@ -262,6 +287,8 @@ export async function sendToParticipant(
+     }),
+     mint: VILLAGE_MINT_URL,
+     unit: VILLAGE_UNIT,
+-    label: comment || "Sent to a participant",
++    label: `To ${await participantName(pubkey)}${
++      comment ? ` · ${comment}` : ""
++    }`,
+   } as any);
+ }
+diff --git a/src/components/belfry/VillageCard.vue b/src/components/belfry/VillageCard.vue
+index ce00f88..583064f 100644
+--- a/src/components/belfry/VillageCard.vue
++++ b/src/components/belfry/VillageCard.vue
+@@ -7,7 +7,8 @@
+         other participants.
+       </div>
+       <div v-if="selfCustody" class="text-body2 q-mb-sm">
+-        You hold your own Nostr key, so the wallet signs in with your own signer.
++        You hold your own Nostr key, so the wallet signs in with your own
++        signer.
+       </div>
+       <q-btn
+         v-if="!selfCustody"
+@@ -33,7 +34,9 @@
+       <div v-else-if="selfCustody" class="text-caption q-mt-sm">
+         Open the wallet in a browser with your Nostr signer extension.
+       </div>
+-      <div v-if="signInError" class="text-warning q-mt-sm">{{ signInError }}</div>
++      <div v-if="signInError" class="text-warning q-mt-sm">
++        {{ signInError }}
++      </div>
+     </template>
+     <template v-else>
+       <div class="row items-center no-wrap">
+@@ -45,59 +48,167 @@
+         </div>
+         <q-btn flat dense no-caps size="sm" label="Sign out" @click="signOut" />
+       </div>
+-      <q-btn
+-        rounded
+-        unelevated
+-        color="primary"
+-        class="full-width q-mt-sm"
+-        data-testid="village-send"
+-        label="Send to a participant"
+-        :disable="!ready"
+-        @click="showSend = true"
+-      />
++      <div class="text-caption village-explainer q-mt-xs">
++        Village tokens have no money value. Pass them on: at a stall, as a
++        thank-you, for a photo you like.
++      </div>
+     </template>
+ 
+-    <q-dialog v-model="showSend">
+-      <q-card class="q-pa-md" style="min-width: 300px; max-width: 420px">
+-        <div class="text-h6 q-mb-md">Send tokens to a participant</div>
+-        <q-input
+-          v-model="recipient"
+-          outlined
+-          dense
+-          label="Their npub or name (name@domain)"
+-          data-testid="village-recipient"
+-          class="q-mb-sm"
+-        />
+-        <q-input
+-          v-model.number="amount"
+-          outlined
+-          dense
+-          type="number"
+-          min="1"
+-          label="Tokens"
+-          data-testid="village-amount"
+-          class="q-mb-sm"
+-        />
+-        <q-input
+-          v-model="comment"
+-          outlined
++    <!-- Send: pick a participant from the Directory, or type an npub or name@domain -->
++    <q-dialog v-model="showSend" @show="loadPeople">
++      <q-card class="q-pa-md village-dialog">
++        <div class="text-h6 q-mb-md">Send tokens</div>
++        <div v-if="!ready" class="text-body2">
++          Sign in with Open Source Village first.
++        </div>
++        <template v-else>
++          <div
++            v-if="selected"
++            class="village-chosen row items-center no-wrap q-mb-sm"
++          >
++            <q-avatar size="36px" class="q-mr-sm village-avatar">
++              <img v-if="selected.picture" :src="selected.picture" alt="" />
++              <span v-else>{{ initial(selected.name) }}</span>
++            </q-avatar>
++            <div class="col text-body1 ellipsis">{{ selected.name }}</div>
++            <q-btn
++              flat
++              dense
++              no-caps
++              size="sm"
++              label="Change"
++              @click="clearSelection"
++            />
++          </div>
++          <template v-else>
++            <q-input
++              v-model="recipient"
++              outlined
++              dense
++              autofocus
++              label="To: a name, npub or name@domain"
++              data-testid="village-recipient"
++              class="q-mb-xs"
++            />
++            <div v-if="recipientHint" class="text-caption q-mb-xs">
++              {{ recipientHint }}
++            </div>
++            <q-list v-if="matches.length" dense class="village-people q-mb-sm">
++              <q-item
++                v-for="p in matches"
++                :key="p.pubkey"
++                clickable
++                :disable="!p.canReceive"
++                @click="choose(p)"
++              >
++                <q-item-section avatar>
++                  <q-avatar size="32px" class="village-avatar">
++                    <img v-if="p.picture" :src="p.picture" alt="" />
++                    <span v-else>{{ initial(p.name) }}</span>
++                  </q-avatar>
++                </q-item-section>
++                <q-item-section>
++                  <q-item-label>{{ p.name }}</q-item-label>
++                  <q-item-label v-if="!p.canReceive" caption>
++                    has not opened the wallet yet
++                  </q-item-label>
++                </q-item-section>
++              </q-item>
++            </q-list>
++            <div v-else-if="peopleLoading" class="text-caption q-mb-sm">
++              Loading the directory…
++            </div>
++            <div
++              v-else-if="peopleLoaded && !people.length"
++              class="text-caption q-mb-sm"
++            >
++              Nobody is listed in the directory yet. Ask for their npub.
++            </div>
++          </template>
++          <q-input
++            v-model.number="amount"
++            outlined
++            dense
++            type="number"
++            min="1"
++            label="Tokens"
++            data-testid="village-amount"
++            class="q-mb-sm"
++          />
++          <q-input
++            v-model="comment"
++            outlined
++            dense
++            label="Note (optional)"
++            class="q-mb-md"
++          />
++          <div v-if="sendError" class="text-warning q-mb-sm">
++            {{ sendError }}
++          </div>
++          <div v-if="returnUrl" class="text-caption q-mb-sm">
++            After sending you go back to {{ returnHost }}.
++          </div>
++          <q-btn
++            rounded
++            unelevated
++            color="primary"
++            class="full-width"
++            data-testid="village-send-confirm"
++            :loading="sending"
++            label="Send"
++            @click="send"
++          />
++        </template>
++        <q-btn
++          flat
+           dense
+-          label="Note (optional)"
+-          class="q-mb-md"
++          no-caps
++          size="sm"
++          class="full-width q-mt-sm"
++          label="Send a token string instead"
++          @click="openRaw('send')"
+         />
+-        <div v-if="sendError" class="text-warning q-mb-sm">{{ sendError }}</div>
+-        <div v-if="returnUrl" class="text-caption q-mb-sm">
+-          After sending you go back to {{ returnHost }}.
++      </q-card>
++    </q-dialog>
++
++    <!-- Receive: a QR that opens the payer's wallet with "Send tokens" to this participant -->
++    <q-dialog v-model="showReceive">
++      <q-card class="q-pa-md village-dialog text-center">
++        <div class="text-h6 q-mb-sm">Receive tokens</div>
++        <template v-if="ready && payLink">
++          <div class="text-body2 q-mb-md">
++            Let them scan this with their phone camera or the wallet's scan
++            button. It opens their wallet ready to send tokens to
++            <strong>{{ myName }}</strong
++            >.
++          </div>
++          <div class="village-qr q-mx-auto q-mb-md">
++            <vue-qrcode :value="payLink" :options="{ width: 280, margin: 2 }" />
++          </div>
++          <q-btn
++            rounded
++            outline
++            color="primary"
++            class="full-width"
++            :label="copied ? 'Link copied' : 'Copy the link'"
++            @click="copyLink"
++          />
++          <div class="text-caption q-mt-sm">
++            If you are listed in the directory, they can also pick you there.
++          </div>
++        </template>
++        <div v-else class="text-body2">
++          Sign in with Open Source Village to receive tokens from other
++          participants.
+         </div>
+         <q-btn
+-          rounded
+-          unelevated
+-          color="primary"
+-          class="full-width"
+-          data-testid="village-send-confirm"
+-          :loading="sending"
+-          label="Send"
+-          @click="send"
++          flat
++          dense
++          no-caps
++          size="sm"
++          class="full-width q-mt-sm"
++          label="Paste a token string instead"
++          @click="openRaw('receive')"
+         />
+       </q-card>
+     </q-dialog>
+@@ -107,6 +218,7 @@
+ <script lang="ts">
+ import { defineComponent } from "vue";
+ import { nip05, nip19 } from "nostr-tools";
++import VueQrcode from "@chenfengyuan/vue-qrcode";
+ import { notifySuccess } from "src/js/notify";
+ import {
+   ssoEnabled,
+@@ -125,16 +237,35 @@ import {
+   sendToParticipant,
+   formatTokens,
+ } from "src/belfry/village";
++import {
++  listedParticipants,
++  participantName,
++  type Participant,
++} from "src/belfry/people";
+ 
+-async function resolvePubkey(input: string): Promise<string> {
++/** The wallet page's buttons and scanner open the dialogs here (WalletPage.vue). */
++export const OPEN_SEND_EVENT = "belfry:open-send";
++export const OPEN_RECEIVE_EVENT = "belfry:open-receive";
++export const OPEN_RAW_EVENT = "belfry:open-raw";
++
++async function resolvePubkey(
++  input: string,
++  people: Participant[] = []
++): Promise<string> {
+   const value = input.trim();
++  const named = people.filter(
++    (p) => p.name.toLowerCase() === value.toLowerCase()
++  );
++  if (named.length === 1) return named[0].pubkey;
+   if (/^[0-9a-f]{64}$/.test(value)) return value;
+   if (value.startsWith("npub1")) return nip19.decode(value).data as string;
+   if (value.includes("@")) {
+     const profile = await nip05.queryProfile(value);
+     if (profile?.pubkey) return profile.pubkey;
+   }
+-  throw new Error("Enter an npub or a name like name@domain.");
++  throw new Error(
++    "Pick someone from the list, or enter an npub or a name like name@domain."
++  );
+ }
+ 
+ /** Pages of the same deployment (wallet.<domain> -> *.<domain>) may ask to come back. */
+@@ -162,7 +293,10 @@ function takePayIntent() {
+   if (!params.has("pay")) return null;
+   const intent = {
+     recipient: params.get("pay") || "",
+-    amount: Math.max(1, Math.floor(Number(params.get("amount")) || 0)),
++    // a participant's receive QR names no amount: the dialog keeps its default
++    amount: params.get("amount")
++      ? Math.max(1, Math.floor(Number(params.get("amount")) || 0))
++      : 0,
+     memo: (params.get("memo") || "").slice(0, 200),
+     ref: params.get("ref") || "",
+     returnUrl: allowedReturn(params.get("return")),
+@@ -179,6 +313,7 @@ function takePayIntent() {
+ 
+ export default defineComponent({
+   name: "VillageCard",
++  components: { VueQrcode },
+   data() {
+     return {
+       signedIn: Boolean(getSession()),
+@@ -190,6 +325,14 @@ export default defineComponent({
+       ready: false,
+       error: "",
+       showSend: false,
++      showReceive: false,
++      people: [] as Participant[],
++      peopleLoading: false,
++      peopleLoaded: false,
++      selected: null as Participant | null,
++      recipientName: "",
++      myName: "",
++      copied: false,
+       recipient: "",
+       amount: 10 as number,
+       comment: "",
+@@ -206,16 +349,112 @@ export default defineComponent({
+     returnHost(): string {
+       return this.returnUrl ? new URL(this.returnUrl).host : "";
+     },
++    matches(): Participant[] {
++      const q = this.recipient.trim().toLowerCase();
++      if (q.startsWith("npub1") || /^[0-9a-f]{64}$/.test(q) || q.includes("@"))
++        return [];
++      const found = q
++        ? this.people.filter(
++            (p) =>
++              p.name.toLowerCase().includes(q) ||
++              p.nip05.toLowerCase().includes(q)
++          )
++        : this.people;
++      return found.slice(0, 8);
++    },
++    recipientHint(): string {
++      return this.recipientName ? `To ${this.recipientName}` : "";
++    },
++    payLink(): string {
++      const session = getSession();
++      if (!session) return "";
++      return `${window.location.origin}/?pay=${nip19.npubEncode(
++        session.pubkey
++      )}`;
++    },
++  },
++  watch: {
++    async recipient(value: string) {
++      this.recipientName = "";
++      const v = value.trim();
++      if (!v.startsWith("npub1") && !/^[0-9a-f]{64}$/.test(v)) return;
++      try {
++        const pubkey = await resolvePubkey(v);
++        const name = await participantName(pubkey);
++        if (this.recipient.trim() === v) this.recipientName = name;
++      } catch {
++        // not a valid npub yet
++      }
++    },
+   },
+   async mounted() {
+     window.addEventListener(SESSION_EVENT, this.onSession);
++    window.addEventListener(OPEN_SEND_EVENT, this.onOpenSend as EventListener);
++    window.addEventListener(OPEN_RECEIVE_EVENT, this.onOpenReceive);
+     setTimeout(() => (this.ownSignerAvailable = hasOwnSigner()), 500);
+     if (this.signedIn) await this.connect();
+   },
+   beforeUnmount() {
+     window.removeEventListener(SESSION_EVENT, this.onSession);
++    window.removeEventListener(
++      OPEN_SEND_EVENT,
++      this.onOpenSend as EventListener
++    );
++    window.removeEventListener(OPEN_RECEIVE_EVENT, this.onOpenReceive);
+   },
+   methods: {
++    onOpenSend(event: CustomEvent) {
++      const detail = event.detail || {};
++      if (detail.recipient) {
++        this.selected = null;
++        this.recipient = detail.recipient;
++      }
++      if (detail.amount) this.amount = detail.amount;
++      if (detail.memo) this.comment = detail.memo;
++      this.showSend = true;
++    },
++    async onOpenReceive() {
++      this.copied = false;
++      this.showReceive = true;
++      const session = getSession();
++      if (session && !this.myName)
++        this.myName = await participantName(session.pubkey);
++    },
++    async loadPeople() {
++      if (!this.ready || this.peopleLoading || this.peopleLoaded) return;
++      this.peopleLoading = true;
++      try {
++        this.people = await listedParticipants();
++        this.peopleLoaded = true;
++      } catch (e) {
++        console.warn("Could not load the directory", e);
++      } finally {
++        this.peopleLoading = false;
++      }
++    },
++    choose(p: Participant) {
++      this.selected = p;
++      this.recipient = "";
++    },
++    clearSelection() {
++      this.selected = null;
++    },
++    initial(name: string) {
++      return (name || "?").trim().charAt(0).toUpperCase();
++    },
++    async copyLink() {
++      try {
++        await navigator.clipboard.writeText(this.payLink);
++        this.copied = true;
++      } catch {
++        this.copied = false;
++      }
++    },
++    openRaw(which: "send" | "receive") {
++      this.showSend = false;
++      this.showReceive = false;
++      window.dispatchEvent(new CustomEvent(OPEN_RAW_EVENT, { detail: which }));
++    },
+     async onSession() {
+       this.signedIn = Boolean(getSession());
+       this.ownSigner = usesOwnSigner();
+@@ -229,7 +468,7 @@ export default defineComponent({
+         const intent = takePayIntent();
+         if (intent) {
+           this.recipient = intent.recipient;
+-          this.amount = intent.amount;
++          this.amount = intent.amount || this.amount;
+           this.comment = intent.memo;
+           this.ref = intent.ref;
+           this.returnUrl = intent.returnUrl;
+@@ -259,7 +498,9 @@ export default defineComponent({
+       try {
+         if (!this.amount || this.amount < 1)
+           throw new Error("Enter a number of tokens.");
+-        const pubkey = await resolvePubkey(this.recipient);
++        const pubkey = this.selected
++          ? this.selected.pubkey
++          : await resolvePubkey(this.recipient, this.people);
+         await sendToParticipant(
+           pubkey,
+           Math.floor(this.amount),
+@@ -268,6 +509,7 @@ export default defineComponent({
+         );
+         notifySuccess(`Sent ${formatTokens(Math.floor(this.amount))}`);
+         this.showSend = false;
++        this.selected = null;
+         this.recipient = "";
+         this.comment = "";
+         this.ref = "";
+@@ -291,4 +533,33 @@ export default defineComponent({
+   border: 1px solid rgba(255, 255, 255, 0.16);
+   border-radius: 12px;
+ }
++.village-explainer {
++  opacity: 0.75;
++}
++.village-dialog {
++  width: 100%;
++  max-width: 420px;
++}
++.village-people {
++  max-height: 260px;
++  overflow-y: auto;
++}
++.village-avatar {
++  background: #243128;
++  color: #d6ff52;
++  font-weight: 600;
++}
++.village-qr {
++  width: 280px;
++  max-width: 100%;
++  background: #fff;
++  border-radius: 12px;
++  overflow: hidden;
++}
++.village-qr canvas,
++.village-qr img {
++  display: block;
++  width: 100% !important;
++  height: auto !important;
++}
+ </style>
+diff --git a/src/pages/WalletPage.vue b/src/pages/WalletPage.vue
+index fcc2cba..a4ad3ac 100644
+--- a/src/pages/WalletPage.vue
++++ b/src/pages/WalletPage.vue
+@@ -14,7 +14,9 @@
+             data-testid="wallet-receive"
+             class="q-px-md q-mr-md wallet-action-btn"
+             color="primary"
+-            @click="showReceiveDialog = true"
++            @click="
++              village ? openVillage('receive') : (showReceiveDialog = true)
++            "
+           >
+             <div class="button-content">
+               <span>{{ $t("WalletPage.actions.receive.label") }}</span>
+@@ -35,10 +37,10 @@
+           <q-btn
+             rounded
+             dense
+-            data-testid="wallet-send"
++            :data-testid="village ? 'village-send' : 'wallet-send'"
+             class="q-px-md q-ml-md wallet-action-btn"
+             color="primary"
+-            @click="showSendDialog = true"
++            @click="village ? openVillage('send') : (showSendDialog = true)"
+           >
+             <div class="button-content">
+               <span>{{ $t("WalletPage.actions.send.label") }}</span>
+@@ -73,6 +75,7 @@
+           ></q-tab>
+           <!-- <q-tab name="tokens" label="Tokens"></q-tab> -->
+           <q-tab
++            v-if="!village"
+             name="mints"
+             class="text-secondary"
+             :label="$t('WalletPage.tabs.mints.label')"
+@@ -209,8 +212,17 @@
+ }
+ </style>
+ <script lang="ts">
+-import { skipOnboarding, ensureVillageMint } from "src/belfry/village";
+-import { isSsoCallback, finishSignIn, trySilentSignIn } from "src/belfry/sso";
++import {
++  skipOnboarding,
++  ensureVillageMint,
++  villageEnabled,
++} from "src/belfry/village";
++import {
++  isSsoCallback,
++  finishSignIn,
++  trySilentSignIn,
++  ssoEnabled,
++} from "src/belfry/sso";
+ import { date } from "quasar";
+ import * as _ from "underscore";
+ import { shortenString } from "src/js/string-utils";
+@@ -229,7 +241,26 @@ import InvoiceDetailDialog from "components/InvoiceDetailDialog.vue";
+ import CreateInvoiceDialog from "components/CreateInvoiceDialog.vue";
+ import SendDialog from "components/SendDialog.vue";
+ import ReceiveDialog from "components/ReceiveDialog.vue";
+-import VillageCard from "components/belfry/VillageCard.vue";
++import VillageCard, {
++  OPEN_SEND_EVENT,
++  OPEN_RECEIVE_EVENT,
++  OPEN_RAW_EVENT,
++} from "components/belfry/VillageCard.vue";
++
++/** A participant's receive QR (VillageCard): <wallet>/?pay=<npub>[&amount=…], or a bare npub. */
++function villagePayTarget(text: string) {
++  const value = text.trim().replace(/^nostr:/i, "");
++  if (/^npub1[02-9ac-hj-np-z]{58}$/.test(value)) return { recipient: value };
++  try {
++    const url = new URL(value);
++    const pay = url.searchParams.get("pay");
++    if (!pay || url.origin !== window.location.origin) return null;
++    const amount = Math.floor(Number(url.searchParams.get("amount")) || 0);
++    return { recipient: pay, ...(amount > 0 ? { amount } : {}) };
++  } catch {
++    return null;
++  }
++}
+ import QrcodeReader from "components/QrcodeReader.vue";
+ import iOSPWAPrompt from "components/iOSPWAPrompt.vue";
+ import AndroidPWAPrompt from "components/AndroidPWAPrompt.vue";
+@@ -346,6 +377,11 @@ export default {
+     ...mapWritableState(useCameraStore, ["camera", "hasCamera"]),
+     ...mapWritableState(useP2PKStore, ["showP2PKDialog"]),
+     ...mapWritableState(useNWCStore, ["showNWCDialog", "nwcEnabled"]),
++    // Belfry: Receive and Send are between participants (VillageCard's dialogs); token strings
++    // stay one tap further ("… a token string instead").
++    village: function () {
++      return villageEnabled() && ssoEnabled();
++    },
+     pendingPaymentsExist: function () {
+       return this.payments.findIndex((payment) => payment.pending) !== -1;
+     },
+@@ -463,8 +499,24 @@ export default {
+     decodeQR: function (res) {
+       this.camera.data = res;
+       this.camera.show = false;
++      const target = this.village ? villagePayTarget(res) : null;
++      if (target) {
++        window.dispatchEvent(
++          new CustomEvent(OPEN_SEND_EVENT, { detail: target })
++        );
++        return;
++      }
+       this.decodeRequest(res);
+     },
++    openVillage: function (which) {
++      window.dispatchEvent(
++        new CustomEvent(which === "send" ? OPEN_SEND_EVENT : OPEN_RECEIVE_EVENT)
++      );
++    },
++    onOpenRaw: function (event) {
++      if (event.detail === "send") this.showSendDialog = true;
++      else this.showReceiveDialog = true;
++    },
+     /////////////////////////////////// WALLET ///////////////////////////////////
+     showInvoiceCreateDialog: async function () {
+       console.log("##### showInvoiceCreateDialog");
+@@ -601,11 +653,13 @@ export default {
+     // Add window resize listener to handle responsive layouts
+     window.addEventListener("resize", this.equalizeButtonWidths);
+     document.addEventListener("visibilitychange", this.handleVisibilityChange);
++    window.addEventListener(OPEN_RAW_EVENT, this.onOpenRaw);
+   },
+ 
+   beforeUnmount: function () {
+     // Remove event listener when component is destroyed
+     window.removeEventListener("resize", this.equalizeButtonWidths);
++    window.removeEventListener(OPEN_RAW_EVENT, this.onOpenRaw);
+     document.removeEventListener(
+       "visibilitychange",
+       this.handleVisibilityChange
+-- 
+2.53.0
+
