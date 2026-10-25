@@ -457,6 +457,31 @@ Found on the VM (2026-10-25): walt.id Verifier2 kept a status list it had fetche
 
 Open: participants' invites have no steward approval step (stewards see them and can revoke the pass); the Keycast account page has no "Invite friends" link of its own ("Show your pass" leads to `/me`); feedback cannot be answered from the steward pages (they show the e-mail).
 
+## 3zb. Joining with an own Nostr key — built 2026-10-25
+
+User: invite someone together with the Nostr key they already have. Before, everyone got a
+derived key and could move to their own key only after activation (§3s self-custody).
+
+- [x] Invite page: optional "Join with my own Nostr key". The page's script asks the browser's
+  NIP-07 signer for the public key, and on submit for a NIP-98 event (kind 27235, the page's URL,
+  `POST`). Odoo checks it in pure Python (`belfry_pass` `models/nostr_proof.py`: event id, BIP-340
+  signature, key, path, method, 10 minutes) and refuses a key of another participant, or a returning
+  participant who has a key already. The pass stores `own_pubkey` and `own_pubkey_proof`
+  (19.0.1.11.0).
+- [x] Activation (`core.own_key_of`) checks the proof again with coincurve, creates a keyless
+  signer account for that key (as `restore-keys` does for self-custody), whitelists it, sets the
+  partner's custody to `self`, and publishes nothing for it (no profile, relay or follow lists;
+  `publish-starter-events` skips self-custody participants too, which also fixes it for
+  participants who moved to their own key).
+- [x] Checks: Odoo 66 tests (7 new: proof check, page, refusals), onboarding 202 (3 new), smoke step
+  10c (forged proof refused, pass active with the own key, custody self, signer account without a
+  key, key whitelisted), 172 ok / 0 failed; the page in headless Chromium with a stand-in NIP-07
+  signer: key shown as npub, signed on submit, on to the payment page.
+
+Open: only NIP-07 extensions on the invite page (no bunker or phone signer; those join with a
+managed key and move later); the village wallet has no own-key mode yet, so tokens of such a
+participant wait in the token link until the wallet can sign in with their signer.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

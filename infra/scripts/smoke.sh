@@ -783,6 +783,61 @@ else
   sed 's/^/  /' <<<"$OUT" >&2; bad "self-custody"
 fi
 
+step "10c. joining with an own Nostr key: a signed proof on the invite page, a keyless signer account"
+# A second participant who already uses Nostr. The key and its signature (the NIP-98 event the
+# invite page's script asks the browser's signer for) are made in the onboarding container.
+OWN_INVITE=$(ox belfry.invite create '[{"note":"smoke own key"}]')
+OWN_TOKEN=$(ox belfry.invite read "[[$OWN_INVITE]]" '{"fields":["token"]}' | jq -r '.[0].token')
+OWN=$("${DC[@]}" exec -T onboarding python - "/belfry/invite/$OWN_TOKEN" <<'PY'
+import json, sys, time
+from coincurve import PrivateKey
+from belfry_onboarding.blossom import event_id
+key = PrivateKey()
+pub = key.public_key_xonly.format().hex()
+ev = {"pubkey": pub, "created_at": int(time.time()), "kind": 27235, "content": "Join Open Source Village with this key",
+      "tags": [["u", "https://smoke.example" + sys.argv[1]], ["method", "POST"]]}
+ev["id"] = event_id(ev)
+ev["sig"] = key.sign_schnorr(bytes.fromhex(ev["id"])).hex()
+bad = dict(ev, sig=PrivateKey().sign_schnorr(bytes.fromhex(ev["id"])).hex())
+print(json.dumps({"pubkey": pub, "proof": json.dumps(ev), "bad": json.dumps(bad)}))
+PY
+)
+OWN_PUB=$(jq -r .pubkey <<<"$OWN")
+OWN_BODY=$(mktemp)
+own_post() { # proof -> http code; the page's body into $OWN_BODY
+  local jar; jar=$(mktemp)
+  local csrf; csrf=$(curl -sS -c "$jar" -b "$jar" "$ODOO_URL/belfry/invite/$OWN_TOKEN" | sed -n 's/.*name="csrf_token"[^>]*value="\([^"]*\)".*/\1/p' | head -n1)
+  curl -sS -b "$jar" -o "$OWN_BODY" -w '%{http_code}' -X POST "$ODOO_URL/belfry/invite/$OWN_TOKEN" \
+    --data-urlencode "csrf_token=$csrf" --data-urlencode "name=Smoke Own Key $STAMP" \
+    --data-urlencode "email=smoke-own-$STAMP@belfry.local" --data-urlencode "product_id=$PRODUCT_ID" \
+    --data-urlencode "own_key=1" --data-urlencode "nostr_pubkey=$OWN_PUB" --data-urlencode "nostr_proof=$1"
+  rm -f "$jar"
+}
+CODE=$(own_post "$(jq -r .bad <<<"$OWN")")
+[[ "$CODE" == 200 ]] && grep -q 'does not match the key' "$OWN_BODY" && ok "a signature by another key is refused on the invite page" || bad "forged proof -> $CODE"
+CODE=$(own_post "$(jq -r .proof <<<"$OWN")")
+[[ "$CODE" =~ ^30[1-8]$ ]] && ok "with the proof -> $CODE (payment link)" || { head -c 400 "$OWN_BODY" >&2; bad "own key POST -> $CODE"; }
+rm -f "$OWN_BODY"
+OWN_PASS=$(ox belfry.pass search_read "[[[\"invite_id\",\"=\",$OWN_INVITE]]]" '{"fields":["id","invoice_id","partner_id","own_pubkey"],"limit":1}' | jq -c '.[0] // empty')
+OWN_PASS_ID=$(jq -r .id <<<"$OWN_PASS"); OWN_INV=$(jq -r '.invoice_id[0]' <<<"$OWN_PASS"); OWN_PARTNER=$(jq -r '.partner_id[0]' <<<"$OWN_PASS")
+[[ "$(jq -r .own_pubkey <<<"$OWN_PASS")" == "$OWN_PUB" ]] && ok "pass $OWN_PASS_ID pending with the own key" || bad "own key on the pass: $OWN_PASS"
+OWN_INV_ROW=$(ox account.move read "[[$OWN_INV]]" '{"fields":["amount_total","currency_id","partner_id"]}' | jq -c '.[0]')
+ox payment.transaction create "[{\"provider_id\":$PROVIDER_ID,${PM_ID:+\"payment_method_id\":$PM_ID,}\"reference\":\"SMOKE-OWN-$STAMP\",\"amount\":$(jq -r .amount_total <<<"$OWN_INV_ROW"),\"currency_id\":$(jq -r '.currency_id[0]' <<<"$OWN_INV_ROW"),\"partner_id\":$(jq -r '.partner_id[0]' <<<"$OWN_INV_ROW"),\"operation\":\"online_direct\",\"invoice_ids\":[[6,0,[$OWN_INV]]],\"provider_reference\":\"pi_smoke_own_$STAMP\",\"state\":\"done\"}]" >/dev/null
+WIZ=$(ox account.payment.register create '[{}]' "{\"context\":{\"active_model\":\"account.move\",\"active_ids\":[$OWN_INV]}}")
+ox account.payment.register action_create_payments "[[$WIZ]]" >/dev/null
+for i in $(seq 1 30); do
+  OWN_ROW=$(ox belfry.pass read "[[$OWN_PASS_ID]]" '{"fields":["state","keycast_pubkey","npub"]}' | jq -c '.[0]')
+  [[ "$(jq -r .state <<<"$OWN_ROW")" == active ]] && break
+  [[ $i == 20 ]] && onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$OWN_INV,\"_action\":\"smoke\"}" >/dev/null || true
+  sleep 2
+done
+[[ "$(jq -r '.state + " " + .keycast_pubkey' <<<"$OWN_ROW")" == "active $OWN_PUB" ]] && ok "active with the participant's own key" || bad "own-key pass: $OWN_ROW"
+[[ "$(ox res.partner read "[[$OWN_PARTNER]]" '{"fields":["belfry_key_custody"]}' | jq -r '.[0].belfry_key_custody')" == self ]] && ok "partner holds their own key (custody self)" || bad "partner custody not self"
+KEYS=$("${DC[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select (select count(*) from users where pubkey='$OWN_PUB') || ' ' || (select count(*) from personal_keys where user_pubkey='$OWN_PUB')")
+[[ "$KEYS" == "1 0" ]] && ok "signer account without a key of Belfry's" || bad "Keycast users/keys for the own key: $KEYS"
+"${DC[@]}" exec -T relay cat /rnostr/config/rnostr.toml | grep -q "$OWN_PUB" && ok "own key on the relay whitelist" || bad "own key not whitelisted"
+ox belfry.pass action_revoke "[[$OWN_PASS_ID]]" >/dev/null 2>&1 || onb_post "/admin/passes/$OWN_PASS_ID/revoke" '{"reason":"smoke cleanup"}' >/dev/null || true
+
 step "11. revoke the pass: status list bit flips, the door refuses the certificate"
 if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then echo "  note SMOKE_KEEP_PASS set: pass $PASS_ID stays active (browser checks of the apps); revocation not tested"; else
 # (printed for the log only; python decodes, since base64 -d fails on unpadded base64url)

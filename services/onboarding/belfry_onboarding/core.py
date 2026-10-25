@@ -54,7 +54,13 @@ PASS_FIELDS = [
     "claim_token",
     "credential_status_index",
     "cashu_amount",
+    # joining with a key of one's own (invite page, belfry_pass models/nostr_proof.py)
+    "own_pubkey",
+    "own_pubkey_proof",
 ]
+
+# The proof of an own key: a NIP-98 event for the invite page, signed with that key.
+OWN_KEY_PROOF_KIND = 27235
 
 
 @dataclass
@@ -428,18 +434,49 @@ def send_login_link(svc: Services, pass_id: int) -> str:
 
 
 def _ensure_keycast_user(
-    svc: Services, partner: dict[str, Any], member_number: str
+    svc: Services, partner: dict[str, Any], member_number: str, own_pubkey: str | None = None
 ) -> tuple[str, str, str]:
-    """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored."""
+    """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored.
+    ``own_pubkey``: the participant joins with their own key, so the account gets no key of
+    Belfry's (a keyless account, as for a self-custody participant)."""
     result = svc.keycast.preload_user(
         vine_id=f"odoo-partner-{partner['id']}",
         username=member_number.lower(),
         display_name=partner.get("name") or member_number,
         key_version=int(partner.get("belfry_key_version") or 0),
+        pubkey=own_pubkey,
     )
     pubkey = result["pubkey"]
     svc.keycast.set_user_status(pubkey, "active")
     return pubkey, hex_to_npub(pubkey), result.get("token", "")
+
+
+def own_key_of(pass_row: dict[str, Any]) -> str | None:
+    """The public key a participant joins with (set on the pass by the invite page), after
+    checking its proof again: the event id, the signature, the key and the kind. Odoo checked the
+    URL, the method and the time when the form was sent. None when the pass has no own key; a
+    proof that does not hold (edited in Odoo after the fact) stops the activation."""
+    own = (pass_row.get("own_pubkey") or "").strip().lower()
+    if not own:
+        return None
+    from .blossom import event_id, verify_signature  # blossom imports this module
+
+    try:
+        proof = json.loads(pass_row.get("own_pubkey_proof") or "")
+        ok = (
+            isinstance(proof, dict)
+            and proof.get("kind") == OWN_KEY_PROOF_KIND
+            and proof.get("pubkey") == own
+            and event_id(proof) == proof.get("id")
+            and verify_signature(proof)
+        )
+    except (ValueError, KeyError, TypeError):
+        ok = False
+    if not ok or not re.fullmatch(r"[0-9a-f]{64}", own):
+        raise RuntimeError(
+            f"pass {pass_row.get('id')}: the proof of the own key {own} does not hold"
+        )
+    return own
 
 
 def active_passes(svc: Services) -> list[dict[str, Any]]:
@@ -689,9 +726,12 @@ def publish_starter_events(svc: Services) -> dict[str, Any]:
         partner_id = m2o_id(row.get("partner_id"))
         if not partner_id:
             continue
-        partner = svc.odoo.read_one("res.partner", partner_id, ["name", "belfry_member_number"])
+        partner = svc.odoo.read_one(
+            "res.partner", partner_id, ["name", "belfry_member_number", "belfry_key_custody"]
+        )
         member_number = (partner or {}).get("belfry_member_number") or ""
-        if not member_number:
+        # a participant with their own key publishes their own profile; Belfry cannot sign it
+        if not member_number or partner.get("belfry_key_custody") == "self":
             continue
         pubkey, _npub, token = _ensure_keycast_user(svc, partner, member_number)
         if pubkey != row["keycast_pubkey"]:
@@ -791,9 +831,14 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
             "belfry_authentik_user_id",
             "belfry_npub",
             "belfry_key_version",
+            "belfry_key_custody",
         ],
     )[0]
     member_number = _ensure_member_number(svc, partner)
+    own_pubkey = own_key_of(pass_row)
+    # Belfry signs nothing for a participant who holds their own key (joined with it, or moved to
+    # it with an earlier pass): no profile, no relay or follow lists.
+    own_custody = bool(own_pubkey) or partner.get("belfry_key_custody") == "self"
 
     tier = pass_row.get("tier")
     duration_days: int | None = None
@@ -819,7 +864,13 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
     date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
 
     authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
-    pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number)
+    pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number, own_pubkey)
+    if own_pubkey and pubkey != own_pubkey:
+        # the partner has a Keycast account with another key already (the invite page refuses
+        # that for known partners; this is the race of two passes in flight)
+        raise RuntimeError(
+            f"pass {pass_row['id']}: partner {partner_id} has the key {pubkey}, not {own_pubkey}"
+        )
     # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
     _set_participant(svc, authentik_user_id, True)
     # Participants never get a password: Odoo mails this one-time sign-in link with the activation.
@@ -827,13 +878,16 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
-    publish_profile(svc, user_token, pubkey, partner, member_number)
+    if not own_custody:
+        publish_profile(svc, user_token, pubkey, partner, member_number)
 
-    svc.odoo.write(
-        "res.partner",
-        [partner_id],
-        {"belfry_authentik_user_id": authentik_user_id, "belfry_npub": npub},
-    )
+    partner_vals: dict[str, Any] = {
+        "belfry_authentik_user_id": authentik_user_id,
+        "belfry_npub": npub,
+    }
+    if own_pubkey:
+        partner_vals["belfry_key_custody"] = "self"
+    svc.odoo.write("res.partner", [partner_id], partner_vals)
     vals: dict[str, Any] = {
         "npub": npub,
         "keycast_pubkey": pubkey,

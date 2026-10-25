@@ -42,6 +42,11 @@ Your account page shows your village name (for example `osv-0042@<domain>`) and 
 Belfry keeps the key safe for you. If you have your own Nostr signer, you can move your identity
 to your own key on the security page; after that, the apps sign in with your own signer.
 
+If you already use Nostr, you can also join with your key from the start: on the invite page, tick
+**Join with my own Nostr key**. Your browser's signer extension shares your public key and signs
+once to show the key is yours; Belfry never sees your private key. In the apps, sign in with your
+own signer (a browser extension or a bunker link) instead of "Sign in with Open Source Village".
+
 ## Inviting friends
 
 The village grows through people who know each other, so there is no public sign-up. With an

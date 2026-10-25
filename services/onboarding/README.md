@@ -128,9 +128,12 @@ nothing is created twice. In order:
 2. Authentik user (username = member number in lower case, no password), added to the group
    `belfry-participants`, which is what lets it use the signer and the pass page.
 3. Signer account through Keycast's preload API, with the key derived from the custody seed and
-   the partner id; the public key becomes the pass's npub.
+   the partner id; the public key becomes the pass's npub. A participant who joined with their own
+   key (`own_pubkey` on the pass, its proof checked again here) gets an account without a key, and
+   the partner's custody becomes `self`.
 4. Relay whitelist with the new key, then the participant's profile (name and NIP-05 name, nothing
-   else), follow list and relay lists, signed through the signer and published.
+   else), follow list and relay lists, signed through the signer and published. Not for a
+   participant who holds their own key: Belfry cannot sign for it, and their own profile counts.
 5. Village tokens (50 per pass day) minted and stored on the pass.
 6. A one-time Authentik sign-in link (valid `LOGIN_LINK_DAYS`), the claim token and the status
    list index, written on the pass together with `state = active` in one write. Odoo then mails

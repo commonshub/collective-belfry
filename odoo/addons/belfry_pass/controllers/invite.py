@@ -6,6 +6,8 @@ import logging
 from odoo import Command, _, fields, http
 from odoo.http import request
 
+from ..models.nostr_proof import ProofError, check_proof, npub
+
 _logger = logging.getLogger(__name__)
 
 # invite usability error -> HTTP status of the error page
@@ -116,6 +118,10 @@ class BelfryInviteController(http.Controller):
             'company_name': clean('company_name'),
             'vat': clean('vat'),
             'promo_code': clean('promo_code'),
+            # joining with a key of one's own: filled by the page's script from the signer
+            'own_key': bool(post.get('own_key')),
+            'nostr_pubkey': clean('nostr_pubkey').lower(),
+            'nostr_proof': clean('nostr_proof'),
         }
 
     def _validate_form(self, form):
@@ -128,6 +134,37 @@ class BelfryInviteController(http.Controller):
         if not template:
             raise InviteFormError(_("Please choose a pass."))
         return template
+
+    def _own_key(self, invite, form, person):
+        """The checked public key (hex) when the visitor joins with a key of their own, else
+        None. The key must not belong to anyone else, and a returning participant who has a key
+        already keeps it (they can move to another one on their account page)."""
+        if not form['own_key']:
+            return None
+        if not form['nostr_pubkey'] or not form['nostr_proof']:
+            raise InviteFormError(_(
+                "To join with your own Nostr key, allow your signer to sign when you send the form."
+            ))
+        try:
+            pubkey = check_proof(form['nostr_proof'], form['nostr_pubkey'], '/belfry/invite/%s' % invite.token)
+        except ProofError as exc:
+            raise InviteFormError(str(exc)) from None
+        key_npub = npub(pubkey)
+        env = request.env
+        if person.belfry_npub and person.belfry_npub != key_npub:
+            raise InviteFormError(_(
+                "Your account has a Nostr key already. Join with that one; you can move to this key "
+                "on your account page afterwards."
+            ))
+        taken = env['res.partner'].sudo().search_count(
+            [('belfry_npub', '=', key_npub), ('id', '!=', person.id)], limit=1,
+        ) or env['belfry.pass'].sudo().search_count(
+            ['|', ('keycast_pubkey', '=', pubkey), ('own_pubkey', '=', pubkey),
+             ('partner_id', '!=', person.id), ('state', 'in', ('pending', 'active'))], limit=1,
+        )
+        if taken:
+            raise InviteFormError(_("This Nostr key belongs to another participant."))
+        return pubkey
 
     def _find_or_create_partners(self, form):
         """Return (person, billing partner). The billing partner is the company when a company
@@ -196,6 +233,7 @@ class BelfryInviteController(http.Controller):
             raise InviteFormError(_("This invite link can no longer be used."))
 
         person, billing_partner = self._find_or_create_partners(form)
+        own_pubkey = self._own_key(invite, form, person)
         product = template.product_variant_id
 
         order = env['sale.order'].sudo().create({
@@ -229,6 +267,8 @@ class BelfryInviteController(http.Controller):
             'invoice_id': invoice.id,
             'invite_id': invite.id,
             'company_id': order.company_id.id,
+            'own_pubkey': own_pubkey or False,
+            'own_pubkey_proof': form['nostr_proof'] if own_pubkey else False,
         })
         invite.sudo().write({
             'state': 'used',

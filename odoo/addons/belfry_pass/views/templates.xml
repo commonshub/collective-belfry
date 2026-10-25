@@ -176,8 +176,29 @@
                     </div>
                 </div>
 
+                <h5>3. Your Nostr key (optional)</h5>
+                <div class="mb-4" id="belfry_own_key_block">
+                    <p class="text-muted mb-2">
+                        Every participant gets a Nostr key for the community apps; Belfry keeps it
+                        for you and can recover it. If you already use Nostr, you can join with
+                        your own key instead: you then sign in to the apps with your own signer,
+                        and Belfry never holds your key.
+                    </p>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="belfry_own_key" name="own_key" value="1"
+                               t-att-checked="'checked' if form.get('own_key') else None"/>
+                        <label class="form-check-label" for="belfry_own_key">
+                            Join with my own Nostr key (needs a signer extension in this browser)
+                        </label>
+                    </div>
+                    <input type="hidden" name="nostr_pubkey" id="belfry_nostr_pubkey"/>
+                    <input type="hidden" name="nostr_proof" id="belfry_nostr_proof"/>
+                    <p class="form-text mt-2" id="belfry_own_key_status" aria-live="polite"/>
+                </div>
+
                 <button type="submit" class="btn btn-primary btn-lg">Continue to payment</button>
             </form>
+            <script src="/belfry_pass/static/src/js/own_key.js" defer="defer"/>
         </t>
     </template>
 </odoo>

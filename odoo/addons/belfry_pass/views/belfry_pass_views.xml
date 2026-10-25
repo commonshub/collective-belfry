@@ -69,6 +69,7 @@
                             <field name="activated_at"/>
                             <field name="npub"/>
                             <field name="keycast_pubkey"/>
+                            <field name="own_pubkey" invisible="not own_pubkey"/>
                             <field name="authentik_user_id"/>
                         </group>
                         <group string="Pass certificate (Phase 3)">

@@ -49,6 +49,12 @@ class BelfryPass(models.Model):
     invite_id = fields.Many2one('belfry.invite', string="Invite", ondelete='set null')
     npub = fields.Char(string="npub at activation", copy=False)
     keycast_pubkey = fields.Char(string="Keycast pubkey (hex)", copy=False)
+    # Joining with a key of one's own (invite page): the public key and the signed NIP-98 event
+    # that proves control of it (models/nostr_proof.py). Activation then creates a signer account
+    # without a key of Belfry's, and the partner holds their own key from the start.
+    own_pubkey = fields.Char(string="Own Nostr key (hex)", copy=False, readonly=True)
+    own_pubkey_proof = fields.Text(string="Proof of the own key", copy=False, readonly=True,
+                                   groups='belfry_pass.group_admin')
     authentik_user_id = fields.Integer(string="Authentik user id at activation", copy=False)
     activated_at = fields.Datetime(copy=False)
     revoked_at = fields.Datetime(copy=False)

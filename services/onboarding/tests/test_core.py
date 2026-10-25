@@ -559,3 +559,80 @@ def test_reconcile_revokes_open_chargebacks(services, odoo, monkeypatch):
     result = core.reconcile(services)
     assert list(result["revoked"].values()) == ["revoked"]
     assert active_pass(odoo, ids["invoice"])["revoke_reason"] == "chargeback"
+
+
+# -- joining with an own key (invite page) ---------------------------------------------------------
+
+
+def own_key_proof(path: str = "/belfry/invite/tok") -> tuple[str, str]:
+    """A key of the participant's own and the NIP-98 event the invite page has them sign."""
+    from coincurve import PrivateKey
+
+    from belfry_onboarding.blossom import event_id
+
+    key = PrivateKey()
+    pubkey = key.public_key_xonly.format().hex()
+    event = {
+        "pubkey": pubkey,
+        "created_at": 1800000000,
+        "kind": 27235,
+        "tags": [["u", f"https://shop.example{path}"], ["method", "POST"]],
+        "content": "Join Open Source Village with this key",
+    }
+    event["id"] = event_id(event)
+    event["sig"] = key.sign_schnorr(bytes.fromhex(event["id"])).hex()
+    return pubkey, json.dumps(event)
+
+
+def seed_own_key_pass(odoo: FakeOdoo, ids: dict, pubkey: str, proof: str) -> int:
+    return odoo.add(
+        "belfry.pass",
+        partner_id=ids["partner"],
+        invoice_id=ids["invoice"],
+        tier="week",
+        state="pending",
+        own_pubkey=pubkey,
+        own_pubkey_proof=proof,
+    )
+
+
+def test_own_key_gets_a_keyless_account_and_no_profile(services, odoo, keycast, relay, whitelist):
+    ids = seed_paid_invoice(odoo, tier="week")
+    pubkey, proof = own_key_proof()
+    seed_own_key_pass(odoo, ids, pubkey, proof)
+
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+
+    p = active_pass(odoo, ids["invoice"])
+    partner = odoo.get("res.partner", ids["partner"])
+    assert keycast.preload_bodies[-1]["pubkey"] == pubkey
+    assert p["keycast_pubkey"] == pubkey
+    assert p["npub"] == partner["belfry_npub"] == hex_to_npub(pubkey)
+    assert partner["belfry_key_custody"] == "self"
+    assert keycast.status[pubkey] == "active"
+    # Belfry cannot sign for the key: no profile, no relay or follow lists
+    assert relay.events == []
+    assert keycast.signed == []
+    assert pubkey in whitelist.config_path.read_text()
+
+
+def test_own_key_with_a_tampered_proof_stops_the_activation(services, odoo, keycast):
+    ids = seed_paid_invoice(odoo, tier="week")
+    pubkey, proof = own_key_proof()
+    other, _ = own_key_proof()
+    seed_own_key_pass(odoo, ids, other, proof)  # the proof is for another key
+
+    with pytest.raises(RuntimeError, match="does not hold"):
+        core.activate_pass(services, ids["invoice"])
+    assert keycast.preloads == 0
+    assert active_pass(odoo, ids["invoice"])["state"] == "pending"
+
+
+def test_starter_events_skip_participants_with_their_own_key(services, odoo, keycast, relay):
+    ids = seed_paid_invoice(odoo, tier="week")
+    pubkey, proof = own_key_proof()
+    seed_own_key_pass(odoo, ids, pubkey, proof)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+
+    assert core.publish_starter_events(services) == {"published": {}}
+    assert relay.events == []
