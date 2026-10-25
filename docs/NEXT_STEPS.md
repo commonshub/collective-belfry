@@ -468,7 +468,7 @@ Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of
 
 To-dos from the user (2026-10-25):
 
-- [ ] Enable iDEAL and Bancontact in the Mollie account (dashboard, Settings › Payment methods), then rerun bootstrap (it offers only the methods the account has enabled).
+- [x] Enable iDEAL and Bancontact in the Mollie account (dashboard, Settings › Payment methods), then rerun bootstrap (it offers only the methods the account has enabled).
 - [ ] Decide whether the backups from before the VM reinstall (`/var/backups/belfry`, old test data, old backup key) are deleted.
 - [ ] Regenerate the Mollie test key (it passed through a chat) and store it with `infra/scripts/put-secret.sh … mollie_api_key`.
 - [ ] Add the venue's IPv4 address to `RATE_LIMIT_EXEMPT` (the IPv6 /64 is in), if the venue has a fixed one.
