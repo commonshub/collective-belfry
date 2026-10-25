@@ -350,8 +350,9 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/status/1")
     async def status_list(request: Request) -> Response:
-        """Token Status List of every pass certificate (bit = pass id): 1 for revoked and
-        expired passes. Derived from Odoo on every request, cacheable for a few minutes."""
+        """Token Status List of every pass certificate (bit = pass id): 0 only for active
+        passes, 1 for every other index (revoked, expired, unknown). Derived from Odoo on every
+        request, cacheable for a few minutes."""
         services = svc(request)
         try:
             token = await run_in_threadpool(claim.status_list_jwt, services)

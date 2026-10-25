@@ -107,7 +107,17 @@ else
 fi
 
 if [[ "$(psql_odoo "select 1 from information_schema.tables where table_name='ir_module_module'")" != "1" ]]; then
-  echo "creating and initialising database $ODOO_DB with $WANT_MODULES (takes a minute or two)"
+  # base first, then the company's country and currency, then the rest: accounting installs the
+  # chart of accounts and taxes of the company's country (l10n_be for BE) and fixes the currency
+  # once journal items exist.
+  COMPANY_COUNTRY=${COMPANY_COUNTRY:-BE}
+  echo "creating database $ODOO_DB (base), company in $COMPANY_COUNTRY with ${COMPANY_CURRENCY:-EUR}"
+  odoo_cli -d "$ODOO_DB" -i base --stop-after-init --without-demo
+  [[ "$(psql_odoo "select count(*) from res_country where code='$COMPANY_COUNTRY'")" == 1 ]] || die "unknown COMPANY_COUNTRY $COMPANY_COUNTRY"
+  psql_odoo "update res_partner set country_id=(select id from res_country where code='$COMPANY_COUNTRY') where id=(select partner_id from res_company where id=1)" >/dev/null
+  psql_odoo "update res_currency set active=true where name='${COMPANY_CURRENCY:-EUR}'" >/dev/null
+  psql_odoo "update res_company set currency_id=(select id from res_currency where name='${COMPANY_CURRENCY:-EUR}') where id=1" >/dev/null
+  echo "initialising $ODOO_DB with $WANT_MODULES (takes a minute or two)"
   odoo_cli -d "$ODOO_DB" -i "$WANT_MODULES" --stop-after-init --without-demo
 elif [[ "$WANT_MODULES" == *belfry_pass* && "$(module_state belfry_pass)" != "installed" ]]; then
   echo "installing belfry_pass into the existing database"
@@ -430,6 +440,18 @@ while :; do
   printf '.'; sleep 5
 done
 echo "blueprint belfry-keycast-provider: successful"
+# Blueprints read client secrets with !File and store a placeholder when the file was missing at
+# that moment (the worker applies a changed blueprint as soon as git updates it, possibly before
+# gen-secrets wrote the secret): re-apply every Belfry blueprint until no provider keeps one.
+i=0
+while ak "$AK_URL/api/v3/providers/oauth2/?page_size=100" | jq -e '[.results[] | select((.client_secret // "") | startswith("placeholder"))] | length > 0' >/dev/null; do
+  (( i += 5 )); [[ $i -ge 60 ]] && die "Authentik providers still have placeholder client secrets: $(ak "$AK_URL/api/v3/providers/oauth2/?page_size=100" | jq -r '[.results[] | select((.client_secret // "") | startswith("placeholder")) | .name] | join(", ")') (check infra/secrets/ and the worker's /run/secrets)"
+  for pk in $(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-&page_size=100" | jq -r '.results[].pk'); do
+    ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$pk/apply/" || true
+  done
+  printf '.'; sleep 5
+done
+echo "Authentik providers: client secrets from infra/secrets/"
 ak "$AK_URL/application/o/keycast/.well-known/openid-configuration" | jq -e '.issuer | endswith("/application/o/keycast/")' >/dev/null \
   || die "Keycast OIDC application not served at /application/o/keycast/"
 echo "Keycast OIDC issuer: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/"

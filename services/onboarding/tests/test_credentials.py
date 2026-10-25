@@ -167,7 +167,11 @@ def test_status_list_flips_the_bit_on_revocation(client, services, odoo, issuer_
     assert credentials.status_at(lst, p["id"]) == 1
     assert credentials.status_at(lst, p2["id"]) == 0
     core.reactivate_pass(services, p["id"])
-    assert credentials.status_at(fetch(), p["id"]) == 0
+    lst = fetch()
+    assert credentials.status_at(lst, p["id"]) == 0
+    # an index without a pass (deleted, or from a database before a reset) is never valid
+    assert credentials.status_at(lst, p2["id"] + 1) == 1
+    assert credentials.status_at(lst, 0) == 1
 
 
 def test_type_metadata(client):
