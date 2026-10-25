@@ -7,6 +7,7 @@ Outputs per app: ``<app>-512.png`` and ``<app>-192.png`` (rounded square on tran
 "any"), ``<app>-maskable-512.png`` (full bleed, symbol inside the 80 % safe zone) and
 ``<app>-180.png`` (apple-touch-icon, full bleed: iOS rounds the corners itself)."""
 
+import math
 from pathlib import Path
 
 from PIL import Image, ImageChops, ImageDraw
@@ -124,6 +125,23 @@ def photos_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, lc, lr * 1.0
 
 
+def programme_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """A clock face ("what is on now") with twelve hour ticks; returns the mark's centre and size."""
+    d.ellipse((c - r * 0.95, c - r * 0.95, c + r * 0.95, c + r * 0.95), fill=ACCENT)
+    for h in range(12):
+        a = math.radians(h * 30)
+        inner = 0.6 if h % 3 == 0 else 0.7
+        d.line(
+            [
+                (c + math.sin(a) * r * 0.82, c - math.cos(a) * r * 0.82),
+                (c + math.sin(a) * r * inner, c - math.cos(a) * r * inner),
+            ],
+            fill=BG,
+            width=round(r * (0.09 if h % 3 == 0 else 0.06)),
+        )
+    return c, c, r * 0.8
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -159,3 +177,4 @@ if __name__ == "__main__":
     render("people", people_symbol)
     render("market", market_symbol)
     render("photos", photos_symbol)
+    render("programme", programme_symbol)

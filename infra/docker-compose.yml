@@ -66,7 +66,7 @@ x-authentik-env: &authentik-env
 
 # The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
 # the Open Source Village app bar (brand/osv-bar.js) in every app.
-x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Programme|${PROGRAMME_PUBLIC_URL:-http://localhost:3900}|What is on now and next: the programme, the rooms, participants' sessions;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
 
 x-keycast-env: &keycast-env
   # the password comes as PGPASSWORD (with-secrets), which sqlx uses when the URL has none
@@ -110,7 +110,7 @@ x-keycast-env: &keycast-env
   OIDC_LOGOUT_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-signer-logout/
   # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
   # each must also be a registered client (bootstrap writes their redirect URIs).
-  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet,belfry-people,belfry-market,belfry-photos}
+  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet,belfry-people,belfry-market,belfry-photos,belfry-programme}
   # Keycast patch 0011: the village wallet derives its backup seed and nutzap key from the
   # participant's key (HKDF per purpose); no other app may derive anything.
   KEYCAST_DERIVE_SECRETS: ${KEYCAST_DERIVE_SECRETS:-belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1}
@@ -767,9 +767,10 @@ services:
     ports: ["3500:8080"]
 
   # The directory (people.<domain>, opt-in profiles), the marketplace (market.<domain>, NIP-99
-  # offers paid in village tokens through the wallet) and the photos (photos.<domain>, NIP-68
-  # pictures on Blossom): browser apps on the community relay, one Node process serving all three
-  # on three ports. services/village/README.md.
+  # offers paid in village tokens through the wallet), the photos (photos.<domain>, NIP-68
+  # pictures on Blossom) and the programme (programme.<domain>, NIP-52 sessions with RSVPs and
+  # comments): browser apps on the community relay, one Node process serving all four on four
+  # ports. services/village/README.md.
   village:
     profiles: ["app"]
     image: belfry-village:local
@@ -788,6 +789,8 @@ services:
         VITE_MARKET_URL: ${MARKET_PUBLIC_URL:-http://localhost:3700}
         VITE_PHOTOS_URL: ${PHOTOS_PUBLIC_URL:-http://localhost:3800}
         VITE_CALENDAR_URL: ${CALENDAR_PUBLIC_URL:-http://localhost:3200}
+        VITE_PROGRAMME_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
+        VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_COMMUNITY_APPS: *community-apps
@@ -795,6 +798,7 @@ services:
       PEOPLE_PUBLIC_URL: ${PEOPLE_PUBLIC_URL:-http://localhost:3600}
       MARKET_PUBLIC_URL: ${MARKET_PUBLIC_URL:-http://localhost:3700}
       PHOTOS_PUBLIC_URL: ${PHOTOS_PUBLIC_URL:-http://localhost:3800}
+      PROGRAMME_PUBLIC_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
       ONBOARDING_URL: http://onboarding:8100
     # PASS_INFO_TOKEN from /run/secrets/pass_info_token
     group_add: *secret-group
@@ -802,7 +806,7 @@ services:
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
-    ports: ["3600:8080", "3700:8081", "3800:8082"]
+    ports: ["3600:8080", "3700:8081", "3800:8082", "3900:8083"]
 
 # default: service to service. data (internal, no internet): Postgres and Redis with their
 # clients only. edge: what only the browser reaches (the static apps; the production proxy).

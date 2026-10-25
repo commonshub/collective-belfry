@@ -11,7 +11,7 @@ import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
 const WHY = "The directory lists the participants who chose to be listed. Sign in to see it and to add yourself."
 const appUrl = name => (import.meta.env[`VITE_${name}_URL`] || "").replace(/\/$/, "")
-const URLS = { chat: appUrl("CHAT"), market: appUrl("MARKET"), photos: appUrl("PHOTOS"), calendar: appUrl("CALENDAR") }
+const URLS = { chat: appUrl("CHAT"), market: appUrl("MARKET"), photos: appUrl("PHOTOS"), calendar: appUrl("CALENDAR"), programme: appUrl("PROGRAMME") }
 const ACTIVITY_DAYS = 14
 
 async function listed() {
@@ -181,7 +181,7 @@ async function mePage() {
 
 // -- what's new ------------------------------------------------------------------------------
 
-const APP_NAMES = { chat: "Chat", calendar: "Calendar", market: "Market", photos: "Photos", people: "Directory" }
+const APP_NAMES = { chat: "Chat", calendar: "Calendar", programme: "Programme", market: "Market", photos: "Photos", people: "Directory" }
 
 function activityLink(event, item) {
   switch (item.app) {
@@ -195,7 +195,14 @@ function activityLink(event, item) {
     case "market":
       return URLS.market ? `${URLS.market}/#/l/${nip19.naddrEncode({ kind: LISTING_KIND, pubkey: event.pubkey, identifier: item.listing.d })}` : ""
     case "calendar":
+      // a public event opens in the programme, where it can be answered and commented on
+      if (event.kind === 31923 && URLS.programme)
+        return `${URLS.programme}/#/s/${nip19.naddrEncode({ kind: 31923, pubkey: event.pubkey, identifier: event.tags.find(t => t[0] === "d")?.[1] || "" })}`
       return URLS.calendar ? `${URLS.calendar}/` : ""
+    case "programme": {
+      const [, pubkey, ...d] = (item.session || "").split(":")
+      return URLS.programme && pubkey ? `${URLS.programme}/#/s/${nip19.naddrEncode({ kind: 31923, pubkey, identifier: d.join(":") })}` : ""
+    }
     case "people":
       return `#/p/${nip19.npubEncode(event.pubkey)}`
     default:

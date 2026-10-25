@@ -1,15 +1,15 @@
-// Belfry village apps: the directory (people.<domain>), the marketplace (market.<domain>) and the
-// photos (photos.<domain>).
+// Belfry village apps: the directory (people.<domain>), the marketplace (market.<domain>), the
+// photos (photos.<domain>) and the programme (programme.<domain>).
 // Both are browser apps that read and write the community relay with the participant's signer;
 // this process serves them, one port each, and tells signed-in participants which keys hold an
 // active pass (the relay keeps the events of expired passes, the apps hide them).
 //
 // | Variable | Meaning |
 // | --- | --- |
-// | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT` | listen ports (8080, 8081, 8082) |
-// | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
+// | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT`, `PROGRAMME_PORT` | listen ports (8080, 8081, 8082, 8083) |
+// | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL`, `PROGRAMME_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
 // | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
-// | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist` and `photos/dist`) |
+// | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist`, `photos/dist` and `programme/dist`) |
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
@@ -198,7 +198,7 @@ function withSecrets(env, names) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const env = withSecrets(process.env, ["PASS_INFO_TOKEN"])
-  for (const name of ["PEOPLE_PUBLIC_URL", "MARKET_PUBLIC_URL", "PHOTOS_PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]) {
+  for (const name of ["PEOPLE_PUBLIC_URL", "MARKET_PUBLIC_URL", "PHOTOS_PUBLIC_URL", "PROGRAMME_PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]) {
     if (!env[name]) throw new Error(`${name} is not set`)
   }
   const passes = onboardingPasses({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
@@ -208,6 +208,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["people", Number(env.PEOPLE_PORT || 8080), env.PEOPLE_PUBLIC_URL],
     ["market", Number(env.MARKET_PORT || 8081), env.MARKET_PUBLIC_URL],
     ["photos", Number(env.PHOTOS_PORT || 8082), env.PHOTOS_PUBLIC_URL],
+    ["programme", Number(env.PROGRAMME_PORT || 8083), env.PROGRAMME_PUBLIC_URL],
   ]) {
     const handler = createApp({ passes, moderation, app, publicUrl, staticDir: join(root, app, "dist") })
     createServer(handler).listen(port, () => console.log(`${app} on :${port}, public ${publicUrl}`))

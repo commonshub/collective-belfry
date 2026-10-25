@@ -282,8 +282,8 @@ vote.{$BELFRY_DOMAIN} {
 	reverse_proxy vote:8080
 }
 
-# Community apps: the directory, the marketplace and the photos (services/village, one process,
-# three ports).
+# Community apps: the directory, the marketplace, the photos and the programme (services/village,
+# one process, four ports).
 people.{$BELFRY_DOMAIN} {
 	import security
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
@@ -300,6 +300,12 @@ photos.{$BELFRY_DOMAIN} {
 	import security
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8082
+}
+
+programme.{$BELFRY_DOMAIN} {
+	import security
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	reverse_proxy village:8083
 }
 
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status

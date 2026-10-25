@@ -223,9 +223,11 @@ REPORT_LABELS = {
     "listing": "offer",
     "photo": "photo",
     "comment": "comment",
+    "session": "programme session",
     "people": "Directory",
     "market": "Marketplace",
     "photos": "Photos",
+    "programme": "Programme",
 }
 
 
@@ -510,7 +512,7 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
                     f"/steward/reports/{r['id']}/hide",
                     sess,
                     "Hide content",
-                    confirm="Hide this content in the directory, marketplace and photos?",
+                    confirm="Hide this content in the community apps?",
                 )
             )
             actions.append(
@@ -540,9 +542,10 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
     open_count = sum(1 for r in reports if r["state"] == "open")
     parts.append(
         f"<section id='reports'><h2>Reports{f' ({open_count} open)' if open_count else ''}</h2>"
-        "<p class='muted'>Reports from the directory, marketplace and photos. Hidden content "
-        "stays on the relay but the apps stop showing it. Reporters are never told to the "
-        "author.</p><div class='wrap'><table><thead><tr><th>Date</th><th>What</th><th>Reason</th>"
+        "<p class='muted'>Reports from the directory, marketplace, photos and programme. "
+        "Hidden content stays on the relay but the apps stop showing it. Reporters are never "
+        "told to the author.</p><div class='wrap'><table><thead><tr><th>Date</th><th>What</th>"
+        "<th>Reason</th>"
         "<th>Author</th><th>Reported by</th><th>State</th><th></th></tr></thead><tbody>"
         + ("".join(rows) or "<tr><td colspan=7 class='muted'>No reports.</td></tr>")
         + "</tbody></table></div></section>"

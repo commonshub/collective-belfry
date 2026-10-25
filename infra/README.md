@@ -45,7 +45,7 @@ more while images build.
 | `chat` | http://localhost:3300 | community chat (`apps/chat/README.md`) |
 | `wallet` | http://localhost:3400 | village token wallet (`apps/wallet/README.md`) |
 | `vote` | http://localhost:3500 | anonymous polls (`../services/vote/README.md`) |
-| `village` | http://localhost:3600, :3700, :3800 | directory, marketplace, photos (`../services/village/README.md`) |
+| `village` | http://localhost:3600, :3700, :3800, :3900 | directory, marketplace, photos, programme (`../services/village/README.md`) |
 | `mailpit` | http://localhost:8025 | catches every mail the local stack sends (not used in production) |
 | `postgres`, `redis` | internal | databases of Odoo, Authentik and Keycast; Keycast's cache. `docker compose exec postgres psql -U postgres` |
 

@@ -1,0 +1,82 @@
+/* The programme's own pieces; the rest is shared/style.css. --track is the session's colour. */
+.days {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+  margin: 4px 0 8px;
+}
+.days a.chip {
+  text-decoration: none;
+}
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: baseline;
+}
+a.session {
+  display: flex;
+  gap: 12px;
+  text-decoration: none;
+  border-left: 4px solid var(--track, #44534a);
+  padding: 12px 14px;
+  margin-bottom: 8px;
+}
+a.session:hover {
+  border-color: var(--osv-accent, #d6ff52);
+  border-left-color: var(--track, #44534a);
+}
+a.session.past {
+  opacity: 0.6;
+}
+.session-time {
+  flex: none;
+  width: 3.2rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.session-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.session-title {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.session-page {
+  border-top: 4px solid var(--track, #44534a);
+}
+.session-page h2 {
+  font-size: 1.35rem;
+  overflow-wrap: anywhere;
+}
+.when {
+  margin: 0;
+}
+.rsvp {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.rsvp button {
+  min-height: 44px;
+}
+.people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 0.9rem;
+}

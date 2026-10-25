@@ -24,8 +24,8 @@ from .core import Services
 
 log = logging.getLogger(__name__)
 
-APPS = {"people", "market", "photos"}
-KINDS = {"profile", "listing", "photo", "comment"}
+APPS = {"people", "market", "photos", "programme"}
+KINDS = {"profile", "listing", "photo", "comment", "session"}
 REASONS = {"spam", "harassment", "illegal", "scam", "other"}
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 # an event id, a pubkey, or an addressable coordinate <kind>:<pubkey>:<d>

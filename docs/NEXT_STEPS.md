@@ -514,6 +514,16 @@ Open: the website route needs merging and deploying (until then the programme so
 
 Smoke note: the restore-keys check (step 10a) failed once with the JSON split by interleaved log lines from `docker compose exec ... 2>&1`; the command itself returns valid JSON. Not related to this slice.
 
+## 3ze. Calendar on phones; the programme app — built 2026-10-25
+
+User (phone screenshot of the calendar): the calendar is not mobile friendly; is there a better calendar UI; how to link it with Nostr events. Chose both: fix the calendar, and a programme app built for the event.
+
+- [x] Calendar patch 0005: our own patch 0001 had replaced Formstr's small square logo with the wide OSV wordmark, which pushed the top bar and the whole page past a phone's edge (451 px on 412 px; the day's event list ran off the screen). Phones get the square mark, the date label stays on one line, and phones open on the day view. Checked at 412 px in headless Chromium: no sideways scrolling, upstream's bottom tab bar is back.
+- [x] Programme app at `programme.<domain>` (`services/village/web/programme`, fourth app of the village process, Keycast client `belfry-programme`): the programme key's sessions and room bookings plus participants' public events, one day at a time ("On now", "Later today" on today), filters by track, times in Europe/Brussels; "Your sessions". Session page: Going/Maybe/Can't go (NIP-52 kind 31925, Formstr's RSVPs read too), who is going, NIP-22 comments on the session's coordinate, photos taken there (the photos app's "Share a photo from this session" adds an `a` tag; the photo says "At <session>"), "Thank the host" tips for participants' sessions (nutzap with the coordinate), "Add to my calendar" (.ics), Share. "What's new" shows session comments and opens public events in the programme. Reports of sessions and comments (`belfry_pass` 19.0.1.17.0: app `programme`, kind `session`). No new policy kinds.
+- [x] Checks: village tests 24 (6 new), onboarding 215, Odoo 69; smoke step 6t, local smoke 178 ok / 0 failed; `infra/scripts/programme-check.mjs` at 390 px with two participants: day list without sideways scrolling, RSVP, comment, .ics, "Your sessions", a photo from the session shown on the session page, the second participant sees the answer and the comment.
+
+Open: sessions are announced in the calendar app (public event), not in the programme app; no polls linked to a session; no reminders; the Calendar by Form* month and week views stay as upstream made them (dots on phones). Deploy: rebuild calendar, village, onboarding; bootstrap (Odoo upgrade, Keycast client); recreate keycast (trusted clients) and the proxy (`programme.` host); add `PROGRAMME_PUBLIC_URL` to the VM's `.env` (gen-secrets appends it).
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

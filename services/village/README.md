@@ -1,16 +1,17 @@
-# Village: the directory, the marketplace and the photos
+# Village: the directory, the marketplace, the photos and the programme
 
-Three community apps of Open Source Village:
+Four community apps of Open Source Village:
 
 - **Directory** at `people.<domain>`: who is here. Participants opt in; nobody is listed by default.
 - **Marketplace** at `market.<domain>`: things, food, help and skills offered between participants,
   priced in village tokens and paid through the wallet.
 - **Photos** at `photos.<domain>`: pictures of the village shared between participants, with likes,
   comments and tips in village tokens.
+- **Programme** at `programme.<domain>`: what is on, as a list for the phone (see "Programme" below).
 
 All are browser apps that read and write the community relay with the participant's own signer
 ("Sign in with Open Source Village" through Keycast, silent once per tab, or a browser extension or
-bunker URL after self-custody). One Node process serves them (ports 8080, 8081 and 8082) and
+bunker URL after self-custody). One Node process serves them (ports 8080, 8081, 8082 and 8083) and
 answers one question: which keys hold an active pass.
 
 ## How it works
@@ -65,12 +66,39 @@ Kinds signed: 0, 5, 7, 20, 1111, 22242, 24242, 27235, 30078, 30402 (all in the `
 policy). Keycast clients `belfry-people`, `belfry-market` and `belfry-photos`, registered by
 bootstrap with `<URL>/oauth/callback` and trusted (`KEYCAST_TRUSTED_CLIENTS`).
 
+## Programme
+
+`programme.<domain>`: the village programme and the room bookings (the public NIP-52 events of
+Belfry's programme key, `PROGRAMME_PUBKEY`, published by the onboarding service's
+`sync-programme` job) and participants' own public events (kind 31923, from the calendar app),
+one day at a time. The day opens on today, or the next day with sessions; on today the list is
+split into "On now", "Later today" and "Earlier today". Filters by track: the programme, each
+room, "From participants" (the choice is kept per browser). Times are shown in `VITE_EVENT_TZ`
+(Europe/Brussels), whatever the phone's zone. "Your sessions" lists what the participant is going
+to, might go to or announced.
+
+A session is addressed by its coordinate `31923:<pubkey>:<d>` (links: `#/s/<naddr>`), and the
+other apps point at it:
+
+| What | Event | Where it shows |
+| --- | --- | --- |
+| Going / Maybe / Can't go | kind 31925, `a` = the coordinate, `status`; one replaceable answer per participant (Calendar by Form*'s RSVPs are read too) | counts on the list, the people going on the session page, "Your sessions" |
+| Comments | NIP-22 kind 1111 with `A` = the coordinate, `K` 31923 | the session page; "What's new" |
+| Photos | kind 20 with an `a` tag: the photos app's `#/new?session=<coordinate>` ("Share a photo from this session") | the session page; "At <session>" on the photo |
+| Thanks | a nutzap through the wallet with the coordinate as `ref` (an `a` tag), participants' sessions only | "Thank the host" |
+| Add to my calendar | an .ics file made in the browser | the phone's own calendar |
+
+Sessions of participants and comments can be reported (`session`, `comment`); the programme's
+own events cannot. No new kinds in the policy (31923, 31925, 1111, 20 and 9321 were in).
+Keycast client `belfry-programme`.
+
 ## What's new
 
 `people.<domain>/#/activity` (linked from the directory as "What's new"): the last 14 days of
 readable events from participants with an active pass, newest first, grouped by day, filterable
 by app, each linking into its app. Shown: chat notes (not replies) and articles, photos and photo
-comments, offers (and offers marked as gone), public calendar events, directory opt-ins. Left out
+comments, comments on programme sessions, offers (and offers marked as gone), public calendar
+events (they open in the programme), directory opt-ins. Left out
 on purpose: private messages and private calendar entries (encrypted), likes, profile edits,
 opting out of the directory, and token payments (who paid whom stays in the wallets and on the
 offer pages); deleted events are dropped. The rules are `activityFromEvent` in `web/shared/model.js`.
@@ -79,17 +107,19 @@ offer pages); deleted events are dropped. The rules are `activityFromEvent` in `
 
 Node 24, no framework, like `services/vote` (whose NIP-98 check and Keycast sign-in are copied
 here): `server/` (node:http), `web/shared` (sign-in, signer, relay with NIP-42 AUTH, the event
-formats in `model.js`), `web/people`, `web/market`, `web/photos` (vanilla JS, Vite;
-`APP=people|market|photos vite build -c web/vite.config.js`). Compose service `village` (profile
-app), host ports 3600, 3700 and 3800 locally, proxy hosts `people.`, `market.` and `photos.<domain>`,
-`PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL`.
+formats in `model.js`), `web/people`, `web/market`, `web/photos`, `web/programme` (vanilla JS,
+Vite; `APP=people|market|photos|programme vite build -c web/vite.config.js`). Compose service
+`village` (profile app), host ports 3600, 3700, 3800 and 3900 locally, proxy hosts `people.`,
+`market.`, `photos.` and `programme.<domain>`, `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`,
+`PHOTOS_PUBLIC_URL`, `PROGRAMME_PUBLIC_URL`.
 
 | Build arg | Meaning |
 | --- | --- |
 | `VITE_KEYCAST_URL`, `VITE_APPS_URL` | Keycast (sign-in, the app bar's home) |
 | `VITE_RELAY_URL` | the community relay (`COMMUNITY_RELAY_URL`) |
 | `VITE_BLOSSOM_URL` | Blossom for listing photos and the photos app (`BLOSSOM_PUBLIC_URL`) |
-| `VITE_CHAT_URL`, `VITE_WALLET_URL`, `VITE_PEOPLE_URL` | links between the apps |
+| `VITE_CHAT_URL`, `VITE_WALLET_URL`, `VITE_PEOPLE_URL`, `VITE_PHOTOS_URL`, `VITE_PROGRAMME_URL` | links between the apps |
+| `VITE_PROGRAMME_PUBKEY`, `VITE_EVENT_TZ` | the programme key (`PROGRAMME_PUBKEY`) and the event's time zone |
 | `VITE_COMMUNITY_APPS`, `VITE_BRAND_URL` | the app bar and the brand files |
 
 Checks: `npm test` (the participants endpoint, the event formats), smoke step 6p (both apps served,
@@ -98,6 +128,9 @@ browser `infra/scripts/village-check.mjs` with two participants: directory opt-i
 offer with a photo, paying it through the wallet, the payment shown to buyer and seller. Photos: tests in `test/photos.test.js`, smoke step 6q, and
 `infra/scripts/photos-check.mjs` with two participants: upload with alt text, share, feed and
 hashtag, like, comment, a tip through the wallet, the photographer sees all three, delete.
+Programme: `test/programme.test.js`, smoke step 6t, and `infra/scripts/programme-check.mjs` at
+390 px: the day list without sideways scrolling, "Going", a comment, the .ics link, "Your
+sessions", a photo shared from the session and shown there, and a second participant seeing it.
 
 ## Open
 
@@ -105,4 +138,6 @@ No moderation or reporting of offers or profiles yet (participants can delete th
 notifications (a seller learns of a payment in the wallet or on the offer page); the directory has
 no fields beyond kind 0 (interests, languages); pictures are links in the directory but uploads in
 the marketplace. Photos: animated GIFs become still JPEGs; no albums; Blossom keeps the files of
-deleted posts until its retention removes them.
+deleted posts until its retention removes them. Programme: no way to announce a session in the
+programme app itself (participants use the calendar app, public events); no polls linked to a
+session yet; no reminders before a session starts.

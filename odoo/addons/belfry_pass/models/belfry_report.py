@@ -20,11 +20,12 @@ TARGET_KINDS = [
     ('listing', "Offer"),
     ('photo', "Photo"),
     ('comment', "Comment"),
+    ('session', "Programme session"),
 ]
 
 
 class BelfryReport(models.Model):
-    """A participant's report of content in the community apps (directory, marketplace, photos).
+    """A participant's report of content in the community apps (directory, marketplace, photos, programme).
 
     The village apps send it through the onboarding service, which calls belfry_report_create
     as the service user; every steward gets a mail. Stewards handle reports on the steward
@@ -40,7 +41,7 @@ class BelfryReport(models.Model):
     reporter_pass_id = fields.Many2one('belfry.pass', string="Reporter's pass", readonly=True)
     reporter_partner_id = fields.Many2one(related='reporter_pass_id.partner_id', string="Reporter")
     app = fields.Selection(
-        [('people', "Directory"), ('market', "Marketplace"), ('photos', "Photos")],
+        [('people', "Directory"), ('market', "Marketplace"), ('photos', "Photos"), ('programme', "Programme")],
         required=True, readonly=True,
     )
     target_kind = fields.Selection(TARGET_KINDS, string="What", required=True, readonly=True)

@@ -566,6 +566,26 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$PHOTOS_URL/api/report" --data-binary "$R_BODY")" == 401 ]] && ok "an unsigned report: 401" || bad "unsigned report not refused"
 fi
 
+step "6t. programme (services/village): served on its own host, follows the programme key; RSVPs and comments signed"
+PROGRAMME_URL=${PROGRAMME_URL:-${PROGRAMME_PUBLIC_URL:-http://localhost:3900}}
+H=$(curl -sS -o - -w '\n%{http_code}' "$PROGRAMME_URL/")
+[[ "${H##*$'\n'}" == 200 && "$H" == *"<title>Open Source Village programme</title>"* ]] && ok "Open Source Village programme answers at $PROGRAMME_URL" || bad "programme at $PROGRAMME_URL: HTTP ${H##*$'\n'}"
+JS=$(grep -o '/assets/index-[^"]*\.js' <<<"$H" | head -1)
+BUNDLE=$(curl -sS "$PROGRAMME_URL$JS")
+[[ "$BUNDLE" == *"belfry-programme"* ]] && ok "bundle signs in as belfry-programme" || bad "programme bundle lacks its client id"
+if [[ -n "${PROGRAMME_PUBKEY:-}" ]]; then
+  [[ "$BUNDLE" == *"$PROGRAMME_PUBKEY"* ]] && ok "bundle follows the programme key" || bad "programme bundle lacks PROGRAMME_PUBKEY (rebuild village after gen-secrets)"
+fi
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PROGRAMME_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  for k in 31925 1111; do
+    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
+    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (RSVP, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+  done
+fi
+echo "  note the browser check (day list, RSVP, comment, a photo from the session) is infra/scripts/programme-check.mjs"
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"

@@ -57,6 +57,7 @@ values = {
     "PEOPLE_PUBLIC_URL": f"https://people.{domain}",
     "MARKET_PUBLIC_URL": f"https://market.{domain}",
     "PHOTOS_PUBLIC_URL": f"https://photos.{domain}",
+    "PROGRAMME_PUBLIC_URL": f"https://programme.{domain}",
 }
 lines = open(path).read().splitlines(keepends=True)
 seen = set()

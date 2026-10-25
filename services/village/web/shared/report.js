@@ -23,7 +23,7 @@ export function reportLink(target, label = "Report") {
 }
 
 function form(target) {
-  const what = { profile: "this entry", listing: "this offer", photo: "this photo", comment: "this comment" }[target.kind] || "this"
+  const what = { profile: "this entry", listing: "this offer", photo: "this photo", comment: "this comment", session: "this session" }[target.kind] || "this"
   return `
     <form class="card stack report-form">
       <strong>Report ${esc(what)} to the stewards</strong>

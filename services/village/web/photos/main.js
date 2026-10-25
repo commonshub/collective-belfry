@@ -1,7 +1,8 @@
 // Open Source Village photos: pictures shared between participants (NIP-68, kind 20), stored on
 // Belfry's Blossom server. Likes, comments and tips in village tokens through the wallet. Hash
 // routes: #/ (everyone's photos), #/t/<hashtag>, #/u/<npub> (one person's), #/p/<event id> (one
-// post), #/new, #/signer.
+// post), #/new (with ?session=<31923 coordinate> from the programme: the post names the session),
+// #/signer.
 import "../shared/style.css"
 import { nip19 } from "nostr-tools"
 import * as session from "../shared/session.js"
@@ -23,10 +24,23 @@ import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
 const WHY = "Participants share their pictures of the village here. Sign in to see them and to add your own."
 const PEOPLE_URL = (import.meta.env.VITE_PEOPLE_URL || "").replace(/\/$/, "")
+const PROGRAMME_URL = (import.meta.env.VITE_PROGRAMME_URL || "").replace(/\/$/, "")
+const SESSION_COORD = /^31923:([0-9a-f]{64}):(.+)$/
 const FEED_LIMIT = 500
 const TIPS = [1, 5, 10]
 const when = t => new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })
 const tokens = n => `${n} token${n === 1 ? "" : "s"}`
+
+/** The programme session a coordinate names: {title, url}, or null when it cannot be read. */
+async function sessionInfo(coordinate) {
+  const m = SESSION_COORD.exec(coordinate || "")
+  if (!m) return null
+  const event = (await query({ kinds: [31923], authors: [m[1]], "#d": [m[2]] })).sort((a, b) => b.created_at - a.created_at)[0]
+  const title = event?.tags.find(t => t[0] === "title")?.[1]
+  if (!title) return null
+  const url = PROGRAMME_URL ? `${PROGRAMME_URL}/#/s/${nip19.naddrEncode({ kind: 31923, pubkey: m[1], identifier: m[2] })}` : ""
+  return { title, url }
+}
 
 function failure(e) {
   if (e.status === 403) return '<p class="notice bad">The photos are for participants with an active pass.</p>'
@@ -153,6 +167,7 @@ async function photoPage(id) {
     hidden = await hiddenRefs()
     if (hidden.has(p.id) && !isMe(p.pubkey)) throw Object.assign(new Error("The stewards hid this photo."), { status: 404 })
     r = await reactionsFor(p, active, hidden)
+    p.sessionInfo = p.session ? await sessionInfo(p.session).catch(() => null) : null
     profiles = await loadProfiles([p.pubkey, ...r.comments.map(c => c.pubkey), ...r.tips.map(t => t.from)])
   } catch (e) {
     body.innerHTML = e.status === 403 ? failure(e) : `<p class="notice bad">${esc(e.message)}</p>`
@@ -178,6 +193,11 @@ async function photoPage(id) {
         )
         .join("")}</div>
       ${p.title ? `<h2>${esc(p.title)}</h2>` : ""}
+      ${
+        p.sessionInfo
+          ? `<p class="small">At ${p.sessionInfo.url ? `<a href="${esc(p.sessionInfo.url)}">${esc(p.sessionInfo.title)}</a>` : esc(p.sessionInfo.title)}</p>`
+          : ""
+      }
       ${p.caption ? `<p class="pre">${esc(p.caption)}</p>` : ""}
       ${p.hashtags.length ? `<p class="chips">${p.hashtags.map(h => `<a class="chip" href="#/t/${encodeURIComponent(h)}">#${esc(h)}</a>`).join("")}</p>` : ""}
       <div class="actions">
@@ -269,7 +289,7 @@ async function photoPage(id) {
   }
 }
 
-async function newPage() {
+async function newPage(sessionCoord = "") {
   render(`${header("Share photos", "#/")}<div id="body"><p class="muted">Loading…</p></div>`)
   bindCommon(route)
   const body = document.getElementById("body")
@@ -281,8 +301,10 @@ async function newPage() {
     return
   }
   const images = []
+  const at = sessionCoord ? await sessionInfo(sessionCoord).catch(() => null) : null
   body.innerHTML = `
     <form class="card stack" id="form">
+      ${at ? `<p class="notice info">From the session <strong>${esc(at.title)}</strong>; the post links to it in the programme.</p>` : ""}
       <div><span class="label">Pictures (up to ${MAX_PHOTOS})</span>
         <div class="stack" id="images"></div>
         <input id="file" type="file" accept="image/*" multiple /></div>
@@ -336,7 +358,14 @@ async function newPage() {
     const val = id => document.getElementById(id).value.trim()
     try {
       const event = await publish(
-        photoTemplate({ title: val("title"), caption: val("caption"), hashtags: parseHashtags(val("hashtags")), location: val("location"), images }),
+        photoTemplate({
+          title: val("title"),
+          caption: val("caption"),
+          hashtags: parseHashtags(val("hashtags")),
+          location: val("location"),
+          images,
+          session: at ? sessionCoord : "",
+        }),
       )
       location.hash = `#/p/${event.id}`
     } catch (e) {
@@ -358,7 +387,7 @@ function route() {
     }
   }
   if ((m = hash.match(/^#\/t\/(.+)$/))) return feedPage({ hashtag: decodeURIComponent(m[1]).toLowerCase() })
-  if (hash === "#/new") return newPage()
+  if ((m = hash.match(/^#\/new(?:\?session=([^&]+))?$/))) return newPage(m[1] ? decodeURIComponent(m[1]) : "")
   if (hash === "#/signer") return signerPage("Your own signer", () => (location.hash = "#/"))
   if (hash === "#/self-custody") return signerPage("Your own signer", () => (location.hash = "#/"), true)
   return feedPage()

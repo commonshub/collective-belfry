@@ -10,7 +10,7 @@ in front of everything and publishes no other port.
   image has no ARM build.
 - A domain. Every service gets a subdomain: `shop.` (Odoo; `ODOO_HOST_PREFIX` changes the
   name), `login.`, `apps.`, `pass.`, `relay.`, `bunker.`, `blossom.`, `mint.`, `issuer.`,
-  `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, plus the
+  `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.`, plus the
   domain itself (NIP-05 names are `<member>@<domain>`). A wildcard record covers them all: A and
   AAAA for `<domain>` and `*.<domain>`.
 - An SMTP relay for the mails (sign-in links, activation mails) and a sender address whose domain
@@ -217,7 +217,7 @@ $C --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-m
 | `mint.` | the token mint | `/v1/mint/*` and `/v1/melt/*` denied: only the onboarding service mints |
 | `issuer.` | Issuer2, the wallet-facing part | `/issuer2/*` (management API) denied |
 | `verifier.` | Verifier2, only the request and response of a session | everything else denied |
-| `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.` | the community apps | |
+| `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.` | the community apps | |
 
 Protections on top:
 

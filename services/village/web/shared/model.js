@@ -151,13 +151,14 @@ export function photoFromEvent(event) {
     caption: event.content || "",
     hashtags: [...new Set(event.tags.filter(t => t[0] === "t" && HASHTAG.test(t[1] || "")).map(t => t[1].toLowerCase()))],
     location: tag(event, "location") || "",
+    session: event.tags.find(t => t[0] === "a" && /^31923:[0-9a-f]{64}:.+/.test(t[1] || ""))?.[1] || "",
     images,
     createdAt: event.created_at,
   }
 }
 
 /** The unsigned kind-20 event for a photo post (`images`: {url, m, x, width, height, alt}). */
-export function photoTemplate({ title = "", caption = "", hashtags = [], location = "", images }) {
+export function photoTemplate({ title = "", caption = "", hashtags = [], location = "", images, session = "" }) {
   if (!images?.length) throw new Error("a photo post needs at least one picture")
   const tags = []
   if (title) tags.push(["title", title])
@@ -174,6 +175,8 @@ export function photoTemplate({ title = "", caption = "", hashtags = [], locatio
   for (const img of images) if (img.x) tags.push(["x", img.x])
   for (const h of hashtags) tags.push(["t", h])
   if (location) tags.push(["location", location])
+  // the programme session it was taken at (its kind-31923 coordinate)
+  if (/^31923:[0-9a-f]{64}:.+/.test(session)) tags.push(["a", session])
   return { kind: PHOTO_KIND, created_at: Math.floor(Date.now() / 1000), tags, content: caption }
 }
 
@@ -249,6 +252,8 @@ export function activityFromEvent(event) {
       return { app: "photos", text: p.images.length > 1 ? `shared ${p.images.length} photos` : "shared a photo", detail: firstLine(p.title || p.caption), image: p.images[0].url }
     }
     case 1111:
+      if (event.tags.some(t => t[0] === "K" && t[1] === "31923"))
+        return { app: "programme", text: "commented on a session", detail: firstLine(event.content), session: event.tags.find(t => t[0] === "A")?.[1] }
       if (!event.tags.some(t => t[0] === "K" && t[1] === String(PHOTO_KIND))) return null
       return { app: "photos", text: "commented on a photo", detail: firstLine(event.content), photoId: event.tags.find(t => t[0] === "E")?.[1] }
     case 30023:
@@ -294,4 +299,151 @@ export function isHidden(hidden, event) {
     if (d !== undefined && hidden.has(`${event.kind}:${event.pubkey}:${d}`)) return true
   }
   return (event.kind === 0 || event.kind === 30078) && hidden.has(event.pubkey)
+}
+
+// Programme (programme.<domain>): NIP-52 time-based calendar events (kind 31923). The village
+// programme and the room bookings come from Belfry's programme key (onboarding `sync-programme`,
+// d = "osv-programme-…" / "osv-room-…", t = "programme" / "room-<slug>"); participants' own
+// public events are shown next to them. A session is addressed by its coordinate
+// "31923:<pubkey>:<d>", and everything else points at that: RSVPs (kind 31925, `a` tag, status
+// accepted / tentative / declined, as Calendar by Form* writes them), comments (NIP-22 kind 1111
+// with an `A` root), photos (kind 20 with an `a` tag) and tips (nutzaps with the coordinate as
+// `ref`, which the wallet puts in an `a` tag).
+export const SESSION_KIND = 31923
+export const RSVP_KIND = 31925
+export const RSVP_STATUSES = ["accepted", "tentative", "declined"]
+
+/** The calendar a session belongs to: {id, title} from its `t` tags and location. */
+export function sessionTrack(event, programmeKey) {
+  const ts = event.tags.filter(t => t[0] === "t").map(t => t[1])
+  if (event.pubkey === programmeKey) {
+    if (ts.includes("programme")) return { id: "programme", title: "Village programme" }
+    const room = ts.find(t => t?.startsWith("room-"))
+    if (room) return { id: room, title: (tag(event, "location") || "").split(",")[0].trim() || room.slice(5) }
+  }
+  return { id: "community", title: "From participants" }
+}
+
+/** A session from a kind-31923 event, or null without a d tag, title or valid times. */
+export function sessionFromEvent(event, programmeKey = "") {
+  if (event?.kind !== SESSION_KIND) return null
+  const d = tag(event, "d")
+  const title = (tag(event, "title") || tag(event, "name") || "").trim()
+  const start = Number(tag(event, "start"))
+  let end = Number(tag(event, "end"))
+  if (!d || !title || !Number.isSafeInteger(start) || start <= 0) return null
+  if (!Number.isSafeInteger(end) || end < start) end = start
+  return {
+    id: event.id,
+    pubkey: event.pubkey,
+    d,
+    coordinate: `${SESSION_KIND}:${event.pubkey}:${d}`,
+    title,
+    summary: tag(event, "summary") || "",
+    description: event.content || "",
+    location: tag(event, "location") || "",
+    start,
+    end,
+    tzid: tag(event, "start_tzid") || "",
+    links: event.tags.filter(t => t[0] === "r").map(t => httpsUrl(t[1])).filter(Boolean),
+    image: httpsUrl(tag(event, "image")),
+    track: sessionTrack(event, programmeKey),
+    official: Boolean(programmeKey) && event.pubkey === programmeKey,
+    createdAt: event.created_at,
+  }
+}
+
+/** The newest version per coordinate, without those their author deleted (kind 5 with `a` or
+ * `e` tags, NIP-09; a deletion counts for versions up to its own time). */
+export function currentSessions(events, deletions, programmeKey = "") {
+  const newest = new Map()
+  for (const e of events) {
+    const s = sessionFromEvent(e, programmeKey)
+    if (!s) continue
+    const prev = newest.get(s.coordinate)
+    if (!prev || s.createdAt > prev.createdAt) newest.set(s.coordinate, s)
+  }
+  for (const del of deletions) {
+    for (const t of del.tags) {
+      for (const [coord, s] of newest) {
+        if (s.pubkey !== del.pubkey || del.created_at < s.createdAt) continue
+        if ((t[0] === "a" && t[1] === coord) || (t[0] === "e" && t[1] === s.id)) newest.delete(coord)
+      }
+    }
+  }
+  return [...newest.values()].sort((a, b) => a.start - b.start || a.title.localeCompare(b.title))
+}
+
+/** The newest RSVP per participant for one session: Map pubkey -> status. */
+export function rsvpsFor(events, coordinate) {
+  const newest = new Map()
+  for (const e of events) {
+    if (e.kind !== RSVP_KIND || !e.tags.some(t => t[0] === "a" && t[1] === coordinate)) continue
+    const prev = newest.get(e.pubkey)
+    if (!prev || e.created_at > prev.created_at) newest.set(e.pubkey, e)
+  }
+  const out = new Map()
+  for (const [pk, e] of newest) {
+    const status = tag(e, "status")
+    if (RSVP_STATUSES.includes(status)) out.set(pk, status)
+  }
+  return out
+}
+
+/** The unsigned RSVP (kind 31925) to a session; one replaceable event per participant and session. */
+export const rsvpTemplate = (session, status) => {
+  if (!RSVP_STATUSES.includes(status)) throw new Error(`unknown RSVP status ${status}`)
+  return {
+    kind: RSVP_KIND,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [
+      ["d", `rsvp-${session.coordinate}`],
+      ["a", session.coordinate],
+      ["e", session.id],
+      ["p", session.pubkey],
+      ["status", status],
+    ],
+    content: "",
+  }
+}
+
+/** A top-level comment (NIP-22) on a session, addressed by its coordinate. */
+export const sessionCommentTemplate = (session, text) => ({
+  kind: 1111,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [
+    ["A", session.coordinate],
+    ["E", session.id, "", session.pubkey],
+    ["K", String(SESSION_KIND)],
+    ["P", session.pubkey],
+    ["a", session.coordinate],
+    ["e", session.id, "", session.pubkey],
+    ["k", String(SESSION_KIND)],
+    ["p", session.pubkey],
+  ],
+  content: text,
+})
+
+const icsText = s => String(s).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, m => `\\${m}`)
+const icsTime = t => new Date(t * 1000).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")
+
+/** An iCalendar file with one session, for "Add to my calendar". */
+export function sessionIcs(session, url = "", now = Date.now()) {
+  const lines = [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "PRODID:-//Belfry//Open Source Village programme//EN",
+    "BEGIN:VEVENT",
+    `UID:${session.coordinate.replace(/:/g, "-")}@opensourcevillage`,
+    `DTSTAMP:${icsTime(Math.floor(now / 1000))}`,
+    `DTSTART:${icsTime(session.start)}`,
+    `DTEND:${icsTime(session.end > session.start ? session.end : session.start + 3600)}`,
+    `SUMMARY:${icsText(session.title)}`,
+  ]
+  if (session.location) lines.push(`LOCATION:${icsText(session.location)}`)
+  const description = [session.description, url].filter(Boolean).join("\n\n")
+  if (description) lines.push(`DESCRIPTION:${icsText(description)}`)
+  if (url) lines.push(`URL:${url}`)
+  lines.push("END:VEVENT", "END:VCALENDAR")
+  return lines.join("\r\n") + "\r\n"
 }
