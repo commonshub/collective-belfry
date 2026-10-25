@@ -381,6 +381,16 @@ User: rate limits on the login, claim and bridge pages (magic-link flooding), no
 
 Open: the VM's ZeroTier node must be authorised in ZeroTier Central, then `ADMIN_NETS` gets the ZeroTier subnet; steward phones need ZeroTier; image pinning and monitoring from the security review are still open.
 
+## 3y. Default avatars and Mollie — built 2026-10-25
+
+User: "Let's do B avatars. Also add what is needed for mollie. Including the web hooks." Decisions (live doc): the default avatar is a mirrored 5×5 pixel pattern in one of five village tints on the card colour, drawn from the public key (option B of the comparison page); Mollie is a second payment provider next to Stripe, through Odoo's own Mollie module.
+
+- [x] Avatars: onboarding `avatar.py` serves `/avatar/<pubkey>.png|.svg` (PNG written with zlib, cached a year, CORS open); the starter profile names the PNG as `picture`, `publish-starter-events` adds it to profiles without a picture (everything else kept); the village apps draw the same picture in the browser (`web/shared/avatar.js`) for profiles without one or with a broken picture. A shared test vector keeps Python and JS in step. Chat, calendar and outside clients show the published `picture`.
+- [x] Mollie: `belfry_pass` 19.0.1.9.0 depends on `payment_mollie` and adds refunds from Odoo, and on each webhook call for a paid payment reads its refunds and chargebacks from Mollie's API: refunds become refund transactions (keyed on the refund id, done when Mollie processes them, so the existing refund webhook revokes the pass; dashboard refunds included), chargebacks set `belfry_chargeback_state`, whose new automation posts to the onboarding service's `/hooks/odoo/chargeback` (open: revoke; reversed: give back a pass revoked for it); reconcile revokes open chargebacks it finds. Bootstrap configures the provider from `infra/secrets/mollie_api_key` (`test_`/`live_`) with `MOLLIE_METHODS` and re-syncs the webhook URLs on every run (new webhooks of a module upgrade got the placeholder URL before). No webhook to register at Mollie: Odoo names its own per payment.
+- [x] Checks: onboarding 189 tests, village 18, Odoo 54 (7 new, Mollie's API mocked); bootstrap with a dummy test key (module upgrade, provider in test mode, card/iDEAL/Bancontact linked, chargeback webhook URL set; disabled again afterwards); local smoke 159 ok / 0 failed (6b checks the picture and the PNG).
+
+Open: a real Mollie test payment, refund and chargeback on the VM (needs the test key; Mollie's test mode can simulate chargebacks only for some methods); the pass field `stripe_payment_intent` holds Mollie's `tr_…` id for Mollie payments (name kept); the VM's participants get the avatar with `publish-starter-events`.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

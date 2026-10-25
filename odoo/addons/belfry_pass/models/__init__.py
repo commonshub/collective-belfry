@@ -6,3 +6,4 @@ from . import product_template
 from . import res_partner
 from . import belfry_steward
 from . import belfry_report
+from . import payment_mollie

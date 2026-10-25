@@ -91,7 +91,7 @@ async function feedPage({ hashtag = "", author = null } = {}) {
     const profile = (await loadProfiles([author])).get(author)
     const npub = nip19.npubEncode(author)
     document.getElementById("who").innerHTML = `
-      <div class="person card">${avatar(profile, 40)}<span class="person-text"><span class="person-name">${esc(profileName(profile, "A participant"))}${
+      <div class="person card">${avatar(profile, 40, author)}<span class="person-text"><span class="person-name">${esc(profileName(profile, "A participant"))}${
         isMe(author) ? ' <span class="badge">you</span>' : ""
       }</span>${PEOPLE_URL ? `<a class="small" href="${esc(`${PEOPLE_URL}/#/p/${npub}`)}">In the directory</a>` : ""}</span></div>`
   }
@@ -167,7 +167,7 @@ async function photoPage(id) {
   const tipLinks = mine ? [] : TIPS.map(n => [n, walletPayLink(p.pubkey, n, memo, p.id)]).filter(([, u]) => u)
   body.innerHTML = `
     <article class="card stack">
-      <div class="person">${avatar(author, 40)}<span class="person-text"><span class="person-name"><a href="#/u/${nip19.npubEncode(p.pubkey)}">${esc(
+      <div class="person">${avatar(author, 40, p.pubkey)}<span class="person-text"><span class="person-name"><a href="#/u/${nip19.npubEncode(p.pubkey)}">${esc(
         profileName(author, "A participant"),
       )}</a></span><span class="small muted">${esc(when(p.createdAt))}${p.location ? ` · ${esc(p.location)}` : ""}</span></span></div>
       <div class="photo-full">${p.images
@@ -207,7 +207,7 @@ async function photoPage(id) {
         r.comments.length
           ? r.comments
               .map(
-                c => `<div class="comment">${avatar(profiles.get(c.pubkey), 28)}<div><span class="small"><a href="#/u/${nip19.npubEncode(c.pubkey)}">${esc(
+                c => `<div class="comment">${avatar(profiles.get(c.pubkey), 28, c.pubkey)}<div><span class="small"><a href="#/u/${nip19.npubEncode(c.pubkey)}">${esc(
                   profileName(profiles.get(c.pubkey), "A participant"),
                 )}</a> <span class="muted">${esc(when(c.created_at))}</span>${
                   isMe(c.pubkey) ? "" : ` ${reportLink({ kind: "comment", ref: c.id, pubkey: c.pubkey, excerpt: c.content }, "Report")}`

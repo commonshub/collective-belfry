@@ -10,6 +10,7 @@ WEBHOOK_PARAMS = ('belfry.onboarding_url', 'belfry.hook_token')
 WEBHOOK_ACTIONS = {
     'belfry_pass.action_webhook_invoice_paid': '/hooks/odoo/invoice-paid',
     'belfry_pass.action_webhook_refund': '/hooks/odoo/refund',
+    'belfry_pass.action_webhook_chargeback': '/hooks/odoo/chargeback',
 }
 
 
@@ -49,7 +50,7 @@ class IrConfigParameter(models.Model):
 
     @api.model
     def belfry_sync_webhook_urls(self):
-        """Rewrite the webhook URLs of the two Belfry server actions from the parameters.
+        """Rewrite the webhook URLs of the Belfry server actions from the parameters.
         Safe to call at any time (also over RPC, e.g. from the bootstrap script)."""
         for xmlid, path in WEBHOOK_ACTIONS.items():
             action = self.env.ref(xmlid, raise_if_not_found=False)

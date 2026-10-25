@@ -16,7 +16,7 @@ in front of everything and publishes no other port.
 - An SMTP relay for the mails (sign-in links, activation mails) and a sender address whose domain
   allows that relay in its SPF record (better also DKIM). Otherwise the relay accepts the mails and
   recipients silently drop them.
-- Stripe keys for Odoo's Stripe payment provider.
+- Keys for a payment provider: Stripe, Mollie or both (Odoo's own providers).
 - For the admin network: a ZeroTier account (free tier is enough).
 - For the custody seed and the backups: two YubiKeys, or software keys while testing.
 
@@ -69,7 +69,15 @@ run bootstrap again. It configures Odoo's Stripe provider (test keys: test mode,
 enabled), has Odoo create its own webhook, creates Belfry's dispute webhook
 (`https://pass.<domain>/hooks/stripe`, `charge.dispute.created` and `.closed`) and writes its
 signing secret into `.env` as `STRIPE_WEBHOOK_SECRET`; restart the onboarding service after that.
-Without keys, stewards mark payments by hand. Then add the first steward (see "Stewards"), set
+Mollie (Netherlands; cards, iDEAL, Bancontact and more), next to Stripe or instead of it: put the
+API key onto the server with `infra/scripts/put-secret.sh <ssh target> mollie_api_key` (`test_…`:
+test mode, `live_…`: enabled) and run bootstrap again. It configures Odoo's Mollie provider with the
+payment methods in `MOLLIE_METHODS` (default `card,ideal,bancontact`; enable the same ones in the
+Mollie dashboard). There is no webhook to register: Odoo names `https://<odoo host>/payment/mollie/webhook`
+in every payment, and Mollie calls it for the payment, its refunds and its chargebacks. A refund
+(from the invoice in Odoo or in Mollie's dashboard) revokes the pass once Mollie processes it; an
+open chargeback revokes it, a reversed one gives it back (`belfry_pass` adds this to Odoo's Mollie
+module). Without any keys, stewards mark payments by hand. Then add the first steward (see "Stewards"), set
 up the admin network and the backups.
 
 ### The smoke test on the server

@@ -20,6 +20,7 @@ from typing import Any
 
 import httpx
 
+from . import avatar
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -558,13 +559,19 @@ def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = 
         return None
 
 
-def profile_content(name: str, member_number: str, nip05_domain: str) -> dict[str, str]:
-    """What the directory may see without opt-in (decided 2026-10-22): name and member number."""
-    return {
+def profile_content(
+    name: str, member_number: str, nip05_domain: str, picture: str = ""
+) -> dict[str, str]:
+    """What the directory may see without opt-in (decided 2026-10-22): name and member number,
+    plus the default avatar drawn from the key (avatar.py)."""
+    content = {
         "name": name,
         "display_name": name,
         "nip05": f"{member_number.lower()}@{nip05_domain}",
     }
+    if picture:
+        content["picture"] = picture
+    return content
 
 
 PROFILE_KIND = 0
@@ -574,14 +581,14 @@ DM_RELAYS_KIND = 10050
 
 
 def starter_events(
-    name: str, member_number: str, nip05_domain: str, relay_url: str
+    name: str, member_number: str, nip05_domain: str, relay_url: str, picture: str = ""
 ) -> dict[int, dict[str, Any]]:
     """The unsigned events a new participant starts with, by kind: the profile, an empty follow
     list, the relay list and the NIP-17 DM relay list, both naming the community relay. Clients
     such as Coracle wait for profile, relays and follows after sign-in and otherwise show "We're
     having a hard time finding your profile"; NIP-17 senders deliver to the 10050 relays."""
     now = int(time.time())
-    content = profile_content(name, member_number, nip05_domain)
+    content = profile_content(name, member_number, nip05_domain, picture)
     return {
         PROFILE_KIND: {
             "kind": PROFILE_KIND,
@@ -606,17 +613,24 @@ def starter_events(
 
 
 def publish_profile(
-    svc: Services, token: str, pubkey: str, partner: dict[str, Any], member_number: str
+    svc: Services,
+    token: str,
+    pubkey: str,
+    partner: dict[str, Any],
+    member_number: str,
+    add_missing_picture: bool = False,
 ) -> list[int]:
     """Publish the participant's starter events (``starter_events``) to the community relay,
     only the kinds the relay does not have yet for this key: a participant's own profile, follows
-    or relay choices made in an app are never overwritten (reactivation, backfill). Best effort;
-    returns the kinds published."""
+    or relay choices made in an app are never overwritten (reactivation, backfill). With
+    ``add_missing_picture`` (the backfill) a profile without a picture is republished with the
+    default avatar added and everything else kept. Best effort; returns the kinds published."""
     if svc.relay is None or not token:
         return []
     name = partner.get("name") or member_number
     relay_url = svc.settings.community_relay_public_url or svc.relay.url
-    wanted = starter_events(name, member_number, svc.settings.nip05_domain, relay_url)
+    picture = avatar.avatar_url(svc.settings.public_url, pubkey)
+    wanted = starter_events(name, member_number, svc.settings.nip05_domain, relay_url, picture)
 
     def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
         return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
@@ -624,12 +638,36 @@ def publish_profile(
     published: list[int] = []
     try:
         existing = svc.relay.query([{"kinds": sorted(wanted), "authors": [pubkey]}], sign)
-        have = {e.get("kind") for e in existing if e.get("pubkey") == pubkey}
+        own = [e for e in existing if e.get("pubkey") == pubkey]
+        have = {e.get("kind") for e in own}
         for kind, unsigned in wanted.items():
             if kind in have:
                 continue
             svc.relay.publish(sign(unsigned), sign)
             published.append(kind)
+        profiles = sorted(
+            (e for e in own if e.get("kind") == PROFILE_KIND), key=lambda e: e.get("created_at", 0)
+        )
+        if add_missing_picture and profiles:
+            latest = profiles[-1]
+            try:
+                content = json.loads(latest.get("content") or "{}")
+            except ValueError:
+                content = None
+            if isinstance(content, dict) and not content.get("picture"):
+                content["picture"] = picture
+                svc.relay.publish(
+                    sign(
+                        {
+                            "kind": PROFILE_KIND,
+                            "created_at": max(int(time.time()), latest.get("created_at", 0) + 1),
+                            "tags": latest.get("tags") or [],
+                            "content": json.dumps(content, separators=(",", ":")),
+                        }
+                    ),
+                    sign,
+                )
+                published.append(PROFILE_KIND)
     except Exception as exc:
         log.warning(
             "starter events for %s not (all) published to %s: %s", member_number, svc.relay.url, exc
@@ -639,7 +677,8 @@ def publish_profile(
 
 def publish_starter_events(svc: Services) -> dict[str, Any]:
     """Backfill ``starter_events`` for every active pass (participants activated before the relay
-    lists existed). Keycast's preload is idempotent per partner and hands out a fresh UCAN."""
+    lists or the default avatar existed; a profile without a picture gets the avatar). Keycast's
+    preload is idempotent per partner and hands out a fresh UCAN."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
@@ -659,7 +698,7 @@ def publish_starter_events(svc: Services) -> dict[str, Any]:
             log.warning("pass of %s: Keycast pubkey differs from Odoo's, skipped", member_number)
             continue
         done[member_number] = publish_profile(
-            svc, token, pubkey, {"id": partner_id, **partner}, member_number
+            svc, token, pubkey, {"id": partner_id, **partner}, member_number, True
         )
     return {"published": done}
 
@@ -968,6 +1007,33 @@ def revoke_for_refund(svc: Services, transaction_id: int) -> str:
     return revoke_pass(svc, rows[0]["id"], "refund")
 
 
+def handle_chargeback(svc: Services, transaction_id: int) -> str:
+    """A payment provider reported a chargeback on the payment of a pass (Mollie, through Odoo's
+    ``belfry_chargeback_state``; Stripe's disputes come to /hooks/stripe instead). Open: the pass
+    is revoked. Reversed: a pass revoked for a chargeback is given back. The state is read from
+    Odoo, never taken from the webhook body."""
+    tx = svc.odoo.read_one(
+        "payment.transaction", transaction_id, ["belfry_chargeback_state", "operation"]
+    )
+    if tx is None:
+        return "not_found"
+    state = tx.get("belfry_chargeback_state")
+    if state not in ("open", "reversed"):
+        return "no_chargeback"
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["transaction_id", "=", transaction_id]], ["id", "state", "revoke_reason"]
+    )
+    if not rows:
+        log.warning("chargeback: no pass for transaction %s", transaction_id)
+        return "no_pass"
+    pass_row = rows[0]
+    if state == "open":
+        return revoke_pass(svc, pass_row["id"], "chargeback")
+    if pass_row.get("state") == "revoked" and pass_row.get("revoke_reason") == "chargeback":
+        return reactivate_pass(svc, pass_row["id"])
+    return "unchanged"
+
+
 def reactivate_pass(svc: Services, pass_id: int) -> str:
     pass_row = svc.odoo.read_one("belfry.pass", pass_id, PASS_FIELDS)
     if pass_row is None:
@@ -1060,6 +1126,26 @@ def reconcile(svc: Services) -> dict[str, Any]:
         for pass_row in passes:
             try:
                 revoked[pass_row["id"]] = revoke_pass(svc, pass_row["id"], "refund")
+            except Exception:
+                log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
+                revoked[pass_row["id"]] = "error"
+    # open chargebacks (Mollie) whose webhook did not reach the service
+    try:
+        charged_back = svc.odoo.search_read(
+            "payment.transaction", [["belfry_chargeback_state", "=", "open"]], ["id"]
+        )
+    except OdooError:
+        log.exception("reconcile: chargebacks not readable (belfry_pass older than 19.0.1.9.0?)")
+        charged_back = []
+    if charged_back:
+        passes = svc.odoo.search_read(
+            "belfry.pass",
+            [["transaction_id", "in", [t["id"] for t in charged_back]], ["state", "=", "active"]],
+            ["id"],
+        )
+        for pass_row in passes:
+            try:
+                revoked[pass_row["id"]] = revoke_pass(svc, pass_row["id"], "chargeback")
             except Exception:
                 log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
                 revoked[pass_row["id"]] = "error"

@@ -52,4 +52,29 @@
             ref('payment.field_payment_transaction__source_transaction_id'),
         ])]"/>
     </record>
+
+    <!-- Chargebacks reported by a payment provider (Mollie, models/payment_mollie.py); Stripe's
+         disputes go to the onboarding service's own endpoint instead. -->
+    <record id="automation_chargeback" model="base.automation">
+        <field name="name">Belfry: chargeback opened or reversed, notify onboarding</field>
+        <field name="model_id" ref="payment.model_payment_transaction"/>
+        <field name="trigger">on_create_or_write</field>
+        <field name="trigger_field_ids" eval="[(6, 0, [ref('belfry_pass.field_payment_transaction__belfry_chargeback_state')])]"/>
+        <field name="filter_domain">[('belfry_chargeback_state', '!=', False)]</field>
+        <field name="active" eval="True"/>
+    </record>
+    <record id="action_webhook_chargeback" model="ir.actions.server">
+        <field name="name">Belfry: POST chargeback</field>
+        <field name="model_id" ref="payment.model_payment_transaction"/>
+        <field name="base_automation_id" ref="automation_chargeback"/>
+        <field name="usage">base_automation</field>
+        <field name="state">webhook</field>
+        <field name="webhook_url">http://onboarding:8100/hooks/odoo/chargeback?token=change-me</field>
+        <field name="webhook_field_ids" eval="[(6, 0, [
+            ref('payment.field_payment_transaction__reference'),
+            ref('payment.field_payment_transaction__provider_reference'),
+            ref('belfry_pass.field_payment_transaction__belfry_chargeback_state'),
+            ref('belfry_pass.field_payment_transaction__belfry_chargeback_id'),
+        ])]"/>
+    </record>
 </odoo>

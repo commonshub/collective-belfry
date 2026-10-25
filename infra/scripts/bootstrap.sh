@@ -25,7 +25,7 @@ ODOO_URL=${ODOO_URL:-http://localhost:8069}
 AK_URL=${AK_URL:-http://localhost:9000}
 KC_URL=${KC_URL:-http://localhost:3000}
 ODOO_DB=odoo
-ODOO_STD_MODULES="base,sale_management,account_payment,payment_stripe,loyalty,sale_loyalty,base_automation,portal"
+ODOO_STD_MODULES="base,sale_management,account_payment,payment_stripe,payment_mollie,loyalty,sale_loyalty,base_automation,portal"
 ODOO_LOG="$INFRA_DIR/.bootstrap-odoo.log"   # full output of the odoo CLI runs (gitignored with .env*)
 
 [[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE; run scripts/gen-secrets.sh first" >&2; exit 1; }
@@ -208,6 +208,8 @@ fi
 
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onboarding_url\",\"${ONBOARDING_URL:-http://onboarding:8100}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
+# set_param leaves unchanged values alone, so webhooks new in a module upgrade get their URLs here
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter belfry_sync_webhook_urls "[]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.login_url\",\"${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
@@ -295,8 +297,40 @@ if [[ -n "${STRIPE_PUBLISHABLE_KEY:-}" && -n "$STRIPE_SECRET_KEY" ]]; then
     fi
   fi
 else
-  echo "Stripe: no keys (STRIPE_PUBLISHABLE_KEY, infra/secrets/stripe_secret_key); payments are marked paid by stewards"
+  echo "Stripe: no keys (STRIPE_PUBLISHABLE_KEY, infra/secrets/stripe_secret_key)"
 fi
+
+# Mollie (Netherlands), next to Stripe or instead of it: Odoo's Mollie provider with Belfry's
+# additions (belfry_pass models/payment_mollie.py: refunds from Odoo; refunds and chargebacks from
+# Mollie's webhook revoke the pass). The API key in infra/secrets/mollie_api_key
+# (scripts/put-secret.sh): test_… puts the provider in test mode, live_… enables it. No webhook to
+# register: Odoo names its own /payment/mollie/webhook in every payment (needs a public https
+# ODOO_PUBLIC_URL). MOLLIE_METHODS: the Odoo payment method codes to offer (the Mollie account must
+# have them enabled too).
+MOLLIE_API_KEY=${MOLLIE_API_KEY:-$(cat "$INFRA_DIR/secrets/mollie_api_key" 2>/dev/null || true)}
+export MOLLIE_API_KEY
+if [[ -n "$MOLLIE_API_KEY" ]]; then
+  case "$MOLLIE_API_KEY" in
+    test_*) MOLLIE_STATE=test ;;
+    live_*) MOLLIE_STATE=enabled ;;
+    *) die "infra/secrets/mollie_api_key is not a Mollie API key (test_… or live_…)" ;;
+  esac
+  MP_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider search '[[["code","=","mollie"]]]' '{"limit":1}' | jq -r '.[0] // empty')
+  [[ -n "$MP_ID" ]] || die "Odoo has no Mollie payment provider (module payment_mollie)"
+  MP_VALS=$(jq -cn --arg state "$MOLLIE_STATE" '{mollie_api_key: $ENV.MOLLIE_API_KEY, state: $state, is_published: true}')
+  odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider write "[[$MP_ID],$MP_VALS]" >/dev/null
+  METHODS=$(jq -cn --arg m "${MOLLIE_METHODS:-card,ideal,bancontact}" '$m | split(",") | map(select(length > 0))')
+  PM_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.method search "[[[\"code\",\"in\",$METHODS],[\"active\",\"in\",[true,false]]]]" | jq -c '.')
+  if [[ "$PM_IDS" != "[]" ]]; then
+    odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.method write "[$PM_IDS,{\"active\":true}]" >/dev/null
+    odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider write "[[$MP_ID],{\"payment_method_ids\":$(jq -c 'map([4, .])' <<<"$PM_IDS")}]" >/dev/null
+  fi
+  echo "Mollie provider: $MOLLIE_STATE mode, methods $(jq -r 'join(", ")' <<<"$METHODS")"
+  [[ "${ODOO_PUBLIC_URL:-}" == https://* ]] || echo "WARNING: Mollie calls Odoo's webhook at ODOO_PUBLIC_URL, which is not public https; payments stay pending until the return page" >&2
+else
+  echo "Mollie: no key (infra/secrets/mollie_api_key)"
+fi
+[[ -n "$STRIPE_SECRET_KEY$MOLLIE_API_KEY" ]] || echo "No payment provider configured: payments are marked paid by stewards"
 
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"

@@ -75,6 +75,7 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
         "name": partner["name"],
         "display_name": partner["name"],
         "nip05": "osv-0001@belfry.local",
+        "picture": f"{services.settings.public_url}/avatar/{ev['pubkey']}.png",
     }
     # empty follow list; both relay lists name the community relay (RELAY_URL without a public one)
     assert by_kind[3]["tags"] == []
@@ -105,6 +106,28 @@ def test_starter_events_use_the_public_relay_and_never_overwrite(services, odoo,
     follows = [e for e in relay.events if e["kind"] == 3]
     assert len(follows) == 1 and follows[0]["tags"] == [["p", "ab" * 32]]
     assert [e["kind"] for e in relay.events if e["pubkey"] == pubkey].count(10050) == 1
+    assert core.publish_starter_events(services) == {"published": {"OSV-0001": []}}
+
+
+def test_profile_carries_the_default_avatar_and_the_backfill_adds_it(services, odoo, relay):
+    services.settings.public_url = "https://pass.belfry.test"
+    ids = seed_paid_invoice(odoo)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    profile = next(e for e in relay.events if e["kind"] == 0)
+    pubkey = profile["pubkey"]
+    picture = f"https://pass.belfry.test/avatar/{pubkey}.png"
+    assert json.loads(profile["content"])["picture"] == picture
+
+    # a profile the participant wrote without a picture: the backfill adds it, keeps the rest
+    own = {"name": "Al", "about": "hi", "website": "https://al.example"}
+    relay.events = [e for e in relay.events if e["kind"] != 0] + [
+        {**profile, "content": json.dumps(own), "created_at": 2_000_000_000, "tags": [["x", "1"]]}
+    ]
+    assert core.publish_starter_events(services) == {"published": {"OSV-0001": [0]}}
+    latest = max((e for e in relay.events if e["kind"] == 0), key=lambda e: e["created_at"])
+    assert json.loads(latest["content"]) == {**own, "picture": picture}
+    assert latest["tags"] == [["x", "1"]] and latest["created_at"] == 2_000_000_001
+    # with a picture of their own nothing is touched
     assert core.publish_starter_events(services) == {"published": {"OSV-0001": []}}
 
 
@@ -494,3 +517,45 @@ def test_restore_keys_reports_a_random_key_that_cannot_come_back(services, odoo,
     keycast.derived = True
     report = core.restore_keys(services)
     assert list(report["partners"].values()) == ["mismatch"]
+
+
+def test_mollie_chargeback_revokes_and_reversal_gives_the_pass_back(
+    client, services, odoo, keycast
+):
+    ids = seed_paid_invoice(odoo)
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    tx = odoo.get("payment.transaction", ids["transaction"])
+
+    def hook():
+        r = client.post(
+            f"/hooks/odoo/chargeback?token={HOOK_TOKEN}",
+            json={"_model": "payment.transaction", "_id": ids["transaction"]},
+        )
+        assert r.status_code == 200
+        return r.json()["result"]
+
+    assert hook() == "no_chargeback"
+    tx["belfry_chargeback_state"] = "open"
+    assert hook() == "revoked"
+    p = active_pass(odoo, ids["invoice"])
+    assert (p["state"], p["revoke_reason"]) == ("revoked", "chargeback")
+    assert keycast.status[p["keycast_pubkey"]] == "suspended"
+    assert hook() == "already_revoked"
+    tx["belfry_chargeback_state"] = "reversed"
+    assert hook() == "reactivated"
+    assert p["state"] == "active" and keycast.status[p["keycast_pubkey"]] == "active"
+    assert hook() == "unchanged"
+    # a pass a steward revoked stays revoked when a chargeback is reversed
+    core.revoke_pass(services, p["id"], "steward")
+    assert hook() == "unchanged" and p["state"] == "revoked"
+    assert client.post("/hooks/odoo/chargeback?token=wrong", json={"_id": 1}).status_code == 401
+
+
+def test_reconcile_revokes_open_chargebacks(services, odoo, monkeypatch):
+    monkeypatch.setattr(core, "today", lambda: dt.date(2027, 1, 21))
+    ids = seed_paid_invoice(odoo)
+    core.activate_pass(services, ids["invoice"])
+    odoo.get("payment.transaction", ids["transaction"])["belfry_chargeback_state"] = "open"
+    result = core.reconcile(services)
+    assert list(result["revoked"].values()) == ["revoked"]
+    assert active_pass(odoo, ids["invoice"])["revoke_reason"] == "chargeback"

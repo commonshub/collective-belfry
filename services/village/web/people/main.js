@@ -31,7 +31,7 @@ function personCard({ pk, profile }) {
   const name = profileName(profile, "A participant")
   return `
     <a class="card person" href="#/p/${nip19.npubEncode(pk)}">
-      ${avatar(profile)}
+      ${avatar(profile, 48, pk)}
       <span class="person-text">
         <span class="person-name">${esc(name)}${isMe(pk) ? ' <span class="badge">you</span>' : ""}</span>
         ${profile?.nip05 ? `<span class="small muted">${esc(profile.nip05)}</span>` : ""}
@@ -100,7 +100,7 @@ async function personPage(npubStr) {
   const pay = walletPayLink(pk, 10, "")
   body.innerHTML = `
     <div class="card stack">
-      <div class="person">${avatar(profile, 72)}<span class="person-text"><span class="person-name big">${esc(profileName(profile, "A participant"))}</span>
+      <div class="person">${avatar(profile, 72, pk)}<span class="person-text"><span class="person-name big">${esc(profileName(profile, "A participant"))}</span>
       ${profile?.nip05 ? `<span class="small muted">${esc(profile.nip05)}</span>` : ""}</span></div>
       ${profile?.about ? `<p class="pre">${esc(profile.about)}</p>` : ""}
       ${profile?.website ? `<p><a href="${esc(profile.website)}" rel="noopener noreferrer" target="_blank">${esc(profile.website)}</a></p>` : ""}
@@ -288,7 +288,7 @@ async function activityPage() {
         const time = new Date(event.created_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
         const start = startText(item.start)
         const inner = `
-          ${avatar(profiles.get(event.pubkey), 36)}
+          ${avatar(profiles.get(event.pubkey), 36, event.pubkey)}
           <span class="activity-text">
             <span><strong>${esc(name)}</strong> ${esc(item.text)}</span>
             ${item.detail ? `<span class="about">${esc(item.detail)}</span>` : ""}

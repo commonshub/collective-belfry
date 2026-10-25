@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import blossom, bridge, claim, core, mypass, pages, reports, steward
+from . import avatar, blossom, bridge, claim, core, mypass, pages, reports, steward
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -108,6 +108,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
+    avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
@@ -208,6 +209,22 @@ def create_app(services: Services | None = None) -> FastAPI:
             result = await run_in_threadpool(core.revoke_for_refund, svc(request), transaction_id)
         except Exception as exc:
             log.exception("refund hook failed for transaction %s", transaction_id)
+            return {"result": "error", "transaction_id": transaction_id, "error": str(exc)}
+        return {"result": result, "transaction_id": transaction_id}
+
+    @app.post("/hooks/odoo/chargeback")
+    async def chargeback(
+        request: Request, token: str | None = Query(default=None)
+    ) -> dict[str, Any]:
+        """Odoo's automation "chargeback": a provider (Mollie) opened or reversed a chargeback."""
+        check_token(request, token)
+        transaction_id = await read_record_id(request)
+        if transaction_id is None:
+            return {"result": "ignored", "error": "missing _id"}
+        try:
+            result = await run_in_threadpool(core.handle_chargeback, svc(request), transaction_id)
+        except Exception as exc:  # reconcile revokes open chargebacks it finds
+            log.exception("chargeback hook failed for transaction %s", transaction_id)
             return {"result": "error", "transaction_id": transaction_id, "error": str(exc)}
         return {"result": result, "transaction_id": transaction_id}
 

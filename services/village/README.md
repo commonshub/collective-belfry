@@ -21,7 +21,9 @@ answers one question: which keys hold an active pass.
   active ones. Nobody outside learns who is attending.
 - **Directory consent.** A kind-30078 event (NIP-78 app data) with `d` = `osv-directory` and content
   `{"listed": true}`; the newest one per author counts. "Your entry" edits it together with the
-  kind-0 profile (name, about, picture link, website; other kind-0 fields are kept). The profile is
+  kind-0 profile (name, about, picture link, website; other kind-0 fields are kept). Without a
+  picture, every app shows the default avatar drawn from the key (`web/shared/avatar.js`, the
+  same picture the onboarding service serves as PNG and puts in the starter profile). The profile is
   the same one the chat and the other apps show. What the directory shows: the kind-0 fields and
   the NIP-05 name, nothing from Odoo (no e-mail, tier or pass dates).
 - **Offers.** NIP-99 classifieds, kind 30402: `title`, `summary`, `price` `["price", "<n>", "OSV"]`

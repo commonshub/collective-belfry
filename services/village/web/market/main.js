@@ -162,7 +162,7 @@ async function listingPage(code) {
       ${l.summary ? `<p><strong>${esc(l.summary)}</strong></p>` : ""}
       ${l.description ? `<p class="pre">${esc(l.description)}</p>` : ""}
       <p class="small muted">${esc(categoryName(l.category))}${l.location ? ` · ${esc(l.location)}` : ""} · since ${new Date(l.publishedAt * 1000).toLocaleDateString()}</p>
-      <div class="person">${avatar(seller, 40)}<span class="person-text"><span class="person-name">${
+      <div class="person">${avatar(seller, 40, l.pubkey)}<span class="person-text"><span class="person-name">${
         profileUrl ? `<a href="${esc(profileUrl)}">${esc(profileName(seller, "A participant"))}</a>` : esc(profileName(seller, "A participant"))
       }</span>${seller?.nip05 ? `<span class="small muted">${esc(seller.nip05)}</span>` : ""}</span></div>
       ${paidByMe.length ? `<p class="notice good">You paid ${paidByMe.reduce((s, p) => s + p.amount, 0)} tokens for this. Agree with the seller how you get it.</p>` : ""}

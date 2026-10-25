@@ -179,7 +179,11 @@ PROFILE=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\
 if [[ -n "$PROFILE" ]]; then
   CONTENT=$(jq -r '.content' <<<"$PROFILE")
   [[ "$(jq -r .nip05 <<<"$CONTENT")" == "$USERNAME@"* && "$(jq -r .name <<<"$CONTENT")" == "$NAME" ]] && ok "kind-0 profile on the relay: $CONTENT" || bad "unexpected profile content: $CONTENT"
-  [[ "$(jq -r 'keys | join(",")' <<<"$CONTENT")" == "display_name,name,nip05" ]] && ok "profile carries only name, display_name, nip05" || bad "profile has extra fields: $(jq -c keys <<<"$CONTENT")"
+  [[ "$(jq -r 'keys | join(",")' <<<"$CONTENT")" == "display_name,name,nip05,picture" ]] && ok "profile carries only name, display_name, nip05, picture" || bad "profile has extra fields: $(jq -c keys <<<"$CONTENT")"
+  PICTURE=$(jq -r .picture <<<"$CONTENT")
+  [[ "$PICTURE" == */avatar/$KC_PUB.png ]] && ok "picture is the default avatar: $PICTURE" || bad "picture: $PICTURE"
+  AV=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$ONB_URL/avatar/$KC_PUB.png")
+  [[ "$AV" == "200 image/png" ]] && ok "default avatar served as PNG" || bad "avatar: $AV"
 else
   bad "no kind-0 event for $KC_PUB on the relay (check the onboarding log for 'not published')"
 fi

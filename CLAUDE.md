@@ -20,7 +20,7 @@ Before relying on details from the snapshot, re-read the live doc with the Claud
 
 - Identity and membership stay separate: the Nostr key belongs to the member (managed, recoverable or self-custodied); membership (Odoo record + signed certificate) belongs to Belfry. Revoking membership never touches the key.
 - Odoo is the single source of truth for passes; the relay whitelist and certificates are derived from it.
-- Payment runs through Odoo's own Stripe provider and Odoo payment links. Belfry's onboarding glue is idempotent, keyed on the Odoo invoice and the Stripe PaymentIntent; Belfry's own Stripe endpoint (disputes only) is keyed on the Stripe event id. Access only after the invoice is paid.
+- Payment runs through Odoo's own providers (Stripe, Mollie) and Odoo payment links. Belfry's onboarding glue is idempotent, keyed on the Odoo invoice and the provider's payment reference; Belfry's own Stripe endpoint (disputes only) is keyed on the Stripe event id, Mollie's refunds and chargebacks come through Odoo (`belfry_pass`, keyed on the refund and chargeback ids). Access only after the invoice is paid.
 - One credential type (`vct` `village-pass/v1`) for all tiers; tier and dates are claims. Door checks disclose only tier, validity and status.
 - No DIDs: did:webvh and the id.<domain> endpoint were dropped on 2026-10-24 (Phase 4); the issuer key is published through jwt-vc-issuer metadata and x5c.
 - Event release = Phases 0–3 (governance, onboarding/registry, Collective Bunker, EUDI pass certificates). Self-custody is built already; DIDs are dropped.

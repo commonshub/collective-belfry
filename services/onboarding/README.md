@@ -89,6 +89,8 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `GET /health` | none | `{"status":"ok"}` |
 | `POST /hooks/odoo/invoice-paid?token=` | `HOOK_TOKEN` | Odoo's webhook: activates the pass of the invoice (`_id`) |
 | `POST /hooks/odoo/refund?token=` | `HOOK_TOKEN` | Odoo's webhook: revokes the pass of a refunded transaction |
+| `POST /hooks/odoo/chargeback?token=` | `HOOK_TOKEN` | Odoo's webhook for a provider's chargeback (Mollie): open revokes the pass, reversed gives back a pass revoked for it; the state is read from Odoo |
+| `GET /avatar/<pubkey>.png`, `.svg` | none | the default avatar drawn from the key (`avatar.py`), named as `picture` in the starter profile; cached for a year |
 | `POST /hooks/stripe` | `Stripe-Signature` | disputes: `charge.dispute.created` revokes, `charge.dispute.closed` won reactivates; every event id is recorded once, replays answer `duplicate` |
 | `POST /hooks/keycast/key-changed?token=` | `HOOK_TOKEN` | Keycast reports a participant who moved to their own key: the pass and the relay whitelist follow |
 | `POST /admin/reconcile?token=`, `POST /admin/sync-relay?token=` | `HOOK_TOKEN` | as the commands above |

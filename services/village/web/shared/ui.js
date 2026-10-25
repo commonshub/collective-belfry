@@ -2,6 +2,7 @@
 // links into the chat and the wallet, and the boot sequence (callback, restore, silent sign-in).
 import * as session from "./session.js"
 import { npub } from "./nostr.js"
+import { avatarUrl } from "./avatar.js"
 import { SSO_CALLBACK_PATH, endSsoSession, finishSso, shouldTrySilentSso, ssoEnabled, startSso } from "./sso.js"
 
 const CHAT_URL = (import.meta.env.VITE_CHAT_URL || "").replace(/\/$/, "")
@@ -42,10 +43,23 @@ export function signInCard(why) {
     </div>`
 }
 
-export const avatar = (profile, size = 48) =>
-  profile?.picture
-    ? `<img class="avatar" src="${esc(profile.picture)}" alt="" width="${size}" height="${size}" loading="lazy" referrerpolicy="no-referrer" />`
-    : `<span class="avatar blank" style="width:${size}px;height:${size}px"></span>`
+/** The participant's picture, or the default avatar drawn from their key (shared/avatar.js);
+ * a picture that fails to load falls back to the default as well. */
+export const avatar = (profile, size = 48, pubkey = "") => {
+  const fallback = avatarUrl(pubkey)
+  return profile?.picture
+    ? `<img class="avatar" src="${esc(profile.picture)}" alt="" width="${size}" height="${size}" loading="lazy" referrerpolicy="no-referrer" data-fallback="${esc(fallback)}" />`
+    : `<img class="avatar" src="${esc(fallback)}" alt="" width="${size}" height="${size}" />`
+}
+// one listener for every picture that fails (error events do not bubble; the CSP allows no inline handlers)
+document.addEventListener(
+  "error",
+  e => {
+    const img = e.target
+    if (img instanceof HTMLImageElement && img.dataset.fallback && img.src !== img.dataset.fallback) img.src = img.dataset.fallback
+  },
+  true,
+)
 
 /** The participant's profile in the chat (Coracle), where "Message" starts a private chat. */
 export const chatLink = pk => (CHAT_URL ? `${CHAT_URL}/people/${npub(pk)}` : "")
