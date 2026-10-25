@@ -1,0 +1,85 @@
+From 4c7c564f8d7778c4968b58dc278f79583a67e6ab Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sun, 25 Oct 2026 23:29:16 +0100
+Subject: [PATCH 5/5] Belfry: phone layout: square mark, date label on one
+ line, day view first
+
+---
+ src/components/ui/TopBar.tsx | 18 ++++++++++++++----
+ src/stores/settings.ts       |  7 ++++++-
+ 2 files changed, 20 insertions(+), 5 deletions(-)
+
+diff --git a/src/components/ui/TopBar.tsx b/src/components/ui/TopBar.tsx
+index 65577b9..abdf8ed 100644
+--- a/src/components/ui/TopBar.tsx
++++ b/src/components/ui/TopBar.tsx
+@@ -105,7 +105,7 @@ export function TopBar({
+           height: TOPBAR_HEIGHT,
+           display: "flex",
+           alignItems: "center",
+-          gap: 2,
++          gap: isMobile ? 1 : 2,
+           px: isMobile ? 1.5 : 2.5,
+         }}
+       >
+@@ -121,10 +121,12 @@ export function TopBar({
+             flexShrink: 0,
+           }}
+         >
++          {/* Belfry: the wide wordmark pushed the phone layout past the screen edge; phones get
++              the square mark */}
+           <img
+-            src="/osv-logo.svg"
++            src={isMobile ? "/icon.svg" : "/osv-logo.svg"}
+             alt="Open Source Village"
+-            style={{ height: 28, width: "auto" }}
++            style={{ height: 28, width: isMobile ? 28 : "auto" }}
+           />
+         </Link>
+ 
+@@ -139,7 +141,14 @@ export function TopBar({
+         )}
+ 
+         {mode === "calendar" ? (
+-          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
++          <Box
++            sx={{
++              display: "flex",
++              alignItems: "center",
++              gap: 0.5,
++              minWidth: 0,
++            }}
++          >
+             {!isMobile && (
+               <>
+                 <IconButton aria-label="previous period" onClick={onPrev}>
+@@ -152,6 +161,7 @@ export function TopBar({
+             )}
+             <Typography
+               data-testid="topbar-date-label"
++              noWrap
+               sx={{ fontWeight: 800, fontSize: isMobile ? 15 : 20 }}
+             >
+               {isMobile ? (dateLabelMobile ?? dateLabel) : dateLabel}
+diff --git a/src/stores/settings.ts b/src/stores/settings.ts
+index 7b73f39..1fc319e 100644
+--- a/src/stores/settings.ts
++++ b/src/stores/settings.ts
+@@ -35,8 +35,13 @@ export interface ISettings {
+ 
+ const localStorageKey = "cal:settings";
+ 
++// Belfry: phones open on the day (seven week columns are too narrow to read on a phone).
++const isPhone =
++  typeof window !== "undefined" &&
++  window.matchMedia?.("(max-width: 599.95px)").matches;
++
+ const defaultSettings: ISettings = {
+-  layout: "week",
++  layout: isPhone ? "day" : "week",
+   filters: {
+     showPublicEvents: false,
+   },
+-- 
+2.53.0
+

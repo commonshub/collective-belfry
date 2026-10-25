@@ -70,6 +70,13 @@ Keycast (`POST /api/oauth/revoke`), sets the silent-try flag and goes through Ke
 Authentik sessions and comes back to the signed-out calendar. Check: `calendar-check.mjs` with
 `SSO=1 LOGOUT=1`.
 
+Patch `0005-...patch`: the phone layout. Upstream shows "Calendar by" plus a small square logo;
+patch 0001's wide OSV wordmark pushed the top bar (and with it the page) past the edge of a phone
+(451 px on a 412 px screen), so phones get the square mark, the date label stays on one line, and
+a phone opens on the day view (seven week columns cannot be read there). Desktop is unchanged.
+For a list of what is on, with RSVPs, comments and photos per session, participants use the
+programme app (`programme.<domain>`, `services/village`).
+
 To change the patch: clone the app, `git checkout <CALENDAR_COMMIT>`, `git apply` the patch,
 commit, edit, `git commit --amend` (or a new commit), `git format-patch <CALENDAR_COMMIT>.. -o infra/apps/calendar/patches`. Run
 Prettier on changed files: the build runs the app's lint and typecheck.
