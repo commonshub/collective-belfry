@@ -431,6 +431,17 @@ and changes how the scripts connect); Dockerfile base images are tags, not diges
 Odoo and the mint still see their secrets in their own process environment; the issuer CA key is
 still on the VM; secrets rotation is manual.
 
+## 3z. Fresh install of the test VM: Belgium, EUR, new keys — 2026-10-25
+
+User: fix the company country and currency (Belgium, EUR); the VM held test data only. A fresh Odoo database alone was not enough: contact ids restart, and participant keys derive from the custody seed and the contact id (keys of smoke-test participants had been exported), the status list is keyed on the pass id (old test credentials would read valid again), and Authentik usernames are the member numbers. So the VM was reinstalled: the other session's secrets change (9f4fc10, 4ba88f2) deployed first, a backup of the old state, then every data volume removed, a new custody seed and a new backup key (both encrypted to the two mock tokens, the old ones kept as `*.old` on the steward laptop), new issuer and verifier keys, a new Keycast master key, every generated secret new (the Mollie key and the SMTP password kept), the steward added again. Old `.env` copies and secrets were shredded on the VM.
+
+- [x] bootstrap: a fresh database gets the company's country (`COMPANY_COUNTRY`, default BE) and currency before accounting, so Odoo installs the Belgian chart (`be_comp`, l10n_be) in EUR; the pass products stay without taxes (VAT still open).
+- [x] Status list: every index except those of active passes is revoked, so a credential whose pass no longer exists never reads valid.
+- [x] bootstrap re-applies the Belfry blueprints while a provider holds a placeholder secret (seen when the worker applied a changed blueprint before the secret file existed); bootstrap offers only the Mollie methods the Mollie account has enabled.
+- [x] Checks on the VM: smoke 156 ok / 0 failed after the secrets change and again after the reinstall; no secret in any container's environment; Mollie card payment → pass active, refund from Odoo → revoked; backup with the new key.
+
+Open: iDEAL and Bancontact are off in the Mollie account (enable in Mollie's dashboard, then rerun bootstrap); the backups made before the reinstall are still at `/var/backups/belfry` (old data, old key).
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).
