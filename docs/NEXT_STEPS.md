@@ -451,6 +451,13 @@ Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of
 2. Phase 2 (continued): check the login, the key export, the pass card (§3m) and a phone NIP-46 client against `wss://bunker.<domain>` (§3n, e.g. Amethyst or Coracle with a bunker URL from "create bunker", or nostr-login via the NIP-05 discovery) live on the VM; pick the marketplace and links protocols (the other app kinds are decided, §3h); choose and deploy the actual client apps (calendar, photos, proposals, NIP-17 chat) against the relay, Blossom and the `belfry-event` scope.
 3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
+To-dos from the user (2026-10-25):
+
+- [ ] Enable iDEAL and Bancontact in the Mollie account (dashboard, Settings › Payment methods), then rerun bootstrap (it offers only the methods the account has enabled).
+- [ ] Decide whether the backups from before the VM reinstall (`/var/backups/belfry`, old test data, old backup key) are deleted.
+- [ ] Regenerate the Mollie test key (it passed through a chat) and store it with `infra/scripts/put-secret.sh … mollie_api_key`.
+- [ ] Add the venue's IPv4 address to `RATE_LIMIT_EXEMPT` (the IPv6 /64 is in), if the venue has a fixed one.
+
 ## Notes
 
 - First commits made on 2026-10-22 (layout agreed: monorepo). Relay slice, Keycast fork, participant login and Phase 3 committed 2026-10-23.
