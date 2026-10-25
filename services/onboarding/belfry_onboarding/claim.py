@@ -333,16 +333,22 @@ this token into it:</p>
 
 
 def revoked_status_indexes(svc: Services) -> set[int]:
-    """Every index of the list except those of active passes: a credential whose pass was
-    revoked, expired or deleted (a database reset, a pass removed by hand) never reads valid."""
+    """Every index up to the highest one in use, except those of active passes: a credential
+    whose pass was revoked, expired or deleted (removed by hand) never reads valid. Indexes above
+    stay 0, so a pass activated after a verifier cached the list (STATUS_LIST_TTL) is valid at
+    once; credentials from before a database reset are refused by the new issuer key."""
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["credential_status_index", "!=", False]],
-        ["credential_status_index"],
+        [["credential_status_index", "!=", False]],
+        ["credential_status_index", "state"],
     )
-    active = {int(r["credential_status_index"]) for r in rows if r.get("credential_status_index")}
-    size = max(credentials.STATUS_LIST_MIN_BITS, (max(active, default=0) // 8 + 1) * 8)
-    return set(range(size)) - active
+    used = {int(r["credential_status_index"]) for r in rows if r.get("credential_status_index")}
+    active = {
+        int(r["credential_status_index"])
+        for r in rows
+        if r.get("credential_status_index") and r.get("state") == "active"
+    }
+    return set(range(max(used, default=-1) + 1)) - active
 
 
 def status_list_jwt(svc: Services) -> str:
