@@ -515,7 +515,7 @@ for page in "privacy|Privacy notice" "terms|Terms of participation" "refunds|Ref
   p=${page%%|*}; t=${page#*|}; H=$(curl -sS -o - -w '\n%{http_code}' "$ONB_URL/$p")
   [[ "${H##*$'\n'}" == 200 && "$H" == *"<title>$t</title>"* && "$H" != *"{{"* ]] && ok "/$p: $t" || bad "/$p: HTTP ${H##*$'\n'}"
 done
-HOME_PAGE=$(curl -sS "$ONB_URL/")
+HOME_PAGE=$(curl -sSL "$ONB_URL/")  # with SITE_URL, / forwards to the start page there
 [[ "$HOME_PAGE" == *'href="/help"'* && "$HOME_PAGE" == *'href="/privacy"'* && "$HOME_PAGE" == *'href="/rules"'* ]] && ok "the landing page links help, rules and the legal pages" || bad "landing page links"
 [[ "$(curl -sS "$ONB_URL/help")" == *"<strong>Chat</strong>"* ]] && ok "/help lists the community apps" || bad "/help has no app list (COMMUNITY_APPS)"
 
@@ -705,7 +705,12 @@ else
   START=$(curl -sS "$ONB_URL/")
 fi
 [[ "$START" == *"How to join"* && "$START" == *"Get an invite"* ]] && ok "start page explains how to join" || bad "start page: $(grep -o '<h1>[^<]*' <<<"$START" | head -1)"
-[[ -z "${TEST_RUN_NOTICE:-}" || "$START" == *"test-notice"* ]] && ok "test-run notice ${TEST_RUN_NOTICE:+shown}${TEST_RUN_NOTICE:-not configured}" || bad "TEST_RUN_NOTICE set but not on the start page"
+if [[ -n "${TEST_RUN_NOTICE:-}" ]]; then
+  [[ "$START" == *"test-notice"* ]] && ok "test-run notice shown" || bad "TEST_RUN_NOTICE set but not on the start page"
+  [[ "$(curl -sS "$FRIEND_URL")" == *"belfry-test-notice"* ]] && ok "test-run notice on Odoo's invite page" || bad "no test-run notice on Odoo's invite page"
+else
+  ok "no test-run notice configured"
+fi
 [[ "$(curl -sS "$ONB_URL/feedback?from=$ONB_URL/me")" == *"What happened?"* ]] && ok "feedback form served" || bad "no feedback form"
 
 step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"

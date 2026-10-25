@@ -41,7 +41,9 @@ A week before:
   is charged, and all data is deleted afterwards." Then run bootstrap and recreate the onboarding
   service (`up -d onboarding`). The notice appears on the start, invite and payment pages, with
   Mollie's test card while Mollie is in test mode. Reset both before the event (the fresh install
-  does).
+  does). On belfry.tofauti.net: `EVENT_START=2026-11-01`, `EVENT_END=2026-11-14` (the test runs in
+  the first two weeks of November); a pass bought before 1 November starts on 1 November, so a
+  dry run in October sees "not valid yet" at `/check` (expected) and skips the door step.
 - [ ] **Dry run with two people** through the whole plan below, including the chat, the market
   payment and the tip, on two different phones (one Android, one iPhone if possible).
 - [ ] **Tester mail** sent (text below), with the date and the link.
