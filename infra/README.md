@@ -82,7 +82,8 @@ the proxy with the browser-facing services; `default` is everything else.
   admin key pair come from `scripts/nostr_keys.py`). Run again, it keeps existing values and only
   appends variables that `.env.example` gained;
 - `infra/keycast/master.key`, which encrypts every key the signer stores (back it up);
-- `infra/odoo/odoo.conf` from `odoo/odoo.conf.tmpl` (with the Odoo master password);
+- `infra/odoo/odoo.conf` from `odoo/odoo.conf.tmpl`, with a PBKDF2 hash of the Odoo master
+  password (the password itself is only in `.env`);
 - the issuer's CA, signing, bridge and verifier keys (`scripts/gen-issuer-pki.sh`,
   `issuer/README.md`);
 - locally, the custody seed participant keys derive from (`secrets/custody/custody-seed`; on a

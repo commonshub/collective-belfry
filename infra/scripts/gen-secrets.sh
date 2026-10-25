@@ -103,14 +103,33 @@ else
   echo "wrote $MASTER_KEY"
 fi
 
-# Odoo config with the master password from .env (odoo.conf is gitignored).
+# Odoo config (odoo.conf is gitignored). It carries only a PBKDF2 hash of the master password,
+# in passlib's format, which Odoo verifies (tools/config.py), so the file can stay readable for
+# the Odoo container's user; the password itself stays in .env. A hash that still matches is kept.
 python3 - "$INFRA_DIR" <<'PYRENDER'
-import re, sys
+import base64, hashlib, hmac, os, re, sys
 infra = sys.argv[1]
 env = dict(m.groups() for m in (re.match(r"^([A-Z0-9_]+)=([^#\s]*)", l) for l in open(f"{infra}/.env")) if m)
+password = env.get("ODOO_MASTER_PASSWORD", "").encode()
+conf = f"{infra}/odoo/odoo.conf"
+ab64 = lambda b: base64.b64encode(b).decode().rstrip("=").replace("+", ".")
+unab64 = lambda s: base64.b64decode(s.replace(".", "+") + "=" * (-len(s) % 4))
+
+def pbkdf2(salt: bytes, rounds: int) -> bytes:
+    return hashlib.pbkdf2_hmac("sha512", password, salt, rounds)
+
+stored = ""
+if os.path.exists(conf):
+    m = re.search(r"^admin_passwd = (\$pbkdf2-sha512\$(\d+)\$([^$]+)\$(\S+))$", open(conf).read(), re.M)
+    if m and hmac.compare_digest(pbkdf2(unab64(m.group(3)), int(m.group(2))), unab64(m.group(4))):
+        stored = m.group(1)
+if password and not stored:
+    salt, rounds = os.urandom(16), 600_000
+    stored = f"$pbkdf2-sha512${rounds}${ab64(salt)}${ab64(pbkdf2(salt, rounds))}"
 tmpl = open(f"{infra}/odoo/odoo.conf.tmpl").read()
-open(f"{infra}/odoo/odoo.conf", "w").write(tmpl.replace("@@ODOO_MASTER_PASSWORD@@", env.get("ODOO_MASTER_PASSWORD", "")))
-print(f"wrote {infra}/odoo/odoo.conf")
+open(conf, "w").write(tmpl.replace("@@ODOO_MASTER_PASSWORD@@", stored))
+os.chmod(conf, 0o644)
+print(f"wrote {conf}")
 PYRENDER
 
 # Phase 3: the credential issuer's CA, signer key and the walt.id Issuer2 key files.
