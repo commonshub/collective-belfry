@@ -15,6 +15,8 @@ dependencies = [
     "segno>=1.6",
     "python-multipart>=0.0.9",
     "coincurve>=20",
+    "icalendar>=6",
+    "recurring-ical-events>=3",
 ]
 
 [project.optional-dependencies]

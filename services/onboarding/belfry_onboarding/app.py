@@ -23,7 +23,19 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import avatar, blossom, bridge, claim, core, feedback, mypass, pages, reports, steward
+from . import (
+    avatar,
+    blossom,
+    bridge,
+    claim,
+    core,
+    feedback,
+    mypass,
+    pages,
+    programme,
+    reports,
+    steward,
+)
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -83,7 +95,11 @@ def build_services(settings: Settings) -> Services:
             RelayWhitelist(
                 settings.relay_config_template,
                 settings.relay_config_path,
-                settings.relay_extra_pubkeys,
+                ",".join(
+                    k
+                    for k in (settings.relay_extra_pubkeys, programme.programme_pubkey(settings))
+                    if k
+                ),
             )
             if settings.relay_config_path
             else None

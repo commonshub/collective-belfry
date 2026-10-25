@@ -15,8 +15,14 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    **Connect with Remote Signer (NIP-46)**. One bunker per app: Keycast binds the first client
    that connects with its secret.
 3. Create a calendar first ("Create Calendar"), then events. Events are private by default
-   (gift-wrapped to the invited participants); switch an event to public to show it to every
-   participant on the community relay.
+   (gift-wrapped to the invited participants). A public event is visible to anyone who opens
+   its link (the app shows other people's public events only through links and invitations).
+4. The sidebar's **Open Source Village** group (patch 0004) shows the village programme and one
+   calendar per room of Commons Hub Brussels, each with its own colour and checkbox. They are the
+   public events of the programme key (`PROGRAMME_PUBKEY`, build argument
+   `VITE_PROGRAMME_PUBKEY`), published by the onboarding service's `sync-programme` job from the
+   website's `/schedule.json` and the rooms' public Google calendars. Read-only here; participants
+   can open, share and RSVP to them.
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
 pass); the app signs through Keycast, so the `belfry-event` policy (`infra/keycast/policy.sql`)

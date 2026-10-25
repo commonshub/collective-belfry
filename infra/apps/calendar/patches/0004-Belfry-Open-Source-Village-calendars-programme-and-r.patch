@@ -1,0 +1,378 @@
+From 93c263c0546a21996c728fc9076d84305cfa6f22 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sun, 25 Oct 2026 16:14:37 +0100
+Subject: [PATCH] Belfry: Open Source Village calendars (programme and rooms)
+ from the programme key
+
+---
+ src/belfry/village.ts                         | 166 ++++++++++++++++++
+ src/components/Calendar.tsx                   |   9 +
+ src/components/SidebarContent.tsx             |   2 +
+ .../sidebar/SidebarVillageCalendars.tsx       |  76 ++++++++
+ src/nostr/village.ts                          |  18 ++
+ src/utils/eventChipColor.ts                   |   7 +
+ 6 files changed, 278 insertions(+)
+ create mode 100644 src/belfry/village.ts
+ create mode 100644 src/components/sidebar/SidebarVillageCalendars.tsx
+ create mode 100644 src/nostr/village.ts
+
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+new file mode 100644
+index 0000000..b734bcb
+--- /dev/null
++++ b/src/belfry/village.ts
+@@ -0,0 +1,166 @@
++/**
++ * Belfry: the Open Source Village calendars. Belfry's `sync-programme` job publishes the
++ * website's programme and the rooms' Google calendars as public NIP-52 events (kind 31923)
++ * signed with the programme key (VITE_PROGRAMME_PUBKEY). This store follows that key's events
++ * on the community relay and groups them by their `t` tag: "programme" is the village
++ * programme, "room-<slug>" one calendar per room. They are read-only public events: no
++ * calendar-list refs, never edited here; participants can still open, share and RSVP to them.
++ */
++import { create } from "zustand";
++import type { Event } from "nostr-tools";
++import type { ObserveHandle } from "@formstr/local-relay";
++import { observeProgrammeEvents } from "../nostr/village";
++import { EventKinds } from "../nostr/kinds";
++import { nostrEventToCalendar } from "../utils/parser";
++import type { ICalendarEvent } from "../utils/types";
++
++export const PROGRAMME_PUBKEY = (
++  (import.meta.env.VITE_PROGRAMME_PUBKEY as string | undefined) || ""
++).trim();
++
++export const VILLAGE_CALENDAR_PREFIX = "village:";
++const VISIBILITY_KEY = "belfry:village-visibility";
++
++export interface VillageCalendar {
++  id: string;
++  title: string;
++  color: string;
++}
++
++// The programme in the village's lime, the rooms in tints that read on the dark theme.
++const PROGRAMME_COLOR = "#d6ff52";
++const ROOM_COLORS = [
++  "#f89b0e",
++  "#5ec8e5",
++  "#c792ea",
++  "#ff7a8a",
++  "#7ee0a1",
++  "#f2d06b",
++  "#8fa8ff",
++];
++
++/** The calendar an event of the programme key belongs to, from its `t` tags. */
++export function villageCalendarFor(event: Event): VillageCalendar | null {
++  const tags = event.tags.filter((t) => t[0] === "t").map((t) => t[1]);
++  if (tags.includes("programme")) {
++    return {
++      id: `${VILLAGE_CALENDAR_PREFIX}programme`,
++      title: "Village programme",
++      color: PROGRAMME_COLOR,
++    };
++  }
++  const room = tags.find((t) => t?.startsWith("room-"));
++  if (!room) return null;
++  const location = event.tags.find((t) => t[0] === "location")?.[1] ?? "";
++  return {
++    id: `${VILLAGE_CALENDAR_PREFIX}${room}`,
++    title: location.split(",")[0]?.trim() || room.slice(5),
++    color: ROOM_COLORS[0], // assigned by position in publish()
++  };
++}
++
++export function villageCalendarColor(calendarId: string): string | undefined {
++  return useVillageCalendars
++    .getState()
++    .calendars.find((c) => c.id === calendarId)?.color;
++}
++
++function loadVisibility(): Record<string, boolean> {
++  try {
++    return JSON.parse(localStorage.getItem(VISIBILITY_KEY) || "{}");
++  } catch {
++    return {};
++  }
++}
++
++interface VillageState {
++  calendars: VillageCalendar[];
++  events: ICalendarEvent[];
++  visibility: Record<string, boolean>;
++  start: () => void;
++  toggleVisibility: (id: string) => void;
++}
++
++let subscription: ObserveHandle | null = null;
++// d tag → newest kind-31923 version; d tag → newest deletion (NIP-09 `a` tag)
++const latest = new Map<string, { event: Event; calendar: VillageCalendar }>();
++const deletedAt = new Map<string, number>();
++
++export const useVillageCalendars = create<VillageState>((set, get) => {
++  const publish = () => {
++    const calendars = new Map<string, VillageCalendar>();
++    const events: ICalendarEvent[] = [];
++    for (const [d, { event, calendar }] of latest) {
++      if ((deletedAt.get(d) ?? -1) >= event.created_at) continue;
++      calendars.set(calendar.id, calendar);
++      const parsed = nostrEventToCalendar(event, calendar.id);
++      if (parsed.begin && parsed.end) events.push(parsed);
++    }
++    // the programme first, then the rooms by name, each room in its own tint
++    const rooms = [...calendars.values()]
++      .filter((c) => !c.id.endsWith(":programme"))
++      .sort((a, b) => a.title.localeCompare(b.title))
++      .map((c, i) => ({ ...c, color: ROOM_COLORS[i % ROOM_COLORS.length] }));
++    const programme = calendars.get(`${VILLAGE_CALENDAR_PREFIX}programme`);
++    const sorted = programme ? [programme, ...rooms] : rooms;
++    set({ calendars: sorted, events });
++  };
++  let timer: ReturnType<typeof setTimeout> | undefined;
++  const schedule = () => {
++    clearTimeout(timer);
++    timer = setTimeout(publish, 150);
++  };
++
++  return {
++    calendars: [],
++    events: [],
++    visibility: loadVisibility(),
++    start: () => {
++      if (subscription || !PROGRAMME_PUBKEY) return;
++      subscription = observeProgrammeEvents(
++        PROGRAMME_PUBKEY,
++        (event: Event) => {
++          if (event.pubkey !== PROGRAMME_PUBKEY) return;
++          if (event.kind === EventKinds.DeletionEvent) {
++            for (const tag of event.tags) {
++              if (tag[0] !== "a") continue;
++              const d = tag[1]?.split(":").slice(2).join(":");
++              if (d)
++                deletedAt.set(
++                  d,
++                  Math.max(deletedAt.get(d) ?? 0, event.created_at),
++                );
++            }
++          } else if (event.kind === EventKinds.PublicCalendarEvent) {
++            const d = event.tags.find((t) => t[0] === "d")?.[1];
++            const calendar = villageCalendarFor(event);
++            if (!d || !calendar) return;
++            const known = latest.get(d);
++            if (!known || known.event.created_at < event.created_at)
++              latest.set(d, { event, calendar });
++          }
++          schedule();
++        },
++      );
++    },
++    toggleVisibility: (id) => {
++      const visibility = {
++        ...get().visibility,
++        [id]: get().visibility[id] === false,
++      };
++      try {
++        localStorage.setItem(VISIBILITY_KEY, JSON.stringify(visibility));
++      } catch {
++        // private mode: the choice lasts for this page only
++      }
++      set({ visibility });
++    },
++  };
++});
++
++/** The events of the village calendars the participant shows. */
++export function useVisibleVillageEvents(): ICalendarEvent[] {
++  const events = useVillageCalendars((s) => s.events);
++  const visibility = useVillageCalendars((s) => s.visibility);
++  return events.filter((e) => visibility[e.calendarId] !== false);
++}
+diff --git a/src/components/Calendar.tsx b/src/components/Calendar.tsx
+index 90eae32..ce7305b 100644
+--- a/src/components/Calendar.tsx
++++ b/src/components/Calendar.tsx
+@@ -10,6 +10,10 @@ import { useCalendarLists } from "../stores/calendarLists";
+ import { useInvitations } from "../stores/invitations";
+ import { useDateWithRouting } from "../hooks/useDateWithRouting";
+ import { useVisibleDeviceEvents } from "../hooks/useVisibleDeviceEvents";
++import {
++  useVillageCalendars,
++  useVisibleVillageEvents,
++} from "../belfry/village";
+ import { findCalendarForEvent } from "../utils/calendarListTypes";
+ 
+ function Calendar() {
+@@ -19,6 +23,10 @@ function Calendar() {
+   const { layout } = useLayout();
+   const { date } = useDateWithRouting();
+   const visibleDeviceEvents = useVisibleDeviceEvents(date, layout);
++  // Belfry: the village programme and room bookings (read-only public events)
++  const visibleVillageEvents = useVisibleVillageEvents();
++  const startVillage = useVillageCalendars((s) => s.start);
++  useEffect(() => startVillage(), [startVillage]);
+ 
+   const didInitialScroll = useRef(false);
+ 
+@@ -82,6 +90,7 @@ function Calendar() {
+     ...visibleEvents,
+     ...invitations.filter((inv) => inv.event).map((inv) => inv.event!),
+     ...visibleDeviceEvents,
++    ...visibleVillageEvents,
+   ];
+ 
+   return (
+diff --git a/src/components/SidebarContent.tsx b/src/components/SidebarContent.tsx
+index 5379484..7490d72 100644
+--- a/src/components/SidebarContent.tsx
++++ b/src/components/SidebarContent.tsx
+@@ -20,6 +20,7 @@ import { ContactFormDialog } from "./ContactFormDialog";
+ import { SchedulingPagesList } from "./SchedulingPagesList";
+ import { SidebarSyncedCalendars } from "./sidebar/SidebarSyncedCalendars";
+ import { SidebarDeviceCalendars } from "./sidebar/SidebarDeviceCalendars";
++import { SidebarVillageCalendars } from "./sidebar/SidebarVillageCalendars";
+ import { useUser } from "../stores/user";
+ import { useSettings } from "../stores/settings";
+ import { useAppointmentData } from "../hooks/useAppointmentData";
+@@ -126,6 +127,7 @@ export function SidebarContent({
+         </Box>
+ 
+         <Box mt={2}>
++          <SidebarVillageCalendars />
+           <SidebarSyncedCalendars />
+           <SidebarDeviceCalendars />
+         </Box>
+diff --git a/src/components/sidebar/SidebarVillageCalendars.tsx b/src/components/sidebar/SidebarVillageCalendars.tsx
+new file mode 100644
+index 0000000..845d8ce
+--- /dev/null
++++ b/src/components/sidebar/SidebarVillageCalendars.tsx
+@@ -0,0 +1,76 @@
++import { useEffect } from "react";
++import { Box, Checkbox, Typography } from "@mui/material";
++import CircleIcon from "@mui/icons-material/Circle";
++import { CollapsibleGroup } from "../ui/CollapsibleGroup";
++import { PROGRAMME_PUBKEY, useVillageCalendars } from "../../belfry/village";
++
++/** Belfry: the sidebar's "Open Source Village" group (village programme and room bookings,
++ * read-only, from the programme key; src/belfry/village.ts). Nothing without the key. */
++export function SidebarVillageCalendars() {
++  const calendars = useVillageCalendars((s) => s.calendars);
++  const visibility = useVillageCalendars((s) => s.visibility);
++  const toggleVisibility = useVillageCalendars((s) => s.toggleVisibility);
++  const start = useVillageCalendars((s) => s.start);
++  useEffect(() => start(), [start]);
++
++  if (!PROGRAMME_PUBKEY) return null;
++
++  return (
++    <CollapsibleGroup
++      title="Open Source Village"
++      count={calendars.length}
++      defaultOpen
++    >
++      {calendars.length === 0 ? (
++        <Typography variant="body2" color="text.secondary" py={1}>
++          The programme appears here once it is published.
++        </Typography>
++      ) : (
++        calendars.map((calendar) => {
++          const visible = visibility[calendar.id] !== false;
++          return (
++            <Box
++              key={calendar.id}
++              data-testid="village-calendar-row"
++              display="flex"
++              alignItems="center"
++              sx={{
++                py: 0.5,
++                "&:hover": { backgroundColor: "action.hover" },
++                borderRadius: 1,
++              }}
++            >
++              <Checkbox
++                checked={visible}
++                onChange={() => toggleVisibility(calendar.id)}
++                size="small"
++                sx={{
++                  color: calendar.color,
++                  "&.Mui-checked": { color: calendar.color },
++                  p: 0.5,
++                }}
++                inputProps={{ "aria-label": calendar.title }}
++              />
++              <Box
++                display="flex"
++                alignItems="center"
++                gap={1}
++                flex={1}
++                minWidth={0}
++                sx={{ ml: 0.5 }}
++              >
++                <CircleIcon sx={{ fontSize: 10, color: calendar.color }} />
++                <Typography
++                  variant="body2"
++                  sx={{ wordBreak: "break-word", whiteSpace: "normal" }}
++                >
++                  {calendar.title}
++                </Typography>
++              </Box>
++            </Box>
++          );
++        })
++      )}
++    </CollapsibleGroup>
++  );
++}
+diff --git a/src/nostr/village.ts b/src/nostr/village.ts
+new file mode 100644
+index 0000000..a473b21
+--- /dev/null
++++ b/src/nostr/village.ts
+@@ -0,0 +1,18 @@
++import type { Event, Filter } from "nostr-tools";
++import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
++import { EventKinds } from "./kinds";
++
++/**
++ * Belfry: the programme key's public calendar events and deletions (src/belfry/village.ts).
++ * No since/until: relays apply them to created_at, not to when an event takes place.
++ */
++export function observeProgrammeEvents(
++  pubkey: string,
++  onEvent: (event: Event) => void,
++): ObserveHandle {
++  const filter: Filter = {
++    kinds: [EventKinds.PublicCalendarEvent, EventKinds.DeletionEvent],
++    authors: [pubkey],
++  };
++  return dataLayer.observe([filter], { onEvent });
++}
+diff --git a/src/utils/eventChipColor.ts b/src/utils/eventChipColor.ts
+index df79942..51c84cc 100644
+--- a/src/utils/eventChipColor.ts
++++ b/src/utils/eventChipColor.ts
+@@ -8,6 +8,10 @@ import {
+ } from "./deviceCalendarAdapter";
+ import type { DeviceCalendarInfo } from "../plugins/deviceCalendar";
+ import type { ICalendarEvent } from "./types";
++import {
++  VILLAGE_CALENDAR_PREFIX,
++  villageCalendarColor,
++} from "../belfry/village";
+ 
+ /**
+  * Resolves the display color for an event by checking, in order:
+@@ -28,6 +32,9 @@ export function resolveCalendarColor(
+     ? nostrCalendars.find((c) => c.id === event.calendarId)
+     : undefined;
+   if (owning?.color) return owning.color;
++  if (event.calendarId?.startsWith(VILLAGE_CALENDAR_PREFIX)) {
++    return villageCalendarColor(event.calendarId);
++  }
+ 
+   if (event.source === "device" && event.calendarId) {
+     const nativeId = event.calendarId.startsWith(DEVICE_CALENDAR_ID_PREFIX)
+-- 
+2.53.0
+

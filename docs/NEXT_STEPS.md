@@ -501,6 +501,19 @@ User: the plain-text "This page is only reachable over Belfry's admin network." 
 
 Not changed: Keycast's error pages were branded in patch 0010; Authentik's own denial page (a participant at the steward app) uses the brand blueprint's CSS; the village and vote apps answer unknown paths with their app; an Odoo portal link with a wrong access token redirects to `/my` → the admin-only login, which now shows the branded admin-network 403.
 
+## 3zd. Programme and room bookings in the calendar — built 2026-10-25
+
+User: the sessions are defined in the opensourcevillage.org repo; the rooms have public Google calendars (commonshub.brussels `src/settings/rooms.json`); sync both into the calendar app and show the booking titles.
+
+- [x] opensourcevillage.org (branch `feat/schedule-json`, not pushed; the repo is private, so Belfry reads the deployed site): `/schedule.json` serves the current edition's programme grid (date, label, morning/afternoon/evening text, venue, dates) and every edition under `editions`. 2 tests.
+- [x] Onboarding `programme.py`, CLI `sync-programme` (cron every 10 minutes, `docs/runbook.md`): every slot of `/schedule.json` (times from `PROGRAMME_SLOTS`, default 09:30–12:30, 14:00–18:00, 18:30–21:30) and every booking of the rooms' public iCal feeds within the event dates (recurring bookings expanded, cancelled ones skipped, the booking's title, "Booked" when it has none) becomes a public NIP-52 event (kind 31923, `d` = `osv-programme-<date>-<slot>` or `osv-room-<slug>-<hash>`, `t` `programme` / `room-<slug>`, `start_tzid` Europe/Brussels, location). Signed with the programme key (new secret `programme_nsec`; `PROGRAMME_PUBKEY` in `.env` follows it, gen-secrets); the relay whitelist adds the key itself. Only changes are published; events whose slot or booking is gone are deleted (kind 5, `a` tags); a source that cannot be read keeps its events. Waits out the relay's 60-events-a-minute limit (a first run of ~110 events takes about two minutes). Dependencies `icalendar`, `recurring-ical-events`. 8 tests.
+- [x] Calendar patch 0004: the pinned app never shows other people's public events (its public-event fetch is unused and would filter by `created_at`), so the sidebar gets an **Open Source Village** group: Village programme plus one calendar per room, own colours and checkboxes (kept per browser), events from the programme key without a time filter, deletions honoured, read-only, RSVP works. Build argument `VITE_PROGRAMME_PUBKEY`.
+- Checked locally: a dry run against the live room feeds and the 2026 programme gave 114 events (36 programme slots, 78 bookings in six rooms); the first sync published them in two rounds (rate limit), the second published nothing; the calendar in headless Chromium shows the group and the week of 26 January 2026 with programme and bookings, a click opens the event with RSVP.
+
+Open: the website route needs merging and deploying (until then the programme source fails and only room bookings sync; their events are then kept, not deleted). The 2027 grid is still empty. The room calendars also carry Commons Hub bookings that are not part of the village; all of them are shown, as decided. One way only (Google and the website stay the source). Deploy on the VM: `gen-secrets.sh` (programme key), rebuild onboarding and calendar, cron line.
+
+Smoke note: the restore-keys check (step 10a) failed once with the JSON split by interleaved log lines from `docker compose exec ... 2>&1`; the command itself returns valid JSON. Not related to this slice.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

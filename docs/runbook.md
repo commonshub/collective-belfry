@@ -23,12 +23,14 @@ Admin and steward pages need the admin network (ZeroTier, `../infra/DEPLOY.md`).
 ## Before the event (once)
 
 1. **Scheduled jobs.** `reconcile` catches payments whose webhook was lost and retries unfinished
-   activations; `expire` ends passes after their last day. Add them to the deploying user's
-   crontab (`crontab -e`):
+   activations; `expire` ends passes after their last day; `sync-programme` copies the website's
+   programme and the rooms' Google calendars into the community calendar. Add them to the
+   deploying user's crontab (`crontab -e`):
 
    ```
    */5 * * * * cd ~/belfry && docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding reconcile >> ~/belfry-cron.log 2>&1
    15 0 * * * cd ~/belfry && docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding expire >> ~/belfry-cron.log 2>&1
+   */10 * * * * cd ~/belfry && docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding sync-programme >> ~/belfry-cron.log 2>&1
    ```
 
 2. **Log rotation.** Docker keeps container logs without limit by default. In

@@ -605,7 +605,8 @@ services:
     group_add: *secret-group
     secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
               bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
-              pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret]
+              pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
+              programme_nsec]
     depends_on:
       odoo:
         condition: service_healthy
@@ -648,6 +649,10 @@ services:
       RELAY_CONFIG_PATH: /relay-config/rnostr.toml
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
+      # sync-programme (programme.py): empty URL disables that source
+      PROGRAMME_SCHEDULE_URL: ${PROGRAMME_SCHEDULE_URL-https://opensourcevillage.org/schedule.json}
+      PROGRAMME_ROOMS_URL: ${PROGRAMME_ROOMS_URL-https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json}
+      PROGRAMME_SLOTS: ${PROGRAMME_SLOTS:-morning=09:30-12:30,afternoon=14:00-18:00,evening=18:30-21:30}
       NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
       # Blossom gate: hostnames a BUD-11 "server" tag may name (comma-separated), empty = any.
       BLOSSOM_HOSTS: ${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}
@@ -698,6 +703,7 @@ services:
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_COMMUNITY_APPS: *community-apps
+        VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
     # static files only: no backend access
     <<: *nonroot
     # caddy's binary carries the file capability to bind port 80; keep it in the bounding set
@@ -822,6 +828,7 @@ secrets:
   steward_session_secret: {file: ./secrets/steward_session_secret}
   pass_page_oidc_client_secret: {file: ./secrets/pass_page_oidc_client_secret}
   pass_page_secret: {file: ./secrets/pass_page_secret}
+  programme_nsec: {file: ./secrets/programme_nsec}
   issuer_oidc_client_secret: {file: ./secrets/issuer_oidc_client_secret}
   keycast_server_nsec: {file: ./secrets/keycast_server_nsec}
   keycast_service_token: {file: ./secrets/keycast_service_token}

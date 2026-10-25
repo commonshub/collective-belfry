@@ -127,6 +127,31 @@ class Settings(BaseSettings):
     event_start: dt.date = Field(default=dt.date(2027, 1, 25), alias="EVENT_START")
     event_end: dt.date = Field(default=dt.date(2027, 1, 31), alias="EVENT_END")
 
+    # Programme sync (programme.py, `python -m belfry_onboarding sync-programme`): the website's
+    # programme grid and the rooms' public Google calendars as public calendar events, signed
+    # with the programme key (secret programme_nsec, hex; the relay whitelist adds its pubkey).
+    programme_nsec: str = Field(default="", alias="PROGRAMME_NSEC")
+    programme_schedule_url: str = Field(
+        default="https://opensourcevillage.org/schedule.json", alias="PROGRAMME_SCHEDULE_URL"
+    )
+    programme_site_url: str = Field(
+        default="https://opensourcevillage.org", alias="PROGRAMME_SITE_URL"
+    )
+    programme_rooms_url: str = Field(
+        default="https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json",
+        alias="PROGRAMME_ROOMS_URL",
+    )
+    # The times of the website's slots (it names only morning, afternoon and evening).
+    programme_slots: str = Field(
+        default="morning=09:30-12:30,afternoon=14:00-18:00,evening=18:30-21:30",
+        alias="PROGRAMME_SLOTS",
+    )
+    programme_timezone: str = Field(default="Europe/Brussels", alias="PROGRAMME_TIMEZONE")
+    programme_venue: str = Field(
+        default="Commons Hub Brussels, Rue de la Madeleine 51, 1000 Brussels",
+        alias="PROGRAMME_VENUE",
+    )
+
     # Not in the contract: when true, a posted invoice with payment_state paid/in_payment but no
     # payment.transaction at all (a payment registered by hand in Odoo) is accepted. Off by
     # default so that the contract's "done transaction with provider_reference" rule applies.

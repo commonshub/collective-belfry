@@ -67,6 +67,7 @@ SECRETS = {
     "HOOK_TOKEN": rand(32),                    # Odoo's and Keycast's webhooks
     "PASS_INFO_TOKEN": rand(32),               # Keycast and the apps at /admin/*
     "MINT_SEED": rand(32),                     # the token mint's keys; back it up
+    "PROGRAMME_NSEC": rand(32),                # signs the programme's calendar events (hex key)
     "STRIPE_WEBHOOK_SECRET": None,             # bootstrap, once Stripe is configured
     "SMTP_PASSWORD": None,                     # put-secret.sh smtp_password
 }
@@ -99,11 +100,14 @@ for name, value in SECRETS.items():
     os.chmod(path(name), 0o640)
 if new:
     print("generated in infra/secrets/: " + ", ".join(new))
-# The admin's public key (a setting: Keycast's ALLOWED_PUBKEYS) always follows its secret key.
-nsec = open(path("KEYCAST_ADMIN_NSEC")).read().strip()
-out = subprocess.run([sys.executable, os.path.join(scripts_dir, "nostr_keys.py"), nsec],
-                     check=True, capture_output=True, text=True).stdout
-generated["KEYCAST_ADMIN_PUBKEY"] = json.loads(out)["pubkey_hex"]
+# Public keys (settings) always follow their secret keys: the admin's is Keycast's
+# ALLOWED_PUBKEYS, the programme key's tells the calendar app whose events are the programme.
+PUBKEYS = {"KEYCAST_ADMIN_PUBKEY": "KEYCAST_ADMIN_NSEC", "PROGRAMME_PUBKEY": "PROGRAMME_NSEC"}
+for pub, sec in PUBKEYS.items():
+    nsec = open(path(sec)).read().strip()
+    out = subprocess.run([sys.executable, os.path.join(scripts_dir, "nostr_keys.py"), nsec],
+                         check=True, capture_output=True, text=True).stdout
+    generated[pub] = json.loads(out)["pubkey_hex"]
 
 def env_out(lines):
     out = []
@@ -111,8 +115,8 @@ def env_out(lines):
         m = line_re.match(line.rstrip("\n"))
         if m and m.group(1) in SECRETS:
             continue
-        if m and m.group(1) == "KEYCAST_ADMIN_PUBKEY":
-            line = f"KEYCAST_ADMIN_PUBKEY={generated['KEYCAST_ADMIN_PUBKEY']}{m.group(3) or ''}\n"
+        if m and m.group(1) in PUBKEYS:
+            line = f"{m.group(1)}={generated[m.group(1)]}{m.group(3) or ''}\n"
         elif m and m.group(2) == "generated":
             line = f"{m.group(1)}={generated[m.group(1)]}{m.group(3) or ''}\n"
         out.append(line)

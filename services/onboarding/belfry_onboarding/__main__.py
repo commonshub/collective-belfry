@@ -1,7 +1,8 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
 ``... sync-participants``; ``... login-link <pass id>`` for a new one-time sign-in link and
 ``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward);
-``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay."""
+``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay;
+``... sync-programme`` for the programme and room bookings as calendar events (programme.py)."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import argparse
 import json
 import sys
 
-from . import core, steward
+from . import core, programme, steward
 from .app import build_services, configure_logging
 from .settings import Settings
 
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
         help="publish the missing profile, follow and relay lists of every active pass",
     )
     sub.add_parser(
+        "sync-programme",
+        help="publish the programme and the rooms' bookings as public calendar events",
+    )
+    sub.add_parser(
         "restore-keys",
         help="recreate every partner's Keycast account from Odoo (custody seed unlocked)",
     )
@@ -64,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
         result = core.publish_starter_events(services)
     elif args.command == "add-steward":
         result = steward.add_steward(services, args.email, args.name)
+    elif args.command == "sync-programme":
+        result = programme.sync(services)
     elif args.command == "restore-keys":
         result = core.restore_keys(services)
     elif args.command == "login-link":
