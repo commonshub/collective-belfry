@@ -113,6 +113,13 @@
         </xpath>
     </template>
 
+    <!-- The invoice's salesperson is the onboarding service's user, which means nothing to a participant. -->
+    <template id="belfry_invoice_page" name="Open Source Village invoice page" inherit_id="account.portal_invoice_page">
+        <xpath expr="//div[@t-if='invoice.invoice_user_id']" position="attributes">
+            <attribute name="t-if">invoice.invoice_user_id and not request.env.user._is_public()</attribute>
+        </xpath>
+    </template>
+
     <template id="invite_layout" name="Open Source Village invite layout">
         <t t-call="web.frontend_layout">
             <t t-set="no_header" t-value="True"/>

@@ -110,6 +110,7 @@ class TestInviteFlow(HttpCase):
         for odoo_link in ('href="/web/login', 'href="/my/home"', 'href="/my/invoices?', 'href="/"'):
             self.assertNotIn(odoo_link, html)
         self.assertRegex(html, r'<li name="invoices_breadcrumb"[^>]*>\s*Invoices & Bills\s*</li>')
+        self.assertNotIn('Salesperson', html)
 
     def test_unknown_token(self):
         self.assertEqual(self._get('no-such-token').status_code, 404)
