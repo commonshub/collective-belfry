@@ -88,6 +88,29 @@ class TestInviteFlow(HttpCase):
         self.assertIn('<title>You are invited to Open Source Village</title>', gone)
         self.assertIn('content="An invitation to Open Source Village.', gone)
 
+    def test_invoice_page_links_lead_to_belfry(self):
+        # participants open the invoice by its access token, without an Odoo login
+        self.env['ir.config_parameter'].sudo().set_param('belfry.public_url', 'https://pass.belfry.test')
+        partner = self.env['res.partner'].create({'name': "Alice", 'email': 'alice@belfry.test'})
+        order = self.env['sale.order'].create({
+            'partner_id': partner.id,
+            'order_line': [(0, 0, {'product_id': self.product_week.product_variant_id.id, 'product_uom_qty': 1})],
+        })
+        order.action_confirm()
+        invoice = order._create_invoices()
+        invoice.action_post()
+        page = self.url_open(invoice.get_portal_url())
+        self.assertEqual(page.status_code, 200)
+        html = page.text
+        self.assertIn('href="https://pass.belfry.test/me"', html)
+        self.assertIn('>Your pass</a>', html)
+        self.assertRegex(html, r'class="navbar-brand logo"[^>]*href="https://pass\.belfry\.test/"|href="https://pass\.belfry\.test/"[^>]*class="navbar-brand logo"')
+        self.assertRegex(html, r'<a aria-label="Open Source Village"[^>]*href="https://pass\.belfry\.test/"><i class="fa fa-home">')
+        # the PDF download (/my/invoices/<id>?access_token=…) works without a login and stays
+        for odoo_link in ('href="/web/login', 'href="/my/home"', 'href="/my/invoices?', 'href="/"'):
+            self.assertNotIn(odoo_link, html)
+        self.assertRegex(html, r'<li name="invoices_breadcrumb"[^>]*>\s*Invoices & Bills\s*</li>')
+
     def test_unknown_token(self):
         self.assertEqual(self._get('no-such-token').status_code, 404)
 

@@ -45,6 +45,8 @@
                 /* The portal chatter boots a separate bundle with Odoo's light theme, and its messages
                    reach nobody (stewards do not work in Odoo). Hide it and the sidebar's "Send message". */
                 #invoice_communication, .o_portal_chatter, a[href="#discussion"] { display: none !important; }
+                /* No links out to odoo.com ("Powered by Odoo" in the footer and the invoice sidebar). */
+                .o_brand_promotion, #wrapwrap div:has(> a[href*="www.odoo.com"]) { display: none !important; }
                 .card-header, .card-footer, .bg-light, .text-bg-light, .bg-white, .bg-100, .bg-200, .bg-body, .o_portal_wrap .bg-light { background-color: #243128 !important; color: #ffffff !important; }
                 .form-control, .form-select { background-color: #243128; color: #ffffff; border-color: #44534a; }
                 .form-control:focus, .form-select:focus { background-color: #243128; color: #ffffff; border-color: #d6ff52; box-shadow: 0 0 0 .25rem rgba(214, 255, 82, .25); }
@@ -80,6 +82,34 @@
                  style="background: #f89b0e; color: #1a231d; font-weight: 600; text-align: center; padding: 8px 16px; font-size: 0.95rem;">
                 <t t-esc="belfry_test_notice"/>
             </div>
+        </xpath>
+    </template>
+
+    <!-- Participants have no Odoo login: the portal's links lead to Belfry, not to Odoo's home,
+         /web/login (admin network only) or /my (needs a login). Applied after portal's own
+         extensions (priority), which add the navbar and the breadcrumbs. -->
+    <template id="belfry_portal_navbar" name="Open Source Village portal navbar" inherit_id="web.frontend_layout" priority="40">
+        <xpath expr="//a[hasclass('navbar-brand')]" position="attributes">
+            <attribute name="href"/>
+            <attribute name="t-att-href">(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/'</attribute>
+        </xpath>
+    </template>
+
+    <template id="belfry_sign_in" name="Open Source Village sign-in link" inherit_id="portal.user_sign_in" priority="40">
+        <xpath expr="//a" position="replace">
+            <a t-att-href="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/me'" t-attf-class="#{_link_class}">Your pass</a>
+        </xpath>
+    </template>
+
+    <template id="belfry_portal_breadcrumbs" name="Open Source Village portal breadcrumbs" inherit_id="portal.portal_breadcrumbs" priority="40">
+        <xpath expr="//a[@href='/my/home']" position="attributes">
+            <attribute name="href"/>
+            <attribute name="t-att-href">(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/'</attribute>
+            <attribute name="aria-label">Open Source Village</attribute>
+            <attribute name="title">Open Source Village</attribute>
+        </xpath>
+        <xpath expr="//li[@name='invoices_breadcrumb']/a" position="attributes">
+            <attribute name="t-if">invoice and not request.env.user._is_public()</attribute>
         </xpath>
     </template>
 
