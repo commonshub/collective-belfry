@@ -7,10 +7,10 @@ else (`DEPLOY.md`).
 ## Run
 
 ```
-make up           # first run: writes infra/.env and the keys, builds the patched signer
+make up           # first run: writes infra/.env, infra/secrets/ and the keys, builds the signer
                   # (about 15 minutes); starts the core services
 make bootstrap    # creates the Odoo database, users, API tokens, the signer's admin and policy,
-                  # applies Authentik's blueprints; writes the tokens into infra/.env
+                  # applies Authentik's blueprints; writes the tokens into infra/secrets/
 make up-app       # builds and starts the onboarding service and the community apps
 make smoke        # end-to-end test (see "Checks")
 make logs         # follow the logs
@@ -59,9 +59,9 @@ the proxy with the browser-facing services; `default` is everything else.
 
 | Path | What |
 | --- | --- |
-| `docker-compose.yml` | the stack; every setting comes from `.env` |
+| `docker-compose.yml` | the stack; settings come from `.env`, secrets from `secrets/` |
 | `docker-compose.prod.yml` | the public overlay: proxy, no published ports, restart policies (`DEPLOY.md`) |
-| `.env.example` | every variable with a comment; `gen-secrets.sh` turns it into `.env` |
+| `.env.example` | every setting with a comment (no secrets); `gen-secrets.sh` turns it into `.env` |
 | `authentik/` | blueprints (flows, providers, sources, branding) and the mail template |
 | `keycast/` | the signer's build (upstream plus Belfry's patch series) and its policy |
 | `apps/` | builds of the chat, calendar and wallet: upstream apps at a pinned commit plus Belfry's patches |
@@ -72,33 +72,65 @@ the proxy with the browser-facing services; `default` is everything else.
 | `proxy/` | the public reverse proxy (Caddy with rate limiting) |
 | `hetzner/` | creating a VM on Hetzner Cloud |
 | `scripts/` | setup, bootstrap, checks, backups, the custody seed (below) |
-| `secrets/` | files that must not be in `.env` (SMTP password, the local custody seed); gitignored |
+| `secrets/` | every password, token and key, one file each (below); gitignored |
+| `secrets-env/` | `with-secrets.sh`, the entrypoint wrapper for images that read secrets from variables only |
 
-## Secrets and tokens
+## Secrets
+
+Settings (URLs, names, ports) are in `infra/.env`. Every secret is a file of its own in
+`infra/secrets/`, named after its variable in lower case (`ODOO_API_KEY` is
+`secrets/odoo_api_key`). Neither is in git, and no secret goes into git encrypted either.
+
+How a container gets a secret:
+
+- Compose mounts the files a service needs, and only those, at `/run/secrets/<name>` (the
+  `secrets:` lists in `docker-compose.yml`). No secret is an environment variable of a container,
+  so `docker inspect`, `docker compose config` and crash reports show none.
+- The files are mode 640 with group 10001. `perms-init` sets that at every start (also for the
+  rendered issuer and verifier configs with their keys), and every container that reads a secret
+  carries group 10001 (`group_add`). Other users on the host cannot read them.
+- Belfry's own services read the files themselves (the onboarding service through pydantic's
+  `secrets_dir`, the Node services for `PASS_INFO_TOKEN`). Authentik reads `file://` values and
+  its blueprints use `!File`. Images that know only environment variables (Odoo, the signer, the
+  mint, authentik's first-start bootstrap) start through `/belfry/with-secrets`
+  (`secrets-env/with-secrets.sh`): it exports the files named in `SECRETS_ENV` for that process
+  only. A command run with `docker compose exec` in such a container needs the wrapper too:
+  `$C exec odoo /belfry/with-secrets odoo shell -d odoo`.
+- The host scripts (bootstrap, smoke, the issuer PKI) load the files with `scripts/secrets.sh`
+  and pass tokens to `curl` on standard input or as header files, not as arguments, which every
+  user could read in `ps`.
 
 `scripts/gen-secrets.sh` writes, once:
 
-- `infra/.env` from `.env.example`, with random passwords and keys (the signer's server key and
-  admin key pair come from `scripts/nostr_keys.py`). Run again, it keeps existing values and only
-  appends variables that `.env.example` gained;
+- `infra/.env` from `.env.example`. Run again, it keeps existing values and only appends settings
+  that `.env.example` gained;
+- `infra/secrets/<name>` with a random value for every generated secret (the signer's server key
+  and admin key come from `scripts/nostr_keys.py`; the admin's public key is a setting in `.env`),
+  and empty files for the ones written later (below), so Compose can mount them. A secret that
+  exists is kept; delete its file to generate it anew. A secret still found in `.env` (an older
+  setup) is moved into its file and removed from `.env`;
 - `infra/keycast/master.key`, which encrypts every key the signer stores (back it up);
 - `infra/odoo/odoo.conf` from `odoo/odoo.conf.tmpl`, with a PBKDF2 hash of the Odoo master
-  password (the password itself is only in `.env`);
+  password (the password itself is only in `secrets/odoo_master_password`);
 - the issuer's CA, signing, bridge and verifier keys (`scripts/gen-issuer-pki.sh`,
   `issuer/README.md`);
 - locally, the custody seed participant keys derive from (`secrets/custody/custody-seed`; on a
   server it is unlocked into memory instead, see `DEPLOY.md`).
 
-All of these are gitignored. An empty variable in `.env` must not carry an inline comment
-(`VAR=   # note`): Compose would read the comment as the value.
+An empty variable in `.env` must not carry an inline comment (`VAR=   # note`): Compose would
+read the comment as the value.
 
-`scripts/bootstrap.sh` creates three tokens and writes them into `.env`:
+Written later, into `infra/secrets/`:
 
-| Variable | What | Lifetime |
-| --- | --- | --- |
-| `ODOO_API_KEY` | API key of the Odoo service user `onboarding@belfry.local` | permanent |
-| `KEYCAST_ADMIN_TOKEN` | the signer's admin token, used to create participant accounts | 30 days; run bootstrap again |
-| `AUTHENTIK_TOKEN` | Authentik's API token | permanent |
+| File | What | Written by | Lifetime |
+| --- | --- | --- | --- |
+| `odoo_api_key` | API key of the Odoo service user `onboarding@belfry.local` | bootstrap | permanent |
+| `keycast_admin_token` | the signer's admin token, used to create participant accounts | bootstrap | 30 days; run bootstrap again |
+| `authentik_token` | Authentik's API token | bootstrap | permanent |
+| `stripe_webhook_secret` | signing secret of the Stripe dispute webhook | bootstrap, with Stripe keys | until the webhook is deleted |
+| `smtp_password`, `stripe_secret_key`, `mollie_api_key` | provider credentials | `scripts/put-secret.sh` | yours |
+
+Restart the onboarding service after bootstrap wrote a token (`$C up -d`).
 
 ## What bootstrap does
 

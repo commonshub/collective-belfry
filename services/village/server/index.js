@@ -8,9 +8,10 @@
 // | --- | --- |
 // | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT` | listen ports (8080, 8081, 8082) |
 // | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
-// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
+// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
 // | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist` and `photos/dist`) |
 import { createServer } from "node:http"
+import { readFileSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -183,8 +184,20 @@ export function createApp({ passes, moderation, app, publicUrl, staticDir }) {
   }
 }
 
+// Secrets come as Compose secrets (/run/secrets/<name in lower case>); a variable of the same name wins.
+function withSecrets(env, names) {
+  const out = { ...env }
+  for (const name of names) {
+    if (out[name]) continue
+    try {
+      out[name] = readFileSync(join(env.SECRETS_DIR || "/run/secrets", name.toLowerCase()), "utf8").trim()
+    } catch {}
+  }
+  return out
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const env = process.env
+  const env = withSecrets(process.env, ["PASS_INFO_TOKEN"])
   for (const name of ["PEOPLE_PUBLIC_URL", "MARKET_PUBLIC_URL", "PHOTOS_PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]) {
     if (!env[name]) throw new Error(`${name} is not set`)
   }

@@ -5,11 +5,12 @@
 // | --- | --- |
 // | `PORT` | listen port (8080) |
 // | `PUBLIC_URL` | the service as browsers reach it; NIP-98 tokens must name `<PUBLIC_URL><path>` |
-// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` | the electorate: `GET <ONBOARDING_URL>/admin/active-passes` |
+// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the electorate: `GET <ONBOARDING_URL>/admin/active-passes` |
 // | `DB_PATH` | SQLite file (`/data/vote.sqlite`) |
 // | `TREE_DEPTH` | Semaphore tree depth (10: up to 1024 voters per poll); the image carries its artifacts |
 // | `STATIC_DIR` | the built web app (`web/dist`) |
 import { createServer } from "node:http"
+import { readFileSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -148,8 +149,20 @@ export function createApp({ polls, passes, publicUrl, staticDir }) {
   }
 }
 
+// Secrets come as Compose secrets (/run/secrets/<name in lower case>); a variable of the same name wins.
+function withSecrets(env, names) {
+  const out = { ...env }
+  for (const name of names) {
+    if (out[name]) continue
+    try {
+      out[name] = readFileSync(join(env.SECRETS_DIR || "/run/secrets", name.toLowerCase()), "utf8").trim()
+    } catch {}
+  }
+  return out
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const env = process.env
+  const env = withSecrets(process.env, ["PASS_INFO_TOKEN"])
   const required = ["PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]
   for (const name of required) if (!env[name]) throw new Error(`${name} is not set`)
   const treeDepth = Number(env.TREE_DEPTH || 10)

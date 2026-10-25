@@ -39,7 +39,7 @@ ovhcloud domain-zone refresh example.net
 
 ```bash
 git clone <this repo> belfry && cd belfry
-infra/scripts/gen-secrets.sh                                   # .env, keys, Odoo config
+infra/scripts/gen-secrets.sh                                   # .env, secrets/, keys, Odoo config
 infra/scripts/prod-env.sh belfry.example ops@belfry.example     # public URLs and hostnames in .env
 # the issuer and verifier certificates must carry the public hostnames; regenerate them
 # (only before the first pass is issued: existing passes are signed with the old key)
@@ -48,7 +48,8 @@ infra/scripts/gen-secrets.sh
 ```
 
 In `infra/.env` set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_ENCRYPTION` and `MAIL_FROM`. The
-SMTP password never goes into `.env`; copy it from your machine:
+SMTP password, like every secret, is a file in `infra/secrets/` (`README.md`, "Secrets"); copy it
+from your machine:
 `infra/scripts/put-secret.sh <ssh target> smtp_password`.
 
 ```bash
@@ -68,7 +69,7 @@ secret key onto the server with `infra/scripts/put-secret.sh <ssh target> stripe
 run bootstrap again. It configures Odoo's Stripe provider (test keys: test mode, live keys:
 enabled), has Odoo create its own webhook, creates Belfry's dispute webhook
 (`https://pass.<domain>/hooks/stripe`, `charge.dispute.created` and `.closed`) and writes its
-signing secret into `.env` as `STRIPE_WEBHOOK_SECRET`; restart the onboarding service after that.
+signing secret into `infra/secrets/stripe_webhook_secret`; restart the onboarding service after that.
 Mollie (Netherlands; cards, iDEAL, Bancontact and more), next to Stripe or instead of it: put the
 API key onto the server with `infra/scripts/put-secret.sh <ssh target> mollie_api_key` (`test_…`:
 test mode, `live_…`: enabled) and run bootstrap again. It configures Odoo's Mollie provider with the
@@ -121,6 +122,25 @@ $C --profile app build <services> && $C --profile app up -d <services>
   `$C restart proxy`. `$C up -d proxy` alone does nothing when only the Caddyfile changed.
 - Image builds leave a large build cache. `docker builder prune --keep-storage 10GB -f` keeps the
   recently used layers and frees the rest.
+
+### Secrets out of `.env` (setups from before 2026-10-25)
+
+Secrets used to be variables in `infra/.env`; now each is a file in `infra/secrets/`
+(`README.md`, "Secrets"). After pulling that change:
+
+```bash
+cp -p infra/.env ~/env.before-secrets       # a copy with the old values, deleted at the end
+infra/scripts/gen-secrets.sh                # moves every secret from .env into infra/secrets/
+grep -cE '^(POSTGRES_PASSWORD|ODOO_API_KEY|HOOK_TOKEN)=' infra/.env   # 0
+$C --profile app build onboarding village vote
+$C --profile app up -d                      # recreates the containers with the secret files
+ODOO_URL=… AK_URL=… KC_URL=… infra/scripts/bootstrap.sh   # as in "First installation"
+$C --profile app restart onboarding
+```
+
+Then run the smoke test, and `shred -u ~/env.before-secrets` once it passes. The values do not
+change, so sessions, tokens and passwords stay valid. The custody seed stays unlocked (only the
+signer is recreated, and it reads the seed from `/run/belfry`).
 
 ## Sign-in for participants and admins
 
@@ -196,15 +216,23 @@ Protections on top:
 - **TLS** from Let's Encrypt (`ACME_EMAIL`), HSTS and the usual security headers.
 - **Rate limits per client address**, set high because the venue's Wi-Fi puts hundreds of
   participants behind one address: Authentik's flow steps 300/min, claim and token pages
-  120/min, `/me` sign-in 120/min, `/check` 600/min, pass sign-in bridge 300/min, door 60/min,
-  issuer 300/min, invite pages 120/min. Beyond that the answer is 429 with `Retry-After`. Mail
-  flooding is limited per account in Authentik, not by address.
+  120/min, `/me` sign-in 120/min, `/check` 600/min, pass sign-in bridge 1200/min and door 600/min
+  (both pages poll every 1.5 s), issuer 300/min, invite pages 120/min. Beyond that the answer is
+  429 with `Retry-After`. The venue Wi-Fi's own public addresses can be exempted altogether with
+  `RATE_LIMIT_EXEMPT` in `.env` (space-separated CIDRs; unset, nobody is exempt). Mail flooding is
+  limited per account in Authentik, not by address.
 - **Content-Security-Policy** on every browser app: scripts only from the app itself, connections
   only to Belfry's hosts (the chat may reach any relay), no framing. Odoo and Authentik ship
   inline code and get none. Blossom's files are served sandboxed.
-- **Containers** run without root (most as user 10001; the signer as the deploying user,
-  `HOST_UID`, who owns `master.key` and the custody seed), with `no-new-privileges`, and without
-  capabilities where they start unprivileged. `perms-init` hands the data volumes to those users.
+- **Containers** run without root (most as user 10001; Postgres as its own user; the signer as
+  the deploying user, `HOST_UID`, who owns `master.key` and the custody seed), with
+  `no-new-privileges`, a process limit, and without capabilities where they start unprivileged;
+  Belfry's own services have a read-only root file system. `perms-init` hands the data volumes to
+  those users.
+- **Secrets** are files in `infra/secrets/` (mode 640, group 10001), mounted into each container
+  that needs them and into no other; none is an environment variable of a container, so
+  `docker inspect` shows none (`README.md`, "Secrets").
+- **Images** from registries are pinned by digest to the builds the smoke test ran against.
 - **Networks**: Postgres and Redis are on the internal network `data` with their clients only;
   the static apps only on `edge` with the proxy. `edge` has IPv6, so the proxy sees IPv6 visitors'
   real addresses.
@@ -296,6 +324,40 @@ custody seed, run bootstrap and the smoke test.
 **Rotating the issuer key**: keep the old certificate in the accepted list of the door and the
 bridge until the last pass signed with it has expired (`issuer/README.md`); old keys stay in the
 backups.
+
+## Hardening the host
+
+Two settings outside the repository, both needing root on the VM once.
+
+**Docker daemon.** `/etc/docker/daemon.json` (the log rotation is in `../docs/runbook.md`):
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "20m", "max-file": "5" },
+  "no-new-privileges": true,
+  "live-restore": true
+}
+```
+
+`no-new-privileges` also covers containers started by hand (`docker run`), and `live-restore`
+keeps the containers running while the daemon restarts (Docker updates by unattended-upgrades). A
+daemon restart with `live-restore` newly set still stops the containers once; the custody seed in
+`/run/belfry` survives that. Then `sudo systemctl restart docker` and `$C --profile app up -d`.
+
+**Who can reach Docker.** Membership in the `docker` group is root on the host: it can mount any
+file into a container, `infra/secrets/` and `/run/belfry` included. On the test VM the deploying
+user `belfry` has that, sudo without a password and the only SSH login. For the event:
+
+1. a personal SSH login (own key) per admin, in the group `sudo` with a password, not in `docker`;
+2. `belfry` keeps the checkout, the containers and the files, without SSH access of its own and
+   without sudo (`sudo deluser belfry sudo`, remove its `authorized_keys` and the sudoers line);
+   admins work as `sudo -iu belfry`;
+3. `sudo` then asks for the admin's password every time, so a stolen SSH key alone gives no
+   access to the secrets.
+
+`custody-seed.sh`, `put-secret.sh` and `backup.sh` connect as `belfry@<host>`: with this change
+they need `<admin>@<host>` and `sudo -u belfry`, which these scripts do not do yet.
 
 ## Known limits
 

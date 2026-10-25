@@ -156,9 +156,10 @@ print("verifier kid", jwk["kid"], "- wrote keys/verifier.jwk.json, keys/verifier
 PY2
 chmod 600 "$KEYS"/*.jwk.json
 
-# Issuer2's external login (authorization-code offers) at Authentik, from .env.
+# Issuer2's external login (authorization-code offers) at Authentik: the URL from .env, the client
+# secret from infra/secrets/.
 AK_PUBLIC=${AUTHENTIK_PUBLIC_URL:-$(env_value AUTHENTIK_PUBLIC_URL)}
-ISSUER_OIDC_CLIENT_SECRET=${ISSUER_OIDC_CLIENT_SECRET:-$(env_value ISSUER_OIDC_CLIENT_SECRET)}
+ISSUER_OIDC_CLIENT_SECRET=${ISSUER_OIDC_CLIENT_SECRET:-$(cat "$INFRA_DIR/secrets/issuer_oidc_client_secret" 2>/dev/null || true)}
 AK_PUBLIC=${AK_PUBLIC:-http://localhost:9000} ISSUER_OIDC_CLIENT_SECRET=$ISSUER_OIDC_CLIENT_SECRET \
   python3 - "$INFRA_DIR/issuer/config" <<'PY3'
 import os, sys
@@ -168,7 +169,14 @@ out = (open(f"{cfg}/authentication-service.conf.tmpl").read()
        .replace("@@AUTHENTIK_PUBLIC_URL@@", os.environ["AK_PUBLIC"].rstrip("/"))
        .replace("@@ISSUER_OIDC_CLIENT_SECRET@@", secret))
 path = f"{cfg}/authentication-service.conf"
-with open(path, "w") as f:
+with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w") as f:
     f.write(out)
 print("wrote issuer/config/authentication-service.conf (Authentik", os.environ["AK_PUBLIC"] + ")")
 PY3
+
+# The rendered configs carry private keys and the client secret: no access for other users. The
+# containers (walt.id as 10001, the onboarding service) read them through group 10001, which
+# perms-init sets at every start (docker-compose.yml).
+chmod 640 "$INFRA_DIR"/issuer/config/issuer2-profiles.conf "$INFRA_DIR"/issuer/config/issuer-service.conf \
+  "$INFRA_DIR"/issuer/config/authentication-service.conf "$INFRA_DIR"/verifier/config/verifier-service.conf \
+  "$KEYS"/issuer.jwk.json "$KEYS"/bridge.jwk.json

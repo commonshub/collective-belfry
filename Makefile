@@ -6,7 +6,7 @@ COMPOSE := docker compose -f infra/docker-compose.yml
 infra/.env:
 	infra/scripts/gen-secrets.sh
 
-secrets: ## (re)generate infra/.env and the Keycast master key (keeps existing files)
+secrets: ## (re)generate infra/.env, infra/secrets/ and the Keycast master key (keeps existing files)
 	infra/scripts/gen-secrets.sh
 
 up: infra/.env ## start postgres, odoo, authentik, keycast, relay (not the onboarding service)
@@ -21,7 +21,7 @@ up-app: infra/.env ## start everything including the onboarding service (needs s
 build-keycast: ## build belfry-keycast:local from infra/keycast/build/Dockerfile (about 15 minutes cold)
 	$(COMPOSE) build keycast
 
-bootstrap: ## create the Odoo database, users, tokens, Keycast admin and policy; writes tokens into infra/.env
+bootstrap: ## create the Odoo database, users, tokens, Keycast admin and policy; writes tokens into infra/secrets/
 	infra/scripts/bootstrap.sh
 
 smoke: ## invite -> pay -> accounts created once (needs up-app and bootstrap)

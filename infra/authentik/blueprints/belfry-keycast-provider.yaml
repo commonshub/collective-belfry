@@ -15,7 +15,7 @@ metadata:
     blueprints.goauthentik.io/description: "OIDC provider and application for the Keycast signer login"
 context:
   keycast_url: !Env [KEYCAST_APP_URL, "http://localhost:3000"]
-  client_secret: !Env [KEYCAST_OIDC_CLIENT_SECRET, "placeholder-set-KEYCAST_OIDC_CLIENT_SECRET"]
+  client_secret: !File [/run/secrets/keycast_oidc_client_secret, "placeholder-set-KEYCAST_OIDC_CLIENT_SECRET"]
 entries:
   # 1. Scope "keycast": the link claim. Absent (no claim) for users without an Odoo partner id,
   #    which Keycast answers with "no signing account".

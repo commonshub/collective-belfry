@@ -21,6 +21,7 @@ set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a; . "$INFRA_DIR/.env"; set +a
+. "$INFRA_DIR/scripts/secrets.sh"
 # Public deployment: set the public URLs (ODOO_URL, AK_URL, KC_URL, ONB_URL, BLOSSOM_URL),
 # WALLET_MAP="" (the test wallet then uses the public hostnames) and ONB_ADMIN_EXEC=1; MAILPIT_URL
 # is optional there (the activation mail to the fake smoke address is refused by a real relay).
@@ -66,7 +67,7 @@ FORM_FIELD_PROMO=${FORM_FIELD_PROMO:-promo_code}
 TIER_XMLID=${TIER_XMLID:-product_week}
 
 for v in ODOO_API_KEY AUTHENTIK_TOKEN KEYCAST_ADMIN_TOKEN HOOK_TOKEN; do
-  [[ -n "${!v:-}" ]] || { echo "$v is empty in infra/.env; run bootstrap first" >&2; exit 1; }
+  [[ -n "${!v:-}" ]] || { echo "$v is empty (infra/secrets/); run bootstrap first" >&2; exit 1; }
 done
 
 pass=0; fail=0
@@ -75,9 +76,11 @@ bad()  { echo "  FAIL $*" >&2; (( fail += 1 )) || true; }
 step() { printf '\n== %s\n' "$*"; }
 die()  { echo "abort: $*" >&2; exit 1; }
 
+# the body (with the admin password) on stdin and the token as a header file: arguments are
+# visible to everyone in ps
 rpc() {
-  curl -fsS "$ODOO_URL/jsonrpc" -H 'Content-Type: application/json' \
-    -d "{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"id\":1,\"params\":{\"service\":\"$1\",\"method\":\"$2\",\"args\":$3}}"
+  curl -fsS "$ODOO_URL/jsonrpc" -H 'Content-Type: application/json' --data-binary @- \
+    <<<"{\"jsonrpc\":\"2.0\",\"method\":\"call\",\"id\":1,\"params\":{\"service\":\"$1\",\"method\":\"$2\",\"args\":$3}}"
 }
 # The test's own Odoo calls (invites, emulated payments, inspection) run as admin; the service
 # user is restricted to what the onboarding service needs (bootstrap).
@@ -90,7 +93,7 @@ ox() { # model method args_json [kwargs_json]
   jq -c '.result' <<<"$out"
 }
 xmlid() { ox ir.model.data search_read "[[[\"module\",\"=\",\"$1\"],[\"name\",\"=\",\"$2\"]]]" '{"fields":["res_id"],"limit":1}' | jq -r '.[0].res_id // empty'; }
-ak() { curl -sS -H "Authorization: Bearer $AUTHENTIK_TOKEN" "$@"; }
+ak() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$AUTHENTIK_TOKEN") "$@"; }
 
 STAMP=$(date +%s)
 EMAIL="smoke-$STAMP@belfry.local"

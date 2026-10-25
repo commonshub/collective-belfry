@@ -1,7 +1,9 @@
 #!/bin/bash
 # Runs once, on first initialisation of the postgres volume (docker-entrypoint-initdb.d).
-# Creates one role and one database per service. Passwords come from the container env.
+# Creates one role and one database per service. Passwords come from the Compose secrets.
 set -euo pipefail
+
+secret() { cat "/run/secrets/$1"; }
 
 create_role() {
   local name="$1" password="$2" extra="${3:-}"
@@ -16,6 +18,6 @@ create_db() {
 # Odoo: role only. The "odoo" database is created by bootstrap (odoo -d odoo -i ...): an empty
 # database that matches the server's dbfilter makes every request fail with KeyError 'ir.http'.
 # CREATEDB also covers the throwaway test database (make test-odoo).
-create_role odoo "$ODOO_DB_PASSWORD" CREATEDB
-create_role authentik "$AUTHENTIK_DB_PASSWORD"; create_db authentik
-create_role keycast "$KEYCAST_DB_PASSWORD"; create_db keycast
+create_role odoo "$(secret odoo_db_password)" CREATEDB
+create_role authentik "$(secret authentik_db_password)"; create_db authentik
+create_role keycast "$(secret keycast_db_password)"; create_db keycast

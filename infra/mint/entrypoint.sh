@@ -1,6 +1,9 @@
 #!/bin/sh
 # Belfry: render the mint's config and import it into its database, then run the mint.
 set -eu
+# The seed is a Compose secret; cdk-mintd reads it from this variable only (config.toml: env:).
+CDK_MINTD_SEED=$(cat /run/secrets/mint_seed)
+export CDK_MINTD_SEED
 WORK=/data
 mkdir -p "$WORK"
 sed -e "s|@MINT_PUBLIC_URL@|${MINT_PUBLIC_URL:?}|" -e "s|@BRAND_URL@|${BELFRY_BRAND_URL:?}|" \

@@ -12,7 +12,7 @@
 #  5. waits for the Authentik bootstrap token and the Belfry blueprints (pass bridge, Keycast
 #     provider, sign-in link, magic-link login) and writes the SMTP settings into the
 #     magic-link e-mail stage
-#  6. writes ODOO_API_KEY, KEYCAST_ADMIN_TOKEN, AUTHENTIK_TOKEN into infra/.env
+#  6. writes ODOO_API_KEY, KEYCAST_ADMIN_TOKEN, AUTHENTIK_TOKEN into infra/secrets/ (scripts/secrets.sh)
 #
 # Usage: infra/scripts/bootstrap.sh   (needs curl, jq, python3, docker compose)
 set -euo pipefail
@@ -30,28 +30,10 @@ ODOO_LOG="$INFRA_DIR/.bootstrap-odoo.log"   # full output of the odoo CLI runs (
 
 [[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE; run scripts/gen-secrets.sh first" >&2; exit 1; }
 set -a; . "$ENV_FILE"; set +a
+. "$INFRA_DIR/scripts/secrets.sh"
 
 log() { printf '\n== %s\n' "$*"; }
 die() { echo "error: $*" >&2; exit 1; }
-
-# set_env KEY VALUE: replace KEY's value in .env in place, keeping its trailing comment.
-set_env() {
-  python3 - "$ENV_FILE" "$1" "$2" <<'PY'
-import re, sys
-path, key, value = sys.argv[1:]
-lines = open(path).read().splitlines(keepends=True)
-done = False
-for i, line in enumerate(lines):
-    m = re.match(rf"^{re.escape(key)}=([^#\n]*?)(\s*#.*)?\n?$", line)
-    if m:
-        lines[i] = f"{key}={value}{m.group(2) or ''}\n"
-        done = True
-if not done:
-    lines.append(f"{key}={value}\n")
-open(path, "w").write("".join(lines))
-PY
-  export "$1=$2"
-}
 
 wait_for() { # name url [seconds]
   local name=$1 url=$2 timeout=${3:-300} i=0
@@ -109,7 +91,7 @@ mkdir -p "$REPO_DIR/odoo/addons"
 psql_odoo() { "${COMPOSE[@]}" exec -T postgres psql -U postgres -d "$ODOO_DB" -tAc "$1" 2>/dev/null || true; }
 # odoo_cli ARGS: run the odoo CLI in the running container; full log to $ODOO_LOG, errors to the terminal.
 odoo_cli() {
-  if ! "${COMPOSE[@]}" exec -T odoo odoo "$@" --no-http >"$ODOO_LOG" 2>&1; then
+  if ! "${COMPOSE[@]}" exec -T odoo /belfry/with-secrets odoo "$@" --no-http >"$ODOO_LOG" 2>&1; then
     grep -E 'ERROR|CRITICAL|Traceback' "$ODOO_LOG" | tail -n 20 >&2
     die "odoo $* failed, see $ODOO_LOG"
   fi
@@ -185,12 +167,12 @@ else
 fi
 
 if [[ -n "${ODOO_API_KEY:-}" && -n "$(odoo_auth "$ODOO_ONBOARDING_LOGIN" "$ODOO_API_KEY")" ]]; then
-  echo "ODOO_API_KEY in .env still works"
+  echo "ODOO_API_KEY still works"
 else
   # res.users.apikeys.generate() over RPC needs an existing key of the same user, so the
   # first key comes from odoo shell (_generate in a sudo env allows a persistent key).
   echo "generating an API key for $ODOO_ONBOARDING_LOGIN"
-  shell_out=$("${COMPOSE[@]}" exec -T odoo odoo shell -d "$ODOO_DB" --no-http 2>/dev/null <<PY
+  shell_out=$("${COMPOSE[@]}" exec -T odoo /belfry/with-secrets odoo shell -d "$ODOO_DB" --no-http 2>/dev/null <<PY
 user = env['res.users'].search([('login', '=', '$ODOO_ONBOARDING_LOGIN')], limit=1)
 Keys = env['res.users.apikeys'].sudo()
 Keys.search([('user_id', '=', user.id), ('name', '=', 'onboarding')])._remove()
@@ -202,8 +184,8 @@ PY
   NEW_KEY=$(sed -n 's/^APIKEY=//p' <<<"$shell_out" | tail -n1)
   [[ -n "$NEW_KEY" ]] || { echo "$shell_out" >&2; die "odoo shell did not return an API key"; }
   [[ -n "$(odoo_auth "$ODOO_ONBOARDING_LOGIN" "$NEW_KEY")" ]] || die "the new API key does not authenticate"
-  set_env ODOO_API_KEY "$NEW_KEY"
-  echo "ODOO_API_KEY written to .env"
+  set_secret ODOO_API_KEY "$NEW_KEY"
+  echo "ODOO_API_KEY written to infra/secrets/odoo_api_key"
 fi
 
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onboarding_url\",\"${ONBOARDING_URL:-http://onboarding:8100}\"]" >/dev/null
@@ -261,7 +243,7 @@ fi
 # infra/secrets/stripe_secret_key (scripts/put-secret.sh). Test keys (sk_test_) put the
 # provider in test mode, live keys enable it. Both webhooks are created through Stripe's API once
 # the public URLs are https: Odoo's (action_stripe_create_webhook) and Belfry's dispute endpoint,
-# whose signing secret goes into .env as STRIPE_WEBHOOK_SECRET (restart onboarding to read it).
+# whose signing secret goes into infra/secrets/stripe_webhook_secret (restart onboarding to read it).
 STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-$(cat "$INFRA_DIR/secrets/stripe_secret_key" 2>/dev/null || true)}
 export STRIPE_SECRET_KEY
 if [[ -n "${STRIPE_PUBLISHABLE_KEY:-}" && -n "$STRIPE_SECRET_KEY" ]]; then
@@ -285,13 +267,13 @@ if [[ -n "${STRIPE_PUBLISHABLE_KEY:-}" && -n "$STRIPE_SECRET_KEY" ]]; then
   fi
   if [[ "${ONBOARDING_PUBLIC_URL:-}" == https://* && -z "${STRIPE_WEBHOOK_SECRET:-}" ]]; then
     DISPUTE_URL="${ONBOARDING_PUBLIC_URL%/}/hooks/stripe"
-    WH=$(curl -sS -u "$STRIPE_SECRET_KEY:" https://api.stripe.com/v1/webhook_endpoints \
+    WH=$(curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$STRIPE_SECRET_KEY") https://api.stripe.com/v1/webhook_endpoints \
       -d url="$DISPUTE_URL" -d "enabled_events[]=charge.dispute.created" -d "enabled_events[]=charge.dispute.closed" \
       -d description="Belfry disputes (onboarding service)")
     WH_SECRET=$(jq -r '.secret // empty' <<<"$WH")
     if [[ -n "$WH_SECRET" ]]; then
-      set_env STRIPE_WEBHOOK_SECRET "$WH_SECRET"; STRIPE_WEBHOOK_SECRET=$WH_SECRET
-      echo "Stripe: dispute webhook for $DISPUTE_URL created; STRIPE_WEBHOOK_SECRET written to .env (restart onboarding)"
+      set_secret STRIPE_WEBHOOK_SECRET "$WH_SECRET"
+      echo "Stripe: dispute webhook for $DISPUTE_URL created; written to infra/secrets/stripe_webhook_secret (restart onboarding)"
     else
       echo "WARNING: Stripe refused the dispute webhook: $(jq -r '.error.message // .' <<<"$WH" | head -c 200)" >&2
     fi
@@ -343,7 +325,7 @@ kc_is_admin() { [[ "$(kc /api/admin/status -H "Authorization: Bearer $1" | jq -r
 # also require the admin's user row, otherwise re-register (web login needs the row).
 kc_admin_row() { "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from users where pubkey='$KEYCAST_ADMIN_PUBKEY'" | grep -q 1; }
 if [[ -n "${KEYCAST_ADMIN_TOKEN:-}" ]] && kc_is_admin "$KEYCAST_ADMIN_TOKEN" && kc_admin_row; then
-  echo "KEYCAST_ADMIN_TOKEN in .env still works and the admin user exists"
+  echo "KEYCAST_ADMIN_TOKEN still works and the admin user exists"
 else
   reg=$(kc -X POST /api/auth/register \
     -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\",\"nsec\":\"$KEYCAST_ADMIN_NSEC\"}")
@@ -367,8 +349,8 @@ else
   ADMIN_TOKEN=$(jq -r '.token // .admin_token // empty' <<<"$tok")
   [[ -n "$ADMIN_TOKEN" ]] || { echo "$tok" >&2; die "no admin token returned"; }
   kc_is_admin "$ADMIN_TOKEN" || die "the fetched admin token does not pass /api/admin/status"
-  set_env KEYCAST_ADMIN_TOKEN "$ADMIN_TOKEN"
-  echo "KEYCAST_ADMIN_TOKEN written to .env"
+  set_secret KEYCAST_ADMIN_TOKEN "$ADMIN_TOKEN"
+  echo "KEYCAST_ADMIN_TOKEN written to infra/secrets/keycast_admin_token"
 fi
 
 # policy.sql is idempotent and updates the allowed kinds of an existing permission, so apply it
@@ -414,10 +396,11 @@ echo "registered clients: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d 
 
 # ---------- 5. Authentik ----------
 log "5/6 Authentik"
-ak() { curl -sS -H "Authorization: Bearer $AUTHENTIK_BOOTSTRAP_TOKEN" -H 'Content-Type: application/json' "$@"; }
+# the token goes in as a header file, not as an argument (arguments are visible to everyone in ps)
+ak() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$AUTHENTIK_BOOTSTRAP_TOKEN") -H 'Content-Type: application/json' "$@"; }
 i=0
 until ak -f -o /dev/null "$AK_URL/api/v3/admin/version/" 2>/dev/null; do
-  (( i += 5 )); [[ $i -ge 180 ]] && die "the Authentik bootstrap token does not work after 180s (worker not done, or the token in .env changed after first start)"
+  (( i += 5 )); [[ $i -ge 180 ]] && die "the Authentik bootstrap token does not work after 180s (worker not done, or infra/secrets/authentik_bootstrap_token changed after first start)"
   printf '.'; sleep 5
 done
 echo "bootstrap token works"
@@ -538,7 +521,7 @@ ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-issuer" \
   | jq -e --arg s "${ISSUER_OIDC_CLIENT_SECRET:-}" '.results[0].client_secret == $s and $s != ""' >/dev/null \
   || die "provider belfry-issuer missing or without ISSUER_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
 echo "blueprint belfry-issuer-app: successful (issuer sign-in for authorization-code offers)"
-set_env AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
+set_secret AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
 
 # ---------- 6. summary ----------
 log "6/6 done"
@@ -546,6 +529,6 @@ cat <<EOF
 Odoo        $ODOO_URL  admin / ODOO_ADMIN_PASSWORD; RPC user $ODOO_ONBOARDING_LOGIN with ODOO_API_KEY
 Authentik   $AK_URL  akadmin / AUTHENTIK_BOOTSTRAP_PASSWORD; API token AUTHENTIK_TOKEN
 Keycast     $KC_URL  $KEYCAST_ADMIN_EMAIL / KEYCAST_ADMIN_PASSWORD; admin UCAN KEYCAST_ADMIN_TOKEN (30 days)
-Tokens are in $ENV_FILE. Restart the onboarding service to pick them up:
+Tokens are in infra/secrets/. Restart the onboarding service to pick up new ones:
   docker compose -f infra/docker-compose.yml --profile app up -d
 EOF

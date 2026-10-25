@@ -1,15 +1,27 @@
-"""Environment configuration. Names match the contract in docs/slice-1-onboarding.md."""
+"""Environment configuration. Names match the contract in docs/slice-1-onboarding.md.
+
+Secrets come as files: under Compose every secret is /run/secrets/<name in lower case>
+(infra/docker-compose.yml, "secrets"); an environment variable of the same name wins (tests).
+"""
 
 from __future__ import annotations
 
 import datetime as dt
+import os
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+SECRETS_DIR = os.environ.get("SECRETS_DIR", "/run/secrets")
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        secrets_dir=SECRETS_DIR if os.path.isdir(SECRETS_DIR) else None,
+    )
 
     odoo_url: str = Field(default="http://odoo:8069", alias="ODOO_URL")
     odoo_db: str = Field(default="odoo", alias="ODOO_DB")

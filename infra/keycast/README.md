@@ -92,7 +92,10 @@ To move to a newer upstream commit, rebase the branch, regenerate the series and
 
 ## Configuration
 
-Set in `docker-compose.yml` from `.env`. Upstream settings:
+Set in `docker-compose.yml` from `.env`; the secrets (`SERVER_NSEC`, `OIDC_CLIENT_SECRET`,
+`KEYCAST_SERVICE_TOKEN`, `PASS_INFO_TOKEN`, `BELFRY_HOOK_TOKEN` and the database password as
+`PGPASSWORD`) come from `infra/secrets/` through the entrypoint wrapper (`SECRETS_ENV`,
+`../README.md`, "Secrets"). Upstream settings:
 
 | Variable | Meaning |
 | --- | --- |
@@ -139,7 +142,7 @@ requests for its keys would be dropped for 30 s.
 
 - `KEYCAST_ADMIN_TOKEN`: a 30-day admin token for creating accounts, written by bootstrap and
   renewed when bootstrap runs after it expired.
-- `KEYCAST_SERVICE_TOKEN`: static, from `.env`.
+- `KEYCAST_SERVICE_TOKEN`: static, from `infra/secrets/keycast_service_token`.
 
 ## Checks
 

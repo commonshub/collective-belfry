@@ -26,7 +26,7 @@ Status 2026-10-23: deployment ready, test not run yet. Results go in the table a
 - The admin passwords (only for Odoo/Authentik admin work, not needed for the test), read in your own terminal (never paste them into a chat):
 
   ```bash
-  ssh belfry@188.245.110.191 "grep -E '^(ODOO_ADMIN_PASSWORD|AUTHENTIK_BOOTSTRAP_PASSWORD)=' belfry/infra/.env"
+  ssh belfry@188.245.110.191 "cd belfry/infra/secrets && head odoo_admin_password authentik_bootstrap_password"
   ```
 
 ## Steps

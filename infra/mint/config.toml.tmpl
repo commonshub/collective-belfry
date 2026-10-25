@@ -11,7 +11,7 @@
 url = "@MINT_PUBLIC_URL@"
 listen_host = "0.0.0.0"
 listen_port = 8085
-seed = "env:CDK_MINTD_SEED"  # MINT_SEED in .env (gen-secrets.sh); losing it loses the keys
+seed = "env:CDK_MINTD_SEED"  # infra/secrets/mint_seed (entrypoint.sh); losing it loses the keys
 input_fee_ppk = 0
 enable_info_page = false
 

@@ -395,6 +395,42 @@ Rate limits (user, 2026-10-25: about 100 participants a day, one venue WiFi): `R
 
 Open: the pass field `stripe_payment_intent` holds Mollie's `tr_…` id for Mollie payments (name kept); the VM's participants get the avatar with `publish-starter-events`.
 
+## 3z. Secrets out of the environment; Docker hardening — built 2026-10-25
+
+User: protect the secrets by moving them out of environment variables, harden Docker; no
+encrypted secrets in git (dotenvx considered and not used: its key would sit on the same VM, Docker
+keeps the decrypted values in the container configuration anyway, and the repo is public). Details:
+`infra/README.md` "Secrets", `infra/DEPLOY.md` "Secrets out of `.env`" and "Hardening the host".
+
+- [x] Every secret is a file `infra/secrets/<name>` (mode 640, group 10001 set by `perms-init`);
+  `.env` holds settings only. `gen-secrets.sh` generates the files and moves the values of an
+  older `.env` into them (same values, nothing to rotate). Compose mounts each file only into the
+  containers that need it; no container has a secret in its environment (`docker inspect`).
+- [x] Readers: the onboarding service through pydantic's `secrets_dir`; the Node services for
+  `PASS_INFO_TOKEN`; Authentik through `file://` and `!File` in the Belfry blueprints; Odoo, Keycast
+  (database password as `PGPASSWORD`, which sqlx uses), the mint and authentik's first-start
+  bootstrap through the wrapper `infra/secrets-env/with-secrets.sh` (`SECRETS_ENV`). Postgres runs
+  as 999 directly (the entrypoint's switch from root would drop the secret group) and reads
+  `POSTGRES_PASSWORD_FILE`; `init.sh` reads the role passwords from the files.
+- [x] The rendered issuer and verifier configs with private keys were world-readable (664); now
+  640 with group 10001, like `issuer.jwk.json` and `bridge.jwk.json` (the onboarding service read
+  them only because its uid happened to be the host user's). `odoo.conf` holds only a PBKDF2 hash
+  of the master password (2a046d4).
+- [x] Host scripts load the files with `scripts/secrets.sh`; bootstrap writes its tokens with
+  `set_secret`; the Odoo admin password, Authentik's token and the Stripe key no longer appear in
+  `curl` arguments (visible in `ps`).
+- [x] Registry images pinned by digest; `pids_limit` on every service; read-only root file system
+  for the onboarding service, village and vote. `RATE_LIMIT_EXEMPT` reaches the proxy.
+- [x] Checks: smoke 159 ok / 0 failed on the migrated local stack (bootstrap included); a fresh
+  Compose project created the Postgres roles from the files and ran authentik's bootstrap; onboarding
+  189 tests, village and vote tests.
+
+Open: the VM migration (DEPLOY.md, a few minutes; containers are recreated); the Docker daemon
+settings and the split of the shared `belfry` login (DEPLOY.md "Hardening the host", needs root
+and changes how the scripts connect); Dockerfile base images are tags, not digests; Keycast,
+Odoo and the mint still see their secrets in their own process environment; the issuer CA key is
+still on the VM; secrets rotation is manual.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).
