@@ -453,6 +453,8 @@ For the group test with real testers (`docs/real-user-test.md`, written by the o
 - [x] Polls can be open for 15 minutes (the session shows results at the feedback round).
 - [x] Checks: onboarding 199 tests (8 new), Odoo 59 (5 new), vote 5; smoke 9b (a friend's invite names the participant, revoked again) and 9c (start page, forward, notice, feedback form); local smoke run.
 
+Found on the VM (2026-10-25): walt.id Verifier2 kept a status list it had fetched for more than 10 minutes (longer than `STATUS_LIST_TTL` = 300 s) while the door and the bridge were used every few minutes; a verifier restart cleared it. Smoke step 11 (revocation refused after one TTL without traffic) passes, so the cache may expire from the last use rather than from the fetch (the list's `exp` is 24 h). To check before the event: with steady door traffic, does a revocation reach the door within the TTL? If not, a shorter `exp` on the list or a restart hook.
+
 Open: participants' invites have no steward approval step (stewards see them and can revoke the pass); the Keycast account page has no "Invite friends" link of its own ("Show your pass" leads to `/me`); feedback cannot be answered from the steward pages (they show the e-mail).
 
 ## 4. Next
