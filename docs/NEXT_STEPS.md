@@ -442,6 +442,19 @@ User: fix the company country and currency (Belgium, EUR); the VM held test data
 
 Open: iDEAL and Bancontact are off in the Mollie account (enable in Mollie's dashboard, then rerun bootstrap); the backups made before the reinstall are still at `/var/backups/belfry` (old data, old key).
 
+## 3za. Start page, invites from participants, feedback, test notice — built 2026-10-25
+
+For the group test with real testers (`docs/real-user-test.md`, written by the other session). User decisions: the journey starts at `https://<domain>`, a page meaningful for everyone that says you need an invite from someone in the community (no public sign-up); participants can invite friends too; testers pay with Mollie's test card; feedback goes through a page in Belfry.
+
+- [x] Start page: the onboarding service's landing page, rewritten (what the village and Belfry are, how to join, links for participants). `SITE_URL` (prod-env.sh: `https://<domain>`) is its home; `pass.<domain>/` forwards there. The proxy serves the onboarding site on the apex with the same rules as on `pass.` (snippet `onboarding_site`, own rate-limit zones), NIP-05 stays on the apex; the apex no longer redirects to Odoo.
+- [x] Invites from participants: `belfry_pass` 19.0.1.10.0 (`belfry_friends.py`): a participant with an active pass has `belfry.invites_per_participant` (`INVITES_PER_PARTICIPANT`, default 3) open or used invites; revoked or expired ones give the slot back. On `/me`, "Invite friends": create (with a private note), copy, share, revoke, see which were used. The invite page says who invited (participant or steward name, `inviter_name`); the steward pages show it. The `/me` session cookie moves from path `/me` to `/`.
+- [x] Feedback: `/feedback` (`feedback.py`), linked from the app bar ("Feedback" in `x-community-apps`, with `?from=` the page) and the footer of the onboarding pages: what happened, what was expected, optional screenshot (PNG/JPEG/WebP, 5 MB), named participant when signed in on `/me`, else an optional e-mail; honeypot, 30 a minute per address. Odoo `belfry.feedback`, mailed to the stewards with the screenshot; a Feedback section on the steward pages (done/reopen, screenshot view).
+- [x] Test-run notice: `TEST_RUN_NOTICE` on every onboarding page and, through `belfry.test_notice` (bootstrap), on Odoo's invite, payment and portal pages, with Mollie's test card while Mollie is in test mode.
+- [x] Polls can be open for 15 minutes (the session shows results at the feedback round).
+- [x] Checks: onboarding 199 tests (8 new), Odoo 59 (5 new), vote 5; smoke 9b (a friend's invite names the participant, revoked again) and 9c (start page, forward, notice, feedback form); local smoke run.
+
+Open: participants' invites have no steward approval step (stewards see them and can revoke the pass); the Keycast account page has no "Invite friends" link of its own ("Show your pass" leads to `/me`); feedback cannot be answered from the steward pages (they show the e-mail).
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

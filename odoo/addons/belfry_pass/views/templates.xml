@@ -58,6 +58,14 @@
                 img.o_payment_logo, img.img-fluid.payment_icon, .o_payment_form img { background: #ffffff; border-radius: 4px; padding: 2px; }
             </style>
         </xpath>
+        <!-- Test runs: belfry.test_notice (bootstrap, TEST_RUN_NOTICE) on every page a participant sees. -->
+        <xpath expr="//div[@id='wrapwrap']/main" position="before">
+            <t t-set="belfry_test_notice" t-value="request.env['ir.config_parameter'].sudo().get_param('belfry.test_notice')"/>
+            <div t-if="belfry_test_notice" class="belfry-test-notice" role="note"
+                 style="background: #f89b0e; color: #1a231d; font-weight: 600; text-align: center; padding: 8px 16px; font-size: 0.95rem;">
+                <t t-esc="belfry_test_notice"/>
+            </div>
+        </xpath>
     </template>
 
     <template id="invite_layout" name="Open Source Village invite layout">
@@ -91,7 +99,7 @@
     <template id="invite_page" name="Open Source Village invite page">
         <t t-call="belfry_pass.invite_layout">
             <p>
-                You were invited by <strong t-esc="invite.steward_id.name"/>.
+                You were invited by <strong t-esc="invite.inviter_name or 'a steward'"/>.
                 Pick a pass and enter your billing details; you will be taken to the payment page next.
                 This link can be used once and expires on
                 <span t-esc="invite.expires_at" t-options="{'widget': 'date'}"/>.

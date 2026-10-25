@@ -69,8 +69,25 @@
 	header Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 }
 
+# import onboarding_site <zone prefix>: the onboarding service as one site, on pass.<domain> and
+# (for the start page) on the apex; the same rules on both hosts.
+(onboarding_site) {
+	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
+	respond @internal 404
+	import admin_only /steward /steward/*
+	import limit {args[0]}-claim 120 1m /claim/* /tokens/*
+	import limit {args[0]}-me 120 1m /me/login /me/callback /me/invites /me/invites/*
+	import limit {args[0]}-check 600 1m /check/*
+	import limit {args[0]}-bridge 1200 1m /bridge/*
+	import limit {args[0]}-door 600 1m /door /door/*
+	import limit {args[0]}-feedback 30 1m /feedback
+	# the pages carry their own small inline scripts and the QR codes as data: images
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
+	reverse_proxy onboarding:8100
+}
+
 # Registry and billing: invite pages, Odoo payment links, back office. Host shop.<domain>
-# (ODOO_HOST_PREFIX; the first test deployment, belfry.tofauti.net, keeps odoo.).
+# (ODOO_HOST_PREFIX).
 {$ODOO_HOST_PREFIX:shop}.{$BELFRY_DOMAIN} {
 	import security
 	# The back office, its login and the database manager only over the admin network;
@@ -113,9 +130,10 @@ apps.{$BELFRY_DOMAIN} {
 			header_up Host {$KEYCAST_TENANT_DOMAIN}
 		}
 	}
-	# Everything else on the apex: the invite/registry front door.
+	# Everything else: the start page (the onboarding service's landing page, SITE_URL) and the
+	# onboarding site it links to.
 	handle {
-		redir https://{$ODOO_HOST_PREFIX:shop}.{$BELFRY_DOMAIN}{uri}
+		import onboarding_site site
 	}
 }
 
@@ -263,15 +281,5 @@ photos.{$BELFRY_DOMAIN} {
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {
 	import security
-	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
-	respond @internal 404
-	import admin_only /steward /steward/*
-	import limit pass-claim 120 1m /claim/* /tokens/*
-	import limit pass-me 120 1m /me/login /me/callback
-	import limit pass-check 600 1m /check/*
-	import limit pass-bridge 1200 1m /bridge/*
-	import limit pass-door 600 1m /door /door/*
-	# the pages carry their own small inline scripts and the QR codes as data: images
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
-	reverse_proxy onboarding:8100
+	import onboarding_site pass
 }

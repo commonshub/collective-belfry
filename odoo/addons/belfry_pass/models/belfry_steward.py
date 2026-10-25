@@ -26,13 +26,14 @@ class BelfryInvite(models.Model):
     )
 
     @api.model
-    def belfry_steward_create(self, steward_email, note=False):
+    def belfry_steward_create(self, steward_email, note=False, steward_name=False):
         """Create an invite for the steward signed in on the steward pages. Returns id, url, token."""
         _check_service_caller(self.env)
         steward_email = (steward_email or '').strip()
         if not steward_email:
             raise UserError("A steward e-mail is required.")
-        vals = {'steward_email': steward_email, 'note': note or False}
+        vals = {'steward_email': steward_email, 'note': note or False,
+                'inviter_name': (steward_name or '').strip()[:100] or False}
         user = self.env['res.users'].sudo().search([('login', '=ilike', steward_email)], limit=1)
         if user:
             vals['steward_id'] = user.id

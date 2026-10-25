@@ -688,7 +688,25 @@ else
   [[ "$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$QR_TOKEN" | jq -r '.scanned_before != null')" == true ]] && ok "/check: a second scan of the same code says when it was first scanned" || bad "/check: second scan not noticed"
 fi
 [[ "$(curl -sS "$ONB_URL/check/${QR_TOKEN%.*}.AAAAAAAAAAAAAAAAAAAAAA")" == *"Not valid"* ]] && ok "/check: a forged code is not valid" || bad "/check accepted a forged code"
+# Inviting a friend from the pass page: a link that names the participant, revoked again.
+INV_PAGE=$(curl -sS -L -b "$MEJAR" -c "$MEJAR" --data-urlencode "note=smoke friend" "$ONB_URL/me/invites")
+FRIEND_URL=$(grep -o 'data-copy="[^"]*/belfry/invite/[^"]*"' <<<"$INV_PAGE" | head -n1 | sed 's/^data-copy="//; s/"$//')
+FRIEND_ID=$(grep -o 'action="/me/invites/[0-9]*/revoke"' <<<"$INV_PAGE" | head -n1 | grep -o '[0-9]\+')
+[[ "$INV_PAGE" == *"Invite link created"* && -n "$FRIEND_URL" ]] && ok "/me: invite link for a friend created" || bad "/me invite: $(grep -o 'class="bad">[^<]*' <<<"$INV_PAGE" | head -1)"
+[[ "$(curl -sS "$FRIEND_URL")" == *"You were invited by <strong>$NAME</strong>"* ]] && ok "the friend's invite page names $NAME" || bad "friend's invite page does not name the participant ($FRIEND_URL)"
+[[ -n "$FRIEND_ID" && "$(curl -sS -L -b "$MEJAR" --data "" "$ONB_URL/me/invites/$FRIEND_ID/revoke")" == *"Invite revoked"* ]] && ok "the participant revoked the unused invite" || bad "invite $FRIEND_ID not revoked"
 rm -f "$MEJAR"
+
+step "9c. the start page and the feedback page"
+if [[ -n "${SITE_URL:-}" ]]; then
+  [[ "$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/")" == "${SITE_URL%/}"* ]] && ok "$ONB_URL/ forwards to the start page $SITE_URL" || bad "$ONB_URL/ does not forward to $SITE_URL"
+  START=$(curl -sS "$SITE_URL/")
+else
+  START=$(curl -sS "$ONB_URL/")
+fi
+[[ "$START" == *"How to join"* && "$START" == *"Get an invite"* ]] && ok "start page explains how to join" || bad "start page: $(grep -o '<h1>[^<]*' <<<"$START" | head -1)"
+[[ -z "${TEST_RUN_NOTICE:-}" || "$START" == *"test-notice"* ]] && ok "test-run notice ${TEST_RUN_NOTICE:+shown}${TEST_RUN_NOTICE:-not configured}" || bad "TEST_RUN_NOTICE set but not on the start page"
+[[ "$(curl -sS "$ONB_URL/feedback?from=$ONB_URL/me")" == *"What happened?"* ]] && ok "feedback form served" || bad "no feedback form"
 
 step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"
 PJAR=$(mktemp); pj() { curl -sS -b "$PJAR" -c "$PJAR" "$@"; }

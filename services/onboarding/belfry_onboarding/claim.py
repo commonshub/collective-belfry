@@ -35,9 +35,18 @@ def qr_svg(data: str) -> str:
     )
 
 
+# TEST_RUN_NOTICE (settings.test_run_notice), set by create_app: a strip on top of every page.
+TEST_NOTICE = ""
+
+
 def page(title: str, body: str) -> str:
     """Open Source Village page frame, dark theme (brand/tokens.css, served at /brand): wordmark,
     one card, footer "run by Belfry". Mail clients never see this; the pages are small."""
+    notice = (
+        f'<div class="test-notice" role="note">{html.escape(TEST_NOTICE)}</div>'
+        if TEST_NOTICE
+        else ""
+    )
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark"><meta name="theme-color" content="#2b3a31">
@@ -58,52 +67,70 @@ def page(title: str, body: str) -> str:
  code {{ font-family: var(--osv-font-mono); word-break: break-all; background: var(--osv-surface-deep); padding: 2px 6px; border-radius: 4px; }}
  footer {{ margin-top: 24px; font-size: 0.85rem; color: var(--osv-foreground-faint); }}
  footer nav {{ margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 14px; }} footer nav a {{ color: var(--osv-foreground-muted); }}
-</style></head><body><main>
+ .test-notice {{ background: var(--osv-accent-2); color: var(--osv-on-accent); font-weight: 600; text-align: center; padding: 8px 16px; font-size: 0.95rem; }}
+</style></head><body>{notice}<main>
 <header><a href="https://opensourcevillage.org"><img src="/brand/osv-logo-horizontal-white.svg" alt="Open Source Village"></a></header>
 {body}
 <footer>Open Source Village, run by Belfry
-<nav><a href="/help">Help</a><a href="/rules">Community rules</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/refunds">Refunds</a></nav></footer>
+<nav><a href="/help">Help</a><a href="/feedback">Feedback</a><a href="/rules">Community rules</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/refunds">Refunds</a></nav></footer>
 </main></body></html>"""
 
 
 def home_page(settings: Any) -> str:
-    """pass.<domain>/: what this site is, and where participants go from here."""
-    links = [
+    """The start page (SITE_URL, https://<domain>; also PUBLIC_URL when no SITE_URL is set): what
+    Open Source Village and Belfry are, how people join (an invite from someone already in), and
+    where participants go from here."""
+    apps = [
+        (
+            settings.apps_public_url,
+            "Your account and the apps",
+            "Sign in by e-mail; chat, calendar, polls, tokens, directory, market, photos.",
+        ),
         (
             "/me",
             "Show your pass",
-            "Your pass as a QR code for the door, no wallet needed.",
+            "Your pass as a QR code for the door. Invite friends from there.",
         ),
-        (
-            settings.apps_public_url,
-            "Your account",
-            "Your pass, your Nostr key and the apps you use.",
-        ),
-        (settings.chat_public_url, "Chat", "Talk to other participants."),
-        (settings.calendar_public_url, "Calendar", "Sessions and meetups at the village."),
         ("/help", "Help", "Signing in, your pass at the door, the apps, tokens, stewards."),
     ]
     items = "".join(
         f'<li><a href="{html.escape(url)}"><strong>{html.escape(name)}</strong>'
         f'<span class="muted">{html.escape(text)}</span></a></li>'
-        for url, name, text in links
+        for url, name, text in apps
         if url
     )
-    nav = f'<ul class="links">{items}</ul>' if items else ""
-    body = f"""<div class="card">
-<h1>Your Open Source Village pass</h1>
-<p class="muted">This is where your pass goes into your wallet and where it is checked at the door.</p>
-<p>To add the pass to your wallet, open the <strong>claim link</strong> in the e-mail you got when
-your pass was paid. Lost the e-mail? Ask a steward to send it again.</p>
+    body = f"""<div class="card hero">
+<h1>Open Source Village</h1>
+<p class="lead">A gathering of people who make and use open source: to work, learn and live
+together for a few days. <a href="https://opensourcevillage.org">About the village</a></p>
+<p class="muted">Belfry runs the village's passes, sign-in and community apps: everything here is
+open source too.</p>
 </div>
-{nav}
+<div class="card">
+<h2>How to join</h2>
+<ol class="steps">
+<li><strong>Get an invite.</strong> The village grows through people who know each other: every
+participant can invite a few friends, and stewards invite too. An invite is a personal link; ask
+someone who is already in.</li>
+<li><strong>Choose your pass</strong> (a day, a week or the whole event) and pay on the invite page.</li>
+<li><strong>Check your e-mail.</strong> A sign-in link arrives; there is no password, ever.</li>
+<li><strong>Use the apps and show your pass</strong> at the door, on your phone or in a wallet.</li>
+</ol>
+<p class="muted">No invite yet? There is no public sign-up. Ask a friend who is coming.</p>
+</div>
+<h2 class="section">Already in?</h2>
+<ul class="links">{items}</ul>
 <style>
- .links {{ list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; }}
+ .hero h1 {{ font-size: 2rem; }} .lead {{ font-size: 1.1rem; }}
+ h2 {{ font-size: 1.15rem; margin: 0 0 8px; }} h2.section {{ margin: 24px 0 0; }}
+ .card + .card {{ margin-top: 16px; }}
+ .steps {{ padding-left: 1.2em; margin: 0 0 12px; display: grid; gap: 8px; }}
+ .links {{ list-style: none; padding: 0; margin: 12px 0 0; display: grid; gap: 12px; }}
  .links a {{ display: block; background: var(--osv-surface); border: 1px solid var(--osv-border); border-radius: 12px; padding: 16px 20px; color: var(--osv-foreground); text-decoration: none; }}
  .links a:hover {{ border-color: var(--osv-accent); }}
  .links strong {{ display: block; color: var(--osv-accent); }}
 </style>"""
-    return page("Open Source Village pass", body)
+    return page("Open Source Village", body)
 
 
 def not_found_page(home: str = "/") -> str:

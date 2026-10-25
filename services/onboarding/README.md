@@ -85,7 +85,9 @@ the steward pages is accepted anyway (it carries the steward's name).
 
 | Method, path | Auth | What |
 | --- | --- | --- |
-| `GET /` | none | landing page of `pass.<domain>` |
+| `GET /` | none | the start page: what the village is, how to join (an invite from someone already in), links for participants; with `SITE_URL` it is served there (the apex) and other hosts forward |
+| `GET /feedback`, `POST /feedback` | none (the `/me` session names the participant) | feedback with an optional screenshot, stored in Odoo (`belfry.feedback`) and mailed to the stewards; `?from=` the page it is about |
+| `POST /me/invites`, `POST /me/invites/<id>/revoke` | `/me` session | invites for friends (`INVITES_PER_PARTICIPANT`, default 3, open or used), listed on `/me` |
 | `GET /health` | none | `{"status":"ok"}` |
 | `POST /hooks/odoo/invoice-paid?token=` | `HOOK_TOKEN` | Odoo's webhook: activates the pass of the invoice (`_id`) |
 | `POST /hooks/odoo/refund?token=` | `HOOK_TOKEN` | Odoo's webhook: revokes the pass of a refunded transaction |

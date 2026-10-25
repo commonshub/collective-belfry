@@ -13,9 +13,10 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Activation mail with the one-time Authentik login setup link (Phase 2), "Send new login link" button
 - Pass certificate claim link and status list index (Phase 3), "Revoke pass" button
 - Mollie next to Stripe: refunds from Odoo, refunds and chargebacks from Mollie's webhook
+- Invites from participants (a limited number per active pass), belfry.feedback from the feedback page
 - belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.9.0',
+    'version': '19.0.1.10.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',

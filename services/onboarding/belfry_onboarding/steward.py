@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 import jwt
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import core
@@ -163,7 +163,29 @@ def finish_login(svc: Services, code: str | None, state: str | None, flow_cookie
 
 # -- actions -------------------------------------------------------------------------------------
 
-INVITE_FIELDS = ["note", "state", "url", "expires_at", "create_date", "steward_email", "steward_id"]
+INVITE_FIELDS = [
+    "note",
+    "state",
+    "url",
+    "expires_at",
+    "create_date",
+    "steward_email",
+    "steward_id",
+    "inviter_name",
+    "inviter_partner_id",
+    "used_by_partner_id",
+]
+FEEDBACK_FIELDS = [
+    "create_date",
+    "partner_id",
+    "email",
+    "page_url",
+    "happened",
+    "expected",
+    "screenshot_name",
+    "state",
+    "handled_by",
+]
 PASS_FIELDS = [
     "partner_id",
     "tier",
@@ -229,7 +251,9 @@ def dashboard_data(svc: Services) -> dict[str, Any]:
         else {}
     )
     reports = odoo.search_read("belfry.report", [], REPORT_FIELDS, limit=50, order="id desc")
+    feedback = odoo.search_read("belfry.feedback", [], FEEDBACK_FIELDS, limit=100, order="id desc")
     return {
+        "feedback": feedback,
         "invites": invites,
         "passes": passes,
         "partners": partners,
@@ -240,7 +264,9 @@ def dashboard_data(svc: Services) -> dict[str, Any]:
 
 def create_invite(svc: Services, sess: dict[str, Any], note: str) -> dict[str, Any]:
     return svc.odoo.call(
-        "belfry.invite", "belfry_steward_create", [sess["email"], note.strip()[:200] or False]
+        "belfry.invite",
+        "belfry_steward_create",
+        [sess["email"], note.strip()[:200] or False, sess.get("name") or False],
     )
 
 
@@ -263,6 +289,21 @@ def handle_report(svc: Services, sess: dict[str, Any], report_id: int, action: s
     return svc.odoo.call(
         "belfry.report", "belfry_report_handle", [[report_id], action, sess["email"]]
     )
+
+
+def handle_feedback(svc: Services, sess: dict[str, Any], feedback_id: int, action: str) -> str:
+    return svc.odoo.call(
+        "belfry.feedback", "belfry_feedback_handle", [[feedback_id], action, sess["email"]]
+    )
+
+
+def feedback_screenshot(svc: Services, feedback_id: int) -> tuple[bytes, str] | None:
+    row = svc.odoo.read_one("belfry.feedback", feedback_id, ["screenshot", "screenshot_name"])
+    if not row or not row.get("screenshot"):
+        return None
+    name = row.get("screenshot_name") or "screenshot.png"
+    kind = {"jpg": "image/jpeg", "webp": "image/webp"}.get(name.rsplit(".", 1)[-1], "image/png")
+    return base64.b64decode(row["screenshot"]), kind
 
 
 def send_login_link(svc: Services, pass_id: int) -> str:
@@ -402,6 +443,49 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
     if err:
         parts.append(f'<div class="card err">{E(err)}</div>')
 
+    feedback = data.get("feedback") or []
+    rows = []
+    for f in feedback:
+        who = f["partner_id"][1] if f.get("partner_id") else (f.get("email") or "not signed in")
+        page_link = (
+            f'<br><a href="{E(f["page_url"])}" target="_blank" rel="noopener" class="muted">'
+            f"{E(f['page_url'][:80])}</a>"
+            if f.get("page_url")
+            else ""
+        )
+        expected = (
+            f"<br><span class='muted'>Expected: {E(f['expected'])}</span>"
+            if f.get("expected")
+            else ""
+        )
+        shot = (
+            f' <a href="/steward/feedback/{f["id"]}/screenshot" target="_blank">screenshot</a>'
+            if f.get("screenshot_name")
+            else ""
+        )
+        action = "done" if f["state"] == "new" else "reopen"
+        button = _form(
+            f"/steward/feedback/{f['id']}/{action}",
+            sess,
+            "Done" if action == "done" else "Reopen",
+            quiet=True,
+        )
+        rows.append(
+            f"<tr><td>{_date(f.get('create_date'))}</td><td>{E(who)}</td>"
+            f"<td class='pre'>{E(f.get('happened') or '')}{expected}{page_link}{shot}</td>"
+            f"<td><span class='state'>{E(f['state'])}</span></td>"
+            f"<td>{button}</td></tr>"
+        )
+    new_count = sum(1 for f in feedback if f["state"] == "new")
+    parts.append(
+        f"<section id='feedback'><h2>Feedback{f' ({new_count} new)' if new_count else ''}</h2>"
+        "<p class='muted'>From the feedback page (the app bar's Feedback link).</p>"
+        "<div class='wrap'><table><thead><tr><th>Date</th><th>From</th><th>What</th>"
+        "<th>State</th><th></th></tr></thead><tbody>"
+        + ("".join(rows) or "<tr><td colspan=5 class='muted'>No feedback yet.</td></tr>")
+        + "</tbody></table></div></section>"
+    )
+
     reports = data.get("reports") or []
     rows = []
     for r in reports:
@@ -466,7 +550,13 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
 
     rows = []
     for inv in data["invites"]:
-        who = inv.get("steward_email") or (inv["steward_id"][1] if inv.get("steward_id") else "")
+        who = inv.get("inviter_name") or inv.get("steward_email") or ""
+        if inv.get("inviter_partner_id"):
+            who += " <span class='muted'>(participant)</span>"
+        else:
+            who = E(who)
+        if inv.get("used_by_partner_id"):
+            who += f"<br><span class='muted'>for {E(inv['used_by_partner_id'][1])}</span>"
         actions = ""
         if inv["state"] == "open":
             actions = (
@@ -482,7 +572,7 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
             )
         rows.append(
             f"<tr><td>{_date(inv.get('create_date'))}</td><td>{E(inv.get('note') or '')}</td>"
-            f"<td>{E(who)}</td><td><span class='state'>{E(inv['state'])}</span></td>"
+            f"<td>{who}</td><td><span class='state'>{E(inv['state'])}</span></td>"
             f"<td>{_date(inv.get('expires_at'))}</td><td>{actions}</td></tr>"
         )
     parts.append(
@@ -492,7 +582,7 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
         '<input type="text" name="note" maxlength="200" '
         'placeholder="Who is it for? (only stewards see this)"> '
         "<button>Create invite</button></form>"
-        '<div class="wrap"><table><thead><tr><th>Created</th><th>Note</th><th>Steward</th>'
+        '<div class="wrap"><table><thead><tr><th>Created</th><th>Note</th><th>Invited by</th>'
         "<th>State</th><th>Expires</th><th></th></tr></thead><tbody>"
         + ("".join(rows) or "<tr><td colspan=6 class='muted'>No invites yet.</td></tr>")
         + "</tbody></table></div></section>"
@@ -582,6 +672,8 @@ MESSAGES = {
     "report-hide": "The content is hidden in the apps.",
     "report-dismiss": "Report dismissed.",
     "report-reopen": "Report reopened.",
+    "feedback-done": "Feedback marked done.",
+    "feedback-reopen": "Feedback reopened.",
     "signed-out": "Signed out.",
 }
 
@@ -718,6 +810,31 @@ def register(app: FastAPI) -> None:
             raise StewardError(404, "Unknown action.")
         await run_in_threadpool(handle_report, services, sess, report_id, action)
         return back(f"report-{action}")
+
+    @app.post("/steward/feedback/{feedback_id}/{action}")
+    async def steward_feedback(
+        feedback_id: int, action: str, request: Request, csrf: str = Form("")
+    ):
+        services, sess = signed_in(request, csrf)
+        if action not in ("done", "reopen"):
+            raise StewardError(404, "Unknown action.")
+        await run_in_threadpool(handle_feedback, services, sess, feedback_id, action)
+        return back(f"feedback-{action}")
+
+    @app.get("/steward/feedback/{feedback_id}/screenshot")
+    async def steward_feedback_screenshot(feedback_id: int, request: Request):
+        services, sess = guard(request)
+        if sess is None:
+            raise StewardError(401, "Sign in as a steward first.")
+        found = await run_in_threadpool(feedback_screenshot, services, feedback_id)
+        if found is None:
+            raise StewardError(404, "No screenshot.")
+        data, kind = found
+        return Response(
+            data,
+            media_type=kind,
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
     @app.post("/steward/passes/{pass_id}/revoke")
     async def steward_revoke_pass(pass_id: int, request: Request, csrf: str = Form("")):

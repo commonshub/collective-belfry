@@ -40,6 +40,7 @@ values = {
     "VERIFIER_PUBLIC_URL": f"https://verifier.{domain}",
     "VERIFIER_SAN": f"verifier.{domain}",
     "ONBOARDING_PUBLIC_URL": f"https://pass.{domain}",
+    "SITE_URL": f"https://{domain}",
     "STATUS_LIST_URL": f"https://pass.{domain}/status/1",
     "STATUS_LIST_TTL": "300",
     "MAIL_FROM": mail_from,

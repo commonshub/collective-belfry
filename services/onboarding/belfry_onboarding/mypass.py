@@ -37,6 +37,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from .claim import TIER_NAMES, page, qr_svg
+from .clients.odoo import OdooError
 from .core import Services, odoo_date
 
 log = logging.getLogger(__name__)
@@ -260,10 +261,79 @@ STYLE = """<style>
  .warn { color: #ffd166; font-weight: 600; }
  .row { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 16px; }
  button.link { background: none; border: 0; color: var(--osv-accent); font: inherit; padding: 0; cursor: pointer; text-decoration: underline; }
+ .card + .card { margin-top: 16px; } h2 { font-size: 1.15rem; margin: 0 0 8px; }
+ .invites form.row input { box-sizing: border-box; min-width: 0; flex: 1 1 200px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--osv-border-strong); background: var(--osv-surface-deep); color: var(--osv-foreground); font: inherit; }
+ .invites button.btn { border: 0; font: inherit; font-weight: 600; cursor: pointer; }
+ .invite-list { list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 12px; }
+ .invite-list li { border-top: 1px solid var(--osv-border); padding-top: 12px; }
+ .invite-list .row { margin-top: 8px; align-items: center; } .invite-list code { display: block; margin-top: 8px; }
+ .small-btn { background: var(--osv-surface-deep); color: var(--osv-foreground); border: 1px solid var(--osv-border-strong); border-radius: 8px; padding: 6px 12px; font: inherit; cursor: pointer; }
+ .small { font-size: 0.85rem; }
 </style>"""
 
 
-def me_page(pass_row: dict[str, Any] | None, qr: dict[str, Any] | None, claim_url: str = "") -> str:
+def invites_section(invites: dict[str, Any] | None, msg: str = "") -> str:
+    """ "Invite friends": the participant's invite links (belfry_friends.py in Odoo)."""
+    if not invites:
+        return ""
+    left, limit = invites.get("left", 0), invites.get("limit", 0)
+    rows = []
+    for inv in invites.get("invites") or []:
+        note = f"<strong>{E(inv['note'])}</strong> · " if inv.get("note") else ""
+        if inv["state"] == "open":
+            tools = (
+                f'<div class="row"><button class="small-btn" type="button" '
+                f'data-copy="{E(inv["url"])}">Copy link</button>'
+                f'<button class="small-btn" type="button" data-share="{E(inv["url"])}">'
+                f'Share</button><form method="post" action="/me/invites/{inv["id"]}/revoke">'
+                '<button class="link" type="submit">Revoke</button></form></div>'
+                f'<code class="small">{E(inv["url"])}</code>'
+            )
+            state = f"open until {E((inv.get('expires_at') or '')[:10])}"
+        elif inv["state"] == "used":
+            tools, state = "", f"used by {E(inv.get('used_by') or 'a friend')}"
+        else:
+            tools, state = "", E(inv["state"])
+        rows.append(f'<li>{note}<span class="muted">{state}</span>{tools}</li>')
+    form = (
+        '<form method="post" action="/me/invites" class="row">'
+        '<input type="text" name="note" maxlength="200" '
+        'placeholder="Who is it for? (only you see this)">'
+        '<button class="btn" type="submit">Create an invite link</button></form>'
+        if left
+        else '<p class="muted">You have no invites left. Revoke an unused one, or ask a steward.</p>'
+    )
+    flash = f'<p class="ok">{E(msg)}</p>' if msg else ""
+    plural = "" if left == 1 else "s"
+    return f"""<div class="card invites" id="invite">
+<h2>Invite friends</h2>
+<p class="muted">The village grows through people who know each other. You can invite {limit}
+friends; {left} invite{plural} left. Each link works once and expires after two weeks; an unused
+one can be revoked and gives the invite back.</p>
+{flash}{form}
+<ul class="invite-list">{"".join(rows)}</ul>
+</div>
+<script>
+document.addEventListener('click', e => {{
+  const c = e.target.closest('[data-copy]'), s = e.target.closest('[data-share]');
+  if (c) navigator.clipboard.writeText(c.dataset.copy).then(() => {{
+    c.textContent = 'Copied'; setTimeout(() => c.textContent = 'Copy link', 1500); }});
+  if (s) {{
+    const data = {{ title: 'Open Source Village', text: 'Join me at Open Source Village:', url: s.dataset.share }};
+    if (navigator.share) navigator.share(data).catch(() => {{}});
+    else navigator.clipboard.writeText(s.dataset.share);
+  }}
+}});
+</script>"""
+
+
+def me_page(
+    pass_row: dict[str, Any] | None,
+    qr: dict[str, Any] | None,
+    claim_url: str = "",
+    invites: dict[str, Any] | None = None,
+    msg: str = "",
+) -> str:
     if pass_row is None:
         body = """<div class="card"><h1>No pass</h1>
 <p class="muted">This account has no Open Source Village pass. If you paid for one, ask a steward.</p></div>"""
@@ -290,6 +360,7 @@ screenshot does not work. Turn the brightness up.</p>
 {wallet}
 <form method="post" action="/me/logout"><button class="link" type="submit">Sign out of this page</button></form>
 </div>
+{invites_section(invites, msg)}
 <script>
 const box = document.getElementById('pass'), img = document.getElementById('qr'), clock = document.getElementById('clock');
 const tick = () => clock.textContent = new Date().toLocaleTimeString([], {{hour: '2-digit', minute: '2-digit', second: '2-digit'}});
@@ -373,7 +444,11 @@ def register(app: FastAPI) -> None:
             info = await run_in_threadpool(_claim_url, services, row["id"])
             claim_url = info or ""
         qr = qr_for(services, row["id"]) if active else None
-        response = HTMLResponse(me_page(row, qr, claim_url))
+        invites = None
+        if active:
+            invites = await run_in_threadpool(participant_invites, services, sess["partner"])
+        msg = INVITE_MESSAGES.get(request.query_params.get("msg", ""), "")
+        response = HTMLResponse(me_page(row, qr, claim_url, invites, msg))
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -422,9 +497,41 @@ def register(app: FastAPI) -> None:
             httponly=True,
             secure=_secure(services),
             samesite="lax",
-            path="/me",
+            path="/",  # the feedback page knows who sends it
         )
         return response
+
+    def same_origin(request: Request, services: Services) -> None:
+        """Forms post only from this site (the session cookie is SameSite=Lax as well)."""
+        origin = request.headers.get("origin")
+        allowed = {_origin(services.settings.public_url), _origin(services.settings.site_url)}
+        if origin and origin not in allowed:
+            raise PassPageError(403, "This form can only be sent from the pass page.")
+
+    @app.post("/me/invites")
+    async def me_create_invite(request: Request):
+        services, sess = guard(request)
+        if sess is None:
+            return RedirectResponse("/me/login", status_code=303)
+        same_origin(request, services)
+        note = str((await request.form()).get("note") or "")
+        try:
+            await run_in_threadpool(create_participant_invite, services, sess["partner"], note)
+        except OdooError as exc:
+            raise PassPageError(409, _odoo_message(exc)) from exc
+        return RedirectResponse("/me?msg=created#invite", status_code=303)
+
+    @app.post("/me/invites/{invite_id}/revoke")
+    async def me_revoke_invite(invite_id: int, request: Request):
+        services, sess = guard(request)
+        if sess is None:
+            return RedirectResponse("/me/login", status_code=303)
+        same_origin(request, services)
+        try:
+            await run_in_threadpool(revoke_participant_invite, services, sess["partner"], invite_id)
+        except OdooError as exc:
+            raise PassPageError(409, _odoo_message(exc)) from exc
+        return RedirectResponse("/me?msg=revoked#invite", status_code=303)
 
     @app.post("/me/logout")
     async def me_logout(request: Request):
@@ -432,7 +539,8 @@ def register(app: FastAPI) -> None:
         body = """<div class="card"><h1>Signed out</h1><p>This page is signed out.</p>
 <p><a class="btn" href="/me">Show my pass</a></p></div>"""
         response = HTMLResponse(page("Signed out", body))
-        response.delete_cookie(SESSION_COOKIE, path="/me")
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        response.delete_cookie(SESSION_COOKIE, path="/me")  # sessions from before 2026-10-25
         return response
 
     @app.get("/check/{token}", response_class=HTMLResponse)
@@ -460,6 +568,43 @@ def register(app: FastAPI) -> None:
                 {**result, "scanned_before": before}, headers={"Cache-Control": "no-store"}
             )
         return HTMLResponse(check_page(result, before), headers={"Cache-Control": "no-store"})
+
+
+INVITE_MESSAGES = {
+    "created": "Invite link created: copy it or share it with your friend.",
+    "revoked": "Invite revoked.",
+}
+
+
+def _origin(url: str) -> str:
+    parts = urllib.parse.urlsplit(url or "")
+    return f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+
+
+def _odoo_message(exc: OdooError) -> str:
+    """Odoo's UserError text (shown to the participant), without the traceback."""
+    text = (exc.data.get("message") or exc.message or "").strip()
+    return text.splitlines()[0][:300] if text else "Odoo refused the request."
+
+
+def participant_invites(svc: Services, partner_id: int) -> dict[str, Any] | None:
+    try:
+        return svc.odoo.call("belfry.invite", "belfry_participant_invites", [partner_id])
+    except OdooError as exc:
+        log.warning("participant invites for partner %s: %s", partner_id, exc)
+        return None
+
+
+def create_participant_invite(svc: Services, partner_id: int, note: str) -> dict[str, Any]:
+    row = svc.odoo.call(
+        "belfry.invite", "belfry_participant_create", [partner_id, note.strip()[:200] or False]
+    )
+    log.info("partner %s created invite %s", partner_id, row.get("id"))
+    return row
+
+
+def revoke_participant_invite(svc: Services, partner_id: int, invite_id: int) -> dict[str, Any]:
+    return svc.odoo.call("belfry.invite", "belfry_participant_revoke", [partner_id, invite_id])
 
 
 def _claim_url(svc: Services, pass_id: int) -> str | None:

@@ -42,10 +42,19 @@ Your account page shows your village name (for example `osv-0042@<domain>`) and 
 Belfry keeps the key safe for you. If you have your own Nostr signer, you can move your identity
 to your own key on the security page; after that, the apps sign in with your own signer.
 
+## Inviting friends
+
+The village grows through people who know each other, so there is no public sign-up. With an
+active pass you can invite a few friends: open [your pass](/me), then **Create an invite link**
+and send or share it. Each link works once and expires after two weeks; the page shows which
+links were used, and an unused one can be revoked to get the invite back.
+
 ## Something wrong?
 
 - **Lost your activation e-mail, or no sign-in link arrives**: ask a steward.
 - **Someone breaks the [community rules](/rules)**: use the Report button, or tell a steward.
+- **Something does not work, or could be better**: send [feedback](/feedback) (the Feedback
+  link in the apps' top bar takes you there with the page you were on).
 - **A steward**: [TO FILL: where to find stewards at the event, and how to reach them before and
   after it].
 

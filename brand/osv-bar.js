@@ -86,7 +86,10 @@
       nav.appendChild(a);
     }
     apps.forEach(function (app) {
-      var a = link(app.url);
+      // the feedback page learns which page the feedback is about
+      var feedback = /\/feedback\/?$/.test(app.url);
+      var a = link(feedback ? app.url + "?from=" + encodeURIComponent(location.href) : app.url);
+      if (feedback) a.removeAttribute("aria-current");
       a.textContent = app.name;
       nav.appendChild(a);
     });

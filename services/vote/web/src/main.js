@@ -233,7 +233,7 @@ function newPage() {
       <fieldset><legend>Options</legend><div id="opts"></div>
         <button type="button" class="link" id="add-opt">+ Add an option</button></fieldset>
       <label>Open for<select name="duration">
-        <option value="3600">1 hour</option><option value="86400" selected>1 day</option>
+        <option value="900">15 minutes</option><option value="3600">1 hour</option><option value="86400" selected>1 day</option>
         <option value="259200">3 days</option><option value="604800">1 week</option>
         <option value="1209600">2 weeks</option></select></label>
       <p class="muted small">Every participant with an active pass can vote once, anonymously.

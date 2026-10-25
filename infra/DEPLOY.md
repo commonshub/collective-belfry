@@ -201,8 +201,8 @@ $C --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-m
 | `shop.` | Odoo: invite pages, payment, invoices | back office, login, database manager, RPC: admin network only |
 | `login.` | Authentik | admin interface and password login: admin network only |
 | `apps.` | the signer: participants' account page and API | `/api/admin/*` denied; `/admin` admin network only |
-| `<domain>` | `/.well-known/nostr.json` (NIP-05) from the signer; everything else redirects to `shop.` | |
-| `pass.` | onboarding service: landing page, claim, tokens, the pass on the phone (`/me`, `/check`), door, pass sign-in bridge, status list, type metadata, Stripe webhook, brand files | `/admin/*`, `/hooks/odoo/*` and the API docs denied; `/steward` admin network only |
+| `<domain>` | the start page (`SITE_URL`: what the village is, how to join with an invite) and the rest of the onboarding site with the same rules as `pass.`; `/.well-known/nostr.json` (NIP-05) from the signer | as `pass.` |
+| `pass.` | onboarding service (its `/` forwards to the start page): claim, tokens, the pass on the phone and invites for friends (`/me`, `/check`), feedback, door, pass sign-in bridge, status list, type metadata, Stripe webhook, brand files | `/admin/*`, `/hooks/odoo/*` and the API docs denied; `/steward` admin network only |
 | `relay.` | the community relay | |
 | `bunker.` | the signer's NIP-46 relay (`BUNKER_PUBLIC_RELAYS=wss://bunker.<domain>` goes into bunker URLs) | |
 | `blossom.` | file server, through its gate | uploads need a participant's signature |

@@ -336,6 +336,16 @@ else
 fi
 [[ -n "$STRIPE_SECRET_KEY$MOLLIE_API_KEY" ]] || echo "No payment provider configured: payments are marked paid by stewards"
 
+# Invites from participants (belfry_friends.py) and the test-run notice on Odoo's pages (invite,
+# payment, portal); while Mollie is in test mode the notice names Mollie's test card.
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.invites_per_participant\",\"${INVITES_PER_PARTICIPANT:-3}\"]" >/dev/null
+NOTICE=${TEST_RUN_NOTICE:-}
+if [[ -n "$NOTICE" && "${MOLLIE_STATE:-}" == test ]]; then
+  NOTICE="$NOTICE Pay with Mollie's test card 4543 4740 0224 9996, any future expiry date, any CVC."
+fi
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "$(jq -cn --arg v "$NOTICE" '["belfry.test_notice", $v]')" >/dev/null
+echo "invites per participant: ${INVITES_PER_PARTICIPANT:-3}; test notice: ${NOTICE:-none}"
+
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
 # Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*

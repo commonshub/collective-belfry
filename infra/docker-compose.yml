@@ -66,7 +66,7 @@ x-authentik-env: &authentik-env
 
 # The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
 # the Open Source Village app bar (brand/osv-bar.js) in every app.
-x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards"
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
 
 x-keycast-env: &keycast-env
   # the password comes as PGPASSWORD (with-secrets), which sqlx uses when the URL has none
@@ -670,6 +670,8 @@ services:
       BRIDGE_JWK_PATH: /keys/bridge.jwk.json
       BRIDGE_CLIENT_ID: belfry-authentik
       EVENT_START: ${EVENT_START:-2027-01-25}
+      SITE_URL: ${SITE_URL:-}
+      TEST_RUN_NOTICE: ${TEST_RUN_NOTICE:-}
       EVENT_END: ${EVENT_END:-2027-01-31}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # The help page (/help) lists the community apps (the app bar's list).

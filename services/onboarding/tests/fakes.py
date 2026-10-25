@@ -19,7 +19,8 @@ M2O: dict[str, set[str]] = {
     "payment.transaction": {"source_transaction_id"},
     "belfry.pass": {"partner_id", "product_id", "invoice_id", "transaction_id", "invite_id"},
     "belfry.stripe.event": {"pass_id"},
-    "belfry.invite": set(),
+    "belfry.invite": {"inviter_partner_id", "used_by_partner_id"},
+    "belfry.feedback": {"partner_id"},
     "belfry.report": {"reporter_pass_id", "target_pass_id"},
     "product.product": set(),
     "res.partner": set(),
@@ -39,6 +40,76 @@ class FakeOdoo(OdooApi):
         self._seq = 0
 
     # -- seeding ------------------------------------------------------------------------------
+
+    invites_per_participant = 3
+
+    def _participant_invites(self, method: str, args: list[Any]) -> Any:
+        """belfry_friends.py: a participant's own invites, within the limit."""
+        partner_id = args[0]
+        mine = [
+            i
+            for i in self.tables["belfry.invite"].values()
+            if i.get("inviter_partner_id") == partner_id
+        ]
+
+        def row(i: dict[str, Any]) -> dict[str, Any]:
+            used = i.get("used_by_partner_id")
+            return {
+                "id": i["id"],
+                "url": i["url"],
+                "state": i["state"],
+                "note": i.get("note") or "",
+                "expires_at": i["expires_at"],
+                "used_by": self.tables["res.partner"].get(used, {}).get("name", "") if used else "",
+            }
+
+        taken = sum(1 for i in mine if i["state"] in ("open", "used"))
+        if method == "belfry_participant_invites":
+            rows = [row(i) for i in sorted(mine, key=lambda i: -i["id"])]
+            return {
+                "limit": self.invites_per_participant,
+                "left": max(0, self.invites_per_participant - taken),
+                "invites": rows,
+            }
+        if method == "belfry_participant_create":
+            active = any(
+                p.get("partner_id") == partner_id and p.get("state") == "active"
+                for p in self.tables["belfry.pass"].values()
+            )
+            if not active:
+                raise OdooError(
+                    "UserError",
+                    {"message": "Only participants with an active pass can invite friends."},
+                )
+            if taken >= self.invites_per_participant:
+                raise OdooError(
+                    "UserError",
+                    {
+                        "message": "You have no invites left. "
+                        "Revoke an unused one, or ask a steward."
+                    },
+                )
+            inv_id = self.add(
+                "belfry.invite",
+                inviter_partner_id=partner_id,
+                inviter_name=self.tables["res.partner"].get(partner_id, {}).get("name"),
+                note=args[1] if len(args) > 1 else False,
+                state="open",
+                token=f"ptok{len(self.tables['belfry.invite']) + 1}",
+                expires_at="2026-11-08 10:00:00",
+                create_date="2026-10-25 10:00:00",
+            )
+            inv = self.tables["belfry.invite"][inv_id]
+            inv["url"] = f"http://odoo.test/belfry/invite/{inv['token']}"
+            return row(inv)
+        if method == "belfry_participant_revoke":
+            inv = next((i for i in mine if i["id"] == args[1]), None)
+            if inv is None:
+                raise OdooError("UserError", {"message": "No such invite."})
+            if inv["state"] == "open":
+                inv["state"] = "revoked"
+            return row(inv)
+        raise OdooError(f"unknown method {method}")
 
     def add(self, model: str, **vals: Any) -> int:
         self._check_unique(model, vals, None)
@@ -158,6 +229,7 @@ class FakeOdoo(OdooApi):
             inv_id = self.add(
                 "belfry.invite",
                 steward_email=email,
+                inviter_name=args[2] if len(args) > 2 else False,
                 note=note,
                 state="open",
                 token=f"tok{len(self.tables[model]) + 1}",
@@ -168,6 +240,27 @@ class FakeOdoo(OdooApi):
             inv = self.tables[model][inv_id]
             inv["url"] = f"http://odoo.test/belfry/invite/{inv['token']}"
             return {"id": inv_id, "url": inv["url"], "token": inv["token"]}
+        if model == "belfry.invite" and method.startswith("belfry_participant_"):
+            return self._participant_invites(method, args)
+        if model == "belfry.feedback" and method == "belfry_feedback_create":
+            vals, emails = args[0], args[1] if len(args) > 1 else []
+            return self.add(
+                "belfry.feedback",
+                **vals,
+                state="new",
+                mailed_to=list(emails),
+                screenshot=args[2] if len(args) > 2 else False,
+                screenshot_name=f"screenshot.{(args[3] or 'image/png').split('/')[1]}"
+                if len(args) > 3 and args[2]
+                else False,
+                create_date="2026-10-25 10:00:00",
+                handled_by=False,
+            )
+        if model == "belfry.feedback" and method == "belfry_feedback_handle":
+            (fid,), action, email = args[0], args[1], args[2]
+            state = {"done": "done", "reopen": "new"}[action]
+            self.tables[model][fid].update(state=state, handled_by=email)
+            return state
         if model == "belfry.invite" and method == "action_revoke":
             for i in args[0]:
                 if self.tables[model][i]["state"] == "open":

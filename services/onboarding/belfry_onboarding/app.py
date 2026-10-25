@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from . import avatar, blossom, bridge, claim, core, mypass, pages, reports, steward
+from . import avatar, blossom, bridge, claim, core, feedback, mypass, pages, reports, steward
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -96,6 +96,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             app.state.services = build_services(settings)
         else:
             app.state.services = services
+        claim.TEST_NOTICE = app.state.services.settings.test_run_notice
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
@@ -109,6 +110,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
+    feedback.register(app)  # /feedback: participants' and testers' feedback (feedback.py)
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
@@ -151,8 +153,13 @@ def create_app(services: Services | None = None) -> FastAPI:
             return None
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def home(request: Request) -> HTMLResponse:
-        return HTMLResponse(claim.home_page(svc(request).settings))
+    async def home(request: Request) -> Response:
+        """The start page. With SITE_URL it lives there (the apex): other hosts forward."""
+        settings = svc(request).settings
+        site = httpx.URL(settings.site_url) if settings.site_url else None
+        if site is not None and request.headers.get("host", "").lower() != site.netloc.decode():
+            return RedirectResponse(str(site), status_code=302)
+        return HTMLResponse(claim.home_page(settings))
 
     @app.exception_handler(StarletteHTTPException)
     async def html_not_found(request: Request, exc: StarletteHTTPException):

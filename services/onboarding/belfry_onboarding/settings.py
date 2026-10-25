@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     verifier_url: str = Field(default="", alias="VERIFIER_URL")  # walt.id Verifier2, internal
     # This service as the browser sees it: claim pages, door, bridge, status list, vct.
     public_url: str = Field(default="http://localhost:8100", alias="PUBLIC_URL")
+    # The start page's address (https://<domain>): this service's landing page, also served on the
+    # apex; PUBLIC_URL's own "/" forwards there. Empty: the landing page stays on PUBLIC_URL.
+    site_url: str = Field(default="", alias="SITE_URL")
+    # A notice on every page during a test run ("Test run: no real money …"); empty: none.
+    test_run_notice: str = Field(default="", alias="TEST_RUN_NOTICE")
     # Tokens (decision 2026-10-24): Belfry's Cashu mint (cdk-mintd, no monetary value). MINT_URL is
     # the mint inside Compose (minting is only reachable there); empty turns tokens off.
     mint_url: str = Field(default="", alias="MINT_URL")
