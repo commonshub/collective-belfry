@@ -786,6 +786,8 @@ fi
 step "10c. joining with an own Nostr key: a signed proof on the invite page, a keyless signer account"
 # A second participant who already uses Nostr. The key and its signature (the NIP-98 event the
 # invite page's script asks the browser's signer for) are made in the onboarding container.
+# SMOKE_KEEP_PASS keeps this participant active; SAVE_OWN_KEY=<file> then writes OWN_SECRET= and
+# OWN_TOKEN= (the pass's tokens) for infra/scripts/wallet-own-signer-check.mjs.
 OWN_INVITE=$(ox belfry.invite create '[{"note":"smoke own key"}]')
 OWN_TOKEN=$(ox belfry.invite read "[[$OWN_INVITE]]" '{"fields":["token"]}' | jq -r '.[0].token')
 OWN=$("${DC[@]}" exec -T onboarding python - "/belfry/invite/$OWN_TOKEN" <<'PY'
@@ -799,7 +801,7 @@ ev = {"pubkey": pub, "created_at": int(time.time()), "kind": 27235, "content": "
 ev["id"] = event_id(ev)
 ev["sig"] = key.sign_schnorr(bytes.fromhex(ev["id"])).hex()
 bad = dict(ev, sig=PrivateKey().sign_schnorr(bytes.fromhex(ev["id"])).hex())
-print(json.dumps({"pubkey": pub, "proof": json.dumps(ev), "bad": json.dumps(bad)}))
+print(json.dumps({"pubkey": pub, "secret": key.secret.hex(), "proof": json.dumps(ev), "bad": json.dumps(bad)}))
 PY
 )
 OWN_PUB=$(jq -r .pubkey <<<"$OWN")
@@ -836,7 +838,15 @@ done
 KEYS=$("${DC[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select (select count(*) from users where pubkey='$OWN_PUB') || ' ' || (select count(*) from personal_keys where user_pubkey='$OWN_PUB')")
 [[ "$KEYS" == "1 0" ]] && ok "signer account without a key of Belfry's" || bad "Keycast users/keys for the own key: $KEYS"
 "${DC[@]}" exec -T relay cat /rnostr/config/rnostr.toml | grep -q "$OWN_PUB" && ok "own key on the relay whitelist" || bad "own key not whitelisted"
-ox belfry.pass action_revoke "[[$OWN_PASS_ID]]" >/dev/null 2>&1 || onb_post "/admin/passes/$OWN_PASS_ID/revoke" '{"reason":"smoke cleanup"}' >/dev/null || true
+if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then
+  if [[ -n "${SAVE_OWN_KEY:-}" ]]; then
+    (umask 077; printf 'OWN_SECRET=%s\nOWN_TOKEN=%s\n' "$(jq -r .secret <<<"$OWN")" \
+      "$(ox belfry.pass read "[[$OWN_PASS_ID]]" '{"fields":["cashu_token"]}' | jq -r '.[0].cashu_token // ""')" > "$SAVE_OWN_KEY")
+    echo "  note own-key participant kept active; key and tokens in $SAVE_OWN_KEY"
+  fi
+else
+  ox belfry.pass action_revoke "[[$OWN_PASS_ID]]" >/dev/null 2>&1 || onb_post "/admin/passes/$OWN_PASS_ID/revoke" '{"reason":"smoke cleanup"}' >/dev/null || true
+fi
 
 step "11. revoke the pass: status list bit flips, the door refuses the certificate"
 if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then echo "  note SMOKE_KEEP_PASS set: pass $PASS_ID stays active (browser checks of the apps); revocation not tested"; else

@@ -1,0 +1,444 @@
+From 5619a0cd255f08b42bfe43546b1d100a7b35aec1 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Sun, 25 Oct 2026 11:07:00 +0100
+Subject: [PATCH] Belfry: the wallet with the participant's own signer
+ (NIP-07), seed and nutzap key in an encrypted backup on the relay
+
+---
+ src/belfry/keys.ts                    | 67 ++++++++++++++++++---
+ src/belfry/nutzap.ts                  | 17 ++----
+ src/belfry/sso.ts                     | 84 ++++++++++++++++++++++++++-
+ src/belfry/village.ts                 | 20 +++----
+ src/components/belfry/VillageCard.vue | 41 ++++++++++++-
+ 5 files changed, 198 insertions(+), 31 deletions(-)
+
+diff --git a/src/belfry/keys.ts b/src/belfry/keys.ts
+index e13b16e..02d50ec 100644
+--- a/src/belfry/keys.ts
++++ b/src/belfry/keys.ts
+@@ -8,13 +8,22 @@
+ //
+ // A participant who takes custody of their Nostr key can reproduce both with any HKDF
+ // implementation (salt "keycast/derive/v1", info = the purpose).
++//
++// With their own signer nothing derives them: the wallet makes a random seed and nutzap key once
++// and keeps them on the community relay as a kind-30078 event ("d" = osv-wallet), its content
++// NIP-44-encrypted to the participant's own key, so another device signed in with the same
++// signer finds them again.
+ 
+-import { entropyToMnemonic } from "@scure/bip39";
++import { entropyToMnemonic, validateMnemonic } from "@scure/bip39";
+ import { wordlist } from "@scure/bip39/wordlists/english";
+ import { getPublicKey } from "nostr-tools";
+ import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
+ import { secp256k1 } from "@noble/curves/secp256k1";
+-import { rpc } from "./sso";
++import { rpc, getSession, usesOwnSigner, signEvent, encryptToSelf, decryptFromSelf } from "./sso";
++import { communityRelay, fetchOne } from "./nutzap";
++
++const BACKUP_KIND = 30078;
++const BACKUP_D = "osv-wallet";
+ 
+ const CURVE_ORDER = BigInt(
+   "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+@@ -33,12 +42,14 @@ export async function deriveWalletMnemonic(): Promise<string> {
+   );
+ }
+ 
++export type NutzapKey = { privateKey: string; publicKey: string };
++
+ /** The nutzap key as {privateKey, publicKey: "02" + x-only}, with an even Y. */
+-export async function deriveNutzapKey(): Promise<{
+-  privateKey: string;
+-  publicKey: string;
+-}> {
+-  const secret = await derive("cashu-nutzap-v1");
++export async function deriveNutzapKey(): Promise<NutzapKey> {
++  return nutzapKeyFrom(await derive("cashu-nutzap-v1"));
++}
++
++function nutzapKeyFrom(secret: Uint8Array): NutzapKey {
+   let d = BigInt("0x" + bytesToHex(secret)) % CURVE_ORDER;
+   if (d === 0n) throw new Error("derived key out of range");
+   // BIP340 x-only keys stand for the even-Y point; negate d when its point is odd.
+@@ -49,3 +60,45 @@ export async function deriveNutzapKey(): Promise<{
+   const privateKey = d.toString(16).padStart(64, "0");
+   return { privateKey, publicKey: "02" + getPublicKey(hexToBytes(privateKey)) };
+ }
++
++/** The wallet's seed and nutzap key: derived through Keycast, or the own signer's backup. */
++export async function walletSecrets(): Promise<{
++  mnemonic: string;
++  nutzapKey: NutzapKey;
++}> {
++  if (!usesOwnSigner()) {
++    return {
++      mnemonic: await deriveWalletMnemonic(),
++      nutzapKey: await deriveNutzapKey(),
++    };
++  }
++  const session = getSession();
++  if (!session) throw new Error("not signed in");
++  const relay = await communityRelay();
++  const found = await fetchOne(relay, {
++    kinds: [BACKUP_KIND],
++    authors: [session.pubkey],
++    "#d": [BACKUP_D],
++  });
++  if (found) {
++    // A backup that cannot be read is never replaced: that would lose the tokens on its seed.
++    const data = JSON.parse(await decryptFromSelf(found.content));
++    if (!validateMnemonic(data.mnemonic, wordlist) || !/^[0-9a-f]{64}$/.test(data.nutzap))
++      throw new Error("The wallet backup on the relay is damaged.");
++    return { mnemonic: data.mnemonic, nutzapKey: nutzapKeyFrom(hexToBytes(data.nutzap)) };
++  }
++  const mnemonic = entropyToMnemonic(crypto.getRandomValues(new Uint8Array(16)), wordlist);
++  const nutzapKey = nutzapKeyFrom(crypto.getRandomValues(new Uint8Array(32)));
++  const content = await encryptToSelf(
++    JSON.stringify({ v: 1, mnemonic, nutzap: nutzapKey.privateKey })
++  );
++  await relay.publish(
++    await signEvent({
++      kind: BACKUP_KIND,
++      created_at: Math.floor(Date.now() / 1000),
++      tags: [["d", BACKUP_D]],
++      content,
++    })
++  );
++  return { mnemonic, nutzapKey };
++}
+diff --git a/src/belfry/nutzap.ts b/src/belfry/nutzap.ts
+index d0edea6..38bc91e 100644
+--- a/src/belfry/nutzap.ts
++++ b/src/belfry/nutzap.ts
+@@ -4,26 +4,19 @@
+ //   with its unit, and the nutzap key (derived from the Nostr key, see keys.ts).
+ // - kind 9321 carries tokens P2PK-locked to the recipient's 10019 key; the wallet redeems the
+ //   ones addressed to the participant and remembers which it has seen.
+-// The community relay only talks to whitelisted pubkeys after NIP-42 AUTH, which Keycast signs.
++// The community relay only talks to whitelisted pubkeys after NIP-42 AUTH, which Keycast signs
++// (or the participant's own signer, sso.ts).
+ 
+ import { Relay } from "nostr-tools";
+-import type { Event, EventTemplate, VerifiedEvent } from "nostr-tools";
++import type { Event } from "nostr-tools";
+ import { getEncodedToken } from "@cashu/cashu-ts";
+-import { rpc, getSession } from "./sso";
++import { getSession, signEvent as sign } from "./sso";
+ import { VILLAGE_MINT_URL, VILLAGE_UNIT } from "./village";
+ 
+ export const COMMUNITY_RELAY =
+   (process.env.BELFRY_COMMUNITY_RELAY as string) || "";
+ const SEEN_KEY = "belfry.nutzaps.seen";
+ 
+-async function sign(template: EventTemplate): Promise<VerifiedEvent> {
+-  const session = getSession();
+-  if (!session) throw new Error("not signed in");
+-  return (await rpc("sign_event", [
+-    { ...template, pubkey: session.pubkey },
+-  ])) as VerifiedEvent;
+-}
+-
+ let relayPromise: Promise<Relay> | null = null;
+ 
+ /** The community relay, connected and authenticated (NIP-42). */
+@@ -47,7 +40,7 @@ export function communityRelay(): Promise<Relay> {
+   return relayPromise;
+ }
+ 
+-async function fetchOne(
++export async function fetchOne(
+   relay: Relay,
+   filter: Record<string, unknown>
+ ): Promise<Event | null> {
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+index 86561b9..1ffe882 100644
+--- a/src/belfry/sso.ts
++++ b/src/belfry/sso.ts
+@@ -5,6 +5,12 @@
+ // Keycast over HTTP RPC: get_public_key, sign_event (kind 10019, 9321, NIP-42 AUTH) and
+ // derive_secret (Keycast patch 0011) for the wallet seed and the nutzap key. On load the wallet
+ // tries a silent sign-in once per tab (prompt=none), like the chat and the calendar.
++//
++// A participant who holds their own key (joined with it, or moved to it) signs in with their own
++// signer instead: a NIP-07 browser extension signs and encrypts, and the wallet's seed and nutzap
++// key come from an encrypted backup on the community relay (keys.ts), since nothing derives them.
++
++import type { EventTemplate, VerifiedEvent } from "nostr-tools";
+ 
+ const KEYCAST_URL = ((process.env.BELFRY_KEYCAST_URL as string) || "").replace(
+   /\/+$/,
+@@ -16,6 +22,7 @@ const CALLBACK_PATH = "/oauth/callback";
+ const FLOW_KEY = "belfry-sso-flow";
+ const TRIED_KEY = "belfry-sso-silent-tried";
+ const SESSION_KEY = "belfry.session";
++const SELF_CUSTODY_KEY = "belfry-sso-self-custody";
+ /** Fired on window when a sign-in finished (components mounted before it update). */
+ export const SESSION_EVENT = "belfry:session";
+ 
+@@ -30,7 +37,19 @@ export type Session = {
+   pubkey: string;
+   accessToken: string;
+   refreshToken: string;
++  /** "nip07": the participant's own signer (browser extension); absent: Keycast. */
++  signer?: "nip07";
++};
++
++type Nip07 = {
++  getPublicKey(): Promise<string>;
++  signEvent(event: EventTemplate & { pubkey?: string }): Promise<VerifiedEvent>;
++  nip44?: {
++    encrypt(pubkey: string, plaintext: string): Promise<string>;
++    decrypt(pubkey: string, ciphertext: string): Promise<string>;
++  };
+ };
++const nip07 = () => (window as unknown as { nostr?: Nip07 }).nostr;
+ 
+ export const ssoEnabled = () => Boolean(KEYCAST_URL);
+ export const isSsoCallback = () => window.location.pathname === CALLBACK_PATH;
+@@ -139,6 +158,9 @@ export async function finishSignIn(): Promise<Session | null> {
+     flow = undefined;
+   }
+   window.history.replaceState(null, "", flow?.returnTo || "/");
++  // Keycast answers this when the participant holds their own key (Keycast patch 0012)
++  if (params.get("error_description") === "self_custody")
++    tab.set(SELF_CUSTODY_KEY, "1");
+   if (!flow || params.get("state") !== flow.state || params.get("error"))
+     return null;
+   const code = params.get("code");
+@@ -187,6 +209,65 @@ async function refresh(session: Session): Promise<boolean> {
+   return true;
+ }
+ 
++/** A NIP-07 signer extension is in this browser. */
++export const hasOwnSigner = () => typeof nip07()?.signEvent === "function";
++/** Signed in with the participant's own signer. */
++export const usesOwnSigner = () => getSession()?.signer === "nip07";
++/** Keycast told us (on a sign-in attempt) that the participant holds their own key. */
++export const toldSelfCustody = () => tab.get(SELF_CUSTODY_KEY) === "1";
++
++/** Signs in with the browser's signer extension: the session is just its public key. */
++export async function signInWithOwnSigner(): Promise<Session> {
++  const signer = nip07();
++  if (!signer) throw new Error("No Nostr signer extension in this browser.");
++  if (!signer.nip44)
++    throw new Error("Your signer cannot encrypt (NIP-44), which the wallet needs.");
++  const pubkey = await signer.getPublicKey();
++  if (!/^[0-9a-f]{64}$/.test(pubkey))
++    throw new Error("Your signer did not share a public key.");
++  const session: Session = {
++    pubkey,
++    accessToken: "",
++    refreshToken: "",
++    signer: "nip07",
++  };
++  setSession(session);
++  window.dispatchEvent(new Event(SESSION_EVENT));
++  return session;
++}
++
++/** Signs an event as the participant: with their own signer, or through Keycast. */
++export async function signEvent(template: EventTemplate): Promise<VerifiedEvent> {
++  const session = getSession();
++  if (!session) throw new Error("not signed in");
++  if (session.signer === "nip07") {
++    const signer = nip07();
++    if (!signer) throw new Error("Your signer extension is not available.");
++    const signed = await signer.signEvent({ ...template, pubkey: session.pubkey });
++    if (signed.pubkey !== session.pubkey)
++      throw new Error("Your signer signed with another key.");
++    return signed;
++  }
++  return (await rpc("sign_event", [
++    { ...template, pubkey: session.pubkey },
++  ])) as VerifiedEvent;
++}
++
++/** NIP-44 to the participant's own key, with their own signer (the wallet backup, keys.ts). */
++export async function encryptToSelf(plaintext: string): Promise<string> {
++  const session = getSession();
++  const signer = nip07();
++  if (!session || !signer?.nip44) throw new Error("Your signer cannot encrypt (NIP-44).");
++  return signer.nip44.encrypt(session.pubkey, plaintext);
++}
++
++export async function decryptFromSelf(ciphertext: string): Promise<string> {
++  const session = getSession();
++  const signer = nip07();
++  if (!session || !signer?.nip44) throw new Error("Your signer cannot decrypt (NIP-44).");
++  return signer.nip44.decrypt(session.pubkey, ciphertext);
++}
++
+ /** Keycast HTTP RPC with the session's access token; refreshes it once on 401. */
+ export async function rpc(method: string, params: unknown[]): Promise<unknown> {
+   for (let attempt = 0; attempt < 2; attempt++) {
+@@ -215,7 +296,8 @@ export async function prepareLogout(returnTo: string) {
+   const session = getSession();
+   setSession(null);
+   tab.set(TRIED_KEY, "1");
+-  if (!ssoEnabled()) return returnTo;
++  // the own signer has no session at Keycast to end
++  if (!ssoEnabled() || session?.signer === "nip07") return returnTo;
+   if (session?.refreshToken) {
+     try {
+       await fetch(KEYCAST_URL + "/api/oauth/revoke", {
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index 5fba3bf..31f92e1 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -15,7 +15,7 @@ import { useReceiveTokensStore } from "src/stores/receiveTokensStore";
+ import { useTokensStore } from "src/stores/tokens";
+ import { notifySuccess } from "src/js/notify";
+ import { getSession } from "./sso";
+-import { deriveWalletMnemonic, deriveNutzapKey } from "./keys";
++import { walletSecrets } from "./keys";
+ import {
+   announceNutzapInfo,
+   listenForNutzaps,
+@@ -85,11 +85,11 @@ const asProofs = (proofs: { amount: number; [k: string]: any }[]): Proof[] =>
+     amount: Amount.from(amount),
+   }));
+ 
+-/** Moves the wallet onto the seed derived from the Nostr key. Tokens it holds are swapped onto
+- *  the new seed (so they can be restored elsewhere); a fresh wallet restores from the mint. */
+-async function adoptDerivedSeed() {
++/** Moves the wallet onto the account's seed (derived from the Nostr key, or the own signer's
++ *  backup). Tokens it holds are swapped onto that seed (so they can be restored elsewhere); a
++ *  fresh wallet restores from the mint. */
++async function adoptSeed(mnemonic: string) {
+   const walletStore = useWalletStore();
+-  const mnemonic = await deriveWalletMnemonic();
+   if (walletStore.mnemonic === mnemonic) return;
+   const held = heldProofs().filter((p) => !p.reserved);
+   walletStore.oldMnemonicCounters.push({
+@@ -119,7 +119,7 @@ async function adoptDerivedSeed() {
+     } catch (e) {
+       // the swap did not happen: the old proofs are still good
+       await proofsStore.addProofs(held);
+-      console.warn("Could not move the tokens onto the derived seed", e);
++      console.warn("Could not move the tokens onto the account's seed", e);
+     }
+   } else {
+     const restore = useRestoreStore();
+@@ -139,15 +139,15 @@ async function receiveQuietly(token: string) {
+ 
+ let connected = false;
+ 
+-/** After signing in (and on every load while signed in): derived seed, nutzap key, 10019,
+- *  incoming nutzaps. */
++/** After signing in (and on every load while signed in): the account's seed and nutzap key,
++ *  10019, incoming nutzaps. */
+ export async function connectVillageAccount() {
+   if (connected || !villageEnabled() || !getSession()) return;
+   connected = true;
+   try {
+     await ensureVillageMint();
+-    await adoptDerivedSeed();
+-    const key = await deriveNutzapKey();
++    const { mnemonic, nutzapKey: key } = await walletSecrets();
++    await adoptSeed(mnemonic);
+     const p2pk = useP2PKStore();
+     if (!p2pk.haveThisKey(key.publicKey)) {
+       p2pk.p2pkKeys = p2pk.p2pkKeys.concat({
+diff --git a/src/components/belfry/VillageCard.vue b/src/components/belfry/VillageCard.vue
+index 678bb22..ce00f88 100644
+--- a/src/components/belfry/VillageCard.vue
++++ b/src/components/belfry/VillageCard.vue
+@@ -6,7 +6,11 @@
+         Sign in to keep your tokens on every device and to receive tokens from
+         other participants.
+       </div>
++      <div v-if="selfCustody" class="text-body2 q-mb-sm">
++        You hold your own Nostr key, so the wallet signs in with your own signer.
++      </div>
+       <q-btn
++        v-if="!selfCustody"
+         rounded
+         unelevated
+         color="primary"
+@@ -15,11 +19,27 @@
+         label="Sign in with Open Source Village"
+         @click="signIn"
+       />
++      <q-btn
++        v-if="ownSignerAvailable"
++        rounded
++        :unelevated="selfCustody"
++        :outline="!selfCustody"
++        color="primary"
++        class="full-width q-mt-sm"
++        data-testid="village-own-signer"
++        label="Use your own signer"
++        @click="signInOwn"
++      />
++      <div v-else-if="selfCustody" class="text-caption q-mt-sm">
++        Open the wallet in a browser with your Nostr signer extension.
++      </div>
++      <div v-if="signInError" class="text-warning q-mt-sm">{{ signInError }}</div>
+     </template>
+     <template v-else>
+       <div class="row items-center no-wrap">
+         <div class="col text-body2">
+-          Signed in<span v-if="ready"> · others can send you tokens</span>
++          Signed in<span v-if="ownSigner"> with your own signer</span
++          ><span v-if="ready"> · others can send you tokens</span>
+           <span v-else-if="error" class="text-warning"> · {{ error }}</span>
+           <span v-else> · setting up…</span>
+         </div>
+@@ -93,6 +113,10 @@ import {
+   getSession,
+   startSignIn,
+   prepareLogout,
++  hasOwnSigner,
++  usesOwnSigner,
++  toldSelfCustody,
++  signInWithOwnSigner,
+   SESSION_EVENT,
+ } from "src/belfry/sso";
+ import {
+@@ -158,6 +182,11 @@ export default defineComponent({
+   data() {
+     return {
+       signedIn: Boolean(getSession()),
++      ownSigner: usesOwnSigner(),
++      // extensions inject window.nostr after the page loaded: checked again on mount
++      ownSignerAvailable: hasOwnSigner(),
++      selfCustody: toldSelfCustody(),
++      signInError: "",
+       ready: false,
+       error: "",
+       showSend: false,
+@@ -180,6 +209,7 @@ export default defineComponent({
+   },
+   async mounted() {
+     window.addEventListener(SESSION_EVENT, this.onSession);
++    setTimeout(() => (this.ownSignerAvailable = hasOwnSigner()), 500);
+     if (this.signedIn) await this.connect();
+   },
+   beforeUnmount() {
+@@ -188,6 +218,7 @@ export default defineComponent({
+   methods: {
+     async onSession() {
+       this.signedIn = Boolean(getSession());
++      this.ownSigner = usesOwnSigner();
+       if (this.signedIn) await this.connect();
+     },
+     async connect() {
+@@ -211,6 +242,14 @@ export default defineComponent({
+     signIn() {
+       startSignIn(false);
+     },
++    async signInOwn() {
++      this.signInError = "";
++      try {
++        await signInWithOwnSigner();
++      } catch (e: any) {
++        this.signInError = e?.message || String(e);
++      }
++    },
+     async signOut() {
+       window.location.href = await prepareLogout("/");
+     },
+-- 
+2.53.0
+

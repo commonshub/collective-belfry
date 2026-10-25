@@ -1,10 +1,11 @@
 # Village token wallet
 
 The Open Source Village wallet at `wallet.<domain>`: [cashu.me](https://github.com/cashubtc/cashu.me)
-(MIT, Vue/Quasar PWA) at commit `002a0a36` plus six Belfry patches, built with the village mint
+(MIT, Vue/Quasar PWA) at commit `002a0a36` plus seven Belfry patches, built with the village mint
 (`infra/mint/`) and served by Caddy. Village tokens have no monetary value; every pass brings 50 per
 pass day. Participants send them to each other as nutzaps (NIP-61), and the wallet's keys derive
-from the participant's Nostr key, so it restores on any device after signing in.
+from the participant's Nostr key, so it restores on any device after signing in. Participants who
+hold their own key sign in with their own signer instead (patch 0007).
 
 | Patch | What it does |
 | --- | --- |
@@ -14,6 +15,7 @@ from the participant's Nostr key, so it restores on any device after signing in.
 | `0004-…` | A pay request's `ref` may also be an event id (64 hex): the nutzap names it in an `e` tag (NIP-61), so the photos app sees tips for a picture. |
 | `0005-…` | Receive and Send fit narrow phones (and Android's larger text): below 400px they drop upstream's 140px minimum and margins and leave room for the scan button, instead of running off both screen edges. |
 | `0006-…` | Geist, self-hosted from `brand/` (the image build copies it to `/belfry/` and `brand.mjs` links it), instead of Inter from Google Fonts, which the deployment's CSP blocks. |
+| `0007-…` | The participant's own signer, for those who joined with their own key or moved to it: "Use your own signer" (a NIP-07 browser extension with NIP-44) next to "Sign in with Open Source Village", which Keycast answers with `self_custody` for them (the card then says so). Nothing derives the wallet's keys from an own key, so the wallet makes a random seed and nutzap key once and keeps them on the community relay as kind 30078 (`d` = `osv-wallet`), the content NIP-44-encrypted to the participant's own key; another device signed in with the same signer reads it back (a backup it cannot read is never replaced). Signing (NIP-42 AUTH, 10019, 9321) goes to the extension; sign out only forgets the session. |
 
 `brand.mjs` (run by the Dockerfile) sets the PWA name "Open Source Village wallet"/"Wallet", the
 colours, the home-screen icons (`brand/apps/wallet-*`, from `brand/make-app-icons.py`) and the app bar
@@ -42,4 +44,6 @@ npx quasar build -m pwa` (the build runs ESLint with errors on).
 
 Checks: smoke step 6o (the wallet client signs in silently; `derive_secret` gives it a stable seed
 secret and a separate nutzap secret, refuses other purposes, and refuses the chat client), step 8c
-(the token bundle a wallet redeems); in a browser, `infra/scripts/wallet-check.mjs`.
+(the token bundle a wallet redeems); in a browser, `infra/scripts/wallet-check.mjs`, and for an own
+key `infra/scripts/wallet-own-signer-check.mjs` (a stand-in NIP-07 extension signing in the
+onboarding container; `SMOKE_KEEP_PASS=1 SAVE_OWN_KEY=<file> make smoke` gives it a participant).

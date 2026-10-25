@@ -478,9 +478,17 @@ derived key and could move to their own key only after activation (§3s self-cus
   key, key whitelisted), 172 ok / 0 failed; the page in headless Chromium with a stand-in NIP-07
   signer: key shown as npub, signed on submit, on to the payment page.
 
-Open: only NIP-07 extensions on the invite page (no bunker or phone signer; those join with a
-managed key and move later); the village wallet has no own-key mode yet, so tokens of such a
-participant wait in the token link until the wallet can sign in with their signer.
+- [x] Wallet patch 0007: "Use your own signer" (NIP-07 with NIP-44). The seed and the nutzap key
+  cannot derive from an own key, so the wallet makes them once and keeps them on the community
+  relay as kind 30078 (`d` = `osv-wallet`), NIP-44-encrypted to the participant's key; another
+  device reads them back. Checked with `infra/scripts/wallet-own-signer-check.mjs` (a stand-in
+  extension signing in the onboarding container): sign-in, the pass's 350 tokens received, a second
+  browser profile with the same seed and the tokens restored from the mint, nutzaps in both
+  directions with a managed participant. `wallet-check.mjs` (managed key) unchanged.
+
+Open: only NIP-07 extensions, on the invite page and in the wallet (no bunker or phone signer;
+those join with a managed key and move later); the other apps' own-signer sign-in was there
+before (§3s) and was not re-tested with a participant who joined with their key.
 
 ## 4. Next
 
