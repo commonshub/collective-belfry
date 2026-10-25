@@ -16,7 +16,7 @@ metadata:
 context:
   redirect_uri: !Env [BELFRY_STEWARD_REDIRECT_URI, "http://localhost:8100/steward/callback"]
   steward_url: !Env [BELFRY_STEWARD_URL, "http://localhost:8100/steward"]
-  client_secret: !File [/run/secrets/steward_oidc_client_secret, "placeholder-set-STEWARD_OIDC_CLIENT_SECRET"]
+  client_secret: !File /run/secrets/steward_oidc_client_secret
 entries:
   - model: authentik_core.group
     id: belfry-stewards

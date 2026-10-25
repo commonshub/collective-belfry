@@ -16,7 +16,7 @@ context:
   bridge_public: !Env [BELFRY_BRIDGE_PUBLIC_URL, "http://localhost:8100/bridge"]
   bridge_internal: !Env [BELFRY_BRIDGE_INTERNAL_URL, "http://onboarding:8100/bridge"]
   bridge_client_id: belfry-authentik
-  bridge_client_secret: !File [/run/secrets/bridge_client_secret, "placeholder-set-BRIDGE_CLIENT_SECRET"]
+  bridge_client_secret: !File /run/secrets/bridge_client_secret
 entries:
   # 1. Group that activated participants are added to. Users get path belfry/participants.
   - model: authentik_core.group

@@ -13,7 +13,7 @@ metadata:
     blueprints.goauthentik.io/description: "Issuer2 login for authorization-code pass offers (participants)"
 context:
   redirect_uri: !Env [BELFRY_ISSUER_REDIRECT_URI, "http://localhost:7005/openid4vci/external/oauth/callback"]
-  client_secret: !File [/run/secrets/issuer_oidc_client_secret, "placeholder-set-ISSUER_OIDC_CLIENT_SECRET"]
+  client_secret: !File /run/secrets/issuer_oidc_client_secret
 entries:
   # belfry-participants is created by the pass-bridge source blueprint.
   - model: authentik_blueprints.metaapplyblueprint

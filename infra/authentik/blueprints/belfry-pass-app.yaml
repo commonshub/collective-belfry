@@ -12,7 +12,7 @@ metadata:
 context:
   redirect_uri: !Env [BELFRY_PASS_PAGE_REDIRECT_URI, "http://localhost:8100/me/callback"]
   pass_url: !Env [BELFRY_PASS_PAGE_URL, "http://localhost:8100/me"]
-  client_secret: !File [/run/secrets/pass_page_oidc_client_secret, "placeholder-set-PASS_PAGE_OIDC_CLIENT_SECRET"]
+  client_secret: !File /run/secrets/pass_page_oidc_client_secret
 entries:
   - model: authentik_providers_oauth2.oauth2provider
     id: belfry-pass-oidc
