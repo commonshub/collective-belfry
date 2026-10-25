@@ -2,7 +2,8 @@
 //
 //   1. A opens the wallet with their Authentik session (COOKIE_JAR): silent sign-in, the seed and
 //      the nutzap key derive from A's Nostr key, kind 10019 is published ("others can send you
-//      tokens"); a token link (TOKEN=cashuB…, e.g. from the pass's tokens page) is received.
+//      tokens"); with PASS_TOKENS=<n> the pass's n tokens come in on their own (and only once);
+//      a token link (TOKEN=cashuB…, e.g. from the pass's tokens page) is received.
 //   2. With SECOND_JAR (B's Authentik session) and SECOND_PUB (B's pubkey hex): B opens the
 //      wallet too, A sends B 5 tokens with "Send to a participant" (a NIP-61 nutzap), and B's
 //      wallet redeems it.
@@ -110,6 +111,21 @@ async function openSignedIn(name, jar) {
 try {
   const a = await openSignedIn("A", process.env.COOKIE_JAR)
   await a.shot("signed-in")
+  if (process.env.PASS_TOKENS) {
+    // the pass's tokens come in on sign-in, without the token link (patch 0008)
+    await a.waitFor(`document.body.innerText.includes("Your pass brought ${process.env.PASS_TOKENS} tokens")`, 30000, "the pass's tokens")
+    await sleep(1500)
+    const got = await balance(a)
+    if (got !== Number(process.env.PASS_TOKENS)) throw new Error(`balance ${got} after the pass's tokens, expected ${process.env.PASS_TOKENS}`)
+    console.log(`  ok   A: the pass's ${got} tokens arrived on sign-in`)
+    // and only once: a reload brings nothing new
+    await a.send("Page.navigate", {url: walletUrl})
+    await a.waitFor(READY, 60000, "the signed-in card after a reload")
+    await sleep(4000)
+    if ((await text(a)).includes("Your pass brought") || (await balance(a)) !== got) throw new Error("the pass's tokens came in twice")
+    console.log("  ok   A: not again after a reload")
+    await a.shot("pass-tokens")
+  }
   if (process.env.TOKEN) {
     const before = (await balance(a)) ?? 0
     // a token link opens the wallet fresh (cashu.me reads the hash once, when it loads)

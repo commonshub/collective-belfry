@@ -100,7 +100,7 @@
 	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
 	error @internal 404
 	import admin_only /steward /steward/*
-	import limit {args[0]}-claim 120 1m /claim/* /tokens/*
+	import limit {args[0]}-claim 120 1m /claim/* /tokens/* /wallet/*
 	import limit {args[0]}-me 120 1m /me/login /me/callback /me/invites /me/invites/*
 	import limit {args[0]}-check 600 1m /check/*
 	import limit {args[0]}-bridge 1200 1m /bridge/*
@@ -202,7 +202,7 @@ mint.{$BELFRY_DOMAIN} {
 wallet.{$BELFRY_DOMAIN} {
 	import security
 	# one inline script (brand.mjs: the dark background before the app loads)
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy wallet:80
 }
 

@@ -35,6 +35,7 @@ from . import (
     programme,
     reports,
     steward,
+    wallet_tokens,
 )
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
@@ -131,6 +132,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
     feedback.register(app)  # /feedback: participants' and testers' feedback (feedback.py)
+    wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.

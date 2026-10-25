@@ -253,3 +253,68 @@ def test_tokens_page(mint_services, odoo, mint, client):
     assert "are in a wallet" in r.text and p["cashu_token"] not in r.text
 
     assert client.get("/tokens/not-a-real-claim-token").status_code == 404
+
+
+# -- the wallet fetches the pass's tokens (/wallet/pass-tokens) -----------------------------------
+
+
+def nip98(key: PrivateKey, url: str, method: str = "GET", **over) -> str:
+    import base64
+    import json
+    import time
+
+    from belfry_onboarding.blossom import event_id
+
+    event = {
+        "pubkey": key.public_key_xonly.format().hex(),
+        "created_at": over.pop("created_at", int(time.time())),
+        "kind": over.pop("kind", 27235),
+        "tags": [["u", url], ["method", method]],
+        "content": "",
+    }
+    event["id"] = event_id(event)
+    event["sig"] = key.sign_schnorr(bytes.fromhex(event["id"])).hex()
+    event.update(over)
+    return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()
+
+
+def test_wallet_gets_the_pass_tokens_once(mint_services, odoo, mint, client):
+    mint_services.settings.public_url = "https://pass.belfry.test"
+    mint_services.settings.wallet_public_url = "https://wallet.belfry.test"
+    ids = seed_paid_invoice(odoo, tier="day")
+    core.activate_pass(mint_services, ids["invoice"])
+    p = next(p for p in odoo.tables["belfry.pass"].values() if p["invoice_id"] == ids["invoice"])
+    key = PrivateKey()
+    p["keycast_pubkey"] = key.public_key_xonly.format().hex()
+    url = "https://pass.belfry.test/wallet/pass-tokens"
+
+    r = client.get("/wallet/pass-tokens", headers={"Authorization": nip98(key, url)})
+    assert r.status_code == 200
+    assert r.json() == {"tokens": [{"amount": 50, "token": p["cashu_token"]}]}
+    assert r.headers["access-control-allow-origin"] == "https://wallet.belfry.test"
+    pre = client.options("/wallet/pass-tokens")
+    assert pre.status_code == 204 and "Authorization" in pre.headers["access-control-allow-headers"]
+
+    # someone else's key gets nothing
+    other = client.get("/wallet/pass-tokens", headers={"Authorization": nip98(PrivateKey(), url)})
+    assert other.json() == {"tokens": []}
+
+    # once redeemed, nothing comes back
+    mint.spent.update(x.y for x in decode_token(p["cashu_token"])[2])
+    r = client.get("/wallet/pass-tokens", headers={"Authorization": nip98(key, url)})
+    assert r.json() == {"tokens": []}
+
+
+def test_wallet_pass_tokens_needs_a_fresh_signed_request(mint_services, odoo, mint, client):
+    mint_services.settings.public_url = "https://pass.belfry.test"
+    key = PrivateKey()
+    url = "https://pass.belfry.test/wallet/pass-tokens"
+    assert client.get("/wallet/pass-tokens").status_code == 401
+    for auth in (
+        nip98(key, "https://evil.test/wallet/pass-tokens"),  # another URL
+        nip98(key, url, method="POST"),  # another method
+        nip98(key, url, created_at=1_000_000_000),  # replayed
+        nip98(key, url, kind=1),  # not NIP-98
+        nip98(key, url, sig="00" * 64),  # forged
+    ):
+        assert client.get("/wallet/pass-tokens", headers={"Authorization": auth}).status_code == 401

@@ -23,12 +23,14 @@ COPY infra/apps/wallet/brand.mjs /tmp/brand.mjs
 ARG BELFRY_MINT_URL=http://localhost:3338
 ARG BELFRY_KEYCAST_URL=http://localhost:3000
 ARG BELFRY_COMMUNITY_RELAY=ws://localhost:3090
+# The onboarding service: the pass's tokens after signing in (GET /wallet/pass-tokens).
+ARG BELFRY_PASS_URL=http://localhost:8100
 # The app bar: home link (Keycast's apps page) and the other apps (Name|URL|Description;...).
 ARG APPS_URL=http://localhost:3000
 ARG COMMUNITY_APPS=""
 RUN node /tmp/brand.mjs "$APPS_URL" "$COMMUNITY_APPS"
 ENV BELFRY_MINT_URL=$BELFRY_MINT_URL BELFRY_KEYCAST_URL=$BELFRY_KEYCAST_URL \
-    BELFRY_COMMUNITY_RELAY=$BELFRY_COMMUNITY_RELAY
+    BELFRY_COMMUNITY_RELAY=$BELFRY_COMMUNITY_RELAY BELFRY_PASS_URL=$BELFRY_PASS_URL
 RUN npx quasar build -m pwa
 
 FROM caddy:2-alpine

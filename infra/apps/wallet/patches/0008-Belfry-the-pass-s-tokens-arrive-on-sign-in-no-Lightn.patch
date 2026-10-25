@@ -1,0 +1,139 @@
+From e6ee664208eb18c89684e0ecf294483c40d7ecaa Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sun, 25 Oct 2026 17:06:26 +0100
+Subject: [PATCH 8/8] Belfry: the pass's tokens arrive on sign-in; no Lightning
+ address or Nostr settings
+
+After signing in, the wallet asks the onboarding service (BELFRY_PASS_URL, GET
+/wallet/pass-tokens, NIP-98 signed with the participant's key) for the tokens of their active
+passes and redeems them, so a participant who never opened the separate "Get your tokens" link
+no longer sees 0 tokens. The settings drop cashu.me's Lightning address (npub.cash), its Nostr
+keys, relays and web of trust, Nostr Wallet Connect and Nostr payment requests: village tokens
+have no Lightning side and the wallet's Nostr identity is the participant's sign-in.
+---
+ quasar.config.js                    |  1 +
+ src/belfry/village.ts               | 38 ++++++++++++++++++++++++++++-
+ src/pages/settings/SettingsPage.vue | 18 ++++++++++++++
+ 3 files changed, 56 insertions(+), 1 deletion(-)
+
+diff --git a/quasar.config.js b/quasar.config.js
+index 58ed44d..f3d773c 100644
+--- a/quasar.config.js
++++ b/quasar.config.js
+@@ -82,6 +82,7 @@ module.exports = configure(function (/* ctx */) {
+         BELFRY_MINT_URL: process.env.BELFRY_MINT_URL || "",
+         BELFRY_KEYCAST_URL: process.env.BELFRY_KEYCAST_URL || "",
+         BELFRY_COMMUNITY_RELAY: process.env.BELFRY_COMMUNITY_RELAY || "",
++        BELFRY_PASS_URL: process.env.BELFRY_PASS_URL || "",
+       },
+       // rawDefine: {}
+       // ignorePublicFolder: true,
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index 31f92e1..c0d3302 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -14,7 +14,7 @@ import { useRestoreStore } from "src/stores/restore";
+ import { useReceiveTokensStore } from "src/stores/receiveTokensStore";
+ import { useTokensStore } from "src/stores/tokens";
+ import { notifySuccess } from "src/js/notify";
+-import { getSession } from "./sso";
++import { getSession, signEvent } from "./sso";
+ import { walletSecrets } from "./keys";
+ import {
+   announceNutzapInfo,
+@@ -31,6 +31,10 @@ export const VILLAGE_UNIT = "osv";
+ 
+ export const villageEnabled = () => Boolean(VILLAGE_MINT_URL);
+ 
++// The onboarding service (pass.<domain>), which holds each pass's token bundle until a wallet
++// redeems it.
++const PASS_URL = (process.env.BELFRY_PASS_URL || "").replace(/\/+$/, "");
++
+ /** Marks the onboarding as done; call before the wallet page decides whether to show it. */
+ export function skipOnboarding() {
+   if (!villageEnabled()) return;
+@@ -157,6 +161,10 @@ export async function connectVillageAccount() {
+       });
+     }
+     await announceNutzapInfo(key.publicKey);
++    // Not fatal: the tokens stay on the pass and come in on the next sign-in or load.
++    claimPassTokens().catch((e) =>
++      console.warn("Could not fetch the pass's tokens", e)
++    );
+     await listenForNutzaps(async (token, _from, amount, _comment, proofs) => {
+       // On a new device old nutzaps come in again: skip the ones already redeemed.
+       const wallet = await useWalletStore().mintWallet(
+@@ -176,6 +184,34 @@ export async function connectVillageAccount() {
+   }
+ }
+ 
++/** The tokens a pass brings (50 per pass day), minted at activation and kept on the pass until a
++ *  wallet redeems them: asked for with a NIP-98 signature of the participant's key, so they land
++ *  in this wallet without the separate "Get your tokens" link. Nothing comes back once redeemed. */
++export async function claimPassTokens() {
++  if (!PASS_URL) return;
++  const url = `${PASS_URL}/wallet/pass-tokens`;
++  const auth = await signEvent({
++    kind: 27235,
++    created_at: Math.floor(Date.now() / 1000),
++    tags: [
++      ["u", url],
++      ["method", "GET"],
++    ],
++    content: "",
++  });
++  const response = await fetch(url, {
++    headers: { Authorization: `Nostr ${btoa(JSON.stringify(auth))}` },
++  });
++  if (!response.ok) throw new Error(`pass tokens: HTTP ${response.status}`);
++  const { tokens } = (await response.json()) as {
++    tokens: { token: string; amount: number }[];
++  };
++  for (const { token, amount } of tokens || []) {
++    await receiveQuietly(token);
++    notifySuccess(`Your pass brought ${formatTokens(amount)}`);
++  }
++}
++
+ /** Sends `amount` tokens to a participant (hex pubkey) as a nutzap. */
+ export async function sendToParticipant(
+   pubkey: string,
+diff --git a/src/pages/settings/SettingsPage.vue b/src/pages/settings/SettingsPage.vue
+index f101e49..a417d40 100644
+--- a/src/pages/settings/SettingsPage.vue
++++ b/src/pages/settings/SettingsPage.vue
+@@ -39,6 +39,17 @@ import { defineComponent, markRaw } from "vue";
+ import { mapState } from "pinia";
+ import { useUiStore } from "src/stores/ui";
+ import SettingsPageShell from "./SettingsPageShell.vue";
++import { villageEnabled } from "src/belfry/village";
++
++// Belfry: village tokens have no Lightning side, and the wallet's Nostr identity is the
++// participant's sign-in, so cashu.me's Lightning address (npub.cash), Nostr keys and relays
++// (with its web of trust), Nostr Wallet Connect and Nostr payment requests are not offered.
++const VILLAGE_HIDDEN = new Set([
++  "lightning_address",
++  "nostr",
++  "nwc",
++  "payment_requests",
++]);
+ import {
+   Vault as VaultIcon,
+   AtSign as AtSignIcon,
+@@ -162,6 +173,13 @@ export default defineComponent({
+           ],
+         },
+       ];
++      if (villageEnabled()) {
++        for (const group of groups) {
++          group.entries = group.entries.filter(
++            (entry) => !VILLAGE_HIDDEN.has(entry.key)
++          );
++        }
++      }
+       return groups.filter((group) => group.entries.length > 0);
+     },
+   },
+-- 
+2.53.0
+
