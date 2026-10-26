@@ -841,12 +841,6 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
             "belfry_key_custody",
         ],
     )[0]
-    member_number = _ensure_member_number(svc, partner)
-    own_pubkey = own_key_of(pass_row)
-    # Belfry signs nothing for a participant who holds their own key (joined with it, or moved to
-    # it with an earlier pass): no profile, no relay or follow lists.
-    own_custody = bool(own_pubkey) or partner.get("belfry_key_custody") == "self"
-
     tier = pass_row.get("tier")
     duration_days: int | None = None
     if not tier:
@@ -869,7 +863,35 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
         or today()
     )
     date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
+    extra: dict[str, Any] = {}
+    if tx:
+        extra["transaction_id"] = tx["id"]
+        extra["stripe_payment_intent"] = tx["provider_reference"]
+    if not pass_row.get("tier"):
+        extra["tier"] = tier
+    return _finish_activation(
+        svc, pass_row, partner, tier, duration_days, date_start, date_end, extra
+    )
 
+
+def _finish_activation(
+    svc: Services,
+    pass_row: dict[str, Any],
+    partner: dict[str, Any],
+    tier: str,
+    duration_days: int | None,
+    date_start: dt.date,
+    date_end: dt.date,
+    extra: dict[str, Any],
+) -> str:
+    """Accounts, keys, sign-in link, tokens and the activating write, for a pass whose payment
+    (or, for volunteers, shifts) is settled. ``extra``: more pass fields for the same write."""
+    partner_id = partner["id"]
+    member_number = _ensure_member_number(svc, partner)
+    own_pubkey = own_key_of(pass_row)
+    # Belfry signs nothing for a participant who holds their own key (joined with it, or moved to
+    # it with an earlier pass): no profile, no relay or follow lists.
+    own_custody = bool(own_pubkey) or partner.get("belfry_key_custody") == "self"
     authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
     pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number, own_pubkey)
     if own_pubkey and pubkey != own_pubkey:
@@ -909,8 +931,7 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
         "credential_status_index": pass_row["id"],
         "state": "active",
     }
-    if not pass_row.get("tier"):
-        vals["tier"] = tier
+    vals.update(extra)
     # Tokens ride the same write, so the activation mail carries the tokens link.
     if not pass_row.get("cashu_amount"):
         vals.update(
@@ -920,9 +941,6 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
                 token_allowance(svc, tier, duration_days, date_start, date_end),
             )
         )
-    if tx:
-        vals["transaction_id"] = tx["id"]
-        vals["stripe_payment_intent"] = tx["provider_reference"]
     svc.odoo.write("belfry.pass", [pass_row["id"]], vals)
     log.info(
         "activate_pass: pass %s active for partner %s (%s), npub %s, %s..%s",

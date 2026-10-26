@@ -14,3 +14,7 @@ access_belfry_feedback_steward,belfry.feedback steward,model_belfry_feedback,gro
 access_belfry_feedback_admin,belfry.feedback admin,model_belfry_feedback,group_admin,1,1,1,1
 access_belfry_application_steward,belfry.application steward,model_belfry_application,group_steward,1,0,0,0
 access_belfry_application_admin,belfry.application admin,model_belfry_application,group_admin,1,1,1,0
+access_belfry_shift_steward,belfry.shift steward,model_belfry_shift,group_steward,1,0,0,0
+access_belfry_shift_admin,belfry.shift admin,model_belfry_shift,group_admin,1,1,1,1
+access_belfry_shift_signup_steward,belfry.shift.signup steward,model_belfry_shift_signup,group_steward,1,0,0,0
+access_belfry_shift_signup_admin,belfry.shift.signup admin,model_belfry_shift_signup,group_admin,1,1,1,1

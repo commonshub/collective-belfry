@@ -22,6 +22,7 @@ M2O: dict[str, set[str]] = {
     "belfry.invite": {"inviter_partner_id", "used_by_partner_id"},
     "belfry.feedback": {"partner_id"},
     "belfry.application": {"invite_id"},
+    "belfry.shift": set(),
     "belfry.report": {"reporter_pass_id", "target_pass_id"},
     "product.product": set(),
     "res.partner": set(),
@@ -30,6 +31,20 @@ UNIQUE: dict[str, list[str]] = {
     "belfry.pass": ["invoice_id", "stripe_payment_intent", "claim_token"],
     "belfry.stripe.event": ["event_id"],
     "res.partner": ["belfry_member_number"],
+}
+
+
+SHIFT_METHODS = {
+    "belfry_shift_board",
+    "belfry_shift_signup",
+    "belfry_shift_leave",
+    "belfry_steward_shift_create",
+    "belfry_steward_shift_cancel",
+    "belfry_steward_volunteers",
+    "belfry_steward_volunteer_add",
+    "belfry_application_volunteer",
+    "belfry_volunteer_by_token",
+    "belfry_volunteer_of_partner",
 }
 
 
@@ -130,6 +145,110 @@ class FakeOdoo(OdooApi):
             inv.setdefault("transaction_ids", [])
             if tx_id not in inv["transaction_ids"]:
                 inv["transaction_ids"].append(tx_id)
+
+    def _volunteer_info(self, p: dict[str, Any]) -> dict[str, Any]:
+        count = sum(
+            1 for sh in self.tables["belfry.shift"].values() if p["partner_id"] in sh["signups"]
+        )
+        return {
+            "pass_id": p["id"],
+            "partner_id": p["partner_id"],
+            "name": "Vic",
+            "state": p["state"],
+            "count": count,
+            "min_shifts": 3,
+            "change_hours": 48,
+            "date_start": p.get("date_start"),
+            "date_end": p.get("date_end"),
+        }
+
+    def _volunteer_pass(self, partner_id: int) -> dict[str, Any] | None:
+        return next(
+            (
+                p
+                for p in self.tables["belfry.pass"].values()
+                if p.get("tier") == "volunteer"
+                and p.get("partner_id") == partner_id
+                and p.get("state") in ("pending", "active")
+            ),
+            None,
+        )
+
+    def _shifts(self, method: str, args: list[Any]) -> Any:
+        """Odoo's models/belfry_volunteer.py, without overlaps and the leave deadline."""
+        shifts = self.tables["belfry.shift"]
+        if method == "belfry_shift_board":
+            me = args[0] if args else None
+            return [
+                {
+                    "id": i,
+                    "title": sh["name"],
+                    "description": "",
+                    "start": sh["start"],
+                    "end": sh["end"],
+                    "place": sh.get("place") or "",
+                    "capacity": sh["capacity"],
+                    "taken": len(sh["signups"]),
+                    "people": ["Vic"] * len(sh["signups"]),
+                    "mine": me in sh["signups"],
+                }
+                for i, sh in shifts.items()
+            ]
+        if method == "belfry_steward_shift_create":
+            return self.add("belfry.shift", **args[0], signups=[])
+        if method == "belfry_steward_shift_cancel":
+            for i in args[0]:
+                shifts.pop(i, None)
+            return True
+        if method == "belfry_steward_volunteers":
+            return [
+                self._volunteer_info(p) | {"email": "vic@example.org"}
+                for p in self.tables["belfry.pass"].values()
+                if p.get("tier") == "volunteer"
+            ]
+        if method in ("belfry_steward_volunteer_add", "belfry_application_volunteer"):
+            if method == "belfry_application_volunteer":
+                self.tables["belfry.application"][args[0][0]].update(
+                    state="invited", handled_by=args[1]
+                )
+                partner = self.add("res.partner", name="Vic", email="vic@example.org")
+            else:
+                partner = self.add("res.partner", name=args[0], email=args[1])
+            return self.add(
+                "belfry.pass",
+                partner_id=partner,
+                tier="volunteer",
+                state="pending",
+                volunteer_token=f"vol-{partner:04d}" + "x" * 30,
+            )
+        if method == "belfry_volunteer_by_token":
+            p = next(
+                (
+                    p
+                    for p in self.tables["belfry.pass"].values()
+                    if p.get("volunteer_token") == args[0]
+                ),
+                None,
+            )
+            return self._volunteer_info(p) if p else False
+        if method == "belfry_volunteer_of_partner":
+            p = self._volunteer_pass(args[0])
+            return self._volunteer_info(p) if p else False
+        p = self._volunteer_pass(args[0])
+        if p is None:
+            raise OdooError("Only volunteers can sign up for shifts.")
+        sh = shifts[args[1]]
+        if method == "belfry_shift_signup":
+            if len(sh["signups"]) >= sh["capacity"]:
+                raise OdooError("This shift is full.")
+            sh["signups"].append(args[0])
+            info = self._volunteer_info(p)
+            info["ready"] = p["state"] == "pending" and info["count"] >= 3
+            return info
+        sh["signups"].remove(args[0])
+        info = self._volunteer_info(p)
+        info["below_minimum"] = p["state"] == "active" and info["count"] < 3
+        return info
 
     def _signin(self, method: str, *args: Any) -> dict[str, Any]:
         """Odoo's models/belfry_welcome.py, without the expiry of the welcome page."""
@@ -318,6 +437,11 @@ class FakeOdoo(OdooApi):
             created = self.execute_kw("belfry.invite", "belfry_steward_create", [email, "app"])
             row.update(state="invited", handled_by=email, invite_id=created["id"])
             return created
+        if (
+            model in ("belfry.shift", "belfry.pass", "belfry.application")
+            and method in SHIFT_METHODS
+        ):
+            return self._shifts(method, args)
         if model == "belfry.feedback" and method == "belfry_feedback_handle":
             (fid,), action, email = args[0], args[1], args[2]
             state = {"done": "done", "reopen": "new"}[action]

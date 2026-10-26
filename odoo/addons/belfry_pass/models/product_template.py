@@ -6,6 +6,8 @@ PASS_TIERS = [
     ('day', "Day pass"),
     ('week', "Week pass"),
     ('full', "Full access"),
+    # earned with shifts, not sold (models/belfry_volunteer.py); no product
+    ('volunteer', "Volunteer"),
 ]
 
 

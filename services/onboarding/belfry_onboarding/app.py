@@ -37,6 +37,7 @@ from . import (
     reports,
     signin,
     steward,
+    volunteer,
     wallet_tokens,
 )
 from .clients.authentik import AuthentikClient
@@ -140,6 +141,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     feedback.register(app)  # /feedback: participants' and testers' feedback (feedback.py)
     signin.register(app)  # /signin, /welcome: one-time sign-in links, the page after paying
     apply.register(app)  # /apply: applications to join (apply.py)
+    volunteer.register(app)  # /shifts, /admin/shifts: volunteers' shifts (volunteer.py)
     wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.

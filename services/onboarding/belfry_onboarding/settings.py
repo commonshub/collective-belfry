@@ -128,6 +128,9 @@ class Settings(BaseSettings):
 
     event_start: dt.date = Field(default=dt.date(2027, 1, 25), alias="EVENT_START")
     event_end: dt.date = Field(default=dt.date(2027, 1, 31), alias="EVENT_END")
+    # Volunteers' passes (volunteer.py): from EVENT_START, this many days, unless a steward set
+    # the pass's dates.
+    volunteer_days: int = Field(default=14, alias="VOLUNTEER_DAYS")
 
     # Programme sync (programme.py, `python -m belfry_onboarding sync-programme`): the website's
     # programme grid and the rooms' public Google calendars as public calendar events, signed

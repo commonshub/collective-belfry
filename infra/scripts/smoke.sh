@@ -92,6 +92,12 @@ ox() { # model method args_json [kwargs_json]
   if [[ $(jq -r 'has("error")' <<<"$out") == true ]]; then jq -r '.error.data.message // .error.message' <<<"$out" >&2; return 1; fi
   jq -c '.result' <<<"$out"
 }
+osvc() { # same as ox, as the onboarding service's user (methods for the steward pages)
+  local out uid; uid=$(rpc common authenticate "[\"$ODOO_DB\",\"$ODOO_ONBOARDING_LOGIN\",\"$ODOO_API_KEY\",{}]" | jq -r '.result')
+  out=$(rpc object execute_kw "[\"$ODOO_DB\",$uid,\"$ODOO_API_KEY\",\"$1\",\"$2\",$3,${4:-{\}}]")
+  if [[ $(jq -r 'has("error")' <<<"$out") == true ]]; then jq -r '.error.data.message // .error.message' <<<"$out" >&2; return 1; fi
+  jq -c '.result' <<<"$out"
+}
 xmlid() { ox ir.model.data search_read "[[[\"module\",\"=\",\"$1\"],[\"name\",\"=\",\"$2\"]]]" '{"fields":["res_id"],"limit":1}' | jq -r '.[0].res_id // empty'; }
 ak() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$AUTHENTIK_TOKEN") "$@"; }
 
@@ -766,6 +772,30 @@ else
   ok "no test-run notice configured"
 fi
 [[ "$(curl -sS "$ONB_URL/feedback?from=$ONB_URL/me")" == *"What happened?"* ]] && ok "feedback form served" || bad "no feedback form"
+[[ "$(curl -sS "$ONB_URL/apply")" == *'action="/apply"'* ]] && ok "application form served" || bad "no application form"
+
+step "9d. volunteers: a pending volunteer pass, three shifts on the shift page, the pass activates"
+VDAY=$(date -u -d '+20 days' +%F)
+SHIFT_IDS=()
+for h in 08 12 16; do
+  SHIFT_IDS+=("$(osvc belfry.shift belfry_steward_shift_create "[{\"name\":\"Smoke shift $h\",\"start\":\"$VDAY $h:00:00\",\"end\":\"$VDAY $h:30:00\",\"capacity\":2}]")")
+done
+VOL_EMAIL="smoke-vol-$STAMP@belfry.local"
+VOL_PASS=$(osvc belfry.pass belfry_steward_volunteer_add "[\"Smoke Volunteer $STAMP\",\"$VOL_EMAIL\"]")
+VOL_TOKEN=$(osvc belfry.pass read "[[$VOL_PASS],[\"volunteer_token\"]]" | jq -r '.[0].volunteer_token // empty')
+[[ -n "$VOL_TOKEN" ]] && ok "volunteer pass $VOL_PASS pending, shift page link made" || bad "volunteer pass: '$VOL_PASS'"
+[[ "$(curl -sS "$ONB_URL/shifts/$VOL_TOKEN")" == *"0 of 3"* ]] && ok "shift page: 0 of 3 shifts" || bad "shift page"
+LAST=""
+for sid in "${SHIFT_IDS[@]}"; do
+  LAST=$(curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$ONB_URL/shifts/$VOL_TOKEN/$sid/signup")
+done
+VSTATE=$(ox belfry.pass read "[[$VOL_PASS]]" '{"fields":["state","tier","date_start","date_end","login_setup_url"]}' | jq -c '.[0]')
+[[ "$LAST" == *"msg=active" && "$(jq -r .state <<<"$VSTATE")" == active && "$(jq -r .login_setup_url <<<"$VSTATE")" == *"/signin/"* ]] \
+  && ok "the third shift activates the volunteer pass ($(jq -r '.date_start + " to " + .date_end' <<<"$VSTATE")), sign-in mail with it" \
+  || bad "volunteer activation: $LAST $VSTATE"
+VREV=$(onb_post "/admin/passes/$VOL_PASS/revoke?token=$HOOK_TOKEN")
+osvc belfry.shift belfry_steward_shift_cancel "[[$(IFS=,; echo "${SHIFT_IDS[*]}")]]" >/dev/null
+[[ "$(jq -r .result <<<"$VREV")" == revoked ]] && ok "smoke volunteer revoked, shifts removed" || bad "volunteer cleanup: $VREV"
 
 step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"
 PJAR=$(mktemp); pj() { curl -sS -b "$PJAR" -c "$PJAR" "$@"; }

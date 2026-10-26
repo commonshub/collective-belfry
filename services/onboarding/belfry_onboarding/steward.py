@@ -13,6 +13,7 @@ every form carries the session's CSRF token.
 from __future__ import annotations
 
 import base64
+import datetime as dt
 import hashlib
 import html
 import logging
@@ -20,6 +21,7 @@ import secrets
 import time
 import urllib.parse
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import jwt
@@ -267,7 +269,12 @@ def dashboard_data(svc: Services) -> dict[str, Any]:
     applications = odoo.search_read(
         "belfry.application", [], APPLICATION_FIELDS, limit=100, order="id desc"
     )
+    shifts = odoo.call("belfry.shift", "belfry_shift_board", [])
+    volunteers = odoo.call("belfry.pass", "belfry_steward_volunteers", [])
     return {
+        "tz": svc.settings.programme_timezone,
+        "shifts": shifts,
+        "volunteers": volunteers,
         "applications": applications,
         "feedback": feedback,
         "invites": invites,
@@ -322,6 +329,52 @@ def answer_application(
     return svc.odoo.call(
         "belfry.application", "belfry_application_decline", [[application_id], sess["email"]]
     )
+
+
+def accept_volunteer(svc: Services, sess: dict[str, Any], application_id: int) -> int:
+    log.info("steward %s: application %s accepted as volunteer", sess["email"], application_id)
+    return svc.odoo.call(
+        "belfry.application", "belfry_application_volunteer", [[application_id], sess["email"]]
+    )
+
+
+def add_volunteer(svc: Services, sess: dict[str, Any], name: str, email: str) -> int:
+    log.info("steward %s: volunteer %s added", sess["email"], email)
+    return svc.odoo.call(
+        "belfry.pass", "belfry_steward_volunteer_add", [name.strip(), email.strip()]
+    )
+
+
+def create_shift(svc: Services, form: dict[str, str]) -> int:
+    """Day, times (Brussels time) and capacity from the form; Odoo stores UTC."""
+    tz = ZoneInfo(svc.settings.programme_timezone)
+    try:
+        day = dt.date.fromisoformat(form["day"])
+        start = dt.datetime.combine(day, dt.time.fromisoformat(form["start"]), tz)
+        end = dt.datetime.combine(day, dt.time.fromisoformat(form["end"]), tz)
+        capacity = int(form.get("capacity") or 1)
+    except (KeyError, ValueError) as exc:
+        raise StewardError(400, "Give the shift a day, a start and an end time.") from exc
+    if end <= start:
+        end += dt.timedelta(days=1)  # a night shift ends the next day
+
+    def utc(value: dt.datetime) -> str:
+        return value.astimezone(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+
+    vals = {
+        "name": form.get("name", "").strip()[:200],
+        "description": form.get("description", "").strip()[:2000] or False,
+        "place": form.get("place", "").strip()[:200] or False,
+        "start": utc(start),
+        "end": utc(end),
+        "capacity": max(capacity, 1),
+    }
+    return svc.odoo.call("belfry.shift", "belfry_steward_shift_create", [vals])
+
+
+def cancel_shift(svc: Services, sess: dict[str, Any], shift_id: int) -> None:
+    log.info("steward %s: shift %s cancelled", sess["email"], shift_id)
+    svc.odoo.call("belfry.shift", "belfry_steward_shift_cancel", [[shift_id]])
 
 
 def handle_feedback(svc: Services, sess: dict[str, Any], feedback_id: int, action: str) -> str:
@@ -469,12 +522,70 @@ def _date(value: Any) -> str:
     return E(str(value)[:10]) if value else ""
 
 
+def shifts_section(sess: dict[str, Any], data: dict[str, Any], svc_tz: str | None) -> str:
+    tz = ZoneInfo(svc_tz or "Europe/Brussels")
+
+    def local(value: str) -> dt.datetime:
+        return dt.datetime.fromisoformat(value).replace(tzinfo=dt.UTC).astimezone(tz)
+
+    rows = []
+    for sh in data.get("shifts") or []:
+        start, end = local(sh["start"]), local(sh["end"])
+        people = E(", ".join(sh.get("people") or [])) or "<span class='muted'>nobody</span>"
+        place = f"<br><span class='muted'>{E(sh['place'])}</span>" if sh.get("place") else ""
+        cancel = _form(
+            f"/steward/shifts/{sh['id']}/cancel",
+            sess,
+            "Cancel",
+            quiet=True,
+            confirm="Cancel this shift? The people signed up get a mail.",
+        )
+        rows.append(
+            f"<tr><td>{start:%a %d %b %H:%M}–{end:%H:%M}</td><td>{E(sh['title'])}{place}</td>"
+            f"<td>{sh['taken']}/{sh['capacity']}</td><td>{people}</td><td>{cancel}</td></tr>"
+        )
+    vrows = "".join(
+        f"<tr><td>{E(v['name'])}<br><span class='muted'>{E(v['email'])}</span></td>"
+        f"<td>{v['count']}/{v['min_shifts']}</td>"
+        f"<td><span class='state'>{E(v['state'])}</span></td></tr>"
+        for v in data.get("volunteers") or []
+    )
+    csrf_input = f'<input type="hidden" name="csrf" value="{E(sess["csrf"])}">'
+    return (
+        "<section id='shifts'><h2>Volunteer shifts</h2>"
+        "<p class='muted'>Volunteers choose their shifts on their own shift page (the link in "
+        "their mail); the volunteer pass activates with the minimum. Times in Brussels time.</p>"
+        f'<form method="post" action="/steward/shifts">{csrf_input}'
+        '<input type="text" name="name" maxlength="200" placeholder="Task, e.g. Bar" required> '
+        '<input type="date" name="day" required> <input type="time" name="start" required> '
+        '<input type="time" name="end" required> '
+        '<input type="text" name="place" maxlength="200" placeholder="Place"> '
+        '<input type="number" name="capacity" min="1" max="50" value="2" title="People"> '
+        "<button>Add shift</button></form>"
+        "<div class='wrap'><table><thead><tr><th>When</th><th>Task</th><th>Taken</th><th>Who</th>"
+        "<th></th></tr></thead><tbody>"
+        + ("".join(rows) or "<tr><td colspan=5 class='muted'>No shifts yet.</td></tr>")
+        + "</tbody></table></div>"
+        "<h3>Volunteers</h3>"
+        f'<form method="post" action="/steward/volunteers">{csrf_input}'
+        '<input type="text" name="name" maxlength="200" placeholder="Name" required> '
+        '<input type="email" name="email" maxlength="200" placeholder="E-mail" required> '
+        "<button>Add volunteer</button></form>"
+        "<div class='wrap'><table><thead><tr><th>Who</th><th>Shifts</th><th>Pass</th></tr></thead>"
+        "<tbody>"
+        + (vrows or "<tr><td colspan=3 class='muted'>No volunteers yet.</td></tr>")
+        + "</tbody></table></div></section>"
+    )
+
+
 def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: str = "") -> str:
     parts: list[str] = []
     if msg:
         parts.append(f'<div class="card msg">{msg}</div>')
     if err:
         parts.append(f'<div class="card err">{E(err)}</div>')
+
+    parts.append(shifts_section(sess, data, svc_tz=data.get("tz")))
 
     applications = data.get("applications") or []
     rows = []
@@ -486,12 +597,21 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
             else ""
         )
         if a["state"] == "new":
-            buttons = _form(f"/steward/applications/{a['id']}/invite", sess, "Invite") + _form(
-                f"/steward/applications/{a['id']}/decline",
-                sess,
-                "Decline",
-                quiet=True,
-                confirm=f"Decline {a['name']}? They get a friendly no by mail.",
+            accept = (
+                _form(f"/steward/applications/{a['id']}/volunteer", sess, "Accept as volunteer")
+                if kind == "volunteer"
+                else ""
+            )
+            buttons = (
+                accept
+                + _form(f"/steward/applications/{a['id']}/invite", sess, "Invite")
+                + _form(
+                    f"/steward/applications/{a['id']}/decline",
+                    sess,
+                    "Decline",
+                    quiet=True,
+                    confirm=f"Decline {a['name']}? They get a friendly no by mail.",
+                )
             )
         else:
             buttons = f"<span class='muted'>{E(a.get('handled_by') or '')}</span>"
@@ -745,6 +865,10 @@ MESSAGES = {
     "report-dismiss": "Report dismissed.",
     "report-reopen": "Report reopened.",
     "application-invite": "Invite mailed to the applicant.",
+    "application-volunteer": "Accepted as volunteer; the shift-page link is on its way by mail.",
+    "volunteer-added": "Volunteer added; the shift-page link is on its way by mail.",
+    "shift-added": "Shift added.",
+    "shift-cancelled": "Shift cancelled; the people signed up got a mail.",
     "application-decline": "Application declined; the applicant got a mail.",
     "feedback-done": "Feedback marked done.",
     "feedback-reopen": "Feedback reopened.",
@@ -890,13 +1014,43 @@ def register(app: FastAPI) -> None:
         application_id: int, action: str, request: Request, csrf: str = Form("")
     ):
         services, sess = signed_in(request, csrf)
-        if action not in ("invite", "decline"):
+        if action not in ("invite", "decline", "volunteer"):
             raise StewardError(404, "Unknown action.")
         try:
-            await run_in_threadpool(answer_application, services, sess, application_id, action)
+            if action == "volunteer":
+                await run_in_threadpool(accept_volunteer, services, sess, application_id)
+            else:
+                await run_in_threadpool(answer_application, services, sess, application_id, action)
         except core.OdooError as exc:
             return back(err=f"Odoo refused: {exc}")
         return back(f"application-{action}")
+
+    @app.post("/steward/shifts")
+    async def steward_create_shift(request: Request):
+        form = {k: str(v) for k, v in (await request.form()).items()}
+        services, _sess = signed_in(request, form.get("csrf", ""))
+        try:
+            await run_in_threadpool(create_shift, services, form)
+        except core.OdooError as exc:
+            return back(err=f"Odoo refused: {exc}")
+        return back("shift-added")
+
+    @app.post("/steward/shifts/{shift_id}/cancel")
+    async def steward_cancel_shift(shift_id: int, request: Request, csrf: str = Form("")):
+        services, sess = signed_in(request, csrf)
+        await run_in_threadpool(cancel_shift, services, sess, shift_id)
+        return back("shift-cancelled")
+
+    @app.post("/steward/volunteers")
+    async def steward_add_volunteer(
+        request: Request, csrf: str = Form(""), name: str = Form(""), email: str = Form("")
+    ):
+        services, sess = signed_in(request, csrf)
+        try:
+            await run_in_threadpool(add_volunteer, services, sess, name, email)
+        except core.OdooError as exc:
+            return back(err=f"Odoo refused: {exc}")
+        return back("volunteer-added")
 
     @app.post("/steward/feedback/{feedback_id}/{action}")
     async def steward_feedback(

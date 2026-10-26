@@ -11,3 +11,4 @@ from . import belfry_friends
 from . import belfry_feedback
 from . import belfry_welcome
 from . import belfry_application
+from . import belfry_volunteer
