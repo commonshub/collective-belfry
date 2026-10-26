@@ -155,7 +155,7 @@
             <p>
                 You were invited by <strong t-esc="invite.inviter_name or 'a steward'"/>.
                 Pick a pass and enter your billing details; you will be taken to the payment page next.
-                This link can be used once and expires on
+                This link is for one person and expires on
                 <span t-esc="invite.expires_at" t-options="{'widget': 'date'}"/>.
             </p>
             <div t-if="early_bird" class="alert alert-success py-2" role="alert">
@@ -190,10 +190,15 @@
                                         <t t-esc="row['list_price']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
                                     </small>
                                 </t>
+                                <t t-if="vat_rate">
+                                    <br/>
+                                    <small class="text-muted">incl. <t t-esc="'%g' % vat_rate"/>% VAT</small>
+                                </t>
                                 <br/>
                                 <small class="text-muted">
-                                    companies:
+                                    organisations:
                                     <t t-esc="row['company_price']" t-options="{'widget': 'monetary', 'display_currency': currency}"/>
+                                    <t t-if="vat_rate"> + VAT</t>
                                 </small>
                             </span>
                         </label>
@@ -213,10 +218,10 @@
                                t-att-value="form.get('email')"/>
                     </div>
                     <div class="col-md-6">
-                        <label class="form-label" for="belfry_company">Company (optional, +50%)</label>
+                        <label class="form-label" for="belfry_company">Organisation (optional)</label>
                         <input class="form-control" type="text" id="belfry_company" name="company_name"
                                t-att-value="form.get('company_name')"/>
-                        <div class="form-text">Fill in when the invoice goes to a company.</div>
+                        <div class="form-text">Fill in when the invoice goes to an organisation: the organisation price applies, VAT is added on top.</div>
                     </div>
                     <div class="col-md-6">
                         <label class="form-label" for="belfry_vat">VAT number (optional)</label>
@@ -230,29 +235,63 @@
                     </div>
                 </div>
 
-                <h5>3. Your Nostr key (optional)</h5>
-                <div class="mb-4" id="belfry_own_key_block">
-                    <p class="text-muted mb-2">
-                        Every participant gets a Nostr key for the community apps; Belfry keeps it
-                        for you and can recover it. If you already use Nostr, you can join with
-                        your own key instead: you then sign in to the apps with your own signer,
-                        and Belfry never holds your key.
+                <details class="mb-4" id="belfry_own_key_block" t-att-open="'open' if form.get('own_key') else None">
+                    <summary class="text-muted">Advanced: for Nostr users</summary>
+                    <p class="text-muted mt-2 mb-2">
+                        Skip this if Nostr is new to you: your account for the community apps is
+                        set up for you. If you already have a Nostr key and a signer extension in
+                        this browser, you can join with that key instead; Belfry then never holds it.
                     </p>
                     <div class="form-check">
                         <input class="form-check-input" type="checkbox" id="belfry_own_key" name="own_key" value="1"
                                t-att-checked="'checked' if form.get('own_key') else None"/>
                         <label class="form-check-label" for="belfry_own_key">
-                            Join with my own Nostr key (needs a signer extension in this browser)
+                            Join with my own Nostr key
                         </label>
                     </div>
                     <input type="hidden" name="nostr_pubkey" id="belfry_nostr_pubkey"/>
                     <input type="hidden" name="nostr_proof" id="belfry_nostr_proof"/>
                     <p class="form-text mt-2" id="belfry_own_key_status" aria-live="polite"/>
-                </div>
+                </details>
 
                 <button type="submit" class="btn btn-primary btn-lg">Continue to payment</button>
             </form>
             <script src="/belfry_pass/static/src/js/own_key.js" defer="defer"/>
+        </t>
+    </template>
+
+    <template id="invite_reserved" name="Open Source Village invite waiting for payment">
+        <t t-call="belfry_pass.invite_layout">
+            <t t-if="payment == 'paid'">
+                <meta http-equiv="refresh" content="5"/>
+                <div class="alert alert-success" role="status">
+                    <h4 class="alert-heading">Payment received</h4>
+                    <p class="mb-0">Your pass is being set up. A mail with your sign-in link is on its way.</p>
+                </div>
+            </t>
+            <t t-elif="payment == 'processing'">
+                <div class="alert alert-info" role="status">
+                    <h4 class="alert-heading">Your payment is being processed</h4>
+                    <p class="mb-0">
+                        Your payment provider has not confirmed it yet (bank transfers can take a few days).
+                        You get a mail as soon as your pass is ready.
+                    </p>
+                </div>
+            </t>
+            <t t-else="">
+                <p id="belfry_reserved">
+                    <t t-if="first_name"><t t-esc="first_name"/>, you</t><t t-else="">You</t>
+                    started signing up with this link<t t-if="tier_name"> (<t t-esc="tier_name"/>)</t>.
+                    Your pass is ready once it is paid.
+                </p>
+                <p><a class="btn btn-primary btn-lg" t-att-href="payment_link" id="belfry_continue_payment">Continue to payment</a></p>
+                <form method="post" t-attf-action="/belfry/invite/#{invite.token}" class="mt-4">
+                    <input type="hidden" name="csrf_token" t-att-value="request.csrf_token()"/>
+                    <input type="hidden" name="start_over" value="1"/>
+                    <p class="text-muted small mb-2">Wrong pass or details? Start over: the unpaid order is cancelled and the form opens again.</p>
+                    <button type="submit" class="btn btn-link p-0" id="belfry_start_over">Start over</button>
+                </form>
+            </t>
         </t>
     </template>
 </odoo>

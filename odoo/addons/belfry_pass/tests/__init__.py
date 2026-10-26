@@ -9,3 +9,5 @@ from . import test_mollie
 from . import test_friends
 from . import test_own_key
 from . import test_error_pages
+from . import test_reserved
+from . import test_vat

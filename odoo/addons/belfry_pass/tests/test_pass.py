@@ -164,7 +164,7 @@ class TestPass(BelfryCase):
         mails = self._login_mails(belfry_pass)
         self.assertEqual(len(mails), 1)
         self.assertIn('https://belfry.test/claim/tok-abc', mails.body_html)
-        self.assertIn('Add the pass to your wallet', mails.body_html)
+        self.assertIn('add it to your wallet app', mails.body_html)
 
     def test_tokens_link_and_mail(self):
         self.env['ir.config_parameter'].sudo().set_param('belfry.public_url', 'https://belfry.test/')

@@ -17,7 +17,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Odoo's frontend error pages in the Open Source Village look
 - belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.17.0',
+    'version': '19.0.1.18.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',
@@ -45,6 +45,7 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
         'data/loyalty_data.xml',
         'data/base_automation_data.xml',
         'data/mail_template_data.xml',
+        'data/ir_cron_data.xml',
         'views/belfry_pass_views.xml',
         'views/belfry_invite_views.xml',
         'views/belfry_stripe_event_views.xml',

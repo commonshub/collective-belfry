@@ -9,3 +9,4 @@ from . import belfry_report
 from . import payment_mollie
 from . import belfry_friends
 from . import belfry_feedback
+from . import belfry_welcome

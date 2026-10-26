@@ -292,6 +292,11 @@ def invites_section(invites: dict[str, Any] | None, msg: str = "") -> str:
             state = f"open until {E((inv.get('expires_at') or '')[:10])}"
         elif inv["state"] == "used":
             tools, state = "", f"used by {E(inv.get('used_by') or 'a friend')}"
+        elif inv["state"] == "reserved":
+            tools, state = (
+                "",
+                f"{E(inv.get('used_by') or 'a friend')} is signing up (waiting for payment)",
+            )
         else:
             tools, state = "", E(inv["state"])
         rows.append(f'<li>{note}<span class="muted">{state}</span>{tools}</li>')

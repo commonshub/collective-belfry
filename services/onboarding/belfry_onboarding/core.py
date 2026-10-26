@@ -389,26 +389,36 @@ def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | N
         return None
 
 
-def _login_link(svc: Services, user_pk: int) -> tuple[str, str]:
-    """A one-time sign-in link for the Authentik user, and its expiry (Odoo datetime).
+def _login_link(svc: Services) -> dict[str, Any]:
+    """The pass fields of a new one-time sign-in link: ``login_setup_url``, its expiry and secret.
 
-    authentik plans the default brand's recovery flow (blueprint belfry-account-setup-flow) for
-    the user and wraps it in a flow token; opening the link signs the browser in (participants
-    have no password; later sign-ins use the login page's magic link or the pass). The link is
-    built from the host the service called, so
-    its origin is replaced with AUTHENTIK_PUBLIC_URL. A new link replaces the user's earlier
-    token. Raises when the brand has no recovery flow (blueprint not applied yet), so the caller
-    stays pending and a retry completes the job, like the participants group.
+    The link is Belfry's own (``<PUBLIC_URL>/signin/<secret>``, signin.py): authentik keeps one
+    recovery token per user, so a link minted for the welcome page after paying would kill a
+    mailed authentik link. signin.py mints the authentik link (recovery flow, blueprint
+    belfry-account-setup-flow: signs the pending user in, no password) only when the secret is
+    used, and redirects there. A new link replaces the pass's earlier secret.
     """
     days = svc.settings.login_link_days
-    link = svc.authentik.create_recovery_link(user_pk, f"days={days}")
+    token = secrets.token_urlsafe(32)
+    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=days)
+    return {
+        "login_setup_url": f"{svc.settings.public_url.rstrip('/')}/signin/{token}",
+        "login_setup_expires_at": expires.strftime("%Y-%m-%d %H:%M:%S"),
+        "signin_token": token,
+        "signin_used_at": False,
+    }
+
+
+def authentik_signin_url(svc: Services, user_pk: int) -> str:
+    """A fresh one-time authentik sign-in link for the user, valid a few minutes (signin.py
+    redirects to it at once). authentik builds it from the host the service called, so its
+    origin is replaced with AUTHENTIK_PUBLIC_URL. Raises when the brand has no recovery flow."""
+    link = svc.authentik.create_recovery_link(user_pk, "minutes=10")
     given = urllib.parse.urlsplit(link)
     public = urllib.parse.urlsplit(svc.settings.authentik_public_url.rstrip("/"))
-    url = urllib.parse.urlunsplit(
+    return urllib.parse.urlunsplit(
         (public.scheme, public.netloc, public.path.rstrip("/") + given.path, given.query, "")
     )
-    expires = dt.datetime.now(dt.UTC) + dt.timedelta(days=days)
-    return url, expires.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def send_login_link(svc: Services, pass_id: int) -> str:
@@ -425,10 +435,7 @@ def send_login_link(svc: Services, pass_id: int) -> str:
     if user_pk is None:
         log.warning("send_login_link: pass %s has no Authentik user", pass_id)
         return "no_user"
-    url, expires = _login_link(svc, user_pk)
-    svc.odoo.write(
-        "belfry.pass", [pass_id], {"login_setup_url": url, "login_setup_expires_at": expires}
-    )
+    svc.odoo.write("belfry.pass", [pass_id], _login_link(svc))
     log.info("send_login_link: new link for pass %s (Authentik user %s)", pass_id, user_pk)
     return "sent"
 
@@ -874,7 +881,7 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
     # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
     _set_participant(svc, authentik_user_id, True)
     # Participants never get a password: Odoo mails this one-time sign-in link with the activation.
-    login_url, login_expires = _login_link(svc, authentik_user_id)
+    login_vals = _login_link(svc)
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
@@ -895,8 +902,7 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
         "date_start": date_start.isoformat(),
         "date_end": date_end.isoformat(),
         "activated_at": now_utc_str(),
-        "login_setup_url": login_url,
-        "login_setup_expires_at": login_expires,
+        **login_vals,
         # Phase 3: the claim page (/claim/<token>) mints the wallet offer; the status list bit
         # of this pass is its id (one list, one bit per pass).
         "claim_token": pass_row.get("claim_token") or secrets.token_urlsafe(24),

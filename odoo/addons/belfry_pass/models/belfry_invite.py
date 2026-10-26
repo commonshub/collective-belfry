@@ -1,9 +1,15 @@
+import logging
 import secrets
 from datetime import timedelta
 
 from odoo import api, fields, models
 
+_logger = logging.getLogger(__name__)
+
 INVITE_VALIDITY_DAYS = 14
+# An invite whose order is still unpaid after this many days is released again (parameter
+# belfry.invite_reserve_days), unless a payment is under way.
+INVITE_RESERVE_DAYS = 7
 
 
 class BelfryInvite(models.Model):
@@ -35,6 +41,9 @@ class BelfryInvite(models.Model):
     state = fields.Selection(
         [
             ('open', "Open"),
+            # the form was sent and the order waits for payment: the link shows "Continue to
+            # payment" instead of the form, and the invite is used once the pass is active
+            ('reserved', "Waiting for payment"),
             ('used', "Used"),
             ('expired', "Expired"),
             ('revoked', "Revoked"),
@@ -66,8 +75,8 @@ class BelfryInvite(models.Model):
 
     def _belfry_usability_error(self):
         """Return ``False`` when the invite can be used now, else one of
-        ``used`` / ``expired`` / ``revoked``. An open invite past its expiry is moved to
-        ``expired`` on the way.
+        ``reserved`` / ``used`` / ``expired`` / ``revoked``. An open invite past its expiry is
+        moved to ``expired`` on the way; a reserved one does not expire while its order waits.
         """
         self.ensure_one()
         if self.state == 'open' and self.expires_at and self.expires_at < fields.Datetime.now():
@@ -78,6 +87,78 @@ class BelfryInvite(models.Model):
 
     def action_revoke(self):
         self.filtered(lambda i: i.state == 'open').write({'state': 'revoked'})
+
+    # ------------------------------------------------------------------
+    # reserved invites (form sent, payment outstanding)
+    # ------------------------------------------------------------------
+
+    def _belfry_payment_state(self):
+        """For a reserved invite: ``unpaid`` (no payment under way), ``processing`` (a
+        transaction is pending or authorized at the provider, e.g. a bank transfer) or ``paid``
+        (the invoice is paid or a transaction is done; the pass is being activated)."""
+        self.ensure_one()
+        invoice = self.sudo().pass_id.invoice_id
+        if not invoice:
+            return 'unpaid'
+        if invoice.payment_state in ('paid', 'in_payment') or 'done' in invoice.transaction_ids.mapped('state'):
+            return 'paid'
+        if {'pending', 'authorized'} & set(invoice.transaction_ids.mapped('state')):
+            return 'processing'
+        return 'unpaid'
+
+    def belfry_payment_link(self):
+        """The invoice's payment link, made the same way as at checkout."""
+        self.ensure_one()
+        invoice = self.sudo().pass_id.invoice_id
+        wizard = self.env['payment.link.wizard'].sudo().with_context(
+            active_model='account.move', active_id=invoice.id, active_ids=invoice.ids,
+        ).create({})
+        return wizard.link
+
+    def belfry_start_over(self):
+        """Release a reserved invite whose order is unpaid: the pending pass is removed, the
+        invoice is credited, the order cancelled and the form is offered again. Returns False when a
+        payment is under way or done (nothing changes then)."""
+        self.ensure_one()
+        invite = self.sudo()
+        if invite.state != 'reserved' or invite._belfry_payment_state() != 'unpaid':
+            return False
+        belfry_pass = invite.pass_id
+        if belfry_pass and belfry_pass.state != 'pending':
+            return False
+        invoice = belfry_pass.invoice_id
+        order = belfry_pass.sale_order_id
+        invite.write({'state': 'open', 'pass_id': False, 'used_by_partner_id': False})
+        if belfry_pass:
+            belfry_pass.unlink()
+        if invoice and invoice.state == 'posted':
+            # a posted invoice keeps its number: a credit note settles it (payment state
+            # "reversed", so the invoice-paid automation never fires for it)
+            invoice._reverse_moves([{'ref': "Invite released, not paid"}], cancel=True)
+        elif invoice and invoice.state == 'draft':
+            invoice.button_cancel()
+        if order and order.state != 'cancel':
+            order._action_cancel()
+        _logger.info("Belfry invite %s released (order %s, invoice %s credited)",
+                     invite.id, order.name, invoice.name)
+        return True
+
+    @api.model
+    def _cron_release_unpaid(self):
+        """Release invites reserved longer than belfry.invite_reserve_days whose order is still
+        unpaid. A payment under way at the provider keeps the reservation (Mollie reports a bank
+        transfer or a late SEPA payment as paid days later)."""
+        days = int(self.env['ir.config_parameter'].sudo().get_param(
+            'belfry.invite_reserve_days', INVITE_RESERVE_DAYS) or INVITE_RESERVE_DAYS)
+        cutoff = fields.Datetime.now() - timedelta(days=days)
+        for invite in self.sudo().search([('state', '=', 'reserved')]):
+            if invite.pass_id and invite.pass_id.create_date > cutoff:
+                continue
+            invite.belfry_start_over()
+
+    def _belfry_mark_used(self):
+        """The pass of a reserved invite became active."""
+        self.filtered(lambda i: i.state == 'reserved').sudo().write({'state': 'used'})
 
     def action_mark_expired(self):
         self.filtered(lambda i: i.state == 'open' and i.expires_at < fields.Datetime.now()).write({'state': 'expired'})

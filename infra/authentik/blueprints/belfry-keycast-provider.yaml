@@ -106,8 +106,21 @@ entries:
     attrs:
       name: Belfry signer (Keycast)
       provider: !KeyOf belfry-keycast-oidc
-      meta_launch_url: !Context keycast_url
+      # Launching the app signs in to Keycast at once (Keycast patch 0018's landing link), so the
+      # brand's default application below lands on the apps page signed in.
+      meta_launch_url: !Format ["%s/api/auth/oidc/start?return_to=%%2Flogin%%3Foidc%%3D1%%26redirect%%3D%%2F", !Context keycast_url]
       policy_engine_mode: any
+
+  # 3b. Where a sign-in ends when no app asked for it (the activation mail's sign-in link, the
+  #     magic link from the login page): authentik sends external users to the brand's default
+  #     application instead of its user portal (core/views/interface.py, RootRedirectView), so
+  #     participants and stewards (created as external users by the onboarding service) land on
+  #     the apps page. Internal users (akadmin) keep the portal.
+  - model: authentik_brands.brand
+    identifiers:
+      domain: authentik-default
+    attrs:
+      default_application: !KeyOf belfry-keycast-app
 
   # 4. Participants only.
   - model: authentik_policies.policybinding

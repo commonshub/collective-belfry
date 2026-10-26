@@ -126,7 +126,9 @@ PASS=$(ox belfry.pass search_read "[[[\"invite_id\",\"=\",$INVITE_ID]]]" '{"fiel
 [[ -n "$PASS" ]] || die "no belfry.pass linked to invite $INVITE_ID"
 PASS_ID=$(jq -r .id <<<"$PASS"); INV_ID=$(jq -r '.invoice_id[0]' <<<"$PASS"); PARTNER_ID=$(jq -r '.partner_id[0]' <<<"$PASS")
 [[ "$(jq -r .state <<<"$PASS")" == pending ]] && ok "pass $PASS_ID pending, invoice $INV_ID, partner $PARTNER_ID" || bad "pass state $(jq -r .state <<<"$PASS")"
-[[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == used ]] && ok "invite marked used" || bad "invite not marked used"
+[[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == reserved ]] && ok "invite reserved until the pass is paid" || bad "invite not reserved"
+RESUME=$(curl -sS "$ODOO_URL/belfry/invite/$TOKEN")
+grep -q 'id="belfry_continue_payment"' <<<"$RESUME" && ok "opening the invite again offers the payment page (refresh, back button)" || bad "reserved invite page: $(head -c 200 <<<"$RESUME")"
 INV=$(ox account.move read "[[$INV_ID]]" '{"fields":["state","amount_total","currency_id","partner_id"]}' | jq -c '.[0]')
 [[ "$(jq -r .state <<<"$INV")" == posted ]] && ok "invoice posted, total $(jq -r .amount_total <<<"$INV")" || bad "invoice state $(jq -r .state <<<"$INV")"
 
@@ -154,6 +156,9 @@ if [[ "$(jq -r .state <<<"$PASS")" != active ]]; then
   PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
 fi
 [[ "$(jq -r .state <<<"$PASS")" == active ]] && ok "pass active: $PASS" || die "pass not active: $PASS"
+[[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == used ]] && ok "invite used once the pass is active" || bad "invite not marked used"
+INV_PDF=$(ox account.move read "[[$INV_ID]]" '{"fields":["invoice_pdf_report_id"]}' | jq -r '.[0].invoice_pdf_report_id[0] // empty')
+[[ -n "$INV_PDF" ]] && ok "the paid invoice has its own PDF (no proforma), attachment $INV_PDF" || bad "invoice $INV_ID has no PDF"
 NPUB=$(jq -r .npub <<<"$PASS"); KC_PUB=$(jq -r .keycast_pubkey <<<"$PASS"); AK_UID=$(jq -r .authentik_user_id <<<"$PASS")
 MEMBER=$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_member_number","belfry_npub","belfry_authentik_user_id"]}' | jq -r '.[0].belfry_member_number')
 [[ -n "$MEMBER" && "$MEMBER" != null ]] && ok "member number $MEMBER" || bad "no member number on the partner"
@@ -197,13 +202,26 @@ SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
 
 step "6c. sign-in link: mailed by Odoo, signs the browser in through Authentik (no password)"
-# Participants never get an Authentik password: activation stores a one-time sign-in link
-# (authentik recovery flow belfry-account-setup) on the pass and Odoo mails it.
+# Participants never get an Authentik password: activation stores a one-time sign-in link on the
+# pass and Odoo mails it. The link is Belfry's (<PUBLIC_URL>/signin/<secret>, signin.py); using it
+# mints the authentik link (recovery flow belfry-account-setup) and redirects there.
 PASS_LOGIN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url","login_setup_expires_at","login_mail_sent_at"]}' | jq -c '.[0]')
 SETUP_URL=$(jq -r '.login_setup_url // empty' <<<"$PASS_LOGIN")
-[[ "$SETUP_URL" == "${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-account-setup/?flow_token="* ]] \
-  && ok "pass carries a sign-in link on the public Authentik URL (valid until $(jq -r .login_setup_expires_at <<<"$PASS_LOGIN"))" \
+[[ "$SETUP_URL" == "$ONB_URL/signin/"* ]] \
+  && ok "pass carries a sign-in link on the public onboarding URL (valid until $(jq -r .login_setup_expires_at <<<"$PASS_LOGIN"))" \
   || bad "login_setup_url: '$SETUP_URL'"
+SIGNIN_PAGE=$(curl -sS "$SETUP_URL")
+grep -q "action=\"/signin/" <<<"$SIGNIN_PAGE" && ok "opening the link shows a page that signs in by script (mail scanners spend nothing)" || bad "sign-in page: $(head -c 200 <<<"$SIGNIN_PAGE")"
+AK_LINK=$(curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$SETUP_URL")
+[[ "$AK_LINK" == "${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-account-setup/?flow_token="* ]] \
+  && ok "using it redirects to a fresh authentik sign-in link" || bad "sign-in link redirect: '$AK_LINK'"
+AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$SETUP_URL")
+[[ "$AGAIN" == 410 ]] && ok "the link works once (second use -> 410)" || bad "second use -> $AGAIN"
+# The page the payer lands on after paying (Odoo's payment status page forwards there): its own
+# secret, so signing in there leaves the mail's link usable.
+WELCOME_TOKEN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["welcome_token"]}' | jq -r '.[0].welcome_token // empty')
+WELCOME=$(curl -sS "$ONB_URL/welcome/$WELCOME_TOKEN")
+[[ -n "$WELCOME_TOKEN" ]] && grep -q "Open the apps" <<<"$WELCOME" && ok "welcome page after paying offers \"Open the apps\"" || bad "welcome page: $(head -c 200 <<<"$WELCOME")"
 MAILS=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID]]]" '{"fields":["recipient_ids","subject","body_html","state"]}')
 MAIL_N=$(jq length <<<"$MAILS")
 if [[ "$MAIL_N" == 1 ]] && jq -e --arg u "$SETUP_URL" '.[0].body_html | contains($u)' <<<"$MAILS" >/dev/null \
@@ -230,7 +248,7 @@ else
 fi
 
 # Drive the link like the browser: the flow only signs the pending user in (remember-me choice).
-FLOW_TOKEN=${SETUP_URL#*flow_token=}
+FLOW_TOKEN=${AK_LINK#*flow_token=}
 SETUP_EXEC="$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=flow_token%3D$FLOW_TOKEN"
 run_setup_flow() { # cookie jar -> prints the final component
   local jar=$1 ch comp body
@@ -252,6 +270,13 @@ FINAL=$(run_setup_flow "$AK_SESSION")
 [[ -n "${SAVE_AK_JAR:-}" ]] && cp "$AK_SESSION" "$SAVE_AK_JAR"
 ME=$(curl -sS -b "$AK_SESSION" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
 [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "sign-in link: browser signed in as Authentik user $AK_UID, no password asked" || bad "sign-in flow ended with '$FINAL', session user '$ME'"
+# No app asked for this sign-in: authentik's root sends external users (participants) to the
+# brand's default application, Keycast's sign-in start, i.e. the apps page signed in.
+ROOT_TO=$(curl -sS -b "$AK_SESSION" -o /dev/null -w '%{redirect_url}' "$AK_URL/")
+LAUNCH_TO=$(curl -sS -b "$AK_SESSION" -o /dev/null -w '%{redirect_url}' "$ROOT_TO")
+[[ "$LAUNCH_TO" == "${KEYCAST_APP_URL:-http://localhost:3000}/api/auth/oidc/start?"* ]] \
+  && ok "after the sign-in link the participant lands on the apps page (Keycast sign-in), not authentik's portal" \
+  || bad "after sign-in: $AK_URL/ -> '$ROOT_TO' -> '$LAUNCH_TO'"
 AK_PW_LOGIN=$(curl -sS -c /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/" | jq -r '[.password_fields // false] | .[0]')
 [[ "$AK_PW_LOGIN" == false ]] && ok "the login page asks for no password (magic link or pass)" || bad "login page offers a password field"
 # The link is one-time: a second use must not sign anyone in.
@@ -786,7 +811,7 @@ if "${DC[@]}" exec -T keycast test -s /run/belfry/custody-seed 2>/dev/null; then
   [[ -z "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" ]] \
     && ok "Keycast account of $USERNAME deleted (simulated loss)" || bad "account still resolves after the delete"
   # ... and comes back from the seed and Odoo with the same key.
-  REST=$("${DC[@]}" exec -T onboarding python -m belfry_onboarding restore-keys 2>&1 | tail -n1)
+  REST=$("${DC[@]}" exec -T onboarding python -m belfry_onboarding restore-keys 2>/dev/null | tail -n1)
   [[ "$(jq -r --arg m "$MEMBER" '.partners[$m] // empty' <<<"$REST")" == ok ]] && ok "restore-keys: $MEMBER ok" || bad "restore-keys: $REST"
   [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" == "$KC_PUB" ]] \
     && ok "same npub after recovery (derived from the custody seed)" || bad "npub after recovery differs"

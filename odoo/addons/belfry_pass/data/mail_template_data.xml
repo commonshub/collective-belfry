@@ -29,51 +29,27 @@
         from <t t-out="format_date(object.date_start) or ''"/> to <t t-out="format_date(object.date_end) or ''"/>.
         Your member number is <strong><t t-out="object.member_number or ''"/></strong>.
     </p>
-    <p style="margin: 20px 0 8px;">
-        <strong>1. Sign in to Open Source Village.</strong> This link signs you in once, without a password, and
-        expires on <t t-out="format_datetime(object.login_setup_expires_at, dt_format='long') if object.login_setup_expires_at else ''"/>.
-        Later, sign in at <a t-att-href="object.belfry_login_url()" style="color: #d6ff52;"><t t-out="object.belfry_login_url()"/></a>
-        with your e-mail address: you get a new sign-in link by mail each time (or present your pass).
-    </p>
-    <p style="margin: 12px 0 20px;">
-        <a t-att-href="object.login_setup_url" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-size: 14px;">
+    <p style="margin: 20px 0 12px;">
+        <a t-att-href="object.login_setup_url" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; padding: 12px 22px; text-decoration: none; border-radius: 8px; font-size: 16px;">
             Sign in to Open Source Village
         </a>
     </p>
-    <t t-if="object.sudo().claim_url">
-    <p style="margin: 20px 0 8px;">
-        <strong>2. Add the pass to your wallet.</strong> Open this page and scan the code with your EUDI wallet
-        (or another OpenID4VCI wallet); the pass certificate shows your tier and validity at the door and signs you
-        in to the apps:
-    </p>
-    <p style="margin: 12px 0 20px;">
-        <a t-att-href="object.sudo().claim_url" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-size: 14px;">
-            Add the pass to your wallet
-        </a>
-    </p>
     <p style="margin: 0 0 20px; color: #c9d1cb;">
-        No wallet? Show your pass as a QR code from your phone instead:
-        <a t-att-href="public_url + '/me'" style="color: #d6ff52;"><t t-out="public_url + '/me'"/></a> (signed in, no wallet needed).
+        The button signs you in, without a password, and takes you to the community apps
+        (<a t-att-href="object.belfry_apps_url()" style="color: #d6ff52;"><t t-out="object.belfry_apps_url()"/></a>).
+        It works once, until <t t-out="format_datetime(object.login_setup_expires_at, dt_format='long') if object.login_setup_expires_at else ''"/>.
+        Later, sign in at <a t-att-href="object.belfry_login_url()" style="color: #d6ff52;"><t t-out="object.belfry_login_url()"/></a>
+        with your e-mail address: you get a sign-in link by mail each time.
     </p>
-    </t>
-    <t t-if="object.sudo().tokens_url">
-    <p style="margin: 20px 0 8px;">
-        <strong>Your <t t-out="object.cashu_amount"/> village tokens.</strong> Open this link to put them into your
-        wallet and pass them on to other participants. They have no monetary value.
-    </p>
-    <p style="margin: 12px 0 20px;">
-        <a t-att-href="object.sudo().tokens_url" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; padding: 10px 18px; text-decoration: none; border-radius: 8px; font-size: 14px;">
-            Get your tokens
-        </a>
-    </p>
-    </t>
-    <p style="margin: 20px 0 8px;">
-        <strong>3. Use the community apps.</strong> Open <a t-att-href="object.belfry_apps_url()" style="color: #d6ff52;"><t t-out="object.belfry_apps_url()"/></a>
-        and choose "Sign in with Open Source Village". Your Nostr key is kept safe by Belfry; your public key is
-        <code style="font-family: 'Geist Mono', Menlo, monospace; font-size: 13px; color: #c9d1cb; word-break: break-all;"><t t-out="object.npub or ''"/></code>.
-    </p>
-    <p style="margin: 12px 0 0; color: #c9d1cb;">
-        If the link has expired, just sign in with your e-mail address as described above.
+    <p style="margin: 20px 0 6px;"><strong>Also for you</strong></p>
+    <ul style="margin: 0 0 20px; padding-left: 20px; color: #c9d1cb;">
+        <li style="margin: 0 0 6px;">Your pass at the door: <a t-att-href="public_url + '/me'" style="color: #d6ff52;">show it on your phone</a><t t-if="object.sudo().claim_url">, or <a t-att-href="object.sudo().claim_url" style="color: #d6ff52;">add it to your wallet app</a></t>.</li>
+        <li t-if="object.sudo().tokens_url" style="margin: 0 0 6px;"><a t-att-href="object.sudo().tokens_url" style="color: #d6ff52;">Your <t t-out="object.cashu_amount"/> village tokens</a>, to pass on to other participants (no monetary value).</li>
+        <li t-if="ctx.get('belfry_invoice_attached')" style="margin: 0 0 6px;">Your invoice is attached to this mail.</li>
+    </ul>
+    <p style="margin: 0; font-size: 12px; color: #8e9a91;">
+        Your public key on Nostr, kept safe by Belfry:
+        <code style="font-family: 'Geist Mono', Menlo, monospace; font-size: 12px; word-break: break-all;"><t t-out="object.npub or ''"/></code>
     </p>
     <p style="margin: 24px 0 0;">See you at the village,<br/>Open Source Village, run by Belfry</p>
   </div>

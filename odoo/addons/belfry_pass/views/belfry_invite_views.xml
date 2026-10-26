@@ -12,6 +12,7 @@
                 <field name="state" widget="badge"
                        decoration-success="state == 'open'"
                        decoration-info="state == 'used'"
+                       decoration-warning="state == 'reserved'"
                        decoration-muted="state in ('expired', 'revoked')"/>
                 <field name="used_by_partner_id"/>
                 <field name="pass_id"/>
@@ -61,6 +62,7 @@
                 <field name="steward_id"/>
                 <field name="used_by_partner_id"/>
                 <filter name="open" string="Open" domain="[('state', '=', 'open')]"/>
+                <filter name="reserved" string="Waiting for payment" domain="[('state', '=', 'reserved')]"/>
                 <filter name="used" string="Used" domain="[('state', '=', 'used')]"/>
                 <filter name="mine" string="My invites" domain="[('steward_id', '=', uid)]"/>
                 <group>

@@ -51,6 +51,9 @@ class AuthentikClient:
             "username": username,
             "name": name,
             "is_active": True,
+            # external: no authentik user portal, and a sign-in without an app waiting ends on
+            # the brand's default application (the apps page) instead of the portal
+            "type": "external",
             "attributes": attributes,
             "path": path,
         }

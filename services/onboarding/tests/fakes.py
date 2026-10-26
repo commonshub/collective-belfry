@@ -63,7 +63,7 @@ class FakeOdoo(OdooApi):
                 "used_by": self.tables["res.partner"].get(used, {}).get("name", "") if used else "",
             }
 
-        taken = sum(1 for i in mine if i["state"] in ("open", "used"))
+        taken = sum(1 for i in mine if i["state"] in ("open", "reserved", "used"))
         if method == "belfry_participant_invites":
             rows = [row(i) for i in sorted(mine, key=lambda i: -i["id"])]
             return {
@@ -130,6 +130,38 @@ class FakeOdoo(OdooApi):
             if tx_id not in inv["transaction_ids"]:
                 inv["transaction_ids"].append(tx_id)
 
+    def _signin(self, method: str, *args: Any) -> dict[str, Any]:
+        """Odoo's models/belfry_welcome.py, without the expiry of the welcome page."""
+        kind, token = args if method == "belfry_use_signin" else ("welcome", args[0])
+        field = {"signin": "signin_token", "welcome": "welcome_token"}[kind]
+        p = next(
+            (p for p in self.tables["belfry.pass"].values() if token and p.get(field) == token),
+            None,
+        )
+        if p is None:
+            return {"result": "not_found"}
+        used = "signin_used_at" if kind == "signin" else "welcome_used_at"
+        if method == "belfry_welcome_info":
+            return {
+                "result": "ok",
+                "state": p.get("state"),
+                "first_name": "Alice",
+                "payment": "paid" if p.get("state") == "active" else "unpaid",
+                "tier_name": "Day pass",
+                "date_start": p.get("date_start"),
+                "date_end": p.get("date_end"),
+                "claim_token": p.get("claim_token"),
+                "signin_available": p.get("state") == "active" and not p.get(used),
+            }
+        if p.get("state") != "active":
+            return {"result": "not_active"}
+        if p.get(used):
+            return {"result": "used"}
+        if kind == "signin" and (p.get("login_setup_expires_at") or "") < "2000":
+            return {"result": "expired"}
+        p[used] = "2026-10-26 12:00:00"
+        return {"result": "ok", "authentik_user_id": p["authentik_user_id"], "pass_id": p["id"]}
+
     # -- execute_kw ---------------------------------------------------------------------------
 
     def execute_kw(self, model, method, args, kwargs=None):
@@ -172,6 +204,8 @@ class FakeOdoo(OdooApi):
                     partner["belfry_member_number"] = f"OSV-{self._seq:04d}"
                 out.append(partner["belfry_member_number"])
             return out
+        if model == "belfry.pass" and method in ("belfry_use_signin", "belfry_welcome_info"):
+            return self._signin(method, *args)
         if model == "belfry.pass" and method == "belfry_find_or_create_for_invoice":
             if self.legacy_module:
                 raise OdooError(

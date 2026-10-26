@@ -192,10 +192,10 @@ def test_concurrent_activation_runs_once(services, odoo, authentik, keycast, mon
     links = []
     login_link = core._login_link
 
-    def slow_login_link(svc, user_id):
-        links.append(user_id)
+    def slow_login_link(svc):
+        links.append(svc)
         time.sleep(0.05)  # widen the window between reading the pass and writing it
-        return login_link(svc, user_id)
+        return login_link(svc)
 
     monkeypatch.setattr(core, "_login_link", slow_login_link)
     results = []

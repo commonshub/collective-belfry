@@ -346,6 +346,12 @@ fi
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "$(jq -cn --arg v "$NOTICE" '["belfry.test_notice", $v]')" >/dev/null
 echo "invites per participant: ${INVITES_PER_PARTICIPANT:-3}; test notice: ${NOTICE:-none}"
 
+# VAT (decision 2026-10-26): the chart's 21% sale tax, included in the pass prices for
+# individuals; organisations get the same rate on top of the company price (controllers/invite.py).
+VAT_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" product.template belfry_setup_vat "[${PASS_VAT_RATE:-21}]") \
+  || die "could not set up VAT on the pass products"
+echo "VAT ${PASS_VAT_RATE:-21}% on the passes (included, excluded tax ids: $VAT_IDS)"
+
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
 # Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
@@ -464,6 +470,18 @@ while :; do
   printf '.'; sleep 5
 done
 echo "blueprint belfry-keycast-provider: successful"
+
+# Participants and stewards are external users (2026-10-26): no authentik portal, and a sign-in
+# with no app waiting ends on the apps page (brand default application). Users created before
+# were internal; move them over (akadmin and other users outside belfry/ stay as they are).
+for ak_path in "${AUTHENTIK_USER_PATH:-belfry/participants}" belfry/stewards; do
+  ak "$AK_URL/api/v3/core/users/?path=$ak_path&type=internal&page_size=500" | jq -r '.results[].pk' |
+    while read -r pk; do
+      ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/core/users/$pk/" -d '{"type":"external"}' \
+        || die "could not make authentik user $pk external"
+      echo "authentik user $pk ($ak_path): now external"
+    done
+done
 # Blueprints read client secrets with !File and store a placeholder when the file was missing at
 # that moment (the worker applies a changed blueprint as soon as git updates it, possibly before
 # gen-secrets wrote the secret): re-apply every Belfry blueprint until no provider keeps one.

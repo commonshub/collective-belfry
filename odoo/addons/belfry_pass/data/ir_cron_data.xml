@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Invites whose order stays unpaid for belfry.invite_reserve_days (default 7) are released,
+         unless a payment is under way at the provider (models/belfry_invite.py). -->
+    <record id="ir_cron_release_unpaid_invites" model="ir.cron">
+        <field name="name">Belfry: release invites with unpaid orders</field>
+        <field name="model_id" ref="belfry_pass.model_belfry_invite"/>
+        <field name="state">code</field>
+        <field name="code">model._cron_release_unpaid()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="active" eval="True"/>
+    </record>
+</odoo>

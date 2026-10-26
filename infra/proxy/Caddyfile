@@ -106,6 +106,8 @@
 	import limit {args[0]}-bridge 1200 1m /bridge/*
 	import limit {args[0]}-door 600 1m /door /door/*
 	import limit {args[0]}-feedback 30 1m /feedback
+	import limit {args[0]}-apply 30 1m /apply
+	import limit {args[0]}-signin 120 1m /signin/* /welcome/*
 	# the pages carry their own small inline scripts and the QR codes as data: images
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy onboarding:8100

@@ -63,7 +63,7 @@ class BelfryInvite(models.Model):
         invites = self.sudo().search([('inviter_partner_id', '=', int(partner_id))], order='id desc')
         rows = [invite._belfry_invite_row() for invite in invites]
         limit = self._belfry_participant_limit()
-        taken = sum(1 for r in rows if r['state'] in ('open', 'used'))
+        taken = sum(1 for r in rows if r['state'] in ('open', 'reserved', 'used'))
         return {'limit': limit, 'left': max(0, limit - taken), 'invites': rows}
 
     @api.model

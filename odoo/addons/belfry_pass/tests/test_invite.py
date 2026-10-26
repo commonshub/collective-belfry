@@ -141,7 +141,7 @@ class TestInviteFlow(HttpCase):
         self.assertIn('payment', location)
 
         self.invite.invalidate_recordset()
-        self.assertEqual(self.invite.state, 'used')
+        self.assertEqual(self.invite.state, 'reserved', "used only once the pass is paid")
         partner = self.invite.used_by_partner_id
         self.assertEqual(partner.email, 'Alice@Example.org')
         self.assertFalse(partner.is_company)
@@ -160,9 +160,10 @@ class TestInviteFlow(HttpCase):
         self.assertAlmostEqual(invoice.amount_total, 144.0)
         self.assertIn('move_id=%s' % invoice.id, location)
 
-        # second use is refused and creates nothing new
+        # a second submission (refresh, back button) offers the payment again and creates nothing
         again = self._post_without_get(self.invite.token, product_id=self.product_week.id, name="X", email="x@example.org")
-        self.assertEqual(again.status_code, 410)
+        self.assertEqual(again.status_code, 200)
+        self.assertIn('belfry_continue_payment', again.text)
         self.assertEqual(self.env['belfry.pass'].search_count([('invite_id', '=', self.invite.id)]), 1)
 
     def _post_without_get(self, token, **form):

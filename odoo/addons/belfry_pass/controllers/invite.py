@@ -1,5 +1,6 @@
 """Public invite page: GET shows the passes and the billing form, POST creates the order,
-invoice, pending pass and redirects to Odoo's payment link."""
+invoice, pending pass and redirects to Odoo's payment link. Until the pass is paid the invite is
+reserved: the link offers the payment page again (or starting over) instead of the form."""
 
 import logging
 
@@ -38,6 +39,8 @@ class BelfryInviteController(http.Controller):
     def invite(self, token, **post):
         invite = request.env['belfry.invite'].sudo().search([('token', '=', token)], limit=1)
         error = invite._belfry_usability_error() if invite else 'not_found'
+        if error == 'reserved':
+            return self._reserved(invite, post)
         if error:
             return self._render_error(error)
 
@@ -57,10 +60,31 @@ class BelfryInviteController(http.Controller):
     # rendering
     # ------------------------------------------------------------------
 
+    def _reserved(self, invite, post):
+        """The form was sent and the order waits for payment (a refresh, the back button, a
+        failed card attempt): offer the payment page again, or start over while nothing is paid.
+        The link is the credential, so the page names the first name only."""
+        payment = invite._belfry_payment_state()
+        if request.httprequest.method == 'POST' and post.get('start_over'):
+            invite.belfry_start_over()
+            return request.redirect('/belfry/invite/%s' % invite.token, code=303)
+        person = invite.used_by_partner_id
+        values = {
+            'invite': invite,
+            'first_name': (person.name or '').split(' ')[0],
+            'tier_name': invite.pass_id.tier_name,
+            'payment': payment,
+            'payment_link': invite.belfry_payment_link() if payment == 'unpaid' else False,
+            'no_header': True,
+            'no_footer': False,
+        }
+        return request.render('belfry_pass.invite_reserved', values)
+
     def _render_error(self, reason):
         messages = {
             'not_found': _("This invite link does not exist."),
-            'used': _("This invite link has already been used."),
+            'used': _("This invite link has been used. If it was you, your pass is active: "
+                      "the sign-in link is in your mail."),
             'expired': _("This invite link has expired. Ask your steward for a new one."),
             'revoked': _("This invite link was revoked."),
         }
@@ -88,6 +112,7 @@ class BelfryInviteController(http.Controller):
                 'company_price': company._get_product_price(variant, 1.0, date=now),
             })
         early_bird = any(row['price'] < row['list_price'] for row in rows)
+        included, excluded = env['product.template'].sudo().belfry_vat_taxes()
         form = dict(form or {})
         if not form.get('product_id') and rows:
             form['product_id'] = rows[0]['template'].id
@@ -99,6 +124,7 @@ class BelfryInviteController(http.Controller):
             'early_bird_until': env['ir.config_parameter'].sudo().get_param('belfry.early_bird_until'),
             'form': form,
             'error': error,
+            'vat_rate': excluded.amount if included and excluded else False,
             'no_header': True,
             'no_footer': False,
         }
@@ -206,6 +232,15 @@ class BelfryInviteController(http.Controller):
             person.write({'parent_id': company.id})
         return person, company
 
+    def _tax_excluded(self, order):
+        """Swap the pass products' VAT (included in the price) for the same rate on top."""
+        excluded = request.env['product.template'].sudo().belfry_vat_taxes()[1]
+        if not excluded:
+            return
+        for line in order.order_line:
+            if line.tax_ids and line.tax_ids != excluded:
+                line.tax_ids = excluded
+
     def _apply_promo_code(self, order, code):
         result = order._try_apply_code(code)
         if result.get('error'):
@@ -247,6 +282,9 @@ class BelfryInviteController(http.Controller):
                 'product_uom_qty': 1,
             })],
         })
+        if billing_partner.is_company:
+            # organisations pay the company price plus VAT; individuals' prices include it
+            self._tax_excluded(order)
         if form['promo_code']:
             self._apply_promo_code(order, form['promo_code'])
 
@@ -271,12 +309,12 @@ class BelfryInviteController(http.Controller):
             'own_pubkey_proof': form['nostr_proof'] if own_pubkey else False,
         })
         invite.sudo().write({
-            'state': 'used',
+            'state': 'reserved',
             'used_by_partner_id': person.id,
             'pass_id': belfry_pass.id,
         })
         _logger.info(
-            "Belfry invite %s used by partner %s: order %s, invoice %s, pass %s",
+            "Belfry invite %s reserved by partner %s: order %s, invoice %s, pass %s",
             invite.id, person.id, order.name, invoice.name, belfry_pass.id,
         )
         return link

@@ -142,10 +142,32 @@ class BelfryPass(models.Model):
             # belt and braces: the service assigns the number before activation, but make
             # sure an active pass never belongs to a partner without one
             self.partner_id.filtered(lambda p: not p.belfry_member_number).belfry_ensure_member_number()
+            self.invite_id._belfry_mark_used()
+            self._belfry_generate_invoice_pdf()
         if vals.get('login_setup_url'):
-            # at activation (state and link in one write) and when a steward asks for a new link
-            self.filtered(lambda p: p.state == 'active')._belfry_send_login_mail()
+            # at activation (state and link in one write) and when a steward asks for a new link;
+            # the invoice goes with the first mail only
+            self.filtered(lambda p: p.state == 'active')._belfry_send_login_mail(
+                with_invoice=vals.get('state') == 'active')
         return res
+
+    def _belfry_generate_invoice_pdf(self):
+        """Make the paid invoice's legal PDF. Odoo 19 shows a "Proforma Invoice" until an invoice
+        is sent; Belfry never uses Odoo's sending (one mail per payment: the activation mail
+        carries the PDF), so it generates the document without a sending method."""
+        sender = self.env['account.move.send'].sudo()
+        for record in self:
+            invoice = record.sudo().invoice_id
+            if not invoice or invoice.state != 'posted' or invoice.invoice_pdf_report_id:
+                continue
+            try:
+                with self.env.cr.savepoint():
+                    sender._generate_and_send_invoices(
+                        invoice, sending_methods=[], extra_edis=[], invoice_edi_format=False,
+                        allow_raising=True,
+                    )
+            except Exception:  # noqa: BLE001 - the pass activates even without the PDF
+                _logger.exception("Belfry pass %s: invoice %s PDF not generated", record.id, invoice.name)
 
     # ------------------------------------------------------------------
     # login link mail
@@ -160,9 +182,9 @@ class BelfryPass(models.Model):
         """Authentik's login page: e-mail magic link or the village pass."""
         return self.env['ir.config_parameter'].sudo().get_param('belfry.login_url') or ''
 
-    def _belfry_send_login_mail(self):
-        """Queue the activation mail (pass details and the one-time sign-in link) for every pass
-        in ``self``. Odoo's mail queue sends it; failures stay visible in Settings > Technical >
+    def _belfry_send_login_mail(self, with_invoice=False):
+        """Queue the activation mail (pass details and the one-time sign-in link, with
+        ``with_invoice`` the invoice PDF) for every pass in ``self``. Odoo's mail queue sends it; failures stay visible in Settings > Technical >
         Emails because the template keeps its mails."""
         template = self.env.ref('belfry_pass.mail_template_pass_activated', raise_if_not_found=False)
         if not template:
@@ -173,7 +195,10 @@ class BelfryPass(models.Model):
                 _logger.warning("Belfry pass %s: holder %s has no e-mail, login link not mailed",
                                 record.id, record.partner_id.id)
                 continue
-            template.sudo().send_mail(record.id, force_send=False)
+            pdf = record.sudo().invoice_id.invoice_pdf_report_id if with_invoice else False
+            email_values = {'attachment_ids': [pdf.id]} if pdf else None
+            template.sudo().with_context(belfry_invoice_attached=bool(pdf)).send_mail(
+                record.id, force_send=False, email_values=email_values)
             record.write({'login_mail_sent_at': fields.Datetime.now()})
             queued = True
             _logger.info("Belfry pass %s: sign-in mail queued for %s", record.id, record.partner_id.email)
