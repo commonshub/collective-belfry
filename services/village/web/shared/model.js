@@ -241,9 +241,15 @@ const firstLine = (s, max = 140) => {
 }
 
 /** {app, text, detail, image, start} for an activity event, or null when it is not shown. */
-export function activityFromEvent(event) {
+export function activityFromEvent(event, { pollsKey = "" } = {}) {
   switch (event.kind) {
     case 1:
+      // the polls app's notes (services/vote): a poll opened, a poll's result (a reply)
+      if (pollsKey && event.pubkey === pollsKey && event.tags.some(t => t[0] === "t" && t[1] === "poll")) {
+        const result = event.tags.some(t => t[0] === "e")
+        const subject = (tag(event, "subject") || "").replace(/^Result: /, "")
+        return { app: "vote", text: result ? "published a result" : "opened a poll", detail: subject, url: httpsUrl(tag(event, "r")) }
+      }
       if (event.tags.some(t => t[0] === "e")) return null // replies stay in the chat's threads
       return { app: "chat", text: "posted a note", detail: firstLine(event.content) }
     case 20: {

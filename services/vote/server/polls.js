@@ -75,6 +75,8 @@ export function createPolls(db, { treeDepth = 10 } = {}) {
       votes: db.prepare("SELECT COUNT(*) AS n FROM votes WHERE poll_id = ?").get(poll.id).n,
       session: poll.session || "",
       session_title: poll.session_title || "",
+      // the Nostr notes about the poll (server/announce.js), once published
+      nostr: { announcement: poll.announce_event || "", result: poll.result_event || "" },
       tree_depth: treeDepth,
     }
     // Results only once the poll has closed, so early votes do not steer later ones.
@@ -214,6 +216,36 @@ export function createPolls(db, { treeDepth = 10 } = {}) {
     },
 
     /** Every counted proof, for anyone to re-verify the tally (after the poll closed). */
+    /** When announcing on Nostr started (set on the first call): polls opened before stay quiet. */
+    announceSince() {
+      db.prepare("INSERT OR IGNORE INTO meta (key, value) VALUES ('announce_since', ?)").run(String(now()))
+      return Number(db.prepare("SELECT value FROM meta WHERE key = 'announce_since'").get().value)
+    },
+
+    /** Open polls not announced on Nostr yet (polls opened after `since`: older ones stay quiet). */
+    toAnnounce(since) {
+      return db
+        .prepare("SELECT * FROM polls WHERE announce_event = '' AND closes_at > ? AND created_at >= ? ORDER BY created_at")
+        .all(now(), since)
+        .map(p => summary(p))
+    },
+
+    /** Closed polls that were announced and whose result is not published yet, with results. */
+    toReport() {
+      return db
+        .prepare("SELECT * FROM polls WHERE announce_event != '' AND result_event = '' AND closes_at <= ? ORDER BY closes_at")
+        .all(now())
+        .map(p => ({ ...summary(p, { withResults: true }), announce_event: p.announce_event }))
+    },
+
+    markAnnounced(id, eventId) {
+      db.prepare("UPDATE polls SET announce_event = ? WHERE id = ?").run(eventId, id)
+    },
+
+    markReported(id, eventId) {
+      db.prepare("UPDATE polls SET result_event = ? WHERE id = ?").run(eventId, id)
+    },
+
     proofs(id) {
       const poll = getPoll(id)
       if (!poll) throw new PollError(404, "no such poll")

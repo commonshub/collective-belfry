@@ -98,7 +98,11 @@ def build_services(settings: Settings) -> Services:
                 settings.relay_config_path,
                 ",".join(
                     k
-                    for k in (settings.relay_extra_pubkeys, programme.programme_pubkey(settings))
+                    for k in (
+                        settings.relay_extra_pubkeys,
+                        programme.programme_pubkey(settings),
+                        settings.polls_pubkey,
+                    )
                     if k
                 ),
             )

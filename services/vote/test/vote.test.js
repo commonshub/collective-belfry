@@ -33,7 +33,8 @@ function nip98(sk, url, method, body = "") {
 async function harness() {
   const keys = [generateSecretKey(), generateSecretKey(), generateSecretKey(), generateSecretKey()]
   const active = new Map(keys.slice(0, 3).map((sk, i) => [getPublicKey(sk), 100 + i])) // keys[3]: no pass
-  const polls = createPolls(openDb(":memory:"), { treeDepth: 10 })
+  const db = openDb(":memory:")
+  const polls = createPolls(db, { treeDepth: 10 })
   const server = createServer(
     createApp({ polls, passes: { active: async () => active }, publicUrl: "http://vote.test", staticDir: null }),
   )
@@ -46,7 +47,7 @@ async function harness() {
     const res = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers, body: raw || undefined })
     return { status: res.status, json: await res.json().catch(() => null) }
   }
-  return { keys, active, polls, call, port, close: () => server.close() }
+  return { keys, active, polls, db, call, port, close: () => server.close() }
 }
 
 const inAnHour = () => Math.floor(Date.now() / 1000) + 3600
@@ -205,4 +206,62 @@ test("an older database gains the session columns", () => {
   assert.equal(p.title, "Old poll")
   assert.equal(p.session, "")
   openDb(file) // a second start leaves it as it is
+})
+
+test("polls on Nostr: an announcement when a poll opens, the result pinning the proofs when it closes", async () => {
+  const { createAnnouncer, proofsBody } = await import("../server/announce.js")
+  const db = openDb(":memory:")
+  const polls = createPolls(db, { treeDepth: 10 })
+  const sk = generateSecretKey()
+  const sent = []
+  const announcer = createAnnouncer({ polls, secretKey: sk, relayUrl: "ws://relay.test", publicUrl: "https://vote.test/", publish: async e => sent.push(e), log: { log() {}, warn() {} } })
+  // a poll from before announcing started stays quiet
+  const old = polls.create(100, { title: "Old", options: ["a", "b"], closes_at: inAnHour() }, new Set([100]))
+  db.prepare("UPDATE polls SET created_at = created_at - 3600 WHERE id = ?").run(old.id)
+  await announcer.kick()
+  assert.deepEqual(sent.map(e => e.kind), [0], "only the profile")
+  assert.equal(JSON.parse(sent[0].content).name, "Open Source Village polls")
+  const coord = `31923:${"ab".repeat(32)}:osv-programme-2027-01-25-morning`
+  const poll = polls.create(100, { title: "Pizza or pasta?", options: ["Pizza", "Pasta"], closes_at: inAnHour(), session: coord, session_title: "Lunch" }, new Set([100]))
+  await announcer.kick()
+  const ann = sent.at(-1)
+  assert.equal(ann.kind, 1)
+  assert.equal(ann.pubkey, getPublicKey(sk))
+  assert.match(ann.content, /^New poll: Pizza or pasta\?\nAbout the session “Lunch”\.\n\n• Pizza\n• Pasta\n/)
+  assert.ok(ann.content.includes("Vote: https://vote.test/#/poll/" + poll.id))
+  assert.deepEqual(ann.tags.find(t => t[0] === "a"), ["a", coord])
+  assert.deepEqual(ann.tags.find(t => t[0] === "subject"), ["subject", "Pizza or pasta?"])
+  assert.equal(polls.get(poll.id).nostr.announcement, ann.id)
+  await announcer.kick()
+  assert.equal(sent.filter(e => e.kind === 1).length, 1, "announced once")
+  // closed: the result, as a reply, with the proofs' hash
+  db.prepare("UPDATE polls SET closes_at = ? WHERE id = ?").run(Math.floor(Date.now() / 1000) - 1, poll.id)
+  await announcer.kick()
+  const res = sent.at(-1)
+  assert.deepEqual(res.tags.find(t => t[0] === "e"), ["e", ann.id, "ws://relay.test", "root"])
+  assert.match(res.content, /^Result: Pizza or pasta\?\n\n• Pizza: 0\n• Pasta: 0\n\n0 of 0 participants voted\./)
+  const x = createHash("sha256").update(proofsBody(polls.proofs(poll.id))).digest("hex")
+  assert.deepEqual(res.tags.find(t => t[0] === "x"), ["x", x])
+  assert.equal(polls.get(poll.id).nostr.result, res.id)
+  await announcer.kick()
+  assert.equal(sent.filter(e => e.kind === 1).length, 2, "reported once")
+  // a relay that refuses: nothing is marked, the next round retries
+  const failing = createAnnouncer({ polls, secretKey: sk, relayUrl: "ws://relay.test", publicUrl: "https://vote.test", publish: async () => { throw new Error("down") }, log: { log() {}, warn() {} } })
+  const later = polls.create(100, { title: "Later", options: ["a", "b"], closes_at: inAnHour() }, new Set([100]))
+  await failing.kick()
+  assert.equal(polls.get(later.id).nostr.announcement, "")
+})
+
+test("the proofs endpoint's body is what the result note's hash covers", async () => {
+  const { proofsBody } = await import("../server/announce.js")
+  const h = await harness()
+  try {
+    const made = await h.call("POST", "/api/polls", { body: { title: "x", options: ["a", "b"], closes_at: inAnHour() }, sk: h.keys[0] })
+    const url = `http://127.0.0.1:${h.port}/api/polls/${made.json.id}/proofs`
+    assert.equal((await fetch(url)).status, 409, "not before it closes")
+    h.db.prepare("UPDATE polls SET closes_at = ? WHERE id = ?").run(Math.floor(Date.now() / 1000) - 1, made.json.id)
+    assert.equal(await (await fetch(url)).text(), proofsBody(h.polls.proofs(made.json.id)))
+  } finally {
+    h.close()
+  }
 })

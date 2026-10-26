@@ -649,6 +649,7 @@ services:
       RELAY_CONFIG_PATH: /relay-config/rnostr.toml
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
+      POLLS_PUBKEY: ${POLLS_PUBKEY:-}
       # sync-programme (programme.py): empty URL disables that source
       PROGRAMME_SCHEDULE_URL: ${PROGRAMME_SCHEDULE_URL-https://opensourcevillage.org/schedule.json}
       PROGRAMME_ROOMS_URL: ${PROGRAMME_ROOMS_URL-https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json}
@@ -757,9 +758,11 @@ services:
       PUBLIC_URL: ${VOTE_PUBLIC_URL:-http://localhost:3500}
       ONBOARDING_URL: http://onboarding:8100
       TREE_DEPTH: "10"
-    # PASS_INFO_TOKEN from /run/secrets/pass_info_token
+      # polls and results as notes of the polls key (POLLS_NSEC) on the community relay
+      RELAY_URL: ws://relay:8080
+    # PASS_INFO_TOKEN and POLLS_NSEC from /run/secrets
     group_add: *secret-group
-    secrets: [pass_info_token]
+    secrets: [pass_info_token, polls_nsec]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -793,6 +796,7 @@ services:
         VITE_PROGRAMME_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
         VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
         VITE_VOTE_URL: ${VOTE_PUBLIC_URL:-http://localhost:3500}
+        VITE_POLLS_PUBKEY: ${POLLS_PUBKEY:-}
         VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_COMMUNITY_APPS: *community-apps
@@ -836,6 +840,7 @@ secrets:
   pass_page_oidc_client_secret: {file: ./secrets/pass_page_oidc_client_secret}
   pass_page_secret: {file: ./secrets/pass_page_secret}
   programme_nsec: {file: ./secrets/programme_nsec}
+  polls_nsec: {file: ./secrets/polls_nsec}
   issuer_oidc_client_secret: {file: ./secrets/issuer_oidc_client_secret}
   keycast_server_nsec: {file: ./secrets/keycast_server_nsec}
   keycast_service_token: {file: ./secrets/keycast_service_token}

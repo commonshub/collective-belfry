@@ -9,11 +9,14 @@
 // | `DB_PATH` | SQLite file (`/data/vote.sqlite`) |
 // | `TREE_DEPTH` | Semaphore tree depth (10: up to 1024 voters per poll); the image carries its artifacts |
 // | `STATIC_DIR` | the built web app (`web/dist`) |
+// | `POLLS_NSEC` (or the file /run/secrets/polls_nsec, hex), `RELAY_URL` | the polls key and the community relay: a note when a poll opens, its result when it closes (server/announce.js); without them, nothing goes to Nostr |
+// | `EVENT_TZ` | the time zone of closing times in those notes (Europe/Brussels) |
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
 import { readFile, stat } from "node:fs/promises"
 import { extname, join, normalize } from "node:path"
 import { fileURLToPath } from "node:url"
+import { createAnnouncer } from "./announce.js"
 import { openDb } from "./db.js"
 import { AuthError, verifyNip98 } from "./nip98.js"
 import { onboardingPasses } from "./passes.js"
@@ -65,7 +68,7 @@ function parseJson(body) {
   }
 }
 
-export function createApp({ polls, passes, publicUrl, staticDir }) {
+export function createApp({ polls, passes, publicUrl, staticDir, onCreated = () => {} }) {
   const base = publicUrl.replace(/\/$/, "")
 
   /** The active pass behind a NIP-98 request, or an error. */
@@ -84,7 +87,9 @@ export function createApp({ polls, passes, publicUrl, staticDir }) {
     if (path === "/api/polls" && req.method === "GET") return send(res, 200, { polls: polls.list(query.get("session") || "") }, PUBLIC)
     if (path === "/api/polls" && req.method === "POST") {
       const who = await participant(req, path, body)
-      return send(res, 201, polls.create(who.passId, parseJson(body), who.active))
+      const poll = polls.create(who.passId, parseJson(body), who.active)
+      onCreated(poll)
+      return send(res, 201, poll)
     }
     if (path === "/api/me" && req.method === "GET") {
       const who = await participant(req, path, body)
@@ -165,13 +170,27 @@ function withSecrets(env, names) {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const env = withSecrets(process.env, ["PASS_INFO_TOKEN"])
+  const env = withSecrets(process.env, ["PASS_INFO_TOKEN", "POLLS_NSEC"])
   const required = ["PUBLIC_URL", "ONBOARDING_URL", "PASS_INFO_TOKEN"]
   for (const name of required) if (!env[name]) throw new Error(`${name} is not set`)
   const treeDepth = Number(env.TREE_DEPTH || 10)
   const db = openDb(env.DB_PATH || "/data/vote.sqlite")
+  const polls = createPolls(db, { treeDepth })
+  let announcer = null
+  if (/^[0-9a-f]{64}$/.test(env.POLLS_NSEC || "") && env.RELAY_URL) {
+    announcer = createAnnouncer({
+      polls,
+      secretKey: Uint8Array.from(Buffer.from(env.POLLS_NSEC, "hex")),
+      relayUrl: env.RELAY_URL,
+      publicUrl: env.PUBLIC_URL,
+      tz: env.EVENT_TZ || "Europe/Brussels",
+    })
+    announcer.start()
+    console.log(`polls on Nostr as ${announcer.pubkey} via ${env.RELAY_URL}`)
+  } else console.log("POLLS_NSEC or RELAY_URL not set: polls are not announced on Nostr")
   const handler = createApp({
-    polls: createPolls(db, { treeDepth }),
+    polls,
+    onCreated: () => announcer?.kick(),
     passes: onboardingPasses({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN }),
     publicUrl: env.PUBLIC_URL,
     staticDir: env.STATIC_DIR || fileURLToPath(new URL("../web/dist", import.meta.url)),

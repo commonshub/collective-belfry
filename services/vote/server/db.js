@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS poll_roots (
   root TEXT NOT NULL,
   PRIMARY KEY (poll_id, root)
 );
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS votes (
   poll_id TEXT NOT NULL REFERENCES polls(id),
   nullifier TEXT NOT NULL,
@@ -48,6 +52,10 @@ export function openDb(path) {
   const columns = db.prepare("PRAGMA table_info(polls)").all().map(c => c.name)
   if (!columns.includes("session")) {
     db.exec("ALTER TABLE polls ADD COLUMN session TEXT NOT NULL DEFAULT ''; ALTER TABLE polls ADD COLUMN session_title TEXT NOT NULL DEFAULT ''")
+  }
+  // 2026-10-26: the Nostr notes announcing a poll and its result (event ids; '' until published)
+  if (!columns.includes("announce_event")) {
+    db.exec("ALTER TABLE polls ADD COLUMN announce_event TEXT NOT NULL DEFAULT ''; ALTER TABLE polls ADD COLUMN result_event TEXT NOT NULL DEFAULT ''")
   }
   return db
 }

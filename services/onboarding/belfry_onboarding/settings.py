@@ -62,6 +62,8 @@ class Settings(BaseSettings):
     )
     # Comma-separated hex pubkeys always on the whitelist (Belfry's own keys, stewards).
     relay_extra_pubkeys: str = Field(default="", alias="RELAY_EXTRA_PUBKEYS")
+    # the vote service's polls key (its notes on polls and results); whitelisted like the above
+    polls_pubkey: str = Field(default="", alias="POLLS_PUBKEY")
 
     # Validity of the one-time sign-in link mailed at activation (authentik flow token), in days.
     login_link_days: int = Field(default=7, alias="LOGIN_LINK_DAYS")

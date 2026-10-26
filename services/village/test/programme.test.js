@@ -174,3 +174,16 @@ test("search: every word, case and accents ignored; starting soon: mine only", (
   assert.equal(model.upcomingFor([s], [yes], me, s.end).length, 0, "over")
   assert.equal(model.upcomingFor([s], [], me, s.start).length, 0, "not going")
 })
+
+test("What's new: the polls key's notes (a poll opened, its result), not someone else's look-alike", () => {
+  const pollsSk = generateSecretKey()
+  const pollsKey = getPublicKey(pollsSk)
+  const tags = [["subject", "Pizza or pasta?"], ["t", "poll"], ["r", "https://vote.example/#/poll/abc"]]
+  const opened = finalizeEvent({ kind: 1, created_at: 1, tags, content: "New poll: Pizza or pasta?" }, pollsSk)
+  assert.deepEqual(activityFromEvent(opened, { pollsKey }), { app: "vote", text: "opened a poll", detail: "Pizza or pasta?", url: "https://vote.example/#/poll/abc" })
+  const result = finalizeEvent({ kind: 1, created_at: 2, tags: [["e", opened.id, "", "root"], ["subject", "Result: Pizza or pasta?"], ...tags.slice(1)], content: "Result" }, pollsSk)
+  assert.equal(activityFromEvent(result, { pollsKey }).text, "published a result")
+  assert.equal(activityFromEvent(result, { pollsKey }).detail, "Pizza or pasta?")
+  const fake = finalizeEvent({ kind: 1, created_at: 1, tags, content: "New poll" }, generateSecretKey())
+  assert.equal(activityFromEvent(fake, { pollsKey }).app, "chat")
+})

@@ -13,6 +13,8 @@ const WHY = "The directory lists the participants who chose to be listed. Sign i
 const appUrl = name => (import.meta.env[`VITE_${name}_URL`] || "").replace(/\/$/, "")
 const URLS = { chat: appUrl("CHAT"), market: appUrl("MARKET"), photos: appUrl("PHOTOS"), calendar: appUrl("CALENDAR"), programme: appUrl("PROGRAMME") }
 const ACTIVITY_DAYS = 14
+// the polls app's key: its notes (a poll opened, a result) show in What's new
+const POLLS_KEY = (import.meta.env.VITE_POLLS_PUBKEY || "").trim()
 
 async function listed() {
   const active = [...(await participants())]
@@ -181,7 +183,7 @@ async function mePage() {
 
 // -- what's new ------------------------------------------------------------------------------
 
-const APP_NAMES = { chat: "Chat", calendar: "Calendar", programme: "Programme", market: "Market", photos: "Photos", people: "Directory" }
+const APP_NAMES = { chat: "Chat", calendar: "Calendar", programme: "Programme", market: "Market", photos: "Photos", vote: "Polls", people: "Directory" }
 
 function activityLink(event, item) {
   switch (item.app) {
@@ -203,6 +205,8 @@ function activityLink(event, item) {
       const [, pubkey, ...d] = (item.session || "").split(":")
       return URLS.programme && pubkey ? `${URLS.programme}/#/s/${nip19.naddrEncode({ kind: 31923, pubkey, identifier: d.join(":") })}` : ""
     }
+    case "vote":
+      return item.url
     case "people":
       return `#/p/${nip19.npubEncode(event.pubkey)}`
     default:
@@ -241,7 +245,7 @@ async function recentActivity() {
   const newest = new Map()
   for (const e of events) {
     // hidden content, and comments on hidden content
-    if (!active.has(e.pubkey) || gone.has(e.id) || isHidden(hidden, e)) continue
+    if (!(active.has(e.pubkey) || (POLLS_KEY && e.pubkey === POLLS_KEY)) || gone.has(e.id) || isHidden(hidden, e)) continue
     if (e.kind === 1111 && e.tags.some(t => t[0] === "E" && hidden.has(t[1]))) continue
     const d = e.kind >= 30000 && e.kind < 40000 ? e.tags.find(t => t[0] === "d")?.[1] : null
     const key = d === null ? e.id : `${e.kind}:${e.pubkey}:${d}`
@@ -250,7 +254,7 @@ async function recentActivity() {
     if (!prev || e.created_at > prev.created_at) newest.set(key, e)
   }
   return [...newest.values()]
-    .map(event => ({ event, item: activityFromEvent(event) }))
+    .map(event => ({ event, item: activityFromEvent(event, { pollsKey: POLLS_KEY }) }))
     .filter(x => x.item)
     .sort((a, b) => b.event.created_at - a.event.created_at)
     .slice(0, 150)
