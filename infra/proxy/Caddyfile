@@ -270,7 +270,7 @@ verifier.{$BELFRY_DOMAIN} {
 # Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
 calendar.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN} https://programme.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy calendar:80
 }
 

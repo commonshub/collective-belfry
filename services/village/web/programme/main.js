@@ -110,9 +110,9 @@ function loadProgramme() {
     const active = await participants()
     const authors = [...new Set([PROGRAMME_KEY, ...active].filter(Boolean))]
     const [events, deletions, rsvps, hidden] = await Promise.all([
-      queryAuthors({ kinds: [SESSION_KIND], limit: 5000 }, authors),
-      queryAuthors({ kinds: [5], limit: 5000 }, authors),
-      queryAuthors({ kinds: [RSVP_KIND], limit: 5000 }, [...active]),
+      queryAuthors({ kinds: [SESSION_KIND] }, authors, { all: true }),
+      queryAuthors({ kinds: [5], "#k": [String(SESSION_KIND)] }, authors, { all: true }),
+      queryAuthors({ kinds: [RSVP_KIND] }, [...active], { all: true }),
       hiddenRefs(),
     ])
     const sessions = currentSessions(events, deletions, PROGRAMME_KEY).filter(
@@ -440,7 +440,7 @@ async function sessionPage(code) {
       .sort((a, b) => a.created_at - b.created_at)
     const photoById = new Map(photoEvents.filter(e => data.active.has(e.pubkey)).map(e => [e.id, e]))
     const posters = [...new Set([...photoById.values()].map(e => e.pubkey))]
-    const gone = posters.length ? deletedIds(await queryAuthors({ kinds: [5], "#k": [String(PHOTO_KIND)] }, posters), photoById) : new Set()
+    const gone = posters.length ? deletedIds(await queryAuthors({ kinds: [5], "#k": [String(PHOTO_KIND)] }, posters, { all: true }), photoById) : new Set()
     photos = [...photoById.values()]
       .filter(e => !gone.has(e.id) && !data.hidden.has(e.id))
       .map(photoFromEvent)
@@ -560,7 +560,7 @@ async function sessionPage(code) {
     b.onclick = async () => {
       for (const x of body.querySelectorAll("[data-rsvp]")) x.disabled = true
       try {
-        const event = await publish(rsvpTemplate(s, b.dataset.rsvp))
+        const event = await publish(rsvpTemplate(s, b.dataset.rsvp, me))
         data.rsvps.push(event)
         keepProgramme(data)
         sessionPage(code)
@@ -660,7 +660,7 @@ async function editPage(code = "", day = "") {
     if (end <= start) end = zonedTime(dayKey(start + 86400), v("end"), TZ) // past midnight
     btn.disabled = true
     try {
-      const template = sessionTemplate({ d: s?.d, title: v("title"), start, end, tzid: TZ, location: v("location"), description: v("description"), link: v("link") })
+      const template = sessionTemplate({ d: s?.d, title: v("title"), start, end, tzid: TZ, location: v("location"), description: v("description"), link: v("link"), keep: s?.tags || [] })
       const event = await publish(template)
       loaded = null
       location.hash = `#/s/${nip19.naddrEncode({ kind: SESSION_KIND, pubkey: event.pubkey, identifier: template.tags[0][1] })}`

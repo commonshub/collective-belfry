@@ -134,7 +134,7 @@ def test_slots_and_bookings_become_calendar_events(svc, relay):
     # March one not at all, the untitled all-day booking as "Booked"
     assert titles == ["Booked", "Python workshop", "Weekly standup", "Weekly standup"]
     workshop = next(e for e in rooms if tag(e, "title") == "Python workshop")
-    assert workshop["content"] == "Bring a laptop"
+    assert workshop["content"] == ""  # the booking note (who, price, how to cancel) stays out
     assert tag(workshop, "location").startswith("Mush Room, ")
     assert ["t", "room-mushroom"] in workshop["tags"]
     assert result["published"] == len(events) == 6
@@ -213,3 +213,14 @@ def test_the_relay_rate_limit_is_waited_out(svc, relay, monkeypatch):
     monkeypatch.setattr(relay, "publish", limited)
     assert programme.sync(svc, http())["published"] == 6
     assert waits == [programme.RATE_LIMIT_WAIT] and len(calendar_events(relay)) == 6
+
+
+def test_more_events_than_the_relay_answers_at_once(svc, relay):
+    # the relay caps every answer (rnostr max_limit); the sync pages through by `until`
+    relay.max_limit = 4
+    assert programme.sync(svc, http())["published"] == 6
+    again = programme.sync(svc, http())
+    assert again["published"] == 0 and again["unchanged"] == 6
+    gone = programme.sync(svc, http(schedule={**SCHEDULE, "days": []}))
+    assert gone["deleted"] == 2
+    assert programme.sync(svc, http(schedule={**SCHEDULE, "days": []}))["deleted"] == 0

@@ -30,13 +30,13 @@ function newest(events) {
 
 /** Coordinates the author deleted (NIP-09 kind 5 with an "a" tag). */
 async function deletedCoordinates(authors) {
-  const dels = await queryAuthors({ kinds: [5], "#k": [String(LISTING_KIND)] }, authors)
+  const dels = await queryAuthors({ kinds: [5], "#k": [String(LISTING_KIND)] }, authors, { all: true })
   return new Set(dels.flatMap(e => e.tags.filter(t => t[0] === "a" && t[1].split(":")[1] === e.pubkey).map(t => t[1])))
 }
 
 async function activeListings() {
   const active = [...(await participants())]
-  const [listings, hidden] = await Promise.all([queryAuthors({ kinds: [LISTING_KIND] }, active).then(newest), hiddenRefs()])
+  const [listings, hidden] = await Promise.all([queryAuthors({ kinds: [LISTING_KIND] }, active, { all: true }).then(newest), hiddenRefs()])
   const gone = await deletedCoordinates([...new Set(listings.map(l => l.pubkey))])
   return listings
     .filter(l => !gone.has(l.coordinate) && !(hidden.has(l.coordinate) && !isMe(l.pubkey)))

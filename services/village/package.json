@@ -11,6 +11,7 @@
     "build": "APP=people vite build -c web/vite.config.js && APP=market vite build -c web/vite.config.js && APP=photos vite build -c web/vite.config.js && APP=programme vite build -c web/vite.config.js"
   },
   "dependencies": {
+    "@noble/hashes": "2.0.1",
     "nostr-tools": "2.25.2"
   },
   "devDependencies": {

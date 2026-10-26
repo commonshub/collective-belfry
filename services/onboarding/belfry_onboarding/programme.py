@@ -33,7 +33,7 @@ import recurring_ical_events
 from coincurve import PrivateKey
 
 from .nip46check import sign_event
-from .relay import RelayError
+from .relay import RelayError, query_all
 
 log = logging.getLogger(__name__)
 
@@ -173,7 +173,10 @@ def _as_datetime(value: dt.date | dt.datetime, tz: ZoneInfo) -> dt.datetime:
 def room_entries(
     room: dict[str, Any], ics: bytes, start: dt.date, end: dt.date, tz: ZoneInfo, venue: str
 ) -> list[Entry]:
-    """A room's bookings between ``start`` and ``end`` (inclusive), recurring ones expanded."""
+    """A room's bookings between ``start`` and ``end`` (inclusive), recurring ones expanded. Only
+    the title: a booking's description is the Commons Hub's booking note (who booked it, their
+    Discord handle, the price in tokens, how to cancel, sometimes an invoice address), not what
+    the session is about."""
     calendar = icalendar.Calendar.from_ical(ics)
     window_start = dt.datetime.combine(start, dt.time(0, 0), tz)
     window_end = dt.datetime.combine(end + dt.timedelta(days=1), dt.time(0, 0), tz)
@@ -194,7 +197,6 @@ def room_entries(
                 start=begin,
                 end=finish,
                 location=", ".join(v for v in (room["name"], venue) if v),
-                description=str(event.get("DESCRIPTION", "")).strip(),
                 hashtags=("osv", "room", f"room-{room['slug']}"),
             )
         )
@@ -326,18 +328,24 @@ def sync(services: Any, client: httpx.Client | None = None) -> dict[str, Any]:
     finally:
         if own_client:
             client.close()
-    existing = services.relay.query(
-        [{"kinds": [CALENDAR_EVENT_KIND, DELETION_KIND], "authors": [pubkey]}], sign
+    # page by page: the relay answers at most PAGE_LIMIT events per request
+    existing = query_all(
+        services.relay, {"kinds": [CALENDAR_EVENT_KIND], "authors": [pubkey]}, sign
+    ) + query_all(
+        services.relay,
+        {"kinds": [DELETION_KIND], "authors": [pubkey], "#k": [str(CALENDAR_EVENT_KIND)]},
+        sign,
     )
     tzid = settings.programme_timezone
     todo = plan(wanted, existing, tzid, failed)
     now = int(time.time())
-    for entry in todo.publish:
+    for i, entry in enumerate(todo.publish):
         publish(
             sign(
                 {
                     "kind": CALENDAR_EVENT_KIND,
-                    "created_at": now,
+                    # one second apart, so the next run can page through them by `until`
+                    "created_at": now - len(todo.publish) + 1 + i,
                     "tags": entry.tags(tzid),
                     "content": entry.description,
                 }

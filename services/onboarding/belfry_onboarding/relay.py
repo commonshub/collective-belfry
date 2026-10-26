@@ -108,3 +108,29 @@ class RelayPublisher:
                 elif kind == "NOTICE":
                     log.info("relay notice: %s", msg[1] if len(msg) > 1 else "")
             raise RelayError("timed out waiting for the relay's EOSE")
+
+
+# The community relay answers at most this many events per filter (rnostr `max_limit`).
+PAGE_LIMIT = 300
+
+
+def query_all(
+    relay: Any, flt: dict[str, Any], sign: Signer, page: int = PAGE_LIMIT, max_pages: int = 100
+) -> list[dict[str, Any]]:
+    """Every event matching one filter, newest first, page by page with ``until``. The relay caps
+    each answer (``PAGE_LIMIT``), so a single REQ silently drops the oldest events. ``until`` is
+    inclusive, so pages overlap at their oldest second; paging ends when a page brings nothing
+    new (also when more than a page shares one second, which the caller avoids by spreading
+    ``created_at``)."""
+    seen: dict[str, dict[str, Any]] = {}
+    until: int | None = None
+    for _ in range(max_pages):
+        q = {**flt, "limit": page} | ({"until": until} if until is not None else {})
+        events = relay.query([q], sign)
+        new = [e for e in events if e["id"] not in seen]
+        if not new:
+            break
+        for e in new:
+            seen[e["id"]] = e
+        until = min(e["created_at"] for e in events)
+    return sorted(seen.values(), key=lambda e: e["created_at"], reverse=True)

@@ -80,8 +80,13 @@ to, might go to or announced, with "Add all to my calendar" (one .ics file).
 Made for the phone: a tab bar at the bottom (Programme, Search, Yours, Announce), the day chips stay
 under the app bar while the list scrolls, a swipe goes to the next or previous day, today's list
 redraws every minute ("On now"), and "Starting soon" names the participant's sessions within half an
-hour. Search matches every word in titles, descriptions, places and rooms (case and accents
-ignored), upcoming first. The programme the phone last loaded is kept in `localStorage` (per
+hour. Search finds sessions where every typed word starts a word of the title, description, place
+or room (case and accents ignored, links left out; "ch" finds "Chess", not "lunch"), upcoming
+first; the field stays under the app bar while the results scroll. While a field has focus (the
+phone's keyboard is up) the tab bar steps aside, and `interactive-widget=resizes-content` makes
+the page end at the keyboard instead of panning the app bar and the field out of view. Every relay
+read pages past the relay's cap of 300 events per request (`queryAll` in `shared/nostr.js`;
+deletions are read with `#k` 31923). The programme the phone last loaded is kept in `localStorage` (per
 participant, cleared on sign-out) and drawn at once, then refreshed from the relay; when the relay
 does not answer, the kept copy stays with a note. A service worker (`web/programme/public/sw.js`,
 the programme app only) caches the page, its assets, the app bar and the brand files, so the app
@@ -93,16 +98,19 @@ before each session (`VALARM`); that is the reminder, since the apps send no not
 day, from and until in the village's time (whatever the phone's zone; an end before the start
 runs past midnight), place (the rooms are suggested), description, a link; `d` = `session-…`, never
 the programme key's `osv-programme-`/`osv-room-` prefixes, which `sync-programme` manages. The host
-edits it (`#/edit/<naddr>`, same coordinate, so RSVPs, comments and photos stay) or cancels it
-(kind 5 with `a` and `e`). Calendar by Form* does not show participants' public events (calendar
-patch 0004 reads the programme key only).
+edits it (`#/edit/<naddr>`, same coordinate, so RSVPs, comments and photos stay; tags the form does
+not show, such as a summary, an image, hashtags or invitees from the calendar app, are kept) or
+cancels it (kind 5 with `a` and `e`). The calendar app shows participants' public events as "From
+participants" (calendar patch 0006), with the same filters as here: it reads this app's
+`/api/participants` (NIP-98) and `/api/hidden`, which answer the calendar's origin
+(`PROGRAMME_CORS_ORIGINS`, CORS).
 
 A session is addressed by its coordinate `31923:<pubkey>:<d>` (links: `#/s/<naddr>`), and the
 other apps point at it:
 
 | What | Event | Where it shows |
 | --- | --- | --- |
-| Going / Maybe / Can't go | kind 31925, `a` = the coordinate, `status`; one replaceable answer per participant (Calendar by Form*'s RSVPs are read too) | counts on the list, the people going on the session page, "Your sessions" |
+| Going / Maybe / Can't go | kind 31925, `a` = the coordinate, `status`; one replaceable answer per participant, with Calendar by Form*'s `d` (the first 30 hex digits of SHA-256 of `<responder>:<author>:<d>`), so an answer in either app replaces the other's | counts on the list, the people going on the session page, "Your sessions" |
 | Comments | NIP-22 kind 1111 with `A` = the coordinate, `K` 31923 | the session page; "What's new" |
 | Photos | kind 20 with an `a` tag: the photos app's `#/new?session=<coordinate>` ("Share a photo from this session") | the session page; "At <session>" on the photo |
 | Thanks | a nutzap through the wallet with the coordinate as `ref` (an `a` tag), participants' sessions only | "Thank the host" |

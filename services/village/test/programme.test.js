@@ -1,6 +1,7 @@
 // The programme app's event formats: sessions (NIP-52 kind 31923), RSVPs (31925), comments
 // (NIP-22 on the session's coordinate), photos taken at a session and the calendar file.
 import assert from "node:assert/strict"
+import { createHash } from "node:crypto"
 import { test } from "node:test"
 import { finalizeEvent, generateSecretKey, getPublicKey, verifyEvent } from "nostr-tools/pure"
 import {
@@ -71,19 +72,25 @@ test("session: deletions by the author remove it, others' deletions do not", () 
 test("rsvp: one replaceable answer per participant, the newest counts", () => {
   const s = currentSessions([slot("osv-programme-2027-01-25-evening", "Party", 1800000000, 1, [["t", "programme"]])], [], PROGRAMME)[0]
   const sk = generateSecretKey()
-  const t = rsvpTemplate(s, "accepted")
+  const me = getPublicKey(sk)
+  const t = rsvpTemplate(s, "accepted", me)
   assert.equal(t.kind, RSVP_KIND)
   assert.deepEqual(t.tags.find(x => x[0] === "a"), ["a", s.coordinate])
   assert.deepEqual(t.tags.find(x => x[0] === "status"), ["status", "accepted"])
-  assert.ok(t.tags.some(x => x[0] === "d" && x[1] === `rsvp-${s.coordinate}`))
+  // the same d as Calendar by Form* (makeDTag of "<responder>:<author>:<d>"), so either app's
+  // answer replaces the other's
+  const expected = createHash("sha256").update(`${me}:${PROGRAMME}:osv-programme-2027-01-25-evening`).digest("hex").slice(0, 30)
+  assert.deepEqual(t.tags.find(x => x[0] === "d"), ["d", expected])
+  assert.throws(() => rsvpTemplate(s, "accepted", ""))
   const yes = finalizeEvent({ ...t, created_at: 100 }, sk)
-  const no = finalizeEvent({ ...rsvpTemplate(s, "declined"), created_at: 200 }, sk)
-  const other = finalizeEvent({ ...rsvpTemplate(s, "tentative"), created_at: 50 }, generateSecretKey())
-  const elsewhere = finalizeEvent({ ...rsvpTemplate({ ...s, coordinate: "31923:aa:x" }, "accepted"), created_at: 300 }, sk)
+  const no = finalizeEvent({ ...rsvpTemplate(s, "declined", me), created_at: 200 }, sk)
+  const otherSk = generateSecretKey()
+  const other = finalizeEvent({ ...rsvpTemplate(s, "tentative", getPublicKey(otherSk)), created_at: 50 }, otherSk)
+  const elsewhere = finalizeEvent({ ...rsvpTemplate({ ...s, coordinate: "31923:aa:x" }, "accepted", me), created_at: 300 }, sk)
   const answers = rsvpsFor([yes, no, other, elsewhere], s.coordinate)
   assert.equal(answers.get(getPublicKey(sk)), "declined")
   assert.equal(answers.size, 2)
-  assert.throws(() => rsvpTemplate(s, "yes"))
+  assert.throws(() => rsvpTemplate(s, "yes", me))
   // what Calendar by Form* writes is read too (its own d tag, a + status)
   const formstr = at(generateSecretKey(), RSVP_KIND, [["a", s.coordinate], ["status", "tentative"], ["d", "f0rm"]])
   assert.equal(rsvpsFor([formstr], s.coordinate).get(formstr.pubkey), "tentative")
@@ -166,9 +173,20 @@ test("search: every word, case and accents ignored; starting soon: mine only", (
   assert.ok(model.sessionMatches(s, "madeleine")) // the place
   assert.ok(!model.sessionMatches(s, "cafe rust"))
   assert.ok(!model.sessionMatches(s, "  "))
+  // word starts only, links left out: "ch" found a room booking through its note's
+  // "discord.com/channels/…" link and "CHT" amount
+  const booking = sessionFromEvent(
+    { ...slot("osv-room-angel-9", "Impro - Kmeleons", 1800000000, 1, [["t", "room-angel"]]), content: "Booked by X for 1.00 xCHT\nhttps://discord.com/channels/1/2" },
+    PROGRAMME,
+  )
+  assert.ok(!model.sessionMatches(booking, "ch"))
+  assert.ok(model.sessionMatches(booking, "kmel"))
+  assert.ok(model.sessionMatches(booking, "impro-kmeleons"))
+  assert.ok(model.sessionMatches(s, "logi"))
+  assert.ok(!model.sessionMatches(s, "ogiciel"))
   const sk = generateSecretKey()
   const me = getPublicKey(sk)
-  const yes = finalizeEvent({ ...rsvpTemplate(s, "accepted"), created_at: 10 }, sk)
+  const yes = finalizeEvent({ ...rsvpTemplate(s, "accepted", me), created_at: 10 }, sk)
   assert.deepEqual(model.upcomingFor([s], [yes], me, s.start - 20 * 60).map(x => x.d), ["osv-room-x-1"])
   assert.equal(model.upcomingFor([s], [yes], me, s.start - 60 * 60).length, 0, "too early")
   assert.equal(model.upcomingFor([s], [yes], me, s.end).length, 0, "over")
@@ -186,4 +204,26 @@ test("What's new: the polls key's notes (a poll opened, its result), not someone
   assert.equal(activityFromEvent(result, { pollsKey }).detail, "Pizza or pasta?")
   const fake = finalizeEvent({ kind: 1, created_at: 1, tags, content: "New poll" }, generateSecretKey())
   assert.equal(activityFromEvent(fake, { pollsKey }).app, "chat")
+})
+
+test("edit: keeps the tags the form does not cover", () => {
+  const sk = generateSecretKey()
+  const start = 1800000000
+  const made = at(sk, 31923, [
+    ["d", "cal-1"], ["title", "Old"], ["start", String(start)], ["end", String(start + 3600)], ["location", "Garden"],
+    ["summary", "Short"], ["image", "https://img.example/a.png"], ["p", "ab".repeat(32)], ["t", "rust"],
+    ["r", "https://first.example"], ["r", "https://second.example"],
+  ])
+  const s = sessionFromEvent(made, PROGRAMME)
+  const t = model.sessionTemplate({ d: s.d, title: "New", start, end: start + 7200, location: "Café", link: "https://new.example", keep: s.tags })
+  const get = name => t.tags.filter(x => x[0] === name).map(x => x[1])
+  assert.deepEqual(get("title"), ["New"])
+  assert.deepEqual(get("location"), ["Café"])
+  assert.deepEqual(get("end"), [String(start + 7200)])
+  assert.deepEqual(get("summary"), ["Short"])
+  assert.deepEqual(get("image"), ["https://img.example/a.png"])
+  assert.deepEqual(get("p"), ["ab".repeat(32)])
+  assert.deepEqual(get("t").sort(), ["osv", "rust"])
+  assert.deepEqual(get("r"), ["https://new.example", "https://second.example"])
+  assert.deepEqual(get("d"), ["cal-1"])
 })

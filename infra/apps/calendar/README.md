@@ -23,10 +23,13 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    `VITE_PROGRAMME_PUBKEY`), published by the onboarding service's `sync-programme` job from the
    website's `/schedule.json` and the rooms' public Google calendars. Read-only here; participants
    can open, share and RSVP to them. Patch 0006 adds **From participants**: every participant's
-   public event (kind 31923 on the community relay, which only participants can write to; the
-   signed-in participant's own are left out, the app shows them already), deleted ones (kind 5 by
-   their author) removed. Revoked participants' events stay until they delete them, and reports
-   hidden by stewards are not applied here (the programme app does both).
+   public event (kind 31923 on the community relay) of a participant with an active pass, without
+   what stewards hid after a report and without deleted ones (kind 5 by their author). The list of
+   active participants and the hidden list come from the programme app (`VITE_PROGRAMME_URL`:
+   `/api/participants` signed with NIP-98, `/api/hidden`; CORS for the calendar's origin, CSP
+   `connect-src`); until they are known the calendar stays empty. The signed-in participant's own
+   events are left out only when they are in one of their calendars already (the app shows those);
+   a session announced in the programme app shows up here.
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
 pass); the app signs through Keycast, so the `belfry-event` policy (`infra/keycast/policy.sql`)

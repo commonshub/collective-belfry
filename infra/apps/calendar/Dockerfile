@@ -39,10 +39,13 @@ ARG VITE_KEYCAST_URL=http://localhost:3000
 # The programme key (PROGRAMME_PUBKEY): its public calendar events on the community relay are the
 # sidebar's "Open Source Village" calendars (programme and rooms, patch 0004); empty hides them.
 ARG VITE_PROGRAMME_PUBKEY=""
+# The programme app (services/village): "From participants" shows only active participants'
+# sessions and leaves out what stewards hid (patch 0006); empty leaves that calendar empty.
+ARG VITE_PROGRAMME_URL=http://localhost:3900
 ENV VITE_TEST_RELAY=$VITE_TEST_RELAY VITE_SIGNER_RELAYS=$VITE_SIGNER_RELAYS \
     VITE_BRAND_URL=$VITE_BRAND_URL VITE_APPS_URL=$VITE_APPS_URL VITE_ABOUT_URL=$VITE_ABOUT_URL \
     VITE_KEYCAST_URL=$VITE_KEYCAST_URL VITE_COMMUNITY_APPS=$VITE_COMMUNITY_APPS \
-    VITE_PROGRAMME_PUBKEY=$VITE_PROGRAMME_PUBKEY \
+    VITE_PROGRAMME_PUBKEY=$VITE_PROGRAMME_PUBKEY VITE_PROGRAMME_URL=$VITE_PROGRAMME_URL \
     VITE_MAIL_API_BASE_URL=""
 RUN pnpm typecheck && pnpm build
 

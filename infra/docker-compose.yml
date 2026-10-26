@@ -705,6 +705,7 @@ services:
         VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
         VITE_COMMUNITY_APPS: *community-apps
         VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
+        VITE_PROGRAMME_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
     # static files only: no backend access
     <<: *nonroot
     # caddy's binary carries the file capability to bind port 80; keep it in the bounding set
@@ -806,6 +807,8 @@ services:
       MARKET_PUBLIC_URL: ${MARKET_PUBLIC_URL:-http://localhost:3700}
       PHOTOS_PUBLIC_URL: ${PHOTOS_PUBLIC_URL:-http://localhost:3800}
       PROGRAMME_PUBLIC_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
+      # other apps that read the programme's participants and hidden list (CORS): the calendar
+      PROGRAMME_CORS_ORIGINS: ${CALENDAR_PUBLIC_URL:-http://localhost:3200}
       ONBOARDING_URL: http://onboarding:8100
     # PASS_INFO_TOKEN from /run/secrets/pass_info_token
     group_add: *secret-group

@@ -62,7 +62,7 @@ async function activePhotos(author = null) {
   const [events, hidden] = await Promise.all([queryAuthors({ kinds: [PHOTO_KIND], limit: FEED_LIMIT }, authors), hiddenRefs()])
   const byId = new Map(events.map(e => [e.id, e]))
   const posters = [...new Set(events.map(e => e.pubkey))]
-  const gone = posters.length ? deletedIds(await queryAuthors({ kinds: [5], "#k": [String(PHOTO_KIND)] }, posters), byId) : new Set()
+  const gone = posters.length ? deletedIds(await queryAuthors({ kinds: [5], "#k": [String(PHOTO_KIND)] }, posters, { all: true }), byId) : new Set()
   return [...byId.values()]
     .filter(e => !gone.has(e.id) && !(hidden.has(e.id) && !isMe(e.pubkey)))
     .map(photoFromEvent)

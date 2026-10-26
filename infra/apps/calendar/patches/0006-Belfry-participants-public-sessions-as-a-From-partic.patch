@@ -1,26 +1,95 @@
-From 7b7a5837ec4ea7b5cde72b66ca8124027a5412ce Mon Sep 17 00:00:00 2001
+From 2a6499055307c386bdb0ded4bd278ff85295e239 Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@localhost>
 Date: Mon, 26 Oct 2026 03:33:08 +0100
 Subject: [PATCH 6/6] Belfry: participants' public sessions as a "From
  participants" calendar
 
 ---
- src/belfry/village.ts | 88 +++++++++++++++++++++++++++----------------
- src/nostr/village.ts  | 17 +++++++++
- 2 files changed, 73 insertions(+), 32 deletions(-)
+ src/belfry/participants.ts |  59 ++++++++++++++++++
+ src/belfry/village.ts      | 122 +++++++++++++++++++++++++++----------
+ src/nostr/village.ts       |  17 ++++++
+ 3 files changed, 166 insertions(+), 32 deletions(-)
+ create mode 100644 src/belfry/participants.ts
 
+diff --git a/src/belfry/participants.ts b/src/belfry/participants.ts
+new file mode 100644
+index 0000000..34a1f2a
+--- /dev/null
++++ b/src/belfry/participants.ts
+@@ -0,0 +1,59 @@
++/**
++ * Belfry: which participants hold an active pass, and what stewards hid after a report, from the
++ * programme app's API (services/village: GET /api/participants with NIP-98, GET /api/hidden).
++ * The community relay keeps the events of expired passes; "From participants" shows only active
++ * participants' sessions, like the programme app.
++ */
++import { signerManager } from "../common/signer";
++import { buildAndSign } from "../nostr/core";
++
++export const PROGRAMME_URL = (
++  (import.meta.env.VITE_PROGRAMME_URL as string | undefined) || ""
++).replace(/\/$/, "");
++
++async function nip98(url: string, pubkey: string): Promise<string> {
++  const signed = await buildAndSign({
++    kind: 27235,
++    pubkey,
++    created_at: Math.floor(Date.now() / 1000),
++    tags: [
++      ["u", url],
++      ["method", "GET"],
++    ],
++    content: "",
++  });
++  return `Nostr ${btoa(JSON.stringify(signed))}`;
++}
++
++/** The active participants' public keys; null when they cannot be learned (not signed in, no
++ * programme app, an error). */
++export async function activeParticipants(
++  pubkey: string,
++): Promise<Set<string> | null> {
++  if (!PROGRAMME_URL || !pubkey) return null;
++  try {
++    await signerManager.getSigner();
++    const url = `${PROGRAMME_URL}/api/participants`;
++    const res = await fetch(url, {
++      headers: { Authorization: await nip98(url, pubkey) },
++    });
++    if (!res.ok) return null;
++    const body = (await res.json()) as { pubkeys?: string[] };
++    return new Set(body.pubkeys ?? []);
++  } catch {
++    return null;
++  }
++}
++
++/** Event ids and coordinates stewards hid; empty when they cannot be read. */
++export async function hiddenRefs(): Promise<Set<string>> {
++  if (!PROGRAMME_URL) return new Set();
++  try {
++    const res = await fetch(`${PROGRAMME_URL}/api/hidden`);
++    if (!res.ok) return new Set();
++    const body = (await res.json()) as { hidden?: string[] };
++    return new Set(body.hidden ?? []);
++  } catch {
++    return new Set();
++  }
++}
 diff --git a/src/belfry/village.ts b/src/belfry/village.ts
-index b734bcb..9102b03 100644
+index b734bcb..91ce47d 100644
 --- a/src/belfry/village.ts
 +++ b/src/belfry/village.ts
-@@ -3,13 +3,19 @@
+@@ -3,13 +3,23 @@
   * website's programme and the rooms' Google calendars as public NIP-52 events (kind 31923)
   * signed with the programme key (VITE_PROGRAMME_PUBKEY). This store follows that key's events
   * on the community relay and groups them by their `t` tag: "programme" is the village
 - * programme, "room-<slug>" one calendar per room. They are read-only public events: no
 + * programme, "room-<slug>" one calendar per room. Participants' own public events (announced in
-+ * the programme app or here) form a third kind, "From participants" (not the signed-in
-+ * participant's own, which the app shows already). They are read-only public events: no
++ * the programme app or here) form a third kind, "From participants": only active participants'
++ * (participants.ts), without what stewards hid, and without the signed-in participant's own
++ * events that are in one of their calendars already (the app shows those). They are read-only
++ * public events: no
   * calendar-list refs, never edited here; participants can still open, share and RSVP to them.
   */
  import { create } from "zustand";
@@ -32,10 +101,12 @@ index b734bcb..9102b03 100644
 +  observeProgrammeEvents,
 +} from "../nostr/village";
 +import { useUser } from "../stores/user";
++import { useCalendarLists } from "../stores/calendarLists";
++import { activeParticipants, hiddenRefs } from "./participants";
  import { EventKinds } from "../nostr/kinds";
  import { nostrEventToCalendar } from "../utils/parser";
  import type { ICalendarEvent } from "../utils/types";
-@@ -29,6 +35,11 @@ export interface VillageCalendar {
+@@ -29,6 +39,11 @@ export interface VillageCalendar {
  
  // The programme in the village's lime, the rooms in tints that read on the dark theme.
  const PROGRAMME_COLOR = "#d6ff52";
@@ -47,7 +118,7 @@ index b734bcb..9102b03 100644
  const ROOM_COLORS = [
    "#f89b0e",
    "#5ec8e5",
-@@ -39,8 +50,10 @@ const ROOM_COLORS = [
+@@ -39,8 +54,10 @@ const ROOM_COLORS = [
    "#8fa8ff",
  ];
  
@@ -59,7 +130,7 @@ index b734bcb..9102b03 100644
    const tags = event.tags.filter((t) => t[0] === "t").map((t) => t[1]);
    if (tags.includes("programme")) {
      return {
-@@ -82,7 +95,8 @@ interface VillageState {
+@@ -82,27 +99,48 @@ interface VillageState {
  }
  
  let subscription: ObserveHandle | null = null;
@@ -68,17 +139,31 @@ index b734bcb..9102b03 100644
 +// (NIP-09 `a` tag)
  const latest = new Map<string, { event: Event; calendar: VillageCalendar }>();
  const deletedAt = new Map<string, number>();
++// active participants (null: not known yet, "From participants" stays empty) and hidden content
++let active: Set<string> | null = null;
++let hidden = new Set<string>();
++let activeFor = "";
  
-@@ -90,19 +104,25 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
+ export const useVillageCalendars = create<VillageState>((set, get) => {
    const publish = () => {
      const calendars = new Map<string, VillageCalendar>();
      const events: ICalendarEvent[] = [];
 -    for (const [d, { event, calendar }] of latest) {
 -      if ((deletedAt.get(d) ?? -1) >= event.created_at) continue;
 +    const me = useUser.getState().user?.pubkey;
++    const inMyCalendars = new Set(
++      useCalendarLists
++        .getState()
++        .calendars.flatMap((c) => c.eventRefs.map((ref) => ref[0])),
++    );
 +    for (const [key, { event, calendar }] of latest) {
 +      if ((deletedAt.get(key) ?? -1) >= event.created_at) continue;
-+      if (calendar.id === COMMUNITY.id && event.pubkey === me) continue;
++      if (calendar.id === COMMUNITY.id) {
++        const coordinate = `${EventKinds.PublicCalendarEvent}:${key}`;
++        if (event.pubkey === me && inMyCalendars.has(coordinate)) continue;
++        if (event.pubkey !== me && !active?.has(event.pubkey)) continue;
++        if (hidden.has(event.id) || hidden.has(coordinate)) continue;
++      }
        calendars.set(calendar.id, calendar);
        const parsed = nostrEventToCalendar(event, calendar.id);
        if (parsed.begin && parsed.end) events.push(parsed);
@@ -99,7 +184,7 @@ index b734bcb..9102b03 100644
      set({ calendars: sorted, events });
    };
    let timer: ReturnType<typeof setTimeout> | undefined;
-@@ -117,31 +137,35 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
+@@ -117,31 +155,51 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
      visibility: loadVisibility(),
      start: () => {
        if (subscription || !PROGRAMME_PUBKEY) return;
@@ -154,8 +239,24 @@ index b734bcb..9102b03 100644
 +      };
 +      subscription = observeProgrammeEvents(PROGRAMME_PUBKEY, onEvent);
 +      observeCommunityEvents(onEvent);
-+      // the signed-in participant's own events leave "From participants"
-+      useUser.subscribe(schedule);
++      // who is active is learned once signed in (the request is signed with the participant's key)
++      const learn = async () => {
++        const me = useUser.getState().user?.pubkey ?? "";
++        if (!me || me === activeFor) return;
++        activeFor = me;
++        [active, hidden] = await Promise.all([
++          activeParticipants(me),
++          hiddenRefs(),
++        ]);
++        if (active === null) activeFor = "";
++        schedule();
++      };
++      useUser.subscribe(() => {
++        void learn();
++        schedule();
++      });
++      useCalendarLists.subscribe(schedule);
++      void learn();
      },
      toggleVisibility: (id) => {
        const visibility = {

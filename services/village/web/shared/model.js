@@ -3,6 +3,8 @@
 // Directory consent: kind 30078 (NIP-78 app data) with d = "osv-directory" and content
 // {"listed": true}; the latest one per author counts, nobody is listed without one.
 // Listings: NIP-99 classifieds, kind 30402, priced in village tokens: ["price", "<n>", "OSV"].
+import { sha256 } from "@noble/hashes/sha2.js"
+import { bytesToHex, utf8ToBytes } from "@noble/hashes/utils.js"
 export const DIRECTORY_D = "osv-directory"
 export const LISTING_KIND = 30402
 export const CURRENCY = "OSV"
@@ -356,6 +358,8 @@ export function sessionFromEvent(event, programmeKey = "") {
     track: sessionTrack(event, programmeKey),
     official: Boolean(programmeKey) && event.pubkey === programmeKey,
     createdAt: event.created_at,
+    // all of them, so an edit keeps what this app does not show (sessionTemplate `keep`)
+    tags: event.tags,
   }
 }
 
@@ -396,14 +400,19 @@ export function rsvpsFor(events, coordinate) {
   return out
 }
 
+/** The RSVP's `d` as Calendar by Form* makes it (makeDTag: the first 30 hex digits of
+ * SHA-256("<responder>:<author>:<event d>")), so an answer in either app replaces the other's. */
+export const rsvpD = (me, session) => bytesToHex(sha256(utf8ToBytes(`${me}:${session.pubkey}:${session.d}`))).slice(0, 30)
+
 /** The unsigned RSVP (kind 31925) to a session; one replaceable event per participant and session. */
-export const rsvpTemplate = (session, status) => {
+export const rsvpTemplate = (session, status, me) => {
   if (!RSVP_STATUSES.includes(status)) throw new Error(`unknown RSVP status ${status}`)
+  if (!/^[0-9a-f]{64}$/.test(me || "")) throw new Error("an RSVP needs the participant's key")
   return {
     kind: RSVP_KIND,
     created_at: Math.floor(Date.now() / 1000),
     tags: [
-      ["d", `rsvp-${session.coordinate}`],
+      ["d", rsvpD(me, session)],
       ["a", session.coordinate],
       ["e", session.id],
       ["p", session.pubkey],
@@ -485,7 +494,7 @@ export function zonedTime(date, hhmm, tz) {
 /** The unsigned public session (NIP-52 kind 31923) a participant announces; `d` keeps an edit on
  * the same coordinate. New ones get `session-…` (never the programme key's `osv-programme-` or
  * `osv-room-`). */
-export function sessionTemplate({ d = "", title, start, end, tzid = "", location = "", description = "", link = "" }) {
+export function sessionTemplate({ d = "", title, start, end, tzid = "", location = "", description = "", link = "", keep = [] }) {
   title = String(title || "").trim()
   if (!title) throw new Error("a session needs a title")
   if (!Number.isSafeInteger(start) || start <= 0) throw new Error("a session needs a start")
@@ -501,9 +510,23 @@ export function sessionTemplate({ d = "", title, start, end, tzid = "", location
   if (location.trim()) tags.push(["location", location.trim().slice(0, 200)])
   const url = httpsUrl(link.trim())
   if (url) tags.push(["r", url])
-  tags.push(["t", "osv"])
+  // an edit keeps the tags the form does not cover (summary, image, hashtags, invitees, more links
+  // from the calendar app); the form's link replaces the first `r`
+  let firstLink = true
+  for (const t of keep) {
+    if (!Array.isArray(t) || EDITED_TAGS.has(t[0])) continue
+    if (t[0] === "r" && firstLink) {
+      firstLink = false
+      continue
+    }
+    if (t[0] === "r" && t[1] === url) continue
+    tags.push(t)
+  }
+  if (!tags.some(t => t[0] === "t" && t[1] === "osv")) tags.push(["t", "osv"])
   return { kind: SESSION_KIND, created_at: Math.floor(Date.now() / 1000), tags, content: String(description).trim().slice(0, 4000) }
 }
+
+const EDITED_TAGS = new Set(["d", "title", "name", "start", "end", "start_tzid", "end_tzid", "location"])
 
 /** Cancelling a session: a deletion (NIP-09) of its coordinate and this version. */
 export const sessionDeletionTemplate = session => ({
@@ -523,13 +546,15 @@ const fold = s =>
     .replace(/\p{M}/gu, "")
     .toLowerCase()
 
-/** Whether every word of the query is in the session's title, description, place or track
- * (case and accents ignored). */
+/** Whether every word of the query starts a word of the session's title, description, place or
+ * track (case and accents ignored; links left out). "ch" finds "Chess", not "CHT" inside a
+ * booking note's "1.00 CHT" or "discord.com/channels/…". */
 export function sessionMatches(session, query) {
-  const words = fold(query).split(/\s+/).filter(Boolean)
+  const words = fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean)
   if (!words.length) return false
-  const text = fold([session.title, session.summary, session.description, session.location, session.track?.title].join(" "))
-  return words.every(w => text.includes(w))
+  const text = fold([session.title, session.summary, session.description, session.location, session.track?.title].join(" ")).replace(/\b(?:https?:\/\/|www\.)\S+/g, " ")
+  const have = text.split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+  return words.every(w => have.some(h => h.startsWith(w)))
 }
 
 /** Sessions the participant is going to, might go to or hosts that are on now or start within

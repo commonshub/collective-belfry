@@ -141,8 +141,23 @@ a.soon-item .label {
   color: var(--osv-accent, #d6ff52);
   margin: 0;
 }
+/* the search field stays in view under the app bar while the results scroll */
 #search {
-  margin-bottom: 12px;
+  position: sticky;
+  top: var(--osv-bar-h, 0px);
+  z-index: 2;
+  margin: 0 -16px 12px;
+  padding: 8px 16px;
+  background: var(--osv-background, #2b3a31);
+}
+/* while the phone's keyboard is up (a field has focus) the tab bar gives its room to the results;
+   with interactive-widget=resizes-content (index.html) the page ends at the keyboard instead of
+   panning the app bar and the field out of view */
+body:has(input:focus, textarea:focus) .tabs {
+  display: none;
+}
+body:has(input:focus, textarea:focus) {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 #search input {
   width: 100%;

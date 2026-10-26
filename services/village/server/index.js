@@ -9,6 +9,7 @@
 // | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT`, `PROGRAMME_PORT` | listen ports (8080, 8081, 8082, 8083) |
 // | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL`, `PROGRAMME_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
 // | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
+// | `PROGRAMME_CORS_ORIGINS` | origins (the calendar) whose pages may read the programme port's `/api/participants` and `/api/hidden` |
 // | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist`, `photos/dist` and `programme/dist`) |
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
@@ -100,13 +101,21 @@ async function readBody(req, limit) {
   return Buffer.concat(chunks)
 }
 
-function send(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store" })
+function send(res, status, body, headers = {}) {
+  res.writeHead(status, { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers })
   res.end(JSON.stringify(body))
 }
 
-export function createApp({ passes, moderation, app, publicUrl, staticDir }) {
+// Read by other apps' pages (CORS for `corsOrigins`): the calendar shows only active participants'
+// sessions and leaves out hidden ones.
+const SHARED_READS = new Set(["/api/participants", "/api/hidden"])
+
+export function createApp({ passes, moderation, app, publicUrl, staticDir, corsOrigins = [] }) {
   const base = publicUrl.replace(/\/$/, "")
+  const cors = req => {
+    const origin = req.headers.origin
+    return origin && corsOrigins.includes(origin) ? { "Access-Control-Allow-Origin": origin, Vary: "Origin" } : {}
+  }
 
   async function api(req, res, path) {
     if (path === "/api/health") return send(res, 200, { ok: true })
@@ -172,6 +181,18 @@ export function createApp({ passes, moderation, app, publicUrl, staticDir }) {
   return async function handler(req, res) {
     const url = new URL(req.url, "http://village.local")
     try {
+      if (SHARED_READS.has(url.pathname)) {
+        const headers = cors(req)
+        if (req.method === "OPTIONS") {
+          const allow = headers["Access-Control-Allow-Origin"]
+            ? { ...headers, "Access-Control-Allow-Methods": "GET", "Access-Control-Allow-Headers": "Authorization", "Access-Control-Max-Age": "600" }
+            : {}
+          res.writeHead(204, allow)
+          return res.end()
+        }
+        const end = res.writeHead.bind(res)
+        res.writeHead = (status, h = {}) => end(status, { ...h, ...headers })
+      }
       if (url.pathname.startsWith("/api/")) return await api(req, res, url.pathname)
       if (req.method !== "GET" && req.method !== "HEAD") throw new HttpError(405, "method not allowed")
       return await serveStatic(res, url.pathname)
@@ -210,7 +231,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["photos", Number(env.PHOTOS_PORT || 8082), env.PHOTOS_PUBLIC_URL],
     ["programme", Number(env.PROGRAMME_PORT || 8083), env.PROGRAMME_PUBLIC_URL],
   ]) {
-    const handler = createApp({ passes, moderation, app, publicUrl, staticDir: join(root, app, "dist") })
+    const corsOrigins = app === "programme" ? (env.PROGRAMME_CORS_ORIGINS || "").split(/[\s,]+/).map(o => o.replace(/\/$/, "")).filter(Boolean) : []
+    const handler = createApp({ passes, moderation, app, publicUrl, staticDir: join(root, app, "dist"), corsOrigins })
     createServer(handler).listen(port, () => console.log(`${app} on :${port}, public ${publicUrl}`))
   }
 }

@@ -657,9 +657,13 @@ class FakeRelay:
 
     url = "ws://relay.test"
 
-    def __init__(self, require_auth: bool = False, fail: bool = False):
+    def __init__(
+        self, require_auth: bool = False, fail: bool = False, max_limit: int | None = None
+    ):
         self.require_auth = require_auth
         self.fail = fail
+        # like rnostr's `max_limit`: at most this many events per filter, newest first
+        self.max_limit = max_limit
         self.events: list[dict[str, Any]] = []
         self.auth_events: list[dict[str, Any]] = []
 
@@ -682,12 +686,22 @@ class FakeRelay:
     def query(self, filters: list[dict[str, Any]], sign) -> list[dict[str, Any]]:
         if self.fail:
             raise RuntimeError("relay down")
-        return [
-            e
-            for e in self.events
-            if any(
-                e["kind"] in f.get("kinds", [e["kind"]])
+        out: list[dict[str, Any]] = []
+        for f in filters:
+            hits = [
+                e
+                for e in self.events
+                if e["kind"] in f.get("kinds", [e["kind"]])
                 and e["pubkey"] in f.get("authors", [e["pubkey"]])
-                for f in filters
-            )
-        ]
+                and e["created_at"] <= f.get("until", e["created_at"])
+                and all(
+                    any(t[0] == name[1:] and t[1] in values for t in e["tags"])
+                    for name, values in f.items()
+                    if name.startswith("#")
+                )
+            ]
+            caps = [n for n in (f.get("limit"), self.max_limit) if n is not None]
+            if caps:
+                hits = sorted(hits, key=lambda e: e["created_at"], reverse=True)[: min(caps)]
+            out += [e for e in hits if e not in out]
+        return out

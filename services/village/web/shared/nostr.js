@@ -23,11 +23,31 @@ export function query(filter, { maxWait = 8000 } = {}) {
   })
 }
 
-/** Large author lists in chunks (relays cap filter sizes). */
-export async function queryAuthors(filter, authors, chunk = 200) {
+// The community relay answers at most this many events per filter (rnostr `max_limit`).
+const PAGE_LIMIT = 300
+
+/** Every event matching the filter, page by page with `until`: one request would silently miss
+ * everything past the relay's cap. Pages overlap at their oldest second (`until` is inclusive);
+ * paging ends when a page brings nothing new. */
+export async function queryAll(filter, { maxPages = 50 } = {}) {
+  const seen = new Map()
+  let until
+  for (let page = 0; page < maxPages; page++) {
+    const events = await query({ ...filter, limit: PAGE_LIMIT, ...(until === undefined ? {} : { until }) })
+    const fresh = events.filter(e => !seen.has(e.id))
+    if (!fresh.length) break
+    for (const e of fresh) seen.set(e.id, e)
+    until = Math.min(...events.map(e => e.created_at))
+  }
+  return [...seen.values()]
+}
+
+/** Large author lists in chunks (relays cap filter sizes); `all` pages past the relay's cap. */
+export async function queryAuthors(filter, authors, { chunk = 200, all = false } = {}) {
   const out = []
   for (let i = 0; i < authors.length; i += chunk) {
-    out.push(...(await query({ ...filter, authors: authors.slice(i, i + chunk) })))
+    const f = { ...filter, authors: authors.slice(i, i + chunk) }
+    out.push(...(await (all ? queryAll(f) : query(f))))
   }
   return out
 }

@@ -134,3 +134,35 @@ test("activity: one line per readable event, private and noisy kinds left out", 
   assert.equal(activityFromEvent(ev(1111, [["E", "b".repeat(64)], ["K", "20"]], "Nice!")).photoId, "b".repeat(64))
   for (const kind of [7, 0, 9321, 1059, 32678, 10019]) assert.equal(activityFromEvent(ev(kind, [], "x")), null, `kind ${kind}`)
 })
+
+test("participants and hidden: readable from the calendar's origin only (CORS)", async () => {
+  const member = generateSecretKey()
+  const server = createServer(
+    createApp({
+      passes: { activePubkeys: async () => new Set([getPublicKey(member)]) },
+      publicUrl: "http://programme.test",
+      staticDir: null,
+      corsOrigins: ["http://calendar.test"],
+    }),
+  )
+  await new Promise(r => server.listen(0, r))
+  const base = `http://127.0.0.1:${server.address().port}`
+  try {
+    const pre = await fetch(`${base}/api/participants`, { method: "OPTIONS", headers: { Origin: "http://calendar.test" } })
+    assert.equal(pre.status, 204)
+    assert.equal(pre.headers.get("access-control-allow-origin"), "http://calendar.test")
+    assert.match(pre.headers.get("access-control-allow-headers"), /Authorization/)
+    const res = await fetch(`${base}/api/participants`, {
+      headers: { Origin: "http://calendar.test", Authorization: nip98(member, "http://programme.test/api/participants") },
+    })
+    assert.equal(res.status, 200)
+    assert.equal(res.headers.get("access-control-allow-origin"), "http://calendar.test")
+    const other = await fetch(`${base}/api/hidden`, { headers: { Origin: "http://evil.test" } })
+    assert.equal(other.headers.get("access-control-allow-origin"), null)
+    const denied = await fetch(`${base}/api/participants`, { headers: { Origin: "http://calendar.test" } })
+    assert.equal(denied.status, 401)
+    assert.equal(denied.headers.get("access-control-allow-origin"), "http://calendar.test")
+  } finally {
+    server.close()
+  }
+})
