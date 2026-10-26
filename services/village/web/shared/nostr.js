@@ -142,12 +142,55 @@ export async function shrinkImage(file, max = 1600) {
 
 /** shrinkImage plus the result's width and height (for NIP-68's "dim"). */
 export async function shrinkImageWithSize(file, max = 1600) {
-  const img = await createImageBitmap(file, { imageOrientation: "from-image" })
+  // A software canvas (willReadFrequently): Firefox's accelerated canvas has drawn some pictures
+  // as plain black. When the result is still one flat colour, decode the file a second way.
+  let canvas = await createImageBitmap(file, { imageOrientation: "from-image" }).then(
+    bitmap => drawShrunk(bitmap, max),
+    () => null,
+  )
+  if (!canvas || isFlat(canvas)) canvas = drawShrunk(await loadImage(file), max)
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.85))
+  if (!blob) throw new Error("this picture could not be read")
+  return { blob, width: canvas.width, height: canvas.height }
+}
+
+function drawShrunk(img, max) {
   const scale = Math.min(1, max / Math.max(img.width, img.height))
   const canvas = document.createElement("canvas")
-  canvas.width = Math.round(img.width * scale)
-  canvas.height = Math.round(img.height * scale)
-  canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height)
-  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.85))
-  return { blob, width: canvas.width, height: canvas.height }
+  canvas.width = Math.max(1, Math.round(img.width * scale))
+  canvas.height = Math.max(1, Math.round(img.height * scale))
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })
+  // JPEG has no transparency: transparent parts become white, not black
+  ctx.fillStyle = "#fff"
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+  img.close?.()
+  return canvas
+}
+
+/** True when every pixel of a 16×16 sample has the same colour (nothing was drawn). */
+function isFlat(canvas) {
+  const probe = document.createElement("canvas")
+  probe.width = probe.height = 16
+  const ctx = probe.getContext("2d", { willReadFrequently: true })
+  ctx.drawImage(canvas, 0, 0, 16, 16)
+  const d = ctx.getImageData(0, 0, 16, 16).data
+  for (let i = 4; i < d.length; i++) if (d[i] !== d[i % 4]) return false
+  return true
+}
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const img = new Image()
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      resolve(img)
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error("this picture could not be read"))
+    }
+    img.src = url
+  })
 }
