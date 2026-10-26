@@ -71,6 +71,7 @@ patch run `make build-keycast`.
 | 0014 | participant keys derived from the custody seed (above); preload with a `pubkey` recreates an account without a key |
 | 0015, 0016 | layout for phones and large text: buttons wrap, the header wraps, long identity values break |
 | 0017 | "Show your pass" on the pass card: the pass as a renewing QR code (`/me` of the onboarding service) |
+| 0018 | the landing page's "Sign in with Open Source Village" starts the Authentik sign-in (e-mail link) itself when the password login is hidden, instead of opening `/login`, whose only choice is the same button |
 
 **Changing a patch:**
 

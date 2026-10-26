@@ -545,6 +545,14 @@ User: "Why do we need a vote database when we have nostr relay", then "Do it" fo
 
 Deployed on belfry.tofauti.net the same day (ee55af5): `gen-secrets.sh` (new `secrets/polls_nsec`, `POLLS_PUBKEY`), vote, village and onboarding rebuilt, `up -d`. Public smoke 170 ok / 0 failed (with `SMOKE_KEEP_PASS`); from outside: a poll opened with `vote-check.mjs`, announced, closed early by hand, the result reply with the public relay hint and an `x` equal to `sha256sum` of the public proofs URL, both notes in What's new. The vote service's first round after a deploy is refused while onboarding rewrites the whitelist; the next round, 30 s later, goes through.
 
+## 3zg. Fewer clicks to sign in; no avatars on the sign-in pages — 2026-10-26
+
+User (testing on the VM): the account page's sign-in button led to a second page with one more button; the magic-link confirmation page showed the address with an initials avatar.
+
+- [x] Keycast patch 0018: with the password login hidden, the landing page's "Sign in with Open Source Village" goes straight to Authentik's e-mail sign-in (`/api/auth/oidc/start`, back through `/login?oidc=1`), as the `/login` button did.
+- [x] Authentik shows no avatars (`avatars` = `none`, set by bootstrap). The user asked for the directory's picture; it was not used because every step after the e-mail shows the pending user's avatar, also to someone who typed another participant's address, so a picture drawn from the Nostr key would link an e-mail address to a Nostr identity. The previous default, `gravatar,initials`, also sent a hash of each address to gravatar.com. Decision (user): no picture.
+- Checked locally: the landing button's link, the confirmation page without an avatar (390 px), smoke 172 ok / 0 failed.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

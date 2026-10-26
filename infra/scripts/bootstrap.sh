@@ -506,6 +506,12 @@ if [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; then
   i=0; while [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; do (( i += 3 )); [[ $i -ge 90 ]] && die "brand logo still not under $BRAND_URL after re-applying belfry-brand"; printf '.'; sleep 3; done
 fi
 echo "blueprint belfry-brand: Open Source Village branding from $BRAND_URL"
+# No avatars on Authentik's pages: after the e-mail is typed, every step shows the pending user's
+# avatar, also to someone who typed another participant's address; a picture from the Nostr key
+# would link the address to that identity, and the default (gravatar,initials) sends a hash of
+# the address to gravatar.com. "none" shows no picture at all.
+ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/admin/settings/" -d '{"avatars":"none"}' || die "could not set Authentik's avatars to none"
+echo "authentik: no avatars"
 # Participants sign in by magic link (blueprint belfry-magic-link-flow): the flow must be the
 # default brand's authentication flow, and its e-mail stage gets the SMTP settings here (the
 # blueprint leaves them out so a re-apply never resets them; same values as Odoo's mail server).

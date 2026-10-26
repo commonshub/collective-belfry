@@ -1,0 +1,53 @@
+From d87fc7918cc08abbedd5912240b1e1e7d282a4ce Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Mon, 26 Oct 2026 10:48:17 +0100
+Subject: [PATCH] feat(belfry): the landing's sign-in button goes straight to
+ the upstream sign-in
+
+With the password login hidden, /login offers only "Sign in with ...", so the landing page's
+button starts /api/auth/oidc/start itself and comes back through /login?oidc=1 as that
+button does. Without OIDC, or with the password form shown, it still opens /login.
+---
+ web/src/routes/+page.svelte | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/web/src/routes/+page.svelte b/web/src/routes/+page.svelte
+index ce513bc..aa99713 100644
+--- a/web/src/routes/+page.svelte
++++ b/web/src/routes/+page.svelte
+@@ -48,6 +48,9 @@ let pubkeyFormat = $state<'hex' | 'npub'>('npub');
+ let copiedPubkey = $state<string | null>(null);
+ let isNip07Loading = $state(false);
+ let hasExtension = $state(false);
++// Belfry: with the password login hidden, the landing's button starts the upstream sign-in
++// (the e-mail link page) itself instead of opening /login, whose only choice is that button.
++let signInHref = $state('/login');
+ let adminRole = $state<string | null>(null);
+ 
+ /** Belfry: the participant's pass from the onboarding service (`GET /api/user/pass`). */
+@@ -126,6 +129,13 @@ const groupedSessions = $derived.by(() => {
+ 
+ onMount(() => {
+ 	hasExtension = typeof window !== 'undefined' && !!window.nostr;
++	api.get<{ enabled: boolean; hide_password_login: boolean }>('/auth/oidc/config')
++		.then((oidc) => {
++			if (oidc.enabled && oidc.hide_password_login) {
++				signInHref = `/api/auth/oidc/start?return_to=${encodeURIComponent('/login?oidc=1&redirect=/')}`;
++			}
++		})
++		.catch(() => {});
+ });
+ 
+ async function handleNip07Signin() {
+@@ -845,7 +855,7 @@ $effect(() => {
+ 
+ 			<!-- CTAs -->
+ 			<div class="landing-ctas">
+-				<a href="/login" class="button button-primary">Sign in with Open Source Village</a>
++				<a href={signInHref} class="button button-primary">Sign in with Open Source Village</a>
+ 							</div>
+ 
+ 			<!-- NIP-07 Admin Login (only visible with browser extension) -->
+-- 
+2.53.0
+
