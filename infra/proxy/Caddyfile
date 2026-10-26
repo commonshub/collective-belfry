@@ -304,7 +304,7 @@ photos.{$BELFRY_DOMAIN} {
 
 programme.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://vote.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8083
 }
 

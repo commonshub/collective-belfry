@@ -584,7 +584,10 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
     jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (RSVP, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
   done
 fi
-echo "  note the browser check (day list, RSVP, comment, a photo from the session) is infra/scripts/programme-check.mjs"
+[[ "$BUNDLE" == *"$VOTE_URL"* ]] && ok "bundle links the polls app ($VOTE_URL)" || bad "programme bundle lacks the polls app's URL"
+PH=$(curl -sS -D - -o /dev/null -H "Origin: $PROGRAMME_URL" "$VOTE_URL/api/polls?session=31923:$(printf '%064d' 0):smoke")
+grep -qi '^access-control-allow-origin: \*' <<<"$PH" && ok "the polls about a session are readable from the programme (CORS)" || bad "polls list without CORS: $(head -c 200 <<<"$PH")"
+echo "  note the browser check (day list, search, RSVP, comment, photos, announcing, polls, the calendar app) is infra/scripts/programme-check.mjs"
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")

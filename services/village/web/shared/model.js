@@ -427,26 +427,33 @@ export const sessionCommentTemplate = (session, text) => ({
 const icsText = s => String(s).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/[,;]/g, m => `\\${m}`)
 const icsTime = t => new Date(t * 1000).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "")
 
-/** An iCalendar file with one session, for "Add to my calendar". */
-export function sessionIcs(session, url = "", now = Date.now()) {
-  const lines = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "PRODID:-//Belfry//Open Source Village programme//EN",
-    "BEGIN:VEVENT",
-    `UID:${session.coordinate.replace(/:/g, "-")}@opensourcevillage`,
-    `DTSTAMP:${icsTime(Math.floor(now / 1000))}`,
-    `DTSTART:${icsTime(session.start)}`,
-    `DTEND:${icsTime(session.end > session.start ? session.end : session.start + 3600)}`,
-    `SUMMARY:${icsText(session.title)}`,
-  ]
-  if (session.location) lines.push(`LOCATION:${icsText(session.location)}`)
-  const description = [session.description, url].filter(Boolean).join("\n\n")
-  if (description) lines.push(`DESCRIPTION:${icsText(description)}`)
-  if (url) lines.push(`URL:${url}`)
-  lines.push("END:VEVENT", "END:VCALENDAR")
+/** An iCalendar file with sessions (`urlOf(session)` names each one's link), each with a reminder
+ * `remind` minutes before it starts (0: none), for "Add to my calendar". */
+export function sessionsIcs(sessions, urlOf = () => "", now = Date.now(), remind = 15) {
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Belfry//Open Source Village programme//EN", "X-WR-CALNAME:Open Source Village"]
+  for (const session of sessions) {
+    const url = urlOf(session)
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${session.coordinate.replace(/:/g, "-")}@opensourcevillage`,
+      `DTSTAMP:${icsTime(Math.floor(now / 1000))}`,
+      `DTSTART:${icsTime(session.start)}`,
+      `DTEND:${icsTime(session.end > session.start ? session.end : session.start + 3600)}`,
+      `SUMMARY:${icsText(session.title)}`,
+    )
+    if (session.location) lines.push(`LOCATION:${icsText(session.location)}`)
+    const description = [session.description, url].filter(Boolean).join("\n\n")
+    if (description) lines.push(`DESCRIPTION:${icsText(description)}`)
+    if (url) lines.push(`URL:${url}`)
+    if (remind > 0) lines.push("BEGIN:VALARM", "ACTION:DISPLAY", `DESCRIPTION:${icsText(session.title)}`, `TRIGGER:-PT${remind}M`, "END:VALARM")
+    lines.push("END:VEVENT")
+  }
+  lines.push("END:VCALENDAR")
   return lines.join("\r\n") + "\r\n"
 }
+
+/** The calendar file for one session. */
+export const sessionIcs = (session, url = "", now = Date.now(), remind = 15) => sessionsIcs([session], () => url, now, remind)
 
 /** Unix time of a wall-clock date and time (`YYYY-MM-DD`, `HH:MM`) in a time zone. */
 export function zonedTime(date, hhmm, tz) {
@@ -503,3 +510,29 @@ export const sessionDeletionTemplate = session => ({
   ],
   content: "cancelled by the host",
 })
+
+const fold = s =>
+  String(s || "")
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+
+/** Whether every word of the query is in the session's title, description, place or track
+ * (case and accents ignored). */
+export function sessionMatches(session, query) {
+  const words = fold(query).split(/\s+/).filter(Boolean)
+  if (!words.length) return false
+  const text = fold([session.title, session.summary, session.description, session.location, session.track?.title].join(" "))
+  return words.every(w => text.includes(w))
+}
+
+/** Sessions the participant is going to, might go to or hosts that are on now or start within
+ * `soon` seconds: for the "Starting soon" note. */
+export function upcomingFor(sessions, rsvps, me, t, soon = 30 * 60) {
+  return sessions.filter(s => {
+    if (s.end <= t || s.start > t + soon) return false
+    if (s.pubkey === me) return true
+    const a = rsvpsFor(rsvps, s.coordinate).get(me)
+    return a === "accepted" || a === "tentative"
+  })
+}

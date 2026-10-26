@@ -9,8 +9,16 @@
 //      picture carries the session's `a` tag, says "At <session>" and appears on the session page.
 //   4. With JAR_B: B sees A among the people going and A's comment.
 //   5. A announces a session (a public kind 31923 in A's name, 19:00–20:30 village time), it shows
-//      under "From participants" (with JAR_B: B sees it too), A edits its title, then cancels it
-//      (kind 5) and it is gone.
+//      under "From participants" (with JAR_B: B sees it too, in the programme and in the calendar
+//      app's "From participants" calendar), A edits its title, then cancels it (kind 5) and it is
+//      gone.
+//   6. Search finds the session by a word of its title; "Yours" offers all of A's sessions as one
+//      calendar file; from the session page A starts a poll in the polls app, which says what it
+//      is about, and the session page lists it.
+//
+// The tab bar sits at the bottom of the screen and the day chips stay in view when scrolling; a
+// reload draws the programme kept on the device, and offline the page still opens with it.
+// VOTE_URL (default http://localhost:3500) and CALENDAR_URL (default http://localhost:3200).
 //
 //   CHROME_BIN=~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome \
 //   JAR_A=a.jar [JAR_B=b.jar] PROGRAMME_URL=http://localhost:3900 PHOTOS_URL=http://localhost:3800 \
@@ -29,6 +37,8 @@ const env = process.env
 if (!env.JAR_A) (console.error("JAR_A is not set (see the header)"), process.exit(2))
 const PROGRAMME = (env.PROGRAMME_URL || "http://localhost:3900").replace(/\/$/, "")
 const PHOTOS = (env.PHOTOS_URL || "http://localhost:3800").replace(/\/$/, "")
+const VOTE = (env.VOTE_URL || "http://localhost:3500").replace(/\/$/, "")
+const CALENDAR = (env.CALENDAR_URL || "http://localhost:3200").replace(/\/$/, "")
 const RUN = Math.random().toString(36).slice(2, 7)
 const COMMENT = `Slides please ${RUN}`
 const TITLE = `From the session ${RUN}`
@@ -145,6 +155,7 @@ function pngFile() {
   return file
 }
 
+const reload = b => b.send("Page.reload", {})
 const ok = msg => console.log(`  ok   ${msg}`)
 const has = s => `document.body.innerText.includes(${JSON.stringify(s)})`
 const noSideScroll = async (b, where) => {
@@ -163,6 +174,23 @@ try {
   const day = await a.evaluate(`document.querySelector("h2").innerText`)
   await noSideScroll(a, "day list")
   ok(`A: ${n} sessions on ${day}, no sideways scrolling at 390px`)
+  const tabsAt = await a.evaluate(`Math.round(innerHeight - document.querySelector(".tabs").getBoundingClientRect().bottom)`)
+  if (tabsAt !== 0) throw new Error(`the tab bar is ${tabsAt}px above the bottom of the screen`)
+  if ((await a.evaluate(`getComputedStyle(document.querySelector(".days")).position`)) !== "sticky") throw new Error("the day chips do not stay in view")
+  ok("A: tab bar at the bottom, day chips stay in view")
+  // the second visit draws from what the phone kept, before the relay answers
+  await reload(a)
+  await a.waitFor(`!!document.querySelector("a.session")`, 2000, "the day list from the phone's copy")
+  ok("A: a second visit shows the programme at once (kept on the device)")
+  // without a network (the venue's WiFi): the service worker opens the page, the kept copy shows
+  await a.waitFor(`!!navigator.serviceWorker.controller`, 20000, "the service worker")
+  await a.send("Network.emulateNetworkConditions", {offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1})
+  await reload(a)
+  await a.waitFor(`!!document.querySelector("a.session") && ${has("what your phone kept")}`, 20000, "the kept programme offline")
+  await a.send("Network.emulateNetworkConditions", {offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1})
+  ok("A: offline, the page opens and shows the kept programme with a note")
+  await a.go(`${PROGRAMME}/`)
+  await a.waitFor(`!!document.querySelector("a.session")`, 30000, "the day list online again")
   await a.shot("day")
 
   // 2. a session: RSVP and comment
@@ -189,8 +217,8 @@ try {
 
   // 3. a photo from the session
   await a.go(sessionUrl)
-  await a.waitFor(`!!document.querySelector('a[href*="#/new?session="]')`, 30000, "the photo link")
-  await a.go(await a.evaluate(`document.querySelector('a[href*="#/new?session="]').href`))
+  await a.waitFor(`!!document.querySelector('a[href*="#/new?session="][href^="${PHOTOS}"]')`, 30000, "the photo link")
+  await a.go(await a.evaluate(`document.querySelector('a[href*="#/new?session="][href^="${PHOTOS}"]').href`))
   await a.waitFor(`!!document.querySelector("#form") && ${has("From the session")}`, 60000, "the share form naming the session")
   const {root} = (await a.send("DOM.getDocument")).result
   const {nodeId} = (await a.send("DOM.querySelector", {nodeId: root.nodeId, selector: "#file"})).result
@@ -223,6 +251,7 @@ try {
   await a.waitFor(`!!document.querySelector("#form #title")`, 30000, "the announce form")
   await noSideScroll(a, "announce form")
   await a.fill("#title", OWN)
+  const ownDate = await a.evaluate(`document.querySelector("#date").value`)
   await a.fill("#start", "19:00")
   await a.fill("#end", "20:30")
   await a.fill("#location", "The garden")
@@ -240,6 +269,10 @@ try {
     await b.go(ownUrl)
     await b.waitFor(`${has(OWN)} && ${has("Announced by")} && !document.querySelector("#cancel")`, 60000, "A's session for B")
     ok("B: sees A's session, announced by A, without Edit or Cancel")
+    const [y, mo, d] = ownDate.split("-").map(Number)
+    await b.go(`${CALENDAR}/d/${y}/${mo}/${d}`)
+    await b.waitFor(has(OWN), 90000, "A's session in the calendar app")
+    ok("B: the calendar app shows A's session (\"From participants\")")
   }
   await a.click('a[href^="#/edit/"]')
   await a.waitFor(`document.querySelector("#title")?.value === ${JSON.stringify(OWN)}`, 30000, "the edit form, filled in")
@@ -252,6 +285,33 @@ try {
   await a.go(ownUrl)
   await a.waitFor(has("not in the programme"), 30000, "the cancelled session's link")
   ok("A: cancelled it (kind 5); gone from the day and its link says so")
+
+  // 6. search, all of "Yours" in one file, a poll about the session
+  const word = title.split(/\s+/).find(w => w.length > 4) || title
+  await a.go(`${PROGRAMME}/#/search?q=${encodeURIComponent(word.toLowerCase())}`)
+  await a.waitFor(`!!document.querySelector("#results a.session") && ${has(title)}`, 30000, "the search result")
+  ok(`A: search for ${JSON.stringify(word.toLowerCase())} finds the session`)
+  await a.go(`${PROGRAMME}/#/mine`)
+  await a.waitFor(`!!document.querySelector('a[download="open-source-village.ics"]')`, 30000, "Add all to my calendar")
+  const all = decodeURIComponent(await a.evaluate(`document.querySelector('a[download="open-source-village.ics"]').href`))
+  if (!all.includes("TRIGGER:-PT15M")) throw new Error("the calendar file has no reminder")
+  ok("A: \"Yours\" offers all sessions as one calendar file, with reminders")
+  const QUESTION = `More time for questions? ${RUN}`
+  await a.go(sessionUrl)
+  await a.waitFor(`!!document.querySelector('a[href*="#/new?session="][href^="${VOTE}"]')`, 30000, "Start a poll")
+  await a.go(await a.evaluate(`document.querySelector('a[href*="#/new?session="][href^="${VOTE}"]').href`))
+  await a.waitFor(`!!document.querySelector("#new-form") && ${has("About the session")}`, 60000, "the poll form naming the session")
+  await a.fill('#new-form input[name="title"]', QUESTION)
+  await a.evaluate(`(() => { const [x, y] = document.querySelectorAll('#new-form input[name="option"]');
+    for (const [i, v] of [[x, "Yes"], [y, "No"]]) { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set.call(i, v); i.dispatchEvent(new Event("input", {bubbles: true})) } })()`)
+  await a.fill('#new-form select[name="duration"]', "900")
+  await a.click('#new-form button[type="submit"]')
+  await a.waitFor(`location.hash.startsWith("#/poll/") && ${has(QUESTION)} && ${has("About " + title)}`, 30000, "the poll naming the session")
+  ok("A: started a poll from the session; the polls app says what it is about")
+  await a.go(sessionUrl)
+  await a.waitFor(`[...document.querySelectorAll("a.poll")].some(p => p.innerText.includes(${JSON.stringify(QUESTION)}))`, 30000, "the poll on the session page")
+  ok("A: the session page lists the poll")
+  await a.shot("polls")
 
   if (!env.KEEP) {
     await a.go(photoUrl)

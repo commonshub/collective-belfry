@@ -36,13 +36,18 @@ app warns below 5 members).
 
 | Route | Auth | |
 | --- | --- | --- |
-| `GET /api/polls`, `GET /api/polls/<id>` | none | list, poll (results once closed) |
+| `GET /api/polls[?session=<coordinate>]`, `GET /api/polls/<id>` | none, open to other origins | list (only the polls about one programme session with `session`), poll (results once closed) |
 | `GET /api/polls/<id>/group` | none | the group's commitments in order (for the Merkle proof) |
 | `GET /api/polls/<id>/proofs` | none | every counted proof, after the poll closed |
-| `POST /api/polls` | NIP-98, active pass | `{title, description, options[2..10], closes_at}` (10 min to 31 days) |
+| `POST /api/polls` | NIP-98, active pass | `{title, description, options[2..10], closes_at, session?, session_title?}` (10 min to 31 days; `session` a kind-31923 coordinate) |
 | `GET /api/me`, `PUT /api/me/identity` | NIP-98, active pass | the pass's registered commitment; register or replace it |
 | `GET /api/polls/<id>/me` | NIP-98, active pass | the commitment the pass votes with in that poll |
 | `POST /api/polls/<id>/votes` | none (the proof) | `{proof}` |
+
+A poll can be about a programme session: the programme app's "Start a poll" opens
+`#/new?session=<coordinate>&title=<title>`, the poll stores both (database column added on start
+for older databases), says "About <session>" with a link back (`VITE_PROGRAMME_URL`, the
+programme's `#/c/<coordinate>`), and the session page lists it from the public list.
 
 NIP-98: `Authorization: Nostr <base64 kind-27235 event>` with `u` = `PUBLIC_URL` + path, `method`
 and `payload` = SHA-256 of the raw body; 60 s validity, one use per event.

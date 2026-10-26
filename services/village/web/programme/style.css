@@ -3,8 +3,14 @@
   display: flex;
   gap: 8px;
   overflow-x: auto;
-  padding-bottom: 8px;
-  margin: 4px 0 8px;
+  scrollbar-width: none;
+  /* stays under the app bar while the day's list scrolls */
+  position: sticky;
+  top: var(--osv-bar-h, 0px);
+  z-index: 2;
+  margin: 0 -16px 8px;
+  padding: 8px 16px;
+  background: var(--osv-background, #2b3a31);
 }
 .days a.chip {
   text-decoration: none;
@@ -79,4 +85,84 @@ a.session.past {
   color: inherit;
   text-decoration: none;
   font-size: 0.9rem;
+}
+
+/* the tab bar: fixed at the bottom, in thumb reach, above the phone's home indicator */
+body {
+  padding-bottom: calc(57px + env(safe-area-inset-bottom, 0px));
+}
+.tabs {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: #1a231d;
+  border-top: 1px solid #44534a;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+.tabs a {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-height: 56px;
+  justify-content: center;
+  color: var(--osv-foreground-faint, #8e9a91);
+  text-decoration: none;
+  font-size: 0.75rem;
+}
+.tabs a.on {
+  color: var(--osv-accent, #d6ff52);
+}
+.tabs svg {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.soon {
+  margin-bottom: 8px;
+}
+a.soon-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  border: 1px solid var(--osv-accent, #d6ff52);
+  padding: 10px 14px;
+}
+a.soon-item .label {
+  color: var(--osv-accent, #d6ff52);
+  margin: 0;
+}
+#search {
+  margin-bottom: 12px;
+}
+#search input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 48px;
+  font-size: 1rem;
+}
+.top-gap {
+  margin-top: 16px;
+}
+.session-page .people {
+  margin-bottom: 4px;
+}
+.session-page .actions {
+  margin-top: 4px;
+}
+a.poll {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  text-decoration: none;
+  padding: 10px 14px;
 }

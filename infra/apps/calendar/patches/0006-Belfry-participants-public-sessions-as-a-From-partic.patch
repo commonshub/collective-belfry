@@ -1,0 +1,189 @@
+From 7b7a5837ec4ea7b5cde72b66ca8124027a5412ce Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 03:33:08 +0100
+Subject: [PATCH 6/6] Belfry: participants' public sessions as a "From
+ participants" calendar
+
+---
+ src/belfry/village.ts | 88 +++++++++++++++++++++++++++----------------
+ src/nostr/village.ts  | 17 +++++++++
+ 2 files changed, 73 insertions(+), 32 deletions(-)
+
+diff --git a/src/belfry/village.ts b/src/belfry/village.ts
+index b734bcb..9102b03 100644
+--- a/src/belfry/village.ts
++++ b/src/belfry/village.ts
+@@ -3,13 +3,19 @@
+  * website's programme and the rooms' Google calendars as public NIP-52 events (kind 31923)
+  * signed with the programme key (VITE_PROGRAMME_PUBKEY). This store follows that key's events
+  * on the community relay and groups them by their `t` tag: "programme" is the village
+- * programme, "room-<slug>" one calendar per room. They are read-only public events: no
++ * programme, "room-<slug>" one calendar per room. Participants' own public events (announced in
++ * the programme app or here) form a third kind, "From participants" (not the signed-in
++ * participant's own, which the app shows already). They are read-only public events: no
+  * calendar-list refs, never edited here; participants can still open, share and RSVP to them.
+  */
+ import { create } from "zustand";
+ import type { Event } from "nostr-tools";
+ import type { ObserveHandle } from "@formstr/local-relay";
+-import { observeProgrammeEvents } from "../nostr/village";
++import {
++  observeCommunityEvents,
++  observeProgrammeEvents,
++} from "../nostr/village";
++import { useUser } from "../stores/user";
+ import { EventKinds } from "../nostr/kinds";
+ import { nostrEventToCalendar } from "../utils/parser";
+ import type { ICalendarEvent } from "../utils/types";
+@@ -29,6 +35,11 @@ export interface VillageCalendar {
+ 
+ // The programme in the village's lime, the rooms in tints that read on the dark theme.
+ const PROGRAMME_COLOR = "#d6ff52";
++const COMMUNITY: VillageCalendar = {
++  id: `${VILLAGE_CALENDAR_PREFIX}community`,
++  title: "From participants",
++  color: "#e8ece9",
++};
+ const ROOM_COLORS = [
+   "#f89b0e",
+   "#5ec8e5",
+@@ -39,8 +50,10 @@ const ROOM_COLORS = [
+   "#8fa8ff",
+ ];
+ 
+-/** The calendar an event of the programme key belongs to, from its `t` tags. */
++/** The calendar an event belongs to: the programme key's by its `t` tags, everyone else's is
++ * "From participants". */
+ export function villageCalendarFor(event: Event): VillageCalendar | null {
++  if (event.pubkey !== PROGRAMME_PUBKEY) return COMMUNITY;
+   const tags = event.tags.filter((t) => t[0] === "t").map((t) => t[1]);
+   if (tags.includes("programme")) {
+     return {
+@@ -82,7 +95,8 @@ interface VillageState {
+ }
+ 
+ let subscription: ObserveHandle | null = null;
+-// d tag → newest kind-31923 version; d tag → newest deletion (NIP-09 `a` tag)
++// "<pubkey>:<d>" → newest kind-31923 version; "<pubkey>:<d>" → newest deletion by that author
++// (NIP-09 `a` tag)
+ const latest = new Map<string, { event: Event; calendar: VillageCalendar }>();
+ const deletedAt = new Map<string, number>();
+ 
+@@ -90,19 +104,25 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
+   const publish = () => {
+     const calendars = new Map<string, VillageCalendar>();
+     const events: ICalendarEvent[] = [];
+-    for (const [d, { event, calendar }] of latest) {
+-      if ((deletedAt.get(d) ?? -1) >= event.created_at) continue;
++    const me = useUser.getState().user?.pubkey;
++    for (const [key, { event, calendar }] of latest) {
++      if ((deletedAt.get(key) ?? -1) >= event.created_at) continue;
++      if (calendar.id === COMMUNITY.id && event.pubkey === me) continue;
+       calendars.set(calendar.id, calendar);
+       const parsed = nostrEventToCalendar(event, calendar.id);
+       if (parsed.begin && parsed.end) events.push(parsed);
+     }
+     // the programme first, then the rooms by name, each room in its own tint
+     const rooms = [...calendars.values()]
+-      .filter((c) => !c.id.endsWith(":programme"))
++      .filter((c) => c.id !== COMMUNITY.id && !c.id.endsWith(":programme"))
+       .sort((a, b) => a.title.localeCompare(b.title))
+       .map((c, i) => ({ ...c, color: ROOM_COLORS[i % ROOM_COLORS.length] }));
+     const programme = calendars.get(`${VILLAGE_CALENDAR_PREFIX}programme`);
+-    const sorted = programme ? [programme, ...rooms] : rooms;
++    const sorted = [
++      ...(programme ? [programme] : []),
++      ...rooms,
++      ...(calendars.has(COMMUNITY.id) ? [COMMUNITY] : []),
++    ];
+     set({ calendars: sorted, events });
+   };
+   let timer: ReturnType<typeof setTimeout> | undefined;
+@@ -117,31 +137,35 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
+     visibility: loadVisibility(),
+     start: () => {
+       if (subscription || !PROGRAMME_PUBKEY) return;
+-      subscription = observeProgrammeEvents(
+-        PROGRAMME_PUBKEY,
+-        (event: Event) => {
+-          if (event.pubkey !== PROGRAMME_PUBKEY) return;
+-          if (event.kind === EventKinds.DeletionEvent) {
+-            for (const tag of event.tags) {
+-              if (tag[0] !== "a") continue;
+-              const d = tag[1]?.split(":").slice(2).join(":");
+-              if (d)
+-                deletedAt.set(
+-                  d,
+-                  Math.max(deletedAt.get(d) ?? 0, event.created_at),
+-                );
+-            }
+-          } else if (event.kind === EventKinds.PublicCalendarEvent) {
+-            const d = event.tags.find((t) => t[0] === "d")?.[1];
+-            const calendar = villageCalendarFor(event);
+-            if (!d || !calendar) return;
+-            const known = latest.get(d);
+-            if (!known || known.event.created_at < event.created_at)
+-              latest.set(d, { event, calendar });
++      const onEvent = (event: Event) => {
++        if (event.kind === EventKinds.DeletionEvent) {
++          for (const tag of event.tags) {
++            if (tag[0] !== "a") continue;
++            const [kind, pubkey, ...d] = (tag[1] ?? "").split(":");
++            // only the author deletes their event
++            if (Number(kind) !== EventKinds.PublicCalendarEvent) continue;
++            if (pubkey !== event.pubkey || !d.length) continue;
++            const key = `${pubkey}:${d.join(":")}`;
++            deletedAt.set(
++              key,
++              Math.max(deletedAt.get(key) ?? 0, event.created_at),
++            );
+           }
+-          schedule();
+-        },
+-      );
++        } else if (event.kind === EventKinds.PublicCalendarEvent) {
++          const d = event.tags.find((t) => t[0] === "d")?.[1];
++          const calendar = villageCalendarFor(event);
++          if (!d || !calendar) return;
++          const key = `${event.pubkey}:${d}`;
++          const known = latest.get(key);
++          if (!known || known.event.created_at < event.created_at)
++            latest.set(key, { event, calendar });
++        }
++        schedule();
++      };
++      subscription = observeProgrammeEvents(PROGRAMME_PUBKEY, onEvent);
++      observeCommunityEvents(onEvent);
++      // the signed-in participant's own events leave "From participants"
++      useUser.subscribe(schedule);
+     },
+     toggleVisibility: (id) => {
+       const visibility = {
+diff --git a/src/nostr/village.ts b/src/nostr/village.ts
+index a473b21..7640855 100644
+--- a/src/nostr/village.ts
++++ b/src/nostr/village.ts
+@@ -16,3 +16,20 @@ export function observeProgrammeEvents(
+   };
+   return dataLayer.observe([filter], { onEvent });
+ }
++
++/**
++ * Belfry: participants' public calendar events and their deletions. The community relay only
++ * takes events from participants, so every author here has (or had) a pass.
++ */
++export function observeCommunityEvents(
++  onEvent: (event: Event) => void,
++): ObserveHandle {
++  const filters: Filter[] = [
++    { kinds: [EventKinds.PublicCalendarEvent] },
++    {
++      kinds: [EventKinds.DeletionEvent],
++      "#k": [String(EventKinds.PublicCalendarEvent)],
++    },
++  ];
++  return dataLayer.observe(filters, { onEvent });
++}
+-- 
+2.53.0
+

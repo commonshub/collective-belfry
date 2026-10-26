@@ -4,7 +4,8 @@
 // links what participants do with it: RSVPs (kind 31925), comments (NIP-22), photos taken there
 // (kind 20 with the session's `a` tag) and, for participants' sessions, tips to the host.
 // Hash routes: #/ (the day to show first), #/d/<YYYY-MM-DD>, #/s/<naddr> (one session), #/mine,
-// #/new (announce a session), #/edit/<naddr>, #/signer.
+// #/search?q=, #/new (announce a session), #/edit/<naddr>, #/c/<coordinate> (a link by coordinate,
+// from the polls app), #/signer.
 import "../shared/style.css"
 import "./style.css"
 import { nip19 } from "nostr-tools"
@@ -22,7 +23,10 @@ import {
   sessionCommentTemplate,
   sessionDeletionTemplate,
   sessionIcs,
+  sessionMatches,
   sessionTemplate,
+  sessionsIcs,
+  upcomingFor,
   zonedTime,
 } from "../shared/model.js"
 import { isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
@@ -34,6 +38,7 @@ const PROGRAMME_KEY = (import.meta.env.VITE_PROGRAMME_PUBKEY || "").trim()
 const TZ = import.meta.env.VITE_EVENT_TZ || "Europe/Brussels"
 const PHOTOS_URL = (import.meta.env.VITE_PHOTOS_URL || "").replace(/\/$/, "")
 const PEOPLE_URL = (import.meta.env.VITE_PEOPLE_URL || "").replace(/\/$/, "")
+const VOTE_URL = (import.meta.env.VITE_VOTE_URL || "").replace(/\/$/, "")
 const TRACK_KEY = "belfry-programme-track"
 const TIPS = [1, 5, 10]
 // the programme in the village's lime, the rooms in the calendar app's tints (calendar patch 0004)
@@ -59,9 +64,42 @@ function failure(e) {
 
 async function requireSignIn(body) {
   if (session.currentPubkey()) return true
+  forgetProgramme()
   body.innerHTML = signInCard(WHY)
   bindCommon(route)
   return false
+}
+
+const CACHE_KEY = "belfry-programme-cache"
+
+/** The programme as this device last loaded it, for the signed-in participant (shown at once, then
+ * refreshed from the relay; also what is left when the venue's network is down). */
+function cachedProgramme() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || "null")
+    if (!c || c.pubkey !== session.currentPubkey()) return null
+    return { ...c, active: new Set(c.active), hidden: new Set(c.hidden), cached: true }
+  } catch {
+    return null
+  }
+}
+
+function keepProgramme(data) {
+  try {
+    if (!data.sessions.length) return
+    const { active, hidden, sessions, rsvps, tracks } = data
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ pubkey: session.currentPubkey(), active: [...active], hidden: [...hidden], sessions, rsvps, tracks }))
+  } catch {
+    // storage full or blocked: the next visit loads from the relay
+  }
+}
+
+function forgetProgramme() {
+  try {
+    localStorage.removeItem(CACHE_KEY)
+  } catch {
+    // nothing kept
+  }
 }
 
 let loaded = null
@@ -88,7 +126,9 @@ function loadProgramme() {
     if (sessions.some(s => s.track.id === "programme")) tracks.push({ id: "programme", title: "Village programme", color: PROGRAMME_COLOR })
     rooms.forEach((r, i) => tracks.push({ ...r, color: ROOM_COLORS[i % ROOM_COLORS.length] }))
     if (sessions.some(s => s.track.id === "community")) tracks.push({ id: "community", title: "From participants", color: COMMUNITY_COLOR })
-    return { active, sessions, rsvps, tracks, hidden }
+    const data = { active, sessions, rsvps, tracks, hidden }
+    keepProgramme(data)
+    return data
   })()
   loaded.catch(() => (loaded = null))
   return loaded
@@ -127,29 +167,76 @@ function defaultDay(days) {
   return days.find(d => d >= today) || days.at(-1)
 }
 
+/** The tab bar at the bottom of the screen, within thumb reach. */
+function tabs(current) {
+  const items = [
+    ["days", "#/", "Programme", "M4 5h16M4 10h16M4 15h10"],
+    ["search", "#/search", "Search", "M10.5 17a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13Zm4.6-1.9L20 20"],
+    ["mine", "#/mine", "Yours", "M12 20s-7-4.4-7-9.5A3.9 3.9 0 0 1 12 8a3.9 3.9 0 0 1 7 2.5C19 15.6 12 20 12 20Z"],
+    ["new", "#/new", "Announce", "M12 5v14M5 12h14"],
+  ]
+  return `<nav class="tabs" aria-label="Programme">${items
+    .map(
+      ([id, href, label, d]) =>
+        `<a href="${href}" ${id === current ? 'class="on" aria-current="page"' : ""}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg><span>${label}</span></a>`,
+    )
+    .join("")}</nav>`
+}
+
+/** "Starting soon": the participant's sessions on now or within half an hour. */
+function soonNote(data, t) {
+  const me = session.currentPubkey()
+  const soon = upcomingFor(data.sessions, data.rsvps, me, t)
+  if (!soon.length) return ""
+  return `<div class="soon stack">${soon
+    .map(
+      s =>
+        `<a class="card soon-item" href="#/s/${naddr(s)}"><span class="label">${s.start <= t ? "On now" : `Starts in ${Math.max(1, Math.round((s.start - t) / 60))} min`}</span><strong>${esc(
+          s.title,
+        )}</strong>${s.location ? `<span class="small muted">${esc(s.location.split(",")[0])}</span>` : ""}</a>`,
+    )
+    .join("")}</div>`
+}
+
+/** Draws a page from the programme kept on this device at once, then again from the relay (unless
+ * another page replaced it meanwhile). `draw(data)` may run twice. */
+async function withProgramme(body, draw) {
+  const cached = cachedProgramme()
+  if (cached) draw(cached)
+  try {
+    const data = await loadProgramme()
+    if (!body.isConnected) return
+    // an empty answer is a relay that did not answer in time, not an empty programme
+    if (cached && !data.sessions.length) return notice("Could not refresh the programme; this is what your phone kept.", "bad")
+    draw(data)
+  } catch (e) {
+    if (!body.isConnected) return
+    if (cached) notice("Could not refresh the programme; this is what your phone kept.", "bad")
+    else body.innerHTML = failure(e)
+  }
+}
+
+let dayTimer = null
+
 async function dayPage(day = "") {
-  render(`${header("Programme")}<div id="body"><p class="muted">Loading…</p></div>`)
+  render(`${header("Programme")}<div id="body"><p class="muted">Loading…</p></div>${tabs("days")}`)
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
-  let data
-  try {
-    data = await loadProgramme()
-  } catch (e) {
-    body.innerHTML = failure(e)
-    return
-  }
-  if (!body.isConnected) return // another page replaced this one meanwhile
+  await withProgramme(body, data => drawDay(body, data, day))
+}
+
+function drawDay(body, data, day) {
   const track = data.tracks.some(t => t.id === chosenTrack()) ? chosenTrack() : ""
   const shown = data.sessions.filter(s => !track || s.track.id === track)
   const days = [...new Set(shown.map(s => dayKey(s.start)))].sort()
+  const t = now()
   if (!days.length) {
-    body.innerHTML = `${filters(data, track)}<p class="muted">Nothing in the programme yet.</p>`
+    body.innerHTML = `${filters(data, track)}<p class="muted">Nothing in the programme yet. <a href="#/new">Announce a session</a>.</p>`
     bindFilters(day)
     return
   }
   if (!days.includes(day)) day = defaultDay(days)
-  const t = now()
   const today = dayKey(t) === day
   const list = shown.filter(s => dayKey(s.start) === day)
   const sections = today
@@ -159,19 +246,62 @@ async function dayPage(day = "") {
         ["Earlier today", list.filter(s => s.end <= t && !(s.start <= t && t < s.end))],
       ]
     : [["", list]]
+  const at = days.indexOf(day)
   body.innerHTML = `
-    <div class="row-end"><a class="button" href="#/new?day=${day}">Announce a session</a><a class="button" href="#/mine">Your sessions</a></div>
-    ${filters(data, track)}
+    ${soonNote(data, t)}
     <nav class="days" aria-label="Days">${days
       .map(d => `<a class="chip ${d === day ? "on" : ""}" href="#/d/${d}" ${d === day ? 'aria-current="date"' : ""}>${esc(d === dayKey(t) ? "Today" : dayName(d, "short"))}</a>`)
       .join("")}</nav>
-    <h2>${esc(dayName(day))}</h2>
-    ${sections
-      .filter(([, items]) => items.length)
-      .map(([title, items]) => `${title ? `<h3 class="day">${esc(title)}</h3>` : ""}<div class="stack">${items.map(s => row(data, s, t)).join("")}</div>`)
-      .join("")}`
+    ${filters(data, track)}
+    <div id="day">
+      <h2>${esc(dayName(day))}</h2>
+      ${sections
+        .filter(([, items]) => items.length)
+        .map(([title, items]) => `${title ? `<h3 class="day">${esc(title)}</h3>` : ""}<div class="stack">${items.map(s => row(data, s, t)).join("")}</div>`)
+        .join("")}
+      <p class="small muted center">${at > 0 || at < days.length - 1 ? "Swipe for the other days." : ""}</p>
+    </div>`
   bindFilters(day)
+  document.querySelector('.tabs a[href="#/new"]')?.setAttribute("href", `#/new?day=${day}`)
   document.querySelector(".days .on")?.scrollIntoView({ inline: "center", block: "nearest" })
+  swipe(document.getElementById("day"), dir => {
+    const next = days[at + dir]
+    if (next) location.hash = `#/d/${next}`
+  })
+  // today: "On now" and "Starting soon" move with the clock
+  clearInterval(dayTimer)
+  if (today) {
+    dayTimer = setInterval(() => {
+      if (!body.isConnected) return clearInterval(dayTimer)
+      if (document.visibilityState === "visible") drawDay(body, data, day)
+    }, 60000)
+  }
+}
+
+/** Horizontal swipes on `el`: `onSwipe(+1)` for the next (swipe left), -1 for the previous. */
+function swipe(el, onSwipe) {
+  if (!el) return
+  let x0 = null
+  let y0 = 0
+  el.addEventListener(
+    "touchstart",
+    e => {
+      x0 = e.touches[0].clientX
+      y0 = e.touches[0].clientY
+    },
+    { passive: true },
+  )
+  el.addEventListener(
+    "touchend",
+    e => {
+      if (x0 === null) return
+      const dx = e.changedTouches[0].clientX - x0
+      const dy = e.changedTouches[0].clientY - y0
+      x0 = null
+      if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(dy)) onSwipe(dx < 0 ? 1 : -1)
+    },
+    { passive: true },
+  )
 }
 
 function filters(data, track) {
@@ -192,48 +322,100 @@ function bindFilters(day) {
       } catch {
         // private mode: the filter lasts until the page is left
       }
-      dayPage(day)
+      const body = document.getElementById("body")
+      const data = cachedProgramme()
+      if (body && data) drawDay(body, data, day)
+      else dayPage(day)
     }
 }
 
-async function minePage() {
-  render(`${header("Your sessions", "#/")}<div id="body"><p class="muted">Loading…</p></div>`)
+/** Sessions by day, with a heading per day. */
+function byDay(data, list, t) {
+  let day = ""
+  return list
+    .map(s => {
+      const d = dayKey(s.start)
+      const heading = d !== day ? `<h3 class="day">${esc(d === dayKey(t) ? "Today" : dayName(d))}</h3>` : ""
+      day = d
+      return heading + row(data, s, t)
+    })
+    .join("")
+}
+
+async function searchPage(q = "") {
+  render(`${header("Search")}<div id="body"><p class="muted">Loading…</p></div>${tabs("search")}`)
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
-  let data
-  try {
-    data = await loadProgramme()
-  } catch (e) {
-    body.innerHTML = failure(e)
-    return
+  let data = null
+  body.innerHTML = `
+    <form id="search" role="search"><input id="q" type="search" enterkeyhint="search" autocomplete="off" placeholder="Talk, room, topic…" aria-label="Search the programme" value="${esc(q)}" /></form>
+    <div id="results"></div>`
+  const input = document.getElementById("q")
+  const results = document.getElementById("results")
+  const show = () => {
+    if (!data) return
+    const query = input.value.trim()
+    const t = now()
+    // upcoming first, then what has passed
+    const hits = data.sessions.filter(s => sessionMatches(s, query))
+    const ordered = [...hits.filter(s => s.end > t), ...hits.filter(s => s.end <= t)]
+    results.innerHTML = !query
+      ? '<p class="muted small">Search titles, descriptions, rooms and hosts\' places.</p>'
+      : ordered.length
+        ? `<p class="small muted">${ordered.length} session${ordered.length === 1 ? "" : "s"}</p>${byDay(data, ordered, t)}`
+        : '<p class="muted">Nothing found.</p>'
+    history.replaceState(null, "", query ? `#/search?q=${encodeURIComponent(query)}` : "#/search")
   }
-  if (!body.isConnected) return // another page replaced this one meanwhile
+  input.oninput = show
+  document.getElementById("search").onsubmit = e => {
+    e.preventDefault()
+    input.blur() // closes the phone's keyboard
+  }
+  if (!q) input.focus()
+  // the results follow the programme as it arrives; the field keeps what is typed
+  await withProgramme(body, fresh => {
+    data = fresh
+    show()
+  })
+}
+
+async function minePage() {
+  render(`${header("Your sessions")}<div id="body"><p class="muted">Loading…</p></div>${tabs("mine")}`)
+  bindCommon(route)
+  const body = document.getElementById("body")
+  if (!(await requireSignIn(body))) return
+  await withProgramme(body, data => drawMine(body, data))
+}
+
+function drawMine(body, data) {
   const t = now()
   const me = session.currentPubkey()
   const mine = data.sessions.filter(s => {
     const a = rsvpsFor(data.rsvps, s.coordinate).get(me)
     return s.end > t && (a === "accepted" || a === "tentative" || s.pubkey === me)
   })
-  let day = ""
-  body.innerHTML = mine.length
-    ? mine
-        .map(s => {
-          const d = dayKey(s.start)
-          const heading = d !== day ? `<h3 class="day">${esc(dayName(d))}</h3>` : ""
-          day = d
-          return heading + row(data, s, t)
-        })
-        .join("")
-    : '<p class="muted">Sessions you are going to (or might go to) and your own show up here. <a href="#/">See the programme</a>.</p>'
+  if (!mine.length) {
+    body.innerHTML =
+      '<p class="muted">Sessions you are going to (or might go to) and your own show up here. <a href="#/">See the programme</a> or <a href="#/new">announce a session</a>.</p>'
+    return
+  }
+  const ics = `data:text/calendar;charset=utf-8,${encodeURIComponent(sessionsIcs(mine, s => `${location.origin}/#/s/${naddr(s)}`))}`
+  body.innerHTML = `
+    ${soonNote(data, t)}
+    ${byDay(data, mine, t)}
+    <div class="stack top-gap">
+      <a class="button" href="${ics}" download="open-source-village.ics">Add all ${mine.length} to my calendar</a>
+      <p class="small muted">One file for your phone's calendar, with a reminder 15 minutes before each session. Add it again after you change your plans.</p>
+    </div>`
 }
 
 async function sessionPage(code) {
-  render(`${header("Session", "#/")}<div id="body"><p class="muted">Loading…</p></div>`)
+  render(`${header("Session", "#/")}<div id="body"><p class="muted">Loading…</p></div>${tabs("")}`)
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
-  let s, data, answers, comments, photos, zaps, profiles
+  let s, data, answers, comments, photos, zaps, profiles, polls
   try {
     const ref = nip19.decode(code)
     if (ref.type !== "naddr" || ref.data.kind !== SESSION_KIND) throw new Error("not a session link")
@@ -241,12 +423,14 @@ async function sessionPage(code) {
     const coordinate = `${SESSION_KIND}:${ref.data.pubkey}:${ref.data.identifier}`
     s = data.sessions.find(x => x.coordinate === coordinate)
     if (!s) throw Object.assign(new Error("This session is not in the programme (any more)."), { status: 404 })
-    const [rsvpEvents, commentEvents, photoEvents, zapEvents] = await Promise.all([
+    const [rsvpEvents, commentEvents, photoEvents, zapEvents, pollList] = await Promise.all([
       query({ kinds: [RSVP_KIND], "#a": [coordinate] }),
       query({ kinds: [1111], "#A": [coordinate] }),
       query({ kinds: [PHOTO_KIND], "#a": [coordinate] }),
       s.official ? Promise.resolve([]) : query({ kinds: [9321], "#a": [coordinate] }),
+      sessionPolls(coordinate),
     ])
+    polls = pollList
     answers = rsvpsFor(
       rsvpEvents.filter(e => data.active.has(e.pubkey)),
       coordinate,
@@ -325,6 +509,26 @@ async function sessionPage(code) {
              ${tipped ? `<p class="small muted">${tipped} thank-you${tipped === 1 ? "" : "s"} in tokens so far.</p>` : ""}`
           : ""
       }
+      ${
+        VOTE_URL
+          ? `<h3>Polls</h3>
+             ${
+               polls === null
+                 ? '<p class="muted small">The polls could not be loaded.</p>'
+                 : polls.length
+                   ? `<div class="stack">${polls
+                       .map(
+                         p =>
+                           `<a class="card poll" href="${esc(`${VOTE_URL}/#/poll/${p.id}`)}"><span class="session-title">${esc(p.title)}</span><span class="small muted"><span class="badge ${p.open ? "open" : ""}">${
+                             p.open ? "Open" : "Results"
+                           }</span> ${p.votes} vote${p.votes === 1 ? "" : "s"}</span></a>`,
+                       )
+                       .join("")}</div>`
+                   : '<p class="muted small">No polls about this session. Ask the room something, anonymously.</p>'
+             }
+             <a class="button" href="${esc(`${VOTE_URL}/#/new?session=${encodeURIComponent(s.coordinate)}&title=${encodeURIComponent(s.title)}`)}">Start a poll</a>`
+          : ""
+      }
       <h3>Photos</h3>
       ${
         photos.length
@@ -358,6 +562,7 @@ async function sessionPage(code) {
       try {
         const event = await publish(rsvpTemplate(s, b.dataset.rsvp))
         data.rsvps.push(event)
+        keepProgramme(data)
         sessionPage(code)
       } catch (err) {
         for (const x of body.querySelectorAll("[data-rsvp]")) x.disabled = false
@@ -409,7 +614,7 @@ async function sessionPage(code) {
 /** Announce a session (a public kind 31923 in the participant's name), or edit one's own. Times are
  * the village's (TZ), whatever the phone's zone. */
 async function editPage(code = "", day = "") {
-  render(`${header(code ? "Edit your session" : "Announce a session", code ? `#/s/${code}` : "#/")}<div id="body"><p class="muted">Loading…</p></div>`)
+  render(`${header(code ? "Edit your session" : "Announce a session", code ? `#/s/${code}` : "#/")}<div id="body"><p class="muted">Loading…</p></div>${tabs(code ? "" : "new")}`)
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
@@ -467,12 +672,45 @@ async function editPage(code = "", day = "") {
   }
 }
 
+/** The polls about a session (the polls app's public list); null when it cannot be reached. */
+async function sessionPolls(coordinate) {
+  if (!VOTE_URL) return []
+  try {
+    const res = await fetch(`${VOTE_URL}/api/polls?session=${encodeURIComponent(coordinate)}`)
+    if (!res.ok) return null
+    return (await res.json()).polls
+  } catch {
+    return null
+  }
+}
+
 function route() {
   const hash = location.hash || "#/"
   let m
   if ((m = hash.match(/^#\/s\/(naddr1\w+)$/))) return sessionPage(m[1])
   if ((m = hash.match(/^#\/d\/(\d{4}-\d{2}-\d{2})$/))) return dayPage(m[1])
   if (hash === "#/mine") return minePage()
+  if ((m = hash.match(/^#\/c\/(.+)$/))) {
+    // a session by its coordinate (`31923:<pubkey>:<d>`, URL-encoded): on to its page
+    try {
+      const [kind, pubkey, ...d] = decodeURIComponent(m[1]).split(":")
+      if (Number(kind) === SESSION_KIND && /^[0-9a-f]{64}$/.test(pubkey) && d.length) {
+        location.replace(`#/s/${nip19.naddrEncode({ kind: SESSION_KIND, pubkey, identifier: d.join(":") })}`)
+        return
+      }
+    } catch {
+      // not a coordinate: the programme
+    }
+  }
+  if ((m = hash.match(/^#\/search(?:\?q=(.*))?$/))) {
+    let q = ""
+    try {
+      q = decodeURIComponent(m[1] || "")
+    } catch {
+      // a broken link: start empty
+    }
+    return searchPage(q)
+  }
   if ((m = hash.match(/^#\/new(?:\?day=(\d{4}-\d{2}-\d{2}))?$/))) return editPage("", m[1])
   if ((m = hash.match(/^#\/edit\/(naddr1\w+)$/))) return editPage(m[1])
   if (hash === "#/signer") return signerPage("Your own signer", () => (location.hash = "#/"))
@@ -481,3 +719,6 @@ function route() {
 }
 
 boot(route)
+
+// the page opens without a network too (public/sw.js); the programme then comes from the phone's copy
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {})

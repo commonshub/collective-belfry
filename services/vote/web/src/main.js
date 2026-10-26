@@ -1,5 +1,6 @@
 // Open Source Village polls: list, create, vote anonymously, results. Hash routes:
-// #/ (polls), #/new, #/poll/<id>, #/device (the voting key on this device).
+// #/ (polls), #/new (with ?session=<coordinate>&title=… from the programme app), #/poll/<id>,
+// #/device (the voting key on this device).
 import "./style.css"
 import { Group, generateProof } from "@semaphore-protocol/core"
 import { api } from "./api.js"
@@ -9,6 +10,7 @@ import { SSO_CALLBACK_PATH, endSsoSession, finishSso, shouldTrySilentSso, ssoEna
 const TREE_DEPTH = 10
 const ARTIFACTS = { wasm: "/artifacts/semaphore-10.wasm", zkey: "/artifacts/semaphore-10.zkey" }
 const app = document.getElementById("app")
+const PROGRAMME_URL = (import.meta.env.VITE_PROGRAMME_URL || "").replace(/\/$/, "")
 
 const esc = s =>
   String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c])
@@ -84,6 +86,7 @@ async function listPage() {
         p => `
         <a class="card poll-link" href="#/poll/${esc(p.id)}">
           <span class="poll-title">${esc(p.title)}</span>
+          ${p.session_title ? `<span class="meta">About ${esc(p.session_title)}</span>` : ""}
           <span class="meta"><span class="badge ${p.open ? "open" : ""}">${p.open ? "Open" : "Closed"}</span>
           ${esc(closesText(p))} · ${p.votes} of ${p.members} voted</span>
         </a>`,
@@ -153,6 +156,7 @@ async function pollPage(id) {
   let body = `
     <div class="card">
       <h2>${esc(poll.title)}</h2>
+      ${poll.session ? `<p class="meta">About ${sessionLink(poll)}</p>` : ""}
       ${poll.description ? `<p class="desc">${esc(poll.description)}</p>` : ""}
       <p class="meta"><span class="badge ${poll.open ? "open" : ""}">${poll.open ? "Open" : "Closed"}</span>
         ${esc(closesText(poll))} · ${poll.votes} of ${poll.members} voted</p>`
@@ -220,7 +224,13 @@ async function pollPage(id) {
   }
 }
 
-function newPage() {
+/** The session a poll is about, linked into the programme app. */
+function sessionLink(poll) {
+  const title = esc(poll.session_title || "a programme session")
+  return PROGRAMME_URL ? `<a href="${esc(`${PROGRAMME_URL}/#/c/${encodeURIComponent(poll.session)}`)}">${title}</a>` : title
+}
+
+function newPage(about = null) {
   if (!session.currentPubkey()) {
     render(`${header("New poll", true)}${signInCard()}`)
     bindCommon()
@@ -228,6 +238,7 @@ function newPage() {
   }
   render(`${header("New poll", true)}
     <form id="new-form" class="card stack">
+      ${about ? `<p class="notice">About the session ${sessionLink({ session: about.session, session_title: about.title })}. The poll shows on the session's page.</p>` : ""}
       <label>Question<input name="title" maxlength="200" required placeholder="What should we…?"></label>
       <label>Details (optional)<textarea name="description" maxlength="2000" rows="3"></textarea></label>
       <fieldset><legend>Options</legend><div id="opts"></div>
@@ -260,6 +271,7 @@ function newPage() {
         description: f.get("description"),
         options: f.getAll("option").map(String).filter(o => o.trim()),
         closes_at: Math.floor(Date.now() / 1000) + Number(f.get("duration")),
+        ...(about ? { session: about.session, session_title: about.title } : {}),
       })
       location.hash = `#/poll/${poll.id}`
     } catch (e) {
@@ -356,6 +368,11 @@ function route() {
   let m
   if ((m = hash.match(/^#\/poll\/([\w-]+)$/))) return pollPage(m[1])
   if (hash === "#/new") return newPage()
+  if ((m = hash.match(/^#\/new\?(.*)$/))) {
+    const q = new URLSearchParams(m[1])
+    const coordinate = q.get("session") || ""
+    return newPage(/^31923:[0-9a-f]{64}:.+/.test(coordinate) ? { session: coordinate, title: (q.get("title") || "").slice(0, 200) } : null)
+  }
   if (hash === "#/device") return devicePage()
   if (hash === "#/signer") return signerPage()
   if (hash === "#/self-custody") return signerPage(true)

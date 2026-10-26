@@ -44,6 +44,11 @@ export function openDb(path) {
   const db = new DatabaseSync(path)
   db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")
   db.exec(SCHEMA)
+  // 2026-10-26: a poll may be about a programme session (NIP-52 coordinate and its title then)
+  const columns = db.prepare("PRAGMA table_info(polls)").all().map(c => c.name)
+  if (!columns.includes("session")) {
+    db.exec("ALTER TABLE polls ADD COLUMN session TEXT NOT NULL DEFAULT ''; ALTER TABLE polls ADD COLUMN session_title TEXT NOT NULL DEFAULT ''")
+  }
   return db
 }
 

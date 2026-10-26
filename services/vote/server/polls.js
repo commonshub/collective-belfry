@@ -12,6 +12,8 @@ import { tx } from "./db.js"
 
 export const MAX_OPTIONS = 10
 const MIN_DURATION_S = 10 * 60
+// a programme session a poll may be about: `31923:<pubkey>:<d>` (NIP-52)
+const SESSION_COORDINATE = /^31923:[0-9a-f]{64}:[^\r\n]{1,200}$/
 const MAX_DURATION_S = 31 * 24 * 3600
 
 export class PollError extends Error {
@@ -71,6 +73,8 @@ export function createPolls(db, { treeDepth = 10 } = {}) {
       open: !closed,
       members: db.prepare("SELECT COUNT(*) AS n FROM poll_members WHERE poll_id = ?").get(poll.id).n,
       votes: db.prepare("SELECT COUNT(*) AS n FROM votes WHERE poll_id = ?").get(poll.id).n,
+      session: poll.session || "",
+      session_title: poll.session_title || "",
       tree_depth: treeDepth,
     }
     // Results only once the poll has closed, so early votes do not steer later ones.
@@ -117,6 +121,10 @@ export function createPolls(db, { treeDepth = 10 } = {}) {
       const description = String(input?.description ?? "").trim()
       const options = Array.isArray(input?.options) ? input.options.map(o => String(o).trim()).filter(Boolean) : []
       const closesAt = Number(input?.closes_at)
+      const session = String(input?.session ?? "").trim()
+      const sessionTitle = String(input?.session_title ?? "").trim()
+      if (session && !SESSION_COORDINATE.test(session)) throw new PollError(400, "session must be a kind-31923 coordinate")
+      if (sessionTitle.length > 200) throw new PollError(400, "session_title is at most 200 characters")
       if (!title || title.length > 200) throw new PollError(400, "title is required (at most 200 characters)")
       if (description.length > 2000) throw new PollError(400, "description is at most 2000 characters")
       if (options.length < 2 || options.length > MAX_OPTIONS) {
@@ -131,19 +139,21 @@ export function createPolls(db, { treeDepth = 10 } = {}) {
       const id = randomBytes(9).toString("base64url")
       return tx(db, () => {
         db.prepare(
-          `INSERT INTO polls (id, scope, title, description, options, creator_pass_id, created_at, closes_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, pollScope(id), title, description, JSON.stringify(options), creatorPassId, now(), closesAt)
+          `INSERT INTO polls (id, scope, title, description, options, creator_pass_id, created_at, closes_at, session, session_title)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(id, pollScope(id), title, description, JSON.stringify(options), creatorPassId, now(), closesAt, session, session ? sessionTitle : "")
         const regs = db.prepare("SELECT pass_id, commitment FROM registrations ORDER BY updated_at, pass_id").all()
         for (const r of regs) if (activePassIds.has(r.pass_id)) addMember(id, r.pass_id, r.commitment)
         return summary(getPoll(id))
       })
     },
 
-    list() {
-      return db
-        .prepare("SELECT * FROM polls ORDER BY closes_at <= ? , created_at DESC LIMIT 200")
-        .all(now())
+    /** The newest polls, open ones first; with `session`, only the polls about that session. */
+    list(session = "") {
+      const rows = session
+        ? db.prepare("SELECT * FROM polls WHERE session = ? ORDER BY closes_at <= ? , created_at DESC LIMIT 200").all(session, now())
+        : db.prepare("SELECT * FROM polls ORDER BY closes_at <= ? , created_at DESC LIMIT 200").all(now())
+      return rows
         .map(p => summary(p, { withResults: true }))
     },
 

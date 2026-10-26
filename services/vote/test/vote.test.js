@@ -2,7 +2,10 @@
 // fetched by scripts/fetch-artifacts.sh into web/public/artifacts).
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { createServer } from "node:http"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -43,7 +46,7 @@ async function harness() {
     const res = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers, body: raw || undefined })
     return { status: res.status, json: await res.json().catch(() => null) }
   }
-  return { keys, active, polls, call, close: () => server.close() }
+  return { keys, active, polls, call, port, close: () => server.close() }
 }
 
 const inAnHour = () => Math.floor(Date.now() / 1000) + 3600
@@ -165,4 +168,41 @@ test("revoked passes do not join polls", () => {
   polls.register(5, id.commitment.toString(), new Set()) // registered, but no active pass
   const poll = polls.create(1, { title: "Q", options: ["A", "B"], closes_at: inAnHour() }, new Set([1]))
   assert.equal(poll.members, 0)
+})
+
+test("polls about a programme session: stored, listed by session, readable from other origins", async () => {
+  const h = await harness()
+  try {
+    const coord = `31923:${"ab".repeat(32)}:osv-programme-2027-01-25-morning`
+    const base = { options: ["Yes", "No"], closes_at: inAnHour() }
+    const made = await h.call("POST", "/api/polls", { body: { ...base, title: "More time for questions?", session: coord, session_title: "Opening" }, sk: h.keys[0] })
+    assert.equal(made.status, 201)
+    assert.equal(made.json.session, coord)
+    assert.equal(made.json.session_title, "Opening")
+    await h.call("POST", "/api/polls", { body: { ...base, title: "Unrelated", session_title: "ignored without a session" }, sk: h.keys[0] })
+    const bad = await h.call("POST", "/api/polls", { body: { ...base, title: "x", session: "30023:aa:x" }, sk: h.keys[0] })
+    assert.equal(bad.status, 400)
+    const res = await fetch(`http://127.0.0.1:${h.port}/api/polls?session=${encodeURIComponent(coord)}`)
+    assert.equal(res.headers.get("access-control-allow-origin"), "*")
+    assert.deepEqual((await res.json()).polls.map(p => p.title), ["More time for questions?"])
+    const all = (await h.call("GET", "/api/polls")).json.polls
+    assert.equal(all.length, 2)
+    assert.equal(all.find(p => p.title === "Unrelated").session_title, "")
+  } finally {
+    h.close()
+  }
+})
+
+test("an older database gains the session columns", () => {
+  const file = join(mkdtempSync(join(tmpdir(), "vote-")), "vote.sqlite")
+  const old = new DatabaseSync(file)
+  old.exec(`CREATE TABLE polls (id TEXT PRIMARY KEY, scope TEXT NOT NULL UNIQUE, title TEXT NOT NULL, description TEXT NOT NULL DEFAULT '',
+    options TEXT NOT NULL, creator_pass_id INTEGER NOT NULL, created_at INTEGER NOT NULL, closes_at INTEGER NOT NULL)`)
+  old.exec(`INSERT INTO polls VALUES ('old', '${pollScope("old")}', 'Old poll', '', '["a","b"]', 1, 1, 2)`)
+  old.close()
+  const polls = createPolls(openDb(file), { treeDepth: 10 })
+  const [p] = polls.list()
+  assert.equal(p.title, "Old poll")
+  assert.equal(p.session, "")
+  openDb(file) // a second start leaves it as it is
 })

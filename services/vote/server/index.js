@@ -33,6 +33,8 @@ const TYPES = {
   ".woff2": "font/woff2",
 }
 
+const PUBLIC = { "Access-Control-Allow-Origin": "*" }
+
 function send(res, status, body, headers = {}) {
   const payload = typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body)
   res.writeHead(status, {
@@ -75,10 +77,11 @@ export function createApp({ polls, passes, publicUrl, staticDir }) {
     return { passId, active: new Set(active.values()) }
   }
 
-  async function api(req, res, path) {
+  async function api(req, res, path, query) {
     const body = req.method === "GET" ? Buffer.alloc(0) : await readBody(req)
     let m
-    if (path === "/api/polls" && req.method === "GET") return send(res, 200, { polls: polls.list() })
+    // public reads: the programme app (another origin) lists the polls about a session
+    if (path === "/api/polls" && req.method === "GET") return send(res, 200, { polls: polls.list(query.get("session") || "") }, PUBLIC)
     if (path === "/api/polls" && req.method === "POST") {
       const who = await participant(req, path, body)
       return send(res, 201, polls.create(who.passId, parseJson(body), who.active))
@@ -93,7 +96,7 @@ export function createApp({ polls, passes, publicUrl, staticDir }) {
       return send(res, 200, { registration: polls.registration(who.passId), joined })
     }
     if ((m = path.match(/^\/api\/polls\/([\w-]{1,32})$/)) && req.method === "GET") {
-      return send(res, 200, polls.get(m[1]))
+      return send(res, 200, polls.get(m[1]), PUBLIC)
     }
     if ((m = path.match(/^\/api\/polls\/([\w-]{1,32})\/group$/)) && req.method === "GET") {
       return send(res, 200, { commitments: polls.group(m[1]) })
@@ -137,7 +140,7 @@ export function createApp({ polls, passes, publicUrl, staticDir }) {
   return async function handler(req, res) {
     const url = new URL(req.url, "http://vote.local")
     try {
-      if (url.pathname.startsWith("/api/")) return await api(req, res, url.pathname)
+      if (url.pathname.startsWith("/api/")) return await api(req, res, url.pathname, url.searchParams)
       if (req.method !== "GET" && req.method !== "HEAD") return send(res, 405, "method not allowed")
       return await serveStatic(res, url.pathname)
     } catch (err) {

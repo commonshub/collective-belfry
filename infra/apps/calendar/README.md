@@ -22,7 +22,11 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    public events of the programme key (`PROGRAMME_PUBKEY`, build argument
    `VITE_PROGRAMME_PUBKEY`), published by the onboarding service's `sync-programme` job from the
    website's `/schedule.json` and the rooms' public Google calendars. Read-only here; participants
-   can open, share and RSVP to them.
+   can open, share and RSVP to them. Patch 0006 adds **From participants**: every participant's
+   public event (kind 31923 on the community relay, which only participants can write to; the
+   signed-in participant's own are left out, the app shows them already), deleted ones (kind 5 by
+   their author) removed. Revoked participants' events stay until they delete them, and reports
+   hidden by stewards are not applied here (the programme app does both).
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
 pass); the app signs through Keycast, so the `belfry-event` policy (`infra/keycast/policy.sql`)
@@ -76,6 +80,8 @@ patch 0001's wide OSV wordmark pushed the top bar (and with it the page) past th
 a phone opens on the day view (seven week columns cannot be read there). Desktop is unchanged.
 For a list of what is on, with RSVPs, comments and photos per session, participants use the
 programme app (`programme.<domain>`, `services/village`).
+
+Patch `0006-...patch`: participants' public sessions as the "From participants" calendar (see 4.).
 
 To change the patch: clone the app, `git checkout <CALENDAR_COMMIT>`, `git apply` the patch,
 commit, edit, `git commit --amend` (or a new commit), `git format-patch <CALENDAR_COMMIT>.. -o infra/apps/calendar/patches`. Run

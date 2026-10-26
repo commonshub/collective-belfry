@@ -75,7 +75,19 @@ one day at a time. The day opens on today, or the next day with sessions; on tod
 split into "On now", "Later today" and "Earlier today". Filters by track: the programme, each
 room, "From participants" (the choice is kept per browser). Times are shown in `VITE_EVENT_TZ`
 (Europe/Brussels), whatever the phone's zone. "Your sessions" lists what the participant is going
-to, might go to or announced.
+to, might go to or announced, with "Add all to my calendar" (one .ics file).
+
+Made for the phone: a tab bar at the bottom (Programme, Search, Yours, Announce), the day chips stay
+under the app bar while the list scrolls, a swipe goes to the next or previous day, today's list
+redraws every minute ("On now"), and "Starting soon" names the participant's sessions within half an
+hour. Search matches every word in titles, descriptions, places and rooms (case and accents
+ignored), upcoming first. The programme the phone last loaded is kept in `localStorage` (per
+participant, cleared on sign-out) and drawn at once, then refreshed from the relay; when the relay
+does not answer, the kept copy stays with a note. A service worker (`web/programme/public/sw.js`,
+the programme app only) caches the page, its assets, the app bar and the brand files, so the app
+opens without a network and shows the kept copy (the CSP's `connect-src` names `pass.<domain>` for
+its brand fetches). Calendar files carry a reminder 15 minutes
+before each session (`VALARM`); that is the reminder, since the apps send no notifications.
 
 "Announce a session" (`#/new`) publishes a public kind 31923 in the participant's name: title,
 day, from and until in the village's time (whatever the phone's zone; an end before the start
@@ -94,7 +106,8 @@ other apps point at it:
 | Comments | NIP-22 kind 1111 with `A` = the coordinate, `K` 31923 | the session page; "What's new" |
 | Photos | kind 20 with an `a` tag: the photos app's `#/new?session=<coordinate>` ("Share a photo from this session") | the session page; "At <session>" on the photo |
 | Thanks | a nutzap through the wallet with the coordinate as `ref` (an `a` tag), participants' sessions only | "Thank the host" |
-| Add to my calendar | an .ics file made in the browser | the phone's own calendar |
+| Polls | a poll in the polls app (`services/vote`) with the session's coordinate: "Start a poll" opens `<vote>/#/new?session=…`; anonymous like every poll | the session page (the polls app's public list, `VITE_VOTE_URL`, CSP `connect-src`); "About <session>" in the poll |
+| Add to my calendar | an .ics file made in the browser, with a reminder 15 minutes before | the phone's own calendar |
 
 Sessions of participants and comments can be reported (`session`, `comment`); the programme's
 own events cannot. No new kinds in the policy (31923, 31925, 1111, 20 and 9321 were in).
@@ -139,7 +152,9 @@ hashtag, like, comment, a tip through the wallet, the photographer sees all thre
 Programme: `test/programme.test.js`, smoke step 6t, and `infra/scripts/programme-check.mjs` at
 390 px: the day list without sideways scrolling, "Going", a comment, the .ics link, "Your
 sessions", a photo shared from the session and shown there, a second participant seeing it, and
-a session announced, seen by the second participant, edited and cancelled.
+a session announced, seen by the second participant (also in the calendar app), edited and
+cancelled, search, "Add all", a poll started from the session and listed there, the tab bar, the
+kept copy on a reload and the page opening offline.
 
 ## Open
 
@@ -147,5 +162,6 @@ No moderation or reporting of offers or profiles yet (participants can delete th
 notifications (a seller learns of a payment in the wallet or on the offer page); the directory has
 no fields beyond kind 0 (interests, languages); pictures are links in the directory but uploads in
 the marketplace. Photos: animated GIFs become still JPEGs; no albums; Blossom keeps the files of
-deleted posts until its retention removes them. Programme: no polls linked to a session yet; no
-reminders before a session starts; participants' sessions are not in the calendar app.
+deleted posts until its retention removes them. Programme: no push notifications (the reminder is the
+phone calendar's, from the .ics file); offline, the day lists, search and "Yours" work from the kept
+copy, but a session's page (answers, comments, photos, polls) needs the network.

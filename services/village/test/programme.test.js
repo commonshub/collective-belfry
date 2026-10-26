@@ -149,3 +149,28 @@ test("announce: a participant's session in the village's time, edits keep the co
   const del = finalizeEvent({ ...sessionDeletionTemplate(s), created_at: s.createdAt + 1 }, sk)
   assert.equal(currentSessions([finalizeEvent(t, sk)], [del], PROGRAMME).length, 0)
 })
+
+test("reminders: the calendar file alarms 15 minutes before; several sessions in one file", () => {
+  const a = sessionFromEvent(slot("osv-room-x-1", "Talk A", Date.UTC(2027, 0, 25, 8, 30) / 1000, 1, [["t", "room-x"]]), PROGRAMME)
+  const b = sessionFromEvent(slot("osv-room-x-2", "Talk B", Date.UTC(2027, 0, 26, 8, 30) / 1000, 1, [["t", "room-x"]]), PROGRAMME)
+  assert.match(model.sessionIcs(a), /\r\nBEGIN:VALARM\r\nACTION:DISPLAY\r\nDESCRIPTION:Talk A\r\nTRIGGER:-PT15M\r\nEND:VALARM\r\nEND:VEVENT\r\n/)
+  assert.doesNotMatch(model.sessionIcs(a, "", Date.now(), 0), /VALARM/)
+  const both = model.sessionsIcs([a, b], s => `https://p.example/#/s/${s.d}`)
+  assert.equal(both.match(/BEGIN:VEVENT/g).length, 2)
+  assert.match(both, /URL:https:\/\/p.example\/#\/s\/osv-room-x-2\r\n/)
+})
+
+test("search: every word, case and accents ignored; starting soon: mine only", () => {
+  const s = sessionFromEvent(slot("osv-room-x-1", "Café des logiciels libres", 1800000000, 1, [["t", "room-x"]]), PROGRAMME)
+  assert.ok(model.sessionMatches(s, "cafe LIBRES"))
+  assert.ok(model.sessionMatches(s, "madeleine")) // the place
+  assert.ok(!model.sessionMatches(s, "cafe rust"))
+  assert.ok(!model.sessionMatches(s, "  "))
+  const sk = generateSecretKey()
+  const me = getPublicKey(sk)
+  const yes = finalizeEvent({ ...rsvpTemplate(s, "accepted"), created_at: 10 }, sk)
+  assert.deepEqual(model.upcomingFor([s], [yes], me, s.start - 20 * 60).map(x => x.d), ["osv-room-x-1"])
+  assert.equal(model.upcomingFor([s], [yes], me, s.start - 60 * 60).length, 0, "too early")
+  assert.equal(model.upcomingFor([s], [yes], me, s.end).length, 0, "over")
+  assert.equal(model.upcomingFor([s], [], me, s.start).length, 0, "not going")
+})
