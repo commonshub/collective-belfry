@@ -1,0 +1,226 @@
+From 72137c6c6eda86325ab4a92dc44e0581c8d55840 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 15:55:14 +0100
+Subject: [PATCH 3/4] Belfry: the village space joins itself; sign-in first, no
+ sign-up
+
+In platform mode the space is every participant's (the relay has them as a member already),
+so it is joined without the dialog, which stays as the fallback when access fails. Without a
+push server there is no notifications toggle. The landing page offers "Sign in with Open
+Source Village" first and "Use your own Nostr signer" below it; instead of creating an
+account (accounts come with a pass), "No pass yet? Ask for an invite" links to the start page.
+---
+ src/app/components/Landing.svelte        | 88 +++++++++++++++---------
+ src/app/components/LogIn.svelte          | 19 +++--
+ src/app/components/SpaceJoin.svelte      |  8 ++-
+ src/routes/spaces/[relay]/+layout.svelte | 13 +++-
+ 4 files changed, 88 insertions(+), 40 deletions(-)
+
+diff --git a/src/app/components/Landing.svelte b/src/app/components/Landing.svelte
+index 3be398d9..7d7bb61b 100644
+--- a/src/app/components/Landing.svelte
++++ b/src/app/components/Landing.svelte
+@@ -21,6 +21,7 @@
+     PLATFORM_DESCRIPTION,
+   } from "@app/core/env"
+   import {pushModal} from "@app/navigation/dialogs"
++  import {ssoEnabled, startSignIn} from "@src/belfry/sso"
+ 
+   const invite = $derived(
+     $page.url.pathname === "/join" ? parseInviteLink($page.url.href) : undefined,
+@@ -42,37 +43,60 @@
+         <p class="m-auto max-w-sm text-center">{PLATFORM_DESCRIPTION}</p>
+       {/if}
+     </div>
+-    <Button aria-label="Log in" onclick={logIn}>
+-      <CardButton primary>
+-        {#snippet icon()}
+-          <div><Icon icon={Login} size={7} /></div>
+-        {/snippet}
+-        {#snippet title()}
+-          <div>Log in</div>
+-        {/snippet}
+-        {#snippet info()}
+-          <div>If you've been here before, you know the drill.</div>
+-        {/snippet}
+-      </CardButton>
+-    </Button>
+-    <Button onclick={signUp}>
+-      <CardButton>
+-        {#snippet icon()}
+-          <div><Icon icon={AddCircle} size={7} /></div>
+-        {/snippet}
+-        {#snippet title()}
+-          <div>Create an account</div>
+-        {/snippet}
+-        {#snippet info()}
+-          <div>Just a few questions and you'll be on your way.</div>
+-        {/snippet}
+-      </CardButton>
+-    </Button>
+-    <p class="text-center text-xs opacity-75">
+-      By using <Link external class="link" href={PLATFORM_ABOUT}>{PLATFORM_NAME}</Link>, you consent
+-      to our
+-      <Link external class="link" href={PLATFORM_TERMS}>Terms of Service</Link> and
+-      <Link external class="link" href={PLATFORM_PRIVACY}>Privacy Policy</Link>.
+-    </p>
++    {#if ssoEnabled()}
++      <!-- Belfry: participants sign in with their Open Source Village account; their pass made it. -->
++      <Button aria-label="Sign in with Open Source Village" onclick={() => startSignIn(false)}>
++        <CardButton primary>
++          {#snippet icon()}
++            <div><Icon icon={Login} size={7} /></div>
++          {/snippet}
++          {#snippet title()}
++            <div>Sign in with Open Source Village</div>
++          {/snippet}
++          {#snippet info()}
++            <div>With the e-mail address of your pass.</div>
++          {/snippet}
++        </CardButton>
++      </Button>
++      <Button class="link text-center text-sm" onclick={logIn}>Use your own Nostr signer</Button>
++      {#if PLATFORM_ABOUT}
++        <p class="text-center text-sm opacity-75">
++          No pass yet? <Link external class="link" href={PLATFORM_ABOUT}>Ask for an invite</Link>.
++        </p>
++      {/if}
++    {:else}
++      <Button aria-label="Log in" onclick={logIn}>
++        <CardButton primary>
++          {#snippet icon()}
++            <div><Icon icon={Login} size={7} /></div>
++          {/snippet}
++          {#snippet title()}
++            <div>Log in</div>
++          {/snippet}
++          {#snippet info()}
++            <div>If you've been here before, you know the drill.</div>
++          {/snippet}
++        </CardButton>
++      </Button>
++      <Button onclick={signUp}>
++        <CardButton>
++          {#snippet icon()}
++            <div><Icon icon={AddCircle} size={7} /></div>
++          {/snippet}
++          {#snippet title()}
++            <div>Create an account</div>
++          {/snippet}
++          {#snippet info()}
++            <div>Just a few questions and you'll be on your way.</div>
++          {/snippet}
++        </CardButton>
++      </Button>
++      <p class="text-center text-xs opacity-75">
++        By using <Link external class="link" href={PLATFORM_ABOUT}>{PLATFORM_NAME}</Link>, you consent
++        to our
++        <Link external class="link" href={PLATFORM_TERMS}>Terms of Service</Link> and
++        <Link external class="link" href={PLATFORM_PRIVACY}>Privacy Policy</Link>.
++      </p>
++    {/if}
+   </ModalBody>
+ </Modal>
+diff --git a/src/app/components/LogIn.svelte b/src/app/components/LogIn.svelte
+index b95866e4..07f2e7b3 100644
+--- a/src/app/components/LogIn.svelte
++++ b/src/app/components/LogIn.svelte
+@@ -24,7 +24,7 @@
+   import LogInEmail from "@app/components/LogInEmail.svelte"
+   import LogInKey from "@app/components/LogInKey.svelte"
+   import {clearModals, pushModal} from "@app/navigation/dialogs"
+-  import {PLATFORM_NAME, POMADE_SIGNERS, HIDE_NOSTR} from "@app/core/env"
++  import {PLATFORM_ABOUT, PLATFORM_NAME, POMADE_SIGNERS, HIDE_NOSTR} from "@app/core/env"
+   import {pushToast} from "@app/features/toast"
+   import {setChecked} from "@app/features/checked"
+   import {login} from "@app/core/session"
+@@ -188,9 +188,18 @@
+         Browse Signer Apps
+       </Link>
+     {/if}
+-    <div class="text-sm">
+-      Need an account?
+-      <Button class="link" onclick={signUp}>Register instead</Button>
+-    </div>
++    {#if ssoEnabled()}
++      <!-- Belfry: accounts come with a pass, not from this app -->
++      {#if PLATFORM_ABOUT}
++        <div class="text-sm">
++          No pass yet? <Link external class="link" href={PLATFORM_ABOUT}>Ask for an invite</Link>.
++        </div>
++      {/if}
++    {:else}
++      <div class="text-sm">
++        Need an account?
++        <Button class="link" onclick={signUp}>Register instead</Button>
++      </div>
++    {/if}
+   </ModalBody>
+ </Modal>
+diff --git a/src/app/components/SpaceJoin.svelte b/src/app/components/SpaceJoin.svelte
+index 26b781d0..5cdf74c0 100644
+--- a/src/app/components/SpaceJoin.svelte
++++ b/src/app/components/SpaceJoin.svelte
+@@ -13,6 +13,7 @@
+   import RelaySummary from "@app/components/RelaySummary.svelte"
+   import SpaceAccessRequest from "@app/components/SpaceAccessRequest.svelte"
+   import SpaceJoinNotifications from "@app/components/SpaceJoinNotifications.svelte"
++  import {PUSH_SERVER} from "@app/core/env"
+   import SpaceJoinStatus from "@app/components/SpaceJoinStatus.svelte"
+   import {attemptRelayAccess, completeSpaceJoin} from "@app/features/spaces/membership"
+   import {pushModal} from "@app/navigation/dialogs"
+@@ -49,7 +50,7 @@
+ 
+   let error = $state(maybe<string>())
+   let loading = $state(true)
+-  let notifications = $state(true)
++  let notifications = $state(Boolean(PUSH_SERVER))
+ 
+   onMount(async () => {
+     error = await attemptRelayAccess(url)
+@@ -60,7 +61,10 @@
+ <Modal label="Join space" tag="form" onsubmit={preventDefault(join)}>
+   <ModalBody>
+     <RelaySummary {url} />
+-    <SpaceJoinNotifications bind:notifications />
++    <!-- Belfry: no push server, so nothing to switch on -->
++    {#if PUSH_SERVER}
++      <SpaceJoinNotifications bind:notifications />
++    {/if}
+     {#if error}
+       <SpaceJoinStatus {error} />
+     {/if}
+diff --git a/src/routes/spaces/[relay]/+layout.svelte b/src/routes/spaces/[relay]/+layout.svelte
+index c58903cf..bd69e3f4 100644
+--- a/src/routes/spaces/[relay]/+layout.svelte
++++ b/src/routes/spaces/[relay]/+layout.svelte
+@@ -24,6 +24,8 @@
+   import {RelayAccessStatus, deriveRelayAccess} from "@app/core/relays"
+   import {relays, roomLists} from "@app/core/plugins"
+   import {userSpaceUrls} from "@app/features/spaces"
++  import {attemptRelayAccess, completeSpaceJoin} from "@app/features/spaces/membership"
++  import {PLATFORM_RELAYS, PUSH_SERVER} from "@app/core/env"
+   import {getModal, pushModal} from "@app/navigation/dialogs"
+   import * as pages from "@app/navigation/pages"
+   import type {LayoutProps} from "./$types"
+@@ -91,7 +93,16 @@
+     } else if (!$userSpaceUrls.includes(url) && !joinPrompted.has(url)) {
+       if (spacesLoaded) {
+         joinPrompted.add(url)
+-        pushModal(SpaceJoin, {url})
++
++        // Belfry: the platform's space belongs to every participant (the relay has them as a
++        // member already), so it joins without asking; the dialog only when that fails.
++        if (PLATFORM_RELAYS.includes(url)) {
++          attemptRelayAccess(url).then(error =>
++            error ? pushModal(SpaceJoin, {url}) : completeSpaceJoin(url, Boolean(PUSH_SERVER)),
++          )
++        } else {
++          pushModal(SpaceJoin, {url})
++        }
+       } else {
+         loadSpaces()
+       }
+-- 
+2.53.0
+

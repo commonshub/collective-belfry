@@ -626,6 +626,44 @@ PH=$(curl -sS -D - -o /dev/null -H "Origin: $PROGRAMME_URL" "$VOTE_URL/api/polls
 grep -qi '^access-control-allow-origin: \*' <<<"$PH" && ok "the polls about a session are readable from the programme (CORS)" || bad "polls list without CORS: $(head -c 200 <<<"$PH")"
 echo "  note the browser check (day list, search, RSVP, comment, photos, announcing, polls, the calendar app) is infra/scripts/programme-check.mjs"
 
+step "6u. groups (Flotilla on zooid): app served without third-party services; the relay's members are the active passes"
+GROUPS_URL=${GROUPS_URL:-${GROUPS_PUBLIC_URL:-http://localhost:3150}}
+GROUPS_RELAY=${GROUPS_RELAY_URL:-ws://localhost:3190}
+GROUPS_RELAY_HTTP=$(sed 's#^ws://#http://#; s#^wss://#https://#' <<<"$GROUPS_RELAY")
+H=$(curl -sS -o - -w '\n%{http_code}' "$GROUPS_URL/")
+[[ "${H##*$'\n'}" == 200 && "$H" == *"<title>Open Source Village groups</title>"* ]] && ok "Open Source Village groups answers at $GROUPS_URL" || bad "groups at $GROUPS_URL: HTTP ${H##*$'\n'}"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$GROUPS_URL/spaces/x/about")" == 200 ]] && ok "app routes fall back to the app (SPA)" || bad "app route not served"
+GROUPS_JS=""
+for f in $(grep -oE '/?_app/immutable/(entry|chunks|nodes)/[^"]+\.js' <<<"$H" | sed 's#^/##' | sort -u); do GROUPS_JS+=$(curl -sS "$GROUPS_URL/$f"); done
+ENV_CHUNK=$(grep -oE 'chunks/[A-Za-z0-9_-]+\.js' <<<"$GROUPS_JS" | sort -u | while read -r c; do curl -sS "$GROUPS_URL/_app/immutable/$c" | grep -q VITE_PLATFORM_RELAYS && echo "$c" && break; done)
+GROUPS_ENV=$([[ -n "$ENV_CHUNK" ]] && curl -sS "$GROUPS_URL/_app/immutable/$ENV_CHUNK")
+[[ "$GROUPS_ENV" == *"belfry-groups"* && "$GROUPS_ENV" == *"$GROUPS_RELAY"* ]] && ok "bundle signs in as belfry-groups on the space $GROUPS_RELAY" || bad "groups bundle lacks its client id or relay ($ENV_CHUNK)"
+[[ "$GROUPS_ENV" != *"dufflepud.coracle"* && "$GROUPS_ENV" != *"nps.flotilla"* && "$GROUPS_ENV" != *"pomade."* && "$H" != *"plausible"* ]] && ok "no Coracle proxy, push, Pomade or analytics in the groups build" || bad "the groups build still names a third-party service"
+NIP11=$(curl -sS -H 'Accept: application/nostr+json' "$GROUPS_RELAY_HTTP/")
+jq -e '.limitation.auth_required == true and (.supported_nips | map(tostring) | index("29"))' <<<"$NIP11" >/dev/null && ok "groups relay: NIP-29, AUTH required ($(jq -r .name <<<"$NIP11"))" || bad "groups relay NIP-11: $(head -c 200 <<<"$NIP11")"
+GROUPS_OWNER=$(jq -r .pubkey <<<"$NIP11")
+[[ -z "${GROUPS_API_PUBKEY:-}" || "$GROUPS_OWNER" == "$GROUPS_API_PUBKEY" ]] && ok "groups relay owner is the groups API key" || bad "groups relay owner $GROUPS_OWNER is not GROUPS_API_PUBKEY"
+# a member check over zooid's member API, from inside the onboarding service (internal host name)
+groups_member() {
+  "${COMPOSE[@]}" exec -T onboarding python -c '
+import sys
+from belfry_onboarding.app import build_services
+from belfry_onboarding.settings import Settings
+g = build_services(Settings()).groups
+print("yes" if g and sys.argv[1] in g.members() else "no")' "$1" 2>/dev/null | tail -n1
+}
+if [[ -n "${KC_PUB:-}" ]]; then
+  [[ "$(groups_member "$KC_PUB")" == yes ]] && ok "the participant is a member of the groups relay" || bad "participant $KC_PUB not a member of the groups relay"
+fi
+if [[ -n "${KC_TOKEN:-}" ]]; then
+  for k in 9 9007 9021 28934; do
+    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[["h","smoke"]], content:""}')
+    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (groups)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+  done
+fi
+echo "  note the browser check (silent sign-in, a room of one's own, a message read back) is infra/scripts/groups-check.mjs"
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"
@@ -948,6 +986,7 @@ DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"
 for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
 [[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
+[[ "$(groups_member "$KC_PUB")" == no ]] && ok "a revoked pass leaves the groups relay" || bad "revoked participant still a member of the groups relay"
 CHECK=$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$(qr_token "$PASS_ID")")
 [[ "$(jq -r .valid <<<"$CHECK")" == false && "$(jq -r .reason <<<"$CHECK")" == *revoked* ]] && ok "/check: the phone pass of a revoked pass is refused at once" || bad "/check after revoke: $CHECK"
 [[ "$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"

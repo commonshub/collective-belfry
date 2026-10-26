@@ -1,0 +1,154 @@
+From 31e34a40eb045b77a282d5322d9c70126b13b4f9 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 15:38:45 +0100
+Subject: [PATCH 1/4] Belfry: no third-party services; members create rooms
+
+Removes the Plausible analytics script and its CSP entry, reads the dufflepud proxy from
+VITE_DUFFLEPUD_URL (empty turns off link previews and the read-marker sync, NIP-05 handles
+are fetched directly), lets an empty VITE_PUSH_BRIDGE turn the push bridge off, and with
+VITE_MEMBERS_CREATE_ROOMS=true shows "Create room" to every member of the space (the relay
+decides, zooid with Belfry's member_create patch).
+---
+ src/app.html                               |  4 ----
+ src/app/components/ContentLinkBlock.svelte |  6 +++++-
+ src/app/components/SpaceMenuRooms.svelte   |  8 +++++++-
+ src/app/core/env.ts                        | 10 ++++++++--
+ src/app/features/analytics.ts              |  3 ++-
+ src/app/features/checked.ts                |  4 ++++
+ svelte.config.js                           |  2 +-
+ 7 files changed, 27 insertions(+), 10 deletions(-)
+
+diff --git a/src/app.html b/src/app.html
+index 9a2fbed7..bee33e52 100644
+--- a/src/app.html
++++ b/src/app.html
+@@ -42,9 +42,5 @@
+   </head>
+   <body data-sveltekit-preload-data="hover" data-sveltekit-preload-code="eager">
+     <div style="display: contents">%sveltekit.body%</div>
+-    <script
+-      defer
+-      data-domain="app.flotilla.social"
+-      src="https://plausible.coracle.social/js/script.manual.js"></script>
+   </body>
+ </html>
+diff --git a/src/app/components/ContentLinkBlock.svelte b/src/app/components/ContentLinkBlock.svelte
+index e9936c2c..ebef4375 100644
+--- a/src/app/components/ContentLinkBlock.svelte
++++ b/src/app/components/ContentLinkBlock.svelte
+@@ -1,9 +1,13 @@
+ <script module lang="ts">
+   import {postJson, simpleCache} from "@welshman/lib"
+-  import {dufflepud} from "@app/core/env"
++  import {dufflepud, DUFFLEPUD_URL} from "@app/core/env"
+ 
+   // Cache previews by url so the same link isn't re-fetched across renders/instances.
+   const loadPreview = simpleCache(async ([url]: [string]) => {
++    if (!DUFFLEPUD_URL) {
++      throw new Error("Link previews are off")
++    }
++
+     const json = await postJson(dufflepud("link/preview"), {url})
+ 
+     if (!json?.title && !json?.image) {
+diff --git a/src/app/components/SpaceMenuRooms.svelte b/src/app/components/SpaceMenuRooms.svelte
+index d90e07fb..e603f98c 100644
+--- a/src/app/components/SpaceMenuRooms.svelte
++++ b/src/app/components/SpaceMenuRooms.svelte
+@@ -9,7 +9,9 @@
+   import SpaceMenuRoomItem from "@app/components/SpaceMenuRoomItem.svelte"
+   import RoomCreate from "@app/components/RoomCreate.svelte"
+   import {relays} from "@app/core/plugins"
++  import {MEMBERS_CREATE_ROOMS} from "@app/core/env"
+   import {deriveUserCanCreateRoom} from "@app/features/spaces/management"
++  import {deriveUserIsSpaceMember} from "@app/features/spaces/membership"
+   import {
+     RoomType,
+     deriveUserRooms,
+@@ -29,7 +31,11 @@
+   const userRooms = deriveUserRooms(url)
+   const otherRooms = deriveOtherRooms(url, RoomType.Text)
+   const otherVoiceRooms = deriveOtherRooms(url, RoomType.Voice)
+-  const canCreateRoom = deriveUserCanCreateRoom(url)
++  // Belfry: on a relay that lets members create rooms, every member gets the button.
++  const canCreateRoom = derived(
++    [deriveUserCanCreateRoom(url), deriveUserIsSpaceMember(url)],
++    ([$canCreate, $isMember]) => $canCreate || (MEMBERS_CREATE_ROOMS && $isMember),
++  )
+ 
+   const roomSearch = derived(otherRooms, $otherRooms =>
+     createSearch(
+diff --git a/src/app/core/env.ts b/src/app/core/env.ts
+index 5cabfa71..3ea9b764 100644
+--- a/src/app/core/env.ts
++++ b/src/app/core/env.ts
+@@ -11,7 +11,8 @@ const env = (key: string): string =>
+ 
+ export const PUSH_SERVER = env("VITE_PUSH_SERVER")
+ 
+-export const PUSH_BRIDGE = normalizeRelayUrl(env("VITE_PUSH_BRIDGE"))
++// Belfry: empty turns the push bridge off (normalizeRelayUrl throws on "").
++export const PUSH_BRIDGE = env("VITE_PUSH_BRIDGE") ? normalizeRelayUrl(env("VITE_PUSH_BRIDGE")) : ""
+ 
+ export const ENABLE_ZAPS = Capacitor.getPlatform() !== "ios"
+ 
+@@ -77,8 +78,13 @@ export const HOSTING_BACKEND_URL = env("VITE_HOSTING_BACKEND_URL")
+ 
+ export const HOSTING_RELAY_DOMAIN = env("VITE_HOSTING_RELAY_DOMAIN")
+ 
+-export const DUFFLEPUD_URL = "https://dufflepud.coracle.social"
++// Belfry: no third-party proxy. Empty turns off link previews and the read-marker sync; NIP-05
++// handles are then fetched directly.
++export const DUFFLEPUD_URL = env("VITE_DUFFLEPUD_URL") || ""
+ 
+ export const THUMBNAIL_URL = env("VITE_THUMBNAIL_URL")
+ 
++// Belfry: the platform relay lets every member create rooms (zooid `[groups] member_create`).
++export const MEMBERS_CREATE_ROOMS = env("VITE_MEMBERS_CREATE_ROOMS") === "true"
++
+ export const dufflepud = (path: string) => DUFFLEPUD_URL + "/" + path
+diff --git a/src/app/features/analytics.ts b/src/app/features/analytics.ts
+index 37d01b8c..d2ce3271 100644
+--- a/src/app/features/analytics.ts
++++ b/src/app/features/analytics.ts
+@@ -3,7 +3,8 @@
+ import {page} from "$app/stores"
+ import {getSetting} from "@app/core/settings"
+ 
+-export const analyticsAvailable = true
++// Belfry: no analytics (the Plausible script is removed from app.html).
++export const analyticsAvailable = false
+ 
+ const w = window as any
+ 
+diff --git a/src/app/features/checked.ts b/src/app/features/checked.ts
+index ed982af6..ea6d37f2 100644
+--- a/src/app/features/checked.ts
++++ b/src/app/features/checked.ts
+@@ -105,6 +105,10 @@ const pushCheckedRemote = throttle(3000, async () => {
+ })
+ 
+ export const syncCheckedRemote = () => {
++  if (!DUFFLEPUD_URL) {
++    return () => {}
++  }
++
+   let ready = false
+ 
+   const unsubscribeUser = app.subscribe($app => {
+diff --git a/svelte.config.js b/svelte.config.js
+index d098cc31..e7fa858b 100644
+--- a/svelte.config.js
++++ b/svelte.config.js
+@@ -34,7 +34,7 @@ export default {
+     },
+     csp: {
+       directives: {
+-        "script-src": ["self", "wasm-unsafe-eval", "https://plausible.coracle.social", ...appHtmlScripts],
++        "script-src": ["self", "wasm-unsafe-eval", ...appHtmlScripts],
+         "worker-src": ["self", "blob:"],
+         "style-src": ["self", "unsafe-inline"],
+         "frame-src": ["none"],
+-- 
+2.53.0
+

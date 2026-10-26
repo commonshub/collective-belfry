@@ -1,0 +1,57 @@
+/* Open Source Village, run by Belfry (appended to Flotilla's src/app.css by the image build).
+   The village palette (brand/tokens.css, dark only) as Flotilla's theme tokens, for its light and
+   dark modes alike; the build sets VITE_THEME=nature, whose selectors these follow. */
+[data-fl-theme="nature"] {
+  &[data-theme="light"],
+  &[data-theme="dark"],
+  & .primary-nav,
+  & .mobile-nav {
+    --primary: #d6ff52;
+    --primary-soft: #c5ee41;
+    --primary-bold: #e4ff8a;
+    --primary-content: #1a231d;
+
+    --secondary: #f89b0e;
+    --secondary-soft: #e08a08;
+    --secondary-bold: #ffb547;
+    --secondary-content: #1a231d;
+
+    --success: #12d2b0;
+    --success-content: #1a231d;
+    --warning: #f89b0e;
+    --warning-content: #1a231d;
+    --error: #ff6b5a;
+    --error-content: #1a231d;
+
+    --backdrop: #121914;
+    --surface: #1a231d;
+    --surface-more: #121914;
+    --surface-less: #243128;
+
+    --content: #ffffff;
+    --content-muted: #c9d1cb;
+    --content-subtle: #8e9a91;
+
+    --line: #ffffff29;
+    --line-more: #ffffff57;
+    --line-less: #ffffff14;
+
+    --shadow-color: 0, 0, 0;
+    --shadow-sm: 0 1px 3px rgba(var(--shadow-color), 0.35);
+    --shadow: 0 4px 12px rgba(var(--shadow-color), 0.4);
+    --shadow-lg: 0 10px 30px rgba(var(--shadow-color), 0.5);
+    --shadow-inset: inset 0 -4px 0 rgba(0, 0, 0, 0.25);
+    --shadow-inset-strong: inset 0 -3px 0 rgba(0, 0, 0, 0.3);
+  }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* The Open Source Village app bar (brand/osv-bar.js) is fixed above the app: Flotilla offsets every
+   fixed and padded top part by --sait, which reads --safe-area-inset-top. */
+html.osv-bar {
+  --safe-area-inset-top: var(--osv-bar-h);
+  --osv-bar-z: 3;
+}

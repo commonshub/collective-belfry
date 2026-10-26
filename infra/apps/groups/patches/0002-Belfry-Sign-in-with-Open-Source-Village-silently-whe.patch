@@ -1,0 +1,381 @@
+From 40180abc35bb63a3f066dbf3b2f4c3188e4ef919 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 15:44:45 +0100
+Subject: [PATCH 2/4] Belfry: Sign in with Open Source Village, silently when
+ signed in; logout everywhere
+
+src/belfry/sso.ts (as in the chat): OAuth authorization code + PKCE against Keycast, client
+belfry-groups, the token response's bunker URL connected over NIP-46. The root layout finishes
+the flow on /oauth/callback or tries prompt=none once per tab before the app starts, and opens
+the login dialog when that did not work out. The login dialog offers the button first. Logout
+revokes the app's authorization and goes through Keycast's logout, which ends the Keycast and
+Authentik sessions and comes back signed out.
+---
+ src/app/components/LogIn.svelte        |   7 +
+ src/app/components/LogOut.svelte       |   5 +-
+ src/app/core/session.ts                |   9 +-
+ src/belfry/sso.ts                      | 217 +++++++++++++++++++++++++
+ src/routes/+layout.svelte              |  25 ++-
+ src/routes/oauth/callback/+page.svelte |   1 +
+ 6 files changed, 258 insertions(+), 6 deletions(-)
+ create mode 100644 src/belfry/sso.ts
+ create mode 100644 src/routes/oauth/callback/+page.svelte
+
+diff --git a/src/app/components/LogIn.svelte b/src/app/components/LogIn.svelte
+index 436c54aa..b95866e4 100644
+--- a/src/app/components/LogIn.svelte
++++ b/src/app/components/LogIn.svelte
+@@ -28,6 +28,7 @@
+   import {pushToast} from "@app/features/toast"
+   import {setChecked} from "@app/features/checked"
+   import {login} from "@app/core/session"
++  import {ssoEnabled, startSignIn} from "@src/belfry/sso"
+ 
+   let signers: Nip55AppInfo[] = $state([])
+   let loading: string | undefined = $state()
+@@ -118,6 +119,12 @@
+         own your social identity.
+       </p>
+     {/if}
++    {#if ssoEnabled()}
++      <Button {disabled} onclick={() => startSignIn(false)} class="button button-primary">
++        <Icon icon={Key} />
++        Sign in with Open Source Village
++      </Button>
++    {/if}
+     {#if getNip07()}
+       <Button {disabled} onclick={loginWithNip07} class="button button-primary">
+         {#if loading === "nip07"}
+diff --git a/src/app/components/LogOut.svelte b/src/app/components/LogOut.svelte
+index 6eb332ea..9eb1ad8f 100644
+--- a/src/app/components/LogOut.svelte
++++ b/src/app/components/LogOut.svelte
+@@ -10,6 +10,7 @@
+   import ModalTitle from "@lib/components/ModalTitle.svelte"
+   import ModalFooter from "@lib/components/ModalFooter.svelte"
+   import {logout} from "@app/core/session"
++  import {prepareLogout} from "@src/belfry/sso"
+ 
+   const back = () => history.back()
+ 
+@@ -17,7 +18,9 @@
+     loading = true
+ 
+     try {
+-      await logout()
++      // Belfry: revoke this app's authorization and end the Open Source Village sign-in too, or
++      // the silent sign-in would sign the participant straight back in.
++      await logout(await prepareLogout("/"))
+     } catch (e) {
+       console.error(e)
+       loading = false
+diff --git a/src/app/core/session.ts b/src/app/core/session.ts
+index a01c40fe..e151a7b4 100644
+--- a/src/app/core/session.ts
++++ b/src/app/core/session.ts
+@@ -59,17 +59,18 @@ export const restoreSession = async () => {
+ }
+ 
+ // A revoked signer can leave the app unable to start, so this clears the device without asking it anything.
+-export const resetSession = async () => {
++export const resetSession = async (next = "/") => {
+   await kv.clear()
+   await ss.clear()
+   await storage.get()?.clear()
+ 
+   localStorage.clear()
+ 
+-  window.location.href = "/"
++  window.location.href = next
+ }
+ 
+-export const logout = async () => {
++// Belfry: `next` is where the browser goes afterwards (the signer's logout, which comes back here).
++export const logout = async (next = "/") => {
+   await Promise.all(logoutHandlers.map(call))
+-  await resetSession()
++  await resetSession(next)
+ }
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+new file mode 100644
+index 00000000..2e2af498
+--- /dev/null
++++ b/src/belfry/sso.ts
+@@ -0,0 +1,217 @@
++// Belfry: "Sign in with Open Source Village" and the silent sign-in check.
++//
++// OAuth 2.0 authorization code + PKCE against Keycast (the community signer). Keycast signs the
++// participant in through Authentik; its token response carries a fresh bunker:// URL, which this
++// module connects with like the "Login with bunker" screen does. On load without a session the
++// app redirects once per tab with prompt=none: Keycast answers with a code when the participant
++// is signed in (Keycast or Authentik session, Belfry's apps skip consent), otherwise with
++// error=login_required and the login screen opens.
++//
++// Logout ends the sign-in everywhere: the app revokes its own authorization at Keycast (with the
++// refresh token of the token response) and goes through Keycast's /api/auth/oidc/logout, which
++// ends the Keycast and Authentik sessions and returns here; otherwise the silent check would
++// sign the participant straight back in.
++
++import {Nip46Broker} from "@welshman/signer"
++import {makeSecret} from "@welshman/util"
++import {toSession, nip46} from "@welshman/app"
++import {NIP46_PERMS} from "@app/core/nip46"
++import {login} from "@app/core/session"
++
++const KEYCAST_URL = ((import.meta.env.VITE_KEYCAST_URL as string) || "").replace(/\/+$/, "")
++const CLIENT_ID = (import.meta.env.VITE_OAUTH_CLIENT_ID as string) || "belfry-groups"
++const SCOPE = "policy:belfry-event"
++const CALLBACK_PATH = "/oauth/callback"
++const FLOW_KEY = "belfry-sso-flow"
++const TRIED_KEY = "belfry-sso-silent-tried"
++const REFRESH_KEY = "belfry-sso-refresh-token"
++
++type Flow = {state: string; verifier: string; silent: boolean; returnTo: string}
++
++// `returnTo` is where the app was when the flow started; the layout navigates there.
++export type SsoResult =
++  | {ok: true; returnTo: string}
++  | {ok: false; silent: boolean; error: string; returnTo: string}
++
++export const ssoEnabled = () => Boolean(KEYCAST_URL)
++
++export const isSsoCallback = () => window.location.pathname === CALLBACK_PATH
++
++const redirectUri = () => window.location.origin + CALLBACK_PATH
++
++const store = {
++  get: (key: string) => {
++    try {
++      return window.sessionStorage.getItem(key)
++    } catch {
++      return null
++    }
++  },
++  set: (key: string, value: string) => {
++    try {
++      window.sessionStorage.setItem(key, value)
++      return true
++    } catch {
++      return false
++    }
++  },
++  remove: (key: string) => {
++    try {
++      window.sessionStorage.removeItem(key)
++    } catch {
++      // storage unavailable: nothing to remove
++    }
++  },
++}
++
++const b64url = (bytes: Uint8Array) =>
++  btoa(String.fromCharCode(...bytes))
++    .replace(/\+/g, "-")
++    .replace(/\//g, "_")
++    .replace(/=+$/, "")
++
++const randomString = (length = 32) => b64url(crypto.getRandomValues(new Uint8Array(length)))
++
++const challengeFor = async (verifier: string) =>
++  b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))
++
++/** Redirects to Keycast. Interactive by default; `silent` adds prompt=none. */
++export const startSignIn = async (silent = false) => {
++  const here = window.location.pathname + window.location.search + window.location.hash
++  const flow: Flow = {
++    state: randomString(),
++    verifier: randomString(48),
++    silent,
++    returnTo: isSsoCallback() ? "/" : here,
++  }
++
++  // Without storage the callback could not check the state: do not start a flow it cannot finish.
++  if (!store.set(FLOW_KEY, JSON.stringify(flow))) return false
++
++  const url = new URL(KEYCAST_URL + "/api/oauth/authorize")
++  url.searchParams.set("client_id", CLIENT_ID)
++  url.searchParams.set("redirect_uri", redirectUri())
++  url.searchParams.set("scope", SCOPE)
++  url.searchParams.set("state", flow.state)
++  url.searchParams.set("code_challenge", await challengeFor(flow.verifier))
++  url.searchParams.set("code_challenge_method", "S256")
++  if (silent) url.searchParams.set("prompt", "none")
++
++  window.location.assign(url.toString())
++  return true
++}
++
++/** One silent attempt per tab. True when the page is being redirected. */
++export const trySilentSignIn = async () => {
++  if (!ssoEnabled() || store.get(TRIED_KEY)) return false
++  if (!store.set(TRIED_KEY, "1")) return false
++  return startSignIn(true)
++}
++
++export const connectBunker = async (bunkerUrl: string) => {
++  const clientSecret = makeSecret()
++  const {signerPubkey, connectSecret, relays} = Nip46Broker.parseBunkerUrl(bunkerUrl)
++  const broker = new Nip46Broker({relays, clientSecret, signerPubkey})
++
++  try {
++    const result = await broker.connect(connectSecret, NIP46_PERMS)
++    const pubkey = await broker.getPublicKey()
++
++    if (!pubkey || !["ack", connectSecret].includes(result)) {
++      throw new Error("the signer did not accept the connection")
++    }
++
++    await login(toSession(nip46, {clientSecret, signerPubkey, relays: broker.params.relays}))
++  } finally {
++    broker.cleanup()
++  }
++}
++
++/** Handles /oauth/callback: exchanges the code and connects. Restores the original URL. */
++export const finishSignIn = async (): Promise<SsoResult> => {
++  const params = new URLSearchParams(window.location.search)
++  const raw = store.get(FLOW_KEY)
++  store.remove(FLOW_KEY)
++
++  let flow: Flow | undefined
++  try {
++    flow = raw ? (JSON.parse(raw) as Flow) : undefined
++  } catch {
++    flow = undefined
++  }
++
++  const returnTo = flow?.returnTo || "/"
++  const silent = Boolean(flow?.silent)
++  const fail = (error: string): SsoResult => ({ok: false, silent, error, returnTo})
++
++  if (!flow || params.get("state") !== flow.state) return fail("state_mismatch")
++  if (params.get("error")) return fail(params.get("error") as string)
++
++  const code = params.get("code")
++  if (!code) return fail("missing_code")
++
++  try {
++    const response = await fetch(KEYCAST_URL + "/api/oauth/token", {
++      method: "POST",
++      headers: {"Content-Type": "application/json"},
++      body: JSON.stringify({
++        grant_type: "authorization_code",
++        code,
++        client_id: CLIENT_ID,
++        redirect_uri: redirectUri(),
++        code_verifier: flow.verifier,
++      }),
++    })
++    const body = await response.json().catch(() => ({}))
++
++    if (!response.ok || !body.bunker_url) {
++      return fail(body.error || `token_${response.status}`)
++    }
++
++    await connectBunker(body.bunker_url)
++    try {
++      if (body.refresh_token) window.localStorage.setItem(REFRESH_KEY, body.refresh_token)
++    } catch {
++      // storage unavailable: logout then only ends the sessions, not the authorization
++    }
++  } catch (e) {
++    console.error("Sign-in with Open Source Village failed", e)
++    return fail("connect_failed")
++  }
++
++  return {ok: true, returnTo}
++}
++
++/** Revokes this app's authorization and returns the URL that ends the single sign-on session
++ *  and comes back to `returnTo`. Call before clearing local storage. */
++export const prepareLogout = async (returnTo: string) => {
++  if (!ssoEnabled()) return returnTo
++
++  let refreshToken: string | null = null
++  try {
++    refreshToken = window.localStorage.getItem(REFRESH_KEY)
++    window.localStorage.removeItem(REFRESH_KEY)
++  } catch {
++    refreshToken = null
++  }
++
++  if (refreshToken) {
++    try {
++      await fetch(KEYCAST_URL + "/api/oauth/revoke", {
++        method: "POST",
++        headers: {"Content-Type": "application/json"},
++        body: JSON.stringify({token: refreshToken, client_id: CLIENT_ID}),
++        signal: AbortSignal.timeout(3000),
++      })
++    } catch (e) {
++      console.warn("Revoking the Open Source Village authorization failed", e)
++    }
++  }
++
++  // Back here signed out: show the login screen instead of trying the silent sign-in again.
++  store.set(TRIED_KEY, "1")
++
++  const url = new URL(KEYCAST_URL + "/api/auth/oidc/logout")
++  url.searchParams.set("return_to", new URL(returnTo, window.location.origin).toString())
++  return url.toString()
++}
+diff --git a/src/routes/+layout.svelte b/src/routes/+layout.svelte
+index cd155a39..e17a98a6 100644
+--- a/src/routes/+layout.svelte
++++ b/src/routes/+layout.svelte
+@@ -29,7 +29,11 @@
+   import {setupAnalytics} from "@app/features/analytics"
+   import {setupLogging} from "@app/core/logger"
+   import * as coreSession from "@app/core/session"
+-  import {restoreSession} from "@app/core/session"
++  import {restoreSession, session} from "@app/core/session"
++  import {goto} from "$app/navigation"
++  import LogIn from "@app/components/LogIn.svelte"
++  import {pushModal} from "@app/navigation/dialogs"
++  import {isSsoCallback, finishSignIn, trySilentSignIn} from "@src/belfry/sso"
+   import {syncSignerAlerts} from "@app/features/signerAlerts"
+   import {wallet} from "@app/features/wallet"
+   import {storage} from "@app/core/storage"
+@@ -100,6 +104,14 @@
+     // Attach the user before anything reads or decrypts on their behalf
+     unsubscribers.push(await restoreSession())
+ 
++    // Belfry: finish "Sign in with Open Source Village", or try it silently once per tab. While
++    // the page is on its way to the signer, the startup screen stays up.
++    const sso = isSsoCallback() ? await finishSignIn() : undefined
++
++    if (!sso && !session.get() && (await trySilentSignIn())) {
++      await new Promise(() => {})
++    }
++
+     // Set up logging
+     unsubscribers.push(setupLogging())
+ 
+@@ -167,6 +179,17 @@
+     // Sync theme and font size
+     unsubscribers.push(syncTheme())
+ 
++    // Belfry: back where the sign-in started; the login dialog when it did not work out.
++    if (sso) {
++      setTimeout(() => {
++        goto(sso.returnTo, {replaceState: true})
++
++        if (!sso.ok && !session.get()) {
++          pushModal(LogIn)
++        }
++      }, 300)
++    }
++
+     return () => unsubscribers.forEach(lib.call)
+   })
+ 
+diff --git a/src/routes/oauth/callback/+page.svelte b/src/routes/oauth/callback/+page.svelte
+new file mode 100644
+index 00000000..3ec8b894
+--- /dev/null
++++ b/src/routes/oauth/callback/+page.svelte
+@@ -0,0 +1 @@
++<!-- Belfry: the root layout finishes "Sign in with Open Source Village" here and moves on. -->
+-- 
+2.53.0
+

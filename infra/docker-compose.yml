@@ -66,7 +66,7 @@ x-authentik-env: &authentik-env
 
 # The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
 # the Open Source Village app bar (brand/osv-bar.js) in every app.
-x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Programme|${PROGRAMME_PUBLIC_URL:-http://localhost:3900}|What is on now and next: the programme, the rooms, participants' sessions;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
+x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Programme|${PROGRAMME_PUBLIC_URL:-http://localhost:3900}|What is on now and next: the programme, the rooms, participants' sessions;Groups|${GROUPS_PUBLIC_URL:-http://localhost:3150}|Rooms for teams, topics and projects; anyone can open one;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
 
 x-keycast-env: &keycast-env
   # the password comes as PGPASSWORD (with-secrets), which sqlx uses when the URL has none
@@ -110,7 +110,7 @@ x-keycast-env: &keycast-env
   OIDC_LOGOUT_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-signer-logout/
   # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
   # each must also be a registered client (bootstrap writes their redirect URIs).
-  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet,belfry-people,belfry-market,belfry-photos,belfry-programme}
+  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet,belfry-people,belfry-market,belfry-photos,belfry-programme,belfry-groups}
   # Keycast patch 0011: the village wallet derives its backup seed and nutzap key from the
   # participant's key (HKDF per purpose); no other app may derive anything.
   KEYCAST_DERIVE_SECRETS: ${KEYCAST_DERIVE_SECRETS:-belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1}
@@ -141,7 +141,8 @@ services:
       perms-init:
         condition: service_completed_successfully
     # the role passwords are read by postgres/init.sh on the first start only
-    secrets: [postgres_password, odoo_db_password, authentik_db_password, keycast_db_password]
+    secrets: [postgres_password, odoo_db_password, authentik_db_password, keycast_db_password,
+              zooid_db_password]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -606,7 +607,7 @@ services:
     secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
               bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
               pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
-              programme_nsec]
+              programme_nsec, groups_api_nsec]
     depends_on:
       odoo:
         condition: service_healthy
@@ -650,6 +651,8 @@ services:
       RELAY_CONFIG_TEMPLATE: /relay-template/rnostr.toml
       RELAY_EXTRA_PUBKEYS: ${RELAY_EXTRA_PUBKEYS:-}
       POLLS_PUBKEY: ${POLLS_PUBKEY:-}
+      # the groups relay's member API (groups_members.py); empty turns the member sync off
+      GROUPS_API_URL: ${GROUPS_API_URL-http://groups-relay:3334}
       # sync-programme (programme.py): empty URL disables that source
       PROGRAMME_SCHEDULE_URL: ${PROGRAMME_SCHEDULE_URL-https://opensourcevillage.org/schedule.json}
       PROGRAMME_ROOMS_URL: ${PROGRAMME_ROOMS_URL-https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json}
@@ -818,6 +821,59 @@ services:
     cap_drop: [ALL]
     ports: ["3600:8080", "3700:8081", "3800:8082", "3900:8083"]
 
+  # The groups relay (groups-relay.<domain>): zooid with NIP-29 groups, members = active passes
+  # (the onboarding service syncs them over zooid's NIP-98 member API on the internal host
+  # name), every member may open a group. infra/groups-relay/README.md.
+  groups-relay:
+    profiles: ["app"]
+    image: belfry-groups-relay:local
+    build: ./groups-relay
+    user: "10001:10001"
+    read_only: true
+    tmpfs: ["/app/config:uid=10001", "/app/media:uid=10001", "/tmp"]
+    environment:
+      GROUPS_RELAY_URL: ${GROUPS_RELAY_URL:-ws://localhost:3190}
+      GROUPS_API_PUBKEY: ${GROUPS_API_PUBKEY:?run scripts/gen-secrets.sh}
+      GROUPS_BRAND_ICON: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand/apps/groups-192.png
+    group_add: *secret-group
+    secrets: [groups_relay_nsec, zooid_db_password]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    cap_drop: [ALL]
+    networks: [default, data]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["3190:3334"]
+
+  # The groups app (groups.<domain>): Flotilla in platform mode on the groups relay, "Sign in
+  # with Open Source Village" through Keycast. infra/apps/groups/README.md.
+  groups:
+    image: belfry-groups:local
+    build:
+      context: ./apps/groups
+      additional_contexts:
+        brand: ../brand
+      args:
+        GROUPS_PUBLIC_URL: ${GROUPS_PUBLIC_URL:-http://localhost:3150}
+        GROUPS_RELAY_URL: ${GROUPS_RELAY_URL:-ws://localhost:3190}
+        COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
+        BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+        BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
+        KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # "No pass yet? Ask for an invite" links here (the start page)
+        SITE_URL: ${SITE_URL:-${ONBOARDING_PUBLIC_URL:-http://localhost:8100}}
+        COMMUNITY_APPS: *community-apps
+    profiles: ["app"]
+    # nginx as its own unprivileged user, like the chat. Browser-only: no backend access.
+    user: "100:101"
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 1024
+    cap_drop: [ALL]
+    sysctls: *low-ports
+    networks: [edge]
+    ports: ["3150:80"]
+
 # default: service to service. data (internal, no internet): Postgres and Redis with their
 # clients only. edge: what only the browser reaches (the static apps; the production proxy).
 networks:
@@ -845,6 +901,9 @@ secrets:
   pass_page_secret: {file: ./secrets/pass_page_secret}
   programme_nsec: {file: ./secrets/programme_nsec}
   polls_nsec: {file: ./secrets/polls_nsec}
+  groups_relay_nsec: {file: ./secrets/groups_relay_nsec}
+  groups_api_nsec: {file: ./secrets/groups_api_nsec}
+  zooid_db_password: {file: ./secrets/zooid_db_password}
   issuer_oidc_client_secret: {file: ./secrets/issuer_oidc_client_secret}
   keycast_server_nsec: {file: ./secrets/keycast_server_nsec}
   keycast_service_token: {file: ./secrets/keycast_service_token}

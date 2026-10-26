@@ -142,6 +142,19 @@ def programme_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
     return c, c, r * 0.8
 
 
+def groups_symbol(d: ImageDraw.ImageDraw, c: float, r: float):
+    """Three people side by side, the middle one in front; returns the mark's centre and size."""
+    side = r * 0.44
+    for dx in (-0.6, 0.6):
+        x = c + r * dx
+        d.ellipse((x - side, c - side, x + side, c + side), fill=ACCENT)
+    # the middle one, with a gap of background around it
+    big, gap = r * 0.58, r * 0.08
+    d.ellipse((c - big - gap, c - big - gap, c + big + gap, c + big + gap), fill=BG)
+    d.ellipse((c - big, c - big, c + big, c + big), fill=ACCENT)
+    return c, c, big * 1.1
+
+
 def symbol_layer(draw_symbol, r: float) -> Image.Image:
     layer = Image.new("RGBA", (S, S), (0, 0, 0, 0))
     cx, cy, size = draw_symbol(ImageDraw.Draw(layer), S / 2, r)
@@ -178,3 +191,4 @@ if __name__ == "__main__":
     render("market", market_symbol)
     render("photos", photos_symbol)
     render("programme", programme_symbol)
+    render("groups", groups_symbol)

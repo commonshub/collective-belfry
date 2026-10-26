@@ -310,6 +310,23 @@ programme.{$BELFRY_DOMAIN} {
 	reverse_proxy village:8083
 }
 
+# Groups (Flotilla, static) on the groups relay. SvelteKit's boot scripts are allowed by hash in
+# the app's own <meta> policy (both must allow). Like the chat, participants may add relays and
+# look up NIP-05 names anywhere, so connections stay open to any https/wss host.
+groups.{$BELFRY_DOMAIN} {
+	import security
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src 'none'; manifest-src 'self'; form-action 'self'"
+	reverse_proxy groups:80
+}
+
+# The groups relay (zooid, NIP-29): members only, after NIP-42 AUTH. Caddy passes the public
+# Host on, which is the only host zooid serves the relay on; its member API answers only the
+# internal host name (groups-relay:3334), so it cannot be reached through here.
+groups-relay.{$BELFRY_DOMAIN} {
+	import security
+	reverse_proxy groups-relay:3334
+}
+
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status
 # list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {

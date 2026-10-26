@@ -1,0 +1,48 @@
+#!/bin/sh
+# Renders Flotilla's build-time .env for Belfry (Vite inlines VITE_* into the bundle).
+# Inputs (build args): GROUPS_PUBLIC_URL, GROUPS_RELAY_URL (the one space: platform mode),
+# COMMUNITY_RELAY_URL (profiles, outbox and private messages), BUNKER_PUBLIC_RELAYS,
+# BLOSSOM_PUBLIC_URL, KEYCAST_APP_URL (the signer for "Sign in with Open Source Village"; empty
+# turns the button and the silent sign-in off), SITE_URL (the start page: "No pass yet?"),
+# FLOTILLA_COMMIT.
+# No third-party services: no default follows or spaces from Coracle, no push server or bridge,
+# no link-preview proxy (dufflepud), no thumbnails, no Pomade e-mail signers, no hosting backend,
+# no log recipient.
+set -eu
+: "${GROUPS_PUBLIC_URL:?}" "${GROUPS_RELAY_URL:?}" "${COMMUNITY_RELAY_URL:?}" "${BUNKER_PUBLIC_RELAYS:?}" "${BLOSSOM_PUBLIC_URL:?}"
+cat <<ENV
+VITE_BUILD_HASH=${FLOTILLA_COMMIT:-}
+VITE_PLATFORM_URL=$GROUPS_PUBLIC_URL
+VITE_PLATFORM_NAME="Open Source Village groups"
+VITE_PLATFORM_LOGO=static/logo.png
+VITE_PLATFORM_ACCENT="#d6ff52"
+VITE_PLATFORM_DESCRIPTION="Groups for Open Source Village, run by Belfry"
+VITE_PLATFORM_ABOUT=${SITE_URL:-}
+VITE_PLATFORM_TERMS=
+VITE_PLATFORM_PRIVACY=
+VITE_PLATFORM_LOGEE=
+VITE_PLATFORM_RELAYS=$GROUPS_RELAY_URL
+VITE_THEME="nature"
+VITE_HIDE_NOSTR=
+VITE_DEFAULT_PUBKEYS=
+VITE_DEFAULT_SPACES=
+VITE_DEFAULT_RELAYS=$COMMUNITY_RELAY_URL
+VITE_DEFAULT_MESSAGING_RELAYS=$COMMUNITY_RELAY_URL
+VITE_DEFAULT_SEARCH_RELAYS=
+VITE_DEFAULT_BLOSSOM_SERVERS=$BLOSSOM_PUBLIC_URL
+VITE_INDEXER_RELAYS=$COMMUNITY_RELAY_URL
+VITE_SIGNER_RELAYS=$BUNKER_PUBLIC_RELAYS
+VITE_BLOCKED_RELAYS=
+VITE_PUSH_SERVER=
+VITE_PUSH_BRIDGE=
+VITE_POMADE_SIGNERS=
+VITE_THUMBNAIL_URL=
+VITE_DUFFLEPUD_URL=
+VITE_GLITCHTIP_API_KEY=
+GLITCHTIP_AUTH_TOKEN=
+VITE_HOSTING_BACKEND_URL=
+VITE_HOSTING_RELAY_DOMAIN=
+VITE_MEMBERS_CREATE_ROOMS=true
+VITE_KEYCAST_URL=${KEYCAST_APP_URL:-}
+VITE_OAUTH_CLIENT_ID=belfry-groups
+ENV

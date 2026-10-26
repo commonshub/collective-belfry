@@ -1,0 +1,259 @@
+From 15c41721b7fe8fc431c26241718577a745f3d347 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 15:26:31 +0100
+Subject: [PATCH] Belfry: members create groups and administer the groups they
+ create
+
+With [groups] member_create = true, every relay member may send a kind 9007.
+The author of a group's create event may send that group's moderation events,
+is listed in its kind 39001 and joins it as a member.
+---
+ zooid/config.go      |  2 +
+ zooid/groups.go      | 71 ++++++++++++++++++++++++++++++++--
+ zooid/groups_test.go | 91 ++++++++++++++++++++++++++++++++++++++++++++
+ zooid/instance.go    |  6 +++
+ 4 files changed, 167 insertions(+), 3 deletions(-)
+
+diff --git a/zooid/config.go b/zooid/config.go
+index d59ee30..9ac7cd1 100644
+--- a/zooid/config.go
++++ b/zooid/config.go
+@@ -59,6 +59,8 @@ type Config struct {
+ 
+ 	Groups struct {
+ 		Enabled bool `toml:"enabled" json:"enabled"`
++		// MemberCreate lets every relay member create groups; the creator administers the group.
++		MemberCreate bool `toml:"member_create" json:"member_create"`
+ 	} `toml:"groups" json:"groups"`
+ 
+ 	Push struct {
+diff --git a/zooid/groups.go b/zooid/groups.go
+index 55bed1b..ddb3b67 100644
+--- a/zooid/groups.go
++++ b/zooid/groups.go
+@@ -4,6 +4,7 @@ import (
+ 	"fiatjaf.com/nostr"
+ 	"fiatjaf.com/nostr/nip29"
+ 	"slices"
++	"strconv"
+ )
+ 
+ // nip29.MetadataEventKinds and nip29.ModerationEventKinds, extended with our
+@@ -183,7 +184,57 @@ func (g *GroupStore) DeleteEvents(event nostr.Event) {
+ // Admins
+ 
+ func (g *GroupStore) GetAdmins(h string) []nostr.PubKey {
+-	return g.Management.GetAdmins()
++	admins := g.Management.GetAdmins()
++
++	if creator, ok := g.GetCreator(h); ok && !slices.Contains(admins, creator) {
++		admins = append(admins, creator)
++	}
++
++	return admins
++}
++
++// GetCreator returns the author of the group's create event, when members may create groups.
++// The create event is group state, so a kind 9005 never removes it; deleting the group does.
++func (g *GroupStore) GetCreator(h string) (nostr.PubKey, bool) {
++	if !g.Config.Groups.MemberCreate || h == "" {
++		return nostr.PubKey{}, false
++	}
++
++	filter := nostr.Filter{
++		Kinds: []nostr.Kind{nostr.KindSimpleGroupCreateGroup},
++		Tags:  nostr.TagMap{"h": []string{h}},
++	}
++
++	for event := range g.Events.QueryEvents(filter, 1) {
++		return event.PubKey, true
++	}
++
++	return nostr.PubKey{}, false
++}
++
++// creatorRoles lists the moderation kinds a group's creator may publish, as role strings.
++func creatorRoles() []string {
++	roles := []string{}
++
++	for _, kind := range ModerationEventKinds {
++		if kind != nostr.KindSimpleGroupCreateGroup {
++			roles = append(roles, strconv.Itoa(int(kind)))
++		}
++	}
++
++	return roles
++}
++
++// CanModerate reports whether a pubkey may send moderation events for one group: the relay's
++// managers always, and the group's creator when members may create groups.
++func (g *GroupStore) CanModerate(h string, pubkey nostr.PubKey) bool {
++	if g.Management.CanManage(pubkey) {
++		return true
++	}
++
++	creator, ok := g.GetCreator(h)
++
++	return ok && creator == pubkey
+ }
+ 
+ func (g *GroupStore) UpdateAdminsList(h string) error {
+@@ -192,8 +243,17 @@ func (g *GroupStore) UpdateAdminsList(h string) error {
+ 		nostr.Tag{"d", h},
+ 	}
+ 
++	creator, hasCreator := g.GetCreator(h)
++
+ 	for _, pubkey := range g.GetAdmins(h) {
+-		tags = append(tags, nostr.Tag{"p", pubkey.Hex()})
++		tag := nostr.Tag{"p", pubkey.Hex()}
++
++		// Clients read an admin's roles as the moderation kinds they may publish.
++		if hasCreator && pubkey == creator {
++			tag = append(tag, creatorRoles()...)
++		}
++
++		tags = append(tags, tag)
+ 	}
+ 
+ 	event := nostr.Event{
+@@ -415,7 +475,12 @@ func (g *GroupStore) CheckWrite(event nostr.Event) string {
+ 		return "invalid: group not found"
+ 	}
+ 
+-	if slices.Contains(ModerationEventKinds, event.Kind) && !g.Management.CanManage(event.PubKey) {
++	if event.Kind == nostr.KindSimpleGroupCreateGroup {
++		if !g.Management.CanManage(event.PubKey) &&
++			!(g.Config.Groups.MemberCreate && g.Management.HasAccess(event.PubKey)) {
++			return "restricted: you are not authorized to manage groups"
++		}
++	} else if slices.Contains(ModerationEventKinds, event.Kind) && !g.CanModerate(h, event.PubKey) {
+ 		return "restricted: you are not authorized to manage groups"
+ 	}
+ 
+diff --git a/zooid/groups_test.go b/zooid/groups_test.go
+index edce541..6fa38ed 100644
+--- a/zooid/groups_test.go
++++ b/zooid/groups_test.go
+@@ -1,6 +1,7 @@
+ package zooid
+ 
+ import (
++	"slices"
+ 	"testing"
+ 
+ 	"fiatjaf.com/nostr"
+@@ -574,3 +575,93 @@ func TestGroupStore_CacheInvalidation(t *testing.T) {
+ 		t.Error("GetMetadata() should see a deleted group's metadata removed")
+ 	}
+ }
++
++func TestGroupStore_CheckWrite_MemberCreate(t *testing.T) {
++	groups := createTestGroupStore()
++	groups.Config.Groups.Enabled = true
++
++	ownerSecret := nostr.Generate()
++	creatorSecret := nostr.Generate()
++	otherSecret := nostr.Generate()
++	strangerSecret := nostr.Generate()
++
++	groups.Config.Info.Pubkey = ownerSecret.Public().Hex()
++	groups.Management.AddMember(creatorSecret.Public())
++	groups.Management.AddMember(otherSecret.Public())
++
++	create := nostr.Event{
++		Kind:      nostr.KindSimpleGroupCreateGroup,
++		CreatedAt: nostr.Now(),
++		Tags:      nostr.Tags{{"h", "garden"}},
++	}
++	create.Sign(creatorSecret)
++
++	if msg := groups.CheckWrite(create); msg == "" {
++		t.Error("CheckWrite() should reject a member's create without member_create")
++	}
++
++	groups.Config.Groups.MemberCreate = true
++
++	if msg := groups.CheckWrite(create); msg != "" {
++		t.Errorf("CheckWrite() for a member's create = %q, want empty", msg)
++	}
++
++	strangerCreate := nostr.Event{Kind: nostr.KindSimpleGroupCreateGroup, PubKey: strangerSecret.Public(), Tags: nostr.Tags{{"h", "other"}}}
++
++	if msg := groups.CheckWrite(strangerCreate); msg == "" {
++		t.Error("CheckWrite() should reject a create from someone who is not a relay member")
++	}
++
++	if err := groups.Events.SaveEvent(create); err != nil {
++		t.Fatalf("SaveEvent() error = %v", err)
++	}
++
++	groups.UpdateMetadata(create)
++
++	edit := func(pubkey nostr.PubKey, h string) nostr.Event {
++		return nostr.Event{Kind: nostr.KindSimpleGroupEditMetadata, PubKey: pubkey, Tags: nostr.Tags{{"h", h}, {"name", "Garden"}}}
++	}
++
++	if msg := groups.CheckWrite(edit(creatorSecret.Public(), "garden")); msg != "" {
++		t.Errorf("CheckWrite() for the creator's edit = %q, want empty", msg)
++	}
++
++	if msg := groups.CheckWrite(edit(otherSecret.Public(), "garden")); msg == "" {
++		t.Error("CheckWrite() should reject another member's edit")
++	}
++
++	if msg := groups.CheckWrite(edit(ownerSecret.Public(), "garden")); msg != "" {
++		t.Errorf("CheckWrite() for the owner's edit = %q, want empty", msg)
++	}
++
++	ownerCreate := nostr.Event{Kind: nostr.KindSimpleGroupCreateGroup, CreatedAt: nostr.Now(), Tags: nostr.Tags{{"h", "kitchen"}}}
++	ownerCreate.Sign(ownerSecret)
++	groups.Events.SaveEvent(ownerCreate)
++	groups.UpdateMetadata(ownerCreate)
++
++	if msg := groups.CheckWrite(edit(creatorSecret.Public(), "kitchen")); msg == "" {
++		t.Error("CheckWrite() should reject the creator's edit of a group they did not create")
++	}
++
++	admins := groups.GetAdmins("garden")
++
++	if !slices.Contains(admins, creatorSecret.Public()) || !slices.Contains(admins, ownerSecret.Public()) {
++		t.Errorf("GetAdmins() = %v, want the owner and the creator", admins)
++	}
++
++	if err := groups.UpdateAdminsList("garden"); err != nil {
++		t.Fatalf("UpdateAdminsList() error = %v", err)
++	}
++
++	for event := range groups.Events.QueryEvents(nostr.Filter{Kinds: []nostr.Kind{nostr.KindSimpleGroupAdmins}, Tags: nostr.TagMap{"d": []string{"garden"}}}, 1) {
++		tag := event.Tags.FindWithValue("p", creatorSecret.Public().Hex())
++
++		if tag == nil || !slices.Contains(tag[2:], "9002") || slices.Contains(tag[2:], "9007") {
++			t.Errorf("kind 39001 creator tag = %v, want the moderation kinds without 9007", tag)
++		}
++	}
++
++	if slices.Contains(groups.GetAdmins("kitchen"), creatorSecret.Public()) {
++		t.Error("GetAdmins() lists the creator for a group they did not create")
++	}
++}
+diff --git a/zooid/instance.go b/zooid/instance.go
+index 7d08ebe..6ba3382 100644
+--- a/zooid/instance.go
++++ b/zooid/instance.go
+@@ -502,6 +502,12 @@ func (instance *Instance) OnEventSaved(ctx context.Context, event nostr.Event) {
+ 	if event.Kind == nostr.KindSimpleGroupCreateGroup {
+ 		instance.Groups.UpdateMetadata(event)
+ 		instance.Groups.UpdateAdminsList(h)
++
++		// A member who creates a group belongs to it, so a closed or private group stays theirs.
++		if !instance.Management.CanManage(event.PubKey) {
++			instance.Groups.AddMember(h, event.PubKey)
++			instance.Groups.UpdateMembersList(h)
++		}
+ 	}
+ 
+ 	if event.Kind == nostr.KindSimpleGroupEditMetadata {
+-- 
+2.53.0
+

@@ -127,6 +127,12 @@ services:
   village:
     ports: !reset []
     restart: unless-stopped
+  groups-relay:
+    ports: !reset []
+    restart: unless-stopped
+  groups:
+    ports: !reset []
+    restart: unless-stopped
   postgres:
     restart: unless-stopped
   redis:

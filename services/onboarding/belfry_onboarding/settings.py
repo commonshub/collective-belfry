@@ -136,6 +136,11 @@ class Settings(BaseSettings):
     # programme grid and the rooms' public Google calendars as public calendar events, signed
     # with the programme key (secret programme_nsec, hex; the relay whitelist adds its pubkey).
     programme_nsec: str = Field(default="", alias="PROGRAMME_NSEC")
+
+    # The groups relay's member API (groups_members.py), synced with the relay whitelist; signed
+    # with the groups API key (secret groups_api_nsec, hex). Empty URL or key: no sync.
+    groups_api_url: str = Field(default="", alias="GROUPS_API_URL")
+    groups_api_nsec: str = Field(default="", alias="GROUPS_API_NSEC")
     programme_schedule_url: str = Field(
         default="https://opensourcevillage.org/schedule.json", alias="PROGRAMME_SCHEDULE_URL"
     )

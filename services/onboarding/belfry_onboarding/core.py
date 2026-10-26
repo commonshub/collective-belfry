@@ -27,6 +27,7 @@ from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
 from .clients.verifier import VerifierClient
+from .groups_members import GroupsMembers
 from .nostr import hex_to_npub
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
@@ -78,6 +79,7 @@ class Services:
     issuer_x5c: list[str] = field(default_factory=list)
     bridge_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs ID tokens
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
+    groups: GroupsMembers | None = None  # the groups relay's members; None without its API
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -592,15 +594,29 @@ def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = 
     whose Odoo state is still pending). Best effort unless ``strict``: a failure is logged and
     the next sync (any later activation, revoke, expiry or the cron) catches up.
     """
-    if svc.whitelist is None:
+    if svc.whitelist is None and svc.groups is None:
         return None
+    pubkeys = [*active_pubkeys(svc), *include]
+    result = None
     try:
-        return svc.whitelist.sync([*active_pubkeys(svc), *include])
+        if svc.whitelist is not None:
+            result = svc.whitelist.sync(pubkeys)
     except Exception as exc:
         if strict:
             raise
         log.warning("relay whitelist not updated: %s", exc)
-        return None
+    # The groups relay (zooid) has the same members, kept on its API, and their profiles
+    # (groups_members.py).
+    try:
+        if svc.groups is not None:
+            svc.groups.sync(pubkeys)
+            if svc.relay is not None:
+                svc.groups.import_profiles(svc.relay, pubkeys)
+    except Exception as exc:
+        if strict:
+            raise
+        log.warning("groups relay members not updated: %s", exc)
+    return result
 
 
 def profile_content(

@@ -69,6 +69,9 @@ SECRETS = {
     "MINT_SEED": rand(32),                     # the token mint's keys; back it up
     "PROGRAMME_NSEC": rand(32),                # signs the programme's calendar events (hex key)
     "POLLS_NSEC": rand(32),                    # signs the polls' notes on Nostr (vote service, hex key)
+    "GROUPS_RELAY_NSEC": rand(32),             # the groups relay's own key (zooid, hex)
+    "GROUPS_API_NSEC": rand(32),               # the onboarding service at the groups relay's API (hex)
+    "ZOOID_DB_PASSWORD": rand(),               # role "zooid" (groups relay)
     "STRIPE_WEBHOOK_SECRET": None,             # bootstrap, once Stripe is configured
     "SMTP_PASSWORD": None,                     # put-secret.sh smtp_password
 }
@@ -104,7 +107,7 @@ if new:
 # Public keys (settings) always follow their secret keys: the admin's is Keycast's
 # ALLOWED_PUBKEYS, the programme key's tells the calendar app whose events are the programme.
 PUBKEYS = {"KEYCAST_ADMIN_PUBKEY": "KEYCAST_ADMIN_NSEC", "PROGRAMME_PUBKEY": "PROGRAMME_NSEC",
-           "POLLS_PUBKEY": "POLLS_NSEC"}
+           "POLLS_PUBKEY": "POLLS_NSEC", "GROUPS_API_PUBKEY": "GROUPS_API_NSEC"}
 for pub, sec in PUBKEYS.items():
     nsec = open(path(sec)).read().strip()
     out = subprocess.run([sys.executable, os.path.join(scripts_dir, "nostr_keys.py"), nsec],

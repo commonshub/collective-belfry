@@ -1,0 +1,49 @@
+From 9cc8d746386958e53f57abac7b838a0bbcc1b83a Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 26 Oct 2026 16:00:41 +0100
+Subject: [PATCH 4/4] Belfry: answer AUTH on the village's relays
+
+Flotilla answers a relay's AUTH challenge only when the relay is in one of the user's lists,
+and those lists live on the community relay, which takes only authenticated participants: a
+new device never read them, so names and avatars stayed npubs. The platform, indexer, default
+and messaging relays of the build (all the village's own) are always answered.
+---
+ src/app/core/auth.ts | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/src/app/core/auth.ts b/src/app/core/auth.ts
+index f700738d..fb17bb27 100644
+--- a/src/app/core/auth.ts
++++ b/src/app/core/auth.ts
+@@ -14,12 +14,28 @@ import type {IApp} from "@welshman/app"
+ import {merged} from "@welshman/store"
+ import {app, appPolicies} from "@app/core/app"
+ import {RelayAuthMode, Settings} from "@app/core/settings"
++import {
++  DEFAULT_MESSAGING_RELAYS,
++  DEFAULT_RELAYS,
++  INDEXER_RELAYS,
++  PLATFORM_RELAYS,
++} from "@app/core/env"
++
++// Belfry: the village's own relays take only authenticated participants, the user's relay lists
++// included, so a new device could never read the lists that would make it answer.
++const platformRelays = new Set([
++  ...PLATFORM_RELAYS,
++  ...INDEXER_RELAYS,
++  ...DEFAULT_RELAYS,
++  ...DEFAULT_MESSAGING_RELAYS,
++])
+ 
+ // Aggressive mode answers every challenge, and otherwise only relays the user has a relationship with.
+ const shouldAuth = (socket: Socket, $app: IApp) => {
+   const {pubkey} = User.require($app)
+ 
+   return (
++    platformRelays.has(socket.url) ||
+     $app.use(Settings).values.get().relay_auth === RelayAuthMode.Aggressive ||
+     $app.use(RoomLists).urls(pubkey).get().includes(socket.url) ||
+     $app.use(RelayLists).urls(pubkey).get().includes(socket.url) ||
+-- 
+2.53.0
+

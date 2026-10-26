@@ -21,3 +21,5 @@ create_db() {
 create_role odoo "$(secret odoo_db_password)" CREATEDB
 create_role authentik "$(secret authentik_db_password)"; create_db authentik
 create_role keycast "$(secret keycast_db_password)"; create_db keycast
+# The groups relay (zooid). bootstrap.sh creates the same on a volume from before it existed.
+create_role zooid "$(secret zooid_db_password)"; create_db zooid

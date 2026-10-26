@@ -31,6 +31,7 @@ from . import (
     claim,
     core,
     feedback,
+    groups_members,
     mypass,
     pages,
     programme,
@@ -47,6 +48,7 @@ from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
 from .clients.verifier import VerifierClient
 from .core import Services
+from .groups_members import GroupsMembers
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
 from .settings import Settings
@@ -105,6 +107,7 @@ def build_services(settings: Settings) -> Services:
                         settings.relay_extra_pubkeys,
                         programme.programme_pubkey(settings),
                         settings.polls_pubkey,
+                        groups_members.api_pubkey(settings.groups_api_nsec),
                     )
                     if k
                 ),
@@ -112,7 +115,19 @@ def build_services(settings: Settings) -> Services:
             if settings.relay_config_path
             else None
         ),
+        groups=_groups_members(settings),
     )
+
+
+def _groups_members(settings: Settings) -> GroupsMembers | None:
+    try:
+        key = groups_members.api_key(settings.groups_api_nsec)
+    except groups_members.GroupsMembersError as exc:
+        log.warning("%s; the groups relay's members are not synced", exc)
+        return None
+    if not settings.groups_api_url or key is None:
+        return None
+    return GroupsMembers(settings.groups_api_url, key)
 
 
 def create_app(services: Services | None = None) -> FastAPI:

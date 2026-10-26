@@ -24,15 +24,19 @@
 --                         32678 private calendar event, 32680 scheduling-pages list
 --   village wallet:       NIP-61 nutzaps 9321 and the nutzap info 10019 (receiving key, mint, relay)
 --   marketplace:          NIP-99 classifieds 30402 (offers), deletions 5; directory: 0 and 30078
+--   groups (2026-10-26):  Flotilla on the groups relay (NIP-29): 9 chat message, 11 thread, 9000-9010
+--                         group moderation (members create and administer their own groups),
+--                         9021/9022 join and leave a group, 10009 the user's group list; NIP-43
+--                         28934 join request, 28935 invite, 28936 leave request for the relay
 -- Not included: links (NIP-B0 / NIP-51), still open.
 INSERT INTO permissions (identifier, config, created_at, updated_at)
-SELECT 'allowed_kinds_belfry_event', '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9321, 10000, 10002, 10003, 10019, 10050, 10063, 22242, 24242, 27235, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', NOW(), NOW()
+SELECT 'allowed_kinds_belfry_event', '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', NOW(), NOW()
 WHERE NOT EXISTS (SELECT 1 FROM permissions WHERE identifier = 'allowed_kinds_belfry_event');
 
 UPDATE permissions
-SET config = '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9321, 10000, 10002, 10003, 10019, 10050, 10063, 22242, 24242, 27235, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', updated_at = NOW()
+SET config = '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', updated_at = NOW()
 WHERE identifier = 'allowed_kinds_belfry_event'
-  AND config::text <> '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9321, 10000, 10002, 10003, 10019, 10050, 10063, 22242, 24242, 27235, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}';
+  AND config::text <> '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}';
 
 UPDATE policies SET description = 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH', updated_at = NOW()
 WHERE slug = 'belfry-event' AND description <> 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH';

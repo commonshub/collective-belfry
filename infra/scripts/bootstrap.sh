@@ -85,6 +85,17 @@ wait_for keycast "$KC_URL/health"
 wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/openid-credential-issuer/openid4vci"
 wait_for_any verifier "${VERIFIER_PUBLIC_URL:-http://localhost:7004}/transaction-data-profiles"
 
+# The groups relay's role and database (postgres/init.sh makes them only on a fresh volume). The
+# password follows secrets/zooid_db_password on every run; restart groups-relay after a change.
+"${COMPOSE[@]}" exec -T postgres psql -U postgres -v ON_ERROR_STOP=1 -q <<'SQL'
+\set pw `cat /run/secrets/zooid_db_password`
+SELECT 'CREATE ROLE zooid LOGIN' WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'zooid') \gexec
+ALTER ROLE zooid WITH LOGIN PASSWORD :'pw';
+SELECT 'CREATE DATABASE zooid OWNER zooid TEMPLATE template0 ENCODING ''UTF8'' LC_COLLATE ''C'' LC_CTYPE ''C'''
+WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'zooid') \gexec
+SQL
+echo "groups relay database: zooid"
+
 # ---------- 2. Odoo database ----------
 log "2/6 Odoo database"
 mkdir -p "$REPO_DIR/odoo/addons"
@@ -411,6 +422,7 @@ kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | len
   -v market_cb="${MARKET_PUBLIC_URL:-http://localhost:3700}/oauth/callback" \
   -v photos_cb="${PHOTOS_PUBLIC_URL:-http://localhost:3800}/oauth/callback" \
   -v programme_cb="${PROGRAMME_PUBLIC_URL:-http://localhost:3900}/oauth/callback" \
+  -v groups_cb="${GROUPS_PUBLIC_URL:-http://localhost:3150}/oauth/callback" \
   -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" <<'SQL'
 -- Keycast resolves the tenant from the Host header (KEYCAST_TENANT_DOMAIN), not the seed tenant 1.
 INSERT INTO registered_clients (tenant_id, client_id, name, allowed_redirect_uris)
@@ -423,7 +435,8 @@ FROM tenants t,
              ('belfry-people', 'Open Source Village directory', :'people_cb'),
              ('belfry-market', 'Open Source Village marketplace', :'market_cb'),
              ('belfry-photos', 'Open Source Village photos', :'photos_cb'),
-             ('belfry-programme', 'Open Source Village programme', :'programme_cb')) AS c(client_id, name, cb)
+             ('belfry-programme', 'Open Source Village programme', :'programme_cb'),
+             ('belfry-groups', 'Open Source Village groups', :'groups_cb')) AS c(client_id, name, cb)
 WHERE t.domain = :'tenant'
 ON CONFLICT (tenant_id, client_id) DO UPDATE
 SET name = EXCLUDED.name, allowed_redirect_uris = EXCLUDED.allowed_redirect_uris, updated_at = NOW()
