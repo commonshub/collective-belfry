@@ -86,7 +86,7 @@ export function profileTemplate({ publicUrl }) {
  * Publishes what is due, every `intervalMs` and after a poll opens (`kick()`). `publish(event)`
  * defaults to the community relay with NIP-42 AUTH; tests pass their own.
  */
-export function createAnnouncer({ polls, secretKey, relayUrl, publicUrl, tz, publish, intervalMs = 30000, log = console }) {
+export function createAnnouncer({ polls, secretKey, relayUrl, relayHint = relayUrl, publicUrl, tz, publish, intervalMs = 30000, log = console }) {
   const base = publicUrl.replace(/\/$/, "")
   let pool = null
   const send =
@@ -113,7 +113,7 @@ export function createAnnouncer({ polls, secretKey, relayUrl, publicUrl, tz, pub
       log.log(`poll ${poll.id} announced on Nostr: ${event.id}`)
     }
     for (const poll of polls.toReport()) {
-      const event = sign(resultTemplate(poll, polls.proofs(poll.id), { publicUrl: base, relayUrl }))
+      const event = sign(resultTemplate(poll, polls.proofs(poll.id), { publicUrl: base, relayUrl: relayHint }))
       await send(event)
       polls.markReported(poll.id, event.id)
       log.log(`poll ${poll.id} result on Nostr: ${event.id}`)

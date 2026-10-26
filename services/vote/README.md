@@ -52,6 +52,25 @@ programme's `#/c/<coordinate>`), and the session page lists it from the public l
 NIP-98: `Authorization: Nostr <base64 kind-27235 event>` with `u` = `PUBLIC_URL` + path, `method`
 and `payload` = SHA-256 of the raw body; 60 s validity, one use per event.
 
+## On Nostr
+
+Votes never become Nostr events: a signed event names its author. What does go to the community
+relay (`server/announce.js`), signed with the polls key (secret `polls_nsec`, `POLLS_PUBKEY` in
+`.env`, whitelisted by the onboarding service):
+
+- a kind-0 profile "Open Source Village polls";
+- when a poll opens, a kind-1 note "New poll: …" with the options, the closing time (`EVENT_TZ`)
+  and the link (tags `subject`, `t` poll, `r` the poll's page, `a` the session it is about);
+- when it closes, a reply (NIP-10 `e` root, relay hint `COMMUNITY_RELAY_URL`) with the counts and
+  an `x` tag: the SHA-256 of the exact body of `GET /api/polls/<id>/proofs`. Anyone can fetch the
+  proofs, check the hash, verify each proof and recount: the count Belfry signed is then the count
+  the proofs give.
+
+A round runs every 30 s and right after a poll is opened; what the relay refuses is retried. Polls
+opened before the service first announced (`meta.announce_since`) stay quiet. The event ids are in
+the poll's `nostr` field. The chat shows the notes like any other; "What's new" in the directory
+shows them as "Polls".
+
 ## Build and run
 
 Node 24 (an exception to "Belfry's code is Python": Semaphore's proof verification and its

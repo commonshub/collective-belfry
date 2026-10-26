@@ -119,7 +119,8 @@ Keycast client `belfry-programme`.
 readable events from participants with an active pass, newest first, grouped by day, filterable
 by app, each linking into its app. Shown: chat notes (not replies) and articles, photos and photo
 comments, comments on programme sessions, offers (and offers marked as gone), public calendar
-events (they open in the programme), directory opt-ins. Left out
+events (they open in the programme), directory opt-ins, and the polls app's notes (a poll opened,
+its result; kind 1 of `POLLS_PUBKEY`, build argument `VITE_POLLS_PUBKEY`, shown as "Polls"). Left out
 on purpose: private messages and private calendar entries (encrypted), likes, profile edits,
 opting out of the directory, and token payments (who paid whom stays in the wallets and on the
 offer pages); deleted events are dropped. The rules are `activityFromEvent` in `web/shared/model.js`.

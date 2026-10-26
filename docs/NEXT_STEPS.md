@@ -528,6 +528,15 @@ User (phone screenshot of the calendar): the calendar is not mobile friendly; is
 
 Open: no push notifications (the reminder comes from the phone's calendar); offline, a session's own page needs the network; the calendar app's "From participants" does not drop revoked participants' or steward-hidden sessions (the programme app does); the Calendar by Form* month and week views stay as upstream made them (dots on phones). Deployed on belfry.tofauti.net 2026-10-26 (f390a2f): `PROGRAMME_PUBLIC_URL` in `.env`; calendar, village, onboarding, chat, vote and wallet rebuilt; `up -d`; bootstrap (belfry_pass 19.0.1.17.0, client `belfry-programme`). The proxy mounts `proxy/` and is not recreated by `up -d`, so a new host block needs `docker compose … exec proxy caddy reload --config /etc/caddy/Caddyfile` (until then TLS for the new host fails with "tlsv1 alert internal error"). Public smoke 176 ok / 0 failed; `programme-check.mjs` from outside against the VM, all steps green. From a laptop that resolves the domain through ZeroTier DNS, Chromium's Private Network Access blocks the apps' cross-origin calls; run the browser checks with `--host-resolver-rules="MAP *.<domain> <public IP>"` (a wrapper as `CHROME_BIN`).
 
+## 3zf. Polls on Nostr — built 2026-10-26
+
+User: "Why do we need a vote database when we have nostr relay", then "Do it" for the hybrid: the database keeps what a relay cannot do (verify proofs, refuse double votes by nullifier, fix the group per poll, hold results until the poll closes; a vote as a signed event would name its voter, and the relay takes only participants' keys after AUTH), while polls and results become Nostr events.
+
+- [x] The vote service signs with its own polls key (secret `polls_nsec`, `POLLS_PUBKEY`, gen-secrets): a kind-0 profile, a kind-1 note when a poll opens (options, closing time, link, `a` to the session), a reply with the result whose `x` tag pins the SHA-256 of the published proofs (`server/announce.js`, `services/vote/README.md` "On Nostr"). Retried until the relay takes it; polls opened before stay quiet. The onboarding service whitelists the key; "What's new" shows the notes as "Polls".
+- [x] Checks: vote tests 9 (announcement, result reply and hash, once only, retry after a refusal, the proofs body is what the hash covers), village tests 28; smoke 6n (the service announces as `POLLS_PUBKEY`, the key is whitelisted), local smoke 182 ok / 0 failed; end to end locally: a poll opened by `vote-check.mjs`, closed early, both notes on the relay, the hash equal to `sha256sum` of the proofs URL, both in What's new.
+
+Deploy: `gen-secrets.sh` on the VM (writes `secrets/polls_nsec` and `POLLS_PUBKEY`), rebuild vote, village and onboarding, `up -d`.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

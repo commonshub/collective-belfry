@@ -760,6 +760,7 @@ services:
       TREE_DEPTH: "10"
       # polls and results as notes of the polls key (POLLS_NSEC) on the community relay
       RELAY_URL: ws://relay:8080
+      COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
     # PASS_INFO_TOKEN and POLLS_NSEC from /run/secrets
     group_add: *secret-group
     secrets: [pass_info_token, polls_nsec]

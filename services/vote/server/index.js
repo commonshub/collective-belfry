@@ -10,6 +10,7 @@
 // | `TREE_DEPTH` | Semaphore tree depth (10: up to 1024 voters per poll); the image carries its artifacts |
 // | `STATIC_DIR` | the built web app (`web/dist`) |
 // | `POLLS_NSEC` (or the file /run/secrets/polls_nsec, hex), `RELAY_URL` | the polls key and the community relay: a note when a poll opens, its result when it closes (server/announce.js); without them, nothing goes to Nostr |
+// | `COMMUNITY_RELAY_URL` | the relay as clients reach it: the hint in the result's reply tag (default `RELAY_URL`) |
 // | `EVENT_TZ` | the time zone of closing times in those notes (Europe/Brussels) |
 import { createServer } from "node:http"
 import { readFileSync } from "node:fs"
@@ -182,6 +183,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       polls,
       secretKey: Uint8Array.from(Buffer.from(env.POLLS_NSEC, "hex")),
       relayUrl: env.RELAY_URL,
+      relayHint: env.COMMUNITY_RELAY_URL || env.RELAY_URL,
       publicUrl: env.PUBLIC_URL,
       tz: env.EVENT_TZ || "Europe/Brussels",
     })

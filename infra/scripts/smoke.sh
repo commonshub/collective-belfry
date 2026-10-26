@@ -485,6 +485,12 @@ const r = await fetch("http://127.0.0.1:8080/api/polls", { method: "POST", body,
 console.log(r.status)' 2>/dev/null || true)
 [[ "$NOPASS" == 403 ]] && ok "a signed request from a key without an active pass: 403" || bad "key without a pass: ${NOPASS:-no answer}"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data '{"proof":{}}' "$VOTE_URL/api/polls/nope/votes")" == 404 ]] && ok "a vote for an unknown poll: 404" || bad "vote for an unknown poll not refused"
+# polls on Nostr: the vote service signs with the polls key, which the relay whitelist carries
+if [[ -n "${POLLS_PUBKEY:-}" && "$POLLS_PUBKEY" != generated ]]; then
+  VLOG=$("${COMPOSE[@]}" logs vote 2>/dev/null || true)
+  [[ "$VLOG" == *"polls on Nostr as $POLLS_PUBKEY"* ]] && ok "the vote service announces polls as POLLS_PUBKEY" || bad "the vote service does not announce polls (POLLS_NSEC, RELAY_URL; rebuild/restart vote)"
+  "${COMPOSE[@]}" exec -T onboarding grep -q "$POLLS_PUBKEY" /relay-config/rnostr.toml && ok "the relay whitelist carries the polls key" || bad "polls key not whitelisted (rebuild onboarding)"
+fi
 echo "  note the browser check (silent sign-in, set up voting, open a poll, vote with a real proof) is infra/scripts/vote-check.mjs"
 
 step "6p. directory and marketplace (services/village): served; only active passes learn who the participants are"
