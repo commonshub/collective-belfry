@@ -8,7 +8,7 @@
 // | --- | --- |
 // | `PEOPLE_PORT`, `MARKET_PORT`, `PHOTOS_PORT`, `PROGRAMME_PORT` | listen ports (8080, 8081, 8082, 8083) |
 // | `PEOPLE_PUBLIC_URL`, `MARKET_PUBLIC_URL`, `PHOTOS_PUBLIC_URL`, `PROGRAMME_PUBLIC_URL` | the apps as browsers reach them; NIP-98 tokens name `<URL><path>` |
-// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`) and hidden content (`GET /admin/moderation/hidden`) |
+// | `ONBOARDING_URL`, `PASS_INFO_TOKEN` (or the file /run/secrets/pass_info_token) | the active passes (`GET /admin/active-passes`), reports (`POST /admin/reports`), hidden content (`GET /admin/moderation/hidden`) and, for the programme's Shifts tab, volunteers' shifts (`/admin/shifts`) |
 // | `PROGRAMME_CORS_ORIGINS` | origins (the calendar) whose pages may read the programme port's `/api/participants` and `/api/hidden` |
 // | `STATIC_ROOT` | the built web apps (`web`, with `people/dist`, `market/dist`, `photos/dist` and `programme/dist`) |
 import { createServer } from "node:http"
@@ -39,23 +39,51 @@ export class HttpError extends Error {
   }
 }
 
-/** Active passes from the onboarding service: a Set of pubkeys (hex), cached for 30 s. */
+/** Active passes from the onboarding service: a Set of pubkeys (hex), and the partner behind
+ * each (for the Shifts tab), cached for 30 s. */
 export function onboardingPasses({ baseUrl, token, fetchImpl = fetch }) {
   let cache = null
+  let partners = new Map()
   let cachedAt = 0
+  async function load() {
+    if (cache && Date.now() - cachedAt < PASSES_TTL_MS) return
+    const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/admin/active-passes`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!res.ok) throw new Error(`onboarding answered ${res.status}`)
+    const { passes } = await res.json()
+    cache = new Set(passes.map(p => p.pubkey).filter(Boolean))
+    partners = new Map(passes.filter(p => p.pubkey && p.partner_id).map(p => [p.pubkey, p.partner_id]))
+    cachedAt = Date.now()
+  }
   return {
     async activePubkeys() {
-      if (cache && Date.now() - cachedAt < PASSES_TTL_MS) return cache
-      const res = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/admin/active-passes`, {
-        headers: { Authorization: `Bearer ${token}` },
-        signal: AbortSignal.timeout(5000),
-      })
-      if (!res.ok) throw new Error(`onboarding answered ${res.status}`)
-      const { passes } = await res.json()
-      cache = new Set(passes.map(p => p.pubkey).filter(Boolean))
-      cachedAt = Date.now()
+      await load()
       return cache
     },
+    async partnerOf(pubkey) {
+      await load()
+      return partners.get(pubkey) || null
+    },
+  }
+}
+
+/** Volunteers' shifts, kept in Odoo and served by the onboarding service for one partner:
+ * `board(partner)` is `{role, count, min_shifts, change_hours, shifts}` (role null: no tab),
+ * `act(partner, id, "signup"|"leave")` is `{result: "ok"|"refused", ...}`. */
+export function onboardingShifts({ baseUrl, token, fetchImpl = fetch }) {
+  const root = baseUrl.replace(/\/$/, "")
+  const headers = { Authorization: `Bearer ${token}` }
+  const call = async (path, method = "GET") => {
+    const res = await fetchImpl(`${root}${path}`, { method, headers, signal: AbortSignal.timeout(10000) })
+    const answer = await res.json().catch(() => ({}))
+    if (!res.ok) throw new HttpError(res.status === 404 ? 404 : 502, answer.detail || `onboarding answered ${res.status}`)
+    return answer
+  }
+  return {
+    board: partner => call(`/admin/shifts?partner=${partner}`),
+    act: (partner, id, action) => call(`/admin/shifts/${id}/${action}?partner=${partner}`, "POST"),
   }
 }
 
@@ -110,7 +138,7 @@ function send(res, status, body, headers = {}) {
 // sessions and leaves out hidden ones.
 const SHARED_READS = new Set(["/api/participants", "/api/hidden"])
 
-export function createApp({ passes, moderation, app, publicUrl, staticDir, corsOrigins = [] }) {
+export function createApp({ passes, moderation, shifts, app, publicUrl, staticDir, corsOrigins = [] }) {
   const base = publicUrl.replace(/\/$/, "")
   const cors = req => {
     const origin = req.headers.origin
@@ -125,6 +153,21 @@ export function createApp({ passes, moderation, app, publicUrl, staticDir, corsO
       const active = await passes.activePubkeys()
       if (!active.has(pubkey)) throw new HttpError(403, "no active pass for this key")
       return send(res, 200, { pubkeys: [...active].sort() })
+    }
+    if (shifts && path === "/api/shifts" && req.method === "GET") {
+      // The volunteers' shifts, for active volunteers and stewards only (the role decides);
+      // anyone else gets no role and the app shows no Shifts tab.
+      const pubkey = verifyNip98(req.headers.authorization, { url: base + path, method: "GET" })
+      const partner = await passes.partnerOf(pubkey)
+      if (!partner) return send(res, 200, { role: null, shifts: [] })
+      return send(res, 200, await shifts.board(partner))
+    }
+    const shift = shifts && req.method === "POST" && path.match(/^\/api\/shifts\/(\d+)\/(signup|leave)$/)
+    if (shift) {
+      const pubkey = verifyNip98(req.headers.authorization, { url: base + path, method: "POST" })
+      const partner = await passes.partnerOf(pubkey)
+      if (!partner) throw new HttpError(403, "no active pass for this key")
+      return send(res, 200, await shifts.act(partner, Number(shift[1]), shift[2]))
     }
     if (path === "/api/hidden" && req.method === "GET") {
       // What stewards hid after a report: event ids, offer coordinates, pubkeys of directory
@@ -224,6 +267,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   const passes = onboardingPasses({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
   const moderation = onboardingModeration({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
+  const shifts = onboardingShifts({ baseUrl: env.ONBOARDING_URL, token: env.PASS_INFO_TOKEN })
   const root = env.STATIC_ROOT || fileURLToPath(new URL("../web", import.meta.url))
   for (const [app, port, publicUrl] of [
     ["people", Number(env.PEOPLE_PORT || 8080), env.PEOPLE_PUBLIC_URL],
@@ -232,7 +276,15 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     ["programme", Number(env.PROGRAMME_PORT || 8083), env.PROGRAMME_PUBLIC_URL],
   ]) {
     const corsOrigins = app === "programme" ? (env.PROGRAMME_CORS_ORIGINS || "").split(/[\s,]+/).map(o => o.replace(/\/$/, "")).filter(Boolean) : []
-    const handler = createApp({ passes, moderation, app, publicUrl, staticDir: join(root, app, "dist"), corsOrigins })
+    const handler = createApp({
+      passes,
+      moderation,
+      shifts: app === "programme" ? shifts : null,
+      app,
+      publicUrl,
+      staticDir: join(root, app, "dist"),
+      corsOrigins,
+    })
     createServer(handler).listen(port, () => console.log(`${app} on :${port}, public ${publicUrl}`))
   }
 }

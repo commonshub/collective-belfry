@@ -87,4 +87,5 @@ def test_active_passes_for_the_vote_service(web, odoo):
     assert web.get("/admin/active-passes").status_code == 401
     r = web.get("/admin/active-passes", headers=auth())
     assert r.status_code == 200
-    assert r.json() == {"passes": [{"pass_id": active, "pubkey": "aa" * 32}]}
+    # the partner too: the village server finds who is behind a signed request (Shifts tab)
+    assert r.json() == {"passes": [{"pass_id": active, "partner_id": partner, "pubkey": "aa" * 32}]}

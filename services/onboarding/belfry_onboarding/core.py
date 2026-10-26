@@ -489,14 +489,21 @@ def own_key_of(pass_row: dict[str, Any]) -> str | None:
 
 
 def active_passes(svc: Services) -> list[dict[str, Any]]:
-    """Id and Keycast pubkey of every active pass (the vote service's electorate)."""
+    """Id, partner and Keycast pubkey of every active pass (the vote service's electorate; the
+    village server finds the partner behind a signed request, for the Shifts tab)."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey"],
+        ["keycast_pubkey", "partner_id"],
     )
     return [
-        {"pass_id": r["id"], "pubkey": r["keycast_pubkey"]} for r in rows if r.get("keycast_pubkey")
+        {
+            "pass_id": r["id"],
+            "partner_id": m2o_id(r.get("partner_id")),
+            "pubkey": r["keycast_pubkey"],
+        }
+        for r in rows
+        if r.get("keycast_pubkey")
     ]
 
 

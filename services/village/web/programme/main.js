@@ -5,7 +5,7 @@
 // (kind 20 with the session's `a` tag) and, for participants' sessions, tips to the host.
 // Hash routes: #/ (the day to show first), #/d/<YYYY-MM-DD>, #/s/<naddr> (one session), #/mine,
 // #/search?q=, #/new (announce a session), #/edit/<naddr>, #/c/<coordinate> (a link by coordinate,
-// from the polls app), #/signer.
+// from the polls app), #/shifts (volunteers' shifts, for active volunteers and stewards), #/signer.
 import "../shared/style.css"
 import "./style.css"
 import { nip19 } from "nostr-tools"
@@ -26,10 +26,11 @@ import {
   sessionMatches,
   sessionTemplate,
   sessionsIcs,
+  shiftAsSession,
   upcomingFor,
   zonedTime,
 } from "../shared/model.js"
-import { isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
+import { isMe, loadProfiles, nip98, participants, publish, query, queryAuthors } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
 import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
@@ -161,20 +162,38 @@ function row(data, s, t) {
     </a>`
 }
 
+/** One of the participant's shifts in a day list ("Yours"): to the Shifts tab. */
+function shiftRow(s, t) {
+  return `
+    <a class="card session shift-row ${s.end <= t ? "past" : ""}" href="#/shifts" style="--track:#f89b0e">
+      <span class="session-time">${esc(time(s.start))}<br><span class="muted">${esc(time(s.end))}</span></span>
+      <span class="session-text">
+        <span class="session-title">${s.start <= t && t < s.end ? '<span class="badge open">Now</span> ' : ""}${esc(s.title)}</span>
+        <span class="small muted">Volunteer shift${s.location ? ` · ${esc(s.location)}` : ""}</span>
+      </span>
+    </a>`
+}
+
 /** The day to open on: today when it has sessions, else the next day with sessions, else the last one. */
 function defaultDay(days) {
   const today = dayKey(now())
   return days.find(d => d >= today) || days.at(-1)
 }
 
-/** The tab bar at the bottom of the screen, within thumb reach. */
+/** The tab bar at the bottom of the screen, within thumb reach; "Shifts" for active volunteers
+ * and stewards (the role this device last learnt, refreshed by `loadShifts`). */
 function tabs(current) {
   const items = [
     ["days", "#/", "Programme", "M4 5h16M4 10h16M4 15h10"],
     ["search", "#/search", "Search", "M10.5 17a6.5 6.5 0 1 1 0-13 6.5 6.5 0 0 1 0 13Zm4.6-1.9L20 20"],
     ["mine", "#/mine", "Yours", "M12 20s-7-4.4-7-9.5A3.9 3.9 0 0 1 12 8a3.9 3.9 0 0 1 7 2.5C19 15.6 12 20 12 20Z"],
+    ...(shiftRole() ? [["shifts", "#/shifts", "Shifts", "M12 7v5l3 2M4 12a8 8 0 1 0 16 0 8 8 0 0 0-16 0Z"]] : []),
     ["new", "#/new", "Announce", "M12 5v14M5 12h14"],
   ]
+  if (!shiftsChecked && session.currentPubkey()) {
+    shiftsChecked = true
+    loadShifts().catch(() => {})
+  }
   return `<nav class="tabs" aria-label="Programme">${items
     .map(
       ([id, href, label, d]) =>
@@ -337,7 +356,7 @@ function byDay(data, list, t) {
       const d = dayKey(s.start)
       const heading = d !== day ? `<h3 class="day">${esc(d === dayKey(t) ? "Today" : dayName(d))}</h3>` : ""
       day = d
-      return heading + row(data, s, t)
+      return heading + (s.shift ? shiftRow(s, t) : row(data, s, t))
     })
     .join("")
 }
@@ -385,22 +404,33 @@ async function minePage() {
   bindCommon(route)
   const body = document.getElementById("body")
   if (!(await requireSignIn(body))) return
-  await withProgramme(body, data => drawMine(body, data))
+  let myShifts = []
+  if (shiftRole()) {
+    try {
+      myShifts = (await loadShifts()).shifts.filter(s => s.mine).map(shiftAsSession)
+    } catch {
+      // the programme still shows; the shifts are on their tab
+    }
+  }
+  await withProgramme(body, data => drawMine(body, data, myShifts))
 }
 
-function drawMine(body, data) {
+function drawMine(body, data, myShifts = []) {
   const t = now()
   const me = session.currentPubkey()
-  const mine = data.sessions.filter(s => {
+  const sessions = data.sessions.filter(s => {
     const a = rsvpsFor(data.rsvps, s.coordinate).get(me)
     return s.end > t && (a === "accepted" || a === "tentative" || s.pubkey === me)
   })
+  const shifts = myShifts.filter(s => s.end > t)
+  const mine = [...sessions, ...shifts].sort((a, b) => a.start - b.start)
   if (!mine.length) {
     body.innerHTML =
       '<p class="muted">Sessions you are going to (or might go to) and your own show up here. <a href="#/">See the programme</a> or <a href="#/new">announce a session</a>.</p>'
     return
   }
-  const ics = `data:text/calendar;charset=utf-8,${encodeURIComponent(sessionsIcs(mine, s => `${location.origin}/#/s/${naddr(s)}`))}`
+  const link = s => (s.shift ? `${location.origin}/#/shifts` : `${location.origin}/#/s/${naddr(s)}`)
+  const ics = `data:text/calendar;charset=utf-8,${encodeURIComponent(sessionsIcs(mine, link))}`
   body.innerHTML = `
     ${soonNote(data, t)}
     ${byDay(data, mine, t)}
@@ -673,6 +703,114 @@ async function editPage(code = "", day = "") {
 }
 
 /** The polls about a session (the polls app's public list); null when it cannot be reached. */
+// -- Volunteers' shifts (onboarding's /admin/shifts through this app's server, NIP-98) ----------
+
+const SHIFT_ROLE_KEY = "belfry-programme-shift-role"
+let shiftsLoading = null
+let shiftsChecked = false // the role is asked once per page load, and on the Shifts tab
+
+function shiftRole() {
+  try {
+    return localStorage.getItem(`${SHIFT_ROLE_KEY}:${session.currentPubkey()}`) || ""
+  } catch {
+    return ""
+  }
+}
+
+/** The shift board for the signed-in participant: `{role, count, min_shifts, change_hours, shifts}`,
+ * role null for everyone but active volunteers and stewards. Remembers the role for the tab bar
+ * and adds or drops the tab when it changed. */
+function loadShifts() {
+  if (!session.currentPubkey()) return Promise.resolve({ role: null, shifts: [] })
+  shiftsLoading ||= (async () => {
+    const res = await fetch("/api/shifts", { headers: { Authorization: await nip98("GET", "/api/shifts") } })
+    const board = await res.json().catch(() => ({}))
+    if (!res.ok) throw new Error(board.error || `request failed (${res.status})`)
+    const before = shiftRole()
+    try {
+      localStorage.setItem(`${SHIFT_ROLE_KEY}:${session.currentPubkey()}`, board.role || "")
+    } catch {
+      // no storage: the tab shows after the next answer
+    }
+    const nav = document.querySelector("nav.tabs")
+    if (nav && before !== (board.role || "")) nav.outerHTML = tabs(nav.querySelector(".on")?.getAttribute("href")?.slice(2) || "days")
+    return board
+  })().finally(() => (shiftsLoading = null))
+  return shiftsLoading
+}
+
+async function shiftsPage() {
+  render(`${header("Shifts")}<div id="body"><p class="muted">Loading…</p></div>${tabs("shifts")}`)
+  bindCommon(route)
+  const body = document.getElementById("body")
+  if (!(await requireSignIn(body))) return
+  shiftsLoading = null
+  try {
+    drawShifts(body, await loadShifts())
+  } catch (e) {
+    if (body.isConnected) body.innerHTML = failure(e)
+  }
+}
+
+function drawShifts(body, board) {
+  if (!body.isConnected) return
+  if (!board.role) {
+    body.innerHTML = '<p class="muted">Shifts are for volunteers and stewards. <a href="#/">See the programme</a>.</p>'
+    return
+  }
+  const volunteer = board.role === "volunteer"
+  const t = now()
+  const shifts = board.shifts.map(s => ({ ...s, ...shiftAsSession(s), name: s.title }))
+  const status = volunteer
+    ? board.count >= board.min_shifts
+      ? `<p>You have <strong>${board.count}</strong> shift${board.count === 1 ? "" : "s"}. Thank you: your volunteer pass is active.</p>`
+      : `<p>You have <strong>${board.count}</strong> of the ${board.min_shifts} shifts that keep your volunteer pass.</p>`
+    : '<p class="muted">Stewards see every shift and who signed up; volunteers sign up here.</p>'
+  let day = ""
+  const list = shifts
+    .map(s => {
+      const d = dayKey(s.start)
+      const heading = d !== day ? `<h3 class="day">${esc(d === dayKey(t) ? "Today" : dayName(d))}</h3>` : ""
+      day = d
+      const full = s.taken >= s.capacity
+      const action = !volunteer
+        ? ""
+        : s.mine
+          ? `<button class="button" data-shift="${s.id}" data-action="leave">Leave</button>`
+          : full
+            ? '<span class="small muted">Full</span>'
+            : `<button class="primary" data-shift="${s.id}" data-action="signup">Sign up</button>`
+      return `${heading}
+        <div class="card shift ${s.end <= t ? "past" : ""} ${s.mine ? "mine" : ""}">
+          <div class="shift-head"><strong>${s.mine ? '<span class="badge open">Yours</span> ' : ""}${esc(s.name)}</strong>
+            <span class="small muted">${esc(time(s.start))}–${esc(time(s.end))}${s.place ? ` · ${esc(s.place)}` : ""}</span></div>
+          ${s.description ? `<p class="small">${esc(s.description)}</p>` : ""}
+          <p class="small muted">${s.taken} of ${s.capacity} taken${s.people?.length ? `: ${s.people.map(esc).join(", ")}` : ""}</p>
+          <div class="row-end">${action}</div>
+        </div>`
+    })
+    .join("")
+  body.innerHTML = `${status}${list || '<p class="muted">No shifts yet.</p>'}
+    ${volunteer ? `<p class="small muted">You can leave a shift until ${board.change_hours} hours before it starts; after that, ask a steward to swap it.</p>` : ""}`
+  body.querySelectorAll("button[data-shift]").forEach(b =>
+    b.addEventListener("click", async () => {
+      b.disabled = true
+      try {
+        const path = `/api/shifts/${b.dataset.shift}/${b.dataset.action}`
+        const res = await fetch(path, { method: "POST", headers: { Authorization: await nip98("POST", path) } })
+        const answer = await res.json().catch(() => ({}))
+        if (!res.ok) throw new Error(answer.error || `request failed (${res.status})`)
+        if (answer.result === "refused") notice(answer.message || "That did not work.", "bad")
+        shiftsLoading = null
+        drawShifts(body, await loadShifts())
+      } catch (e) {
+        b.disabled = false
+        notice(e.message, "bad")
+      }
+    }),
+  )
+}
+
 async function sessionPolls(coordinate) {
   if (!VOTE_URL) return []
   try {
@@ -690,6 +828,7 @@ function route() {
   if ((m = hash.match(/^#\/s\/(naddr1\w+)$/))) return sessionPage(m[1])
   if ((m = hash.match(/^#\/d\/(\d{4}-\d{2}-\d{2})$/))) return dayPage(m[1])
   if (hash === "#/mine") return minePage()
+  if (hash === "#/shifts") return shiftsPage()
   if ((m = hash.match(/^#\/c\/(.+)$/))) {
     // a session by its coordinate (`31923:<pubkey>:<d>`, URL-encoded): on to its page
     try {

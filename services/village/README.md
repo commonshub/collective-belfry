@@ -77,7 +77,8 @@ room, "From participants" (the choice is kept per browser). Times are shown in `
 (Europe/Brussels), whatever the phone's zone. "Your sessions" lists what the participant is going
 to, might go to or announced, with "Add all to my calendar" (one .ics file).
 
-Made for the phone: a tab bar at the bottom (Programme, Search, Yours, Announce), the day chips stay
+Made for the phone: a tab bar at the bottom (Programme, Search, Yours, Announce, and Shifts for
+volunteers and stewards), the day chips stay
 under the app bar while the list scrolls, a swipe goes to the next or previous day, today's list
 redraws every minute ("On now"), and "Starting soon" names the participant's sessions within half an
 hour. Search finds sessions where every typed word starts a word of the title, description, place
@@ -121,6 +122,18 @@ Sessions of participants and comments can be reported (`session`, `comment`); th
 own events cannot. No new kinds in the policy (31923, 31925, 1111, 20 and 9321 were in).
 Keycast client `belfry-programme`.
 
+**Shifts** (`#/shifts`). Volunteers earn their pass with shifts, which live in Odoo, never on the
+relay (docs/NEXT_STEPS.md §3zh). This app's server answers `GET /api/shifts` and
+`POST /api/shifts/<id>/signup|leave` (NIP-98, programme port only): it finds the signer's partner
+in the active passes (`partner_id` of `/admin/active-passes`) and asks the onboarding service's
+`/admin/shifts` for that partner, so the browser never names a partner. The role decides: an
+active volunteer sees every shift with who signed up and signs up or leaves (until
+`change_hours` before it; a refusal shows the onboarding service's message), a steward sees the
+same without buttons, anyone else gets no role and no tab. The tab appears once the server has
+named a role (remembered per participant on the device; asked once per page load). The
+participant's shifts are in "Yours" and in its calendar file. Pending volunteers use their
+personal shift page on `pass.<domain>/shifts/<secret>` instead (they have no Nostr key yet).
+
 ## What's new
 
 `people.<domain>/#/activity` (linked from the directory as "What's new"): the last 14 days of
@@ -163,7 +176,9 @@ Programme: `test/programme.test.js`, smoke step 6t, and `infra/scripts/programme
 sessions", a photo shared from the session and shown there, a second participant seeing it, and
 a session announced, seen by the second participant (also in the calendar app), edited and
 cancelled, search, "Add all", a poll started from the session and listed there, the tab bar, the
-kept copy on a reload and the page opening offline.
+kept copy on a reload and the page opening offline. Shifts: `test/shifts.test.js`,
+`infra/scripts/shifts-check.mjs` at 390 px (a steward sees the board without buttons; a volunteer,
+with the browser answering `/api/shifts`, signs up, gets a refusal and finds the shifts in "Yours").
 
 ## Open
 

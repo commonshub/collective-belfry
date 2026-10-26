@@ -98,7 +98,9 @@ body {
   bottom: 0;
   z-index: 5;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  /* four tabs, five with Shifts for volunteers and stewards */
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   background: #1a231d;
   border-top: 1px solid #44534a;
   padding-bottom: env(safe-area-inset-bottom, 0px);
@@ -180,4 +182,20 @@ a.poll {
   gap: 2px;
   text-decoration: none;
   padding: 10px 14px;
+}
+
+/* Shifts: volunteers' shifts, one card each; the participant's own marked */
+.card.shift.mine {
+  border-color: var(--osv-accent, #d6ff52);
+}
+.card.shift.past {
+  opacity: 0.6;
+}
+.shift-head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.card.shift .row-end {
+  margin: 8px 0 0;
 }

@@ -467,6 +467,21 @@ export function sessionsIcs(sessions, urlOf = () => "", now = Date.now(), remind
   return lines.join("\r\n") + "\r\n"
 }
 
+/** A volunteer shift (onboarding's `/admin/shifts`: times in UTC as `YYYY-MM-DD HH:MM:SS`) in the
+ * shape of a session, for the day lists and the calendar file. */
+export function shiftAsSession(shift) {
+  const unix = s => Math.floor(Date.parse(`${String(s).replace(" ", "T")}Z`) / 1000)
+  return {
+    coordinate: `shift:${shift.id}`,
+    shift: true,
+    title: `Shift: ${shift.title}`,
+    start: unix(shift.start),
+    end: unix(shift.end),
+    location: shift.place || "",
+    description: shift.description || "",
+  }
+}
+
 /** The calendar file for one session. */
 export const sessionIcs = (session, url = "", now = Date.now(), remind = 15) => sessionsIcs([session], () => url, now, remind)
 

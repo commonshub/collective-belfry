@@ -227,3 +227,18 @@ test("edit: keeps the tags the form does not cover", () => {
   assert.deepEqual(get("r"), ["https://new.example", "https://second.example"])
   assert.deepEqual(get("d"), ["cal-1"])
 })
+
+test("shifts: a shift in the shape of a session, for the day lists and the calendar file", () => {
+  const { shiftAsSession, sessionsIcs } = model
+  const s = shiftAsSession({ id: 4, title: "Kitchen", description: "Lunch for 80", place: "Commons Hub", start: "2027-01-26 10:00:00", end: "2027-01-26 13:00:00" })
+  assert.equal(s.start, Date.UTC(2027, 0, 26, 10) / 1000, "UTC from Odoo")
+  assert.equal(s.end - s.start, 3 * 3600)
+  assert.equal(s.title, "Shift: Kitchen")
+  assert.equal(s.coordinate, "shift:4")
+  assert.ok(s.shift)
+  const ics = sessionsIcs([s], () => "https://programme.test/#/shifts", Date.UTC(2027, 0, 1))
+  assert.match(ics, /UID:shift-4@opensourcevillage/)
+  assert.match(ics, /DTSTART:20270126T100000Z/)
+  assert.match(ics, /LOCATION:Commons Hub/)
+  assert.match(ics, /TRIGGER:-PT15M/)
+})
