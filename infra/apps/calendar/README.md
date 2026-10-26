@@ -29,7 +29,10 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    `/api/participants` signed with NIP-98, `/api/hidden`; CORS for the calendar's origin, CSP
    `connect-src`); until they are known the calendar stays empty. The signed-in participant's own
    events are left out only when they are in one of their calendars already (the app shows those);
-   a session announced in the programme app shows up here.
+   a session announced in the programme app shows up here. The relay answers at most 300 events
+   per filter and a subscription cannot page, so the programme, the room bookings and the
+   deletions have a filter each, and participants' events are asked for by author, 100 per
+   subscription; a failed participants request is retried after 30 seconds.
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
 pass); the app signs through Keycast, so the `belfry-event` policy (`infra/keycast/policy.sql`)

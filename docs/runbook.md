@@ -33,6 +33,11 @@ Admin and steward pages need the admin network (ZeroTier, `../infra/DEPLOY.md`).
    */10 * * * * cd ~/belfry && docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app exec -T onboarding python -m belfry_onboarding sync-programme >> ~/belfry-cron.log 2>&1
    ```
 
+   A manual `sync-programme` started within a few minutes of a cron run may publish versions with
+   an older `created_at` than the stored ones (each run spreads its events one second apart,
+   ending at the start time, so the relay can page through them); the relay keeps the stored
+   version and the next run publishes the change again.
+
 2. **Log rotation.** Docker keeps container logs without limit by default. In
    `/etc/docker/daemon.json`:
 

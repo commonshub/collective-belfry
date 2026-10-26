@@ -1,14 +1,14 @@
-From 2a6499055307c386bdb0ded4bd278ff85295e239 Mon Sep 17 00:00:00 2001
+From d19163dea9c67ced2e4a2eefe094c781a1ec183a Mon Sep 17 00:00:00 2001
 From: Belfry <belfry@localhost>
 Date: Mon, 26 Oct 2026 03:33:08 +0100
 Subject: [PATCH 6/6] Belfry: participants' public sessions as a "From
  participants" calendar
 
 ---
- src/belfry/participants.ts |  59 ++++++++++++++++++
- src/belfry/village.ts      | 122 +++++++++++++++++++++++++++----------
- src/nostr/village.ts       |  17 ++++++
- 3 files changed, 166 insertions(+), 32 deletions(-)
+ src/belfry/participants.ts |  59 ++++++++++++++++
+ src/belfry/village.ts      | 135 ++++++++++++++++++++++++++++---------
+ src/nostr/village.ts       |  52 ++++++++++++--
+ 3 files changed, 209 insertions(+), 37 deletions(-)
  create mode 100644 src/belfry/participants.ts
 
 diff --git a/src/belfry/participants.ts b/src/belfry/participants.ts
@@ -77,7 +77,7 @@ index 0000000..34a1f2a
 +  }
 +}
 diff --git a/src/belfry/village.ts b/src/belfry/village.ts
-index b734bcb..91ce47d 100644
+index b734bcb..cf81733 100644
 --- a/src/belfry/village.ts
 +++ b/src/belfry/village.ts
 @@ -3,13 +3,23 @@
@@ -130,7 +130,7 @@ index b734bcb..91ce47d 100644
    const tags = event.tags.filter((t) => t[0] === "t").map((t) => t[1]);
    if (tags.includes("programme")) {
      return {
-@@ -82,27 +99,48 @@ interface VillageState {
+@@ -82,27 +99,50 @@ interface VillageState {
  }
  
  let subscription: ObserveHandle | null = null;
@@ -143,6 +143,8 @@ index b734bcb..91ce47d 100644
 +let active: Set<string> | null = null;
 +let hidden = new Set<string>();
 +let activeFor = "";
++let community: ObserveHandle[] = [];
++let retry: ReturnType<typeof setTimeout> | undefined;
  
  export const useVillageCalendars = create<VillageState>((set, get) => {
    const publish = () => {
@@ -184,7 +186,7 @@ index b734bcb..91ce47d 100644
      set({ calendars: sorted, events });
    };
    let timer: ReturnType<typeof setTimeout> | undefined;
-@@ -117,31 +155,51 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
+@@ -117,31 +157,62 @@ export const useVillageCalendars = create<VillageState>((set, get) => {
      visibility: loadVisibility(),
      start: () => {
        if (subscription || !PROGRAMME_PUBKEY) return;
@@ -238,17 +240,28 @@ index b734bcb..91ce47d 100644
 +        schedule();
 +      };
 +      subscription = observeProgrammeEvents(PROGRAMME_PUBKEY, onEvent);
-+      observeCommunityEvents(onEvent);
 +      // who is active is learned once signed in (the request is signed with the participant's key)
++      // (and the participants' events are asked for by author, so the relay's cap of 300 events
++      // per filter counts per chunk of authors, not for everyone); a failure is retried in 30 s
 +      const learn = async () => {
 +        const me = useUser.getState().user?.pubkey ?? "";
 +        if (!me || me === activeFor) return;
 +        activeFor = me;
++        clearTimeout(retry);
 +        [active, hidden] = await Promise.all([
 +          activeParticipants(me),
 +          hiddenRefs(),
 +        ]);
-+        if (active === null) activeFor = "";
++        if (active === null) {
++          activeFor = "";
++          retry = setTimeout(() => void learn(), 30000);
++        } else {
++          for (const handle of community) handle.unobserve();
++          const authors = [...active, me].filter(
++            (pk, i, all) => pk !== PROGRAMME_PUBKEY && all.indexOf(pk) === i,
++          );
++          community = observeCommunityEvents(authors, onEvent);
++        }
 +        schedule();
 +      };
 +      useUser.subscribe(() => {
@@ -261,30 +274,73 @@ index b734bcb..91ce47d 100644
      toggleVisibility: (id) => {
        const visibility = {
 diff --git a/src/nostr/village.ts b/src/nostr/village.ts
-index a473b21..7640855 100644
+index a473b21..f2f1af7 100644
 --- a/src/nostr/village.ts
 +++ b/src/nostr/village.ts
-@@ -16,3 +16,20 @@ export function observeProgrammeEvents(
-   };
-   return dataLayer.observe([filter], { onEvent });
- }
+@@ -2,6 +2,11 @@ import type { Event, Filter } from "nostr-tools";
+ import { dataLayer, type ObserveHandle } from "@formstr/local-relay";
+ import { EventKinds } from "./kinds";
+ 
++// The community relay answers at most 300 events per filter and a subscription cannot page, so
++// the filters are split: the programme, the room bookings and the deletions each get their own,
++// and participants' events are asked for in chunks of authors.
++const AUTHORS_PER_FILTER = 100;
 +
-+/**
-+ * Belfry: participants' public calendar events and their deletions. The community relay only
-+ * takes events from participants, so every author here has (or had) a pass.
-+ */
-+export function observeCommunityEvents(
-+  onEvent: (event: Event) => void,
-+): ObserveHandle {
+ /**
+  * Belfry: the programme key's public calendar events and deletions (src/belfry/village.ts).
+  * No since/until: relays apply them to created_at, not to when an event takes place.
+@@ -10,9 +15,46 @@ export function observeProgrammeEvents(
+   pubkey: string,
+   onEvent: (event: Event) => void,
+ ): ObserveHandle {
+-  const filter: Filter = {
+-    kinds: [EventKinds.PublicCalendarEvent, EventKinds.DeletionEvent],
+-    authors: [pubkey],
+-  };
+-  return dataLayer.observe([filter], { onEvent });
 +  const filters: Filter[] = [
-+    { kinds: [EventKinds.PublicCalendarEvent] },
++    {
++      kinds: [EventKinds.PublicCalendarEvent],
++      authors: [pubkey],
++      "#t": ["programme"],
++    },
++    {
++      kinds: [EventKinds.PublicCalendarEvent],
++      authors: [pubkey],
++      "#t": ["room"],
++    },
 +    {
 +      kinds: [EventKinds.DeletionEvent],
++      authors: [pubkey],
 +      "#k": [String(EventKinds.PublicCalendarEvent)],
 +    },
 +  ];
 +  return dataLayer.observe(filters, { onEvent });
 +}
++
++/**
++ * Belfry: participants' public calendar events and their deletions, for the given authors (the
++ * active participants); one subscription per chunk of authors.
++ */
++export function observeCommunityEvents(
++  authors: string[],
++  onEvent: (event: Event) => void,
++): ObserveHandle[] {
++  const handles: ObserveHandle[] = [];
++  for (let i = 0; i < authors.length; i += AUTHORS_PER_FILTER) {
++    const chunk = authors.slice(i, i + AUTHORS_PER_FILTER);
++    const filters: Filter[] = [
++      { kinds: [EventKinds.PublicCalendarEvent], authors: chunk },
++      {
++        kinds: [EventKinds.DeletionEvent],
++        authors: chunk,
++        "#k": [String(EventKinds.PublicCalendarEvent)],
++      },
++    ];
++    handles.push(dataLayer.observe(filters, { onEvent }));
++  }
++  return handles;
+ }
 -- 
 2.53.0
 

@@ -5,7 +5,7 @@ import "../shared/style.css"
 import { nip19 } from "nostr-tools"
 import * as session from "../shared/session.js"
 import { ACTIVITY_KINDS, DIRECTORY_D, LISTING_KIND, activityFromEvent, deletedIds, directoryConsent, isHidden, latestByAuthor, parseProfile, profileName } from "../shared/model.js"
-import { forgetProfile, isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
+import { forgetProfile, isMe, loadProfiles, participants, publish, query, queryAll, queryAuthors } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, chatLink, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
 import { bindReports, hiddenRefs, reportLink } from "../shared/report.js"
 
@@ -235,7 +235,8 @@ async function recentActivity() {
   const since = Math.floor(Date.now() / 1000) - ACTIVITY_DAYS * 86400
   const [events, deletions, hidden] = await Promise.all([
     query({ kinds: ACTIVITY_KINDS, since, limit: 500 }),
-    query({ kinds: [5], since, limit: 500 }),
+    // every deletion of the two weeks (paged past the relay's cap), or deleted posts come back
+    queryAll({ kinds: [5], since }),
     hiddenRefs(),
   ])
   const byId = new Map(events.map(e => [e.id, e]))
