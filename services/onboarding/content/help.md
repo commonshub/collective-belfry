@@ -49,7 +49,8 @@ own signer (a browser extension or a bunker link) instead of "Sign in with Open 
 
 ## Inviting friends
 
-The village grows through people who know each other, so there is no public sign-up. With an
+The village grows through people who know each other: you join with an invite, or by
+[applying](/apply) and getting one from the stewards. With an
 active pass you can invite a few friends: open [your pass](/me), then **Create an invite link**
 and send or share it. Each link works once and expires after two weeks; the page shows which
 links were used, and an unused one can be revoked to get the invite back.

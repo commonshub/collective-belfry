@@ -21,6 +21,7 @@ M2O: dict[str, set[str]] = {
     "belfry.stripe.event": {"pass_id"},
     "belfry.invite": {"inviter_partner_id", "used_by_partner_id"},
     "belfry.feedback": {"partner_id"},
+    "belfry.application": {"invite_id"},
     "belfry.report": {"reporter_pass_id", "target_pass_id"},
     "product.product": set(),
     "res.partner": set(),
@@ -290,6 +291,33 @@ class FakeOdoo(OdooApi):
                 create_date="2026-10-25 10:00:00",
                 handled_by=False,
             )
+        if model == "belfry.application" and method == "belfry_application_create":
+            vals, emails = args[0], args[1] if len(args) > 1 else []
+            if "@" not in (vals.get("email") or ""):
+                raise OdooError("Please enter a valid e-mail address.")
+            return self.add(
+                "belfry.application",
+                **vals,
+                state="new",
+                mailed_to=list(emails),
+                create_date="2026-10-26 10:00:00",
+                handled_by=False,
+                duplicate_note=False,
+            )
+        if model == "belfry.application" and method in (
+            "belfry_application_invite",
+            "belfry_application_decline",
+        ):
+            (aid,), email = args[0], args[1]
+            row = self.tables[model][aid]
+            if row["state"] != "new":
+                raise OdooError(f"This application was answered already ({row['state']}).")
+            if method == "belfry_application_decline":
+                row.update(state="declined", handled_by=email)
+                return "declined"
+            created = self.execute_kw("belfry.invite", "belfry_steward_create", [email, "app"])
+            row.update(state="invited", handled_by=email, invite_id=created["id"])
+            return created
         if model == "belfry.feedback" and method == "belfry_feedback_handle":
             (fid,), action, email = args[0], args[1], args[2]
             state = {"done": "done", "reopen": "new"}[action]

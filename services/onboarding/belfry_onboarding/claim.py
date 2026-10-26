@@ -111,12 +111,13 @@ open source too.</p>
 <ol class="steps">
 <li><strong>Get an invite.</strong> The village grows through people who know each other: every
 participant can invite a few friends, and stewards invite too. An invite is a personal link; ask
-someone who is already in.</li>
+someone who is already in, or <a href="/apply">apply</a> and the stewards answer by mail.</li>
 <li><strong>Choose your pass</strong> (a day, a week or the whole event) and pay on the invite page.</li>
 <li><strong>Check your e-mail.</strong> A sign-in link arrives; there is no password, ever.</li>
 <li><strong>Use the apps and show your pass</strong> at the door, on your phone or in a wallet.</li>
 </ol>
-<p class="muted">No invite yet? There is no public sign-up. Ask a friend who is coming.</p>
+<p class="muted">No invite yet? Ask a friend who is coming, or <a href="/apply">apply to join</a>
+(as a visitor or as a volunteer).</p>
 </div>
 <h2 class="section">Already in?</h2>
 <ul class="links">{items}</ul>

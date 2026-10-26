@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
+    apply,
     avatar,
     blossom,
     bridge,
@@ -138,6 +139,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
     feedback.register(app)  # /feedback: participants' and testers' feedback (feedback.py)
     signin.register(app)  # /signin, /welcome: one-time sign-in links, the page after paying
+    apply.register(app)  # /apply: applications to join (apply.py)
     wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.

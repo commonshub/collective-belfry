@@ -12,3 +12,5 @@ access_belfry_report_steward,belfry.report steward,model_belfry_report,group_ste
 access_belfry_report_admin,belfry.report admin,model_belfry_report,group_admin,1,1,1,0
 access_belfry_feedback_steward,belfry.feedback steward,model_belfry_feedback,group_steward,1,0,0,0
 access_belfry_feedback_admin,belfry.feedback admin,model_belfry_feedback,group_admin,1,1,1,1
+access_belfry_application_steward,belfry.application steward,model_belfry_application,group_steward,1,0,0,0
+access_belfry_application_admin,belfry.application admin,model_belfry_application,group_admin,1,1,1,0

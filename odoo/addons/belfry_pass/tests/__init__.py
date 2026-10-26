@@ -11,3 +11,4 @@ from . import test_own_key
 from . import test_error_pages
 from . import test_reserved
 from . import test_vat
+from . import test_application

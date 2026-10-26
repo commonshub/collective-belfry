@@ -186,6 +186,16 @@ FEEDBACK_FIELDS = [
     "state",
     "handled_by",
 ]
+APPLICATION_FIELDS = [
+    "create_date",
+    "name",
+    "email",
+    "motivation",
+    "kind",
+    "state",
+    "handled_by",
+    "duplicate_note",
+]
 PASS_FIELDS = [
     "partner_id",
     "tier",
@@ -254,7 +264,11 @@ def dashboard_data(svc: Services) -> dict[str, Any]:
     )
     reports = odoo.search_read("belfry.report", [], REPORT_FIELDS, limit=50, order="id desc")
     feedback = odoo.search_read("belfry.feedback", [], FEEDBACK_FIELDS, limit=100, order="id desc")
+    applications = odoo.search_read(
+        "belfry.application", [], APPLICATION_FIELDS, limit=100, order="id desc"
+    )
     return {
+        "applications": applications,
         "feedback": feedback,
         "invites": invites,
         "passes": passes,
@@ -290,6 +304,23 @@ def handle_report(svc: Services, sess: dict[str, Any], report_id: int, action: s
     log.info("steward %s: report %s %s", sess["email"], report_id, action)
     return svc.odoo.call(
         "belfry.report", "belfry_report_handle", [[report_id], action, sess["email"]]
+    )
+
+
+def answer_application(
+    svc: Services, sess: dict[str, Any], application_id: int, action: str
+) -> Any:
+    """``invite``: an invite in the steward's name, mailed to the applicant; ``decline``: a
+    friendly no by mail."""
+    log.info("steward %s: application %s %s", sess["email"], application_id, action)
+    if action == "invite":
+        return svc.odoo.call(
+            "belfry.application",
+            "belfry_application_invite",
+            [[application_id], sess["email"], sess.get("name") or False],
+        )
+    return svc.odoo.call(
+        "belfry.application", "belfry_application_decline", [[application_id], sess["email"]]
     )
 
 
@@ -444,6 +475,44 @@ def dashboard(sess: dict[str, Any], data: dict[str, Any], msg: str = "", err: st
         parts.append(f'<div class="card msg">{msg}</div>')
     if err:
         parts.append(f'<div class="card err">{E(err)}</div>')
+
+    applications = data.get("applications") or []
+    rows = []
+    for a in applications:
+        kind = "volunteer" if a.get("kind") == "volunteer" else "visitor"
+        dup = (
+            f"<br><span class='muted'>{E(a['duplicate_note'])}</span>"
+            if a.get("duplicate_note")
+            else ""
+        )
+        if a["state"] == "new":
+            buttons = _form(f"/steward/applications/{a['id']}/invite", sess, "Invite") + _form(
+                f"/steward/applications/{a['id']}/decline",
+                sess,
+                "Decline",
+                quiet=True,
+                confirm=f"Decline {a['name']}? They get a friendly no by mail.",
+            )
+        else:
+            buttons = f"<span class='muted'>{E(a.get('handled_by') or '')}</span>"
+        rows.append(
+            f"<tr><td>{_date(a.get('create_date'))}</td>"
+            f"<td>{E(a['name'])}<br><span class='muted'>{E(a['email'])}</span>{dup}</td>"
+            f"<td class='pre'>{E(a.get('motivation') or '')}</td>"
+            f"<td>{kind}<br><span class='state'>{E(a['state'])}</span></td>"
+            f"<td>{buttons}</td></tr>"
+        )
+    new_count = sum(1 for a in applications if a["state"] == "new")
+    parts.append(
+        "<section id='applications'><h2>Applications"
+        f"{f' ({new_count} new)' if new_count else ''}</h2>"
+        "<p class='muted'>From the apply page. Invite mails the applicant an invite link in your "
+        "name; they choose and pay a pass. Decline sends a friendly no.</p>"
+        "<div class='wrap'><table><thead><tr><th>Date</th><th>Who</th><th>Motivation</th>"
+        "<th>As</th><th></th></tr></thead><tbody>"
+        + ("".join(rows) or "<tr><td colspan=5 class='muted'>No applications yet.</td></tr>")
+        + "</tbody></table></div></section>"
+    )
 
     feedback = data.get("feedback") or []
     rows = []
@@ -675,6 +744,8 @@ MESSAGES = {
     "report-hide": "The content is hidden in the apps.",
     "report-dismiss": "Report dismissed.",
     "report-reopen": "Report reopened.",
+    "application-invite": "Invite mailed to the applicant.",
+    "application-decline": "Application declined; the applicant got a mail.",
     "feedback-done": "Feedback marked done.",
     "feedback-reopen": "Feedback reopened.",
     "signed-out": "Signed out.",
@@ -813,6 +884,19 @@ def register(app: FastAPI) -> None:
             raise StewardError(404, "Unknown action.")
         await run_in_threadpool(handle_report, services, sess, report_id, action)
         return back(f"report-{action}")
+
+    @app.post("/steward/applications/{application_id}/{action}")
+    async def steward_application(
+        application_id: int, action: str, request: Request, csrf: str = Form("")
+    ):
+        services, sess = signed_in(request, csrf)
+        if action not in ("invite", "decline"):
+            raise StewardError(404, "Unknown action.")
+        try:
+            await run_in_threadpool(answer_application, services, sess, application_id, action)
+        except core.OdooError as exc:
+            return back(err=f"Odoo refused: {exc}")
+        return back(f"application-{action}")
 
     @app.post("/steward/feedback/{feedback_id}/{action}")
     async def steward_feedback(
