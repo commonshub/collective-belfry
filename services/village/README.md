@@ -70,12 +70,20 @@ bootstrap with `<URL>/oauth/callback` and trusted (`KEYCAST_TRUSTED_CLIENTS`).
 
 `programme.<domain>`: the village programme and the room bookings (the public NIP-52 events of
 Belfry's programme key, `PROGRAMME_PUBKEY`, published by the onboarding service's
-`sync-programme` job) and participants' own public events (kind 31923, from the calendar app),
+`sync-programme` job) and participants' own public events (kind 31923, announced here or as public events in the calendar app),
 one day at a time. The day opens on today, or the next day with sessions; on today the list is
 split into "On now", "Later today" and "Earlier today". Filters by track: the programme, each
 room, "From participants" (the choice is kept per browser). Times are shown in `VITE_EVENT_TZ`
 (Europe/Brussels), whatever the phone's zone. "Your sessions" lists what the participant is going
 to, might go to or announced.
+
+"Announce a session" (`#/new`) publishes a public kind 31923 in the participant's name: title,
+day, from and until in the village's time (whatever the phone's zone; an end before the start
+runs past midnight), place (the rooms are suggested), description, a link; `d` = `session-…`, never
+the programme key's `osv-programme-`/`osv-room-` prefixes, which `sync-programme` manages. The host
+edits it (`#/edit/<naddr>`, same coordinate, so RSVPs, comments and photos stay) or cancels it
+(kind 5 with `a` and `e`). Calendar by Form* does not show participants' public events (calendar
+patch 0004 reads the programme key only).
 
 A session is addressed by its coordinate `31923:<pubkey>:<d>` (links: `#/s/<naddr>`), and the
 other apps point at it:
@@ -130,7 +138,8 @@ offer with a photo, paying it through the wallet, the payment shown to buyer and
 hashtag, like, comment, a tip through the wallet, the photographer sees all three, delete.
 Programme: `test/programme.test.js`, smoke step 6t, and `infra/scripts/programme-check.mjs` at
 390 px: the day list without sideways scrolling, "Going", a comment, the .ics link, "Your
-sessions", a photo shared from the session and shown there, and a second participant seeing it.
+sessions", a photo shared from the session and shown there, a second participant seeing it, and
+a session announced, seen by the second participant, edited and cancelled.
 
 ## Open
 
@@ -138,6 +147,5 @@ No moderation or reporting of offers or profiles yet (participants can delete th
 notifications (a seller learns of a payment in the wallet or on the offer page); the directory has
 no fields beyond kind 0 (interests, languages); pictures are links in the directory but uploads in
 the marketplace. Photos: animated GIFs become still JPEGs; no albums; Blossom keeps the files of
-deleted posts until its retention removes them. Programme: no way to announce a session in the
-programme app itself (participants use the calendar app, public events); no polls linked to a
-session yet; no reminders before a session starts.
+deleted posts until its retention removes them. Programme: no polls linked to a session yet; no
+reminders before a session starts; participants' sessions are not in the calendar app.

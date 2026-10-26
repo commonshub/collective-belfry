@@ -4,7 +4,7 @@
 // links what participants do with it: RSVPs (kind 31925), comments (NIP-22), photos taken there
 // (kind 20 with the session's `a` tag) and, for participants' sessions, tips to the host.
 // Hash routes: #/ (the day to show first), #/d/<YYYY-MM-DD>, #/s/<naddr> (one session), #/mine,
-// #/signer.
+// #/new (announce a session), #/edit/<naddr>, #/signer.
 import "../shared/style.css"
 import "./style.css"
 import { nip19 } from "nostr-tools"
@@ -20,7 +20,10 @@ import {
   rsvpTemplate,
   rsvpsFor,
   sessionCommentTemplate,
+  sessionDeletionTemplate,
   sessionIcs,
+  sessionTemplate,
+  zonedTime,
 } from "../shared/model.js"
 import { isMe, loadProfiles, participants, publish, query, queryAuthors } from "../shared/nostr.js"
 import { avatar, bindCommon, boot, esc, header, notice, render, signInCard, signerPage, walletPayLink } from "../shared/ui.js"
@@ -46,6 +49,7 @@ const dayName = (key, style = "long") =>
 const when = s => `${dayName(dayKey(s.start))}, ${time(s.start)}${s.end > s.start ? `–${time(s.end)}` : ""}`
 const tokens = n => `${n} token${n === 1 ? "" : "s"}`
 const now = () => Math.floor(Date.now() / 1000)
+const hm = t => new Intl.DateTimeFormat("en-GB", { timeZone: TZ, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(t * 1000))
 const naddr = s => nip19.naddrEncode({ kind: SESSION_KIND, pubkey: s.pubkey, identifier: s.d })
 
 function failure(e) {
@@ -135,6 +139,7 @@ async function dayPage(day = "") {
     body.innerHTML = failure(e)
     return
   }
+  if (!body.isConnected) return // another page replaced this one meanwhile
   const track = data.tracks.some(t => t.id === chosenTrack()) ? chosenTrack() : ""
   const shown = data.sessions.filter(s => !track || s.track.id === track)
   const days = [...new Set(shown.map(s => dayKey(s.start)))].sort()
@@ -155,7 +160,7 @@ async function dayPage(day = "") {
       ]
     : [["", list]]
   body.innerHTML = `
-    <div class="row-end"><a class="button" href="#/mine">Your sessions</a></div>
+    <div class="row-end"><a class="button" href="#/new?day=${day}">Announce a session</a><a class="button" href="#/mine">Your sessions</a></div>
     ${filters(data, track)}
     <nav class="days" aria-label="Days">${days
       .map(d => `<a class="chip ${d === day ? "on" : ""}" href="#/d/${d}" ${d === day ? 'aria-current="date"' : ""}>${esc(d === dayKey(t) ? "Today" : dayName(d, "short"))}</a>`)
@@ -203,6 +208,7 @@ async function minePage() {
     body.innerHTML = failure(e)
     return
   }
+  if (!body.isConnected) return // another page replaced this one meanwhile
   const t = now()
   const me = session.currentPubkey()
   const mine = data.sessions.filter(s => {
@@ -263,6 +269,7 @@ async function sessionPage(code) {
     body.innerHTML = e.status === 403 ? failure(e) : `<p class="notice bad">${esc(e.message)}</p>`
     return
   }
+  if (!body.isConnected) return // another page replaced this one meanwhile
   const me = session.currentPubkey()
   const mine = answers.get(me)
   const track = trackOf(data, s)
@@ -308,6 +315,11 @@ async function sessionPage(code) {
         ${s.official ? "" : isMe(s.pubkey) ? "" : reportLink({ kind: "session", ref: s.coordinate, pubkey: s.pubkey, excerpt: s.title })}
       </div>
       ${
+        !s.official && isMe(s.pubkey)
+          ? `<div class="actions tight"><a class="button" href="#/edit/${naddr(s)}">Edit</a><button id="cancel" class="danger">Cancel the session</button></div>`
+          : ""
+      }
+      ${
         tipLinks.length
           ? `<div class="actions tight"><span class="label">Thank the host</span>${tipLinks.map(([n, u]) => `<a class="button" href="${esc(u)}">${tokens(n)}</a>`).join("")}</div>
              ${tipped ? `<p class="small muted">${tipped} thank-you${tipped === 1 ? "" : "s"} in tokens so far.</p>` : ""}`
@@ -352,6 +364,21 @@ async function sessionPage(code) {
         notice(`Could not save your answer: ${err.message}`, "bad")
       }
     }
+  const cancel = document.getElementById("cancel")
+  if (cancel)
+    cancel.onclick = async () => {
+      if (!confirm(`Cancel "${s.title}"? It disappears from the programme.`)) return
+      cancel.disabled = true
+      try {
+        await publish(sessionDeletionTemplate(s))
+        loaded = null
+        location.hash = `#/d/${dayKey(s.start)}`
+        notice("Session cancelled.", "good")
+      } catch (err) {
+        cancel.disabled = false
+        notice(`Could not cancel: ${err.message}`, "bad")
+      }
+    }
   document.getElementById("share").onclick = async () => {
     try {
       if (navigator.share) await navigator.share({ title: s.title, text: when(s), url: link })
@@ -379,12 +406,75 @@ async function sessionPage(code) {
   }
 }
 
+/** Announce a session (a public kind 31923 in the participant's name), or edit one's own. Times are
+ * the village's (TZ), whatever the phone's zone. */
+async function editPage(code = "", day = "") {
+  render(`${header(code ? "Edit your session" : "Announce a session", code ? `#/s/${code}` : "#/")}<div id="body"><p class="muted">Loading…</p></div>`)
+  bindCommon(route)
+  const body = document.getElementById("body")
+  if (!(await requireSignIn(body))) return
+  let data, s = null
+  try {
+    data = await loadProgramme()
+    if (code) {
+      const ref = nip19.decode(code)
+      s = data.sessions.find(x => x.coordinate === `${SESSION_KIND}:${ref.data.pubkey}:${ref.data.identifier}`)
+      if (!s || !isMe(s.pubkey) || s.official) throw new Error("You can only edit sessions you announced.")
+    }
+  } catch (e) {
+    body.innerHTML = e.status === 403 ? failure(e) : `<p class="notice bad">${esc(e.message)}</p>`
+    return
+  }
+  if (!body.isConnected) return // another page replaced this one meanwhile
+  const days = [...new Set(data.sessions.filter(x => x.official).map(x => dayKey(x.start)))].sort()
+  const date = s ? dayKey(s.start) : /^\d{4}-\d{2}-\d{2}$/.test(day) ? day : days.find(d => d >= dayKey(now())) || dayKey(now())
+  const places = [...new Set(data.sessions.filter(x => x.track.id.startsWith("room-") && x.location).map(x => x.location))].sort()
+  body.innerHTML = `
+    <form class="card stack" id="form">
+      <p class="small muted">Your session appears in the programme under "From participants". Everyone with a pass sees it, with your name.</p>
+      <label>Title<input id="title" required maxlength="200" value="${esc(s?.title || "")}" placeholder="Rust meetup, a walk to the canal, a workshop…" /></label>
+      <label>Day<input id="date" type="date" required value="${esc(date)}" /></label>
+      <div class="two">
+        <label>From<input id="start" type="time" required value="${esc(s ? hm(s.start) : "")}" /></label>
+        <label>Until<input id="end" type="time" required value="${esc(s ? hm(s.end) : "")}" /></label>
+      </div>
+      <p class="small muted">Times in the village's time (${esc(TZ.replace(/_/g, " "))}).</p>
+      <label>Where<input id="location" maxlength="200" list="places" value="${esc(s?.location || "")}" placeholder="A room, the garden, the café…" /></label>
+      <datalist id="places">${places.map(p => `<option value="${esc(p)}"></option>`).join("")}</datalist>
+      <label>What it is about<textarea id="description" rows="5" maxlength="4000">${esc(s?.description || "")}</textarea></label>
+      <label>A link (optional)<input id="link" type="url" maxlength="500" value="${esc(s?.links[0] || "")}" placeholder="https://" /></label>
+      <button type="submit" class="primary">${s ? "Save" : "Announce"}</button>
+    </form>`
+  document.getElementById("form").onsubmit = async ev => {
+    ev.preventDefault()
+    const v = id => document.getElementById(id).value
+    const btn = ev.target.querySelector("button[type=submit]")
+    const date = v("date")
+    const start = zonedTime(date, v("start"), TZ)
+    let end = zonedTime(date, v("end"), TZ)
+    if (end <= start) end = zonedTime(dayKey(start + 86400), v("end"), TZ) // past midnight
+    btn.disabled = true
+    try {
+      const template = sessionTemplate({ d: s?.d, title: v("title"), start, end, tzid: TZ, location: v("location"), description: v("description"), link: v("link") })
+      const event = await publish(template)
+      loaded = null
+      location.hash = `#/s/${nip19.naddrEncode({ kind: SESSION_KIND, pubkey: event.pubkey, identifier: template.tags[0][1] })}`
+      notice(s ? "Saved." : "Your session is in the programme.", "good")
+    } catch (err) {
+      btn.disabled = false
+      notice(`Could not save: ${err.message}`, "bad")
+    }
+  }
+}
+
 function route() {
   const hash = location.hash || "#/"
   let m
   if ((m = hash.match(/^#\/s\/(naddr1\w+)$/))) return sessionPage(m[1])
   if ((m = hash.match(/^#\/d\/(\d{4}-\d{2}-\d{2})$/))) return dayPage(m[1])
   if (hash === "#/mine") return minePage()
+  if ((m = hash.match(/^#\/new(?:\?day=(\d{4}-\d{2}-\d{2}))?$/))) return editPage("", m[1])
+  if ((m = hash.match(/^#\/edit\/(naddr1\w+)$/))) return editPage(m[1])
   if (hash === "#/signer") return signerPage("Your own signer", () => (location.hash = "#/"))
   if (hash === "#/self-custody") return signerPage("Your own signer", () => (location.hash = "#/"), true)
   return dayPage()

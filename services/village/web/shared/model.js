@@ -447,3 +447,59 @@ export function sessionIcs(session, url = "", now = Date.now()) {
   lines.push("END:VEVENT", "END:VCALENDAR")
   return lines.join("\r\n") + "\r\n"
 }
+
+/** Unix time of a wall-clock date and time (`YYYY-MM-DD`, `HH:MM`) in a time zone. */
+export function zonedTime(date, hhmm, tz) {
+  const [y, mo, d] = date.split("-").map(Number)
+  const [h, mi] = hhmm.split(":").map(Number)
+  if (![y, mo, d, h, mi].every(Number.isInteger)) return NaN
+  const wall = Date.UTC(y, mo - 1, d, h, mi) / 1000
+  const parts = t =>
+    Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric" })
+        .formatToParts(new Date(t * 1000))
+        .map(p => [p.type, Number(p.value)]),
+    )
+  // the zone's offset at the guess, twice (once more across a daylight-saving change)
+  let t = wall
+  for (let i = 0; i < 2; i++) {
+    const p = parts(t)
+    t = wall - (Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute) / 1000 - t)
+  }
+  return t
+}
+
+/** The unsigned public session (NIP-52 kind 31923) a participant announces; `d` keeps an edit on
+ * the same coordinate. New ones get `session-…` (never the programme key's `osv-programme-` or
+ * `osv-room-`). */
+export function sessionTemplate({ d = "", title, start, end, tzid = "", location = "", description = "", link = "" }) {
+  title = String(title || "").trim()
+  if (!title) throw new Error("a session needs a title")
+  if (!Number.isSafeInteger(start) || start <= 0) throw new Error("a session needs a start")
+  if (!Number.isSafeInteger(end) || end <= start) throw new Error("the end must be after the start")
+  if (end - start > 24 * 3600) throw new Error("a session lasts at most a day")
+  const tags = [
+    ["d", d || `session-${Math.floor(Date.now() / 1000).toString(36)}-${Math.random().toString(36).slice(2, 8)}`],
+    ["title", title.slice(0, 200)],
+    ["start", String(start)],
+    ["end", String(end)],
+  ]
+  if (tzid) tags.push(["start_tzid", tzid], ["end_tzid", tzid])
+  if (location.trim()) tags.push(["location", location.trim().slice(0, 200)])
+  const url = httpsUrl(link.trim())
+  if (url) tags.push(["r", url])
+  tags.push(["t", "osv"])
+  return { kind: SESSION_KIND, created_at: Math.floor(Date.now() / 1000), tags, content: String(description).trim().slice(0, 4000) }
+}
+
+/** Cancelling a session: a deletion (NIP-09) of its coordinate and this version. */
+export const sessionDeletionTemplate = session => ({
+  kind: 5,
+  created_at: Math.floor(Date.now() / 1000),
+  tags: [
+    ["a", session.coordinate],
+    ["e", session.id],
+    ["k", String(SESSION_KIND)],
+  ],
+  content: "cancelled by the host",
+})

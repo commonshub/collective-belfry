@@ -8,6 +8,9 @@
 //   3. "Share a photo from this session" opens the photos app with the session named; the shared
 //      picture carries the session's `a` tag, says "At <session>" and appears on the session page.
 //   4. With JAR_B: B sees A among the people going and A's comment.
+//   5. A announces a session (a public kind 31923 in A's name, 19:00–20:30 village time), it shows
+//      under "From participants" (with JAR_B: B sees it too), A edits its title, then cancels it
+//      (kind 5) and it is gone.
 //
 //   CHROME_BIN=~/.cache/ms-playwright/chromium-1223/chrome-linux64/chrome \
 //   JAR_A=a.jar [JAR_B=b.jar] PROGRAMME_URL=http://localhost:3900 PHOTOS_URL=http://localhost:3800 \
@@ -211,6 +214,44 @@ try {
     await b.waitFor(`${has(COMMENT)} && !!document.querySelector(".people .who")`, 60000, "A's answer and comment")
     ok("B: sees A going and A's comment")
   }
+
+  // 5. announce, edit, cancel a session
+  const OWN = `Announced ${RUN}`
+  await a.go(`${PROGRAMME}/#/`)
+  await a.waitFor(`!!document.querySelector('a[href^="#/new"]')`, 30000, "the announce button")
+  await a.click('a[href^="#/new"]')
+  await a.waitFor(`!!document.querySelector("#form #title")`, 30000, "the announce form")
+  await noSideScroll(a, "announce form")
+  await a.fill("#title", OWN)
+  await a.fill("#start", "19:00")
+  await a.fill("#end", "20:30")
+  await a.fill("#location", "The garden")
+  await a.fill("#description", "Bring a jumper.")
+  await a.shot("announce")
+  await a.click("#form button[type=submit]")
+  await a.waitFor(`location.hash.startsWith("#/s/naddr1") && ${has(OWN)} && !!document.querySelector("#cancel")`, 30000, "the announced session's page")
+  const ownUrl = await a.evaluate("location.href")
+  const ownWhen = await a.evaluate(`document.querySelector(".when strong").innerText`)
+  if (!/19:00|7:00/.test(ownWhen)) throw new Error(`the session starts at ${ownWhen}, expected 19:00 village time`)
+  ok(`A: announced ${JSON.stringify(OWN)} (${ownWhen}), Edit and Cancel shown to the host`)
+  if (env.JAR_B) {
+    const b = await browser("B2")
+    await loadJar(b, env.JAR_B)
+    await b.go(ownUrl)
+    await b.waitFor(`${has(OWN)} && ${has("Announced by")} && !document.querySelector("#cancel")`, 60000, "A's session for B")
+    ok("B: sees A's session, announced by A, without Edit or Cancel")
+  }
+  await a.click('a[href^="#/edit/"]')
+  await a.waitFor(`document.querySelector("#title")?.value === ${JSON.stringify(OWN)}`, 30000, "the edit form, filled in")
+  await a.fill("#title", `${OWN} (moved)`)
+  await a.click("#form button[type=submit]")
+  await a.waitFor(`location.href === ${JSON.stringify(ownUrl)} && ${has(OWN + " (moved)")}`, 30000, "the edited session on the same link")
+  ok("A: edited the title; the session keeps its link")
+  await a.evaluate(`window.confirm = () => true; document.querySelector("#cancel").click()`)
+  await a.waitFor(`location.hash.startsWith("#/d/") && !document.body.innerText.includes(${JSON.stringify(OWN)})`, 30000, "the session gone from the day")
+  await a.go(ownUrl)
+  await a.waitFor(has("not in the programme"), 30000, "the cancelled session's link")
+  ok("A: cancelled it (kind 5); gone from the day and its link says so")
 
   if (!env.KEEP) {
     await a.go(photoUrl)

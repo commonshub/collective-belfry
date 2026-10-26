@@ -16,6 +16,7 @@ import {
   sessionFromEvent,
   sessionIcs,
 } from "../web/shared/model.js"
+import * as model from "../web/shared/model.js"
 
 const programmeSk = generateSecretKey()
 const PROGRAMME = getPublicKey(programmeSk)
@@ -119,4 +120,32 @@ test("ics: one event in UTC, text escaped", () => {
   assert.match(ics, /\r\nSUMMARY:Talk\\; with\\, commas\r\n/)
   assert.match(ics, /\r\nURL:https:\/\/programme.example\/#\/s\/naddr1x\r\n/)
   assert.match(ics, /END:VCALENDAR\r\n$/)
+})
+
+test("announce: a participant's session in the village's time, edits keep the coordinate", () => {
+  const { sessionTemplate, sessionDeletionTemplate, zonedTime } = model
+  // winter (UTC+1) and summer (UTC+2) in Brussels, and the change night
+  assert.equal(zonedTime("2027-01-25", "10:00", "Europe/Brussels"), Date.UTC(2027, 0, 25, 9) / 1000)
+  assert.equal(zonedTime("2027-07-01", "10:00", "Europe/Brussels"), Date.UTC(2027, 6, 1, 8) / 1000)
+  assert.equal(zonedTime("2027-03-28", "04:00", "Europe/Brussels"), Date.UTC(2027, 2, 28, 2) / 1000)
+  assert.ok(Number.isNaN(zonedTime("2027-01-25", "", "Europe/Brussels")))
+  const start = zonedTime("2027-01-25", "19:00", "Europe/Brussels")
+  const t = sessionTemplate({ title: " Rust meetup ", start, end: start + 7200, tzid: "Europe/Brussels", location: "Garden", link: "https://rust.example" })
+  const d = t.tags.find(x => x[0] === "d")[1]
+  assert.match(d, /^session-/)
+  const sk = generateSecretKey()
+  const s = sessionFromEvent(finalizeEvent(t, sk), PROGRAMME)
+  assert.equal(s.title, "Rust meetup")
+  assert.equal(s.track.id, "community")
+  assert.equal(s.end - s.start, 7200)
+  assert.equal(s.location, "Garden")
+  assert.deepEqual(s.links, ["https://rust.example"])
+  const edited = sessionTemplate({ d, title: "Rust meetup (moved)", start, end: start + 3600 })
+  assert.equal(edited.tags.find(x => x[0] === "d")[1], d)
+  assert.throws(() => sessionTemplate({ title: "", start, end: start + 60 }))
+  assert.throws(() => sessionTemplate({ title: "x", start, end: start }))
+  assert.throws(() => sessionTemplate({ title: "x", start, end: start + 25 * 3600 }))
+  // cancelled by the host: gone; a deletion by someone else does not count
+  const del = finalizeEvent({ ...sessionDeletionTemplate(s), created_at: s.createdAt + 1 }, sk)
+  assert.equal(currentSessions([finalizeEvent(t, sk)], [del], PROGRAMME).length, 0)
 })
