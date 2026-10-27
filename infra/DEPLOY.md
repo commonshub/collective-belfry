@@ -144,8 +144,10 @@ signer is recreated, and it reads the seed from `/run/belfry`).
 
 ## Sign-in for participants and admins
 
-Participants sign in with an e-mail link or their pass; they have no passwords. The login page
-mails a one-time link valid for 10 minutes, at most five per account in 30 minutes. The mails go
+Participants sign in with an e-mail link or code, or their pass; they have no passwords. The
+login page mails a one-time link and a 6-digit code, valid for 10 minutes, at most five mails per
+account in 30 minutes; the page waits for the code (five wrong codes end it), so a device without
+the mailbox signs in by typing it. Using one of the two makes the other useless. The mails go
 out through the SMTP settings bootstrap writes into Authentik (`SMTP_*`,
 `infra/secrets/smtp_password`); run bootstrap again after changing them.
 

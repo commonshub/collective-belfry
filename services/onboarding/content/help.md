@@ -9,8 +9,9 @@ Everything you need for Open Source Village on one page.
 2. That signs you in. You land on [your account]({{account}}): your pass, your village name and
    the apps.
 3. Next time, open any app and choose **Sign in with Open Source Village**. Enter your e-mail
-   address and open the link we send you, in the same browser, within 10 minutes. Once you are
-   signed in, the apps sign you in by themselves.
+   address. We send you a link and a 6-digit code, both valid for 10 minutes: open the link in
+   the same browser, or type the code on the sign-in page (handy on a device where your e-mail
+   is not). Once you are signed in, the apps sign you in by themselves.
 
 No e-mail? Check your spam folder, then ask a steward to send a new link.
 

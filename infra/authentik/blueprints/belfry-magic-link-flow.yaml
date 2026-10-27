@@ -1,8 +1,10 @@
 # Belfry: participants sign in by magic link, never with a password (decided 2026-10-23).
 #
 # The brand's authentication flow (the login page, and every OIDC authorize request, Keycast's
-# "Sign in with Belfry" included): enter the e-mail address, authentik mails a one-time link
-# (10 minutes), opening it signs the browser in and continues where the login started. The pass
+# "Sign in with Belfry" included): enter the e-mail address, authentik mails a one-time link and
+# a 6-digit code (10 minutes). Opening the link signs that browser in and continues where the
+# login started; typing the code on the waiting page does the same on a device without the
+# mailbox. The pass
 # sign-in (source pass-bridge) is offered on the same page. Unknown addresses get authentik's
 # "Failed to authenticate." and no mail is sent (no mail to arbitrary addresses; the price is that
 # the page tells whether an address has an account).
@@ -98,6 +100,190 @@ entries:
             cache.set(key, 1, 1800)
             count = 1
         return count > 5
+  # Link and code (2026-10-26): one mail carries the sign-in link and a 6-digit code. The page
+  # that waits after the e-mail address asks for the code, so a device without the mailbox (a
+  # shared laptop, a kiosk) signs in by typing it; the link signs in the browser that opens it,
+  # as before. belfry-magic-link-send runs when the code stage is reached: it makes the link
+  # (a flow token like the e-mail stage's, with authentik's "Continue" step against mail
+  # scanners) and the code, keeps the code's hash in the cache for this browser session and
+  # mails both with the e-mail stage's SMTP settings. Opening the link restores the plan with
+  # is_restored set, and the same policy then skips the code stage. The code is valid for
+  # 10 minutes, five wrong tries end it; using it deletes the link.
+  - model: authentik_policies_expression.expressionpolicy
+    id: belfry-magic-link-send
+    identifiers:
+      name: belfry-magic-link-send
+    attrs:
+      execution_logging: false
+      # True: show the code stage. False only for a restored plan (the mailed link).
+      expression: |
+        import secrets
+        from datetime import timedelta
+        from hashlib import sha256
+        from uuid import uuid4
+        from django.core.cache import cache
+        from django.http import QueryDict
+        from django.urls import reverse
+        from django.utils.text import slugify
+        from django.utils.timezone import now
+        from authentik.flows.models import Flow, FlowToken
+        from authentik.stages.email.flow import pickle_flow_token_for_email
+        from authentik.stages.email.models import EmailStage
+
+        restored = context.get("is_restored")
+        if restored:
+            # the link was opened: the code of the same mail stops working (by the token's key:
+            # authentik's "Continue" step has deleted the token, so its pk is gone)
+            key = cache.get(f"belfry-code-token-{getattr(restored, 'key', '')}")
+            state = cache.get(key) if key else None
+            if state:
+                state["used"] = True
+                cache.set(key, state, 900)
+            return False
+        user = context.get("pending_user")
+        plan = context.get("flow_plan")
+        http = request.http_request
+        if not user or not getattr(user, "pk", None) or plan is None or http is None:
+            return True
+        if not http.session.session_key:
+            http.session.save()
+        key = f"belfry-code-{http.session.session_key}-{user.pk}"
+        state = cache.get(key)
+        if state and state["expires"] > now().timestamp():
+            return True
+        flow = Flow.objects.get(pk=plan.flow_pk)
+        expires = now() + timedelta(minutes=10)
+        token = FlowToken.objects.create(
+            expires=expires + timedelta(minutes=1),
+            user=user,
+            identifier=slugify(f"belfry-magic-link-{uuid4()}"),
+            flow=flow,
+            _plan=pickle_flow_token_for_email(plan),
+            revoke_on_execution=False,
+        )
+        query = QueryDict(http.GET.get("query", ""), mutable=True)
+        query.pop("flow_token", None)
+        query["flow_token"] = token.key
+        url = http.build_absolute_uri(
+            reverse("authentik_core:if-flow", kwargs={"flow_slug": flow.slug}) + "?" + query.urlencode()
+        )
+        code = f"{secrets.randbelow(1000000):06d}"
+        cache.set(key, {
+            "hash": sha256(f"{key}:{code}".encode()).hexdigest(),
+            "expires": expires.timestamp(),
+            "tries": 0,
+            "token": token.pk,
+        }, 900)
+        cache.set(f"belfry-code-token-{token.key}", key, 900)
+        sent = ak_send_email(
+            user.email,
+            "Your Open Source Village sign-in link",
+            stage=EmailStage.objects.get(name="belfry-magic-link-email"),
+            template="belfry/magic_link.html",
+            context={"url": url, "code": code, "user": user, "expires": expires},
+        )
+        if not sent:
+            cache.delete(key)
+            token.delete()
+            ak_message("The e-mail could not be sent. Try again in a minute.")
+        return True
+  - model: authentik_policies_expression.expressionpolicy
+    id: belfry-magic-link-code-check
+    identifiers:
+      name: belfry-magic-link-code-check
+    attrs:
+      execution_logging: false
+      expression: |
+        from hashlib import sha256
+        from hmac import compare_digest
+        from django.core.cache import cache
+        from django.utils.timezone import now
+        from authentik.flows.models import FlowToken
+
+        user = request.context.get("pending_user") or request.user
+        http = request.http_request
+        if not user or not getattr(user, "pk", None) or http is None:
+            return False
+        key = f"belfry-code-{http.session.session_key}-{user.pk}"
+        state = cache.get(key)
+        if not state or state["expires"] < now().timestamp():
+            ak_message("This code has expired. Start again to get a new one.")
+            return False
+        if state.get("used"):
+            ak_message("This sign-in was finished with the link from the e-mail. Start again to sign in here.")
+            return False
+        if state["tries"] >= 5:
+            ak_message("Too many wrong codes. Start again to get a new one.")
+            return False
+        given = "".join(c for c in str(request.context.get("prompt_data", {}).get("code", "")) if c.isdigit())
+        if compare_digest(sha256(f"{key}:{given}".encode()).hexdigest(), state["hash"]):
+            cache.delete(key)
+            cache.set(f"belfry-code-ok-{http.session.session_key}-{user.pk}", True, 600)
+            FlowToken.objects.filter(pk=state["token"]).delete()
+            return True
+        state["tries"] += 1
+        cache.set(key, state, 900)
+        ak_message("That code is not right. Check the e-mail and try again.")
+        return False
+  # Belt and braces before the login: the browser opened the mailed link, or typed the code.
+  - model: authentik_policies_expression.expressionpolicy
+    id: belfry-magic-link-unverified
+    identifiers:
+      name: belfry-magic-link-unverified
+    attrs:
+      execution_logging: false
+      # True (deny) unless the link or the code was used in this browser.
+      expression: |
+        from django.core.cache import cache
+        if context.get("is_restored"):
+            return False
+        user = context.get("pending_user")
+        http = request.http_request
+        if not user or not getattr(user, "pk", None) or http is None:
+            return True
+        return not cache.get(f"belfry-code-ok-{http.session.session_key}-{user.pk}")
+  - model: authentik_stages_deny.denystage
+    id: belfry-magic-link-unverified-deny
+    identifiers:
+      name: belfry-magic-link-unverified-deny
+    attrs:
+      deny_message: This sign-in was not confirmed. Start again.
+  - model: authentik_stages_prompt.prompt
+    id: belfry-magic-link-code-info
+    identifiers:
+      name: belfry-magic-link-code-info
+    attrs:
+      field_key: belfry_code_info
+      label: Check your e-mail
+      type: alert_info
+      required: false
+      order: 0
+      initial_value: >-
+        We sent you a sign-in link and a 6-digit code. Open the link on this device, or type
+        the code here (for example when your e-mail is on your phone).
+      placeholder: ""
+  - model: authentik_stages_prompt.prompt
+    id: belfry-magic-link-code-field
+    identifiers:
+      name: belfry-magic-link-code-field
+    attrs:
+      field_key: code
+      label: Code from the e-mail
+      type: text
+      required: true
+      order: 10
+      placeholder: "123456"
+      sub_text: The code is valid for 10 minutes.
+  - model: authentik_stages_prompt.promptstage
+    id: belfry-magic-link-code
+    identifiers:
+      name: belfry-magic-link-code
+    attrs:
+      fields:
+        - !KeyOf belfry-magic-link-code-info
+        - !KeyOf belfry-magic-link-code-field
+      validation_policies:
+        - !KeyOf belfry-magic-link-code-check
   - model: authentik_stages_user_login.userloginstage
     id: belfry-magic-link-login
     identifiers:
@@ -131,11 +317,46 @@ entries:
       enabled: true
       # a failing expression counts as "no" (the deny stage is skipped, the mail stage still runs)
       failure_result: false
+  # The e-mail stage itself is not bound any more (the code stage mails link and code); it stays
+  # as the holder of the SMTP settings bootstrap writes. bootstrap.sh removes its old binding
+  # (order 20) from existing installs: `state: absent` on a binding breaks later applies.
   - model: authentik_flows.flowstagebinding
+    id: belfry-magic-link-code-binding
     identifiers:
       target: !KeyOf belfry-magic-link
-      stage: !KeyOf belfry-magic-link-email
-      order: 20
+      stage: !KeyOf belfry-magic-link-code
+      order: 21
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: any
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf belfry-magic-link-code-binding
+      policy: !KeyOf belfry-magic-link-send
+    attrs:
+      order: 0
+      enabled: true
+      # a failing expression shows the code stage, where no code can pass: never a login
+      failure_result: true
+  - model: authentik_flows.flowstagebinding
+    id: belfry-magic-link-unverified-binding
+    identifiers:
+      target: !KeyOf belfry-magic-link
+      stage: !KeyOf belfry-magic-link-unverified-deny
+      order: 25
+    attrs:
+      evaluate_on_plan: false
+      re_evaluate_policies: true
+      policy_engine_mode: any
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf belfry-magic-link-unverified-binding
+      policy: !KeyOf belfry-magic-link-unverified
+    attrs:
+      order: 0
+      enabled: true
+      failure_result: true
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf belfry-magic-link

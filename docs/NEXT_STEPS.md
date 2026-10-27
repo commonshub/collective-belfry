@@ -582,6 +582,16 @@ Part D of `docs/plan-user-test-followups.md`; user decision: everyone can create
 
 Open: member names show as npubs locally (Flotilla asks no relay for their profiles there, probably because the relays are plain `ws://localhost`); to check on the public deployment. No push notifications, no voice or video rooms (LiveKit), stewards are not admins of every room. Not deployed: the VM needs `gen-secrets.sh`, the images (groups-relay, groups, onboarding, keycast's env, and the other apps for their app bar), bootstrap and a `caddy reload`.
 
+## 3zj. Sign-in code next to the magic link — built 2026-10-26
+
+User: the sign-in mail should also carry a 6-digit code, for devices without the mailbox.
+
+- [x] Blueprint `belfry-magic-link-flow`: after the e-mail address the page asks for the code (prompt stage `belfry-magic-link-code`). An expression policy on that stage's binding (`belfry-magic-link-send`) makes the link (a flow token like authentik's e-mail stage, with its "Continue" step against mail scanners) and the code, keeps the code's hash in authentik's cache for that browser session and mails both with the e-mail stage's SMTP settings (`ak_send_email`); the e-mail stage itself is no longer bound (bootstrap removes the old binding: `state: absent` on a binding breaks later blueprint applies). The code is valid for 10 minutes, five wrong tries end it; the code deletes the link, the link marks the code used; a deny stage before the login stops any path where neither was used. Opening the link restores the plan, so it still continues an app's sign-in (OIDC) in the browser that started it; the code does the same on the waiting page.
+- [x] Mail templates show the code; help page, DEPLOY.md and the test plan mention it.
+- Checks: smoke 6h (code in the mail, wrong code refused, the code signs the waiting browser in, the link of that mail dead afterwards; the per-account limit counts code pages); by hand: link then code ("finished with the link"), screenshot of the code page at 390 px.
+
+Open: the code page has no "send again" (start over; the per-account limit applies); the code is tied to the browser session that asked for it.
+
 ## 3zk. EUDI reference wallet: signed issuer metadata, the registrar's certificates — built 2026-10-27
 
 User: the pass cannot be imported into a wallet; can the EUDI relying-party registrar (registry.serviceproviders.eudiw.dev) help? Read from the reference wallet's source (`WalletCoreConfigImpl.kt`, wallet-core `REGISTRATION_CERTIFICATE.md`, eudi-lib-jvm-openid4vci-kt): it requires signed issuer metadata (`Accept: application/jwt`), treats an unknown issuer of a non-PID credential as a warning only, refuses signed requests under an untrusted certificate, and, with "registration check" on (off by default), wants a registration certificate in `issuer_info` / `verifier_info`, bound to the certificate that signed the message. The registrar issues exactly those: a WRPAC (access certificate under a CA on the EU test list) and a WRPRC (registration certificate). Decision (user): build the metadata signing and the verifier side; the registration itself needs Belfry's legal details and is the stewards'.

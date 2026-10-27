@@ -192,7 +192,7 @@ text or a screenshot. The observer matches it with the logs.
 
 - A magic link must be opened in the browser where the sign-in started; mail apps on phones often
   open links in a browser of their own. A link opened elsewhere ends on a page with a button to
-  sign in again.
+  sign in again. The 6-digit code in the same mail avoids that: type it on the sign-in page.
 - Polls show results only after they close; there is no early close (the shortest is 15 minutes).
 - The chat's private messages had not been tested between two real people before this test.
 - The wallet pass works with walt.id's web wallet; national EUDI wallets and the EUDI reference

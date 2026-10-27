@@ -1,11 +1,11 @@
 {% comment %}
-Open Source Village magic-link mail (e-mail stage belfry-magic-link-email, blueprint
-belfry-magic-link-flow). Standalone, not authentik's email/base.html (its light frame and
+Open Source Village sign-in mail: link and 6-digit code (policy belfry-magic-link-send, blueprint
+belfry-magic-link-flow, sent with the e-mail stage belfry-magic-link-email's SMTP settings). Standalone, not authentik's email/base.html (its light frame and
 "Powered by authentik" footer). Dark card, the brand palette inline (brand/tokens.css values:
 mail clients load no stylesheet). The logo is cid:logo, which authentik attaches from
 /web/dist/assets/icons/icon_left_brand.png; docker-compose.yml mounts
 brand/osv-logo-horizontal-dark.png over that path. Mounted at /templates; plain-text twin
-magic_link.txt. Context: url, user, expires, token.
+magic_link.txt. Context: url, code, user, expires.
 {% endcomment %}<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
@@ -36,8 +36,14 @@ magic_link.txt. Context: url, user, expires, token.
             </td>
           </tr>
           <tr>
+            <td style="padding: 0 28px 24px;">
+              <p style="margin: 0 0 8px; color: #c9d1cb;">Signing in on another device, without this mailbox? Type this code on its sign-in page:</p>
+              <p style="margin: 0; font-family: 'Geist Mono', ui-monospace, Menlo, Consolas, monospace; font-size: 30px; font-weight: 600; letter-spacing: 6px; color: #d6ff52;">{{ code }}</p>
+            </td>
+          </tr>
+          <tr>
             <td style="padding: 0 28px 28px; font-size: 13px; color: #8e9a91;">
-              The link is valid for {{ expires|timeuntil }}. If you did not try to sign in, ignore this mail; nobody can sign in without opening the link.
+              Link and code are valid for {{ expires|timeuntil }}, and only one of them works. If you did not try to sign in, ignore this mail; nobody can sign in without the link or the code.
             </td>
           </tr>
         </table>

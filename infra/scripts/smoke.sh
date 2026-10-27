@@ -320,7 +320,7 @@ fi
 WCODE=$(curl -sS -o /dev/null -w '%{http_code}' "${WALLET_PUBLIC_URL:-http://localhost:3400}/")
 [[ "$WCODE" == 200 ]] && ok "wallet app served (${WALLET_PUBLIC_URL:-http://localhost:3400})" || bad "wallet app -> $WCODE"
 
-step "6h. magic link: the login page mails a one-time link that signs the participant in"
+step "6h. magic link and code: the login page mails a one-time link and a 6-digit code; either signs the participant in"
 MAGIC_EXEC="$AK_URL/api/v3/flows/executor/belfry-magic-link/"
 magic_request() { # cookie jar, e-mail -> component after the identification stage
   curl -sS -b "$1" -c "$1" "$MAGIC_EXEC" >/dev/null
@@ -349,7 +349,7 @@ UNKNOWN=$(magic_request "$MJAR" "nobody-$STAMP@example.org")
 if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/null | jq -r '.total // empty' 2>/dev/null)" ]]; then
   rm -f "$MJAR"; MJAR=$(mktemp)
   REQ=$(magic_request "$MJAR" "$EMAIL")
-  [[ "$(jq -r .component <<<"$REQ")" == ak-stage-email ]] && ok "link requested for $EMAIL (e-mail stage)" || bad "magic-link request: $REQ"
+  [[ "$(jq -r .component <<<"$REQ")" == ak-stage-prompt ]] && ok "link and code requested for $EMAIL (the page asks for the code)" || bad "magic-link request: $REQ"
   ML=""
   for _ in 1 2 3 4 5 6; do
     sleep 1
@@ -361,6 +361,9 @@ if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/
   done
   if [[ -n "$ML" ]]; then
     ok "magic-link mail delivered (subject 'Your Open Source Village sign-in link')"
+    # The same mail carries the code for a device without the mailbox.
+    MCODE=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r' | grep -oE '^ +[0-9]{6}$' | tr -d ' ')
+    [[ "$MCODE" =~ ^[0-9]{6}$ ]] && ok "the mail carries a 6-digit code" || bad "no code in the sign-in mail"
     FINAL=$(magic_open "$MJAR" "$ML")
     ME=$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
     [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "magic link signed the browser in as Authentik user $AK_UID" || bad "magic link ended with '$FINAL', session user '$ME'"
@@ -368,6 +371,24 @@ if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/
     ME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
     [[ -z "$ME" ]] && ok "the magic link works once ($FINAL on reuse)" || bad "reused magic link signed in user $ME"
     rm -f "$RJAR"
+    WJAR=$(mktemp); REQ=$(magic_request "$WJAR" "$EMAIL"); sleep 2
+    MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=$(jq -rn --arg v "to:$EMAIL subject:\"sign-in link\"" '$v|@uri')")
+    MTXT=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r')
+    MCODE2=$(grep -oE '^ +[0-9]{6}$' <<<"$MTXT" | tr -d ' '); ML2=$(grep -o 'flow_token=[A-Za-z0-9]*' <<<"$MTXT" | head -n1 | cut -d= -f2)
+    code_post() { curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" \
+      --data "$(jq -nc --arg c "$2" '{component:"ak-stage-prompt",code:$c}')" "$MAGIC_EXEC"; }
+    WRONG=$( [[ "$MCODE2" == 000000 ]] && echo 000001 || echo 000000 )
+    R=$(code_post "$WJAR" "$WRONG")
+    [[ "$(jq -r .component <<<"$R")" == ak-stage-prompt && "$R" == *"not right"* ]] && ok "a wrong code is refused" || bad "wrong code: $(jq -c '{component,response_errors}' <<<"$R")"
+    R=$(code_post "$WJAR" "$MCODE2")
+    [[ "$(jq -r .component <<<"$R")" == ak-stage-user-login ]] \
+      && R=$(curl -sS -b "$WJAR" -c "$WJAR" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data '{"component":"ak-stage-user-login","remember_me":false}' "$MAGIC_EXEC")
+    ME=$(curl -sS -b "$WJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+    [[ "$ME" == "$AK_UID" ]] && ok "the code signed the waiting browser in (no mailbox on that device)" || bad "code sign-in ended with '$(jq -r .component <<<"$R")', session user '$ME'"
+    RJAR=$(mktemp); FINAL=$(magic_open "$RJAR" "$ML2")
+    ME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+    [[ -z "$ME" ]] && ok "after the code, the link of the same mail no longer works" || bad "link after code signed in user $ME"
+    rm -f "$RJAR" "$WJAR"
   else
     bad "no magic-link mail for $EMAIL in Mailpit"
   fi
@@ -379,7 +400,7 @@ SENT=0; DENIED=""
 for _ in 1 2 3 4 5 6 7; do
   LJAR=$(mktemp); REQ=$(magic_request "$LJAR" "$EMAIL"); rm -f "$LJAR"
   case "$(jq -r .component <<<"$REQ")" in
-    ak-stage-email) SENT=$((SENT + 1)) ;;
+    ak-stage-prompt) SENT=$((SENT + 1)) ;;
     ak-stage-access-denied) DENIED=$REQ; break ;;
     *) DENIED="unexpected: $REQ"; break ;;
   esac

@@ -585,6 +585,16 @@ reapply_blueprint() {
     printf '.'; sleep 5
   done
 }
+# Link and code (2026-10-26): the flow's code stage mails both; the e-mail stage only holds the
+# SMTP settings. Apply the flow again (the worker does not always notice an edited file) and
+# remove the e-mail stage's binding that installs from before still have.
+reapply_blueprint belfry-magic-link-flow
+for b in $(ak "$AK_URL/api/v3/flows/bindings/?target=$LOGIN_FLOW&stage=$EMAIL_STAGE" | jq -r '.results[].pk'); do
+  ak -f -o /dev/null -X DELETE "$AK_URL/api/v3/flows/bindings/$b/" || die "could not unbind the e-mail stage"
+  echo "magic-link flow: e-mail stage unbound (link and code are mailed by the code stage)"
+done
+ak "$AK_URL/api/v3/flows/bindings/?target=$LOGIN_FLOW" | jq -e '[.results[].stage_obj.name] | index("belfry-magic-link-code")' >/dev/null \
+  || die "flow belfry-magic-link has no code stage (blueprint belfry-magic-link-flow)"
 # Steward pages (/steward in the onboarding service): their OIDC application and the group.
 reapply_blueprint belfry-steward-app
 # The brand's custom CSS changes with the repo (mobile fixes 2026-10-24); the worker does not
