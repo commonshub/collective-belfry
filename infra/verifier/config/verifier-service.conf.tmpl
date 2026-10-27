@@ -3,12 +3,16 @@
 # (both in the onboarding service). urlPrefix is the wallet-facing URL of the sessions; the
 # onboarding service creates sessions through the docker network (http://verifier:7004).
 #
-# Requests are signed (OpenID4VP x509_san_dns client id): the request object is a JWT signed
-# with the verifier key below and carries the x5c chain (Belfry CA + verifier leaf, SAN =
-# VERIFIER_SAN). walt.id requires a dotted DNS name, so "localhost" is not possible; locally the
-# client id does not match the response_uri host (the test wallet does not check it, real
-# wallets do), in production VERIFIER_SAN is the verifier's public hostname.
-clientId: "x509_san_dns:@@VERIFIER_SAN@@"
+# Requests are signed: the request object is a JWT signed with the key below and carries its
+# x5c chain. Two cases, chosen by gen-issuer-pki.sh:
+# - Belfry's own CA (default): client id x509_san_dns:<VERIFIER_SAN>. walt.id requires a dotted
+#   DNS name, so "localhost" is not possible; locally the client id does not match the
+#   response_uri host (the test wallet does not check it, real wallets do), in production
+#   VERIFIER_SAN is the verifier's public hostname.
+# - The EUDI registrar's access certificate (issuer/keys/eudi/, eudi-registry-certs.sh): client
+#   id x509_hash:<SHA-256 of the leaf>, since that certificate names no DNS host. The onboarding
+#   service adds the registration certificate to every request as verifier_info.
+clientId: "@@VERIFIER_CLIENT_ID@@"
 clientMetadata: {
    client_name: "Belfry (Open Source Village)"
 }

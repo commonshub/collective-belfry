@@ -30,7 +30,24 @@ The leaf is what matters to verifiers: Verifier2's `signature` policy takes the 
 | Type Metadata | `GET /vct/village-pass/v1` | the `vct` URL; Issuer2 only serves VCTM for its own `vct`s |
 | Door | `GET /door` (QR page), `POST /door/sessions`, `GET /door/sessions/<id>` | asks for `pass_tier` only; policies `signature`, `expiration`, `not-before`, `allowed-issuer`, `credential-status` (fail closed) |
 | Pass bridge | `GET /bridge/.well-known/openid-configuration`, `/bridge/authorize`, `/bridge/poll/<sid>`, `/bridge/token`, `/bridge/userinfo`, `/bridge/jwks` | sign-in with the pass for Authentik's `pass-bridge` source (`docs/pass-sign-in.md`) |
-| Test wallet | `python -m belfry_onboarding.testwallet receive|present|show` | a scripted holder (fresh P-256 key, JWT proof, KB-JWT); `--map` rewrites hosts for use inside Compose |
+| Test wallet | `python -m belfry_onboarding.testwallet receive|present|metadata|show` | a scripted holder (fresh P-256 key, JWT proof, KB-JWT); `--map` rewrites hosts for use inside Compose |
+
+## EUDI reference wallet: signed metadata and the registrar's certificates
+
+The EUDI reference wallet (`eudi-app-android-wallet-ui`, wallet-core) reads issuer metadata only signed (`requireSignedMetadata()`), refuses a signed OpenID4VP request whose certificate it does not trust (`enforceIfPresent`), and, when the user turns on "registration check", wants a registration certificate from issuers and verifiers. Its trust anchors are the EU test trusted lists at `trustedlist.serviceproviders.eudiw.dev`; for credentials other than a PID an untrusted issuer is only a warning (`INFORM`).
+
+- **Signed metadata, always.** The onboarding service's `/issuer-metadata` (the proxy routes both metadata paths of `issuer.<domain>` there) answers `Accept: application/jwt` with the metadata as a JWT (`typ` `openidvci-issuer-metadata+jwt`, ES256, `sub` = `iss` = the credential issuer, `iat`, `exp` one day, `x5c`), OpenID4VCI 1.0 §12.2.2; other clients still get JSON (`Vary: Accept`). Code: `belfry_onboarding/eudi.py`.
+- **With the registrar's certificates.** Register Belfry at the EUDI relying-party registrar (`registry.serviceproviders.eudiw.dev`, or `itb.registry.serviceproviders.eudiw.dev` with the Launchpad guide `launchpad2026.md` of `eudi-srv-web-relyingparty-registration-py`): entitlements `Non_Q_EAA_Provider` and `Service_Provider`, provided attestation `dc+sd-jwt` with `vct_values` = the pass's `vct`, an intended use asking for `pass_tier` (and, for the pass sign-in, `member_number` and `npub`). That gives a WRPAC (`wrpac.p12`, access certificate with key, under a CA on the test list `WRPACProviders`) and a WRPRC (`wrprc.jwt`, registration certificate). Then:
+
+  ```bash
+  infra/scripts/eudi-registry-certs.sh wrpac.p12 wrprc.jwt [wrprc-issuer.jwt]
+  docker compose up -d --force-recreate perms-init verifier onboarding
+  ```
+
+  The script writes `infra/issuer/keys/eudi/` (`wrpac.jwk.json`, `wrpac.x5c.json` without the self-signed root, the key and leaf as PEM, the registration certificates), shows the certificate's subject and the registration certificate's `sub`, entitlements and attestations (the wallet binds the two by the organisation identifier), and re-runs `gen-issuer-pki.sh`. From then on the metadata is signed with the WRPAC and carries the WRPRC as `issuer_info` (`[{format: registration_cert, data}]`, ETSI TS 119 472-3); Verifier2 signs the door's and the bridge's request objects with the WRPAC under the client id `x509_hash:<SHA-256 of the leaf>` (the WRPAC names no DNS host, so `x509_san_dns` cannot match), and the onboarding service adds the WRPRC to every session as `verifier_info`. `wrprc-issuer.jwt` is only needed when the issuer has its own registration certificate. Delete `keys/eudi/*`, run `gen-issuer-pki.sh` and recreate the same containers to go back to Belfry's own certificates.
+- **What stays Belfry's.** The passes themselves are still signed with Belfry's issuer key and CA, and the door and the bridge still pin that leaf. The status list too.
+- **Check.** `python -m belfry_onboarding.testwallet metadata <credential issuer>` fetches and verifies the signed metadata like the EUDI library (typ, signature with the `x5c` leaf, `sub`); `present` prints the request's `client_id` and `verifier_info`. Smoke steps 8 and 9 check both, for the registrar's certificate when `keys/eudi/` has one, else for Belfry's.
+- **Test only.** The registrar's CAs are on the EU *test* lists; national production wallets trust their member states' lists, not these.
 
 ## URLs
 
@@ -38,7 +55,7 @@ Wallets talk to `ISSUER_PUBLIC_URL` (`credential_issuer` = `<that>/openid4vci`) 
 
 ## Known limits
 
-- Phones: `http://localhost` works for the test wallet only. Real wallets need HTTPS with a public chain for the issuer, verifier and onboarding URLs (EUDI reference wallet: also signed issuer metadata and a trusted issuer certificate, see the spike note).
+- Phones: `http://localhost` works for the test wallet only. Real wallets need HTTPS with a public chain for the issuer, verifier and onboarding URLs. The EUDI reference wallet also needs signed issuer metadata and, to trust Belfry, the registrar's certificates (section above); it also authenticates itself with a wallet attestation and DPoP, which have not been tried against Issuer2.
 - HAIP mandates the authorization code flow; the claim QR is the pre-authorized code flow (accepted by wallets, not by a strict conformance run).
-- The verifier's requests are signed (`x509_san_dns:verifier.belfry.local`, request object JWT with the verifier's x5c). walt.id refuses `localhost` as a DNS name, so locally the client id does not match the response URI's host; the test wallet does not check that, real wallets do. In production `VERIFIER_SAN` is the verifier's public hostname. Encrypted responses (`direct_post.jwt`) are not enabled.
+- The verifier's requests are signed (`x509_san_dns:verifier.belfry.local`, request object JWT with the verifier's x5c; `x509_hash` with the registrar's access certificate, section above). walt.id refuses `localhost` as a DNS name, so locally the client id does not match the response URI's host; the test wallet does not check that, real wallets do. In production `VERIFIER_SAN` is the verifier's public hostname. Encrypted responses (`direct_post.jwt`) are not enabled.
 - `exp` of a day pass is the end of its day (UTC), not the event's closing hour.

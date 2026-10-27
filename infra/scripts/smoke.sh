@@ -699,6 +699,22 @@ CRED=$(tail -n1 <<<"$CRED")
 [[ "$(jq -r .payload.pass_tier <<<"$CRED")" == week && "$(jq -r .disclosed.member_number <<<"$CRED")" == "$MEMBER" && "$(jq -r .disclosed.npub <<<"$CRED")" == "$NPUB" ]] && ok "claims: tier week, member $MEMBER, npub (disclosable)" || bad "claims: $(jq -c '{p: .payload.pass_tier, d: .disclosed}' <<<"$CRED")"
 [[ "$(jq -r .payload.status.status_list.idx <<<"$CRED")" == "$PASS_ID" ]] && ok "status list index = pass id" || bad "status idx $(jq -c .payload.status <<<"$CRED")"
 VCTM=$(curl -sS "$ONB_URL/vct/village-pass/v1" | jq -r .vct); [[ "$VCTM" == "$(jq -r .payload.vct <<<"$CRED")" ]] && ok "type metadata served at the vct URL" || bad "vctm: $VCTM"
+# Signed issuer metadata, as the EUDI reference wallet requires it (Accept: application/jwt): with
+# the EUDI registrar's access certificate and issuer_info when infra/issuer/keys/eudi/ has them
+# (eudi-registry-certs.sh), else with Belfry's issuer key. Locally there is no proxy in front of
+# Issuer2, so the wallet reads the onboarding service's metadata route directly.
+EUDI_X5C="$INFRA_DIR/issuer/keys/eudi/wrpac.x5c.json"
+ISSUER_ID=$(python3 -c 'import json,sys,urllib.parse as u; print(json.loads(u.parse_qs(u.urlsplit(sys.argv[1]).query)["credential_offer"][0])["credential_issuer"])' "$OFFER_URL")
+META_ARGS=(); [[ -n "$WALLET_MAP" ]] && META_ARGS=(--url http://localhost:8100/issuer-metadata)
+META=$("${WALLET[@]}" metadata "$ISSUER_ID" "${META_ARGS[@]}" 2>&1 | tail -n1)
+if [[ -f "$EUDI_X5C" ]]; then
+  WRPAC_HASH=$(python3 -c 'import base64,hashlib,json,sys; print(base64.urlsafe_b64encode(hashlib.sha256(base64.b64decode(json.load(open(sys.argv[1]))[0])).digest()).rstrip(b"=").decode())' "$EUDI_X5C")
+  [[ "$(jq -r .x509_hash <<<"$META")" == "$WRPAC_HASH" && "$(jq -c .issuer_info <<<"$META")" == '["registration_cert"]' ]] \
+    && ok "issuer metadata signed with the EUDI access certificate, registration certificate in issuer_info" || bad "signed metadata: $META"
+else
+  [[ "$(jq -r .signed <<<"$META")" == true && "$(jq -r .sub <<<"$META")" == "$ISSUER_ID" && "$(jq -r .x5c <<<"$META")" == 2 ]] \
+    && ok "issuer metadata signed (application/jwt) with Belfry's issuer certificate" || bad "signed metadata: $META"
+fi
 
 step "8c. village tokens: minted at activation (50 per pass day), redeemable once, minting closed"
 TOKENS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["cashu_amount"]}' | jq -r '.[0].cashu_amount // 0')
@@ -763,6 +779,13 @@ DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"
 [[ -n "$DSID" && "$DURL" == openid4vp://* ]] && ok "door session $DSID" || die "door session: $DOOR"
 PRES=$("${WALLET[@]}" present "$DURL" --wallet /tmp/smoke-wallet.json --disclose pass_tier 2>&1 | tail -n1)
 [[ "$(jq -r .status <<<"$PRES")" == 200 ]] && ok "wallet presented the pass (disclosed nothing beyond the tier)" || bad "present: $PRES"
+if [[ -f "$EUDI_X5C" ]]; then
+  [[ "$(jq -r .client_id <<<"$PRES")" == "x509_hash:$WRPAC_HASH" && "$(jq -c .verifier_info <<<"$PRES")" == '["registration_cert"]' ]] \
+    && ok "door request signed with the EUDI access certificate (x509_hash), registration certificate in verifier_info" || bad "door request: $(jq -c '{client_id, verifier_info}' <<<"$PRES")"
+else
+  [[ "$(jq -r .client_id <<<"$PRES")" == x509_san_dns:* && "$(jq -c .verifier_info <<<"$PRES")" == '[]' ]] \
+    && ok "door request signed under Belfry's CA ($(jq -r .client_id <<<"$PRES"))" || bad "door request: $(jq -c '{client_id, verifier_info}' <<<"$PRES")"
+fi
 for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
 [[ "$(jq -r .status <<<"$RES")" == valid && "$(jq -r .tier <<<"$RES")" == week ]] && ok "door: valid pass, tier week, until $(jq -r .valid_until <<<"$RES")" || bad "door result: $RES"
 curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/door" | grep -q 200 && ok "GET /door -> 200 (QR page)" || bad "door page"

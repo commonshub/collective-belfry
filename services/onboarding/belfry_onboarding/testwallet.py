@@ -6,6 +6,11 @@ KB-JWT). It stands in for an EUDI wallet in the smoke test; it is not a wallet.
     python -m belfry_onboarding.testwallet present '<openid4vp://authorize?...>' --wallet w.json \\
         --disclose pass_tier,npub
 
+``metadata`` reads the credential issuer metadata the way the EUDI reference wallet does (signed,
+``Accept: application/jwt``) and checks the JWT against the leaf of its x5c:
+
+    python -m belfry_onboarding.testwallet metadata https://issuer.<domain>/openid4vci
+
 The sign-in variant (authorization-code offer with issuer_state, as DIDroom uses it) is split in
 two, because the browser part (Issuer2's login at Authentik) happens outside the wallet:
 
@@ -140,6 +145,44 @@ def _issuer_metadata(http: httpx.Client, issuer: str, hostmap: HostMap) -> dict[
         meta = http.get(hostmap(f"{base}/.well-known/openid-credential-issuer/{tail}"))
     meta.raise_for_status()
     return meta.json()
+
+
+def signed_metadata(issuer: str, hostmap: HostMap, url: str | None = None) -> dict[str, Any]:
+    """Fetch the issuer metadata as ``application/jwt`` (RFC 8615 path, as the EUDI library
+    builds it, or ``url``) and verify it as the EUDI library does: typ, ES256 signature with the
+    x5c leaf's key, ``sub`` = the issuer identifier, ``iat`` present. The chain is not checked
+    against a trust anchor here."""
+    from cryptography import x509
+
+    if url is None:
+        parts = urllib.parse.urlsplit(issuer)
+        path = "/.well-known/openid-credential-issuer" + parts.path.rstrip("/")
+        url = urllib.parse.urlunsplit(parts._replace(path=path))
+    with httpx.Client(timeout=30) as http:
+        r = http.get(hostmap(url), headers={"Accept": "application/jwt"})
+    r.raise_for_status()
+    ctype = r.headers.get("content-type", "").split(";")[0]
+    if ctype != "application/jwt":
+        raise SystemExit(f"metadata not signed (content type {ctype or 'none'})")
+    token = r.text.strip()
+    header = jwt.get_unverified_header(token)
+    if header.get("typ") != "openidvci-issuer-metadata+jwt":
+        raise SystemExit(f"wrong typ {header.get('typ')}")
+    leaf = base64.b64decode(header["x5c"][0])
+    key = x509.load_der_x509_certificate(leaf).public_key()
+    claims = jwt.decode(
+        token, key, algorithms=["ES256"], options={"require": ["iat", "sub"], "verify_aud": False}
+    )
+    if claims["sub"] != issuer:
+        raise SystemExit(f"sub {claims['sub']} is not the issuer {issuer}")
+    return {
+        "signed": True,
+        "sub": claims["sub"],
+        "x5c": len(header["x5c"]),
+        "x509_hash": b64url(hashlib.sha256(leaf).digest()),
+        "issuer_info": [i.get("format") for i in claims.get("issuer_info") or []],
+        "credential_configurations": sorted(claims.get("credential_configurations_supported", {})),
+    }
 
 
 def _auth_server_metadata(http: httpx.Client, server: str, hostmap: HostMap) -> dict[str, Any]:
@@ -312,7 +355,13 @@ def present(
         if state:
             form["state"] = state
         resp = http.post(hostmap(response_uri), data=form)
-    return {"status": resp.status_code, "body": resp.text[:500], "disclosed": [d for d in keep]}
+    return {
+        "status": resp.status_code,
+        "body": resp.text[:500],
+        "disclosed": [d for d in keep],
+        "client_id": client_id,
+        "verifier_info": [i.get("format") for i in request.get("verifier_info") or []],
+    }
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -337,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
     sf.add_argument("redirect")
     sf.add_argument("--state", required=True)
     sf.add_argument("--out", required=True)
+    m = sub.add_parser("metadata")
+    m.add_argument("issuer")
+    m.add_argument("--url", default=None, help="metadata URL instead of the RFC 8615 one")
     s = sub.add_parser("show")
     s.add_argument("--wallet", required=True)
     args = parser.parse_args(argv)
@@ -353,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         wallet = signin_finish(args.redirect, json.load(open(args.state)), hostmap)
         json.dump(wallet, open(args.out, "w"))
         json.dump(decode_credential(wallet["credential"]), sys.stdout)
+    elif args.command == "metadata":
+        json.dump(signed_metadata(args.issuer, hostmap, args.url), sys.stdout)
     elif args.command == "present":
         wallet = json.load(open(args.wallet))
         disclose = [d for d in args.disclose.split(",") if d]

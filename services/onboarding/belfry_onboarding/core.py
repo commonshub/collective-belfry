@@ -27,6 +27,7 @@ from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
 from .clients.verifier import VerifierClient
+from .eudi import RegistryCerts
 from .groups_members import GroupsMembers
 from .nostr import hex_to_npub
 from .relay import RelayPublisher
@@ -78,6 +79,8 @@ class Services:
     issuer_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs status lists
     issuer_x5c: list[str] = field(default_factory=list)
     bridge_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs ID tokens
+    # WRPAC and registration certificate from the EUDI registrar (eudi.py); None without them
+    eudi: RegistryCerts | None = None
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
     groups: GroupsMembers | None = None  # the groups relay's members; None without its API
 

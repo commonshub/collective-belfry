@@ -103,6 +103,9 @@ class Settings(BaseSettings):
     issuer_jwk_path: str = Field(default="", alias="ISSUER_JWK_PATH")
     issuer_x5c_path: str = Field(default="", alias="ISSUER_X5C_PATH")
     bridge_jwk_path: str = Field(default="", alias="BRIDGE_JWK_PATH")
+    # The EUDI registrar's access and registration certificates (eudi.py); empty or without
+    # wrpac.jwk.json: the issuer metadata is signed with the issuer key, no verifier_info.
+    eudi_dir: str = Field(default="", alias="EUDI_DIR")
     # The OIDC client Authentik's pass-bridge source uses (blueprint belfry-pass-bridge-source).
     bridge_client_id: str = Field(default="belfry-authentik", alias="BRIDGE_CLIENT_ID")
     bridge_client_secret: str = Field(default="", alias="BRIDGE_CLIENT_SECRET")

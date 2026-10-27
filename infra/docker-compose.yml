@@ -296,7 +296,7 @@ services:
   # and chmod need.
   perms-init:
     image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -628,6 +628,8 @@ services:
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro
+      # The EUDI registrar's access and registration certificates (eudi-registry-certs.sh); may be empty.
+      - ./issuer/keys/eudi:/keys/eudi:ro
       # Open Source Village brand assets, served at /brand (pages, authentik, issuer, wallets).
       - ../brand:/brand:ro
     environment:
@@ -677,6 +679,7 @@ services:
       ISSUER_JWK_PATH: /keys/issuer.jwk.json
       ISSUER_X5C_PATH: /keys/issuer.x5c.json
       BRIDGE_JWK_PATH: /keys/bridge.jwk.json
+      EUDI_DIR: /keys/eudi
       BRIDGE_CLIENT_ID: belfry-authentik
       EVENT_START: ${EVENT_START:-2027-01-25}
       SITE_URL: ${SITE_URL:-}

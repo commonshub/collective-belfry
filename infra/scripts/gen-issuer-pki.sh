@@ -21,7 +21,9 @@
 #   infra/issuer/config/authentication-service.conf from authentication-service.conf.tmpl
 #                                     (Authentik login of authorization-code offers: public
 #                                     Authentik URL, ISSUER_OIDC_CLIENT_SECRET)
-#   infra/verifier/config/verifier-service.conf from verifier-service.conf.tmpl (signing key, x5c, client id)
+#   infra/verifier/config/verifier-service.conf from verifier-service.conf.tmpl (signing key, x5c, client id;
+#                                     the EUDI registrar's access certificate from keys/eudi/ when
+#                                     eudi-registry-certs.sh imported one)
 set -euo pipefail
 
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,7 +36,9 @@ SAN=${ISSUER_SAN:-issuer.belfry.local}
 # The verifier's x509_san_dns client id. walt.id requires a dotted DNS name (no "localhost");
 # in production this is the verifier's public hostname.
 VERIFIER_SAN=${VERIFIER_SAN:-verifier.belfry.local}
-mkdir -p "$KEYS"
+# eudi/ holds the EUDI registrar's certificates (eudi-registry-certs.sh); created here so Compose
+# mounts a directory the host user owns.
+mkdir -p "$KEYS/eudi"
 cd "$KEYS"
 
 if [[ -f issuer.key.pem ]]; then
@@ -148,13 +152,24 @@ jwk = jwk_from_pem(f"{keys}/verifier.key.pem")
 json.dump(jwk, open(f"{keys}/verifier.jwk.json", "w"), indent=1)
 x5c = [der_b64(f"{keys}/verifier.crt.pem"), der_b64(f"{keys}/ca.crt.pem")]
 json.dump(x5c, open(f"{keys}/verifier.x5c.json", "w"))
+client_id = f"x509_san_dns:{san}"
+# With the EUDI registrar's access certificate (eudi-registry-certs.sh), the request objects are
+# signed with it instead, under its x509_hash client id: the certificate names no DNS host, and
+# its CA is the one the EUDI reference wallet trusts.
+import os
+if os.path.isfile(f"{keys}/eudi/wrpac.jwk.json") and os.path.isfile(f"{keys}/eudi/wrpac.x5c.json"):
+    jwk = json.load(open(f"{keys}/eudi/wrpac.jwk.json"))
+    x5c = json.load(open(f"{keys}/eudi/wrpac.x5c.json"))
+    digest = hashlib.sha256(base64.b64decode(x5c[0])).digest()
+    client_id = "x509_hash:" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode()
 tmpl = open(f"{keys}/../../verifier/config/verifier-service.conf.tmpl").read()
 out = (tmpl.replace("@@VERIFIER_KEY@@", json.dumps({"type": "jwk", "jwk": jwk}))
-           .replace("@@VERIFIER_X5C@@", json.dumps(x5c)).replace("@@VERIFIER_SAN@@", san))
+           .replace("@@VERIFIER_X5C@@", json.dumps(x5c)).replace("@@VERIFIER_CLIENT_ID@@", client_id))
 open(f"{keys}/../../verifier/config/verifier-service.conf", "w").write(out)
-print("verifier kid", jwk["kid"], "- wrote keys/verifier.jwk.json, keys/verifier.x5c.json, verifier/config/verifier-service.conf")
+print("verifier client id", client_id, "- wrote verifier/config/verifier-service.conf")
 PY2
 chmod 600 "$KEYS"/*.jwk.json
+[[ -f "$KEYS/eudi/wrpac.jwk.json" ]] && chmod 600 "$KEYS/eudi/wrpac.jwk.json"
 
 # Issuer2's external login (authorization-code offers) at Authentik: the URL from .env, the client
 # secret from infra/secrets/.
@@ -180,3 +195,5 @@ PY3
 chmod 640 "$INFRA_DIR"/issuer/config/issuer2-profiles.conf "$INFRA_DIR"/issuer/config/issuer-service.conf \
   "$INFRA_DIR"/issuer/config/authentication-service.conf "$INFRA_DIR"/verifier/config/verifier-service.conf \
   "$KEYS"/issuer.jwk.json "$KEYS"/bridge.jwk.json
+[[ -f "$KEYS/eudi/wrpac.jwk.json" ]] && chmod 640 "$KEYS/eudi/wrpac.jwk.json"
+true

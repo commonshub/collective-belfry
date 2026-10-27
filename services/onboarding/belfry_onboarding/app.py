@@ -30,6 +30,7 @@ from . import (
     bridge,
     claim,
     core,
+    eudi,
     feedback,
     groups_members,
     mypass,
@@ -74,9 +75,18 @@ def _load_json(path: str) -> Any:
 
 
 def build_services(settings: Settings) -> Services:
+    registry = eudi.load(settings.eudi_dir)
     return Services(
         issuer=IssuerClient(settings.issuer_url) if settings.issuer_url else None,
-        verifier=VerifierClient(settings.verifier_url) if settings.verifier_url else None,
+        verifier=(
+            VerifierClient(
+                settings.verifier_url,
+                verifier_info=eudi.registration_info(registry.wrprc) if registry else None,
+            )
+            if settings.verifier_url
+            else None
+        ),
+        eudi=registry,
         issuer_jwk=_load_json(settings.issuer_jwk_path) or {},
         issuer_x5c=_load_json(settings.issuer_x5c_path) or [],
         bridge_jwk=_load_json(settings.bridge_jwk_path) or {},
@@ -444,10 +454,14 @@ def create_app(services: Services | None = None) -> FastAPI:
         )
 
     @app.get("/issuer-metadata")
-    async def issuer_metadata(request: Request) -> JSONResponse:
-        """Issuer2's credential issuer metadata plus authorization_servers. The proxy serves
-        this for both metadata paths on issuer.<domain> (infra/proxy/Caddyfile)."""
-        issuer = svc(request).issuer
+    async def issuer_metadata(request: Request) -> Response:
+        """Issuer2's credential issuer metadata plus authorization_servers and, with the EUDI
+        registrar's certificates, issuer_info. The proxy serves this for both metadata paths on
+        issuer.<domain> (infra/proxy/Caddyfile). A client that accepts application/jwt (the
+        EUDI reference wallet requires it) gets the metadata signed: with the registrar's
+        access certificate when there is one, else with Belfry's issuer key (eudi.py)."""
+        services = svc(request)
+        issuer = services.issuer
         if issuer is None:
             raise HTTPException(status_code=404, detail="no issuer configured")
         try:
@@ -455,7 +469,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         except httpx.HTTPError as exc:
             log.warning("issuer metadata: %s", exc)
             raise HTTPException(status_code=502, detail="issuer unavailable") from exc
-        return JSONResponse(doc)
+        doc = eudi.with_issuer_info(doc, services.eudi)
+        headers = {"Vary": "Accept"}
+        if eudi.wants_jwt(request.headers.get("accept")):
+            if services.eudi:
+                jwk, x5c = services.eudi.jwk, services.eudi.x5c
+            else:
+                jwk, x5c = services.issuer_jwk, services.issuer_x5c
+            if jwk and x5c:
+                token = eudi.sign_metadata(doc, jwk, x5c)
+                return Response(token, media_type="application/jwt", headers=headers)
+        return JSONResponse(doc, headers=headers)
 
     @app.post("/issuer-shim/token")
     async def issuer_token(request: Request) -> Response:

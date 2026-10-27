@@ -45,9 +45,18 @@ def village_pass_policies(issuer: str, check_status: bool = True) -> list[Any]:
 
 
 class VerifierClient:
-    def __init__(self, url: str, client: httpx.Client | None = None, timeout: float = 30.0):
+    def __init__(
+        self,
+        url: str,
+        client: httpx.Client | None = None,
+        timeout: float = 30.0,
+        verifier_info: list[dict[str, Any]] | None = None,
+    ):
         self.url = url.rstrip("/")
         self._client = client or httpx.Client(timeout=timeout)
+        # OpenID4VP verifier_info of every request: the EUDI registration certificate, bound to
+        # the access certificate that signs the request objects (eudi.py)
+        self.verifier_info = verifier_info
 
     def create_session(
         self, dcql_query: dict[str, Any], vc_policies: list[Any], signed_request: bool = True
@@ -55,18 +64,19 @@ class VerifierClient:
         """Cross-device OpenID4VP session. Returns ``sessionId`` and
         ``bootstrapAuthorizationRequestUrl`` (the ``openid4vp://`` URL for the QR code).
         ``signed_request``: the request object is a JWT signed with the verifier's configured
-        key and x5c (client id ``x509_san_dns:...``), so wallets can authenticate the verifier."""
-        body = {
-            "flow_type": "cross_device",
-            "core_flow": {
-                "dcql_query": dcql_query,
-                "signed_request": signed_request,
-                "policies": {
-                    "vp_policies": {"dc+sd-jwt": VP_POLICIES_SD_JWT},
-                    "vc_policies": vc_policies,
-                },
+        key and x5c (client id ``x509_san_dns:...`` under Belfry's CA, or ``x509_hash:...`` of
+        the EUDI registrar's access certificate), so wallets can authenticate the verifier."""
+        core: dict[str, Any] = {
+            "dcql_query": dcql_query,
+            "signed_request": signed_request,
+            "policies": {
+                "vp_policies": {"dc+sd-jwt": VP_POLICIES_SD_JWT},
+                "vc_policies": vc_policies,
             },
         }
+        if self.verifier_info:
+            core["verifier_info"] = self.verifier_info
+        body = {"flow_type": "cross_device", "core_flow": core}
         r = self._client.post(f"{self.url}/verification-session/create", json=body)
         r.raise_for_status()
         return r.json()
