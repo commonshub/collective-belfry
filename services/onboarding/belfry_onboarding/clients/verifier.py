@@ -59,16 +59,24 @@ class VerifierClient:
         self.verifier_info = verifier_info
 
     def create_session(
-        self, dcql_query: dict[str, Any], vc_policies: list[Any], signed_request: bool = True
+        self,
+        dcql_query: dict[str, Any],
+        vc_policies: list[Any],
+        signed_request: bool = True,
+        encrypted_response: bool = True,
     ) -> dict[str, Any]:
         """Cross-device OpenID4VP session. Returns ``sessionId`` and
         ``bootstrapAuthorizationRequestUrl`` (the ``openid4vp://`` URL for the QR code).
         ``signed_request``: the request object is a JWT signed with the verifier's configured
         key and x5c (client id ``x509_san_dns:...`` under Belfry's CA, or ``x509_hash:...`` of
-        the EUDI registrar's access certificate), so wallets can authenticate the verifier."""
+        the EUDI registrar's access certificate), so wallets can authenticate the verifier.
+        ``encrypted_response``: ``response_mode`` ``direct_post.jwt``, the wallet encrypts its
+        answer to a per-session key in ``client_metadata.jwks`` (HAIP; Altme and Talao send
+        nothing at all for a plain ``direct_post`` request)."""
         core: dict[str, Any] = {
             "dcql_query": dcql_query,
             "signed_request": signed_request,
+            "encrypted_response": encrypted_response,
             "policies": {
                 "vp_policies": {"dc+sd-jwt": VP_POLICIES_SD_JWT},
                 "vc_policies": vc_policies,

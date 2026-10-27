@@ -1,6 +1,7 @@
 """A minimal SD-JWT VC holder for tests: receives a village pass over OpenID4VCI (pre-authorized
-code, JWT proof with a fresh P-256 key) and presents it over OpenID4VP (DCQL, ``direct_post``,
-KB-JWT). It stands in for an EUDI wallet in the smoke test; it is not a wallet.
+code, JWT proof with a fresh P-256 key) and presents it over OpenID4VP (DCQL, ``direct_post`` or
+the encrypted ``direct_post.jwt``, KB-JWT). It stands in for an EUDI wallet in the smoke test; it
+is not a wallet.
 
     python -m belfry_onboarding.testwallet receive '<openid-credential-offer://...>' --out w.json
     python -m belfry_onboarding.testwallet present '<openid4vp://authorize?...>' --wallet w.json \\
@@ -28,6 +29,7 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import sys
 import time
 import urllib.parse
@@ -37,6 +39,7 @@ import httpx
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 def b64url(data: bytes) -> str:
@@ -308,6 +311,54 @@ def decode_credential(compact: str) -> dict[str, Any]:
     return {"header": header, "payload": payload, "disclosed": claims}
 
 
+def _concat_kdf(z: bytes, enc: str, bits: int) -> bytes:
+    """RFC 7518 §4.6.2 for ECDH-ES in direct key agreement mode (no apu/apv): one SHA-256
+    round covers 128 and 256 bit keys."""
+
+    def field(data: bytes) -> bytes:
+        return len(data).to_bytes(4, "big") + data
+
+    other = field(enc.encode()) + field(b"") + field(b"") + bits.to_bytes(4, "big")
+    return hashlib.sha256((1).to_bytes(4, "big") + z + other).digest()[: bits // 8]
+
+
+def encrypt_response(payload: dict[str, Any], client_metadata: dict[str, Any]) -> str:
+    """Compact JWE (``ECDH-ES``, A128GCM or A256GCM) of ``payload`` to the verifier's P-256
+    encryption key in ``client_metadata.jwks``, as OpenID4VP's ``direct_post.jwt`` asks."""
+    keys = (client_metadata.get("jwks") or {}).get("keys") or []
+    jwk = next((k for k in keys if k.get("kty") == "EC" and k.get("use", "enc") == "enc"), None)
+    if jwk is None or jwk.get("crv") != "P-256":
+        raise ValueError("no P-256 encryption key in client_metadata.jwks")
+    supported = client_metadata.get("encrypted_response_enc_values_supported") or ["A128GCM"]
+    enc = "A256GCM" if "A256GCM" in supported else "A128GCM"
+    verifier_key = ec.EllipticCurvePublicNumbers(
+        int.from_bytes(b64url_decode(jwk["x"]), "big"),
+        int.from_bytes(b64url_decode(jwk["y"]), "big"),
+        ec.SECP256R1(),
+    ).public_key()
+    ephemeral = ec.generate_private_key(ec.SECP256R1())
+    z = ephemeral.exchange(ec.ECDH(), verifier_key)
+    cek = _concat_kdf(z, enc, 256 if enc == "A256GCM" else 128)
+    nums = ephemeral.public_key().public_numbers()
+    header = {
+        "alg": "ECDH-ES",
+        "enc": enc,
+        "epk": {
+            "kty": "EC",
+            "crv": "P-256",
+            "x": b64url(nums.x.to_bytes(32, "big")),
+            "y": b64url(nums.y.to_bytes(32, "big")),
+        },
+    }
+    if jwk.get("kid"):
+        header["kid"] = jwk["kid"]
+    protected = b64url(json.dumps(header, separators=(",", ":")).encode())
+    iv = os.urandom(12)
+    sealed = AESGCM(cek).encrypt(iv, json.dumps(payload).encode(), protected.encode())
+    ciphertext, tag = sealed[:-16], sealed[-16:]
+    return ".".join([protected, "", b64url(iv), b64url(ciphertext), b64url(tag)])
+
+
 def present(
     request_url: str, wallet: dict[str, Any], disclose: list[str], hostmap: HostMap
 ) -> dict[str, Any]:
@@ -350,10 +401,16 @@ def present(
             algorithm="ES256",
             headers={"typ": "kb+jwt"},
         )
-        vp_token = json.dumps({query_id: [presentation + kb]})
-        form = {"vp_token": vp_token}
-        if state:
-            form["state"] = state
+        vp_token = {query_id: [presentation + kb]}
+        if request.get("response_mode") == "direct_post.jwt":
+            payload: dict[str, Any] = {"vp_token": vp_token}
+            if state:
+                payload["state"] = state
+            form = {"response": encrypt_response(payload, request.get("client_metadata") or {})}
+        else:
+            form = {"vp_token": json.dumps(vp_token)}
+            if state:
+                form["state"] = state
         resp = http.post(hostmap(response_uri), data=form)
     return {
         "status": resp.status_code,

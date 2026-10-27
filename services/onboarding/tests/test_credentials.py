@@ -222,6 +222,7 @@ def test_door_asks_for_the_tier_only_and_reports_validity(client, verifier):
     assert query["meta"]["vct_values"] == ["https://belfry.test/vct/village-pass/v1"]
     assert query["claims"] == [{"path": ["pass_tier"]}]
     assert created["signed_request"] is True
+    assert created["encrypted_response"] is True
     policies = created["policies"]["vc_policies"]
     assert "signature" in policies and "expiration" in policies and "not-before" in policies
     assert {
