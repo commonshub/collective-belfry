@@ -582,7 +582,7 @@ Part D of `docs/plan-user-test-followups.md`; user decision: everyone can create
 
 Open: member names show as npubs locally (Flotilla asks no relay for their profiles there, probably because the relays are plain `ws://localhost`); to check on the public deployment. No push notifications, no voice or video rooms (LiveKit), stewards are not admins of every room. Not deployed: the VM needs `gen-secrets.sh`, the images (groups-relay, groups, onboarding, keycast's env, and the other apps for their app bar), bootstrap and a `caddy reload`.
 
-## 3zj. EUDI reference wallet: signed issuer metadata, the registrar's certificates — built 2026-10-27
+## 3zk. EUDI reference wallet: signed issuer metadata, the registrar's certificates — built 2026-10-27
 
 User: the pass cannot be imported into a wallet; can the EUDI relying-party registrar (registry.serviceproviders.eudiw.dev) help? Read from the reference wallet's source (`WalletCoreConfigImpl.kt`, wallet-core `REGISTRATION_CERTIFICATE.md`, eudi-lib-jvm-openid4vci-kt): it requires signed issuer metadata (`Accept: application/jwt`), treats an unknown issuer of a non-PID credential as a warning only, refuses signed requests under an untrusted certificate, and, with "registration check" on (off by default), wants a registration certificate in `issuer_info` / `verifier_info`, bound to the certificate that signed the message. The registrar issues exactly those: a WRPAC (access certificate under a CA on the EU test list) and a WRPRC (registration certificate). Decision (user): build the metadata signing and the verifier side; the registration itself needs Belfry's legal details and is the stewards'.
 
