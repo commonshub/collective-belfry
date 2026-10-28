@@ -78,3 +78,25 @@ def test_legal_drafts_show_what_is_missing(client):
 def test_home_page_links_help(client):
     r = client.get("/")
     assert 'href="/help"' in r.text
+
+
+def test_skill_is_served_with_the_domain(services, client):
+    services.settings.public_url = "https://pass.belfry.test"
+    r = client.get("/skill.md")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "text/markdown; charset=utf-8"
+    assert r.text.startswith("---\nname: open-source-village\n")
+    assert "https://shop.belfry.test/belfry/api/invites/<token>" in r.text
+    assert "<domain>" not in r.text
+
+
+def test_skill_domain():
+    class S:
+        site_url = ""
+        public_url = "http://localhost:8100"
+
+    assert pages.site_domain(S) == ""  # local: the skill keeps <domain>
+    S.public_url = "https://pass.example.org"
+    assert pages.site_domain(S) == "example.org"
+    S.site_url = "https://village.example"
+    assert pages.site_domain(S) == "village.example"

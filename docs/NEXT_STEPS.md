@@ -616,6 +616,16 @@ User: a DIDroom maintainer said the pass would not work with third-party wallets
 
 Open: the claim page keeps showing a QR after its 10-minute offer expired (a stale sign-in QR gave "issuer_state is invalid"): renew it or mark it; the help and claim pages should name Talao (or Altme once the Play Store has a build after 2026-08-19); Talao's pass sign-in on Authentik's login page and the door with the registrar's `x509_hash` client id are untested.
 
+## 3zm. Pass API: an agent orders a pass from an invite — built 2026-10-28
+
+User: how could an agent pay for a ticket (x402)? Then: build the API for the passes, no 402 for now.
+
+- [x] Odoo `controllers/api.py` (19.0.1.21.0), the invite page as JSON on `shop.<domain>`, the invite token as the credential: `GET /belfry/api/invites/<token>` (passes with tier, `product_id`, `price` incl. VAT, `company_price` plus VAT, `vat_rate`, currency, expiry; or the order waiting for payment), `POST …/order` (JSON `tier` or `product_id`, `name`, `email`, optional `company_name`, `vat`, `promo_code`, `nostr_pubkey` with `nostr_proof` signed for the API path) → 201 with the invoice number, amounts and Odoo's payment link, `POST …/start-over` (releases an unpaid order). Errors `{"error", "message"}`: 404, 410 used/expired/revoked, 409 reserved or payment under way, 400, 422. The checkout is the page's own (`InviteCheckout`, shared), so pricing, VAT, promo codes, the reservation and activation are unchanged; the pass, sign-in link and certificate go to the attendee's e-mail, never to the caller. The invite page links the API (`<link rel="alternate" type="application/json">`), so an agent handed the invite link finds it. Proxy: `/belfry/api/*` shares the invite pages' rate limit.
+- [x] Agent skill `skills/open-source-village/SKILL.md`: for an agent helping a visitor (rules: confirm before spending, the visitor's own e-mail, payment link to the visitor, invite link and sign-in links are credentials), applying, the API with examples and errors, what follows payment (activation mail, sign-in, the pass at the door with `/me` or Talao, tokens), the apps. Served at `pass.<domain>/skill.md` (and the apex) with the deployment's domain filled in (`pages.py`, `../skills` mounted as `SKILLS_DIR`); the invite page links it (`<link rel="help" type="text/markdown">`) and the API's offer names it (`skill_url`).
+- Checks: Odoo 96 tests (9 new in `test_api.py`); onboarding 252; smoke step 3b (offer, order, second order 409, start-over, the skill); local smoke 218 ok / 0 failed.
+
+Open: paying without a human. The agent gets Odoo's payment link (a hosted page for cards and Mollie's methods). Next idea, not decided: an HTTP 402 answer with an x402 requirement in EURe (Monerium, euro e-money, the account Belfry books already) on Gnosis, settled by the onboarding service itself (Permit2 with EURe's ERC-2612 `permit`; Coinbase's facilitator does not serve Gnosis) and recorded in Odoo keyed on the transaction hash. To check first: which chain the Monerium IBAN is linked to, whether that account is an Odoo journal, `permit` in EURe v2 and Permit2 on Gnosis; x402 has no refunds or chargebacks.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

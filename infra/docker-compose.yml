@@ -632,8 +632,11 @@ services:
       - ./issuer/keys/eudi:/keys/eudi:ro
       # Open Source Village brand assets, served at /brand (pages, authentik, issuer, wallets).
       - ../brand:/brand:ro
+      # The skill for agents helping a visitor, served at /skill.md.
+      - ../skills:/skills:ro
     environment:
       BRAND_DIR: /brand
+      SKILLS_DIR: /skills
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
       ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}

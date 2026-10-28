@@ -12,7 +12,8 @@
             <title t-esc="title or 'Open Source Village'"/>
         </xpath>
         <xpath expr="//head" position="inside">
-            <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>
+            <t t-set="belfry_public_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')"/>
+            <t t-set="belfry_brand_url" t-value="belfry_public_url + '/brand'"/>
             <meta property="og:site_name" content="Open Source Village"/>
             <meta property="og:type" content="website"/>
             <meta property="og:title" t-att-content="title or 'Open Source Village'"/>
@@ -22,6 +23,10 @@
             <meta property="og:image:width" content="512"/>
             <meta property="og:image:height" content="512"/>
             <meta property="og:image:alt" content="Open Source Village"/>
+            <!-- the invite as JSON for an agent ordering on someone's behalf (controllers/api.py) -->
+            <link t-if="belfry_api_url" rel="alternate" type="application/json" t-att-href="belfry_api_url"/>
+            <!-- and the skill for such agents, on the onboarding service (skills/open-source-village) -->
+            <link t-if="belfry_api_url" rel="help" type="text/markdown" t-att-href="belfry_public_url + '/skill.md'"/>
             <meta name="twitter:card" content="summary"/>
             <meta name="color-scheme" content="dark"/>
             <meta name="theme-color" content="#2b3a31"/>
@@ -125,6 +130,7 @@
             <t t-set="no_header" t-value="True"/>
             <t t-set="no_footer" t-value="True"/>
             <t t-set="pageName" t-value="'belfry_invite'"/>
+            <t t-set="belfry_api_url" t-value="invite and '/belfry/api/invites/%s' % invite.token"/>
             <t t-set="title" t-value="'You are invited to Open Source Village'"/>
             <t t-set="share_description" t-value="'%s invited you. Pick a pass to join the village.' % invite.inviter_name if invite and invite.inviter_name else 'An invitation to Open Source Village. Pick a pass to join the village.'"/>
             <t t-set="belfry_brand_url" t-value="(request.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/') + '/brand'"/>

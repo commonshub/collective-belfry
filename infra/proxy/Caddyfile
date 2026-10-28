@@ -120,7 +120,7 @@
 	# The back office, its login and the database manager only over the admin network;
 	# participants keep the invite, payment and portal pages (access-token links).
 	import admin_only /odoo /odoo/* /web /web/ /web/login /web/login/* /web/reset_password* /web/signup* /web/database/* /web/session/* /web/become /xmlrpc/* /jsonrpc /json/*
-	import limit odoo-invite 120 1m /belfry/invite/*
+	import limit odoo-invite 120 1m /belfry/invite/* /belfry/api/*
 	reverse_proxy odoo:8069
 }
 

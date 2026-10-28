@@ -13,3 +13,4 @@ from . import test_reserved
 from . import test_vat
 from . import test_application
 from . import test_volunteer
+from . import test_api

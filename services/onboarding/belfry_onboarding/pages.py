@@ -15,9 +15,10 @@ import re
 from functools import cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 from . import claim
 
@@ -29,6 +30,10 @@ PAGES = {
     "rules": "Community rules",
     "help": "Help",
 }
+
+# The skill for an agent helping a visitor (skills/ in the repo, SKILLS_DIR in Compose), served at
+# /skill.md with the deployment's domain in place of <domain>.
+SKILL = "open-source-village/SKILL.md"
 
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
@@ -182,6 +187,25 @@ def page_html(name: str, settings: Any) -> str:
     return claim.page(title or PAGES[name], f'<div class="card prose">{body}</div>{PAGE_STYLE}')
 
 
+def site_domain(settings: Any) -> str:
+    """The domain of the deployment: SITE_URL's host, else PUBLIC_URL's without ``pass.``; empty
+    when neither names one (a local run on localhost ports)."""
+    site = urlparse(getattr(settings, "site_url", "") or "").hostname
+    if site:
+        return site
+    host = urlparse(getattr(settings, "public_url", "") or "").hostname or ""
+    return host.removeprefix("pass.") if host.startswith("pass.") else ""
+
+
+def skill_text(settings: Any) -> str:
+    # a local checkout finds the folder itself; in the image it is mounted (SKILLS_DIR)
+    env = os.environ.get("SKILLS_DIR")
+    skills_dir = Path(env) if env else Path(__file__).resolve().parents[3] / "skills"
+    text = (skills_dir / SKILL).read_text(encoding="utf-8")
+    domain = site_domain(settings)
+    return text.replace("<domain>", domain) if domain else text
+
+
 def register(app: FastAPI) -> None:
     for name in PAGES:
 
@@ -191,3 +215,8 @@ def register(app: FastAPI) -> None:
         app.add_api_route(
             f"/{name}", handler, methods=["GET"], response_class=HTMLResponse, name=f"page_{name}"
         )
+
+    @app.get("/skill.md", include_in_schema=False)
+    def skill(request: Request) -> Response:
+        text = skill_text(request.app.state.services.settings)
+        return Response(text, media_type="text/markdown; charset=utf-8")

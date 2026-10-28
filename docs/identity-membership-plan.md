@@ -1,6 +1,6 @@
 # Belfry Identity & Membership Plan
 
-> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions, rev 47 the community app protocols, rev 49 the passwordless magic-link login; see docs/NEXT_STEPS.md §3b–§3h and §3j, rev 50 the branding decision of 2026-10-23 (§3l), rev 51 single sign-on for the community apps (§3q), rev 59 logout everywhere (§3r); rev 63–71 (not re-exported): derived keys under YubiKeys, and DIDs dropped on 2026-10-24 (Phase 4, did:webvh, id.<domain>). The live doc is the source of truth.
+> Snapshot of the Claude Doc https://claude.ai/artifact/VUoFGX4mFvZUCPXqKe2amj (rev 39, exported 2026-10-22; rev 43 adds the community relay decision of 2026-10-23, rev 44 the Keycast login through Authentik, rev 45 the participant login through a mailed account-setup link, rev 46 the Phase 3 decisions, rev 47 the community app protocols, rev 49 the passwordless magic-link login; see docs/NEXT_STEPS.md §3b–§3h and §3j, rev 50 the branding decision of 2026-10-23 (§3l), rev 51 single sign-on for the community apps (§3q), rev 59 logout everywhere (§3r); rev 63–71 (not re-exported): derived keys under YubiKeys, and DIDs dropped on 2026-10-24 (Phase 4, did:webvh, id.<domain>); rev 86 (not re-exported): the pass API for agents (§3zm). The live doc is the source of truth.
 
 2026-10-20
 

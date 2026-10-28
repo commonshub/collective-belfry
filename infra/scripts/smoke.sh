@@ -138,6 +138,30 @@ grep -q 'id="belfry_continue_payment"' <<<"$RESUME" && ok "opening the invite ag
 INV=$(ox account.move read "[[$INV_ID]]" '{"fields":["state","amount_total","currency_id","partner_id"]}' | jq -c '.[0]')
 [[ "$(jq -r .state <<<"$INV")" == posted ]] && ok "invoice posted, total $(jq -r .amount_total <<<"$INV")" || bad "invoice state $(jq -r .state <<<"$INV")"
 
+step "3b. pass API: the invite as JSON, an order from an agent, released again"
+API_INVITE_ID=$(ox belfry.invite create '[{"note":"smoke api"}]')
+API_URL="$ODOO_URL/belfry/api/invites/$(ox belfry.invite read "[[$API_INVITE_ID]]" '{"fields":["token"]}' | jq -r '.[0].token')"
+OFFER=$(curl -sS "$API_URL")
+[[ "$(jq -r '[.state, (.passes | map(.tier) | sort | join(","))] | join(" ")' <<<"$OFFER")" == "open day,full,week" ]] \
+  && ok "GET /belfry/api/invites/<token>: open, three passes, week $(jq -r '.passes[] | select(.tier=="week") | .price' <<<"$OFFER") $(jq -r .currency <<<"$OFFER")" \
+  || bad "API offer: $(head -c 300 <<<"$OFFER")"
+API_BODY=$(mktemp)
+API_CODE=$(curl -sS -o "$API_BODY" -w '%{http_code}' -X POST "$API_URL/order" -H 'Content-Type: application/json' \
+  --data-binary "$(jq -nc --arg e "smoke-api-$STAMP@belfry.local" '{tier:"week", name:"Smoke Agent", email:$e}')")
+[[ "$API_CODE" == 201 && "$(jq -r '.state + " " + .payment' "$API_BODY")" == "reserved unpaid" && "$(jq -r .payment_url "$API_BODY")" == http* ]] \
+  && ok "POST order -> 201, invoice $(jq -r .invoice.number "$API_BODY") $(jq -r .invoice.amount_total "$API_BODY"), payment link" \
+  || bad "POST order -> $API_CODE $(head -c 300 "$API_BODY")"
+API_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$API_URL/order" -H 'Content-Type: application/json' \
+  --data-binary '{"tier":"day","name":"Twice","email":"twice@belfry.local"}')
+[[ "$API_AGAIN" == 409 ]] && ok "a second order on the same invite -> 409" || bad "second order -> $API_AGAIN"
+API_CODE=$(curl -sS -o "$API_BODY" -w '%{http_code}' -X POST "$API_URL/start-over")
+[[ "$API_CODE" == 200 && "$(jq -r .state "$API_BODY")" == open ]] && ok "start-over -> 200, the invite is open again" || bad "start-over -> $API_CODE $(head -c 200 "$API_BODY")"
+rm -f "$API_BODY"
+ox belfry.invite action_revoke "[[$API_INVITE_ID]]" >/dev/null
+SKILL=$(curl -sS "$ONB_URL/skill.md")
+[[ "$SKILL" == "---"$'\n'"name: open-source-village"* && "$(jq -r .skill_url <<<"$OFFER")" == */skill.md ]] \
+  && ok "the agent skill at /skill.md, named in the offer" || bad "skill: $(head -c 200 <<<"$SKILL")"
+
 step "4. emulate a Stripe payment: done transaction + manual payment on the invoice"
 PROVIDER_ID=$(ox payment.provider search "[[[\"code\",\"=\",\"stripe\"]]]" '{"limit":1,"context":{"active_test":false}}' | jq -r '.[0] // empty')
 [[ -n "$PROVIDER_ID" ]] || die "no stripe payment.provider"

@@ -24,72 +24,9 @@ class InviteFormError(Exception):
     """A validation problem with the submitted form; the message is shown to the visitor."""
 
 
-class BelfryInviteController(http.Controller):
-
-    @http.route(
-        '/belfry/invite/<string:token>',
-        type='http',
-        auth='public',
-        methods=['GET', 'POST'],
-        # website=True only tells http_routing (a portal dependency) to prepare the frontend
-        # rendering environment (languages, portal layout); the website module is not needed
-        website=True,
-        sitemap=False,
-    )
-    def invite(self, token, **post):
-        invite = request.env['belfry.invite'].sudo().search([('token', '=', token)], limit=1)
-        error = invite._belfry_usability_error() if invite else 'not_found'
-        if error == 'reserved':
-            return self._reserved(invite, post)
-        if error:
-            return self._render_error(error)
-
-        if request.httprequest.method == 'GET':
-            return request.render('belfry_pass.invite_page', self._page_values(invite))
-
-        form = self._clean_form(post)
-        try:
-            with request.env.cr.savepoint():
-                link = self._checkout(invite, form)
-        except InviteFormError as exc:
-            values = self._page_values(invite, form=form, error=str(exc))
-            return request.render('belfry_pass.invite_page', values)
-        return request.redirect(link, code=303, local=False)
-
-    # ------------------------------------------------------------------
-    # rendering
-    # ------------------------------------------------------------------
-
-    def _reserved(self, invite, post):
-        """The form was sent and the order waits for payment (a refresh, the back button, a
-        failed card attempt): offer the payment page again, or start over while nothing is paid.
-        The link is the credential, so the page names the first name only."""
-        payment = invite._belfry_payment_state()
-        if request.httprequest.method == 'POST' and post.get('start_over'):
-            invite.belfry_start_over()
-            return request.redirect('/belfry/invite/%s' % invite.token, code=303)
-        person = invite.used_by_partner_id
-        values = {
-            'invite': invite,
-            'first_name': (person.name or '').split(' ')[0],
-            'tier_name': invite.pass_id.tier_name,
-            'payment': payment,
-            'payment_link': invite.belfry_payment_link() if payment == 'unpaid' else False,
-            'no_header': True,
-            'no_footer': False,
-        }
-        return request.render('belfry_pass.invite_reserved', values)
-
-    def _render_error(self, reason):
-        messages = {
-            'not_found': _("This invite link does not exist."),
-            'used': _("This invite link has been used. If it was you, your pass is active: "
-                      "the sign-in link is in your mail."),
-            'expired': _("This invite link has expired. Ask your steward for a new one."),
-            'revoked': _("This invite link was revoked."),
-        }
-        values = {'reason': reason, 'message': messages.get(reason, messages['not_found'])}
-        return request.render('belfry_pass.invite_error', values, status=ERROR_STATUS.get(reason, 400))
+class InviteCheckout:
+    """Prices and checkout of an invite, shared by the invite page and the pass API
+    (controllers/api.py)."""
 
     def _pass_products(self):
         return request.env['product.template'].sudo().search(
@@ -161,10 +98,11 @@ class BelfryInviteController(http.Controller):
             raise InviteFormError(_("Please choose a pass."))
         return template
 
-    def _own_key(self, invite, form, person):
+    def _own_key(self, invite, form, person, path):
         """The checked public key (hex) when the visitor joins with a key of their own, else
-        None. The key must not belong to anyone else, and a returning participant who has a key
-        already keeps it (they can move to another one on their account page)."""
+        None. The proof is a signed POST to ``path``, the page the form was sent to. The key
+        must not belong to anyone else, and a returning participant who has a key already keeps
+        it (they can move to another one on their account page)."""
         if not form['own_key']:
             return None
         if not form['nostr_pubkey'] or not form['nostr_proof']:
@@ -172,7 +110,7 @@ class BelfryInviteController(http.Controller):
                 "To join with your own Nostr key, allow your signer to sign when you send the form."
             ))
         try:
-            pubkey = check_proof(form['nostr_proof'], form['nostr_pubkey'], '/belfry/invite/%s' % invite.token)
+            pubkey = check_proof(form['nostr_proof'], form['nostr_pubkey'], path)
         except ProofError as exc:
             raise InviteFormError(str(exc)) from None
         key_npub = npub(pubkey)
@@ -255,9 +193,10 @@ class BelfryInviteController(http.Controller):
             raise InviteFormError(_("This code does not apply to the selected pass."))
         order._update_programs_and_rewards()
 
-    def _checkout(self, invite, form):
+    def _checkout(self, invite, form, path=None):
         """Create partner, order, invoice, payment link and pending pass. Runs inside a
-        savepoint; raising InviteFormError rolls everything back."""
+        savepoint; raising InviteFormError rolls everything back. ``path``: where the form was
+        sent (the invite page unless given), for the own key's proof."""
         env = request.env
         template = self._validate_form(form)
 
@@ -268,7 +207,7 @@ class BelfryInviteController(http.Controller):
             raise InviteFormError(_("This invite link can no longer be used."))
 
         person, billing_partner = self._find_or_create_partners(form)
-        own_pubkey = self._own_key(invite, form, person)
+        own_pubkey = self._own_key(invite, form, person, path or '/belfry/invite/%s' % invite.token)
         product = template.product_variant_id
 
         order = env['sale.order'].sudo().create({
@@ -318,3 +257,71 @@ class BelfryInviteController(http.Controller):
             invite.id, person.id, order.name, invoice.name, belfry_pass.id,
         )
         return link
+
+
+class BelfryInviteController(InviteCheckout, http.Controller):
+
+    @http.route(
+        '/belfry/invite/<string:token>',
+        type='http',
+        auth='public',
+        methods=['GET', 'POST'],
+        # website=True only tells http_routing (a portal dependency) to prepare the frontend
+        # rendering environment (languages, portal layout); the website module is not needed
+        website=True,
+        sitemap=False,
+    )
+    def invite(self, token, **post):
+        invite = request.env['belfry.invite'].sudo().search([('token', '=', token)], limit=1)
+        error = invite._belfry_usability_error() if invite else 'not_found'
+        if error == 'reserved':
+            return self._reserved(invite, post)
+        if error:
+            return self._render_error(error)
+
+        if request.httprequest.method == 'GET':
+            return request.render('belfry_pass.invite_page', self._page_values(invite))
+
+        form = self._clean_form(post)
+        try:
+            with request.env.cr.savepoint():
+                link = self._checkout(invite, form)
+        except InviteFormError as exc:
+            values = self._page_values(invite, form=form, error=str(exc))
+            return request.render('belfry_pass.invite_page', values)
+        return request.redirect(link, code=303, local=False)
+
+    # ------------------------------------------------------------------
+    # rendering
+    # ------------------------------------------------------------------
+
+    def _reserved(self, invite, post):
+        """The form was sent and the order waits for payment (a refresh, the back button, a
+        failed card attempt): offer the payment page again, or start over while nothing is paid.
+        The link is the credential, so the page names the first name only."""
+        payment = invite._belfry_payment_state()
+        if request.httprequest.method == 'POST' and post.get('start_over'):
+            invite.belfry_start_over()
+            return request.redirect('/belfry/invite/%s' % invite.token, code=303)
+        person = invite.used_by_partner_id
+        values = {
+            'invite': invite,
+            'first_name': (person.name or '').split(' ')[0],
+            'tier_name': invite.pass_id.tier_name,
+            'payment': payment,
+            'payment_link': invite.belfry_payment_link() if payment == 'unpaid' else False,
+            'no_header': True,
+            'no_footer': False,
+        }
+        return request.render('belfry_pass.invite_reserved', values)
+
+    def _render_error(self, reason):
+        messages = {
+            'not_found': _("This invite link does not exist."),
+            'used': _("This invite link has been used. If it was you, your pass is active: "
+                      "the sign-in link is in your mail."),
+            'expired': _("This invite link has expired. Ask your steward for a new one."),
+            'revoked': _("This invite link was revoked."),
+        }
+        values = {'reason': reason, 'message': messages.get(reason, messages['not_found'])}
+        return request.render('belfry_pass.invite_error', values, status=ERROR_STATUS.get(reason, 400))
