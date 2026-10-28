@@ -64,6 +64,11 @@ ODOO_URL=https://shop.belfry.example AK_URL=https://login.belfry.example KC_URL=
 $C --profile app up -d --build            # onboarding service and apps
 ```
 
+Before bootstrap, `ADMIN_NETS` in `infra/.env` must list the VM's own public addresses:
+bootstrap logs in to Odoo over `/jsonrpc`, which the proxy answers only on the admin network
+(403 otherwise). Without ZeroTier yet, take the line `infra/scripts/zerotier.sh status` would
+print minus the ZeroTier subnet: `127.0.0.1/8 172.16.0.0/12 <ipv4>/32 <ipv6>/128`.
+
 On a server, bootstrap reaches the services through their public hostnames and runs the calls
 the proxy blocks with `docker compose exec` inside the containers.
 

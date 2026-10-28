@@ -82,7 +82,9 @@ log "1/6 waiting for services"
 wait_for odoo "$ODOO_URL/web/health"
 wait_for authentik "$AK_URL/-/health/ready/"
 wait_for keycast "$KC_URL/health"
-wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/openid-credential-issuer/openid4vci"
+# Issuer2's own metadata: behind the proxy the credential issuer metadata comes through the
+# onboarding service, which starts only after bootstrap.
+wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/oauth-authorization-server/openid4vci"
 wait_for_any verifier "${VERIFIER_PUBLIC_URL:-http://localhost:7004}/transaction-data-profiles"
 
 # The groups relay's role and database (postgres/init.sh makes them only on a fresh volume). The
