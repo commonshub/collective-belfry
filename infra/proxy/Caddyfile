@@ -94,6 +94,17 @@
 	header Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 }
 
+# import vanity <path> <host prefix>: <domain>/<path>[/rest] redirects to <host prefix>.<domain>[/rest]
+# (query kept). 302, so the short names can be pointed elsewhere later without browsers keeping
+# the old target. The apps stay on their own hosts (own origins: their keys in localStorage, their
+# service workers and policies stay apart); only the short name lives on the apex.
+(vanity) {
+	redir /{args[0]} https://{args[1]}.{$BELFRY_DOMAIN}/ 302
+	handle_path /{args[0]}/* {
+		redir https://{args[1]}.{$BELFRY_DOMAIN}{uri} 302
+	}
+}
+
 # import onboarding_site <zone prefix>: the onboarding service as one site, on pass.<domain> and
 # (for the start page) on the apex; the same rules on both hosts.
 (onboarding_site) {
@@ -157,6 +168,19 @@ apps.{$BELFRY_DOMAIN} {
 			header_up Host {$KEYCAST_TENANT_DOMAIN}
 		}
 	}
+	# Short names for the participant apps (<domain>/chat, …). None may collide with a page of
+	# the onboarding service, which answers everything else on the apex.
+	import vanity chat chat
+	import vanity groups groups
+	import vanity calendar calendar
+	import vanity programme programme
+	import vanity vote vote
+	import vanity people people
+	import vanity market market
+	import vanity photos photos
+	import vanity wallet wallet
+	import vanity apps apps
+	import vanity shop {$ODOO_HOST_PREFIX:shop}
 	# Everything else: the start page (the onboarding service's landing page, SITE_URL) and the
 	# onboarding site it links to.
 	handle {

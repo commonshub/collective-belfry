@@ -12,7 +12,10 @@ in front of everything and publishes no other port.
   name), `login.`, `apps.`, `pass.`, `relay.`, `bunker.`, `blossom.`, `mint.`, `issuer.`,
   `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.`, plus the
   domain itself (NIP-05 names are `<member>@<domain>`). A wildcard record covers them all: A and
-  AAAA for `<domain>` and `*.<domain>`.
+  AAAA for `<domain>` and `*.<domain>`. The participant apps also have short names on the domain
+  itself (`<domain>/chat`, `/groups`, `/calendar`, `/programme`, `/vote`, `/people`, `/market`,
+  `/photos`, `/wallet`, `/apps`, `/shop`): 302 redirects to their hosts (`vanity` in
+  `proxy/Caddyfile`), so the apps keep their own origins.
 - An SMTP relay for the mails (sign-in links, activation mails) and a sender address whose domain
   allows that relay in its SPF record (better also DKIM). Otherwise the relay accepts the mails and
   recipients silently drop them.
