@@ -78,6 +78,11 @@ run bootstrap again. It configures Odoo's Stripe provider (test keys: test mode,
 enabled), has Odoo create its own webhook, creates Belfry's dispute webhook
 (`https://pass.<domain>/hooks/stripe`, `charge.dispute.created` and `.closed`) and writes its
 signing secret into `infra/secrets/stripe_webhook_secret`; restart the onboarding service after that.
+A restricted key (`rk_test_…`, `rk_live_…`) works in place of the secret key when it has write
+access to PaymentIntents, SetupIntents, PaymentMethods, Customers, Refunds and Webhook Endpoints
+(plus Apple Pay domains for Apple Pay): the calls Odoo 19's `payment_stripe` and bootstrap make.
+A missing permission shows only when a payment or refund fails, so try a small live payment and
+refund it.
 Mollie (Netherlands; cards, iDEAL, Bancontact and more), next to Stripe or instead of it: put the
 API key onto the server with `infra/scripts/put-secret.sh <ssh target> mollie_api_key` (`test_…`:
 test mode, `live_…`: enabled) and run bootstrap again. It configures Odoo's Mollie provider with the

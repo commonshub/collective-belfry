@@ -264,7 +264,8 @@ else
 fi
 
 # Stripe: Odoo's own Stripe provider takes the card payments (payment links), Belfry's endpoint
-# /hooks/stripe the disputes. Keys: STRIPE_PUBLISHABLE_KEY in .env, the secret key in
+# /hooks/stripe the disputes. Keys: STRIPE_PUBLISHABLE_KEY in .env, the secret key (or a restricted
+# key, rk_…, with the permissions in DEPLOY.md) in
 # infra/secrets/stripe_secret_key (scripts/put-secret.sh). Test keys (sk_test_) put the
 # provider in test mode, live keys enable it. Both webhooks are created through Stripe's API once
 # the public URLs are https: Odoo's (action_stripe_create_webhook) and Belfry's dispute endpoint,
@@ -273,9 +274,9 @@ STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-$(cat "$INFRA_DIR/secrets/stripe_secret_k
 export STRIPE_SECRET_KEY
 if [[ -n "${STRIPE_PUBLISHABLE_KEY:-}" && -n "$STRIPE_SECRET_KEY" ]]; then
   case "$STRIPE_SECRET_KEY" in
-    sk_test_*) STRIPE_STATE=test; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_test_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a test key while the secret key is" ;;
-    sk_live_*) STRIPE_STATE=enabled; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_live_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a live key while the secret key is" ;;
-    *) die "infra/secrets/stripe_secret_key is not a Stripe secret key (sk_test_… or sk_live_…)" ;;
+    sk_test_*|rk_test_*) STRIPE_STATE=test; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_test_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a test key while the secret key is" ;;
+    sk_live_*|rk_live_*) STRIPE_STATE=enabled; [[ "$STRIPE_PUBLISHABLE_KEY" == pk_live_* ]] || die "STRIPE_PUBLISHABLE_KEY is not a live key while the secret key is" ;;
+    *) die "infra/secrets/stripe_secret_key is not a Stripe secret or restricted key (sk_test_…, sk_live_…, rk_test_…, rk_live_…)" ;;
   esac
   SP_ID=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" payment.provider search '[[["code","=","stripe"]]]' '{"limit":1}' | jq -r '.[0] // empty')
   [[ -n "$SP_ID" ]] || die "Odoo has no Stripe payment provider (module payment_stripe)"
