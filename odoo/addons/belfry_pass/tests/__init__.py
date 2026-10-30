@@ -14,3 +14,4 @@ from . import test_vat
 from . import test_application
 from . import test_volunteer
 from . import test_api
+from . import test_holder_invites

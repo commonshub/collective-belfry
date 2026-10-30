@@ -1,6 +1,6 @@
 ---
 name: open-source-village
-description: Help a visitor join and take part in Open Source Village, run by Belfry. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps.
+description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, or create and manage groups for them.
 ---
 
 # Open Source Village: helping a visitor
@@ -205,3 +205,132 @@ but the key stays the participant's.
   you. A refunded or disputed payment ends the pass at once.
 - Someone breaks the rules (`/rules`): use the Report button in the app, or tell a steward.
 - Something doesn't work: `/feedback`, or a steward.
+
+## 6. Acting for a pass holder (agents)
+
+A participant or steward can let you act for them. You then have **their rights, nothing more**,
+and everything you do appears under their name. There is no API key: every request is a Nostr
+event signed with the holder's key, which the relays, the file server and the invite API check.
+
+### Getting the signer
+
+Ask the holder for a **bunker URL** (NIP-46 remote signing; `bunker://<pubkey>?relay=…&secret=…`):
+
+- They sign in at `https://apps.<domain>` (their account page), choose **Connect to Nostr App**,
+  give it a name (yours) and the permissions **Belfry event apps**, and copy the `bunker://` URL.
+- A holder who uses their own Nostr key gives you a bunker URL from their own signer instead.
+
+Treat the bunker URL like a password: don't log it, post it or pass it on. Its secret binds to the
+first client key that connects, so generate one client key, keep it, and reuse it for every
+session; a new client key needs a new bunker URL. The holder can end your access at any time
+(**Revoke Access** on their account page), and a pass that ends stops it everywhere.
+
+Any Nostr library with NIP-46 works (for example `nostr-tools` in JavaScript, or `nak` on the
+command line). Belfry's own reference agent is
+`services/onboarding/belfry_onboarding/agentcheck.py` in the Belfry repository: it does every
+step below through a bunker.
+
+### Rules
+
+- **Do what the holder asked.** Posts, reactions, invites and groups speak in the holder's name.
+  When unsure (a public post, an invite, adding or removing someone), ask first.
+- **Invites are the holder's to give.** A participant has a few invites (3 by default); a
+  steward's are not limited. Someone already in the village is not invited again.
+- **Photos and videos are public by URL**, also when you post them in a private group. Don't
+  upload anything the holder would not show to anyone with the link.
+
+### Where things are
+
+Every relay needs NIP-42 AUTH: answer the relay's `AUTH` challenge with a kind-22242 event
+(tags `["relay", "<the relay URL>"]`, `["challenge", "<challenge>"]`) signed through the bunker.
+Only keys with an active pass get in.
+
+| What | Where |
+| --- | --- |
+| Posts, replies, reactions, reposts for the whole village, profiles | community relay `wss://relay.<domain>` |
+| Groups (rooms): NIP-29 | groups relay `wss://groups-relay.<domain>` (the app: `groups.<domain>`) |
+| Photos and videos | Blossom `https://blossom.<domain>` |
+| Invites by e-mail | `https://pass.<domain>/api/invites` |
+| Signing (NIP-46) | `wss://bunker.<domain>`, named in the bunker URL |
+
+### Invites by e-mail
+
+`https://pass.<domain>/api/invites`, JSON in and out. Every request carries a NIP-98
+authorization: a kind-27235 event signed through the bunker, with tags
+`["u", "<the full request URL>"]` and `["method", "GET" | "POST"]`, and for a request with a body
+also `["payload", "<SHA-256 hex of the body>"]`. Send it as
+`Authorization: Nostr <base64 of the event JSON>`. It is valid for one minute and only once.
+
+```
+POST /api/invites
+{"email": "sam@example.org", "name": "Sam", "note": "met at the hackathon"}
+```
+
+Answer `201`: Belfry mailed the invite link to that address.
+
+```json
+{"id": 176, "state": "open", "email": "sam@example.org", "name": "Sam", "note": "met at the hackathon",
+ "url": "https://shop.<domain>/belfry/invite/…", "expires_at": "2026-11-13 12:00:00",
+ "pass_state": false, "npub": false}
+```
+
+- The invitee chooses a pass and pays on the page, themselves. Their npub exists only once the
+  pass is active. Until then `npub` is `false`.
+- `GET /api/invites/<id>` follows one invite: `state` is `open`, `reserved` (they ordered and the
+  payment is outstanding), `used`, `expired` or `revoked`; `pass_state` becomes `active` and `npub`
+  is their key (`npub1…`) once they have paid.
+- `GET /api/invites` lists the holder's invites by e-mail and says whether the holder is a steward.
+- `POST /api/invites/<id>/revoke` revokes an open invite and gives the holder the invite back.
+- The same address again returns the open invite; no second mail goes out. An address whose owner
+  already has an active pass answers `200` with `{"state": "member", "email", "npub"}`.
+
+Errors are `{"error", "message"}`: `401 unauthorized` (signature, URL, method, age, payload or a
+reused event), `403 no_pass` (the key holds no active pass), `404 not_found`, `409 refused` (for
+example no invites left; `message` says why), `400 invalid_json`, `422 invalid` (no e-mail).
+
+### Posts, replies, reactions, reposts
+
+Publish to the community relay, signed through the bunker:
+
+| Action | Event |
+| --- | --- |
+| Post | kind 1, the text in `content` |
+| Reply | kind 1 with `["e", "<root id>", "<relay>", "root"]`, plus `["e", "<parent id>", "<relay>", "reply"]` when answering a reply, and `["p", "<author pubkey>"]` |
+| Reaction | kind 7, `content` `+` or an emoji, tags `["e", "<id>"]`, `["p", "<author>"]`, `["k", "<kind of the event>"]` |
+| Repost | kind 6 for a kind-1 post (`content` the reposted event's JSON, tags `["e", "<id>", "<relay>"]`, `["p", "<author>"]`); kind 16 with `["k", "<kind>"]` for other kinds |
+| Delete own event | kind 5 with `["e", "<id>"]` |
+
+### Photos and videos
+
+1. Upload: `PUT https://blossom.<domain>/upload` with the file as the body, its `Content-Type`,
+   and `Authorization: Nostr <base64 event>`: a kind-24242 event with `content` "Upload <name>",
+   tags `["t", "upload"]`, `["x", "<SHA-256 hex of the file>"]`,
+   `["expiration", "<unix time, a few minutes ahead>"]`. The answer is
+   `{"url", "sha256", "size", "type"}`.
+2. Post: put the `url` in the text and add
+   `["imeta", "url <url>", "m <type>", "x <sha256>", "size <size>"]` to the event.
+
+Up to 25 MB per file. Images are kept for a year, videos and audio for three months.
+
+### Groups (rooms)
+
+Groups live on the groups relay. Every event about a group carries `["h", "<group id>"]`; choose
+the id yourself (lowercase letters, digits and `-`, for example `garden-team`). The holder who
+creates a group administers it; only a group's admins may change it or its members.
+
+| Action | Event |
+| --- | --- |
+| Create | kind 9007 with `["h", id]` |
+| Name, description, access | kind 9002 with `["h", id]`, `["name", …]`, `["about", …]`, optional `["picture", <url>]`, and for a **private** group `["private"]` and `["closed"]` (add `["hidden"]` to hide it from non-members). Without these tags the group is **public**: everyone in the village can read it and post in it. |
+| Add someone | kind 9000 with `["h", id]`, `["p", "<their pubkey hex>"]` |
+| Remove someone | kind 9001 with `["h", id]`, `["p", "<pubkey>"]` |
+| Message | kind 9 with `["h", id]`, the text in `content` (photos as above) |
+| Reply to a message | kind 9 with `["h", id]`, `["q", "<message id>", "<relay>", "<author>"]`, `["p", "<author>"]` |
+| Reaction, repost | as on the community relay (kind 7, kind 16 with `["k", "9"]`), plus `["h", id]` |
+
+The relay keeps each group's state and signs it: read kind 39000 (name and flags), 39001 (admins)
+and 39002 (members) with the filter `{"#d": [id]}`.
+
+To turn an npub into the hex pubkey that `p` tags need, decode it (bech32, NIP-19). The invite API
+gives you the invitee's npub once their pass is active, so you can then add them to a group.
+

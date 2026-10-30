@@ -63,4 +63,47 @@
 </div>
         </field>
     </record>
+
+    <!-- Sent when a pass holder (or an agent signing with the holder's key, pass.<domain>/api/invites)
+         invites someone by e-mail: the invite link, who invites, until when it works. Same look as
+         the activation mail. -->
+    <record id="mail_template_invite_by_mail" model="mail.template">
+        <field name="name">Open Source Village: invite by e-mail</field>
+        <field name="model_id" ref="belfry_pass.model_belfry_invite"/>
+        <field name="subject">{{ object.inviter_name or 'Someone in the village' }} invites you to Open Source Village</field>
+        <field name="email_from">{{ object.env.company.email_formatted or user.email_formatted }}</field>
+        <field name="use_default_to" eval="False"/>
+        <field name="email_to">{{ object.invitee_email }}</field>
+        <field name="auto_delete" eval="False"/>
+        <field name="body_html" type="html">
+<t t-set="public_url" t-value="(object.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')"/>
+<t t-set="brand_url" t-value="public_url + '/brand'"/>
+<div style="margin: 0; padding: 32px 12px; background-color: #2b3a31; font-family: Geist, -apple-system, 'Segoe UI', Arial, sans-serif; font-size: 15px; line-height: 1.5; color: #ffffff;">
+  <div style="max-width: 560px; margin: 0 auto; background-color: #1a231d; border: 1px solid #44534a; border-radius: 12px; padding: 28px;">
+    <p style="margin: 0 0 20px;"><img t-att-src="brand_url + '/osv-logo-horizontal-dark.png'" alt="Open Source Village" width="240" style="display: block; width: 240px; max-width: 100%; height: auto; border: 0;"/></p>
+    <p style="margin: 0 0 12px;">Hello<t t-if="object.invitee_name"> <t t-out="object.invitee_name"/></t>,</p>
+    <p style="margin: 0 0 12px;">
+        <strong><t t-out="object.inviter_name or 'Someone in the village'"/></strong> invites you to
+        Open Source Village. Places are given through people who know each other, so this link is for you only.
+    </p>
+    <p style="margin: 20px 0 12px;">
+        <a t-att-href="object.url" style="display: inline-block; background-color: #d6ff52; color: #1a231d; font-weight: 600; padding: 12px 22px; text-decoration: none; border-radius: 8px; font-size: 16px;">
+            Choose your pass
+        </a>
+    </p>
+    <p style="margin: 0 0 20px; color: #c9d1cb;">
+        The link works once, until <t t-out="format_datetime(object.expires_at, dt_format='long') if object.expires_at else ''"/>.
+        You choose a pass and pay on the page; your sign-in link follows by mail when the payment is in.
+        If you do not know who sent this, ignore it.
+    </p>
+    <p style="margin: 24px 0 0;">See you at the village,<br/>Open Source Village, run by Belfry</p>
+  </div>
+  <p style="margin: 16px 0 0; text-align: center; font-size: 12px; color: #8e9a91;">
+    Open Source Village, run by Belfry ·
+    <a t-att-href="public_url + '/help'" style="color: #8e9a91;">Help</a> ·
+    <a t-att-href="public_url + '/privacy'" style="color: #8e9a91;">Privacy</a>
+  </p>
+</div>
+        </field>
+    </record>
 </odoo>

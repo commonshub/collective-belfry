@@ -33,6 +33,7 @@ from . import (
     eudi,
     feedback,
     groups_members,
+    holder_invites,
     mypass,
     pages,
     programme,
@@ -168,6 +169,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     apply.register(app)  # /apply: applications to join (apply.py)
     volunteer.register(app)  # /shifts, /admin/shifts: volunteers' shifts (volunteer.py)
     wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
+    holder_invites.register(app)  # /api/invites: invites by e-mail, signed with the holder's key
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.

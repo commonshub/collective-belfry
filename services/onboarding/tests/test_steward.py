@@ -169,7 +169,11 @@ def test_add_steward_creates_or_reuses_the_user(services, authentik):
     first = steward.add_steward(services, "sam@belfry.test", "Steward Sam")
     assert first["created"] is True
     again = steward.add_steward(services, "sam@belfry.test")
-    assert again == {**first, "created": False}
+    assert again == {
+        **first,
+        "created": False,
+        "pass": {**first["pass"], "result": "already_active"},
+    }
     assert authentik.members("belfry-stewards") == {first["authentik_user"]}
     with pytest.raises(ValueError):
         steward.add_steward(services, "not-an-address")

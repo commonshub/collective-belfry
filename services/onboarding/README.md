@@ -52,7 +52,8 @@ line, for cron jobs and operators (`docker compose exec onboarding python -m bel
 | `sync-participants` | make the Authentik group `belfry-participants` match the active passes |
 | `publish-starter-events` | publish missing profiles, follow lists and relay lists of active passes; never overwrites |
 | `login-link <pass id>` | a new one-time sign-in link for that pass; Odoo mails it |
-| `add-steward <e-mail> [name]` | create or find the Authentik user and add it to `belfry-stewards` |
+| `add-steward <e-mail> [name]` | create or find the Authentik user, add it to `belfry-stewards` and give the steward a free pass |
+| `steward-passes` | give every member of `belfry-stewards` their free pass (idempotent; run on deploys) |
 | `restore-keys` | recreate every participant's signer account after losing the signer's data (custody seed needed) |
 
 `--http h11` matters: walt.id's Java client sends `Upgrade: h2c` over plain HTTP, which the

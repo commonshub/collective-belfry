@@ -12,3 +12,4 @@ from . import belfry_feedback
 from . import belfry_welcome
 from . import belfry_application
 from . import belfry_volunteer
+from . import belfry_holder_invites

@@ -59,6 +59,119 @@ class FakeOdoo(OdooApi):
 
     invites_per_participant = 3
 
+    mailed_invites: list[int] = []
+
+    def _holder_invites(self, method: str, args: list[Any]) -> Any:
+        """belfry_holder_invites.py: invites by e-mail for a pass holder."""
+        partner_id = args[0]
+        invites = self.tables["belfry.invite"]
+
+        def row(i: dict[str, Any]) -> dict[str, Any]:
+            p = self.tables["belfry.pass"].get(i.get("pass_id") or 0, {})
+            active = p.get("state") == "active"
+            npub = self.tables["res.partner"].get(p.get("partner_id"), {}).get("belfry_npub")
+            return {
+                "id": i["id"],
+                "state": i["state"],
+                "email": i.get("invitee_email") or "",
+                "name": i.get("invitee_name") or "",
+                "note": i.get("note") or "",
+                "url": i["url"],
+                "expires_at": i["expires_at"],
+                "pass_state": p.get("state") or False,
+                "npub": (npub or False) if active else False,
+            }
+
+        mine = [i for i in invites.values() if i.get("requested_by_partner_id") == partner_id]
+        if method == "belfry_holder_invites":
+            return [row(i) for i in sorted(mine, key=lambda i: -i["id"])]
+        if method == "belfry_holder_invite_get":
+            found = [i for i in mine if i["id"] == args[1]]
+            return row(found[0]) if found else False
+        if method == "belfry_holder_invite_revoke":
+            found = [i for i in mine if i["id"] == args[1]]
+            if not found:
+                raise OdooError("UserError", {"message": "No such invite."})
+            if found[0]["state"] == "open":
+                found[0]["state"] = "revoked"
+            return row(found[0])
+        # belfry_holder_invite(partner_id, email, name, note, steward_email)
+        email, name, note, steward_email = args[1], args[2], args[3], args[4]
+        if not any(
+            p.get("partner_id") == partner_id and p.get("state") == "active"
+            for p in self.tables["belfry.pass"].values()
+        ):
+            raise OdooError(
+                "UserError", {"message": "Only participants with an active pass can invite."}
+            )
+        for p in self.tables["belfry.pass"].values():
+            holder = self.tables["res.partner"].get(p.get("partner_id"), {})
+            if p.get("state") == "active" and (holder.get("email") or "").lower() == email.lower():
+                return {
+                    "state": "member",
+                    "email": email,
+                    "npub": holder.get("belfry_npub") or False,
+                }
+        for i in mine:
+            if (i.get("invitee_email") or "").lower() == email.lower() and i["state"] in (
+                "open",
+                "reserved",
+            ):
+                return row(i)
+        if steward_email:
+            made = self.execute_kw("belfry.invite", "belfry_steward_create", [steward_email, note])
+        else:
+            made = self._participant_invites("belfry_participant_create", [partner_id, note])
+        inv = invites[made["id"]]
+        inv.update(requested_by_partner_id=partner_id, invitee_email=email, invitee_name=name)
+        self.mailed_invites = [*self.mailed_invites, inv["id"]]
+        return row(inv)
+
+    def _steward_pass(self, email: str, name: Any) -> dict[str, Any]:
+        """belfry_steward.py: the steward's free pass on a zero-amount, paid invoice."""
+        partners = self.tables["res.partner"]
+        person = next(
+            (pid for pid, p in partners.items() if (p.get("email") or "").lower() == email.lower()),
+            None,
+        ) or self.add("res.partner", name=name or email, email=email)
+        for p in self.tables["belfry.pass"].values():
+            if p.get("partner_id") == person and p.get("state") in ("pending", "active"):
+                return {
+                    "pass_id": p["id"],
+                    "invoice_id": p.get("invoice_id") or False,
+                    "state": p["state"],
+                    "created": False,
+                }
+        if not self.tables["product.product"]:
+            self.add(
+                "product.product", name="Full access", belfry_tier="full", belfry_duration_days=0
+            )
+        product = next(
+            pid for pid, p in self.tables["product.product"].items() if p["belfry_tier"] == "full"
+        )
+        invoice = self.add(
+            "account.move",
+            name=f"INV/STEWARD/{person}",
+            move_type="out_invoice",
+            state="posted",
+            payment_state="paid",
+            partner_id=person,
+            invoice_date="2027-01-19",
+            transaction_ids=[],
+        )
+        self.add("account.move.line", move_id=invoice, product_id=product)
+        pass_id = self.add(
+            "belfry.pass",
+            partner_id=person,
+            tier="full",
+            product_id=product,
+            invoice_id=invoice,
+            state="pending",
+            steward_pass=True,
+            manual_paid_by=f"steward pass ({email})",
+        )
+        return {"pass_id": pass_id, "invoice_id": invoice, "state": "pending", "created": True}
+
     def _participant_invites(self, method: str, args: list[Any]) -> Any:
         """belfry_friends.py: a participant's own invites, within the limit."""
         partner_id = args[0]
@@ -394,6 +507,10 @@ class FakeOdoo(OdooApi):
             inv = self.tables[model][inv_id]
             inv["url"] = f"http://odoo.test/belfry/invite/{inv['token']}"
             return {"id": inv_id, "url": inv["url"], "token": inv["token"]}
+        if model == "belfry.invite" and method.startswith("belfry_holder_"):
+            return self._holder_invites(method, args)
+        if model == "belfry.pass" and method == "belfry_steward_pass":
+            return self._steward_pass(args[0], args[1] if len(args) > 1 else False)
         if model == "belfry.invite" and method.startswith("belfry_participant_"):
             return self._participant_invites(method, args)
         if model == "belfry.feedback" and method == "belfry_feedback_create":

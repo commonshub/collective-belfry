@@ -1,6 +1,7 @@
 """CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
 ``... sync-participants``; ``... login-link <pass id>`` for a new one-time sign-in link and
-``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward);
+``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward) and give them
+their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay;
 ``... sync-programme`` for the programme and room bookings as calendar events (programme.py)."""
 
@@ -36,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     add.add_argument("email")
     add.add_argument("name", nargs="?", default="")
+    sub.add_parser("steward-passes", help="give every member of the stewards group their free pass")
     sub.add_parser(
         "publish-starter-events",
         help="publish the missing profile, follow and relay lists of every active pass",
@@ -68,7 +70,11 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         result = core.publish_starter_events(services)
     elif args.command == "add-steward":
-        result = steward.add_steward(services, args.email, args.name)
+        result = steward.add_steward(
+            services, args.email, args.name, steward.activation_via_hook(services)
+        )
+    elif args.command == "steward-passes":
+        result = steward.steward_passes(services, steward.activation_via_hook(services))
     elif args.command == "sync-programme":
         result = programme.sync(services)
     elif args.command == "restore-keys":

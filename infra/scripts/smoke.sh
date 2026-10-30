@@ -709,6 +709,50 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
 fi
 echo "  note the browser check (silent sign-in, a room of one's own, a message read back) is infra/scripts/groups-check.mjs"
 
+step "6v. an agent acts for the participant with nothing but the bunker URL: invite by e-mail, photo, posts, groups"
+# agentcheck signs every step through the participant's bunker (NIP-46): an invite by e-mail on
+# /api/invites (NIP-98), a photo on Blossom, a note, reply, reaction and repost on the community
+# relay, a private group with a member and a public group on the groups relay. AGENT_MAP rewrites
+# public hosts for the transport inside the onboarding container (empty on a public deployment).
+AGENT_MAP=${AGENT_MAP-localhost:3080=keycast-relay:8080,localhost:3090=relay:8080,localhost:3190=groups-relay:3334,localhost:3100=blossom-gate:80}
+AGENT_INVITEE="agent-invitee-$(date +%s)@example.org"
+# The agent gets a bunker of its own: a bunker secret binds to the first client key that connects
+# (step 6i used the app's), so the participant connects one more app, as on the account page.
+AGENT_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
+if [[ -n "$AGENT_BUNKER" && "$AGENT_BUNKER" != "${KC_BUNKER:-}" ]]; then
+  AGENT=("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding.agentcheck "$AGENT_BUNKER"
+    --pass-url "${ONBOARDING_PUBLIC_URL:-http://localhost:8100}" --relay "${COMMUNITY_RELAY_URL:-ws://localhost:3090}"
+    --groups-relay "${GROUPS_RELAY_URL:-ws://localhost:3190}" --blossom "${BLOSSOM_PUBLIC_URL:-http://localhost:3100}"
+    --invite "$AGENT_INVITEE")
+  [[ -n "$AGENT_MAP" ]] && AGENT+=(--map "$AGENT_MAP")
+  if OUT=$("${AGENT[@]}" 2>&1); then sed 's/^/  /' <<<"$OUT"; ok "agent: invite, photo, posts and groups, all signed through the bunker"
+  else sed 's/^/  /' <<<"$OUT" >&2; bad "agent through the bunker"; fi
+  AGENT_INVITE=$(sed -n 's/^INVITE_ID=//p' <<<"$OUT")
+  if [[ -n "$AGENT_INVITE" ]]; then
+    N=$(ox mail.mail search_count "[[[\"model\",\"=\",\"belfry.invite\"],[\"res_id\",\"=\",$AGENT_INVITE],[\"email_to\",\"=\",\"$AGENT_INVITEE\"]]]")
+    [[ "$N" == 1 ]] && ok "the invite link is mailed to $AGENT_INVITEE" || bad "invite mails to $AGENT_INVITEE: $N"
+    ox belfry.invite action_revoke "[[$AGENT_INVITE]]" >/dev/null  # leave no open invite behind
+  fi
+else
+  bad "no second bunker URL for the agent ('$AGENT_BUNKER')"
+fi
+
+step "6w. stewards get a free pass: add-steward activates a full-access pass on a zero invoice"
+STEWARD_EMAIL="steward-$(date +%s)@example.org"
+OUT=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding add-steward "$STEWARD_EMAIL" "Smoke Steward" 2>/dev/null | tail -n1)
+SP_ID=$(jq -r '.pass.pass_id // empty' <<<"$OUT")
+[[ "$(jq -r .pass.state <<<"$OUT")" == active ]] && ok "add-steward: steward and free pass $SP_ID active ($(jq -r .pass.result <<<"$OUT"))" || bad "add-steward: $OUT"
+if [[ -n "$SP_ID" ]]; then
+  SP=$(ox belfry.pass read "[[$SP_ID]]" '{"fields":["state","tier","steward_pass","invoice_id"]}')
+  jq -e '.[0] | .state == "active" and .tier == "full" and .steward_pass' <<<"$SP" >/dev/null && ok "the steward pass is active, full access" || bad "steward pass: $SP"
+  INV=$(ox account.move read "[[$(jq -r '.[0].invoice_id[0]' <<<"$SP")]]" '{"fields":["amount_total","payment_state"]}')
+  jq -e '.[0] | .amount_total == 0 and .payment_state == "paid"' <<<"$INV" >/dev/null && ok "on a paid invoice of 0" || bad "steward invoice: $INV"
+  AGAIN=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding add-steward "$STEWARD_EMAIL" 2>/dev/null | tail -n1)
+  [[ "$(jq -r .pass.result <<<"$AGAIN")" == already_active && "$(jq -r .pass.pass_id <<<"$AGAIN")" == "$SP_ID" ]] && ok "add-steward again keeps the one pass" || bad "add-steward again: $AGAIN"
+  SREV=$(onb_post "/admin/passes/$SP_ID/revoke?token=$HOOK_TOKEN")
+  [[ "$(jq -r .result <<<"$SREV")" == revoked ]] && ok "smoke steward's pass revoked again" || bad "steward pass cleanup: $SREV"
+fi
+
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$RESEND")" == sent ]] && ok "POST /admin/passes/<id>/login-link -> sent" || bad "login-link endpoint: $RESEND"

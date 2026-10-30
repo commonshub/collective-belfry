@@ -20,6 +20,7 @@ import logging
 import secrets
 import time
 import urllib.parse
+from collections.abc import Callable
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -401,10 +402,12 @@ def revoke_pass(svc: Services, sess: dict[str, Any], pass_id: int) -> str:
     return core.revoke_pass(svc, pass_id, "steward")
 
 
-def add_steward(svc: Services, email: str, name: str = "") -> dict[str, Any]:
-    """Make the Authentik user with this e-mail a steward (CLI ``add-steward``). A participant
-    keeps their account; anyone else gets a new passwordless user (path belfry/stewards), who
-    signs in by magic link."""
+def add_steward(
+    svc: Services, email: str, name: str = "", activate: Activate | None = None
+) -> dict[str, Any]:
+    """Make the Authentik user with this e-mail a steward (CLI ``add-steward``) and give them
+    their free pass (``steward_pass``). A participant keeps their account; anyone else gets a new
+    passwordless user (path belfry/stewards), who signs in by magic link."""
     email = email.strip()
     if "@" not in email:
         raise ValueError(f"not an e-mail address: {email!r}")
@@ -429,7 +432,64 @@ def add_steward(svc: Services, email: str, name: str = "") -> dict[str, Any]:
         created = True
     ak.add_user_to_group(group["pk"], int(user["pk"]))
     log.info("add_steward: %s (Authentik user %s, created=%s)", email, user["pk"], created)
-    return {"email": email, "authentik_user": int(user["pk"]), "created": created}
+    return {
+        "email": email,
+        "authentik_user": int(user["pk"]),
+        "created": created,
+        "pass": steward_pass(svc, email, name or user.get("name") or "", activate),
+    }
+
+
+# Activates the pass of a paid invoice and returns core.activate_pass's result.
+Activate = Callable[[int], str]
+
+
+def activation_via_hook(svc: Services, url: str = "http://127.0.0.1:8100") -> Activate:
+    """For the CLI: the zero invoice fires Odoo's invoice-paid webhook to the running service at
+    once, and activation is serialized per invoice only inside that process. So the CLI asks the
+    service through the same hook instead of activating in a second process (two activations
+    would race: duplicate tokens, a serialization failure in Odoo)."""
+
+    def activate(invoice_id: int) -> str:
+        r = httpx.post(
+            f"{url}/hooks/odoo/invoice-paid",
+            params={"token": svc.settings.hook_token},
+            json={"_id": invoice_id, "_model": "account.move"},
+            timeout=120,
+        )
+        r.raise_for_status()
+        return str(r.json().get("result"))
+
+    return activate
+
+
+def steward_pass(
+    svc: Services, email: str, name: str = "", activate: Activate | None = None
+) -> dict[str, Any]:
+    """Stewards get a free pass (decided 2026-10-30): Odoo makes it on a zero-amount invoice
+    (``belfry_steward_pass``, idempotent) and it is activated like a paid one. A steward who
+    holds a pass already keeps it. Returns the pass id and the activation's result."""
+    row = svc.odoo.call("belfry.pass", "belfry_steward_pass", [email, name or False])
+    result = "already_" + row["state"] if row["state"] != "pending" else "pending"
+    if row["state"] == "pending" and row.get("invoice_id"):
+        result = (activate or (lambda i: core.activate_pass(svc, i)))(row["invoice_id"])
+    # Odoo's own invoice-paid webhook may have activated it first ("already_active")
+    state = (svc.odoo.read_one("belfry.pass", row["pass_id"], ["state"]) or {}).get("state")
+    log.info("steward pass for %s: pass %s, %s, %s", email, row["pass_id"], result, state)
+    return {"pass_id": row["pass_id"], "result": result, "state": state}
+
+
+def steward_passes(svc: Services, activate: Activate | None = None) -> dict[str, Any]:
+    """A free pass for every member of the stewards group (CLI ``steward-passes``, run by
+    deploys; ``add-steward`` gives new stewards theirs)."""
+    done: dict[str, Any] = {}
+    for email in svc.authentik.group_member_emails(svc.settings.steward_group):
+        try:
+            done[email] = steward_pass(svc, email, activate=activate)
+        except Exception as exc:  # one steward's failure must not stop the others
+            log.warning("steward pass for %s failed: %s", email, exc)
+            done[email] = {"error": str(exc)[:300]}
+    return {"stewards": done}
 
 
 # -- pages ---------------------------------------------------------------------------------------

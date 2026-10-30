@@ -626,6 +626,54 @@ User: how could an agent pay for a ticket (x402)? Then: build the API for the pa
 
 Open: paying without a human. The agent gets Odoo's payment link (a hosted page for cards and Mollie's methods). Next idea, not decided: an HTTP 402 answer with an x402 requirement in EURe (Monerium, euro e-money, the account Belfry books already) on Gnosis, settled by the onboarding service itself (Permit2 with EURe's ERC-2612 `permit`; Coinbase's facilitator does not serve Gnosis) and recorded in Odoo keyed on the transaction hash. To check first: which chain the Monerium IBAN is linked to, whether that account is an Odoo journal, `permit` in EURe v2 and Permit2 on Gnosis; x402 has no refunds or chargebacks.
 
+## 3zn. Agents act for a pass holder; stewards get a free pass — built 2026-10-30
+
+User: point an agent at belfry.opensourcevillage.org to invite people by e-mail and get their npub,
+create public or private groups with members, and post with photos and videos, reactions,
+replies and reposts. Decisions (user, 2026-10-30): no free passes for invitees (the invitee pays);
+"public" means visible to every member of Belfry; the agent acts as the agent of a pass holder
+(steward or villager) with that holder's rights; **no API key**: the agent signs with the
+holder's key through a Keycast bunker (or the holder's own signer), as the apps do. Stewards get a
+free pass automatically.
+
+- [x] Invites by e-mail, `pass.<domain>/api/invites` (onboarding `holder_invites.py`): every
+  request is NIP-98 (kind 27235, `u`, `method`, `payload` = SHA-256 of a body; one minute, each
+  event once), signed by a key with an active pass. A steward (Authentik `belfry-stewards`) invites
+  without limit, a participant within `belfry.invites_per_participant`. `POST` mails the invite
+  link to the invitee (Odoo `belfry_holder_invites.py`, template `mail_template_invite_by_mail`,
+  `use_default_to` off); `GET /api/invites[/<id>]` shows `state`, `pass_state` and the invitee's
+  `npub` once the pass is active; `POST …/<id>/revoke`. Same address again: the open invite, no
+  second mail; an address with an active pass: `{"state": "member", "npub"}`. Proxy zone
+  `<site>-api` 60/min.
+- [x] Posts, reactions, replies, reposts, photos and videos, groups: nothing new on the server.
+  The bunker signs kinds 1, 5, 6, 7, 9, 16, 1111, 9000–9010, 24242, 27235, 22242 (policy
+  `belfry-event`); the community relay, the groups relay (NIP-29: `private`, `closed`, `hidden` in
+  the 9002 metadata; none = public to every member) and the Blossom gate check the active pass.
+  Skill section 6 (`skills/open-source-village/SKILL.md`): getting a bunker URL ("Connect to Nostr
+  App" on `apps.<domain>`, permissions "Belfry event apps"), rules, NIP-98, event recipes, Blossom
+  upload with `imeta`, groups. Reference agent `belfry_onboarding.agentcheck` (signs everything
+  through a bunker; the transport may map public hosts to internal ones while the AUTH tags and
+  the Host header stay public, which zooid needs).
+- [x] Steward pass: `add-steward` also gives the steward a free pass, `steward-passes` backfills
+  every member of the stewards group (idempotent). Odoo `belfry_steward_pass` (19.0.1.22.0): the
+  `belfry.steward_pass_tier` product (default `full`) on an order with 100 % discount, invoice
+  posted (Odoo marks a zero invoice paid), `steward_pass` and `manual_paid_by` set, so activation
+  takes the usual path. The CLI hands activation to the running service through its invoice-paid
+  hook: Odoo's webhook fires for the zero invoice at once, and two processes activating the same
+  invoice raced (serialization failure, double side effects).
+- Found: a bunker secret binds to the first client key that connects ("Secret already used by
+  another client"), so an agent keeps its client key and needs a bunker of its own.
+- Checks: Odoo 100 tests (4 new), onboarding 257 (5 new: signatures, payload, replay, limits,
+  steward rights, steward pass); smoke 6v (an agent with a second bunker: invite mailed, photo on
+  Blossom, note/reply/reaction/repost, private group with a member, message/reply/reaction/repost
+  in it, a public group) and 6w (steward pass active on a paid zero invoice, idempotent); local
+  smoke 214 ok / 0 failed.
+
+Deploy (not done): bootstrap (module upgrade), Odoo restart, recreate onboarding, `caddy reload`,
+then `python -m belfry_onboarding steward-passes`. Open: no "Invite by e-mail" form on `/me` for
+people without an agent; posting in a public group as a non-member follows zooid's rules (only
+`closed` refuses non-members) and was read from the code, not tested with a second key.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

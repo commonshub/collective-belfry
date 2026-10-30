@@ -1,6 +1,6 @@
 import logging
 
-from odoo import api, fields, models
+from odoo import Command, api, fields, models
 from odoo.exceptions import AccessError, UserError
 
 _logger = logging.getLogger(__name__)
@@ -77,3 +77,59 @@ class BelfryPass(models.Model):
         _logger.info("Belfry pass %s: invoice %s marked paid by steward %s",
                      self.id, invoice.name, steward_email)
         return invoice.payment_state
+
+    steward_pass = fields.Boolean(
+        string="Steward pass", readonly=True, copy=False,
+        help="Given free to a steward (decided 2026-10-30): a zero-amount invoice, activated like "
+             "a paid one.",
+    )
+
+    @api.model
+    def belfry_steward_pass(self, email, name=False):
+        """The free pass of a steward (onboarding ``add-steward`` and ``steward-passes``): the
+        ``belfry.steward_pass_tier`` pass (default full access) on an invoice with a 100 %
+        discount, posted, hence paid, and marked like a steward's hand payment so activation
+        accepts it. Idempotent: a person who has a pending or active pass gets that one back.
+        Returns ``{'pass_id', 'invoice_id', 'state', 'created'}``."""
+        _check_service_caller(self.env)
+        email = (email or '').strip()
+        if '@' not in email:
+            raise UserError("A steward e-mail is required.")
+        Partner = self.env['res.partner'].sudo()
+        person = Partner.search([('email', '=ilike', email), ('is_company', '=', False)],
+                                order='id asc', limit=1)
+        if not person:
+            person = Partner.create({'name': (name or '').strip() or email, 'email': email, 'type': 'contact'})
+        existing = self.sudo().search(
+            [('partner_id', '=', person.id), ('state', 'in', ('pending', 'active'))], order='id desc', limit=1)
+        if existing:
+            return {'pass_id': existing.id, 'invoice_id': existing.invoice_id.id or False,
+                    'state': existing.state, 'created': False}
+        tier = self.env['ir.config_parameter'].sudo().get_param('belfry.steward_pass_tier') or 'full'
+        template = self.env['product.template'].sudo().search([('belfry_tier', '=', tier)], limit=1)
+        if not template:
+            raise UserError("No pass product for the steward pass tier %r." % tier)
+        product = template.product_variant_id
+        order = self.env['sale.order'].sudo().create({
+            'partner_id': person.id,
+            'origin': "Belfry steward pass",
+            'order_line': [Command.create({'product_id': product.id, 'product_uom_qty': 1, 'discount': 100.0})],
+        })
+        order.action_confirm()
+        invoice = order._create_invoices()
+        invoice.action_post()
+        if invoice.payment_state not in ('paid', 'in_payment'):
+            raise UserError("The steward pass invoice %s is not settled (%s)." % (invoice.name, invoice.payment_state))
+        record = self.sudo().create({
+            'partner_id': person.id,
+            'tier': tier,
+            'product_id': product.id,
+            'sale_order_id': order.id,
+            'invoice_id': invoice.id,
+            'company_id': order.company_id.id,
+            'steward_pass': True,
+            'manual_paid_by': "steward pass (%s)" % email,
+            'manual_paid_at': fields.Datetime.now(),
+        })
+        _logger.info("Belfry steward pass %s for %s (invoice %s)", record.id, email, invoice.name)
+        return {'pass_id': record.id, 'invoice_id': invoice.id, 'state': record.state, 'created': True}
