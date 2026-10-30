@@ -32,6 +32,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
 | `belfry_onboarding/stripe_sig.py`, `nostr.py` | Stripe signature check; npub encoding |
 | `belfry_onboarding/testwallet.py`, `nip46check.py` | a scripted wallet and a NIP-46 client, used by the smoke test |
+| `belfry_onboarding/agent.py`, `agentcheck.py` | an agent acting for a pass holder through their bunker URL: one action per call (`me`, `invite`, `invites`, `status`, `revoke`), and the smoke test's run through every step |
 | `tests/` | unit tests with in-memory fakes of Odoo, Authentik, Keycast and the mint |
 
 ## Run

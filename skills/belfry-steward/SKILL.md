@@ -78,6 +78,8 @@ As in the participant skill (section 6, "Invites by e-mail"). For a steward:
   active, and then you can add them to groups.
 - An address whose owner holds an active pass already answers `{"state": "member", "npub"}`:
   nobody is invited twice.
+- The participant skill shows the command that makes these calls for you
+  (`python -m belfry_onboarding.agent … invite <e-mail>`), the exact `u` tag and the rate limit.
 
 ### Groups (rooms) and their members
 

@@ -264,6 +264,30 @@ authorization: a kind-27235 event signed through the bunker, with tags
 also `["payload", "<SHA-256 hex of the body>"]`. Send it as
 `Authorization: Nostr <base64 of the event JSON>`. It is valid for one minute and only once.
 
+- **The `u` tag is the exact public URL** you send the request to:
+  `https://pass.<domain>/api/invites`, `https://pass.<domain>/api/invites/176`, with no trailing
+  `/` and no query string. Any other spelling (`http://`, a trailing `/`, an internal address)
+  answers `401`, even if the request reaches the server.
+- **At most 60 requests a minute** from one address to `https://pass.<domain>/api/*`; more answer
+  `429`. Wait a minute. Following an invite every few minutes is plenty: nothing changes until the
+  invitee pays.
+
+**The command.** The Belfry repository has one that does all of this for you
+(`services/onboarding`, `pip install ./services/onboarding`, Python 3.12):
+
+```
+export BELFRY_BUNKER='bunker://…'          # the holder's; keep it out of the command line
+python -m belfry_onboarding.agent --domain <domain> me
+python -m belfry_onboarding.agent --domain <domain> invite sam@example.org --name Sam --note "met at the hackathon"
+python -m belfry_onboarding.agent --domain <domain> invites
+python -m belfry_onboarding.agent --domain <domain> status 176
+python -m belfry_onboarding.agent --domain <domain> revoke 176
+```
+
+It prints the API's JSON (below) and exits with 0 on success. It keeps its client key in
+`~/.config/belfry-agent/<bunker pubkey>.key` (`--key-file` to choose), so the same bunker URL
+works on every run; delete the file only together with asking for a new bunker URL.
+
 ```
 POST /api/invites
 {"email": "sam@example.org", "name": "Sam", "note": "met at the hackathon"}
@@ -289,7 +313,8 @@ Answer `201`: Belfry mailed the invite link to that address.
 
 Errors are `{"error", "message"}`: `401 unauthorized` (signature, URL, method, age, payload or a
 reused event), `403 no_pass` (the key holds no active pass), `404 not_found`, `409 refused` (for
-example no invites left; `message` says why), `400 invalid_json`, `422 invalid` (no e-mail).
+example no invites left; `message` says why), `400 invalid_json`, `422 invalid` (no e-mail). A
+`429` (too many requests, see above) comes from the proxy, without a JSON body.
 
 ### Posts, replies, reactions, reposts
 

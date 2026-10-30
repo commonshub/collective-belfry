@@ -736,6 +736,26 @@ if [[ -n "$AGENT_BUNKER" && "$AGENT_BUNKER" != "${KC_BUNKER:-}" ]]; then
 else
   bad "no second bunker URL for the agent ('$AGENT_BUNKER')"
 fi
+# The one-action command (belfry_onboarding.agent) keeps its client key between runs, so one
+# bunker URL serves every call: me, invite, status, revoke, each a separate connection.
+CLI_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
+if [[ -n "$CLI_BUNKER" ]]; then
+  CLI_KEY="/tmp/belfry-agent-$(date +%s).key"
+  cli() { "${COMPOSE[@]}" exec -T -e BELFRY_BUNKER="$CLI_BUNKER" onboarding python -m belfry_onboarding.agent \
+    --domain "${BELFRY_DOMAIN:-localhost}" --pass-url "${ONBOARDING_PUBLIC_URL:-http://localhost:8100}" \
+    --key-file "$CLI_KEY" ${AGENT_MAP:+--map "$AGENT_MAP"} "$@" 2>&1; }
+  OUT=$(cli me); [[ "$(jq -r .member <<<"$OUT" 2>/dev/null)" == true ]] && ok "agent me: member" || bad "agent me: $(head -c 200 <<<"$OUT")"
+  CLI_INVITEE="agent-cli-$(date +%s)@example.org"
+  OUT=$(cli invite "$CLI_INVITEE" --name "CLI Invitee"); CLI_ID=$(jq -r '.id // empty' <<<"$OUT" 2>/dev/null)
+  [[ -n "$CLI_ID" ]] && ok "agent invite $CLI_INVITEE -> $CLI_ID (same client key, second connection)" || bad "agent invite: $(head -c 200 <<<"$OUT")"
+  if [[ -n "$CLI_ID" ]]; then
+    OUT=$(cli status "$CLI_ID"); [[ "$(jq -r .state <<<"$OUT")" == open ]] && ok "agent status: open" || bad "agent status: $(head -c 200 <<<"$OUT")"
+    OUT=$(cli revoke "$CLI_ID"); [[ "$(jq -r .state <<<"$OUT")" == revoked ]] && ok "agent revoke: revoked" || bad "agent revoke: $(head -c 200 <<<"$OUT")"
+  fi
+  "${COMPOSE[@]}" exec -T onboarding rm -f "$CLI_KEY"
+else
+  bad "no bunker URL for the agent command"
+fi
 
 step "6w. stewards get a free pass: add-steward activates a full-access pass on a zero invoice"
 STEWARD_EMAIL="steward-$(date +%s)@example.org"

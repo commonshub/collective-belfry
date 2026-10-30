@@ -165,6 +165,7 @@ class BunkerClient:
         timeout: float = 20.0,
         debug: bool = False,
         insecure_tls: bool = False,
+        client_key: bytes | None = None,
     ):
         import ssl
 
@@ -172,7 +173,9 @@ class BunkerClient:
 
         self.bunker_pubkey, relays, self.secret = parse_bunker_url(bunker_url)
         self.relay = hostmap(relays[0])
-        self.secret_key = PrivateKey().secret
+        # A bunker secret binds to the first client key that connects: callers that come back
+        # later pass the key they kept (agent.py), the checks use a throwaway one.
+        self.secret_key = client_key or PrivateKey().secret
         self.pubkey = PrivateKey(self.secret_key).public_key_xonly.format().hex()
         self.conv_key = conversation_key(self.secret_key, bytes.fromhex(self.bunker_pubkey))
         self.timeout = timeout

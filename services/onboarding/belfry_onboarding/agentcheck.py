@@ -42,8 +42,10 @@ from .nip46check import BunkerClient, HostMap, Nip46Error
 class Signer:
     """Signs unsigned events as the holder through the bunker."""
 
-    def __init__(self, bunker_url: str, hostmap: HostMap, timeout: float):
-        self.client = BunkerClient(bunker_url, hostmap, timeout)
+    def __init__(
+        self, bunker_url: str, hostmap: HostMap, timeout: float, client_key: bytes | None = None
+    ):
+        self.client = BunkerClient(bunker_url, hostmap, timeout, client_key=client_key)
         for attempt in range(1, 4):  # like real clients (see nip46check.run_check)
             try:
                 reply = self.client.call(
