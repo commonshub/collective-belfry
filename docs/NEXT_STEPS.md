@@ -669,8 +669,12 @@ free pass automatically.
   in it, a public group) and 6w (steward pass active on a paid zero invoice, idempotent); local
   smoke 214 ok / 0 failed.
 
-Deploy (not done): bootstrap (module upgrade), Odoo restart, recreate onboarding, `caddy reload`,
-then `python -m belfry_onboarding steward-passes`. Open: no "Invite by e-mail" form on `/me` for
+Deployed 2026-10-30 to belfry.tofauti.net and belfry.opensourcevillage.org (bootstrap, onboarding
+rebuilt, `caddy reload`, `steward-passes`: the stewards there held active passes already); smoke
+220 ok / 0 failed on both over TLS. Found on the servers: Blossom descriptors said `http://`
+because the gate replaced the public proxy's `X-Forwarded-Proto`; the gate now trusts private
+ranges (`infra/blossom/Caddyfile`, deploy with `up -d --force-recreate blossom-gate`). One
+belfry2 run missed Keycast's "Sign in with" button once (6d), green on the rerun. Open: no "Invite by e-mail" form on `/me` for
 people without an agent; posting in a public group as a non-member follows zooid's rules (only
 `closed` refuses non-members) and was read from the code, not tested with a second key.
 
