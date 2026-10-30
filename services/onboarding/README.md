@@ -26,6 +26,8 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/reports.py` | reports from the village apps and the list of hidden content |
 | `belfry_onboarding/pages.py`, `content/*.md` | the text pages (privacy notice, terms, refund policy, community rules, help): edit the Markdown in `content/` |
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
+| `belfry_onboarding/holder_invites.py` | invites by e-mail for a pass holder or their agent (`/api/invites`, NIP-98) |
+| `belfry_onboarding/discovery.py` | what an app needs to connect: `/.well-known/belfry.json`, `/api/me`, CORS of `/api/*` |
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
 | `belfry_onboarding/stripe_sig.py`, `nostr.py` | Stripe signature check; npub encoding |
 | `belfry_onboarding/testwallet.py`, `nip46check.py` | a scripted wallet and a NIP-46 client, used by the smoke test |
@@ -75,6 +77,7 @@ Every variable is listed with a comment in `infra/.env.example`; Compose passes 
 | Steward pages | `STEWARD_OIDC_CLIENT_ID`, `STEWARD_OIDC_CLIENT_SECRET`, `STEWARD_SESSION_SECRET`, `STEWARD_SESSION_HOURS` (12), `STEWARD_GROUP`; without the secrets `/steward` answers 503 |
 | Pass on the phone | `PASS_PAGE_OIDC_CLIENT_ID`, `PASS_PAGE_OIDC_CLIENT_SECRET`, `PASS_PAGE_SECRET`, `PASS_PAGE_SESSION_DAYS` (14); without the secrets `/me` and `/check` answer 503 |
 | Links on pages | `APPS_PUBLIC_URL`, `CHAT_PUBLIC_URL`, `CALENDAR_PUBLIC_URL`, `BRAND_DIR` |
+| Discovery, API | `COMMUNITY_NAME`, `ODOO_PUBLIC_URL`, `GROUPS_RELAY_URL`, `BUNKER_PUBLIC_RELAYS`, `BLOSSOM_PUBLIC_URL` (listed in `/.well-known/belfry.json`), `API_CORS_ORIGINS` (origins, comma separated or `*`, whose pages may call `/api/*`; empty: none) |
 | Shared secrets | `HOOK_TOKEN` (Odoo's webhooks and the admin routes), `PASS_INFO_TOKEN` (Keycast and the apps), `STRIPE_WEBHOOK_SECRET` |
 | Event | `EVENT_START`, `EVENT_END`, `RECONCILE_DAYS` (30), `ALLOW_MANUAL_PAYMENTS` (off), `BLOSSOM_HOSTS`, `LOG_LEVEL` |
 
@@ -90,6 +93,10 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `GET /feedback`, `POST /feedback` | none (the `/me` session names the participant) | feedback with an optional screenshot, stored in Odoo (`belfry.feedback`) and mailed to the stewards; `?from=` the page it is about |
 | `POST /me/invites`, `POST /me/invites/<id>/revoke` | `/me` session | invites for friends (`INVITES_PER_PARTICIPANT`, default 3, open or used), listed on `/me` |
 | `GET /health` | none | `{"status":"ok"}` |
+| `GET /.well-known/belfry.json` | none (CORS for every origin) | the community's name, relays, file server, mint, sign-in, APIs, apps and skills: an app asks for the domain only |
+| `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name and its passes (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
+| `/api/invites`, `/api/invites/<id>`, `POST /api/invites/<id>/revoke` | NIP-98, key with an active pass | invites by e-mail for a pass holder or their agent (`holder_invites.py`); stewards' are unlimited |
+| `GET /skill.md`, `/skills/<name>.md` | none | the agent skills in `skills/` with the deployment's domain filled in (`open-source-village`, `belfry-steward`) |
 | `POST /hooks/odoo/invoice-paid?token=` | `HOOK_TOKEN` | Odoo's webhook: activates the pass of the invoice (`_id`) |
 | `POST /hooks/odoo/refund?token=` | `HOOK_TOKEN` | Odoo's webhook: revokes the pass of a refunded transaction |
 | `POST /hooks/odoo/chargeback?token=` | `HOOK_TOKEN` | Odoo's webhook for a provider's chargeback (Mollie): open revokes the pass, reversed gives back a pass revoked for it; the state is read from Odoo |

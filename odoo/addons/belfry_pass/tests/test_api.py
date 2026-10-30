@@ -139,3 +139,25 @@ class TestPassApi(HttpCase):
         self.assertEqual(response.status_code, 410)
         self.assertEqual(response.json()['error'], 'expired')
         self.assertEqual(self._order(tier='week', name="A", email="a@example.org").status_code, 410)
+
+    def test_cors_for_configured_origins(self):
+        origin = 'http://localhost:5173'
+        self.assertNotIn('Access-Control-Allow-Origin',
+                         self.url_open(self.url, headers={'Origin': origin}).headers, "off by default")
+        self.assertEqual(self.url_open(self.url + '/order', method='OPTIONS', headers={
+            'Origin': origin, 'Access-Control-Request-Method': 'POST'}).status_code, 403)
+        self.env['ir.config_parameter'].sudo().set_param('belfry.api_cors_origins', 'https://app.test, %s' % origin)
+        response = self.url_open(self.url, headers={'Origin': origin})
+        self.assertEqual(response.headers['Access-Control-Allow-Origin'], origin)
+        preflight = self.url_open(self.url + '/order', method='OPTIONS', headers={
+            'Origin': origin, 'Access-Control-Request-Method': 'POST',
+            'Access-Control-Request-Headers': 'content-type'})
+        self.assertEqual(preflight.status_code, 204)
+        self.assertEqual(preflight.headers['Access-Control-Allow-Origin'], origin)
+        self.assertIn('Content-Type', preflight.headers['Access-Control-Allow-Headers'])
+        other = self.url_open(self.url, headers={'Origin': 'https://elsewhere.test'})
+        self.assertNotIn('Access-Control-Allow-Origin', other.headers)
+        # errors carry the headers too, so the page can read them
+        missing = self.url_open('/belfry/api/invites/no-such-token', headers={'Origin': origin})
+        self.assertEqual(missing.status_code, 404)
+        self.assertEqual(missing.headers['Access-Control-Allow-Origin'], origin)

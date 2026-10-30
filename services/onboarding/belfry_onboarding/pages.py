@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
 
 from . import claim
@@ -34,6 +34,7 @@ PAGES = {
 # The skill for an agent helping a visitor (skills/ in the repo, SKILLS_DIR in Compose), served at
 # /skill.md with the deployment's domain in place of <domain>.
 SKILL = "open-source-village/SKILL.md"
+_SKILL_NAME = re.compile(r"^[a-z0-9-]+$")
 
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
@@ -197,11 +198,11 @@ def site_domain(settings: Any) -> str:
     return host.removeprefix("pass.") if host.startswith("pass.") else ""
 
 
-def skill_text(settings: Any) -> str:
+def skill_text(settings: Any, skill: str = SKILL) -> str:
     # a local checkout finds the folder itself; in the image it is mounted (SKILLS_DIR)
     env = os.environ.get("SKILLS_DIR")
     skills_dir = Path(env) if env else Path(__file__).resolve().parents[3] / "skills"
-    text = (skills_dir / SKILL).read_text(encoding="utf-8")
+    text = (skills_dir / skill).read_text(encoding="utf-8")
     domain = site_domain(settings)
     return text.replace("<domain>", domain) if domain else text
 
@@ -219,4 +220,15 @@ def register(app: FastAPI) -> None:
     @app.get("/skill.md", include_in_schema=False)
     def skill(request: Request) -> Response:
         text = skill_text(request.app.state.services.settings)
+        return Response(text, media_type="text/markdown; charset=utf-8")
+
+    @app.get("/skills/{name}.md", include_in_schema=False)
+    def named_skill(name: str, request: Request) -> Response:
+        """Every skill in skills/ (/.well-known/belfry.json lists them), by its folder's name."""
+        if not _SKILL_NAME.match(name):
+            raise HTTPException(status_code=404)
+        try:
+            text = skill_text(request.app.state.services.settings, f"{name}/SKILL.md")
+        except FileNotFoundError:
+            raise HTTPException(status_code=404) from None
         return Response(text, media_type="text/markdown; charset=utf-8")

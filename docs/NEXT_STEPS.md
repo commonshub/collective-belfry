@@ -678,6 +678,44 @@ belfry2 run missed Keycast's "Sign in with" button once (6d), green on the rerun
 people without an agent; posting in a public group as a non-member follows zooid's rules (only
 `closed` refuses non-members) and was read from the code, not tested with a second key.
 
+## 3zo. Apps connect to a Belfry: discovery, /api/me, CORS, steward skill — built 2026-10-30
+
+User: a demo app for stewards who want a Belfry (a local server and frontend; a new key; choose
+the community; e-mail and a 6-digit code; membership and an invite code; a Discord-like chat), and
+skills so that anyone can build such an app with every identity and all data in the Belfry.
+Decision (user, 2026-10-30): **one key per Belfry**. Managed keys already are (each Belfry's own
+custody seed); an app that holds a member's seed derives one key per Belfry
+(`HKDF-SHA256(salt "belfry/member/v1", IKM = BIP-39 seed, info "belfry/nostr/v1/<domain>/<version>")`),
+so keys are not linkable across communities.
+
+- [x] `/.well-known/belfry.json` (onboarding `discovery.py`, on the apex and `pass.<domain>`, CORS
+  `*`): name, domain, relays (community, groups, signer), Blossom, mint, sign-in, APIs (`me`,
+  `invites`, `apply`, the pass API's `invite_offer`), apps (`COMMUNITY_APPS`), skills. New settings
+  `COMMUNITY_NAME`, `ODOO_PUBLIC_URL`, `GROUPS_RELAY_URL`, `BUNKER_PUBLIC_RELAYS`,
+  `BLOSSOM_PUBLIC_URL` (Compose passes the existing variables).
+- [x] `GET /api/me` (NIP-98): `member`, `steward`, NIP-05 name and the key's passes, by
+  `keycast_pubkey` or `own_pubkey` (a pass ordered with one's own key shows as `pending`); a key
+  without a pass gets `member: false`, not 403.
+- [x] CORS: `API_CORS_ORIGINS` (comma separated or `*`, empty = none) for `/api/*` in the
+  onboarding service (middleware, preflight 204/403, headers on errors too) and for the pass API in
+  Odoo (`belfry.api_cors_origins`, set by bootstrap; routes take `OPTIONS`). No cookies are
+  involved: the onboarding APIs authenticate NIP-98, the pass API the invite token.
+- [x] Skills: `skills/open-source-village` gains discovery, `/api/me`, section 7 (sessions as
+  NIP-52 kind 31923 with RSVPs, comments, photos, cancel; a session with its own group: `h` tag
+  with the groups relay on the event, a first kind-9 message with the event's `a` in the group) and
+  section 8 (apps that hold the participant's key: one key per Belfry, ordering with the proof,
+  waiting for `member`, no recovery by Belfry, own signer for Belfry's apps). New
+  `skills/belfry-steward`: how the pieces fit, `/api/me`, invites, groups, sessions, tokens, what
+  needs the steward pages or a server operator, what is not there yet. Served at
+  `/skills/<name>.md`.
+- Checks: onboarding 264 (7 new), Odoo `TestPassApi` 10 (1 new); locally `belfry.json`, `/api/me`
+  for a key without a pass, preflights refused without `API_CORS_ORIGINS`.
+- Open for the demo: an e-mail-code API that binds an app's key to an e-mail address (the code
+  today belongs to Authentik's sign-in flow and signs in a browser session, and only for existing
+  users); a steward API over NIP-98 (mark paid, revoke, applications); issuing extra tokens; short
+  invite codes; the event-to-group convention is documented, no app reads it yet; the zooid relay's
+  acceptance of the first message's `a` tag was not tested.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

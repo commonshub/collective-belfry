@@ -686,6 +686,14 @@ services:
       BRIDGE_CLIENT_ID: belfry-authentik
       EVENT_START: ${EVENT_START:-2027-01-25}
       SITE_URL: ${SITE_URL:-}
+      # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect
+      COMMUNITY_NAME: ${COMMUNITY_NAME:-Open Source Village}
+      ODOO_PUBLIC_URL: ${ODOO_PUBLIC_URL:-http://localhost:8069}
+      GROUPS_RELAY_URL: ${GROUPS_RELAY_URL:-ws://localhost:3190}
+      BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+      BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
+      # Origins whose pages may call /api/* (comma separated, or *); NIP-98 only, no cookies
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-}
       TEST_RUN_NOTICE: ${TEST_RUN_NOTICE:-}
       EVENT_END: ${EVENT_END:-2027-01-31}
       LOG_LEVEL: ${LOG_LEVEL:-info}

@@ -8,7 +8,10 @@ pass, its sign-in link and certificate go to the attendee's e-mail, never to the
 
 Errors are ``{"error": code, "message": text}``: 404 ``not_found``, 410 ``used`` / ``expired`` /
 ``revoked``, 409 ``reserved`` (an order waits already) or ``payment_under_way``, 400
-``invalid_json``, 422 ``invalid`` (the message says what to fix)."""
+``invalid_json``, 422 ``invalid`` (the message says what to fix).
+
+Pages on the origins in ``belfry.api_cors_origins`` (comma separated, or ``*``; bootstrap sets it
+from API_CORS_ORIGINS) may call the API from the browser; it takes no cookies."""
 
 import json
 import logging
@@ -27,9 +30,11 @@ ORDER_FIELDS = ('name', 'email', 'company_name', 'vat', 'promo_code', 'nostr_pub
 
 class BelfryPassApi(InviteCheckout, http.Controller):
 
-    @http.route('/belfry/api/invites/<string:token>', type='http', auth='public', methods=['GET'],
+    @http.route('/belfry/api/invites/<string:token>', type='http', auth='public', methods=['GET', 'OPTIONS'],
                 csrf=False, sitemap=False)
     def invite(self, token):
+        if request.httprequest.method == 'OPTIONS':
+            return self._preflight()
         invite, error = self._invite(token)
         if error == 'reserved':
             return self._json(self._reserved_values(invite))
@@ -37,9 +42,11 @@ class BelfryPassApi(InviteCheckout, http.Controller):
             return self._error(error)
         return self._json(self._offer(invite))
 
-    @http.route('/belfry/api/invites/<string:token>/order', type='http', auth='public', methods=['POST'],
-                csrf=False, sitemap=False)
+    @http.route('/belfry/api/invites/<string:token>/order', type='http', auth='public',
+                methods=['POST', 'OPTIONS'], csrf=False, sitemap=False)
     def order(self, token):
+        if request.httprequest.method == 'OPTIONS':
+            return self._preflight()
         invite, error = self._invite(token)
         if error:
             return self._error(error, invite)
@@ -59,8 +66,10 @@ class BelfryPassApi(InviteCheckout, http.Controller):
         return self._json(self._reserved_values(invite, link), status=201)
 
     @http.route('/belfry/api/invites/<string:token>/start-over', type='http', auth='public',
-                methods=['POST'], csrf=False, sitemap=False)
+                methods=['POST', 'OPTIONS'], csrf=False, sitemap=False)
     def start_over(self, token):
+        if request.httprequest.method == 'OPTIONS':
+            return self._preflight()
         invite, error = self._invite(token)
         if error != 'reserved':
             return self._error(error or 'open', invite,
@@ -148,8 +157,28 @@ class BelfryPassApi(InviteCheckout, http.Controller):
         post['own_key'] = bool(post['nostr_pubkey'])
         return self._clean_form(post)
 
+    def _cors_headers(self):
+        """CORS for the calling page's origin when ``belfry.api_cors_origins`` allows it."""
+        origin = request.httprequest.headers.get('Origin')
+        param = request.env['ir.config_parameter'].sudo().get_param('belfry.api_cors_origins') or ''
+        allowed = [o.strip().rstrip('/') for o in param.split(',') if o.strip()]
+        if not origin or not ('*' in allowed or origin.rstrip('/') in allowed):
+            return []
+        return [
+            ('Access-Control-Allow-Origin', '*' if '*' in allowed else origin),
+            ('Access-Control-Allow-Methods', 'GET, POST'),
+            ('Access-Control-Allow-Headers', 'Content-Type'),
+            ('Access-Control-Max-Age', '600'),
+            ('Vary', 'Origin'),
+        ]
+
+    def _preflight(self):
+        headers = self._cors_headers()
+        return request.make_response('', status=204 if headers else 403, headers=headers)
+
     def _json(self, data, status=200):
-        return request.make_json_response(data, status=status, headers=[('Cache-Control', 'no-store')])
+        return request.make_json_response(
+            data, status=status, headers=[('Cache-Control', 'no-store')] + self._cors_headers())
 
     def _error(self, code, invite=None, message=None, status=None):
         if code == 'reserved':

@@ -1,6 +1,6 @@
 ---
 name: open-source-village
-description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, or create and manage groups for them.
+description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, create and manage groups, or announce sessions and workshops for them, and when building an app that joins a Belfry community with the participant's own key.
 ---
 
 # Open Source Village: helping a visitor
@@ -18,6 +18,9 @@ The hosts are on `<domain>`, the domain of the visitor's invite link. The copy s
 | `shop.<domain>` | invite pages, the pass API, invoices and payment |
 | `<domain>` and `pass.<domain>` | start page, `/apply`, `/help`, `/me` (the visitor's pass), `/rules`, `/terms`, `/privacy`, `/refunds`, `/feedback` |
 | `login.<domain>` | the sign-in page |
+
+An app finds every address of a Belfry (relays, file server, mint, APIs, apps) in
+`https://<domain>/.well-known/belfry.json`, so it only needs to ask for the domain.
 
 ## Rules
 
@@ -107,7 +110,7 @@ Optional fields:
   the JSON object or its text) with tags `["u", "<the full order URL>"]` and
   `["method", "POST"]`, signed with that key in the visitor's own signer no more than 10 minutes
   before the order. Without these fields Belfry creates and keeps a key for the visitor, which
-  they can replace with their own later.
+  they can replace with their own later. An app that holds the visitor's key: see section 8.
 
 ### After ordering
 
@@ -334,3 +337,92 @@ and 39002 (members) with the filter `{"#d": [id]}`.
 To turn an npub into the hex pubkey that `p` tags need, decode it (bech32, NIP-19). The invite API
 gives you the invitee's npub once their pass is active, so you can then add them to a group.
 
+### Where a key stands
+
+`GET https://pass.<domain>/api/me`, NIP-98 signed like the invite API (`["u", "<that URL>"]`,
+`["method", "GET"]`), answers for the key that signed it, also when that key holds no pass:
+
+```json
+{"pubkey": "<hex>", "npub": "npub1…", "member": true, "steward": false,
+ "nip05": "osv-0042@<domain>",
+ "passes": [{"id": 17, "state": "active", "tier": "week", "date_start": "2027-01-25",
+             "date_end": "2027-01-31", "payment": "paid"}]}
+```
+
+`member` is true while a pass is `active`. A pass ordered with this key that isn't paid yet
+shows as `pending`; past ones as `expired` or `revoked`. A key Belfry doesn't know gets
+`"member": false, "passes": []`. Use it to show the holder where they stand, and wait for
+`member` before connecting to the relays (they refuse keys without an active pass).
+
+## 7. Sessions and workshops
+
+A session (talk, workshop, meetup) is a public NIP-52 time-based calendar event, **kind 31923**,
+on the community relay, in the holder's name. The calendar (`calendar.<domain>`, "From
+participants") and the programme (`programme.<domain>`) show it.
+
+| Tag | Value |
+| --- | --- |
+| `d` | `session-` and a few random characters, chosen once; editing republishes with the same `d` |
+| `title` | the title |
+| `start`, `end` | unix seconds |
+| `start_tzid`, `end_tzid` | `Europe/Brussels` (the village's time zone) |
+| `location` | the room or place |
+| `summary` | optional, one line |
+| `t` | optional hashtags, one tag each |
+| `r` | optional link |
+
+The description goes in `content`. Never use a `d` beginning with `osv-programme-` or
+`osv-room-`: those belong to the village programme. The session's address is its coordinate
+`31923:<pubkey hex>:<d>`, and the other apps point at it:
+
+| Action | Event |
+| --- | --- |
+| Going / maybe / can't go | kind 31925, `["a", "<coordinate>"]`, `["d", "<first 30 hex digits of SHA-256 of '<responder>:<author>:<d>'>"]`, `["status", "accepted" \| "tentative" \| "declined"]` |
+| Comment | kind 1111, `["A", "<coordinate>"]`, `["K", "31923"]`, `["P", "<author>"]`, `["a", "<coordinate>"]`, `["k", "31923"]`, `["p", "<author>"]` |
+| Photo from the session | kind 20 with the photo (`imeta`) and `["a", "<coordinate>"]` |
+| Cancel | kind 5 with `["a", "<coordinate>"]` and `["e", "<event id>"]` |
+
+### A session with its own group
+
+For a workshop that needs a room to talk in before and after, link a NIP-29 group (section 6,
+"Groups") and the session both ways:
+
+1. Create the group on the groups relay (kind 9007), then name it after the session (kind 9002,
+   `name` the session's title, `about` one line). Use an id derived from the session's `d`, for
+   example `session-k3x9q` → `ws-k3x9q`, so both are easy to find from each other. Leave it public
+   unless the session is invite-only.
+2. Publish the session (kind 31923) with an extra tag naming its group:
+   `["h", "<group id>", "wss://groups-relay.<domain>"]`.
+3. Post a first message in the group (kind 9 with `["h", "<group id>"]`) that points back at the
+   session: the text with the title and time, and the tag `["a", "<coordinate>",
+   "wss://relay.<domain>"]`.
+
+Apps that know this convention show "Join the group" on the session and the session in the group.
+People who say they're going (kind 31925) aren't added to the group automatically. In a public
+group every participant can read and post anyway; in a private one the group's admin adds them
+(kind 9000).
+
+## 8. Apps that hold the participant's key
+
+An app can keep the participant's key itself instead of Belfry's signer, for example a community
+app on the participant's own device. Then:
+
+- **One key per Belfry.** A key belongs to one community. If the app holds a seed (a BIP-39
+  mnemonic the participant writes down), derive a separate key for each Belfry:
+  `HKDF-SHA256(salt "belfry/member/v1", IKM = the 64-byte BIP-39 seed, info
+  "belfry/nostr/v1/<domain>/<version>")`, 32 bytes, `version` starting at `0` (use the next
+  version if the result is not a valid secp256k1 secret key). The same mnemonic restores the key
+  for every Belfry, and nobody can link a participant's keys across communities.
+- **Join with it.** Order the pass with `nostr_pubkey` and `nostr_proof` (section 2): the proof is
+  a kind-27235 event signed with the new key, tags `["u", "<the full order URL>"]` and
+  `["method", "POST"]`, no more than 10 minutes old. The key must not belong to anyone else.
+- **Wait for the pass.** After payment, poll `GET /api/me` (section 6) until `member` is true;
+  only then do the relays let the key in (NIP-42 AUTH, signed by the app with the key).
+- **Belfry can't recover this key.** The mnemonic is the backup; tell the participant. A lost
+  mnemonic means a lost key (the pass stays in Odoo; ask a steward).
+- **Signing in to Belfry's own apps** (chat, calendar, wallet) then goes through the app's own
+  signer, for example as a NIP-46 bunker or a NIP-07 browser extension, not "Sign in with Open
+  Source Village", which serves keys Belfry keeps.
+- **From the browser.** The JSON APIs answer pages of other origins only when the Belfry lists
+  them (`API_CORS_ORIGINS`). Otherwise call them from the app's own server. NIP-98 events name the
+  Belfry's public URL in their `u` tag either way. Relays (WebSockets) need no CORS.

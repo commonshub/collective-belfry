@@ -95,6 +95,16 @@ class Settings(BaseSettings):
     apps_public_url: str = Field(default="", alias="APPS_PUBLIC_URL")
     chat_public_url: str = Field(default="", alias="CHAT_PUBLIC_URL")
     calendar_public_url: str = Field(default="", alias="CALENDAR_PUBLIC_URL")
+    # The community's name and the other public addresses, for /.well-known/belfry.json
+    # (discovery.py): what an app needs to connect to this Belfry. Empty ones are left out.
+    community_name: str = Field(default="Open Source Village", alias="COMMUNITY_NAME")
+    odoo_public_url: str = Field(default="", alias="ODOO_PUBLIC_URL")
+    groups_relay_public_url: str = Field(default="", alias="GROUPS_RELAY_URL")
+    bunker_relays: str = Field(default="", alias="BUNKER_PUBLIC_RELAYS")
+    blossom_public_url: str = Field(default="", alias="BLOSSOM_PUBLIC_URL")
+    # Origins (comma separated, or *) whose pages may call the JSON APIs (/api/*) from the
+    # browser. The APIs take no cookies, only NIP-98 headers. Empty: same origin only.
+    api_cors_origins: str = Field(default="", alias="API_CORS_ORIGINS")
     # status_list.uri in the credential, as the verifier reaches it (Compose: service name).
     status_list_url: str = Field(default="", alias="STATUS_LIST_URL")
     # How long verifiers may cache the status list (ttl claim and Cache-Control max-age), in
