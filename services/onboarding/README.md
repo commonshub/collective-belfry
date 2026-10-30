@@ -28,6 +28,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
 | `belfry_onboarding/holder_invites.py` | invites by e-mail for a pass holder or their agent (`/api/invites`, NIP-98) |
 | `belfry_onboarding/discovery.py` | what an app needs to connect: `/.well-known/belfry.json`, `/api/me`, CORS of `/api/*` |
+| `belfry_onboarding/email_code.py` | an app's own key proves an e-mail address with a mailed 6-digit code (`/api/email-code`) |
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
 | `belfry_onboarding/stripe_sig.py`, `nostr.py` | Stripe signature check; npub encoding |
 | `belfry_onboarding/testwallet.py`, `nip46check.py` | a scripted wallet and a NIP-46 client, used by the smoke test |
@@ -94,7 +95,8 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `POST /me/invites`, `POST /me/invites/<id>/revoke` | `/me` session | invites for friends (`INVITES_PER_PARTICIPANT`, default 3, open or used), listed on `/me` |
 | `GET /health` | none | `{"status":"ok"}` |
 | `GET /.well-known/belfry.json` | none (CORS for every origin) | the community's name, relays, file server, mint, sign-in, APIs, apps and skills: an app asks for the domain only |
-| `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name and its passes (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
+| `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name, `email` and its passes (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
+| `POST /api/email-code`, `POST /api/email-code/verify` | NIP-98, any key | Odoo mails a 6-digit code (10 minutes, five tries, five codes per address and ten per key in 30 minutes); the right code records the key on the address's contact (`belfry_verified_pubkey`, the contact created if needed), never over a key the contact holds (`409 other_key`) |
 | `/api/invites`, `/api/invites/<id>`, `POST /api/invites/<id>/revoke` | NIP-98, key with an active pass | invites by e-mail for a pass holder or their agent (`holder_invites.py`); stewards' are unlimited |
 | `GET /skill.md`, `/skills/<name>.md` | none | the agent skills in `skills/` with the deployment's domain filled in (`open-source-village`, `belfry-steward`) |
 | `POST /hooks/odoo/invoice-paid?token=` | `HOOK_TOKEN` | Odoo's webhook: activates the pass of the invoice (`_id`) |

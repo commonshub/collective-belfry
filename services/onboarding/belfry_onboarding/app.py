@@ -31,6 +31,7 @@ from . import (
     claim,
     core,
     discovery,
+    email_code,
     eudi,
     feedback,
     groups_members,
@@ -172,6 +173,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
     holder_invites.register(app)  # /api/invites: invites by e-mail, signed with the holder's key
     discovery.register(app)  # /.well-known/belfry.json, /api/me, CORS of /api/* (discovery.py)
+    email_code.register(app)  # /api/email-code: an app's own key proves an e-mail address
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.

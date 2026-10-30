@@ -46,6 +46,7 @@ class ApiError(Exception):
         self.status = status
         self.error = error
         self.message = message
+        self.extra: dict[str, Any] = {}  # more fields for the answer (tries_left, npub)
 
 
 class SeenEvents:
@@ -157,7 +158,7 @@ def register(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def api_error(_request: Request, exc: ApiError):
         return JSONResponse(
-            {"error": exc.error, "message": exc.message},
+            {"error": exc.error, "message": exc.message, **exc.extra},
             status_code=exc.status,
             headers={"Cache-Control": "no-store"},
         )

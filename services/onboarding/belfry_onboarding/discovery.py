@@ -6,7 +6,8 @@ file server, mint, sign-in, APIs, apps and agent skills, so an app asks for the 
 
 ``GET /api/me`` answers for the key that signed the request (NIP-98, as ``/api/invites``):
 whether it holds an active pass, its passes (also one ordered with this key and not yet paid),
-its NIP-05 name and whether its holder is a steward. Unlike ``/api/invites`` it answers keys
+its NIP-05 name, whether its holder is a steward and the e-mail address behind it (also one the
+key proved with ``/api/email-code``). Unlike ``/api/invites`` it answers keys
 without a pass too, so an app can show a visitor where they stand.
 
 ``API_CORS_ORIGINS`` lets pages on other origins (a local app, another community's site) call
@@ -56,6 +57,7 @@ def document(settings: Any) -> dict[str, Any]:
     api = {
         "me": public + ME,
         "invites": public + "/api/invites",
+        "email_code": public + "/api/email-code",
         "apply": site + "/apply",
         "invite_offer": shop + "/belfry/api/invites/{token}" if shop else "",
         "wallet_pass_tokens": public + "/wallet/pass-tokens",
@@ -112,14 +114,16 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
     ]
     active = next((r for r in rows if r["state"] == "active"), None)
     partner_id = m2o_id((active or (rows[0] if rows else {})).get("partner_id"))
+    partner_fields = ["email", "belfry_member_number", "belfry_authentik_user_id"]
     partner: dict[str, Any] = {}
     if partner_id:
-        partner = (
-            svc.odoo.read_one(
-                "res.partner", partner_id, ["belfry_member_number", "belfry_authentik_user_id"]
-            )
-            or {}
+        partner = svc.odoo.read_one("res.partner", partner_id, partner_fields) or {}
+    else:
+        # no pass yet: the contact whose address this key proved (/api/email-code)
+        found_partners = svc.odoo.search_read(
+            "res.partner", [["belfry_verified_pubkey", "=", pubkey]], partner_fields, limit=1
         )
+        partner = found_partners[0] if found_partners else {}
     number = partner.get("belfry_member_number") or ""
     user_pk = partner.get("belfry_authentik_user_id")
     steward = bool(active and user_pk) and int(user_pk) in svc.authentik.group_member_pks(
@@ -131,6 +135,8 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         "member": active is not None,
         "steward": steward,
         "nip05": f"{number.lower()}@{svc.settings.nip05_domain}" if active and number else None,
+        # the address of the contact behind the passes or the one this key proved by e-mail
+        "email": partner.get("email") or None,
         "passes": passes,
     }
 

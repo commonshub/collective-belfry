@@ -716,6 +716,32 @@ so keys are not linkable across communities.
   invite codes; the event-to-group convention is documented, no app reads it yet; the zooid relay's
   acceptance of the first message's `a` tag was not tested.
 
+## 3zp. E-mail code for an app's own key — built 2026-10-30
+
+User: the demo app asks for an e-mail address and a 6-digit code after making its key. Authentik's
+code belongs to its sign-in flow (a browser session, existing users only), so Belfry has its own:
+
+- [x] Odoo `belfry.key.code` (19.0.1.23.0, `models/belfry_key_code.py`): `belfry_key_code_send`
+  mails a code (template `mail_template_key_code`, the code in the subject and body, rendered at
+  send time and kept only as a hash; the mail queue is triggered at once), 10 minutes, a new code
+  ends the previous one, five codes per address and ten per key in 30 minutes;
+  `belfry_key_code_verify` allows five tries. The right code records the key on the address's
+  contact as `belfry_verified_pubkey` (+ `belfry_email_verified_at`), creating a contact if there
+  is none. It never writes `belfry_npub`: a contact holding another key answers `other_key` with
+  that npub, and a key verified or held by another contact answers `key_taken`. The invite page
+  refuses an own key that another contact verified.
+- [x] Onboarding `email_code.py`: `POST /api/email-code` (202 for any address, 429) and
+  `POST /api/email-code/verify` (200 `bound`; 422 `wrong_code` with `tries_left`, 410 `expired`,
+  409 `other_key` / `key_taken`), NIP-98 signed by the app's key, which needs no pass. `/api/me`
+  adds `email` (behind the passes, or the one the key proved). Listed in `belfry.json`.
+- [x] Skill section 8: proving the address before ordering; the steward skill no longer lists it
+  as missing.
+- Checks: Odoo `TestKeyCode` 6; onboarding 268 (4 new); locally: code mailed in 2 s (Mailpit),
+  wrong code refused, right code bound, `/api/me` shows the address.
+- Open: a contact holding another key has no way to move to the app's key from the app (the
+  account page's self-custody move does it); the code in the subject shows in lock-screen
+  previews, as most services do.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

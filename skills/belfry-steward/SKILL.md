@@ -58,7 +58,7 @@ tells an app where its own key stands, not someone else's:
 
 ```json
 {"pubkey": "<hex>", "npub": "npub1…", "member": true, "steward": true,
- "nip05": "osv-0042@<domain>",
+ "nip05": "osv-0042@<domain>", "email": "dana@example.org",
  "passes": [{"id": 17, "state": "active", "tier": "full", "date_start": "2027-01-25",
              "date_end": "2027-01-31", "payment": "paid"}]}
 ```
@@ -131,6 +131,4 @@ Groups → `belfry-stewards`).
 These are planned, not available, so don't promise them:
 - a steward API over NIP-98 for what the steward pages do (mark paid, revoke, applications);
 - issuing extra village tokens;
-- signing in with an e-mail code from another app and binding that app's key to the e-mail
-  address (today the e-mail code signs in to Belfry's own apps only);
 - stewards as moderators of every group.

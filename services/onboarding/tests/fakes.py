@@ -26,6 +26,7 @@ M2O: dict[str, set[str]] = {
     "belfry.report": {"reporter_pass_id", "target_pass_id"},
     "product.product": set(),
     "res.partner": set(),
+    "belfry.key.code": set(),
 }
 UNIQUE: dict[str, list[str]] = {
     "belfry.pass": ["invoice_id", "stripe_payment_intent", "claim_token"],
@@ -60,6 +61,43 @@ class FakeOdoo(OdooApi):
     invites_per_participant = 3
 
     mailed_invites: list[int] = []
+
+    def _key_codes(self, method: str, args: list[Any]) -> Any:
+        """belfry_key_code.py: e-mail codes for an app's key. The mailed code lands in
+        ``mailed_codes[email]``; ``key_code_answer`` overrides the next verify answer."""
+        codes = self.tables["belfry.key.code"]
+        email, pubkey = args[0], args[1]
+        if "@" not in email:
+            raise OdooError("A valid e-mail address is required.")
+        if method == "belfry_key_code_send":
+            if sum(1 for c in codes.values() if c["email"] == email) >= 5:
+                return {"state": "too_many"}
+            code = f"{len(codes) + 123456}"
+            self.add("belfry.key.code", email=email, pubkey=pubkey, code=code, tries=0, app=args[2])
+            self.mailed_codes = {**self.mailed_codes, email: code}
+            return {"state": "sent", "expires_at": "2027-01-25 10:10:00"}
+        if method == "belfry_key_code_verify":
+            if self.key_code_answer:
+                answer, self.key_code_answer = self.key_code_answer, None
+                return answer
+            live = [c for c in codes.values() if c["email"] == email and c["pubkey"] == pubkey]
+            if not live or live[-1]["tries"] >= 5 or live[-1].get("used"):
+                return {"state": "expired"}
+            rec = live[-1]
+            rec["tries"] += 1
+            if rec["code"] != args[2]:
+                return {"state": "wrong_code", "tries_left": 5 - rec["tries"]}
+            rec["used"] = True
+            partner = next(
+                (p for p in self.tables["res.partner"].values() if p.get("email") == email), None
+            )
+            pid = partner["id"] if partner else self.add("res.partner", name=email, email=email)
+            self.tables["res.partner"][pid]["belfry_verified_pubkey"] = pubkey
+            return {"state": "bound", "email": email, "npub": "npub-of-" + pubkey, "member": False}
+        raise NotImplementedError(method)
+
+    mailed_codes: dict[str, str] = {}
+    key_code_answer: dict[str, Any] | None = None
 
     def _holder_invites(self, method: str, args: list[Any]) -> Any:
         """belfry_holder_invites.py: invites by e-mail for a pass holder."""
@@ -507,6 +545,8 @@ class FakeOdoo(OdooApi):
             inv = self.tables[model][inv_id]
             inv["url"] = f"http://odoo.test/belfry/invite/{inv['token']}"
             return {"id": inv_id, "url": inv["url"], "token": inv["token"]}
+        if model == "belfry.key.code":
+            return self._key_codes(method, args)
         if model == "belfry.invite" and method.startswith("belfry_holder_"):
             return self._holder_invites(method, args)
         if model == "belfry.pass" and method == "belfry_steward_pass":

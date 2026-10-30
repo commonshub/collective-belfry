@@ -344,14 +344,15 @@ gives you the invitee's npub once their pass is active, so you can then add them
 
 ```json
 {"pubkey": "<hex>", "npub": "npub1…", "member": true, "steward": false,
- "nip05": "osv-0042@<domain>",
+ "nip05": "osv-0042@<domain>", "email": "dana@example.org",
  "passes": [{"id": 17, "state": "active", "tier": "week", "date_start": "2027-01-25",
              "date_end": "2027-01-31", "payment": "paid"}]}
 ```
 
 `member` is true while a pass is `active`. A pass ordered with this key that isn't paid yet
 shows as `pending`; past ones as `expired` or `revoked`. A key Belfry doesn't know gets
-`"member": false, "passes": []`. Use it to show the holder where they stand, and wait for
+`"member": false, "passes": []`. `email` is the address behind the passes, or the one the key
+proved with `/api/email-code` (section 8); `null` otherwise. Use it to show the holder where they stand, and wait for
 `member` before connecting to the relays (they refuse keys without an active pass).
 
 ## 7. Sessions and workshops
@@ -413,6 +414,23 @@ app on the participant's own device. Then:
   "belfry/nostr/v1/<domain>/<version>")`, 32 bytes, `version` starting at `0` (use the next
   version if the result is not a valid secp256k1 secret key). The same mnemonic restores the key
   for every Belfry, and nobody can link a participant's keys across communities.
+- **Prove the e-mail address** (optional before ordering, useful to find out where someone
+  stands). Both calls are NIP-98 signed with the key, which needs no pass:
+
+  ```
+  POST https://pass.<domain>/api/email-code         {"email": "dana@example.org", "app": "Your app's name"}
+  POST https://pass.<domain>/api/email-code/verify  {"email": "dana@example.org", "code": "123456", "name": "Dana"}
+  ```
+
+  The first answers `202` `{"state": "sent"}` for any address and mails a 6-digit code, valid for
+  10 minutes. Ask the participant to type it in your app: never read their mailbox. The second
+  answers `200` `{"state": "bound", "email", "npub", "member"}`: the key is recorded on the
+  address's contact (created if needed), and `GET /api/me` now shows the address. Errors:
+  `422 wrong_code` (with `tries_left`; five wrong tries end the code), `410 expired` (ask for a
+  new code), `429 too_many` (five codes per address in half an hour), `409 other_key` (this
+  address already holds another key in this Belfry: its `npub` is in the answer; the participant
+  uses that key or moves to the new one on their account page; nothing changed), `409 key_taken`
+  (the key is someone else's).
 - **Join with it.** Order the pass with `nostr_pubkey` and `nostr_proof` (section 2): the proof is
   a kind-27235 event signed with the new key, tags `["u", "<the full order URL>"]` and
   `["method", "POST"]`, no more than 10 minutes old. The key must not belong to anyone else.
