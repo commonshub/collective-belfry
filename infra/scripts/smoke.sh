@@ -752,6 +752,17 @@ if [[ -n "$SP_ID" ]]; then
   SREV=$(onb_post "/admin/passes/$SP_ID/revoke?token=$HOOK_TOKEN")
   [[ "$(jq -r .result <<<"$SREV")" == revoked ]] && ok "smoke steward's pass revoked again" || bad "steward pass cleanup: $SREV"
 fi
+# the smoke steward leaves the stewards group again (steward-passes would give it a pass back)
+SGONE=$("${COMPOSE[@]}" exec -T onboarding python -c '
+import sys
+from belfry_onboarding.app import build_services
+from belfry_onboarding.settings import Settings
+s = build_services(Settings()); ak = s.authentik
+group = ak.find_group(s.settings.steward_group)
+for u in ak.find_users_by_email(sys.argv[1]):
+    ak.remove_user_from_group(group["pk"], int(u["pk"]))
+print(sys.argv[1] in ak.group_member_emails(s.settings.steward_group))' "$STEWARD_EMAIL" 2>/dev/null | tail -n1)
+[[ "$SGONE" == False ]] && ok "smoke steward removed from the stewards group" || bad "smoke steward still a steward ($SGONE)"
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
