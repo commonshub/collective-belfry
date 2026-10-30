@@ -5,6 +5,12 @@
 {
 	auto_https off
 	admin off
+	# Keep the public proxy's X-Forwarded-Proto (https): blossom-server builds the blob URLs in
+	# its descriptors from it, which came back as http:// behind the gate. Only the public proxy
+	# (and, locally, the host) reach the gate, both from private Docker addresses.
+	servers {
+		trusted_proxies static private_ranges
+	}
 }
 
 :80 {
