@@ -1,0 +1,1 @@
+{"root":["./src/config.ts","./src/main.tsx","./src/core/actions.ts","./src/core/auth.ts","./src/core/db.ts","./src/core/model.ts","./src/core/store.ts","./src/core/sync.ts","./src/ui/App.tsx","./src/ui/Calendar.tsx","./src/ui/ChannelInfo.tsx","./src/ui/Chat.tsx","./src/ui/Login.tsx","./src/ui/common.tsx","./vite.config.ts"],"version":"5.6.3"}

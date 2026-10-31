@@ -1,0 +1,129 @@
+import { useEffect, useState, type ReactNode } from 'react'
+import { db } from '../core/db'
+import { displayName, profiles, type Media } from '../core/model'
+import { outboxItems, status, useVersion } from '../core/store'
+import { isLocalOnly } from '../core/sync'
+import { BELFRY } from '../config'
+
+// ---- hash router: #/c/general, #/c/general/info, #/cal, #/cal/<d>, #/me, #/channels
+
+export function useRoute(): string[] {
+  const [h, setH] = useState(location.hash)
+  useEffect(() => {
+    const on = () => setH(location.hash)
+    addEventListener('hashchange', on)
+    return () => removeEventListener('hashchange', on)
+  }, [])
+  return h.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent)
+}
+
+export const go = (path: string) => { location.hash = '#/' + path }
+export const back = (fallback: string) => (history.length > 1 ? history.back() : go(fallback))
+
+// ---- avatars -----------------------------------------------------------------
+
+const COLORS = ['#d6ff52', '#f89b0e', '#7ee0a1', '#5ec8e5', '#c792ea', '#ff9a8a', '#f2d06b']
+
+export function Avatar({ pubkey, size = 36 }: { pubkey: string; size?: number }) {
+  const p = profiles().get(pubkey)
+  const name = displayName(pubkey)
+  const color = COLORS[parseInt(pubkey.slice(0, 6) || '0', 16) % COLORS.length]
+  return (
+    <div className="avatar" style={{ background: color, width: size, height: size, fontSize: size * 0.42 }}>
+      {p?.picture ? <img src={p.picture} alt="" loading="lazy" /> : (name[0] ?? '?').toUpperCase()}
+    </div>
+  )
+}
+
+// ---- media: idb: URLs are files that only exist on this device (demo / not yet uploaded)
+
+const objectUrls = new Map<string, string>()
+
+export function useMediaUrl(url: string) {
+  const [src, setSrc] = useState(() => (url.startsWith('idb:') ? objectUrls.get(url) : url))
+  useEffect(() => {
+    if (!url.startsWith('idb:') || objectUrls.has(url)) return
+    let live = true
+    db().then((d) => d.get('blobs', url.slice(4))).then((b) => {
+      if (!b || !live) return
+      const u = URL.createObjectURL(b)
+      objectUrls.set(url, u)
+      setSrc(u)
+    })
+    return () => { live = false }
+  }, [url])
+  return src
+}
+
+export function MediaItem({ m }: { m: Media }) {
+  const src = useMediaUrl(m.url)
+  if (!src) return <div className="file">…</div>
+  if (m.mime.startsWith('image/'))
+    return (
+      <a href={src} target="_blank" rel="noreferrer">
+        <img src={src} alt={m.name ?? ''} loading="lazy" style={m.w && m.h ? { aspectRatio: `${m.w}/${m.h}` } : undefined} />
+      </a>
+    )
+  if (m.mime.startsWith('video/')) return <video src={src} controls playsInline preload="metadata" />
+  return (
+    <a className="file" href={src} target="_blank" rel="noreferrer" download={m.name}>
+      📎 <span>{m.name || m.url.split('/').pop()}</span>
+    </a>
+  )
+}
+
+export function MediaGrid({ media }: { media: Media[] }) {
+  if (!media.length) return null
+  const visual = media.filter((m) => /^(image|video)\//.test(m.mime))
+  const files = media.filter((m) => !/^(image|video)\//.test(m.mime))
+  return (
+    <>
+      {visual.length > 0 && (
+        <div className={'media' + (visual.length === 1 ? ' one' : '')}>
+          {visual.map((m) => <MediaItem key={m.url} m={m} />)}
+        </div>
+      )}
+      {files.map((m) => <div key={m.url} style={{ marginTop: 6 }}><MediaItem m={m} /></div>)}
+    </>
+  )
+}
+
+// ---- sheet ---------------------------------------------------------------------
+
+export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="sheet-bg" onClick={onClose}>
+      <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
+        <div className="grab" />
+        <h3>{title}</h3>
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// ---- sync status -----------------------------------------------------------------
+
+export function StatusPill() {
+  useVersion()
+  const queued = outboxItems().length
+  if (isLocalOnly()) return <span className="status">Demo · this device</span>
+  const up = status.relays[BELFRY.groupsRelay] === 'up'
+  if (!status.online || !up)
+    return <span className="status off">Offline{queued ? ` · ${queued} to send` : ''}</span>
+  if (queued) return <span className="status">Sending {queued}…</span>
+  return <span className="status ok">Synced</span>
+}
+
+export function fmtTime(ts: number) {
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+export function fmtDay(d: Date) {
+  const today = new Date()
+  const y = new Date(today)
+  y.setDate(today.getDate() - 1)
+  if (d.toDateString() === today.toDateString()) return 'Today'
+  if (d.toDateString() === y.toDateString()) return 'Yesterday'
+  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
+}
