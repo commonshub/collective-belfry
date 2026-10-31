@@ -116,8 +116,7 @@ class BelfryPass(models.Model):
             'order_line': [Command.create({'product_id': product.id, 'product_uom_qty': 1, 'discount': 100.0})],
         })
         order.action_confirm()
-        invoice = order._create_invoices()
-        invoice.action_post()
+        invoice = self.env['belfry.pass'].sudo()._belfry_invoice_order(order)
         if invoice.payment_state not in ('paid', 'in_payment'):
             raise UserError("The steward pass invoice %s is not settled (%s)." % (invoice.name, invoice.payment_state))
         record = self.sudo().create({

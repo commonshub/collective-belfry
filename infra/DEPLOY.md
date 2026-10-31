@@ -211,7 +211,12 @@ relays, which is slower but works.
 When another organisation sells the tickets and keeps the books (for Open Source Village: XL
 Collective, on Odoo Online), Belfry's Odoo keeps the order, the payment link and the pass, and its
 invoice stays internal. The onboarding service books every paid ticket in the seller's Odoo over
-its JSON-2 API (`services/onboarding/belfry_onboarding/accounting.py`):
+its JSON-2 API (`services/onboarding/belfry_onboarding/accounting.py`). With
+`ACCOUNTING_ISSUER` set, Belfry's internal invoices go to their own sales journal "Ticket orders"
+(code `ORD`, created by the module on the first order), so the payment page, Stripe and the
+receipts show an order number (`ORD/2026/00012`), not a second invoice number; orders placed
+before keep their `INV/` number.
+
 
 1. a customer invoice: the buyer (found by e-mail, or created), the same lines and VAT, and
    `ref` = `ACCOUNTING_REF_PREFIX` + Belfry's invoice number;

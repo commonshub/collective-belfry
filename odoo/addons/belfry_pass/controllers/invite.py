@@ -229,8 +229,7 @@ class InviteCheckout:
             self._apply_promo_code(order, form['promo_code'])
 
         order.action_confirm()
-        invoice = order._create_invoices()
-        invoice.action_post()
+        invoice = env['belfry.pass'].sudo()._belfry_invoice_order(order)
 
         wizard = env['payment.link.wizard'].sudo().with_context(
             active_model='account.move', active_id=invoice.id, active_ids=invoice.ids,

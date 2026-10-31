@@ -40,6 +40,31 @@ class BelfryPass(models.Model):
         """The organisation that invoices the tickets, or '' when Belfry's own invoice is it."""
         return self.env['ir.config_parameter'].sudo().get_param('belfry.invoice_issuer') or ''
 
+    @api.model
+    def belfry_order_journal(self):
+        """With an issuer, Belfry's internal invoices go to their own sales journal "Ticket
+        orders" (ORD/2026/00012), so the payment page, Stripe and the receipts show an order
+        number, not a second invoice number next to the issuer's. Created from the default sales
+        journal (its accounts) on first use. Empty without an issuer: the default journal then."""
+        Journal = self.env['account.journal'].sudo()
+        if not self.belfry_invoice_issuer():
+            return Journal
+        company = self.env.company
+        journal = Journal.search([('code', '=', 'ORD'), ('company_id', '=', company.id)], limit=1)
+        if not journal:
+            sales = Journal.search([('type', '=', 'sale'), ('company_id', '=', company.id)], limit=1)
+            journal = sales.copy({'name': "Ticket orders", 'code': 'ORD', 'sequence': sales.sequence + 1})
+        return journal
+
+    def _belfry_invoice_order(self, order):
+        """Confirmed order -> posted invoice, in the order journal when there is one."""
+        journal = self.belfry_order_journal()
+        if journal:
+            order.journal_id = journal
+        invoice = order._create_invoices()
+        invoice.action_post()
+        return invoice
+
     def belfry_accounting_export(self):
         """What the issuer's invoice needs, for the onboarding service (whose user may not read
         taxes or countries): the buyer, the lines with their tax kind, the payment and refunds."""

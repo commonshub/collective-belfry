@@ -135,8 +135,15 @@ PASS_ID=$(jq -r .id <<<"$PASS"); INV_ID=$(jq -r '.invoice_id[0]' <<<"$PASS"); PA
 [[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == reserved ]] && ok "invite reserved until the pass is paid" || bad "invite not reserved"
 RESUME=$(curl -sS "$ODOO_URL/belfry/invite/$TOKEN")
 grep -q 'id="belfry_continue_payment"' <<<"$RESUME" && ok "opening the invite again offers the payment page (refresh, back button)" || bad "reserved invite page: $(head -c 200 <<<"$RESUME")"
-INV=$(ox account.move read "[[$INV_ID]]" '{"fields":["state","amount_total","currency_id","partner_id"]}' | jq -c '.[0]')
+INV=$(ox account.move read "[[$INV_ID]]" '{"fields":["state","name","amount_total","currency_id","partner_id"]}' | jq -c '.[0]')
 [[ "$(jq -r .state <<<"$INV")" == posted ]] && ok "invoice posted, total $(jq -r .amount_total <<<"$INV")" || bad "invoice state $(jq -r .state <<<"$INV")"
+if [[ -n "${ACCOUNTING_ISSUER:-}" ]]; then
+  # Belfry's invoice is internal: an order number (ORD/...) on the payment page, not a second invoice number
+  INV_NAME=$(jq -r .name <<<"$INV")
+  PAY_PAGE=$(curl -sSL "$(ox belfry.invite belfry_payment_link "[[$INVITE_ID]]" | jq -r .)")
+  [[ "$INV_NAME" == ORD/* ]] && grep -qF "$INV_NAME" <<<"$PAY_PAGE" && ! grep -q 'INV/' <<<"$PAY_PAGE" \
+    && ok "payment page shows the order number $INV_NAME" || bad "payment page reference: $INV_NAME"
+fi
 
 step "3b. pass API: the invite as JSON, an order from an agent, released again"
 API_INVITE_ID=$(ox belfry.invite create '[{"note":"smoke api"}]')

@@ -750,6 +750,10 @@ Stripe account is XL Collective's. Belfry keeps its own Odoo for passes, invites
 links; its invoice stays internal. Mollie is off on belfry2 (it was in test mode next to live
 Stripe: a test card would have activated a real pass).
 
+- [x] Belfry's internal invoices are numbered as orders when an issuer is set: own sales journal
+  "Ticket orders" (`ORD/2026/…`, `belfry_order_journal`, module 19.0.1.25.0) in both checkouts
+  (invite page and steward pass), so the payment page and Stripe show no second invoice number.
+  Odoo test; smoke step 3 checks the payment page.
 - [x] `accounting.py` (onboarding) over Odoo's JSON-2 API (`clients/odoo_json2.py`; JSON-RPC is
   deprecated from Odoo 19 and Odoo Online moves first): per paid pass a customer invoice at the
   seller (buyer by e-mail, same lines and VAT, `ref` = "Belfry " + Belfry's invoice number as the

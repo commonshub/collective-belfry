@@ -60,3 +60,21 @@ class TestAccounting(BelfryCase):
         self.assertFalse(mail.attachment_ids, "Belfry's invoice stays internal")
         self.assertIn('Your invoice comes from XL Collective in a separate e-mail', mail.body_html)
         self.assertNotIn('Your invoice is attached', mail.body_html)
+
+    def test_internal_invoices_get_an_order_number_with_an_issuer(self):
+        Pass = self.env['belfry.pass']
+        self.env['ir.config_parameter'].sudo().set_param('belfry.invoice_issuer', False)
+        own = Pass._belfry_invoice_order(self._confirmed_order())
+        self.assertNotEqual(own.journal_id.code, 'ORD', "without an issuer: the default journal")
+        self.env['ir.config_parameter'].sudo().set_param('belfry.invoice_issuer', "XL Collective")
+        internal = Pass._belfry_invoice_order(self._confirmed_order())
+        self.assertEqual(internal.journal_id.code, 'ORD')
+        self.assertEqual(internal.state, 'posted')
+        self.assertTrue(internal.name.startswith('ORD/'), internal.name)
+        again = Pass._belfry_invoice_order(self._confirmed_order())
+        self.assertEqual(again.journal_id, internal.journal_id, "one order journal")
+
+    def _confirmed_order(self):
+        order = self._make_order(self.alice, self.product_week)
+        order.action_confirm()
+        return order
