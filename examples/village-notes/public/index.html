@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Village Notes</title>
+<style>
+  :root {
+    --bg: #12131a; --card: #1c1e28; --line: #2c2f3d; --text: #ecedf3; --muted: #9a9db0;
+    --accent: #f5b041; --accent-text: #1a1408; --error: #ff7b72; --ok: #7ee2a8;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 16px; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+           margin-bottom: 16px; }
+  h1 { font-size: 1.3rem; margin: 0; }
+  h2 { font-size: 1.05rem; margin: 0 0 8px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+          padding: 16px; margin-bottom: 16px; }
+  .muted { color: var(--muted); font-size: .9rem; }
+  .error { color: var(--error); }
+  .ok { color: var(--ok); }
+  label { display: block; margin: 10px 0 4px; font-size: .9rem; color: var(--muted); }
+  input, textarea, select { width: 100%; padding: 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--bg); color: var(--text); font: inherit; }
+  textarea { min-height: 90px; resize: vertical; }
+  button { margin-top: 12px; padding: 10px 16px; border: 0; border-radius: 8px; font: inherit;
+           font-weight: 600; background: var(--accent); color: var(--accent-text); cursor: pointer; }
+  button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .big { font-size: 2rem; font-weight: 700; }
+  .note { border-top: 1px solid var(--line); padding: 12px 0; }
+  .note:first-child { border-top: 0; }
+  .note .who { font-weight: 600; }
+  .note .text { white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 4px; }
+  .mnemonic { font-family: ui-monospace, monospace; background: var(--bg); padding: 12px;
+              border-radius: 8px; border: 1px dashed var(--accent); word-spacing: .4em; }
+  a { color: var(--accent); }
+  [hidden] { display: none !important; }
+  code { overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Village Notes</h1>
+    <button id="logout" class="secondary" hidden>Sign out</button>
+  </header>
+  <p id="community" class="muted"></p>
+
+  <!-- Signed out -->
+  <section id="signed-out" hidden>
+    <div class="card">
+      <h2>I have an invite</h2>
+      <p class="muted">Paste the invite link or its code.</p>
+      <input id="invite-input" placeholder="https://shop.…/belfry/invite/… or the code">
+      <button id="invite-open">Continue</button>
+      <p id="invite-error" class="error"></p>
+    </div>
+    <div class="card">
+      <h2>I have a pass: sign in</h2>
+      <p class="muted">On your account page (<a id="apps-link" target="_blank" rel="noopener">apps</a>)
+        choose <b>Connect to Nostr App</b>, name it "Village Notes", pick the permissions
+        <b>Belfry event apps</b> and paste the <code>bunker://</code> URL here.</p>
+      <input id="bunker-input" type="password" autocomplete="off" placeholder="bunker://…">
+      <div class="row">
+        <button id="bunker-login">Sign in</button>
+        <button id="nip07-login" class="secondary" hidden>Use my browser extension</button>
+      </div>
+      <p id="login-error" class="error"></p>
+    </div>
+  </section>
+
+  <!-- Invite -->
+  <section id="invite" hidden>
+    <div class="card" id="offer-card">
+      <h2>Your invite</h2>
+      <div id="offer"></div>
+    </div>
+    <div class="card" id="order-card" hidden>
+      <h2>Order a pass</h2>
+      <label for="tier">Pass</label>
+      <select id="tier"></select>
+      <label for="name">Your name</label>
+      <input id="name" autocomplete="name">
+      <label for="email">Your e-mail (the pass and its sign-in link go there)</label>
+      <input id="email" type="email" autocomplete="email">
+      <label class="row" style="color:var(--text)"><input id="own-key" type="checkbox" checked style="width:auto">
+        Keep my key in this app (you get 12 words to write down)</label>
+      <button id="order">Order, then pay</button>
+      <p id="order-error" class="error"></p>
+    </div>
+    <div class="card" id="mnemonic-card" hidden>
+      <h2>Write these 12 words down</h2>
+      <p class="muted">They are your key for this village. Belfry can't recover it; nobody else should see them.</p>
+      <p id="mnemonic" class="mnemonic"></p>
+    </div>
+    <div class="card" id="payment-card" hidden>
+      <h2>Payment</h2>
+      <div id="payment"></div>
+      <button id="payment-check" class="secondary">Check again</button>
+    </div>
+    <button id="invite-back" class="secondary">Back</button>
+  </section>
+
+  <!-- Signed in -->
+  <section id="signed-in" hidden>
+    <div class="card">
+      <h2>You</h2>
+      <div id="me"></div>
+    </div>
+    <div class="card">
+      <h2>Village tokens</h2>
+      <div id="wallet"><p class="muted">Looking…</p></div>
+    </div>
+    <div class="card">
+      <h2>New public note</h2>
+      <textarea id="note-text" placeholder="What's happening in the village?"></textarea>
+      <div class="row"><button id="note-post">Post to the village</button><span id="post-status" class="muted"></span></div>
+    </div>
+    <div class="card">
+      <h2>Notes from the village</h2>
+      <div id="notes"><p class="muted">Connecting to the community relay…</p></div>
+    </div>
+  </section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

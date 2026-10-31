@@ -1,0 +1,20 @@
+{
+  "name": "village-notes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A small app on a Belfry: join with an invite, sign in with a bunker URL, see your tokens, read and post notes",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "@noble/curves": "2.0.1",
+    "@noble/hashes": "2.0.1",
+    "@scure/bip39": "2.0.1",
+    "esbuild": "0.28.2",
+    "nostr-tools": "2.25.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
