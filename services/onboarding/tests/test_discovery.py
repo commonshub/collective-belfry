@@ -53,6 +53,8 @@ def test_skills_are_served_by_name(services, client):
 def test_me_for_a_member(services, odoo, client):
     key, partner = holder(services, odoo)
     odoo.tables["res.partner"][partner]["belfry_member_number"] = "OSV-0042"
+    for p in odoo.tables["belfry.pass"].values():
+        p["cashu_amount"] = 350  # a week's tokens, minted at activation
     services.settings.nip05_domain = "belfry.test"
     r = get(client, key, "/api/me")
     assert r.status_code == 200, r.text
@@ -62,6 +64,7 @@ def test_me_for_a_member(services, odoo, client):
     assert me["member"] is True and me["steward"] is False
     assert me["nip05"] == "osv-0042@belfry.test"
     assert [(p["state"], p["tier"]) for p in me["passes"]] == [("active", "week")]
+    assert me["passes"][0]["tokens"] == 350
 
 
 def test_me_for_a_steward(services, odoo, client, authentik):

@@ -94,7 +94,16 @@ def document(settings: Any) -> dict[str, Any]:
 
 def me(svc: Services, pubkey: str) -> dict[str, Any]:
     """Where the key stands: its passes (Keycast's key or one of the holder's own) and holder."""
-    fields = ["id", "state", "tier", "date_start", "date_end", "partner_id", "payment_state"]
+    fields = [
+        "id",
+        "state",
+        "tier",
+        "date_start",
+        "date_end",
+        "partner_id",
+        "payment_state",
+        "cashu_amount",
+    ]
     found: dict[int, dict[str, Any]] = {}
     # keycast_pubkey is set at activation; own_pubkey already when ordering with one's own key
     for field in ("keycast_pubkey", "own_pubkey"):
@@ -109,6 +118,8 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
             "date_start": r.get("date_start") or None,
             "date_end": r.get("date_end") or None,
             "payment": r.get("payment_state") or None,
+            # the village tokens minted onto the pass at activation (in a wallet once collected)
+            "tokens": r.get("cashu_amount") or 0,
         }
         for r in rows
     ]

@@ -262,7 +262,7 @@ async function enter(s) {
   signer = s;
   show("signed-in");
   const me = await loadMe();
-  loadWallet();
+  loadWallet(me);
   if (me?.member === false) {
     $("notes").replaceChildren(el("p", { class: "muted" }, "The village relay opens once you hold an active pass."));
     $("note-post").disabled = true;
@@ -303,32 +303,43 @@ async function loadMe() {
 
 // Tokens: the pass's own bundle until a wallet collects it, plus nutzaps (NIP-61) to this key
 // that are still unspent at the mint. What the wallet already holds lives in its seed, which
-// only the wallet app knows, so that part is a link.
-const tokens = { pass: null, nutzaps: null };
+// only the wallet app knows: for that part the page shows what the pass brought (/api/me) and
+// links the wallet.
+const tokens = { brought: null, pass: null, nutzaps: null, error: "" };
 
 function renderWallet() {
   const box = $("wallet");
   const known = [tokens.pass, tokens.nutzaps].filter((x) => x !== null);
-  const total = known.reduce((a, b) => a + b, 0);
+  const waiting = known.reduce((a, b) => a + b, 0);
+  const collected = Math.max((tokens.brought || 0) - (tokens.pass || 0), 0);
   const walletApp = cfg.apps.find((a) => a.name === "Wallet")?.url;
-  box.replaceChildren(
-    el("p", { class: "big" }, known.length ? String(total) : "…"),
-    el("p", { class: "muted" }, total
-      ? "tokens waiting for you: " + [
-          tokens.pass ? `${tokens.pass} from your pass` : "",
-          tokens.nutzaps ? `${tokens.nutzaps} sent to you` : ""].filter(Boolean).join(", ")
-      : "No tokens waiting to be collected."),
-  );
-  if (walletApp) {
-    box.append(el("p", { class: "muted" }, "What you already collected is in ",
-      el("a", { href: walletApp, target: "_blank", rel: "noopener" }, "your wallet"), "."));
+  const wallet = walletApp ? el("a", { href: walletApp, target: "_blank", rel: "noopener" }, "your wallet") : "your wallet";
+  box.replaceChildren(el("p", { class: "big" }, known.length ? String(waiting + collected) : "…"));
+  if (waiting) {
+    box.append(el("p", { class: "muted" }, "waiting to be collected: " + [
+      tokens.pass ? `${tokens.pass} from your pass` : "",
+      tokens.nutzaps ? `${tokens.nutzaps} sent to you` : ""].filter(Boolean).join(", ")));
   }
+  if (collected) {
+    box.append(el("p", { class: "muted" }, `${collected} from your pass are in `, wallet,
+      " (spending and receiving there is not counted here)."));
+  } else if (!waiting && known.length && !tokens.error) {
+    box.append(el("p", { class: "muted" }, "No tokens waiting. What you collected is in ", wallet, "."));
+  }
+  if (tokens.error) box.append(el("p", { class: "error" }, "Pass tokens: " + tokens.error));
 }
 
-async function loadWallet() {
+async function loadWallet(me) {
+  const pass = me?.passes?.find((p) => p.state === "active");
+  tokens.brought = pass?.tokens ?? null;
   renderWallet();
   const r = await api(cfg.api.wallet_pass_tokens, { sign: signer.sign });
-  tokens.pass = r.status === 200 ? r.data.tokens.reduce((a, t) => a + (t.amount || 0), 0) : 0;
+  if (r.status === 200) {
+    tokens.pass = r.data.tokens.reduce((a, t) => a + (t.amount || 0), 0);
+  } else {
+    tokens.pass = 0;
+    tokens.error = errorText(r);
+  }
   renderWallet();
 }
 
@@ -474,6 +485,57 @@ async function loginBunker() {
   $("bunker-login").disabled = false;
 }
 
+// "Sign in with Open Source Village": OAuth authorization code + PKCE against Keycast, as the
+// community chat does. Keycast sends the participant through the Belfry's sign-in page (e-mail,
+// then the mailed 6-digit code or link) and, after consent, its token response carries a fresh
+// bunker:// URL with the permissions "Belfry event apps". Keycast takes any client_id; its token
+// endpoint answers every origin, so this needs no proxy.
+
+const OAUTH_CLIENT = "village-notes";
+const OAUTH_SCOPE = "policy:belfry-event";
+const oauthRedirect = () => location.origin + "/oauth/callback";
+
+const b64url = (bytes) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+async function loginSso() {
+  const flow = { state: b64url(crypto.getRandomValues(new Uint8Array(32))),
+    verifier: b64url(crypto.getRandomValues(new Uint8Array(48))) };
+  store.set("oauth", flow);
+  const challenge = b64url(new Uint8Array(
+    await crypto.subtle.digest("SHA-256", new TextEncoder().encode(flow.verifier))));
+  const url = new URL(cfg.sign_in.keycast.replace(/\/+$/, "") + "/api/oauth/authorize");
+  url.search = new URLSearchParams({
+    client_id: OAUTH_CLIENT, redirect_uri: oauthRedirect(), scope: OAUTH_SCOPE,
+    state: flow.state, code_challenge: challenge, code_challenge_method: "S256",
+  });
+  location.assign(url);
+}
+
+/** Back from Keycast at /oauth/callback: exchanges the code for a bunker URL. */
+async function finishSso() {
+  const params = new URLSearchParams(location.search);
+  const flow = store.get("oauth");
+  store.del("oauth");
+  history.replaceState(null, "", "/");
+  if (!flow || params.get("state") !== flow.state) throw new Error("The sign-in did not start here; try again.");
+  if (params.get("error")) throw new Error("Not signed in: " + params.get("error"));
+  const res = await fetch(cfg.sign_in.keycast.replace(/\/+$/, "") + "/api/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "authorization_code", code: params.get("code"), client_id: OAUTH_CLIENT,
+      redirect_uri: oauthRedirect(), code_verifier: flow.verifier,
+    }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || !body.bunker_url) throw new Error("Not signed in: " + (body.error || `token ${res.status}`));
+  const s = await bunkerSigner(body.bunker_url);
+  store.set("session", { type: "bunker", bunker: body.bunker_url, sso: true,
+    refresh: body.refresh_token || null });
+  return s;
+}
+
 async function loginNip07() {
   try {
     const s = await nip07Signer();
@@ -484,13 +546,27 @@ async function loginNip07() {
   }
 }
 
-function logout() {
+/** Signs out here; after "Sign in with Open Source Village" also everywhere (as the chat does):
+ *  revokes this app's authorization and ends the Keycast and sign-in sessions, so the next sign-in
+ *  asks for the e-mail code again. Keycast returns to this page only when the Belfry registered
+ *  the app's origin; otherwise the browser ends on the account page, signed out. */
+async function logout() {
+  const session = store.get("session");
   store.del("session");
   signer?.close();
   relay?.close();
   signer = relay = null;
   notes.clear();
-  location.reload();
+  if (!session?.sso) return location.reload();
+  const keycast = cfg.sign_in.keycast.replace(/\/+$/, "");
+  if (session.refresh) {
+    await fetch(keycast + "/api/oauth/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ token: session.refresh, client_id: OAUTH_CLIENT }),
+    }).catch(() => {});
+  }
+  location.assign(keycast + "/api/auth/oidc/logout?return_to=" + encodeURIComponent(location.origin + "/"));
 }
 
 async function main() {
@@ -504,9 +580,20 @@ async function main() {
   $("payment-check").onclick = loadOffer;
   $("bunker-login").onclick = loginBunker;
   $("nip07-login").onclick = loginNip07;
+  $("sso-login").onclick = loginSso;
   $("note-post").onclick = postNote;
   $("logout").onclick = logout;
   setTimeout(() => { $("nip07-login").hidden = !window.nostr; }, 300);
+
+  if (location.pathname === "/oauth/callback") {
+    try {
+      return await enter(await finishSso());
+    } catch (e) {
+      show("signed-out");
+      $("login-error").textContent = e.message || String(e);
+      return;
+    }
+  }
 
   const invited = new URLSearchParams(location.search).get("invite");
   const session = store.get("session");

@@ -112,7 +112,7 @@ http
       res.writeHead(200, { "content-type": "text/javascript" });
       return res.end(appJs);
     }
-    if (url.pathname === "/" || url.pathname === "/index.html") {
+    if (["/", "/index.html", "/oauth/callback"].includes(url.pathname)) {
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       return res.end(await readFile(join(here, "public/index.html")));
     }

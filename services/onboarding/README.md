@@ -99,7 +99,7 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `POST /me/invites`, `POST /me/invites/<id>/revoke` | `/me` session | invites for friends (`INVITES_PER_PARTICIPANT`, default 3, open or used), listed on `/me` |
 | `GET /health` | none | `{"status":"ok"}` |
 | `GET /.well-known/belfry.json` | none (CORS for every origin) | the community's name, relays, file server, mint, sign-in, APIs, apps and skills: an app asks for the domain only |
-| `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name, `email` and its passes (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
+| `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name, `email` and its passes with the tokens each brought (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
 | `POST /api/email-code`, `POST /api/email-code/verify` | NIP-98, any key | Odoo mails a 6-digit code (10 minutes, five tries, five codes per address and ten per key in 30 minutes); the right code records the key on the address's contact (`belfry_verified_pubkey`, the contact created if needed), never over a key the contact holds (`409 other_key`) |
 | `/api/invites`, `/api/invites/<id>`, `POST /api/invites/<id>/revoke` | NIP-98, key with an active pass | invites by e-mail for a pass holder or their agent (`holder_invites.py`); stewards' are unlimited |
 | `GET /skill.md`, `/skills/<name>.md` | none | the agent skills in `skills/` with the deployment's domain filled in (`open-source-village`, `belfry-steward`) |

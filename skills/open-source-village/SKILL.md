@@ -1,6 +1,6 @@
 ---
 name: open-source-village
-description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, create and manage groups, or announce sessions and workshops for them, and when building an app that joins a Belfry community with the participant's own key.
+description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, create and manage groups, or announce sessions and workshops for them, and when building an app that joins a Belfry community with the participant's own key or signs pass holders in with their e-mail and a mailed code.
 ---
 
 # Open Source Village: helping a visitor
@@ -371,13 +371,16 @@ gives you the invitee's npub once their pass is active, so you can then add them
 {"pubkey": "<hex>", "npub": "npub1…", "member": true, "steward": false,
  "nip05": "osv-0042@<domain>", "email": "dana@example.org",
  "passes": [{"id": 17, "state": "active", "tier": "week", "date_start": "2027-01-25",
-             "date_end": "2027-01-31", "payment": "paid"}]}
+             "date_end": "2027-01-31", "payment": "paid", "tokens": 350}]}
 ```
 
 `member` is true while a pass is `active`. A pass ordered with this key that isn't paid yet
 shows as `pending`; past ones as `expired` or `revoked`. A key Belfry doesn't know gets
 `"member": false, "passes": []`. `email` is the address behind the passes, or the one the key
-proved with `/api/email-code` (section 8); `null` otherwise. Use it to show the holder where they stand, and wait for
+proved with `/api/email-code` (section 8); `null` otherwise. `tokens` is what the pass brought
+(50 village tokens per pass day): `GET /wallet/pass-tokens` returns them until a wallet
+collects them, afterwards they are in the participant's wallet, whose balance only the wallet
+app knows. Use it to show the holder where they stand, and wait for
 `member` before connecting to the relays (they refuse keys without an active pass).
 
 ## 7. Sessions and workshops
@@ -469,3 +472,51 @@ app on the participant's own device. Then:
 - **From the browser.** The JSON APIs answer pages of other origins only when the Belfry lists
   them (`API_CORS_ORIGINS`). Otherwise call them from the app's own server. NIP-98 events name the
   Belfry's public URL in their `u` tag either way. Relays (WebSockets) need no CORS.
+
+## 9. Sign-in with e-mail and code for an app ("Sign in with Open Source Village")
+
+An app on the participant's device or website signs a pass holder in the way Belfry's own apps
+do: the participant gives the e-mail address of their pass and types the 6-digit code from the
+mail (or opens its link). The app never sees the address or the code; it gets a bunker URL with
+the permissions **Belfry event apps**. This is for keys Belfry keeps; a participant with their
+own key signs in with their own signer (section 8).
+
+It is OAuth 2.0 authorization code with PKCE (S256) against Keycast, `sign_in.keycast` in
+`/.well-known/belfry.json` (`https://apps.<domain>`). No registration is needed: pick a
+`client_id` (a short name of your app). `redirect_uri` must be `https://`, or `http://localhost`
+while developing.
+
+1. Keep a random `state` and a `code_verifier` (43 to 128 characters) in the browser, then send it
+   to
+
+   ```
+   https://apps.<domain>/api/oauth/authorize?client_id=<your app>&redirect_uri=<your callback>
+     &scope=policy:belfry-event&state=<state>&code_challenge=<base64url(SHA-256(verifier))>
+     &code_challenge_method=S256
+   ```
+
+   The participant chooses "Sign in with Open Source Village", enters their e-mail address and
+   the code, then approves your app on Keycast's consent screen (Belfry's own apps skip it). The
+   next time, a participant who is still signed in comes straight back.
+2. Your callback gets `?code=…&state=…` (check the state) or `?error=…`. Exchange the code from
+   the browser (the endpoint answers every origin):
+
+   ```
+   POST https://apps.<domain>/api/oauth/token   (JSON)
+   {"grant_type": "authorization_code", "code": "<code>", "client_id": "<your app>",
+    "redirect_uri": "<your callback>", "code_verifier": "<verifier>"}
+   ```
+
+   The answer has `bunker_url` and `refresh_token`. Connect to the bunker with NIP-46 as in
+   section 6 (one client key, kept and reused) and read `GET /api/me` to see the pass.
+3. Silent check on load (optional): the same request with `prompt=none` never shows a page; it
+   comes back with a code when the participant is signed in and has approved your app, else with
+   `error=login_required` or `error=consent_required`. Try it once per tab, not in a loop.
+4. Signing out: `POST https://apps.<domain>/api/oauth/revoke` `{"token": "<refresh_token>",
+   "client_id": "<your app>"}` ends your app's authorization; then send the browser to
+   `https://apps.<domain>/api/auth/oidc/logout?return_to=<your page>`, which ends the sign-in
+   for every app, so the next sign-in asks for a code again. `return_to` is honoured for
+   origins a steward registered in Keycast; otherwise the browser ends on the account page.
+
+`examples/village-notes` in the Belfry repository does all of this (`src/app.js`, `loginSso`,
+`finishSso`, `logout`).
