@@ -195,9 +195,16 @@ class BelfryPass(models.Model):
                 _logger.warning("Belfry pass %s: holder %s has no e-mail, login link not mailed",
                                 record.id, record.partner_id.id)
                 continue
-            pdf = record.sudo().invoice_id.invoice_pdf_report_id if with_invoice else False
+            # Another organisation selling the tickets mails its own invoice (accounting.py);
+            # Belfry's stays internal then.
+            issuer = record.belfry_invoice_issuer()
+            pdf = (record.sudo().invoice_id.invoice_pdf_report_id
+                   if with_invoice and not issuer else False)
             email_values = {'attachment_ids': [pdf.id]} if pdf else None
-            template.sudo().with_context(belfry_invoice_attached=bool(pdf)).send_mail(
+            template.sudo().with_context(
+                belfry_invoice_attached=bool(pdf),
+                belfry_invoice_issuer=issuer if with_invoice else '',
+            ).send_mail(
                 record.id, force_send=False, email_values=email_values)
             record.write({'login_mail_sent_at': fields.Datetime.now()})
             queued = True

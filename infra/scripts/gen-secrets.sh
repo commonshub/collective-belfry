@@ -73,6 +73,7 @@ SECRETS = {
     "GROUPS_API_NSEC": rand(32),               # the onboarding service at the groups relay's API (hex)
     "ZOOID_DB_PASSWORD": rand(),               # role "zooid" (groups relay)
     "STRIPE_WEBHOOK_SECRET": None,             # bootstrap, once Stripe is configured
+    "ACCOUNTING_ODOO_API_KEY": None,           # put-secret.sh: the ticket seller's Odoo (API key)
     "SMTP_PASSWORD": None,                     # put-secret.sh smtp_password
 }
 generated = {"KEYCAST_ADMIN_PUBKEY": admin["pubkey_hex"], "HOST_UID": uid, "HOST_GID": gid}

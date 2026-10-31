@@ -3,7 +3,9 @@
 ``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward) and give them
 their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay;
-``... sync-programme`` for the programme and room bookings as calendar events (programme.py)."""
+``... sync-programme`` for the programme and room bookings as calendar events (programme.py);
+``... accounting-check`` for the ticket seller's Odoo and its ids, ``... accounting-book [pass id]``
+to book paid tickets there (accounting.py)."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import argparse
 import json
 import sys
 
-from . import core, programme, steward
+from . import accounting, core, programme, steward
 from .app import build_services, configure_logging
 from .settings import Settings
 
@@ -50,6 +52,15 @@ def main(argv: list[str] | None = None) -> int:
         "restore-keys",
         help="recreate every partner's Keycast account from Odoo (custody seed unlocked)",
     )
+    sub.add_parser(
+        "accounting-check",
+        help="connect to the ticket seller's Odoo: the configured ids and the candidates",
+    )
+    book = sub.add_parser(
+        "accounting-book",
+        help="book a paid ticket at the ticket seller (all that are missing without a pass id)",
+    )
+    book.add_argument("pass_id", type=int, nargs="?")
     args = parser.parse_args(argv)
 
     settings = Settings()
@@ -79,6 +90,19 @@ def main(argv: list[str] | None = None) -> int:
         result = programme.sync(services)
     elif args.command == "restore-keys":
         result = core.restore_keys(services)
+    elif args.command in ("accounting-check", "accounting-book"):
+        if services.accounting is None:
+            print(
+                "ACCOUNTING_ODOO_URL or the accounting_odoo_api_key secret is not set",
+                file=sys.stderr,
+            )
+            return 2
+        if args.command == "accounting-check":
+            result = accounting.check(services.accounting)
+        elif args.pass_id:
+            result = {"result": accounting.book_pass(services, args.pass_id)}
+        else:
+            result = accounting.reconcile(services)
     elif args.command == "login-link":
         result = {"result": core.send_login_link(services, args.pass_id), "pass_id": args.pass_id}
     else:

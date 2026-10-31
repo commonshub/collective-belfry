@@ -742,6 +742,37 @@ code belongs to its sign-in flow (a browser session, existing users only), so Be
   account page's self-custody move does it); the code in the subject shows in lock-screen
   previews, as most services do.
 
+## 3zq. Tickets booked at the seller's Odoo (XL Collective) — built 2026-10-31
+
+Decisions (2026-10-31): XL Collective sells the tickets and issues the invoice; its Odoo is Odoo
+Online (Enterprise, no custom modules), with API access (Custom plan). One invoice per ticket; the
+Stripe account is XL Collective's. Belfry keeps its own Odoo for passes, invites and payment
+links; its invoice stays internal. Mollie is off on belfry2 (it was in test mode next to live
+Stripe: a test card would have activated a real pass).
+
+- [x] `accounting.py` (onboarding) over Odoo's JSON-2 API (`clients/odoo_json2.py`; JSON-RPC is
+  deprecated from Odoo 19 and Odoo Online moves first): per paid pass a customer invoice at the
+  seller (buyer by e-mail, same lines and VAT, `ref` = "Belfry " + Belfry's invoice number as the
+  idempotency key), posted only when its total equals Belfry's, paid into the Stripe journal (or
+  the manual journal for payments stewards mark), sent by the seller's Odoo. A full refund: the
+  credit note (reversal wizard), refund paid, sent. Partial refunds, chargebacks, disputes:
+  `attention`, for the accountant. Free tickets: `skipped`.
+- [x] `belfry_pass` 19.0.1.24.0: `belfry.pass.accounting_*` (state, the seller's numbers, error),
+  `belfry_accounting_export` (the service user may not read taxes), `belfry.invoice_issuer`
+  (bootstrap from `ACCOUNTING_ISSUER`): the activation mail then carries no invoice and says "Your
+  invoice comes from … in a separate e-mail".
+- [x] Hooks: invoice paid → book, refund → credit note, chargeback/dispute → attention; `reconcile`
+  retries. An invoice without a pass product no longer gets a pass made for it
+  (`no_pass_product`), so a Belfry Odoo can stand in as the seller.
+- [x] CLI `accounting-check`, `accounting-book [pass id]`; `infra/scripts/accounting-test-issuer.sh`
+  makes a Belfry Odoo the stand-in seller (user, API key, product, Stripe journal);
+  `DEPLOY.md` "Accounting at the ticket seller".
+- Checks: Odoo 110 (3 new); onboarding 278 (10 new); local smoke 233 ok against the local Odoo as
+  the seller: invoice posted, paid and sent, the activation mail names the seller, a full refund
+  booked as credit note (smoke steps 5 and 12). Found on the way: smoke 6w reused `INV`.
+- Open: belfry2 books at tofauti's Odoo as the stand-in; XL Collective's own ids, user and key;
+  the payment page still shows Belfry's internal invoice number as the reference.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

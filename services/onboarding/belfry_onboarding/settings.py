@@ -137,6 +137,26 @@ class Settings(BaseSettings):
     blossom_hosts: str = Field(default="", alias="BLOSSOM_HOSTS")
 
     hook_token: str = Field(alias="HOOK_TOKEN")
+
+    # Accounting elsewhere (accounting.py): the organisation that sells the tickets books each
+    # one in its own Odoo (JSON-2 API, Odoo Online too). Empty URL or key: Belfry's own invoice
+    # is the buyer's. Ids are the issuer's records; `accounting-check` lists the candidates.
+    accounting_odoo_url: str = Field(default="", alias="ACCOUNTING_ODOO_URL")
+    accounting_odoo_db: str = Field(default="", alias="ACCOUNTING_ODOO_DB")
+    accounting_odoo_api_key: str = Field(default="", alias="ACCOUNTING_ODOO_API_KEY")
+    # Its name, in the activation mail ("Your invoice comes from ..."); bootstrap tells Odoo.
+    accounting_issuer: str = Field(default="", alias="ACCOUNTING_ISSUER")
+    # Pass tier -> product, "*" for any other line: e.g. "day=11,week=12,full=13,*=14"
+    accounting_products: str = Field(default="", alias="ACCOUNTING_PRODUCTS")
+    accounting_tax_included: str = Field(default="", alias="ACCOUNTING_TAX_INCLUDED")
+    accounting_tax_excluded: str = Field(default="", alias="ACCOUNTING_TAX_EXCLUDED")
+    # Payment journals: Stripe's payouts, and payments stewards mark by hand (empty: left open)
+    accounting_journal: str = Field(default="", alias="ACCOUNTING_JOURNAL")
+    accounting_manual_journal: str = Field(default="", alias="ACCOUNTING_MANUAL_JOURNAL")
+    # The issuer's invoice ref: this prefix and Belfry's invoice number (the idempotency key)
+    accounting_ref_prefix: str = Field(default="Belfry ", alias="ACCOUNTING_REF_PREFIX")
+    # The issuer's Odoo mails its invoice (and credit note) to the buyer
+    accounting_send: bool = Field(default=True, alias="ACCOUNTING_SEND")
     stripe_webhook_secret: str = Field(default="", alias="STRIPE_WEBHOOK_SECRET")
 
     event_start: dt.date = Field(default=dt.date(2027, 1, 25), alias="EVENT_START")

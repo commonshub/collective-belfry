@@ -189,6 +189,19 @@ fi
 [[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == used ]] && ok "invite used once the pass is active" || bad "invite not marked used"
 INV_PDF=$(ox account.move read "[[$INV_ID]]" '{"fields":["invoice_pdf_report_id"]}' | jq -r '.[0].invoice_pdf_report_id[0] // empty')
 [[ -n "$INV_PDF" ]] && ok "the paid invoice has its own PDF (no proforma), attachment $INV_PDF" || bad "invoice $INV_ID has no PDF"
+if [[ -n "${ACCOUNTING_ODOO_URL:-}" ]]; then
+  # The ticket seller's Odoo books the ticket (onboarding's accounting.py), right after activation.
+  for i in $(seq 1 15); do
+    ACC=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["accounting_state","accounting_ref","accounting_error"]}' | jq -c '.[0]')
+    [[ "$(jq -r .accounting_state <<<"$ACC")" != false ]] && break
+    sleep 2
+  done
+  [[ "$(jq -r .accounting_state <<<"$ACC")" == done ]] && ok "booked at ${ACCOUNTING_ISSUER:-the ticket seller} as $(jq -r .accounting_ref <<<"$ACC")" || bad "accounting: $ACC"
+  if [[ -n "${ACCOUNTING_ISSUER:-}" ]]; then
+    N=$(ox mail.mail search_count "[[[\"model\",\"=\",\"belfry.pass\"],[\"res_id\",\"=\",$PASS_ID],[\"body_html\",\"ilike\",\"invoice comes from\"]]]")
+    [[ "$N" -ge 1 ]] && ok "the activation mail leaves the invoice to $ACCOUNTING_ISSUER" || bad "activation mail without the issuer's note ($N)"
+  fi
+fi
 NPUB=$(jq -r .npub <<<"$PASS"); KC_PUB=$(jq -r .keycast_pubkey <<<"$PASS"); AK_UID=$(jq -r .authentik_user_id <<<"$PASS")
 MEMBER=$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_member_number","belfry_npub","belfry_authentik_user_id"]}' | jq -r '.[0].belfry_member_number')
 [[ -n "$MEMBER" && "$MEMBER" != null ]] && ok "member number $MEMBER" || bad "no member number on the partner"
@@ -270,8 +283,11 @@ MP=$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/search?query=to:$EMAIL" 2>/dev/n
 if [[ -z "$(jq -r '.messages_count // empty' <<<"$MP")" ]]; then
   echo "  note Mailpit not reachable at $MAILPIT_URL (a real SMTP relay in production); mail state: $(ox mail.mail read "[$(jq -c 'map(.id)' <<<"$MAILS")]" '{"fields":["state","failure_reason"]}' | jq -c 'map({state, failure_reason})')"
 elif [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]]; then
-  MP_ID=$(jq -r '.messages[0].ID' <<<"$MP")
-  MP_BODY=$(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.HTML // .Text')
+  # the activation mail, among others to the same address (the ticket seller's invoice, say)
+  for MP_ID in $(jq -r '.messages[:5][].ID' <<<"$MP"); do
+    MP_BODY=$(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.HTML // .Text')
+    grep -q "$SETUP_URL" <<<"$MP_BODY" && break
+  done
   grep -q "$SETUP_URL" <<<"$MP_BODY" && ok "mail delivered over SMTP to Mailpit with the setup link (from $(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.From.Address'))" || bad "delivered mail lacks the setup link"
 else
   bad "no mail for $EMAIL in Mailpit: $(jq -c '{messages_count}' <<<"$MP")"
@@ -765,8 +781,8 @@ SP_ID=$(jq -r '.pass.pass_id // empty' <<<"$OUT")
 if [[ -n "$SP_ID" ]]; then
   SP=$(ox belfry.pass read "[[$SP_ID]]" '{"fields":["state","tier","steward_pass","invoice_id"]}')
   jq -e '.[0] | .state == "active" and .tier == "full" and .steward_pass' <<<"$SP" >/dev/null && ok "the steward pass is active, full access" || bad "steward pass: $SP"
-  INV=$(ox account.move read "[[$(jq -r '.[0].invoice_id[0]' <<<"$SP")]]" '{"fields":["amount_total","payment_state"]}')
-  jq -e '.[0] | .amount_total == 0 and .payment_state == "paid"' <<<"$INV" >/dev/null && ok "on a paid invoice of 0" || bad "steward invoice: $INV"
+  SINV=$(ox account.move read "[[$(jq -r '.[0].invoice_id[0]' <<<"$SP")]]" '{"fields":["amount_total","payment_state"]}')
+  jq -e '.[0] | .amount_total == 0 and .payment_state == "paid"' <<<"$SINV" >/dev/null && ok "on a paid invoice of 0" || bad "steward invoice: $SINV"
   AGAIN=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding add-steward "$STEWARD_EMAIL" 2>/dev/null | tail -n1)
   [[ "$(jq -r .pass.result <<<"$AGAIN")" == already_active && "$(jq -r .pass.pass_id <<<"$AGAIN")" == "$SP_ID" ]] && ok "add-steward again keeps the one pass" || bad "add-steward again: $AGAIN"
   SREV=$(onb_post "/admin/passes/$SP_ID/revoke?token=$HOOK_TOKEN")
@@ -1156,6 +1172,14 @@ PASS2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_p
 [[ "$(ak "$AK_URL/api/v3/core/users/?username=$USERNAME" | jq '.pagination.count')" == 1 ]] && ok "still one Authentik user" || bad "Authentik user count changed"
 [[ "$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')" == "$LINKS_BEFORE_REPLAY" ]] && ok "source link count unchanged ($LINKS_BEFORE_REPLAY)" || bad "source link count changed"
 [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n]')" == "$KC_PUB" ]] && ok "same Keycast pubkey" || bad "Keycast pubkey changed"
+
+if [[ -n "${ACCOUNTING_ODOO_URL:-}" ]]; then
+  step "12. a full refund becomes a credit note at the ticket seller"
+  REF_TX=$(ox payment.transaction create "[{\"provider_id\":$PROVIDER_ID,${PM_ID:+\"payment_method_id\":$PM_ID,}\"reference\":\"SMOKE-$STAMP-R\",\"amount\":-$(jq -r .amount_total <<<"$INV"),\"currency_id\":$(jq -r '.currency_id[0]' <<<"$INV"),\"partner_id\":$(jq -r '.partner_id[0]' <<<"$INV"),\"operation\":\"refund\",\"source_transaction_id\":$TX_ID,\"provider_reference\":\"re_smoke_$STAMP\",\"state\":\"done\"}]")
+  R=$(onb_post "/hooks/odoo/refund?token=$HOOK_TOKEN" "{\"_model\":\"payment.transaction\",\"_id\":$REF_TX,\"_action\":\"smoke\"}" | jq -r .result)
+  ACC=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","accounting_state","accounting_refund_ref","accounting_error"]}' | jq -c '.[0]')
+  [[ "$(jq -r .accounting_state <<<"$ACC")" == refunded ]] && ok "refund ($R): credit note $(jq -r .accounting_refund_ref <<<"$ACC") at ${ACCOUNTING_ISSUER:-the ticket seller}" || bad "refund at the seller: $ACC"
+fi
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
 [[ $fail -eq 0 ]]

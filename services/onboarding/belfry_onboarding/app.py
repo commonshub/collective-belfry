@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
+    accounting,
     apply,
     avatar,
     blossom,
@@ -129,6 +130,7 @@ def build_services(settings: Settings) -> Services:
             else None
         ),
         groups=_groups_members(settings),
+        accounting=accounting.from_settings(settings),
     )
 
 
@@ -273,6 +275,10 @@ def create_app(services: Services | None = None) -> FastAPI:
         except Exception as exc:  # Odoo does not retry: log, answer 200, reconcile picks it up
             log.exception("invoice-paid hook failed for invoice %s", invoice_id)
             return {"result": "error", "invoice_id": invoice_id, "error": str(exc)}
+        if result in ("activated", "already_active"):
+            await run_in_threadpool(
+                accounting.after, svc(request), "payment", accounting.book_invoice_id, invoice_id
+            )
         return {"result": result, "invoice_id": invoice_id}
 
     @app.post("/hooks/keycast/key-changed")
@@ -305,6 +311,9 @@ def create_app(services: Services | None = None) -> FastAPI:
         except Exception as exc:
             log.exception("refund hook failed for transaction %s", transaction_id)
             return {"result": "error", "transaction_id": transaction_id, "error": str(exc)}
+        await run_in_threadpool(
+            accounting.after, svc(request), "refund", accounting.refund_transaction, transaction_id
+        )
         return {"result": result, "transaction_id": transaction_id}
 
     @app.post("/hooks/odoo/chargeback")

@@ -28,6 +28,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
 | `belfry_onboarding/holder_invites.py` | invites by e-mail for a pass holder or their agent (`/api/invites`, NIP-98) |
 | `belfry_onboarding/discovery.py` | what an app needs to connect: `/.well-known/belfry.json`, `/api/me`, CORS of `/api/*` |
+| `belfry_onboarding/accounting.py`, `clients/odoo_json2.py` | books each paid ticket (invoice, payment, credit note) in the Odoo of the organisation that sells the tickets, over its JSON-2 API (`../../infra/DEPLOY.md`, "Accounting at the ticket seller") |
 | `belfry_onboarding/email_code.py` | an app's own key proves an e-mail address with a mailed 6-digit code (`/api/email-code`) |
 | `belfry_onboarding/relay.py`, `relay_whitelist.py` | publishing to the community relay; its whitelist from the active passes |
 | `belfry_onboarding/stripe_sig.py`, `nostr.py` | Stripe signature check; npub encoding |
@@ -58,6 +59,8 @@ line, for cron jobs and operators (`docker compose exec onboarding python -m bel
 | `login-link <pass id>` | a new one-time sign-in link for that pass; Odoo mails it |
 | `add-steward <e-mail> [name]` | create or find the Authentik user, add it to `belfry-stewards` and give the steward a free pass |
 | `steward-passes` | give every member of `belfry-stewards` their free pass (idempotent; run on deploys) |
+| `accounting-check` | connect to the ticket seller's Odoo: the configured product, tax and journal ids, and the candidates |
+| `accounting-book [pass id]` | book a paid ticket at the ticket seller; without an id, every one not booked yet (also part of `reconcile`) |
 | `restore-keys` | recreate every participant's signer account after losing the signer's data (custody seed needed) |
 
 `--http h11` matters: walt.id's Java client sends `Upgrade: h2c` over plain HTTP, which the

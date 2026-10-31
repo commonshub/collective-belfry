@@ -20,7 +20,8 @@ from typing import Any
 
 import httpx
 
-from . import avatar
+from . import accounting, avatar
+from .accounting import Accounting
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
@@ -83,6 +84,7 @@ class Services:
     eudi: RegistryCerts | None = None
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
     groups: GroupsMembers | None = None  # the groups relay's members; None without its API
+    accounting: Accounting | None = None  # the ticket seller's Odoo; None: Belfry invoices
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -843,6 +845,12 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
                 invoice_id,
             )
 
+    if (
+        not svc.odoo.search_read("belfry.pass", [["invoice_id", "=", invoice_id]], ["id"], limit=1)
+        and _tier_from_invoice(svc, invoice_id)[0] is None
+    ):
+        log.info("activate_pass: invoice %s sells no pass", invoice_id)
+        return "no_pass_product"
     pass_row = _find_or_create_pass(svc, invoice)
     state = pass_row.get("state")
     if state == "active":
@@ -1132,6 +1140,7 @@ def handle_chargeback(svc: Services, transaction_id: int) -> str:
         return "no_pass"
     pass_row = rows[0]
     if state == "open":
+        accounting.after(svc, "chargeback", accounting.flag_chargeback, pass_row["id"])
         return revoke_pass(svc, pass_row["id"], "chargeback")
     if pass_row.get("state") == "revoked" and pass_row.get("revoke_reason") == "chargeback":
         return reactivate_pass(svc, pass_row["id"])
@@ -1253,12 +1262,15 @@ def reconcile(svc: Services) -> dict[str, Any]:
             except Exception:
                 log.exception("reconcile: revoke_pass(%s) failed", pass_row["id"])
                 revoked[pass_row["id"]] = "error"
-    return {
+    result = {
         "activated": activated,
         "revoked": revoked,
         "participants": sync_participants(svc),
         "tokens": issue_missing_tokens(svc),
     }
+    if svc.accounting is not None:
+        result["accounting"] = accounting.reconcile(svc)
+    return result
 
 
 # -- Stripe disputes ----------------------------------------------------------------------------
@@ -1282,6 +1294,7 @@ def handle_dispute_created(svc: Services, dispute: dict[str, Any]) -> tuple[str,
         return "no_pass", None
     if dispute.get("id"):
         svc.odoo.write("belfry.pass", [pass_row["id"]], {"stripe_dispute_id": dispute["id"]})
+    accounting.after(svc, "dispute", accounting.flag_chargeback, pass_row["id"])
     return revoke_pass(svc, pass_row["id"], "chargeback"), pass_row["id"]
 
 

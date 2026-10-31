@@ -607,7 +607,7 @@ services:
     secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
               bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
               pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
-              programme_nsec, groups_api_nsec]
+              programme_nsec, groups_api_nsec, accounting_odoo_api_key]
     depends_on:
       odoo:
         condition: service_healthy
@@ -695,6 +695,17 @@ services:
       # Origins whose pages may call /api/* (comma separated, or *); NIP-98 only, no cookies
       API_CORS_ORIGINS: ${API_CORS_ORIGINS:-}
       TEST_RUN_NOTICE: ${TEST_RUN_NOTICE:-}
+      # The ticket seller's Odoo (accounting.py); empty URL: Belfry's own invoice is the buyer's
+      ACCOUNTING_ODOO_URL: ${ACCOUNTING_ODOO_URL:-}
+      ACCOUNTING_ODOO_DB: ${ACCOUNTING_ODOO_DB:-}
+      ACCOUNTING_ISSUER: ${ACCOUNTING_ISSUER:-}
+      ACCOUNTING_PRODUCTS: ${ACCOUNTING_PRODUCTS:-}
+      ACCOUNTING_TAX_INCLUDED: ${ACCOUNTING_TAX_INCLUDED:-}
+      ACCOUNTING_TAX_EXCLUDED: ${ACCOUNTING_TAX_EXCLUDED:-}
+      ACCOUNTING_JOURNAL: ${ACCOUNTING_JOURNAL:-}
+      ACCOUNTING_MANUAL_JOURNAL: ${ACCOUNTING_MANUAL_JOURNAL:-}
+      ACCOUNTING_REF_PREFIX: ${ACCOUNTING_REF_PREFIX:-Belfry }
+      ACCOUNTING_SEND: ${ACCOUNTING_SEND:-true}
       EVENT_END: ${EVENT_END:-2027-01-31}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       # The help page (/help) lists the community apps (the app bar's list).
@@ -926,6 +937,7 @@ secrets:
   pass_info_token: {file: ./secrets/pass_info_token}
   mint_seed: {file: ./secrets/mint_seed}
   stripe_webhook_secret: {file: ./secrets/stripe_webhook_secret}
+  accounting_odoo_api_key: {file: ./secrets/accounting_odoo_api_key}
 
 volumes:
   blossom-data:

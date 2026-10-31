@@ -46,6 +46,7 @@
         <li style="margin: 0 0 6px;">Your pass at the door: <a t-att-href="public_url + '/me'" style="color: #d6ff52;">show it on your phone</a><t t-if="object.sudo().claim_url">, or <a t-att-href="object.sudo().claim_url" style="color: #d6ff52;">add it to your wallet app</a></t>.</li>
         <li t-if="object.sudo().tokens_url" style="margin: 0 0 6px;"><a t-att-href="object.sudo().tokens_url" style="color: #d6ff52;">Your <t t-out="object.cashu_amount"/> village tokens</a>, to pass on to other participants (no monetary value).</li>
         <li t-if="ctx.get('belfry_invoice_attached')" style="margin: 0 0 6px;">Your invoice is attached to this mail.</li>
+        <li t-if="ctx.get('belfry_invoice_issuer')" style="margin: 0 0 6px;">Your invoice comes from <t t-out="ctx.get('belfry_invoice_issuer')"/> in a separate e-mail.</li>
     </ul>
     <p style="margin: 0; font-size: 12px; color: #8e9a91;">
         Your public key on Nostr, kept safe by Belfry:

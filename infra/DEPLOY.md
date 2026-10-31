@@ -206,6 +206,53 @@ Stewards who work at the door from a phone need ZeroTier on that phone. Opening 
 VM's firewall allows direct ZeroTier connections; without it traffic goes through ZeroTier's
 relays, which is slower but works.
 
+## Accounting at the ticket seller (another organisation's Odoo)
+
+When another organisation sells the tickets and keeps the books (for Open Source Village: XL
+Collective, on Odoo Online), Belfry's Odoo keeps the order, the payment link and the pass, and its
+invoice stays internal. The onboarding service books every paid ticket in the seller's Odoo over
+its JSON-2 API (`services/onboarding/belfry_onboarding/accounting.py`):
+
+1. a customer invoice: the buyer (found by e-mail, or created), the same lines and VAT, and
+   `ref` = `ACCOUNTING_REF_PREFIX` + Belfry's invoice number;
+2. posted only if its total equals Belfry's (otherwise left as a draft for the accountant);
+3. the payment in `ACCOUNTING_JOURNAL` (Stripe), or `ACCOUNTING_MANUAL_JOURNAL` for payments a
+   steward marked by hand (empty: left open);
+4. sent to the buyer by the seller's Odoo (`ACCOUNTING_SEND`, default on). The activation mail
+   then says "Your invoice comes from <ACCOUNTING_ISSUER> in a separate e-mail".
+
+A full refund becomes a credit note with its refund payment. Partial refunds, chargebacks and
+Stripe disputes are not booked: the pass shows "Needs the accountant". Free tickets (steward
+passes) are not booked. The result is on the pass (`accounting_state`, `accounting_ref`,
+`accounting_error`); the invoice-paid and refund hooks book at once, `reconcile` retries.
+
+At the seller, once: a user for Belfry with invoicing rights (Accounting / Billing administrator
+and contact creation) and an API key (Preferences › Account Security › New API key); a product
+per pass tier or one for all; the 21% sale taxes, price included and price excluded; a bank
+journal for Stripe. The external API needs Odoo Online's Custom plan. Then on Belfry's server:
+
+```bash
+infra/scripts/put-secret.sh <ssh target> accounting_odoo_api_key    # the seller's API key
+# infra/.env
+ACCOUNTING_ODOO_URL=https://xlcollective.odoo.com
+ACCOUNTING_ODOO_DB=xlcollective              # the database name (Odoo Online: the subdomain)
+ACCOUNTING_ISSUER="XL Collective"
+ACCOUNTING_PRODUCTS=*=<product id>           # or day=..,week=..,full=..,*=.. per tier
+ACCOUNTING_TAX_INCLUDED=<tax id>
+ACCOUNTING_TAX_EXCLUDED=<tax id>
+ACCOUNTING_JOURNAL=<journal id>
+```
+
+`docker compose exec onboarding python -m belfry_onboarding accounting-check` lists the configured
+records and the candidates (taxes, bank journals, products) to pick the ids from. Run bootstrap
+again (it tells Odoo the issuer's name for the activation mail) and restart the onboarding
+service. `accounting-book [pass id]` books one ticket by hand, or all that are missing.
+
+To try it before the seller's Odoo is connected, another Belfry can stand in:
+`infra/scripts/accounting-test-issuer.sh` on that Belfry's server creates the user, key, product
+and journal there and prints the `.env` lines (that server's `ADMIN_NETS` must list this one's
+addresses, since its proxy serves `/json/*` only to the admin network).
+
 ## Stewards
 
 Stewards work on `https://pass.<domain>/steward` (over the admin network): create and revoke
