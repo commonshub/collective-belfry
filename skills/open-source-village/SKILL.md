@@ -1,6 +1,6 @@
 ---
 name: open-source-village
-description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, create and manage groups, or announce sessions and workshops for them, and when building an app that joins a Belfry community with the participant's own key or signs pass holders in with their e-mail and a mailed code.
+description: Help a visitor join and take part in Open Source Village, run by Belfry, or act for a pass holder. Use when someone asks you to get them a pass (from an invite link or by applying), to order and pay for it, or to explain what comes after: the activation e-mail, signing in, the pass at the door, the wallet and the village apps. Also use when a pass holder gives you a bunker URL to invite people by e-mail, post, react, repost, share photos and videos, create and manage groups, or announce sessions and workshops for them, and when building an app that joins a Belfry community with the participant's own key or signs pass holders in with their e-mail and a mailed code, or lets them make invite codes.
 ---
 
 # Open Source Village: helping a visitor
@@ -256,7 +256,7 @@ Only keys with an active pass get in.
 | Invites by e-mail | `https://pass.<domain>/api/invites` |
 | Signing (NIP-46) | `wss://bunker.<domain>`, named in the bunker URL |
 
-### Invites by e-mail
+### Invites by e-mail or as a code
 
 `https://pass.<domain>/api/invites`, JSON in and out. Every request carries a NIP-98
 authorization: a kind-27235 event signed through the bunker, with tags
@@ -279,6 +279,7 @@ also `["payload", "<SHA-256 hex of the body>"]`. Send it as
 export BELFRY_BUNKER='bunker://…'          # the holder's; keep it out of the command line
 python -m belfry_onboarding.agent --domain <domain> me
 python -m belfry_onboarding.agent --domain <domain> invite sam@example.org --name Sam --note "met at the hackathon"
+python -m belfry_onboarding.agent --domain <domain> invite --note "for my neighbour"    # a code, nothing mailed
 python -m belfry_onboarding.agent --domain <domain> invites
 python -m belfry_onboarding.agent --domain <domain> status 176
 python -m belfry_onboarding.agent --domain <domain> revoke 176
@@ -293,7 +294,9 @@ POST /api/invites
 {"email": "sam@example.org", "name": "Sam", "note": "met at the hackathon"}
 ```
 
-Answer `201`: Belfry mailed the invite link to that address.
+Answer `201`: Belfry mailed the invite link to that address. Without `email` (`{}` or only a
+`note`) nothing is mailed: the answer's `url` is the invite link and its last part the invite code,
+for the holder to pass on (section 10).
 
 ```json
 {"id": 176, "state": "open", "email": "sam@example.org", "name": "Sam", "note": "met at the hackathon",
@@ -306,14 +309,15 @@ Answer `201`: Belfry mailed the invite link to that address.
 - `GET /api/invites/<id>` follows one invite: `state` is `open`, `reserved` (they ordered and the
   payment is outstanding), `used`, `expired` or `revoked`; `pass_state` becomes `active` and `npub`
   is their key (`npub1…`) once they have paid.
-- `GET /api/invites` lists the holder's invites by e-mail and says whether the holder is a steward.
+- `GET /api/invites` lists the holder's invites (by e-mail and as codes, `email` `""` for a code)
+  and says whether the holder is a steward.
 - `POST /api/invites/<id>/revoke` revokes an open invite and gives the holder the invite back.
 - The same address again returns the open invite; no second mail goes out. An address whose owner
   already has an active pass answers `200` with `{"state": "member", "email", "npub"}`.
 
 Errors are `{"error", "message"}`: `401 unauthorized` (signature, URL, method, age, payload or a
 reused event), `403 no_pass` (the key holds no active pass), `404 not_found`, `409 refused` (for
-example no invites left; `message` says why), `400 invalid_json`, `422 invalid` (no e-mail). A
+example no invites left; `message` says why), `400 invalid_json`, `422 invalid` (an `email` that is not an address). A
 `429` (too many requests, see above) comes from the proxy, without a JSON body.
 
 ### Posts, replies, reactions, reposts
@@ -520,3 +524,29 @@ while developing.
 
 `examples/village-notes` in the Belfry repository does all of this (`src/app.js`, `loginSso`,
 `finishSso`, `logout`).
+
+## 10. An invite code from an app
+
+A pass holder can invite someone from an app: the app makes an invite code, the holder passes it
+on (a message, a QR code, in person), and the invitee opens it in any app of the Belfry or in the
+shop. It needs the holder signed in to the app with a signer (section 9, or a bunker URL) and an
+active pass (`member` in `GET /api/me`); show the feature only then.
+
+1. **Make the code.** `POST https://pass.<domain>/api/invites`, NIP-98 signed (section 6), body
+   `{}` or `{"note": "for my neighbour"}` (a note for the holder only, up to 200 characters). The
+   answer `201` has `url` (`https://shop.<domain>/belfry/invite/<code>`) and `expires_at`; the
+   code is the part after `/invite/`. Each call is a new code. With `"email"` in the body Belfry
+   mails the invite instead (section 6).
+2. **Pass it on.** Show the code and offer to copy it, the shop link (`url`), or a link into your
+   own app that opens the invite (`?invite=<code>` in Village Notes). One person can use a code.
+3. **Opening a code.** An app that takes codes reads the offer at `invite_offer` in
+   `/.well-known/belfry.json` with the code in place of `{token}` and orders as in section 2.
+4. **Follow and revoke.** `GET /api/invites` lists the holder's invites (`email` `""` for codes)
+   with `state` (`open`, `reserved`, `used`, `expired`, `revoked`) and, once the invitee's pass is
+   active, `pass_state` `active` and their `npub`. `POST /api/invites/<id>/revoke` takes back an
+   open one and gives the holder the invite back.
+
+A participant has a few invites (3 by default; `409 refused` with the reason when none are left), a
+steward's are not limited. From a browser page, call the API through your server unless the Belfry
+lists your origin in `API_CORS_ORIGINS` (section 8). `examples/village-notes` does all of this
+(`src/app.js`, `createInvite`, `loadInvites`).

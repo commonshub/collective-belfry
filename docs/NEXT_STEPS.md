@@ -789,6 +789,15 @@ User: sign in to Village Notes with the e-mail and the one-time code; signing ou
 
 Open: an outside app sees Keycast's own sign-in page and consent screen (Belfry's apps skip both).
 
+## 3zs. Invite codes from an app — built 2026-11-01
+
+User: Village Notes should create an invite code; describe it in the skill.
+
+- [x] Odoo `belfry_pass` 19.0.1.26.0: `belfry_holder_invite` without an e-mail makes an invite link for the holder to pass on (nothing mailed, no duplicate check, counts against the limit, listed with the holder's invites).
+- [x] `POST /api/invites` takes `email` as optional; the agent command's `invite` without an address makes a code. Skill section 6 updated, new section 10 (an invite code from an app).
+- [x] Village Notes: "Invite someone" for pass holders: a code (copy the code, a `/?invite=` link into the app or the shop link) or an invite mailed to an address; the holder's invites with their state, revoke for open ones.
+- Checks: Odoo 112 tests (1 new); onboarding 279 (1 new); `agentcheck` (smoke 6v) makes a code, reads its offer at the shop and revokes it; local smoke 234 ok. The Village Notes card itself was not tried in a browser.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

@@ -29,6 +29,7 @@ function conventional(domain) {
     shop: `https://shop.${domain}`,
     api: {
       me: `${pass}/api/me`,
+      invites: `${pass}/api/invites`,
       invite_offer: `https://shop.${domain}/belfry/api/invites/{token}`,
       wallet_pass_tokens: `${pass}/wallet/pass-tokens`,
     },
@@ -52,6 +53,7 @@ if (discovery.ok) {
 // Only the APIs the page needs, on the Belfry's own hosts.
 const allowed = [
   `${wellKnown.pass}/api/me`,
+  `${wellKnown.pass}/api/invites`,
   `${wellKnown.pass}/api/email-code`,
   `${wellKnown.pass}/wallet/pass-tokens`,
   `${wellKnown.shop}/belfry/api/invites/`,

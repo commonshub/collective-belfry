@@ -142,18 +142,24 @@ class FakeOdoo(OdooApi):
             raise OdooError(
                 "UserError", {"message": "Only participants with an active pass can invite."}
             )
+        email = email or ""  # no e-mail: an invite link the holder passes on, nothing mailed
         for p in self.tables["belfry.pass"].values():
             holder = self.tables["res.partner"].get(p.get("partner_id"), {})
-            if p.get("state") == "active" and (holder.get("email") or "").lower() == email.lower():
+            if (
+                email
+                and p.get("state") == "active"
+                and (holder.get("email") or "").lower() == email.lower()
+            ):
                 return {
                     "state": "member",
                     "email": email,
                     "npub": holder.get("belfry_npub") or False,
                 }
         for i in mine:
-            if (i.get("invitee_email") or "").lower() == email.lower() and i["state"] in (
-                "open",
-                "reserved",
+            if (
+                email
+                and (i.get("invitee_email") or "").lower() == email.lower()
+                and i["state"] in ("open", "reserved")
             ):
                 return row(i)
         if steward_email:
@@ -162,7 +168,8 @@ class FakeOdoo(OdooApi):
             made = self._participant_invites("belfry_participant_create", [partner_id, note])
         inv = invites[made["id"]]
         inv.update(requested_by_partner_id=partner_id, invitee_email=email, invitee_name=name)
-        self.mailed_invites = [*self.mailed_invites, inv["id"]]
+        if email:
+            self.mailed_invites = [*self.mailed_invites, inv["id"]]
         return row(inv)
 
     def _steward_pass(self, email: str, name: Any) -> dict[str, Any]:

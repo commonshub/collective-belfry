@@ -263,6 +263,8 @@ async function enter(s) {
   show("signed-in");
   const me = await loadMe();
   loadWallet(me);
+  $("invites-card").hidden = !me?.member;
+  if (me?.member) loadInvites();
   if (me?.member === false) {
     $("notes").replaceChildren(el("p", { class: "muted" }, "The village relay opens once you hold an active pass."));
     $("note-post").disabled = true;
@@ -399,6 +401,82 @@ async function loadNutzaps() {
     tokens.nutzaps = 0;
   }
   renderWallet();
+}
+
+// Invites (skill section 6): an invite code to pass on, or one Belfry mails to an address.
+// POST /api/invites without an e-mail makes a link; its last part is the code that the "I have
+// an invite" box (here or in any app of the Belfry) takes.
+
+const inviteCode = (url) => url.split("/invite/")[1] || url;
+const inviteLink = (url) => location.origin + "/?invite=" + encodeURIComponent(inviteCode(url));
+
+function copyButton(text, label) {
+  const b = el("button", { class: "secondary" }, label);
+  b.onclick = async () => {
+    try { await navigator.clipboard.writeText(text); b.textContent = "Copied"; }
+    catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = label; }, 1500);
+  };
+  return b;
+}
+
+const INVITE_STATES = { open: "not used yet", reserved: "ordered, payment outstanding",
+  used: "used", expired: "expired", revoked: "revoked" };
+
+function inviteRow(i) {
+  const who = i.email || (i.note ? `code · ${i.note}` : "code");
+  const state = i.pass_state === "active" ? "joined" : INVITE_STATES[i.state] || i.state;
+  const actions = el("div", { class: "row" });
+  if (i.state === "open") {
+    actions.append(copyButton(inviteCode(i.url), "Copy code"));
+    const revoke = el("button", { class: "secondary" }, "Revoke");
+    revoke.onclick = async () => {
+      revoke.disabled = true;
+      const r = await api(`${cfg.api.invites}/${i.id}/revoke`, { method: "POST", json: {}, sign: signer.sign });
+      if (r.status !== 200) $("invite-status").textContent = errorText(r);
+      loadInvites();
+    };
+    actions.append(revoke);
+  }
+  return el("div", { class: "invite" },
+    el("div", {}, el("div", {}, who), el("div", { class: "muted" }, `${state}, until ${(i.expires_at || "").slice(0, 10)}`)),
+    actions);
+}
+
+async function loadInvites() {
+  const r = await api(cfg.api.invites, { sign: signer.sign });
+  if (r.status !== 200) return $("invites").replaceChildren(el("p", { class: "error" }, errorText(r)));
+  $("invites").replaceChildren(...(r.data.invites.length
+    ? [el("h2", { style: "margin-top:16px" }, "Your invites"), ...r.data.invites.map(inviteRow)]
+    : []));
+}
+
+async function createInvite() {
+  const email = $("invitee-email").value.trim(), note = $("invitee-note").value.trim();
+  $("invite-status").textContent = "";
+  $("invite-create").disabled = true;
+  try {
+    const r = await api(cfg.api.invites, { method: "POST", json: { email, note }, sign: signer.sign });
+    if (r.status === 200 && r.data.state === "member") {
+      $("invite-status").textContent = `${email} has a pass already.`;
+    } else if (r.status !== 201) {
+      $("invite-status").textContent = errorText(r);
+    } else if (email) {
+      $("invite-made").replaceChildren(el("p", { class: "ok" }, `Invite mailed to ${email}.`));
+      $("invitee-email").value = $("invitee-note").value = "";
+    } else {
+      const code = inviteCode(r.data.url);
+      $("invite-made").replaceChildren(
+        el("p", { class: "code" }, code),
+        el("p", { class: "muted" }, "Pass on the code (it goes into \"I have an invite\") or a link. One person can use it."),
+        el("div", { class: "row" }, copyButton(code, "Copy code"), copyButton(inviteLink(r.data.url), "Copy link to this app"),
+          copyButton(r.data.url, "Copy shop link")));
+      $("invitee-note").value = "";
+    }
+    loadInvites();
+  } finally {
+    $("invite-create").disabled = false;
+  }
 }
 
 const notes = new Map();
@@ -581,6 +659,7 @@ async function main() {
   $("bunker-login").onclick = loginBunker;
   $("nip07-login").onclick = loginNip07;
   $("sso-login").onclick = loginSso;
+  $("invite-create").onclick = createInvite;
   $("note-post").onclick = postNote;
   $("logout").onclick = logout;
   setTimeout(() => { $("nip07-login").hidden = !window.nostr; }, 300);

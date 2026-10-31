@@ -41,6 +41,12 @@
   a { color: var(--accent); }
   [hidden] { display: none !important; }
   code { overflow-wrap: anywhere; }
+  .code { font-family: ui-monospace, monospace; font-size: 1.1rem; background: var(--bg);
+          padding: 10px 12px; border-radius: 8px; border: 1px dashed var(--accent);
+          overflow-wrap: anywhere; margin: 8px 0 0; }
+  .invite { border-top: 1px solid var(--line); padding: 10px 0; display: flex; gap: 8px;
+            align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .invite button { margin-top: 0; padding: 6px 12px; }
 </style>
 </head>
 <body>
@@ -118,6 +124,18 @@
     <div class="card">
       <h2>Village tokens</h2>
       <div id="wallet"><p class="muted">Looking…</p></div>
+    </div>
+    <div class="card" id="invites-card" hidden>
+      <h2>Invite someone</h2>
+      <p class="muted">Make an invite code to pass on yourself, or give an e-mail address and Belfry
+        mails the invite there.</p>
+      <label for="invitee-email">E-mail (optional)</label>
+      <input id="invitee-email" type="email" autocomplete="off" placeholder="sam@example.org">
+      <label for="invitee-note">Note for yourself (optional)</label>
+      <input id="invitee-note" maxlength="200" placeholder="met at the hackathon">
+      <div class="row"><button id="invite-create">Create invite</button><span id="invite-status" class="muted"></span></div>
+      <div id="invite-made"></div>
+      <div id="invites"></div>
     </div>
     <div class="card">
       <h2>New public note</h2>

@@ -20,6 +20,9 @@ A small app on a Belfry, built from the visitor skill
   seed is derived through Keycast for the wallet only.
 - **Sign out**: after "Sign in with Open Source Village" it revokes the app's authorization and
   ends the sign-in everywhere (Keycast's logout), so the next sign-in asks for the code again.
+- **Invites**: a pass holder makes an invite code to pass on (or has Belfry mail an invite to an
+  address), copies the code or a link (`/?invite=<code>` into this app, or the shop's), follows
+  their invites and revokes open ones (`/api/invites`, NIP-98; skill section 10).
 - **Notes**: the latest kind-1 notes on the community relay (NIP-42 AUTH), and a box to post one.
 
 ```

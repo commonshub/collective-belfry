@@ -26,7 +26,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/reports.py` | reports from the village apps and the list of hidden content |
 | `belfry_onboarding/pages.py`, `content/*.md` | the text pages (privacy notice, terms, refund policy, community rules, help): edit the Markdown in `content/` |
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
-| `belfry_onboarding/holder_invites.py` | invites by e-mail for a pass holder or their agent (`/api/invites`, NIP-98) |
+| `belfry_onboarding/holder_invites.py` | invites by e-mail or as a code for a pass holder or their agent (`/api/invites`, NIP-98) |
 | `belfry_onboarding/discovery.py` | what an app needs to connect: `/.well-known/belfry.json`, `/api/me`, CORS of `/api/*` |
 | `belfry_onboarding/accounting.py`, `clients/odoo_json2.py` | books each paid ticket (invoice, payment, credit note) in the Odoo of the organisation that sells the tickets, over its JSON-2 API (`../../infra/DEPLOY.md`, "Accounting at the ticket seller") |
 | `belfry_onboarding/email_code.py` | an app's own key proves an e-mail address with a mailed 6-digit code (`/api/email-code`) |
@@ -101,7 +101,7 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `GET /.well-known/belfry.json` | none (CORS for every origin) | the community's name, relays, file server, mint, sign-in, APIs, apps and skills: an app asks for the domain only |
 | `GET /api/me` | NIP-98 | where the signing key stands: `member`, `steward`, NIP-05 name, `email` and its passes with the tokens each brought (also one ordered with this key, not yet paid); a key without a pass gets `member: false` |
 | `POST /api/email-code`, `POST /api/email-code/verify` | NIP-98, any key | Odoo mails a 6-digit code (10 minutes, five tries, five codes per address and ten per key in 30 minutes); the right code records the key on the address's contact (`belfry_verified_pubkey`, the contact created if needed), never over a key the contact holds (`409 other_key`) |
-| `/api/invites`, `/api/invites/<id>`, `POST /api/invites/<id>/revoke` | NIP-98, key with an active pass | invites by e-mail for a pass holder or their agent (`holder_invites.py`); stewards' are unlimited |
+| `/api/invites`, `/api/invites/<id>`, `POST /api/invites/<id>/revoke` | NIP-98, key with an active pass | invites by e-mail, or as a code without `email` (nothing mailed), for a pass holder or their agent (`holder_invites.py`); stewards' are unlimited |
 | `GET /skill.md`, `/skills/<name>.md` | none | the agent skills in `skills/` with the deployment's domain filled in (`open-source-village`, `belfry-steward`) |
 | `POST /hooks/odoo/invoice-paid?token=` | `HOOK_TOKEN` | Odoo's webhook: activates the pass of the invoice (`_id`) |
 | `POST /hooks/odoo/refund?token=` | `HOOK_TOKEN` | Odoo's webhook: revokes the pass of a refunded transaction |

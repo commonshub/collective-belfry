@@ -733,11 +733,11 @@ fi
 echo "  note the browser check (silent sign-in, a room of one's own, a message read back) is infra/scripts/groups-check.mjs"
 
 step "6v. an agent acts for the participant with nothing but the bunker URL: invite by e-mail, photo, posts, groups"
-# agentcheck signs every step through the participant's bunker (NIP-46): an invite by e-mail on
+# agentcheck signs every step through the participant's bunker (NIP-46): an invite by e-mail and a code on
 # /api/invites (NIP-98), a photo on Blossom, a note, reply, reaction and repost on the community
 # relay, a private group with a member and a public group on the groups relay. AGENT_MAP rewrites
 # public hosts for the transport inside the onboarding container (empty on a public deployment).
-AGENT_MAP=${AGENT_MAP-localhost:3080=keycast-relay:8080,localhost:3090=relay:8080,localhost:3190=groups-relay:3334,localhost:3100=blossom-gate:80}
+AGENT_MAP=${AGENT_MAP-localhost:8069=odoo:8069,localhost:3080=keycast-relay:8080,localhost:3090=relay:8080,localhost:3190=groups-relay:3334,localhost:3100=blossom-gate:80}
 AGENT_INVITEE="agent-invitee-$(date +%s)@example.org"
 # The agent gets a bunker of its own: a bunker secret binds to the first client key that connects
 # (step 6i used the app's), so the participant connects one more app, as on the account page.

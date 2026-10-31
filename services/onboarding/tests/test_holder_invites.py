@@ -109,6 +109,22 @@ def test_participant_limit_and_revoke(services, odoo, client):
     assert get(client, key, "/api/invites/999").status_code == 404
 
 
+def test_holder_invite_as_a_link(services, odoo, client):
+    key, partner = holder(services, odoo)
+    r = post(client, key, "/api/invites", {"note": "for my neighbour"})
+    assert r.status_code == 201, r.text
+    invite = r.json()
+    assert (
+        invite["state"] == "open" and invite["email"] == "" and "/belfry/invite/" in invite["url"]
+    )
+    assert odoo.mailed_invites == []  # nothing mailed: the holder passes the link on
+    assert odoo.tables["belfry.invite"][invite["id"]]["inviter_partner_id"] == partner
+    second = post(client, key, "/api/invites", {"email": ""})
+    assert second.status_code == 201 and second.json()["id"] != invite["id"]
+    listed = get(client, key, "/api/invites").json()
+    assert {invite["id"], second.json()["id"]} <= {i["id"] for i in listed["invites"]}
+
+
 def test_steward_invites_without_limit(services, odoo, authentik, client):
     key, partner = holder(services, odoo, authentik, steward_group=True)
     rows = [post(client, key, "/api/invites", {"email": f"s{i}@example.org"}) for i in range(5)]

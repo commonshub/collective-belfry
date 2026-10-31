@@ -231,6 +231,25 @@ def run(args: argparse.Namespace) -> int:
                     f" npub {r.json().get('npub')}",
                 )
             print(f"INVITE_ID={invite.get('id', '')}")
+            # an invite code to pass on: no e-mail, nothing mailed; the shop reads its offer
+            r = call("POST", api, {"note": "agent check: a code"})
+            made = r.json()
+            url = made.get("url") or ""
+            check(
+                r.status_code == 201 and made.get("email") == "" and "/belfry/invite/" in url,
+                f"invite code without e-mail -> {r.status_code} {url.rsplit('/', 1)[-1][:8]}...",
+            )
+            if made.get("id"):
+                offer = http.get(hostmap(url.replace("/belfry/invite/", "/belfry/api/invites/")))
+                check(
+                    offer.status_code == 200,
+                    f"the shop reads the code's offer -> {offer.status_code}",
+                )
+                r = call("POST", f"{api}/{made['id']}/revoke", {})
+                check(
+                    r.status_code == 200 and r.json().get("state") == "revoked",
+                    f"the code revoked (the invite back to the holder) -> {r.status_code}",
+                )
         r = http.get(hostmap(api))
         check(r.status_code == 401, f"unsigned request -> {r.status_code}")
 

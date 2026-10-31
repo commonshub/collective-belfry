@@ -10,7 +10,8 @@ _logger = logging.getLogger(__name__)
 
 class BelfryInvite(models.Model):
     """Invites sent by e-mail for a pass holder: the holder, or an agent signing with the
-    holder's Nostr key, names the invitee's e-mail; Belfry mails the invite link there. The
+    holder's Nostr key, names the invitee's e-mail; Belfry mails the invite link there. Without an
+    e-mail the invite is a link (and its code) the holder passes on themselves. The
     onboarding service checks the signature (pass.<domain>/api/invites) and says whether the
     holder is a steward; the holder's rights apply: a participant's invites count against
     ``belfry.invites_per_participant``, a steward's do not."""
@@ -53,29 +54,31 @@ class BelfryInvite(models.Model):
 
     @api.model
     def belfry_holder_invite(self, partner_id, email, name=False, note=False, steward_email=False):
-        """Invite ``email`` for the holder and mail the link. ``steward_email``: the holder is a
-        steward (the onboarding service checked), so no invite limit applies. Someone with an
-        active pass already gets no invite (``state`` ``member`` and their npub); an open or
-        reserved invite of the same holder for the same address is returned again, not doubled."""
+        """Invite ``email`` for the holder and mail the link; without ``email``, an invite link the
+        holder shares themselves (nothing is mailed). ``steward_email``: the holder is a steward
+        (the onboarding service checked), so no invite limit applies. Someone with an active pass
+        already gets no invite (``state`` ``member`` and their npub); an open or reserved invite of
+        the same holder for the same address is returned again, not doubled."""
         _check_service_caller(self.env)
         holder = self._belfry_holder(partner_id)
         email = (email or '').strip()
-        if not email or '@' not in email or email.startswith('@') or email.endswith('@') or len(email) > 254:
+        if email and ('@' not in email or email.startswith('@') or email.endswith('@') or len(email) > 254):
             raise UserError("A valid e-mail address is required.")
         name = (name or '').strip()[:100] or False
-        member = self.env['belfry.pass'].sudo().search(
-            [('partner_id.email', '=ilike', email), ('state', '=', 'active')], limit=1)
-        if member:
-            return {'state': 'member', 'email': email,
-                    'npub': member.partner_id.belfry_npub or member.npub or False}
-        existing = self.sudo().search([
-            ('requested_by_partner_id', '=', holder.id), ('invitee_email', '=ilike', email),
-            ('state', 'in', ('open', 'reserved')),
-        ], limit=1)
-        if existing:
-            existing._belfry_usability_error()  # an open one past its expiry becomes expired
-            if existing.state in ('open', 'reserved'):
-                return existing._belfry_holder_row()
+        if email:
+            member = self.env['belfry.pass'].sudo().search(
+                [('partner_id.email', '=ilike', email), ('state', '=', 'active')], limit=1)
+            if member:
+                return {'state': 'member', 'email': email,
+                        'npub': member.partner_id.belfry_npub or member.npub or False}
+            existing = self.sudo().search([
+                ('requested_by_partner_id', '=', holder.id), ('invitee_email', '=ilike', email),
+                ('state', 'in', ('open', 'reserved')),
+            ], limit=1)
+            if existing:
+                existing._belfry_usability_error()  # an open one past its expiry becomes expired
+                if existing.state in ('open', 'reserved'):
+                    return existing._belfry_holder_row()
         if steward_email:
             row = self.belfry_steward_create(steward_email, note, steward_name=holder.name)
         else:
@@ -83,13 +86,14 @@ class BelfryInvite(models.Model):
         invite = self.sudo().browse(row['id'])
         invite.write({
             'requested_by_partner_id': holder.id,
-            'invitee_email': email,
+            'invitee_email': email or False,
             'invitee_name': name,
             'inviter_name': invite.inviter_name or holder.name,
         })
-        invite._belfry_send_invite_mail()
-        _logger.info("Belfry invite %s mailed for holder %s (steward: %s)",
-                     invite.id, holder.id, bool(steward_email))
+        if email:
+            invite._belfry_send_invite_mail()
+        _logger.info("Belfry invite %s %s for holder %s (steward: %s)", invite.id,
+                     "mailed" if email else "as a link", holder.id, bool(steward_email))
         return invite._belfry_holder_row()
 
     def _belfry_send_invite_mail(self):
@@ -106,7 +110,7 @@ class BelfryInvite(models.Model):
 
     @api.model
     def belfry_holder_invites(self, partner_id):
-        """The invites the holder asked for by e-mail, newest first."""
+        """The invites the holder asked for through the API (by e-mail or as a link), newest first."""
         _check_service_caller(self.env)
         invites = self.sudo().search([('requested_by_partner_id', '=', int(partner_id))], order='id desc')
         return [invite._belfry_holder_row() for invite in invites]

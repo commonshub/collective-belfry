@@ -46,6 +46,20 @@ class TestHolderInvitesAndStewardPass(BelfryCase):
         self.assertFalse(self.Invite.belfry_holder_invite_get(self.bob.id, row['id']))
         self.assertEqual(self.Invite.belfry_holder_invite_revoke(self.alice.id, row['id'])['state'], 'revoked')
 
+    def test_participant_invite_as_a_link(self):
+        mails_before = self.env['mail.mail'].sudo().search_count([('model', '=', 'belfry.invite')])
+        row = self.Invite.belfry_holder_invite(self.alice.id, False, False, 'for my neighbour')
+        self.assertEqual((row['state'], row['email'], row['note']), ('open', '', 'for my neighbour'))
+        invite = self.env['belfry.invite'].browse(row['id'])
+        self.assertIn(invite.token, row['url'])
+        # nothing mailed; it counts against the limit like any invite and is listed
+        self.assertFalse(invite.invite_mail_sent_at)
+        self.assertEqual(self.env['mail.mail'].sudo().search_count([('model', '=', 'belfry.invite')]), mails_before)
+        self.assertEqual((invite.inviter_partner_id, invite.requested_by_partner_id), (self.alice, self.alice))
+        self.assertEqual([r['id'] for r in self.Invite.belfry_holder_invites(self.alice.id)], [row['id']])
+        # each call is a new link
+        self.assertNotEqual(self.Invite.belfry_holder_invite(self.alice.id, '')['id'], row['id'])
+
     def test_npub_once_the_pass_is_active_and_members_are_not_invited(self):
         row = self.Invite.belfry_holder_invite(self.alice.id, 'dan@example.org', 'Dan')
         dan = self.env['res.partner'].create({'name': "Dan", 'email': 'dan@example.org', 'belfry_npub': 'npub1dan'})

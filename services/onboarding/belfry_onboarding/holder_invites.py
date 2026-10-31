@@ -1,15 +1,16 @@
-"""Invites by e-mail, for a pass holder or an agent acting for them: ``/api/invites``.
+"""Invites by e-mail or as a link, for a pass holder or an agent acting for them: ``/api/invites``.
 
 There is no API key. Every request carries a NIP-98 authorization (kind 27235) signed with the
 holder's Nostr key, through a Keycast bunker or the holder's own signer, exactly as the relays
 and Blossom check the same key. The key must hold an active pass, and the holder's rights apply:
 a participant's invites count against ``belfry.invites_per_participant``, a steward's (a member of
 ``STEWARD_GROUP`` in Authentik) do not. Belfry mails the invite link to the invitee
-(``belfry_holder_invites.py`` in Odoo); the invitee chooses and pays, and the invite shows the
-new participant's npub once the pass is active.
+(``belfry_holder_invites.py`` in Odoo); without an e-mail the answer's link (``url``, the code at
+its end) is for the holder to pass on, nothing is mailed. The invitee chooses and pays, and the
+invite shows the new participant's npub once the pass is active.
 
-    POST /api/invites                {"email", "name"?, "note"?}   201 the invite (200 ``member``)
-    GET  /api/invites                the holder's invites by e-mail, newest first
+    POST /api/invites                {"email"?, "name"?, "note"?}  201 the invite (200 ``member``)
+    GET  /api/invites                the holder's invites, newest first
     GET  /api/invites/<id>           one invite: state, pass_state, npub when active
     POST /api/invites/<id>/revoke    revoke an open invite
 
@@ -124,9 +125,9 @@ def _call(svc: Services, method: str, args: list[Any]) -> Any:
 
 
 def create_invite(svc: Services, who: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
-    email = body.get("email")
-    if not isinstance(email, str) or "@" not in email:
-        raise ApiError(422, "invalid", "email must be an e-mail address.")
+    email = body.get("email") or ""
+    if not isinstance(email, str) or (email.strip() and "@" not in email):
+        raise ApiError(422, "invalid", "email must be an e-mail address (or left out for a link).")
     name, note = body.get("name") or "", body.get("note") or ""
     if not isinstance(name, str) or not isinstance(note, str):
         raise ApiError(422, "invalid", "name and note must be text.")
@@ -136,15 +137,16 @@ def create_invite(svc: Services, who: dict[str, Any], body: dict[str, Any]) -> d
         "belfry_holder_invite",
         [
             who["partner_id"],
-            email.strip(),
+            email.strip() or False,
             name.strip()[:100] or False,
             note.strip()[:200] or False,
             steward_email,
         ],
     )
     log.info(
-        "api: holder %s invited by e-mail (invite %s, steward %s)",
+        "api: holder %s invited %s (invite %s, steward %s)",
         who["partner_id"],
+        "by e-mail" if email.strip() else "with a link",
         row.get("id"),
         who["steward"],
     )

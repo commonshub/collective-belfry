@@ -6,6 +6,7 @@ where ``agentcheck`` runs every step as a test, this does one thing and prints t
     export BELFRY_BUNKER='bunker://…'           # from the holder; not on the command line
     python -m belfry_onboarding.agent --domain <domain> me
     python -m belfry_onboarding.agent --domain <domain> invite sam@example.org [--name Sam]
+    python -m belfry_onboarding.agent --domain <domain> invite [--note …]   # a code, nothing mailed
     python -m belfry_onboarding.agent --domain <domain> invites
     python -m belfry_onboarding.agent --domain <domain> status <invite id>
     python -m belfry_onboarding.agent --domain <domain> revoke <invite id>
@@ -53,7 +54,7 @@ def request(args: argparse.Namespace) -> tuple[str, str, Any]:
         return "GET", f"/api/invites/{args.id}", None
     if args.action == "revoke":
         return "POST", f"/api/invites/{args.id}/revoke", None
-    body = {"email": args.email}
+    body = {"email": args.email} if args.email else {}
     if args.name:
         body["name"] = args.name
     if args.note:
@@ -77,11 +78,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--timeout", type=float, default=20.0)
     sub = ap.add_subparsers(dest="action", required=True)
     sub.add_parser("me", help="where the holder's key stands: member, steward, passes")
-    inv = sub.add_parser("invite", help="invite someone by e-mail (Belfry mails the link)")
-    inv.add_argument("email")
+    inv = sub.add_parser(
+        "invite", help="invite someone by e-mail (Belfry mails the link), or without one: a code"
+    )
+    inv.add_argument("email", nargs="?", default="")
     inv.add_argument("--name", default="")
     inv.add_argument("--note", default="")
-    sub.add_parser("invites", help="the holder's invites by e-mail")
+    sub.add_parser("invites", help="the holder's invites")
     sub.add_parser("status", help="one invite: state, pass, npub once active").add_argument("id")
     sub.add_parser("revoke", help="revoke an open invite").add_argument("id")
     args = ap.parse_args(argv)

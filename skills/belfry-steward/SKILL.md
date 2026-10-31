@@ -71,7 +71,7 @@ tells an app where its own key stands, not someone else's:
 
 ### Invite people by e-mail: `https://pass.<domain>/api/invites`
 
-As in the participant skill (section 6, "Invites by e-mail"). For a steward:
+As in the participant skill (section 6, "Invites by e-mail or as a code"). For a steward:
 - `GET /api/invites` says `"steward": true`, and creating invites is not limited.
 - `POST /api/invites` `{"email", "name"?, "note"?}` mails the invite link. The invitee chooses
   a pass and pays on the page. Their npub appears on `GET /api/invites/<id>` once the pass is
