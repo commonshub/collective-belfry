@@ -72,6 +72,8 @@ patch run `make build-keycast`.
 | 0015, 0016 | layout for phones and large text: buttons wrap, the header wraps, long identity values break |
 | 0017 | "Show your pass" on the pass card: the pass as a renewing QR code (`/me` of the onboarding service) |
 | 0018 | the landing page's "Sign in with Open Source Village" starts the Authentik sign-in (e-mail link) itself when the password login is hidden, instead of opening `/login`, whose only choice is the same button |
+| 0019 | logout returns to an app the participant signed in to through OAuth (its authorization's origin, revoked ones too), not only to registered clients |
+| 0020 | the OAuth pages (sign-in, consent, account choice) keep the dark background in light mode; white text was on a white page |
 
 **Changing a patch:**
 

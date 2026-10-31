@@ -1,0 +1,108 @@
+From e3ada4f3e5e77b2ba226d8b429ea69b99d05a076 Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Sat, 31 Oct 2026 23:58:33 +0100
+Subject: [PATCH 19/20] feat(belfry): logout returns to an app the participant
+ signed in to
+
+GET /api/auth/oidc/logout?return_to= honoured return_to only on the
+origins of registered clients (Belfry's own apps). An app outside the
+Belfry (an example app, a community's own site) that signed the
+participant in through OAuth sent them to the landing page instead.
+
+Now the origin of any OAuth authorization of the participant signing
+out (from the Keycast session, read before it is cleared) is accepted
+too, revoked ones included: an app revokes its own authorization
+(POST /api/oauth/revoke) before it sends the browser here.
+---
+ api/src/api/http/oidc.rs | 47 +++++++++++++++++++++++++++++++++++-----
+ 1 file changed, 41 insertions(+), 6 deletions(-)
+
+diff --git a/api/src/api/http/oidc.rs b/api/src/api/http/oidc.rs
+index 1c564eb..46d81e5 100644
+--- a/api/src/api/http/oidc.rs
++++ b/api/src/api/http/oidc.rs
+@@ -929,9 +929,16 @@ pub struct LogoutParams {
+     pub return_to: Option<String>,
+ }
+ 
+-/// Where a logout may return to: a same-origin path, or a URL on the origin of one of the
+-/// tenant's registered clients (Belfry's apps). Anything else falls back to `/`.
+-async fn logout_return_to(pool: &sqlx::PgPool, tenant_id: i64, raw: Option<&str>) -> String {
++/// Where a logout may return to: a same-origin path, a URL on the origin of one of the tenant's
++/// registered clients (Belfry's apps), or one on the origin of an app the signed-in participant
++/// authorized through OAuth (also a revoked authorization: an app revokes its own before it sends
++/// the participant here). Anything else falls back to `/`.
++async fn logout_return_to(
++    pool: &sqlx::PgPool,
++    tenant_id: i64,
++    user_pubkey: Option<&str>,
++    raw: Option<&str>,
++) -> String {
+     let Some(raw) = raw else {
+         return "/".to_string();
+     };
+@@ -945,7 +952,7 @@ async fn logout_return_to(pool: &sqlx::PgPool, tenant_id: i64, raw: Option<&str>
+         return "/".to_string();
+     };
+     let repo = keycast_core::repositories::RegisteredClientRepository::new(pool.clone());
+-    let allowed = repo
++    let registered = repo
+         .list(tenant_id)
+         .await
+         .map(|clients| {
+@@ -956,10 +963,26 @@ async fn logout_return_to(pool: &sqlx::PgPool, tenant_id: i64, raw: Option<&str>
+                 .any(|o| o == origin)
+         })
+         .unwrap_or(false);
+-    if allowed {
++    let authorized = match user_pubkey {
++        Some(pubkey) if !registered => sqlx::query_scalar::<_, bool>(
++            "SELECT EXISTS (SELECT 1 FROM oauth_authorizations
++             WHERE tenant_id = $1 AND user_pubkey = $2 AND redirect_origin = $3)",
++        )
++        .bind(tenant_id)
++        .bind(pubkey)
++        .bind(&origin)
++        .fetch_one(pool)
++        .await
++        .unwrap_or(false),
++        _ => false,
++    };
++    if registered || authorized {
+         raw.to_string()
+     } else {
+-        tracing::info!(return_to = %raw, "logout return_to is not a registered client origin");
++        tracing::info!(
++            return_to = %raw,
++            "logout return_to is neither a registered client origin nor an app of this participant"
++        );
+         "/".to_string()
+     }
+ }
+@@ -968,11 +991,23 @@ async fn logout_return_to(pool: &sqlx::PgPool, tenant_id: i64, raw: Option<&str>
+ pub async fn oidc_logout(
+     tenant: crate::api::tenant::TenantExtractor,
+     State(auth_state): State<AuthState>,
++    headers: HeaderMap,
+     Query(params): Query<LogoutParams>,
+ ) -> Result<Response, OidcError> {
++    // the participant who is signing out, while their Keycast session still exists
++    let user_pubkey = match super::auth::extract_ucan_from_cookie(&headers) {
++        Some(token) => {
++            crate::ucan_auth::validate_ucan_token(&format!("Bearer {token}"), tenant.0.id)
++                .await
++                .ok()
++                .map(|(pubkey, _redirect_origin, _bunker_pubkey, _ucan)| pubkey)
++        }
++        None => None,
++    };
+     let return_to = logout_return_to(
+         &auth_state.state.db,
+         tenant.0.id,
++        user_pubkey.as_deref(),
+         params.return_to.as_deref(),
+     )
+     .await;
+-- 
+2.53.0
+

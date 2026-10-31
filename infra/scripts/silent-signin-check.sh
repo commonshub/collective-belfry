@@ -172,17 +172,31 @@ fi
 
 [[ -n "${LOGOUT_JAR:-}" ]] || exit 0
 # 10. App logout, part 2: Keycast's logout ends the Keycast and the Authentik session and returns
-#     to the app. The Authentik invalidation flow is a JS page, so its executor API is driven here.
-APP_HOME="${REDIRECT_URI%/oauth/callback}/"
+#     to the app (here one outside the Belfry; a registered app's origin is accepted as before). The Authentik invalidation flow is a JS page, so its executor API is driven here.
 [[ -s "$LOGOUT_JAR" ]] || fail "no cookie jar at $LOGOUT_JAR"
 cp "$LOGOUT_JAR" "$JAR/ak5"; touch "$JAR/kc5"
 read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s9 "$CHALLENGE" none)")
 [[ -n "$(param code "$END")" ]] && grep -q keycast_session "$JAR/kc5" || fail "logout check: no silent sign-in first ('$END', $HOPS)"
+# An app outside the Belfry (not a registered client, like examples/village-notes) signs in with
+# consent and revokes its authorization, as its logout does: Keycast's logout still returns to it
+# (patch 0019), since the participant signing out authorized that origin.
+OTHER_HOME=${OTHER_APP_HOME:-http://localhost:8099/}
+OTHER_CB="${OTHER_HOME%/}/oauth/callback"
+CODE=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -H 'Content-Type: application/json' -H "Origin: $KC_URL" \
+  --data "$(jq -cn --arg cb "$OTHER_CB" --arg ch "$CHALLENGE" '{client_id: "belfry-check-other-app", redirect_uri: $cb,
+    scope: "policy:belfry-event", state: "s11", approved: true, code_challenge: $ch, code_challenge_method: "S256"}')" \
+  "$KC_URL/api/oauth/authorize" | jq -r '.code // empty')
+[[ -n "$CODE" ]] || fail "consent for an outside app gave no code"
+REFRESH=$(curl -sS -H 'Content-Type: application/json' --data "$(jq -cn --arg c "$CODE" --arg cb "$OTHER_CB" --arg v "$VERIFIER" \
+  '{grant_type: "authorization_code", code: $c, client_id: "belfry-check-other-app", redirect_uri: $cb, code_verifier: $v}')" \
+  "$KC_URL/api/oauth/token" | jq -r '.refresh_token // empty')
+[[ -n "$REFRESH" ]] || fail "token exchange for an outside app gave no refresh token"
+curl -sS -o /dev/null -H 'Content-Type: application/json' --data "$(jq -cn --arg t "$REFRESH" '{token: $t, client_id: "belfry-check-other-app"}')" "$KC_URL/api/oauth/revoke"
 # A sign-in started in this browser and never finished leaves a flow plan in the Authentik
 # session; authentik's end-session view then answers an empty page (found 2026-10-24), so Keycast
 # goes to the invalidation flow itself (OIDC_LOGOUT_URL, patch 0013). Leave such a plan first.
 curl -sS -b "$JAR/ak5" -c "$JAR/ak5" -o /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/?query="
-LOC=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/logout?return_to=$(urlenc "$APP_HOME")")
+LOC=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/logout?return_to=$(urlenc "$OTHER_HOME")")
 [[ "$LOC" == "$AK_URL"*"/if/flow/belfry-signer-logout/"* ]] || fail "logout redirected to '$LOC' (OIDC_LOGOUT_URL not the invalidation flow?)"
 grep -q $'keycast_session\t[^[:space:]]' "$JAR/kc5" && fail "keycast_session still set after logout" || true
 FLOW_URL=$LOC
@@ -194,7 +208,7 @@ for _ in 1 2 3 4 5; do
 done
 [[ "$TO" == "$KC_URL/api/auth/oidc/logged-out" ]] || fail "invalidation flow ended with: $(head -c 300 <<<"$CH")"
 BACK=$(curl -sS -b "$JAR/kc5" -c "$JAR/kc5" -o /dev/null -w '%{redirect_url}' "$TO")
-[[ "$BACK" == "$APP_HOME" ]] && say "logout (with an unfinished sign-in in the browser): Keycast -> Authentik invalidation flow -> Keycast -> back at $APP_HOME" || fail "logged-out returned to '$BACK'"
+[[ "$BACK" == "$OTHER_HOME" ]] && say "logout (with an unfinished sign-in in the browser): Keycast -> Authentik invalidation flow -> Keycast -> back at the outside app $OTHER_HOME (authorized, then revoked)" || fail "logged-out returned to '$BACK'"
 [[ -z "$(curl -sS -b "$JAR/ak5" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.username // empty' 2>/dev/null)" ]] \
   && say "logout: the Authentik session has ended" || fail "Authentik session still alive after logout"
 read -r END HOPS < <(follow "$JAR/kc5" "$JAR/ak5" "$(authorize_url "$CLIENT_ID" "$REDIRECT_URI" s10 "$CHALLENGE" none)")

@@ -61,8 +61,9 @@ entries:
     identifiers:
       name: belfry-account-setup-login
     attrs:
-      session_duration: seconds=0
-      remember_me_offset: days=14
+      # signed in for 14 days without asking "Stay signed in?" (the answer is always yes)
+      session_duration: days=14
+      remember_me_offset: seconds=0
   - model: authentik_flows.flowstagebinding
     identifiers:
       target: !KeyOf belfry-account-setup

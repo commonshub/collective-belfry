@@ -1,0 +1,57 @@
+From 2a807650264131120128aac3e8370defd1c4fc8d Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Sat, 31 Oct 2026 23:58:33 +0100
+Subject: [PATCH 20/20] fix(belfry): dark background on the OAuth pages in
+ light mode
+
+The branding patch kept upstream's white page background for light mode
+while the text is white, so the sign-in, consent and account pages of
+apps outside the Belfry showed white on white (title and logo gone).
+Belfry's pages are dark only (brand/tokens.css: #2b3a31).
+---
+ api/src/api/http/oauth.rs | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index 853e8f0..a1ceb66 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -1317,7 +1317,7 @@ pub async fn authorize_get(
+         :root {{
+             --divine-green: #d6ff52;
+             --divine-green-dark: #c5ee41;
+-            --bg: #ffffff;
++            --bg: #2b3a31;
+             --surface: #1a231d;
+             --border: #44534a;
+             --text: #ffffff;
+@@ -1468,7 +1468,7 @@ pub async fn authorize_get(
+         :root {{
+             --divine-green: #d6ff52;
+             --divine-green-dark: #c5ee41;
+-            --bg: #ffffff;
++            --bg: #2b3a31;
+             --surface: #1a231d;
+             --border: #44534a;
+             --text: #ffffff;
+@@ -2036,7 +2036,7 @@ pub async fn authorize_get(
+             --divine-green-dark: #c5ee41;
+             --divine-green-light: #243128;
+             --divine-purple: #f89b0e;
+-            --bg: #ffffff;
++            --bg: #2b3a31;
+             --surface: #1a231d;
+             --border: #44534a;
+             --text: #ffffff;
+@@ -4647,7 +4647,7 @@ pub async fn connect_get(
+         }}
+         @media (prefers-color-scheme: light) {{
+             :root {{
+-                --bg: #ffffff;
++                --bg: #2b3a31;
+                 --surface: #1a231d;
+                 --border: #44534a;
+                 --text: #ffffff;
+-- 
+2.53.0
+

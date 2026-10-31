@@ -548,8 +548,8 @@ async function loginNip07() {
 
 /** Signs out here; after "Sign in with Open Source Village" also everywhere (as the chat does):
  *  revokes this app's authorization and ends the Keycast and sign-in sessions, so the next sign-in
- *  asks for the e-mail code again. Keycast returns to this page only when the Belfry registered
- *  the app's origin; otherwise the browser ends on the account page, signed out. */
+ *  asks for the e-mail code again. Keycast then returns to this page (the origin of an app the
+ *  participant signed in to, Keycast patch 0019). */
 async function logout() {
   const session = store.get("session");
   store.del("session");

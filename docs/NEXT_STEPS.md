@@ -777,6 +777,18 @@ Stripe: a test card would have activated a real pass).
 - Open: belfry2 books at tofauti's Odoo as the stand-in; XL Collective's own ids, user and key;
   the payment page still shows Belfry's internal invoice number as the reference.
 
+## 3zr. Village Notes signs in with e-mail and code; sign-in without "Stay signed in?" — built 2026-10-31
+
+User: sign in to Village Notes with the e-mail and the one-time code; signing out and in again should ask again; the token count showed 0 with 50 tokens; no yes/no question about staying signed in; the Keycast page for an outside app was white on white; after signing out, back to the app.
+
+- [x] `examples/village-notes`: "Sign in with Open Source Village" (OAuth code + PKCE against Keycast, client `village-notes`, any client id works), the token response's bunker URL; sign-out revokes the app's authorization and goes through Keycast's logout. Skill section 9 describes it for any app.
+- [x] `/api/me` passes carry `tokens` (what the pass brought); Village Notes shows those the wallet collected next to those still waiting, and API errors instead of 0.
+- [x] Authentik login stages (magic link, account setup): `session_duration` 14 days, `remember_me_offset` 0, so no "Stay signed in?" step (the answer is always yes).
+- [x] Keycast patch 0019: logout `return_to` also accepts the origin of an OAuth authorization of the participant signing out (revoked ones too); patch 0020: dark background on the OAuth pages in light mode.
+- Checks: onboarding 278; `cargo test -p keycast_api --lib` 321; local smoke green; `silent-signin-check.sh` step 10 now signs an outside app in (consent), revokes it and expects the logout back at that app; screenshot of the sign-in page for `village-notes` at 390 px in light mode.
+
+Open: an outside app sees Keycast's own sign-in page and consent screen (Belfry's apps skip both).
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

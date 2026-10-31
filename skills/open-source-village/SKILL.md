@@ -515,8 +515,8 @@ while developing.
 4. Signing out: `POST https://apps.<domain>/api/oauth/revoke` `{"token": "<refresh_token>",
    "client_id": "<your app>"}` ends your app's authorization; then send the browser to
    `https://apps.<domain>/api/auth/oidc/logout?return_to=<your page>`, which ends the sign-in
-   for every app, so the next sign-in asks for a code again. `return_to` is honoured for
-   origins a steward registered in Keycast; otherwise the browser ends on the account page.
+   for every app, so the next sign-in asks for a code again, and comes back to `return_to`
+   (any page on the origin of your `redirect_uri`).
 
 `examples/village-notes` in the Belfry repository does all of this (`src/app.js`, `loginSso`,
 `finishSso`, `logout`).
