@@ -85,6 +85,7 @@ class Services:
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
     groups: GroupsMembers | None = None  # the groups relay's members; None without its API
     accounting: Accounting | None = None  # the ticket seller's Odoo; None: Belfry invoices
+    access: Any = None  # access.AccessService: grants as Nostr events; None: passes alone
 
 
 # -- small helpers ------------------------------------------------------------------------------
@@ -513,10 +514,22 @@ def active_passes(svc: Services) -> list[dict[str, Any]]:
 
 
 def active_pubkeys(svc: Services) -> list[str]:
-    """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo."""
+    """The relay whitelist: Keycast pubkeys of every active pass (Odoo) and the members granted
+    access by Nostr events (access.py)."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey"],
+    )
+    granted = svc.access.members() if svc.access is not None else []
+    return [*(r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")), *granted]
+
+
+def steward_pubkeys(svc: Services) -> list[str]:
+    """Keys of the stewards' active passes: admins of access.py by right."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["steward_pass", "=", True], ["keycast_pubkey", "!=", False]],
         ["keycast_pubkey"],
     )
     return [r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")]

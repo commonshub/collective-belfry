@@ -1,4 +1,4 @@
-"""Bech32 (BIP-173) encoding of Nostr public keys: hex pubkey -> ``npub1...`` (NIP-19)."""
+"""Bech32 (BIP-173) encoding of Nostr public keys: hex pubkey <-> ``npub1...`` (NIP-19)."""
 
 from __future__ import annotations
 
@@ -51,3 +51,30 @@ def hex_to_npub(pubkey_hex: str) -> str:
     if len(raw) != 32:
         raise ValueError(f"Nostr pubkey must be 32 bytes, got {len(raw)}")
     return bech32_encode("npub", raw)
+
+
+def _bech32_decode(value: str) -> tuple[str, list[int]]:
+    value = value.strip().lower()
+    hrp, sep, data = value.rpartition("1")
+    if not sep or not hrp or len(data) < 6 or any(c not in _CHARSET for c in data):
+        raise ValueError("not a bech32 string")
+    values = [_CHARSET.index(c) for c in data]
+    if _polymod(_hrp_expand(hrp) + values) != 1:
+        raise ValueError("bad bech32 checksum")
+    return hrp, values[:-6]
+
+
+def npub_to_hex(npub: str) -> str:
+    hrp, data = _bech32_decode(npub)
+    if hrp != "npub":
+        raise ValueError("not an npub")
+    acc, bits, out = 0, 0, bytearray()
+    for v in data:
+        acc = (acc << 5) | v
+        bits += 5
+        if bits >= 8:
+            bits -= 8
+            out.append((acc >> bits) & 0xFF)
+    if len(out) != 32:
+        raise ValueError("an npub holds 32 bytes")
+    return out.hex()

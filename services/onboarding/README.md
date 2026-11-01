@@ -27,6 +27,7 @@ It keeps no state of its own: everything lives in Odoo (`belfry.pass`, `res.part
 | `belfry_onboarding/pages.py`, `content/*.md` | the text pages (privacy notice, terms, refund policy, community rules, help): edit the Markdown in `content/` |
 | `belfry_onboarding/blossom.py` | the upload check for the file server |
 | `belfry_onboarding/holder_invites.py` | invites by e-mail or as a code for a pass holder or their agent (`/api/invites`, NIP-98) |
+| `belfry_onboarding/access.py`, `nip44.py` | access as Nostr events on the groups relay: requests (NIP-17 gift wraps to the service key), grants, revokes, invite codes, admins; NIP-44 v2 and NIP-59 (skill section 11) |
 | `belfry_onboarding/discovery.py` | what an app needs to connect: `/.well-known/belfry.json`, `/api/me`, CORS of `/api/*` |
 | `belfry_onboarding/accounting.py`, `clients/odoo_json2.py` | books each paid ticket (invoice, payment, credit note) in the Odoo of the organisation that sells the tickets, over its JSON-2 API (`../../infra/DEPLOY.md`, "Accounting at the ticket seller") |
 | `belfry_onboarding/email_code.py` | an app's own key proves an e-mail address with a mailed 6-digit code (`/api/email-code`) |
@@ -83,6 +84,7 @@ Every variable is listed with a comment in `infra/.env.example`; Compose passes 
 | Pass on the phone | `PASS_PAGE_OIDC_CLIENT_ID`, `PASS_PAGE_OIDC_CLIENT_SECRET`, `PASS_PAGE_SECRET`, `PASS_PAGE_SESSION_DAYS` (14); without the secrets `/me` and `/check` answer 503 |
 | Links on pages | `APPS_PUBLIC_URL`, `CHAT_PUBLIC_URL`, `CALENDAR_PUBLIC_URL`, `BRAND_DIR` |
 | Discovery, API | `COMMUNITY_NAME`, `ODOO_PUBLIC_URL`, `GROUPS_RELAY_URL`, `BUNKER_PUBLIC_RELAYS`, `BLOSSOM_PUBLIC_URL` (listed in `/.well-known/belfry.json`), `API_CORS_ORIGINS` (origins, comma separated or `*`, whose pages may call `/api/*`; empty: none) |
+| Access events | `ACCESS_ENABLED` (on; needs `GROUPS_RELAY_URL` and `GROUPS_API_NSEC`), `ACCESS_APP_URL` (an app linked from the admins' DMs) |
 | Shared secrets | `HOOK_TOKEN` (Odoo's webhooks and the admin routes), `PASS_INFO_TOKEN` (Keycast and the apps), `STRIPE_WEBHOOK_SECRET` |
 | Event | `EVENT_START`, `EVENT_END`, `RECONCILE_DAYS` (30), `ALLOW_MANUAL_PAYMENTS` (off), `BLOSSOM_HOSTS`, `LOG_LEVEL` |
 
@@ -130,6 +132,16 @@ the steward pages is accepted anyway (it carries the steward's name).
 | `GET /brand/*` | none | the shared brand files (`brand/`) |
 
 ## How the operations work
+
+**Access events** (`access.py`, skill section 11). A thread follows the groups relay as the groups
+API key: the grant, revoke, invite and receipt events, and the gift wraps addressed to that key.
+The state is a replay of the events; the members it grants join the active passes in
+`core.active_pubkeys`, so the relay whitelist and zooid's members follow (on every change, and
+every minute for end dates). A request with a valid invite code, or for `admin` while there is
+none, is granted at once; any other goes to every admin as a NIP-17 DM, and their
+`approve`/`decline` reply becomes a grant or revoke signed by the service with `approved_by` /
+`declined_by`. With shell access, `python -m belfry_onboarding admins add|remove <npub>`,
+`grant <npub> [--role R] [--days N]` and `revoke <npub>` publish service-signed events.
 
 **Activation** (`activate_pass`, from the invoice webhook or `reconcile`) runs only for a paid,
 posted invoice with a completed card transaction (or a steward's manual payment), and only for a
