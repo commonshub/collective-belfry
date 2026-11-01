@@ -10,9 +10,32 @@ from belfry_onboarding.blossom import event_id, verify_signature
 # padding table from NIP-44's test vectors (unpadded length -> padded length)
 @pytest.mark.parametrize(
     "unpadded,padded",
-    [(16, 32), (32, 32), (33, 64), (37, 64), (45, 64), (49, 64), (64, 64), (65, 96), (100, 128),
-     (111, 128), (200, 224), (250, 256), (320, 320), (383, 384), (384, 384), (400, 448), (500, 512),
-     (512, 512), (515, 640), (700, 768), (800, 896), (900, 1024), (1020, 1024), (65535, 65536)],
+    [
+        (16, 32),
+        (32, 32),
+        (33, 64),
+        (37, 64),
+        (45, 64),
+        (49, 64),
+        (64, 64),
+        (65, 96),
+        (100, 128),
+        (111, 128),
+        (200, 224),
+        (250, 256),
+        (320, 320),
+        (383, 384),
+        (384, 384),
+        (400, 448),
+        (500, 512),
+        (512, 512),
+        (515, 640),
+        (700, 768),
+        (800, 896),
+        (900, 1024),
+        (1020, 1024),
+        (65535, 65536),
+    ],
 )
 def test_padded_len_matches_the_spec(unpadded, padded):
     assert n.padded_len(unpadded) == padded
@@ -54,7 +77,10 @@ def test_parse_bunker_url_and_host_map():
     pk = "ab" * 32
     url = f"bunker://{pk}?relay=ws%3A%2F%2Flocalhost%3A3080&secret=s3cret"
     assert n.parse_bunker_url(url) == (pk, ["ws://localhost:3080"], "s3cret")
-    assert n.HostMap("localhost:3080=keycast-relay:8080")("ws://localhost:3080") == "ws://keycast-relay:8080"
+    assert (
+        n.HostMap("localhost:3080=keycast-relay:8080")("ws://localhost:3080")
+        == "ws://keycast-relay:8080"
+    )
     assert n.HostMap("")("wss://bunker.example.org") == "wss://bunker.example.org"
     assert (
         n.HostMap("ws://localhost:3080=wss://127.0.0.1:8443")("ws://localhost:3080")
