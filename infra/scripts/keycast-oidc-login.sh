@@ -40,11 +40,16 @@ CHALLENGE=$(printf '%s' "$VERIFIER" | openssl dgst -sha256 -binary | b64url)
 APP_STATE=$(openssl rand -hex 8)
 AUTHZ="/api/oauth/authorize?client_id=$CLIENT_ID&redirect_uri=$(urlenc "$REDIRECT_URI")&scope=$(urlenc "$SCOPE")&code_challenge=$CHALLENGE&code_challenge_method=S256&state=$APP_STATE"
 
-# 1. The popup offers the Authentik login.
-kc "$KC_URL$AUTHZ" | grep -q 'Sign in with ' && say "authorize page offers 'Sign in with …'" || fail "no OIDC button on $KC_URL$AUTHZ"
+# 1. Without a session, the authorize request goes straight to the Authentik login (patch 0021,
+#    the password login is hidden), and the way back skips the account chooser (screen=consent).
+START=$(kc -o /dev/null -w '%{redirect_url}' "$KC_URL$AUTHZ")
+[[ "$START" == "$KC_URL/api/auth/oidc/start?return_to="* ]] || fail "authorize redirected to '$START', not to the OIDC start"
+BACK_PATH=$(python3 -c 'import sys, urllib.parse as u; print(u.parse_qs(u.urlsplit(sys.argv[1]).query)["return_to"][0])' "$START")
+[[ "$BACK_PATH" == "$AUTHZ&screen=consent" ]] || fail "OIDC start returns to '$BACK_PATH'"
+say "authorize -> OIDC start, back past the account chooser"
 
 # 2. Start: Keycast sets the signed flow cookie and sends us to Authentik.
-LOC=$(kc -o /dev/null -w '%{redirect_url}' "$KC_URL/api/auth/oidc/start?return_to=$(urlenc "$AUTHZ")")
+LOC=$(kc -o /dev/null -w '%{redirect_url}' "$START")
 [[ "$LOC" == "$AK_URL/application/o/authorize/?"* ]] || fail "start redirected to '$LOC'"
 grep -q keycast_oidc "$KC_JAR" || fail "no keycast_oidc cookie"
 say "start -> Authentik authorize, flow cookie set"
@@ -61,7 +66,7 @@ say "Authentik authorize -> Keycast callback"
 
 # 5. Callback: session cookie, back to the OAuth request.
 read -r CODE_STATUS BACK < <(kc -o "$JAR/cb.html" -w '%{http_code} %{redirect_url}\n' "$CB")
-[[ "$CODE_STATUS" == 303 && "$BACK" == "$KC_URL$AUTHZ" ]] || fail "callback answered $CODE_STATUS -> '$BACK': $(sed 's/<[^>]*>/ /g' "$JAR/cb.html" | tr -s ' ' | head -c 300)"
+[[ "$CODE_STATUS" == 303 && "$BACK" == "$KC_URL$BACK_PATH" ]] || fail "callback answered $CODE_STATUS -> '$BACK': $(sed 's/<[^>]*>/ /g' "$JAR/cb.html" | tr -s ' ' | head -c 300)"
 grep -q keycast_session "$KC_JAR" || fail "no keycast_session cookie after the callback"
 say "callback -> session cookie, back to /api/oauth/authorize"
 
@@ -89,12 +94,13 @@ fi
 
 # 6. Consent, or an immediate redirect with a code when this app is already approved for the
 #    participant (Keycast remembers authorizations per origin and policy).
-read -r AZ_STATUS AZ_LOC < <(kc -o "$JAR/authz.html" -w '%{http_code} %{redirect_url}\n' "$KC_URL$AUTHZ")
+read -r AZ_STATUS AZ_LOC < <(kc -o "$JAR/authz.html" -w '%{http_code} %{redirect_url}\n' "$KC_URL$BACK_PATH")
 if [[ "$AZ_LOC" == "$REDIRECT_URI?code="* ]]; then
   CODE=$(sed -E 's/.*[?&]code=([^&]+).*/\1/' <<<"$AZ_LOC")
   say "app already approved: Keycast redirected with a code"
 else
-  [[ "$AZ_STATUS" == 200 ]] && grep -qi 'authorize' "$JAR/authz.html" && say "consent screen shown" \
+  [[ "$AZ_STATUS" == 200 ]] && grep -q 'Authorize App' "$JAR/authz.html" && ! grep -q 'Choose an account' "$JAR/authz.html" \
+    && say "consent screen shown (no account chooser)" \
     || fail "no consent screen after login (HTTP $AZ_STATUS)"
   APPROVE=$(jq -nc --arg c "$CLIENT_ID" --arg r "$REDIRECT_URI" --arg s "$SCOPE" --arg st "$APP_STATE" --arg ch "$CHALLENGE" \
     '{client_id:$c, redirect_uri:$r, scope:$s, state:$st, approved:true, code_challenge:$ch, code_challenge_method:"S256"}')

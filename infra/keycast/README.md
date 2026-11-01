@@ -74,6 +74,7 @@ patch run `make build-keycast`.
 | 0018 | the landing page's "Sign in with Open Source Village" starts the Authentik sign-in (e-mail link) itself when the password login is hidden, instead of opening `/login`, whose only choice is the same button |
 | 0019 | logout returns to an app the participant signed in to through OAuth (its authorization's origin, revoked ones too), not only to registered clients |
 | 0020 | the OAuth pages (sign-in, consent, account choice) keep the dark background in light mode; white text was on a white page |
+| 0021 | with OIDC-only login, an outside app's sign-in goes straight to the upstream login (as trusted apps' sign-in has since 0008) and comes back past the "Choose an account" page (`screen=consent`); outside apps still get the consent screen |
 
 **Changing a patch:**
 

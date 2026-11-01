@@ -1,0 +1,90 @@
+From dea246d8adc98ed57ca7d8fb04a085419c13049b Mon Sep 17 00:00:00 2001
+From: friedger <mail@friedger.de>
+Date: Sun, 1 Nov 2026 13:46:15 +0100
+Subject: [PATCH 21/21] feat(belfry): outside apps go straight to the upstream login,
+ and back past the account chooser
+
+With OIDC_HIDE_PASSWORD_LOGIN, an outside app's sign-in (not only a
+trusted app's) redirects to the upstream login instead of a page with a
+second "Sign in with ..." button. The way back carries screen=consent:
+the person has just signed in for this app, so the "Choose an account"
+page has nothing to choose; an outside app still gets its consent
+screen. Village Notes onboarding: two screens fewer.
+---
+ api/src/api/http/oauth.rs | 44 +++++++++++++++++++++++++++++++++++----
+ 1 file changed, 40 insertions(+), 4 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index a1ceb66..4954765 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -885,6 +885,24 @@ fn authorize_return_path(uri: &axum::http::Uri) -> String {
+     }
+ }
+ 
++/// Where the upstream login sends the browser back to: the same authorize request, marked as
++/// past the account chooser (`screen=consent`).
++fn authorize_return_after_login(uri: &axum::http::Uri) -> String {
++    let Ok(mut url) = reqwest::Url::parse(&format!("http://sentinel.invalid{uri}")) else {
++        return authorize_return_path(uri);
++    };
++    let pairs: Vec<(String, String)> = url
++        .query_pairs()
++        .filter(|(k, _)| k != "screen")
++        .map(|(k, v)| (k.into_owned(), v.into_owned()))
++        .collect();
++    url.query_pairs_mut()
++        .clear()
++        .extend_pairs(pairs)
++        .append_pair("screen", "consent");
++    format!("{}?{}", url.path(), url.query().unwrap_or_default())
++}
++
+ /// GET /oauth/authorize
+ /// Shows login form if not authenticated, auto-approves if already authorized for this app
+ /// with the same policy, or shows the approval page
+@@ -1233,12 +1251,14 @@ pub async fn authorize_get(
+         return Ok(silent_error(&params, "login_required"));
+     }
+ 
+-    // Belfry: a trusted app's button goes straight to the upstream login when it is the only
+-    // login (OIDC_HIDE_PASSWORD_LOGIN), instead of a page with a second "Sign in with …" button.
++    // Belfry: an app's button goes straight to the upstream login when it is the only login
++    // (OIDC_HIDE_PASSWORD_LOGIN), instead of a page with a second "Sign in with …" button. The
++    // way back skips the account chooser: the person has just signed in for this app, so the
++    // session is theirs; an outside app still gets its consent screen.
+     if user_pubkey.is_none() && !force_login && !has_byok_pubkey {
+         let oidc_only = super::oidc::provider().is_some_and(|p| p.config.hide_password_login);
+-        if oidc_only && is_trusted_client(pool, &params.client_id, tenant_id).await? {
+-            let return_to = authorize_return_path(&original_uri);
++        if oidc_only {
++            let return_to = authorize_return_after_login(&original_uri);
+             let start = redirect_with_params(
+                 "http://sentinel.invalid/api/auth/oidc/start",
+                 &[("return_to", Some(&return_to))],
+@@ -5268,6 +5288,22 @@ mod tests {
+         assert!(super::parse_trusted_clients(Some("")).is_empty());
+     }
+ 
++    #[test]
++    fn the_way_back_from_the_login_skips_the_account_chooser() {
++        let uri: axum::http::Uri = "/api/oauth/authorize?client_id=notes&state=a%20b&screen=x"
++            .parse()
++            .unwrap();
++        assert_eq!(
++            super::authorize_return_after_login(&uri),
++            "/api/oauth/authorize?client_id=notes&state=a+b&screen=consent"
++        );
++        let bare: axum::http::Uri = "/api/oauth/authorize".parse().unwrap();
++        assert_eq!(
++            super::authorize_return_after_login(&bare),
++            "/api/oauth/authorize?screen=consent"
++        );
++    }
++
+     #[test]
+     fn redirect_params_are_encoded_and_keep_the_query() {
+         assert_eq!(
+-- 
+2.53.0
+

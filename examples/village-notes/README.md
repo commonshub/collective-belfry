@@ -4,10 +4,16 @@ A small app on a Belfry, built from the visitor skill
 (`https://pass.<domain>/skills/open-source-village.md`):
 
 - **Invite**: paste an invite link or code (or open `/?invite=<token>`). The app reads the offer,
-  orders the chosen pass and shows the payment link. By default it creates the participant's key
-  itself (12 words, HKDF per the skill's section 8) and sends `nostr_pubkey` + `nostr_proof` with
-  the order. Once the payment is in and `/api/me` says `member`, you're signed in. If you untick
-  that box, Belfry keeps the key and you sign in later with a bunker URL.
+  orders the chosen pass with a `return_url` back to this page and shows the payment link, which
+  goes straight to the provider's checkout and returns here after paying (a Belfry that refuses
+  the `return_url`, because this origin isn't in its `API_CORS_ORIGINS`, takes the order without
+  it, and the payment opens in a new tab). Belfry keeps the participant's key: once
+  the pass is active, the page starts "Sign in with Open Source Village" by itself, once (the
+  button stays for another try). Belfry signs the payer in when the payment completes, so this
+  usually needs only the consent; otherwise the e-mail address of the order and a mailed code. Under "Advanced: hold your own key", for people who manage
+  Nostr keys themselves, the app creates the key instead (12 words, HKDF per the skill's section
+  8) and sends `nostr_pubkey` + `nostr_proof` with the order; once `/api/me` says `member` for
+  that key, you're signed in.
 - **Sign in**: "Sign in with Open Source Village" (OAuth code + PKCE against Keycast, client
   `village-notes`, back at `/oauth/callback`): the Belfry's sign-in page asks for the pass's
   e-mail address and mails a 6-digit code and a link; after Keycast's consent screen the token
@@ -21,8 +27,9 @@ A small app on a Belfry, built from the visitor skill
 - **Sign out**: after "Sign in with Open Source Village" it revokes the app's authorization and
   ends the sign-in everywhere (Keycast's logout), so the next sign-in asks for the code again.
 - **Invites**: a pass holder makes an invite code to pass on (or has Belfry mail an invite to an
-  address), copies the code or a link (`/?invite=<code>` into this app, or the shop's), follows
-  their invites and revokes open ones (`/api/invites`, NIP-98; skill section 10).
+  address). The same tap opens the phone's share sheet with a link into this app
+  (`/?invite=<code>`; a copy where there is no share sheet); they follow their invites and revoke
+  open ones (`/api/invites`, NIP-98; skill section 10).
 - **Notes**: the latest kind-1 notes on the community relay (NIP-42 AUTH), and a box to post one.
 
 ```

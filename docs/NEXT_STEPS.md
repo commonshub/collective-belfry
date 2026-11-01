@@ -832,6 +832,17 @@ everyone landed on Belfry's welcome page, not back in the app.
   Going straight to Stripe would need Stripe Checkout Sessions next to Odoo's Stripe module.
 - [ ] The invite page (`/belfry/invite/<token>`) still redirects to Odoo's payment link; it could
   use `/belfry/pay` too.
+- [x] Fewer sign-in screens for outside apps (walkthrough changes 2 to 5, 2026-11-01): Keycast
+  patch 0021 sends an outside app's sign-in straight to the authentik login when the password
+  login is hidden (trusted apps did since 0008) and back with `screen=consent`, past "Choose an
+  account"; the consent screen stays. Village Notes keeps the key with Belfry by default (12
+  words only under "Advanced: hold your own key"), sends `return_url` and opens `payment_url` in
+  the same tab, starts the sign-in by itself once the pass is active (also when the invite answers
+  410 `used`), and "Create and share invite" opens the share sheet with the app link. Expected:
+  13 screens and 13 actions from an invite code to a signed-in app with a code for a friend, down
+  to 8 and 7 (walkthrough doc https://claude.ai/artifact/Nj2b4XWt28BJdantksGxJT). Keycast unit
+  tests 322; local smoke 237 ok with 0021 (`keycast-oidc-login.sh` expects the redirect). Not yet
+  walked through in a browser end to end.
 
 ## 4. Next
 

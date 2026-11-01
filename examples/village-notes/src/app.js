@@ -162,6 +162,18 @@ async function loadOffer() {
   $("mnemonic-card").hidden = !pending;
   if (pending) $("mnemonic").textContent = pending;
 
+  // the API answers a used invite with 410 "used": the pass ordered on it is active
+  const used = r.status === 410 && r.data?.error === "used";
+  if (used && (pending || store.get("ordered." + invite.token))) {
+    // ordered in this browser and paid
+    offer.append(el("p", {}, "Your pass is active."));
+    $("payment-card").hidden = false;
+    $("payment-card").querySelector("h2").textContent = "Sign in";
+    $("payment-check").hidden = true;
+    $("payment").replaceChildren();
+    waitForPass();
+    return;
+  }
   if (r.status !== 200) {
     offer.append(el("p", { class: "error" }, errorText(r)));
     return;
@@ -198,11 +210,23 @@ async function order() {
       tags: [["u", orderUrl], ["method", "POST"]],
     }, sk);
   }
+  // After paying, the Belfry sends the payer back here instead of to its welcome page, when
+  // this origin may use its API; a Belfry that refuses return_url takes the order without it.
+  body.return_url = location.origin + "/?invite=" + encodeURIComponent(invite.token);
   $("order").disabled = true;
-  const r = await api(orderUrl, { method: "POST", json: body });
+  let r = await api(orderUrl, { method: "POST", json: body });
+  if (r.status === 422 && /return_url/.test(r.data?.message || "")) {
+    delete body.return_url;
+    r = await api(orderUrl, { method: "POST", json: body });
+  }
   $("order").disabled = false;
+  // a Belfry that knows return_url lists payment_methods; an older one ignores the field
+  if (r.status === 201 && body.return_url && Array.isArray(r.data?.payment_methods)) {
+    store.set("returns." + invite.token, true);
+  }
   if (r.status === 201 || (r.status === 409 && r.data?.error === "reserved")) {
     if (mnemonic && r.status === 201) store.set("pending." + invite.token, mnemonic);
+    if (!mnemonic) store.set("ordered." + invite.token, email);
     await loadOffer();
   } else {
     $("order-error").textContent = errorText(r);
@@ -212,16 +236,22 @@ async function order() {
 function renderPayment(o) {
   const p = $("payment");
   p.replaceChildren();
-  $("payment-card").hidden = false;
+  $("payment-card").hidden = $("payment-check").hidden = false;
+  $("payment-card").querySelector("h2").textContent = "Payment";
   const inv = o.invoice;
   if (inv) p.append(el("p", {}, `Invoice ${inv.number}: `, el("b", {}, money(inv.amount_total, inv.currency))));
   if (o.payment === "paid") {
     p.append(el("p", { class: "ok" }, "Paid. Your pass is being activated."));
-    waitForPass();
+    if (store.get("pending." + invite.token)) waitForPass();
+    else invite.timer = setTimeout(loadOffer, 3000); // the invite turns "used" once the pass is active
     return;
   }
   if (o.payment === "processing") p.append(el("p", {}, "Your payment is under way."));
-  if (o.payment_url) {
+  if (o.payment_url && store.get("returns." + invite.token)) {
+    // payment_url goes straight to the provider's checkout, which brings the payer back here
+    const a = el("a", { href: o.payment_url }, "Pay now");
+    p.append(el("p", {}, a, " (you come back here after paying)"));
+  } else if (o.payment_url) {
     const a = el("a", { href: o.payment_url, target: "_blank", rel: "noopener" }, "Pay now");
     p.append(el("p", {}, a, " (opens the payment page; come back here afterwards)"));
   }
@@ -232,9 +262,24 @@ async function waitForPass() {
   const mnemonic = store.get("pending." + invite.token);
   const p = $("payment");
   if (!mnemonic) {
-    p.append(el("p", {}, "Watch for the activation e-mail. Then get a bunker URL on your account page and sign in here."));
+    // Belfry keeps the key: sign in through Keycast with the e-mail address and a mailed code
+    const email = store.get("ordered." + invite.token);
+    const button = el("button", {}, "Sign in with Open Source Village");
+    button.onclick = loginSso;
+    p.append(
+      el("p", {}, "Sign in with ", el("b", {}, email || "the e-mail address you ordered with"),
+        " (if Belfry asks, it mails you a 6-digit code)."),
+      button,
+    );
+    // Coming back from paying, the payer only wants in: start the sign-in once by itself.
+    // The button stays for a second try (or when the sign-in came back without a session).
+    if (!store.get("autosignin." + invite.token)) {
+      store.set("autosignin." + invite.token, true);
+      loginSso();
+    }
     return;
   }
+  p.append(el("p", { class: "muted" }, "Signing you in…"));
   const local = localSigner(mnemonic);
   for (let i = 0; i < 60; i++) {
     const r = await api(cfg.api.me, { sign: local.sign });
@@ -420,6 +465,22 @@ function copyButton(text, label) {
   return b;
 }
 
+/** The phone's share sheet with the invite link; copies it where there is none. */
+function shareButton(link) {
+  const label = "Share invite link";
+  const b = el("button", {}, label);
+  b.onclick = async () => {
+    if (navigator.share) {
+      try { return await navigator.share({ title: "Join Open Source Village", text: "Your invite to Open Source Village:", url: link }); }
+      catch (e) { if (e.name === "AbortError") return; }
+    }
+    try { await navigator.clipboard.writeText(link); b.textContent = "Link copied"; }
+    catch { b.textContent = "Copy failed"; }
+    setTimeout(() => { b.textContent = label; }, 1500);
+  };
+  return b;
+}
+
 const INVITE_STATES = { open: "not used yet", reserved: "ordered, payment outstanding",
   used: "used", expired: "expired", revoked: "revoked" };
 
@@ -468,10 +529,12 @@ async function createInvite() {
       const code = inviteCode(r.data.url);
       $("invite-made").replaceChildren(
         el("p", { class: "code" }, code),
-        el("p", { class: "muted" }, "Pass on the code (it goes into \"I have an invite\") or a link. One person can use it."),
-        el("div", { class: "row" }, copyButton(code, "Copy code"), copyButton(inviteLink(r.data.url), "Copy link to this app"),
-          copyButton(r.data.url, "Copy shop link")));
+        el("p", { class: "muted" }, "Send the link: it opens this app with the code filled in. One person can use it."),
+        el("div", { class: "row" }, shareButton(inviteLink(r.data.url)), copyButton(code, "Copy code")));
       $("invitee-note").value = "";
+      // the same tap opens the share sheet (the click's user activation still holds)
+      if (navigator.share) navigator.share({ title: "Join Open Source Village",
+        text: "Your invite to Open Source Village:", url: inviteLink(r.data.url) }).catch(() => {});
     }
     loadInvites();
   } finally {
@@ -660,6 +723,9 @@ async function main() {
   $("nip07-login").onclick = loginNip07;
   $("sso-login").onclick = loginSso;
   $("invite-create").onclick = createInvite;
+  $("invitee-email").oninput = () => {
+    $("invite-create").textContent = $("invitee-email").value.trim() ? "Mail the invite" : "Create and share invite";
+  };
   $("note-post").onclick = postNote;
   $("logout").onclick = logout;
   setTimeout(() => { $("nip07-login").hidden = !window.nostr; }, 300);

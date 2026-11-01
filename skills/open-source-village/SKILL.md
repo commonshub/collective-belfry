@@ -517,9 +517,10 @@ while developing.
      &code_challenge_method=S256
    ```
 
-   The participant chooses "Sign in with Open Source Village", enters their e-mail address and
-   the code, then approves your app on Keycast's consent screen (Belfry's own apps skip it). The
-   next time, a participant who is still signed in comes straight back.
+   The browser goes straight to Belfry's sign-in page: the participant enters their e-mail
+   address and the code (or nothing, when already signed in to Belfry), then approves your app on
+   Keycast's consent screen (Belfry's own apps skip it). The next time, a participant who is
+   still signed in comes straight back.
 2. Your callback gets `?code=…&state=…` (check the state) or `?error=…`. Exchange the code from
    the browser (the endpoint answers every origin):
 
