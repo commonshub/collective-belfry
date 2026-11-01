@@ -550,3 +550,56 @@ A participant has a few invites (3 by default; `409 refused` with the reason whe
 steward's are not limited. From a browser page, call the API through your server unless the Belfry
 lists your origin in `API_CORS_ORIGINS` (section 8). `examples/village-notes` does all of this
 (`src/app.js`, `createInvite`, `loadInvites`).
+
+## 11. Access as Nostr events: requests, admins, grants and invite codes
+
+Besides passes, a Belfry lets people in with signed Nostr events on its groups relay, so every
+member can audit who let whom in, with which role and until when. There is no API to call: an
+app reads the state from `/.well-known/belfry.json` and writes events.
+
+**The state.** `access` in `/.well-known/belfry.json` (CORS `*`, cached 15 s):
+`relay` (the groups relay), `service` (Belfry's service key, hex), `admins` (hex pubkeys),
+`needs_admin` (true while the Belfry has no admin), `synced` and `kinds`
+(`grant` 8534, `revoke` 8535, `invite` 8536, `request` 8537, `receipt` 8538). Stewards with an
+active pass are admins too.
+
+**Is this key in?** Connect to the groups relay with NIP-42 AUTH. A member's `REQ` is answered; a
+non-member's is `CLOSED` with `restricted:`. A member can read their grant: kind 8534 with
+`#p` = their key (the newest 8534 or 8535 for a key wins; `["role", …]`, optional
+`["until", <unix>]`).
+
+**Asking to get in** (any signed-in key, member or not). Send a NIP-17 gift wrap (NIP-59: rumor →
+seal kind 13 signed by the key → kind 1059 from a one-time key, `["p", <service>]`) to the
+groups relay; it accepts gift wraps to members from anyone. The rumor is kind **8537**:
+
+- `content`: a note for the admins (who you are, why), may be empty.
+- `["claim", <invite code>]` to use an invite code: the key is in at once with the invite's role.
+- `["role", "admin"]` while `needs_admin` is true: the first to ask becomes the admin.
+- `["name", <display name>]`: shown to the admins (unverified).
+
+Without a valid code, Belfry publishes a receipt (kind 8538, `["p", <key>]`, `["e", <wrap id>]`)
+and writes to every admin. Poll the relay (or `belfry.json` for a first admin) to see when the
+key is in; Belfry also sends a welcome DM once it is.
+
+**Admins answer** in any NIP-17 client by replying to Belfry's DM: `approve <ref>`, optionally a
+role and a number of days (`approve 3fa2c1d0 volunteer 14`), or `decline <ref>`. An app can
+instead sign the grant itself (it then counts as the admin's own act):
+
+- **Grant** kind 8534: `["p", <key>]`, `["role", <role>]` (`member` by default, `admin` makes an
+  admin; lower-case, up to 32 of `a-z0-9_-`), optional `["until", <unix>]`, and
+  `["e", <wrap id>, "", "request"]` when it answers a request.
+- **Revoke** kind 8535: `["p", <key>]` ends a grant; with `["e", <wrap id>]` it declines a request,
+  with `["e", <invite id>]` it withdraws an invite.
+- **Invite** kind 8536: `["code", <sha256 hex of the code>]`, `["role", <role>]`, optional
+  `["days", <n>]` (counted from the day it is used) or `["until", <unix>]`, `["max", <uses>]`,
+  `["expires", <unix>]`. Make the code in the app (random, at least 8 characters); only its hash
+  is published. Pass the code on yourself.
+
+An event counts only if its author was an admin when it was signed (or it is Belfry's own). Pending
+requests are the receipts with no later grant or revoke for that key. Admins read the requests'
+notes in the DMs Belfry sent them (tags `["requester", <key>]`, `["request", <wrap id>]`,
+`["note", …]`).
+
+**On the server**, with shell access: `python -m belfry_onboarding admins [list|add|remove] <npub>`,
+`grant <npub> [--role R] [--days N]`, `revoke <npub>` publish the same events signed with the
+service key; that is how to change admins when none is left or the first one was the wrong one.

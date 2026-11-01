@@ -43,8 +43,10 @@ def _url(value: str) -> str:
     return (value or "").strip().rstrip("/")
 
 
-def document(settings: Any) -> dict[str, Any]:
-    """The discovery document. Addresses not configured here are left out."""
+def document(settings: Any, access: Any = None) -> dict[str, Any]:
+    """The discovery document. Addresses not configured here are left out. ``access`` (an
+    access.AccessService) adds the read-only access state: admins, whether the Belfry still needs
+    its first admin, the service key requests go to and the event kinds."""
     public = _url(settings.public_url)
     site = _url(settings.site_url) or public
     shop = _url(settings.odoo_public_url)
@@ -88,6 +90,7 @@ def document(settings: Any) -> dict[str, Any]:
             for name, url, text in pages.community_apps(os.environ.get("COMMUNITY_APPS", ""))
         ],
         "skills": {role: f"{public}/skills/{name}.md" for role, name in SKILLS.items()},
+        "access": access.public_state() if access is not None else None,
     }
     return {k: v for k, v in doc.items() if v not in ("", None)}
 
@@ -195,8 +198,11 @@ def register(app: FastAPI) -> None:
 
     @app.get(WELL_KNOWN)
     async def well_known(request: Request) -> JSONResponse:
-        doc = document(request.app.state.services.settings)
-        return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
+        services = request.app.state.services
+        doc = document(services.settings, services.access)
+        # the access state changes with every grant: keep caches short
+        cache = "public, max-age=15" if services.access is not None else "public, max-age=300"
+        return JSONResponse(doc, headers={"Cache-Control": cache})
 
     @app.get(ME)
     async def api_me(request: Request) -> JSONResponse:

@@ -174,6 +174,11 @@ class Settings(BaseSettings):
     # with the groups API key (secret groups_api_nsec, hex). Empty URL or key: no sync.
     groups_api_url: str = Field(default="", alias="GROUPS_API_URL")
     groups_api_nsec: str = Field(default="", alias="GROUPS_API_NSEC")
+    # Access as Nostr events on the groups relay (access.py): grants, invites, requests and
+    # admins, followed with the groups API key. ACCESS_APP_URL: an app whose admin pages the DMs
+    # to admins link to (optional).
+    access_enabled: bool = Field(default=True, alias="ACCESS_ENABLED")
+    access_app_url: str = Field(default="", alias="ACCESS_APP_URL")
     programme_schedule_url: str = Field(
         default="https://opensourcevillage.org/schedule.json", alias="PROGRAMME_SCHEDULE_URL"
     )

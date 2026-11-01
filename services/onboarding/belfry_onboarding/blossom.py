@@ -128,7 +128,8 @@ def authorize(svc: Services, authorization: str | None, method: str) -> str:
     hosts = [h.strip().lower() for h in svc.settings.blossom_hosts.split(",") if h.strip()]
     event = parse_authorization(authorization)
     pubkey = check_event(event, method, hosts)
-    if not pubkey_has_active_pass(svc, pubkey):
+    granted = svc.access is not None and svc.access.is_member(pubkey)
+    if not granted and not pubkey_has_active_pass(svc, pubkey):
         log.info("blossom: %s refused for %s, no active pass", method, pubkey)
         raise BlossomAuthError(403, "no active pass for this key")
     return pubkey

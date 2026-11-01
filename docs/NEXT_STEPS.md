@@ -798,6 +798,42 @@ User: Village Notes should create an invite code; describe it in the skill.
 - [x] Village Notes: "Invite someone" for pass holders: a code (copy the code, a `/?invite=` link into the app or the shop link) or an invite mailed to an address; the holder's invites with their state, revoke for open ones.
 - Checks: Odoo 112 tests (1 new); onboarding 279 (1 new); `agentcheck` (smoke 6v) makes a code, reads its offer at the shop and revokes it; local smoke 234 ok. The Village Notes card itself was not tried in a browser.
 
+## 3zt. Access as Nostr events: requests, admins, grants, invite codes — built 2026-11-01
+
+User: no CORS and no classic API for apps; use Nostr events so that everything is auditable, with
+one read-only API for the Belfry's state. Until a Belfry has an admin, the app offers to become
+it; then an invite code or a request with a note, which reaches the admins as a DM with an easy
+way to approve. Decisions (user, 2026-11-01): there are several ways in and the manual one is
+always there (Odoo and Stripe stay the automated one); a grant has a role and an optional end
+date or number of days; the first to claim admin wins, and shell access can always change admins.
+
+- [x] `access.py` (onboarding): kinds 8534 grant, 8535 revoke, 8536 invite (only the code's hash),
+  8537 request (the rumor of a NIP-17 gift wrap to the service key, the groups API key, which
+  zooid accepts from anyone), 8538 receipt. The state is a replay of the events: an event counts
+  if the service signed it or its author was an admin at that time; admins are active `admin`
+  grants plus the stewards' active passes (so a Belfry with stewards is never offered to the
+  first comer). A thread follows the groups relay (internal address, public Host as zooid needs),
+  grants first-admin and invite-code requests at once, writes other requests to every admin as
+  NIP-17 DMs (groups and community relay) and acts on their `approve <ref> [role] [days]` /
+  `decline <ref>` replies; welcome DM on approval. Idempotent across restarts: a gift wrap is
+  handled once, known from the receipts and the `e` tags of the service's own events.
+- [x] Members = active passes ∪ active grants: `core.active_pubkeys` (rnostr whitelist and zooid
+  members follow on every change and every minute for end dates), the Blossom gate.
+- [x] `/.well-known/belfry.json` gets `access` (relay, service key, admins, `needs_admin`, kinds).
+  CLI `admins [list|add|remove]`, `grant`, `revoke` (service-signed). `nip44.py`: NIP-44 v2 and
+  NIP-59, checked against nostr-tools both ways. Settings `ACCESS_ENABLED` (on), `ACCESS_APP_URL`
+  (an app's `#/admin/requests/<id>` linked from the admins' DMs). Skill section 11.
+- Checks: onboarding 293 (14 new); end to end against zooid 0.3.0 with Belfry's patch and a local
+  Postgres (first admin; a request DM'd to the admin and approved by DM reply; welcome DM; invite
+  code; an admin's own grant; a non-admin's grant ignored; a fresh load agrees), every grant
+  landing in zooid's member list. Not run: the Compose stack and `make smoke`.
+
+Open: the pass APIs (`/api/me`, `/api/invites`, `/api/email-code`) and their CORS stay for the
+apps that use them; an app built on this section needs none of them. Grants do not create Odoo
+contacts, passes, tokens or Authentik participants (the relays, groups and Blossom let them in).
+A request reaches admins only on Belfry's relays, not their own DM relays (kind 10050). Requests
+from banned keys are refused by zooid itself.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

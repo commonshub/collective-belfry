@@ -658,6 +658,10 @@ services:
       POLLS_PUBKEY: ${POLLS_PUBKEY:-}
       # the groups relay's member API (groups_members.py); empty turns the member sync off
       GROUPS_API_URL: ${GROUPS_API_URL-http://groups-relay:3334}
+      # access as Nostr events on the groups relay (access.py): off with ACCESS_ENABLED=false;
+      # ACCESS_APP_URL: an app whose #/admin/requests/<id> the admins' DMs link to
+      ACCESS_ENABLED: ${ACCESS_ENABLED:-true}
+      ACCESS_APP_URL: ${ACCESS_APP_URL:-}
       # sync-programme (programme.py): empty URL disables that source
       PROGRAMME_SCHEDULE_URL: ${PROGRAMME_SCHEDULE_URL-https://opensourcevillage.org/schedule.json}
       PROGRAMME_ROOMS_URL: ${PROGRAMME_ROOMS_URL-https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json}

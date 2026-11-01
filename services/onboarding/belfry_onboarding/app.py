@@ -24,6 +24,7 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
+    access,
     accounting,
     apply,
     avatar,
@@ -152,6 +153,16 @@ def create_app(services: Services | None = None) -> FastAPI:
             settings = Settings()
             configure_logging(settings.log_level)
             app.state.services = build_services(settings)
+            # access as Nostr events (access.py): follows the groups relay in a thread
+            svc = app.state.services
+            svc.access = access.from_settings(
+                settings,
+                stewards=lambda: core.steward_pubkeys(svc),
+                on_members=lambda _members: core.sync_relay_whitelist(svc),
+                extra_relays=[svc.relay] if svc.relay is not None else [],
+            )
+            if svc.access is not None:
+                svc.access.start()
         else:
             app.state.services = services
         claim.TEST_NOTICE = app.state.services.settings.test_run_notice
