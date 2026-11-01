@@ -493,18 +493,17 @@ else
   bad "no Keycast access token from step 6d"
 fi
 
-step "6g. policy kinds: calendar, photos, proposals and NIP-17 chat sign; others are refused"
+step "6g. policy kinds: any kind signs (calendar, photos, proposals, NIP-17 chat, tasks, zaps)"
 if [[ -n "${KC_TOKEN:-}" ]]; then
   kc_sign() { # kind [tags json] -> "ok" or the error
     local ev; ev=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$1" --argjson tags "${2:-[]}" '{pubkey:$pk, created_at:$t, kind:$k, tags:$tags, content:"smoke"}')
     local r; r=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')")
     [[ -n "$(jq -r '.result.sig // empty' <<<"$r")" ]] && echo ok || jq -r '.error // .message // .' <<<"$r" | head -c 120
   }
-  for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list" "30402:marketplace offer (NIP-99)" "30078:directory consent (NIP-78)"; do
+  for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list" "30402:marketplace offer (NIP-99)" "30078:directory consent (NIP-78)" "2100:task (tasklist.sh)" "9735:zap receipt (outside the old list)"; do
     k=${spec%%:*}; name=${spec#*:}; res=$(kc_sign "$k")
     [[ "$res" == ok ]] && ok "kind $k ($name) signed" || bad "kind $k ($name): $res"
   done
-  res=$(kc_sign 9735); [[ "$res" != ok ]] && ok "kind 9735 (zap receipt, not allowed) refused: $res" || bad "kind 9735 was signed although it is not in the policy"
   ENC=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$KC_PUB" '{method:"nip44_encrypt", params:[$pk, "hello village"]}')")
   CT=$(jq -r '.result // empty' <<<"$ENC")
   [[ -n "$CT" ]] && ok "nip44_encrypt through the signer works (NIP-17 chat)" || bad "nip44_encrypt: $ENC"
@@ -525,7 +524,7 @@ DISC_RELAY=$(curl -sS "$KC_URL/.well-known/nostr.json" | jq -r '.nip46.relay // 
 if [[ -n "${KC_BUNKER:-}" ]]; then
   BUNKER_RELAY=$(python3 -c 'import sys, urllib.parse as u; print((u.parse_qs(u.urlsplit(sys.argv[1]).query).get("relay") or [""])[0])' "$KC_BUNKER")
   [[ "$BUNKER_RELAY" == "$PUBLIC_RELAY" ]] && ok "the OAuth bunker URL names the public relay $BUNKER_RELAY" || bad "bunker URL relay is '$BUNKER_RELAY', expected $PUBLIC_RELAY"
-  NIP46=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.nip46check "$KC_BUNKER" --expect-pubkey "$KC_PUB" --refused-kind 9735)
+  NIP46=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.nip46check "$KC_BUNKER" --expect-pubkey "$KC_PUB")
   [[ -n "$BUNKER_MAP" ]] && NIP46+=(--map "$BUNKER_MAP")
   if OUT=$("${NIP46[@]}" 2>&1); then sed 's/^/  /' <<<"$OUT"; ok "NIP-46 client: connect, get_public_key, sign_event through the bunker relay"
   else sed 's/^/  /' <<<"$OUT" >&2; bad "NIP-46 client through the bunker relay"; fi

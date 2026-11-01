@@ -1,45 +1,26 @@
 -- Keycast policy "belfry-event": the scope (policy:belfry-event) that Belfry's community apps
 -- request. Only allowed_kinds permissions gate signing by event kind; there is no API for
 -- creating global policies (GET /api/policies is read-only), hence SQL. Idempotent: re-running
--- it updates the allowed kinds of an existing permission.
+-- it updates the config of an existing permission.
 -- From docs/research/keycast-spike.md section 3. Applied by scripts/bootstrap.sh on every run.
 --
--- Kinds (decided 2026-10-23, docs/NEXT_STEPS.md §3h):
---   profile and base      0 profile, 1 note, 5 deletion, 7 reaction, 10002 relay list,
---                         22242 NIP-42 AUTH (the community relay requires it), 27235 NIP-98 HTTP auth
---   calendar (NIP-52)     31922 date-based event, 31923 time-based event, 31924 calendar, 31925 RSVP
---   photos (NIP-68)       20 picture; uploads use 24242 (Blossom BUD-11)
---   proposals             NIP-88 polls 1068 and responses 1018; NIP-23 long-form 30023 with
---                         NIP-22 comments 1111 (and 1 for plain replies)
---   chat (NIP-17)         13 seal (signed by the user's key), 1059 gift wrap (signed by a throwaway
---                         key, listed for clients that ask the signer anyway), 10050 DM relay list;
---                         kind 14/15 messages are never signed. nip44_encrypt/nip44_decrypt are not
---                         gated by kinds in Keycast: an allowed_kinds policy always permits them.
---   apps (2026-10-23)     the hosted calendar (formstr nostr-calendar) and chat (Coracle) also sign:
---                         3 contact list, 6 repost, 16 generic repost, 1984 report, 1985 label,
---                         10000 mute list, 10003 bookmarks, 10063 Blossom server list, 30000 follow
---                         sets, 30002 relay sets, 30003 bookmark sets, 30015 interest sets,
---                         30078 app data (NIP-78), 31890 feeds; calendar extras 31926 busy list,
---                         31927 scheduling page, 32069 private RSVP, 32123 private calendar list,
---                         32678 private calendar event, 32680 scheduling-pages list
---   village wallet:       NIP-61 nutzaps 9321 and the nutzap info 10019 (receiving key, mint, relay)
---   marketplace:          NIP-99 classifieds 30402 (offers), deletions 5; directory: 0 and 30078
---   groups (2026-10-26):  Flotilla on the groups relay (NIP-29): 9 chat message, 11 thread, 9000-9010
---                         group moderation (members create and administer their own groups),
---                         9021/9022 join and leave a group, 10009 the user's group list; NIP-43
---                         28934 join request, 28935 invite, 28936 leave request for the relay
--- Not included: links (NIP-B0 / NIP-51), still open.
+-- Kinds: any (2026-11-01, docs/NEXT_STEPS.md §3h). The permission has no "allowed_kinds" list,
+-- which Keycast reads as "all kinds" (AllowedKinds::can_sign: None => true), on the HTTP RPC and
+-- on NIP-46 alike. Until then it listed the kinds of Belfry's own apps, so every new app or
+-- protocol (tasklist.sh tasks 2100-2103, zaps, links, ...) needed a change here first. What a
+-- key may do is decided by the relays and the file server (active pass, NIP-29 group roles),
+-- not by the signer. nip44_encrypt/nip44_decrypt were never gated by kinds.
 INSERT INTO permissions (identifier, config, created_at, updated_at)
-SELECT 'allowed_kinds_belfry_event', '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', NOW(), NOW()
+SELECT 'allowed_kinds_belfry_event', '{"allowed_kinds": null}', NOW(), NOW()
 WHERE NOT EXISTS (SELECT 1 FROM permissions WHERE identifier = 'allowed_kinds_belfry_event');
 
 UPDATE permissions
-SET config = '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}', updated_at = NOW()
+SET config = '{"allowed_kinds": null}', updated_at = NOW()
 WHERE identifier = 'allowed_kinds_belfry_event'
-  AND config::text <> '{"allowed_kinds": [0, 1, 3, 5, 6, 7, 9, 11, 13, 16, 20, 1018, 1059, 1068, 1111, 1984, 1985, 9000, 9001, 9002, 9003, 9004, 9005, 9006, 9007, 9008, 9009, 9010, 9021, 9022, 9321, 10000, 10002, 10003, 10009, 10019, 10050, 10063, 22242, 24242, 27235, 28934, 28935, 28936, 30000, 30002, 30003, 30015, 30023, 30078, 30402, 31890, 31922, 31923, 31924, 31925, 31926, 31927, 32069, 32123, 32678, 32680]}';
+  AND config::text <> '{"allowed_kinds": null}';
 
-UPDATE policies SET description = 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH', updated_at = NOW()
-WHERE slug = 'belfry-event' AND description <> 'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH';
+UPDATE policies SET description = 'Sign any event for you in the village apps; private chat and relay AUTH', updated_at = NOW()
+WHERE slug = 'belfry-event' AND description <> 'Sign any event for you in the village apps; private chat and relay AUTH';
 
 -- Branding of the seed tenant (shown by the OAuth popup and the e-mails): Divine -> Open Source Village (run by Belfry).
 -- Keycast serves the tenant of the Host header (KEYCAST_TENANT_DOMAIN, psql variable :tenant from
@@ -49,7 +30,7 @@ WHERE (id = 1 OR domain = :'tenant') AND name <> 'Open Source Village';
 
 INSERT INTO policies (name, team_id, slug, display_name, description, created_at, updated_at)
 SELECT 'Belfry Event Apps', NULL, 'belfry-event', 'Belfry event apps',
-       'Profile, notes, reactions, calendar, photos, proposals, private chat and relay AUTH', NOW(), NOW()
+       'Sign any event for you in the village apps; private chat and relay AUTH', NOW(), NOW()
 WHERE NOT EXISTS (SELECT 1 FROM policies WHERE slug = 'belfry-event');
 
 INSERT INTO policy_permissions (policy_id, permission_id, created_at, updated_at)
