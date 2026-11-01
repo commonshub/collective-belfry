@@ -35,9 +35,9 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    subscription; a failed participants request is retried after 30 seconds.
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
-pass); the app signs through Keycast, so the `belfry-event` policy (`infra/keycast/policy.sql`)
-must allow its kinds: 0, 3, 5, 13, 1059, 10002, 22242, 30078, 31923, 31925, 31926, 31927, 32069,
-32123, 32678, 32680.
+pass); the app signs through Keycast with the `belfry-event` policy (`infra/keycast/policy.sql`),
+which allows any kind since 2026-11-01. The app signs 0, 3, 5, 13, 1059, 10002, 22242, 30078,
+31923, 31925, 31926, 31927, 32069, 32123, 32678, 32680.
 
 ## Build
 
