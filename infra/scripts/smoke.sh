@@ -310,17 +310,18 @@ fi
 # Drive the link like the browser: the flow only signs the pending user in (remember-me choice).
 FLOW_TOKEN=${AK_LINK#*flow_token=}
 SETUP_EXEC="$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=flow_token%3D$FLOW_TOKEN"
-run_setup_flow() { # cookie jar -> prints the final component
-  local jar=$1 ch comp body
-  ch=$(curl -sS -b "$jar" -c "$jar" "$SETUP_EXEC")
+run_setup_flow() { # cookie jar [executor URL] -> prints the final component (FLOW_TO: its target)
+  local jar=$1 exec=${2:-$SETUP_EXEC} ch comp body
+  ch=$(curl -sS -b "$jar" -c "$jar" "$exec")
   for _ in 1 2 3; do
     comp=$(jq -r '.component // empty' <<<"$ch")
     case "$comp" in
       ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
       *) break ;;
     esac
-    ch=$(curl -sS -b "$jar" -c "$jar" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$SETUP_EXEC")
+    ch=$(curl -sS -b "$jar" -c "$jar" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$exec")
   done
+  jq -r '.to // empty' <<<"$ch" > "$jar.to"
   jq -r '.component // "none"' <<<"$ch"
 }
 AK_SESSION=$(mktemp)   # the participant's browser; 6d continues in it
@@ -337,6 +338,23 @@ LAUNCH_TO=$(curl -sS -b "$AK_SESSION" -o /dev/null -w '%{redirect_url}' "$ROOT_T
 [[ "$LAUNCH_TO" == "${KEYCAST_APP_URL:-http://localhost:3000}/api/auth/oidc/start?"* ]] \
   && ok "after the sign-in link the participant lands on the apps page (Keycast sign-in), not authentik's portal" \
   || bad "after sign-in: $AK_URL/ -> '$ROOT_TO' -> '$LAUNCH_TO'"
+# Ordered by an app with a return_url: the welcome page signs in by script and the sign-in ends
+# back in the app (policy belfry-account-setup-return), not on the apps page.
+RETURN_URL="http://localhost:8080/?invite=smoke-$STAMP"
+ox belfry.pass write "[[$PASS_ID],{\"return_url\":\"$RETURN_URL\"}]" >/dev/null
+WELCOME=$(curl -sS "$ONB_URL/welcome/$WELCOME_TOKEN")
+WELCOME_LINK=$(curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$ONB_URL/welcome/$WELCOME_TOKEN")
+RJAR=$(mktemp)
+RQUERY=$(jq -rn --arg q "${WELCOME_LINK#*\?}" '$q | @uri')
+RFINAL=$(run_setup_flow "$RJAR" "$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=$RQUERY")
+RME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
+[[ "$WELCOME" == *'action="/welcome/'* && "$RFINAL" == xak-flow-redirect && "$(cat "$RJAR.to")" == "$RETURN_URL" && "$RME" == "$AK_UID" ]] \
+  && ok "with the order's return_url the welcome page signs in and returns to the app" \
+  || bad "return to the app: page $(head -c 80 <<<"$WELCOME"), link '$WELCOME_LINK', flow '$RFINAL' to '$(cat "$RJAR.to")', user '$RME'"
+AGAIN_TO=$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/welcome/$WELCOME_TOKEN")
+[[ "$AGAIN_TO" == "$RETURN_URL" ]] && ok "used once: the welcome page goes back to the app without signing in" || bad "welcome again -> '$AGAIN_TO'"
+ox belfry.pass write "[[$PASS_ID],{\"return_url\":false}]" >/dev/null
+rm -f "$RJAR" "$RJAR.to"
 AK_PW_LOGIN=$(curl -sS -c /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/" | jq -r '[.password_fields // false] | .[0]')
 [[ "$AK_PW_LOGIN" == false ]] && ok "the login page asks for no password (magic link or pass)" || bad "login page offers a password field"
 # The link is one-time: a second use must not sign anyone in.

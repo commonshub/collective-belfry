@@ -418,13 +418,19 @@ class FakeOdoo(OdooApi):
         )
         if p is None:
             return {"result": "not_found"}
+        result = self._use_signin(method, kind, p)
+        if kind == "welcome":
+            result["return_url"] = p.get("return_url") or False
+        return result
+
+    def _use_signin(self, method: str, kind: str, p: dict[str, Any]) -> dict[str, Any]:
         used = "signin_used_at" if kind == "signin" else "welcome_used_at"
         if method == "belfry_welcome_info":
             return {
                 "result": "ok",
                 "state": p.get("state"),
                 "first_name": "Alice",
-                "payment": "paid" if p.get("state") == "active" else "unpaid",
+                "payment": "paid" if p.get("state") == "active" or p.get("paid") else "unpaid",
                 "tier_name": "Day pass",
                 "date_start": p.get("date_start"),
                 "date_end": p.get("date_end"),

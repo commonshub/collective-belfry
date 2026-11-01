@@ -10,12 +10,20 @@ authentik_signin_url) and redirects there. A sign-in that no app asked for ends 
 
 Mail scanners open links without running scripts, so the GET only shows a page whose script
 sends the POST that spends the secret (a button without scripts).
+
+A pass ordered by an app with a ``return_url`` (Odoo's pass API) comes back to the app instead
+(2026-11-01): the welcome page waits for the activation, signs in by script and the sign-in link
+carries ``belfry_return``, which the account-setup flow turns into its final redirect (blueprint
+belfry-account-setup-flow). Then the app's "Sign in with Open Source Village" finds a session.
+When signing in is not possible (the secret used or stale, the pass not active within two
+minutes, a payment still processing), the payer goes back to the app without a session.
 """
 
 from __future__ import annotations
 
 import html
 import logging
+import urllib.parse
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -35,6 +43,41 @@ MESSAGES = {
     "not_active": "This pass is not active.",
     "no_user": "Your account is not ready yet. Try again in a minute.",
 }
+
+
+# the welcome page reloads every 3 s while the pass is set up; with a return_url the payer goes
+# back to the app after this many rounds even without a session
+WELCOME_WAIT_ROUNDS = 40
+
+
+def _host(url: str) -> str:
+    return urllib.parse.urlsplit(url).netloc or url
+
+
+def welcome_next(info: dict[str, Any], wait: int) -> str:
+    """For a pass with a return_url: ``signin`` (spend the secret, then the app), ``wait`` (the
+    pass is being set up) or ``go`` (back to the app now, without signing in)."""
+    if info.get("state") == "active":
+        return "signin" if info.get("signin_available") else "go"
+    if info.get("payment") == "paid" and wait < WELCOME_WAIT_ROUNDS:
+        return "wait"
+    return "go"
+
+
+def waiting_page(token: str, target: str, wait: int) -> str:
+    host = E(_host(target))
+    body = f"""<meta http-equiv="refresh" content="3;url=/welcome/{E(token)}?wait={wait + 1}">
+<div class="card">
+<h1>Payment received</h1>
+<p>Your pass is being set up; then you go back to {host}, signed in.</p>
+<p class="muted small"><a href="{E(target)}">Back to {host} now</a></p>
+</div>"""
+    return page("Welcome to Open Source Village", body)
+
+
+def with_return(link: str, target: str) -> str:
+    """The authentik sign-in link, ending at the app (policy belfry-account-setup-return)."""
+    return link + ("&" if "?" in link else "?") + urllib.parse.urlencode({"belfry_return": target})
 
 
 def _apps_button(svc: Services) -> str:
@@ -137,8 +180,11 @@ def register(app: FastAPI) -> None:
         result = await run_in_threadpool(
             services.odoo.call, "belfry.pass", "belfry_use_signin", [kind, token]
         )
+        target = result.get("return_url") or ""
         if result.get("result") != "ok":
             log.info("%s link refused: %s", kind, result.get("result"))
+            if target:  # back to the app that ordered, without a session
+                return no_store(RedirectResponse(target, status_code=303))
             return no_store(
                 HTMLResponse(problem_page(services, str(result.get("result"))), status_code=410)
             )
@@ -146,7 +192,7 @@ def register(app: FastAPI) -> None:
             authentik_signin_url, services, int(result["authentik_user_id"])
         )
         log.info("%s link used for pass %s", kind, result.get("pass_id"))
-        return no_store(RedirectResponse(url, status_code=303))
+        return no_store(RedirectResponse(with_return(url, target) if target else url, 303))
 
     @app.get("/signin/{token}", response_class=HTMLResponse)
     async def signin_page(token: str):
@@ -166,13 +212,30 @@ def register(app: FastAPI) -> None:
         return await spend(svc(request), "signin", token)
 
     @app.get("/welcome/{token}", response_class=HTMLResponse)
-    async def welcome(request: Request, token: str):
+    async def welcome(request: Request, token: str, wait: int = 0):
         services = svc(request)
         info = await run_in_threadpool(
             services.odoo.call, "belfry.pass", "belfry_welcome_info", [token]
         )
         if info.get("result") != "ok":
             return no_store(HTMLResponse(problem_page(services, "not_found"), status_code=404))
+        target = info.get("return_url")
+        if target:
+            step = welcome_next(info, wait)
+            if step == "go":
+                return no_store(RedirectResponse(target, status_code=303))
+            if step == "wait":
+                return no_store(HTMLResponse(waiting_page(token, target, wait)))
+            return no_store(
+                HTMLResponse(
+                    spend_page(
+                        f"/welcome/{token}",
+                        "Signing you in",
+                        f"One moment: you are signed in and go back to {_host(target)}.",
+                        "Continue",
+                    )
+                )
+            )
         return no_store(HTMLResponse(welcome_page(services, token, info)))
 
     @app.post("/welcome/{token}")

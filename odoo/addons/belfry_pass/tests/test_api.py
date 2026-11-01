@@ -210,7 +210,13 @@ class TestPayRoute(HttpCase):
         self.assertEqual(response.status_code, 201, response.text[:500])
         self.invite.invalidate_recordset()
         self.assertEqual(self.invite.pass_id.return_url, 'https://notes.test/?invite=abc')
-        self.assertEqual(self.invite.pass_id.belfry_landing_url(), 'https://notes.test/?invite=abc')
+        belfry_pass = self.invite.pass_id
+        self.assertEqual(belfry_pass.belfry_landing_url(), belfry_pass.belfry_welcome_url(),
+                         "the welcome page signs the payer in and goes on to return_url")
+        info = belfry_pass.belfry_welcome_info(belfry_pass.welcome_token)
+        self.assertEqual(info['return_url'], 'https://notes.test/?invite=abc')
+        used = belfry_pass.belfry_use_signin('welcome', belfry_pass.welcome_token)
+        self.assertEqual(used, {'result': 'not_active', 'return_url': 'https://notes.test/?invite=abc'})
 
     def test_without_mollie_the_payment_link(self):
         body = self._order().json()
@@ -236,7 +242,7 @@ class TestPayRoute(HttpCase):
         # back from Mollie: /payment/status polls the transaction of this browser's session
         tx._set_done()
         poll = self.make_jsonrpc_request('/payment/status/poll', {})
-        self.assertEqual(poll['landing_route'], 'https://notes.test/')
+        self.assertTrue(poll['landing_route'].startswith('https://pass.belfry.test/welcome/'), poll['landing_route'])
 
     def test_a_chosen_method(self):
         self._mollie()

@@ -131,3 +131,45 @@ def test_admin_endpoint(client, odoo, services):
     assert pass_for(odoo, ids["invoice"])["login_setup_url"] != first
     r = client.post(f"/admin/passes/424242/login-link?token={HOOK_TOKEN}")
     assert r.json() == {"result": "not_found", "pass_id": 424242}
+
+
+def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo, authentik):
+    """A pass ordered by an app with a return_url: the welcome page waits, signs in by script,
+    and the authentik link ends at the app (belfry_return); otherwise straight back to the app."""
+    ids = seed_paid_invoice(odoo)
+    pid = odoo.add(
+        "belfry.pass",
+        partner_id=ids["partner"],
+        tier="day",
+        state="pending",
+        invoice_id=ids["invoice"],
+        welcome_token="r" * 43,
+        return_url="http://localhost:8080/?invite=abc",
+        paid=True,
+    )
+    path = f"/welcome/{'r' * 43}"
+    waiting = client.get(path)
+    assert waiting.status_code == 200 and "back to localhost:8080" in waiting.text
+    assert f"url={path}?wait=1" in waiting.text
+    gone = client.get(path + "?wait=40", follow_redirects=False)
+    assert gone.status_code == 303, "the pass took too long: back to the app without a session"
+    assert gone.headers["location"] == "http://localhost:8080/?invite=abc"
+
+    assert core.activate_pass(services, ids["invoice"]) == "activated"
+    assert odoo.tables["belfry.pass"][pid]["state"] == "active"
+    page = client.get(path)
+    assert f'action="{path}"' in page.text and "go back to localhost:8080" in page.text
+    r = client.post(path, follow_redirects=False)
+    assert r.status_code == 303
+    assert r.headers["location"] == (
+        "https://login.belfry.test/if/flow/belfry-account-setup/?flow_token=tok001"
+        "&belfry_return=http%3A%2F%2Flocalhost%3A8080%2F%3Finvite%3Dabc"
+    )
+    # used: the welcome page and its POST both go back to the app without signing in again
+    for again in (
+        client.get(path, follow_redirects=False),
+        client.post(path, follow_redirects=False),
+    ):
+        assert again.status_code == 303
+        assert again.headers["location"] == "http://localhost:8080/?invite=abc"
+    assert len(authentik.recovery_links) == 1

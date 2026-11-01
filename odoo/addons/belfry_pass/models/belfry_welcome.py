@@ -46,9 +46,11 @@ class BelfryPass(models.Model):
         return "%s/welcome/%s" % (base, token) if base and token else False
 
     def belfry_landing_url(self):
-        """Where the payer goes after paying: the ordering app, or Belfry's welcome page."""
+        """Where the payer goes after paying: Belfry's welcome page, which signs the browser in
+        and then goes on to the ordering app's ``return_url`` if there is one (signin.py); the
+        app directly when the welcome page has no address."""
         self.ensure_one()
-        return self.sudo().return_url or self.belfry_welcome_url()
+        return self.belfry_welcome_url() or self.sudo().return_url
 
     @api.model
     def _belfry_by_token(self, kind, token):
@@ -79,6 +81,7 @@ class BelfryPass(models.Model):
             'claim_token': record.claim_token or False,
             'signin_available': record.state == 'active' and not record.welcome_used_at
                 and record._belfry_welcome_fresh(),
+            'return_url': record.return_url or False,
         }
 
     def _belfry_welcome_fresh(self):
@@ -89,11 +92,19 @@ class BelfryPass(models.Model):
     def belfry_use_signin(self, kind, token):
         """Spend a sign-in secret (``signin``: the mail's link; ``welcome``: the page after
         paying). Returns ``{'result': 'ok', 'authentik_user_id': …}`` or a result of
-        ``not_found``, ``not_active``, ``used``, ``expired``, ``no_user``."""
+        ``not_found``, ``not_active``, ``used``, ``expired``, ``no_user``. The welcome page's
+        answers carry the order's ``return_url``: the payer goes on there either way."""
         _check_service_caller(self.env)
         record = self._belfry_by_token(kind, token)
         if not record:
             return {'result': 'not_found'}
+        result = record._belfry_use_signin(kind)
+        if kind == 'welcome':
+            result['return_url'] = record.return_url or False
+        return result
+
+    def _belfry_use_signin(self, kind):
+        record = self
         self.env.cr.execute("SELECT id FROM belfry_pass WHERE id = %s FOR UPDATE", (record.id,))
         record.invalidate_recordset()
         if record.state != 'active':

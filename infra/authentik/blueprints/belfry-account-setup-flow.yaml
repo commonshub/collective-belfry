@@ -65,10 +65,41 @@ entries:
       session_duration: days=14
       remember_me_offset: seconds=0
   - model: authentik_flows.flowstagebinding
+    id: belfry-account-setup-login-binding
     identifiers:
       target: !KeyOf belfry-account-setup
       stage: !KeyOf belfry-account-setup-login
       order: 30
+    attrs:
+      # the policy below runs again in the browser's request, where the link's query is known
+      re_evaluate_policies: true
+
+  # Back to the app after paying (2026-11-01): the welcome page signs the payer in with this flow
+  # and adds belfry_return=<the order's return_url> to the link (onboarding signin.py). authentik
+  # follows an absolute URL at the end of a flow only from the plan's "redirect" context, which
+  # only a policy can set; ?next= must be relative. Without the parameter nothing changes: the
+  # flow ends on the brand's default application, the apps page. The URL was checked against the
+  # API's allowed origins when the order was placed; here only http(s) is required.
+  - model: authentik_policies_expression.expressionpolicy
+    id: belfry-account-setup-return
+    identifiers:
+      name: belfry-account-setup-return
+    attrs:
+      expression: |
+        from urllib.parse import parse_qs, urlsplit
+        query = request.http_request.GET.get("query", "") if request.http_request else ""
+        target = (parse_qs(query).get("belfry_return") or [""])[0]
+        parts = urlsplit(target)
+        plan = request.context.get("flow_plan")
+        if plan is not None and parts.scheme in ("https", "http") and parts.netloc:
+            plan.context["redirect"] = target
+        return True
+  - model: authentik_policies.policybinding
+    identifiers:
+      target: !KeyOf belfry-account-setup-login-binding
+      policy: !KeyOf belfry-account-setup-return
+    attrs:
+      order: 0
 
   # The recovery-link API uses the recovery flow of the brand matching the request host, falling
   # back to the default brand. The seed brand is not always flagged default (seen on a fresh

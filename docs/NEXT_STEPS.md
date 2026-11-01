@@ -812,10 +812,18 @@ everyone landed on Belfry's welcome page, not back in the app.
   and taken from Mollie at the webhook). Odoo's payment link stays as `payment_link` and is the
   fallback: no provider with a checkout of its own (Stripe pays inside Odoo's page), an unknown
   method, or any error. A paid order goes to its landing page.
-- [x] `return_url` in the order: kept on the pass, the landing page after paying instead of
-  `/welcome` (`belfry_landing_url`). Only on origins in `belfry.api_cors_origins` (`*`: any https
+- [x] `return_url` in the order: kept on the pass; after paying the welcome page goes on there
+  (`belfry_landing_url`, next item). Only on origins in `belfry.api_cors_origins` (`*`: any https
   origin or http on localhost). Apps sign the payer in themselves afterwards (skill §9).
 - [x] `payment_methods` (code, name) in the offer and in the order, for apps that offer the choice.
+- [x] Signed in on the way back (walkthrough change 1, 2026-11-01): with a `return_url` the payer
+  still lands on `/welcome/<token>`, which waits for the activation (2 minutes at most), spends
+  the welcome secret by script and adds `belfry_return=<return_url>` to the authentik sign-in
+  link. authentik only follows a relative `?next=`, so an expression policy on the account-setup
+  flow's login stage (`belfry-account-setup-return`, re-evaluated in the browser's request) puts
+  the URL into the plan's `redirect`, which authentik follows at the end of the flow. Secret used
+  or stale, pass not ready, payment processing: straight to `return_url` without a session.
+  Onboarding test; smoke drives the flow and checks it ends at the return URL.
 - [x] Module 19.0.1.27.0; Odoo tests (return_url, fallback, Mollie with and without a method, the
   landing after the poll, a paid order); smoke 3b follows `payment_url`; skill §2 and §8.
 - [ ] Stripe on belfry2 still goes through Odoo's page (Stripe's Payment Element in Odoo's form).

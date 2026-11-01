@@ -139,8 +139,11 @@ has no checkout page of its own (Stripe): `payment_url` then opens `payment_link
 the invoice and a Pay button. In a browser app, open `payment_url` in the same tab and send
 `return_url` with the order.
 
-After paying, the visitor lands on `return_url`, or else on a welcome page that waits for their
-pass and then signs that browser in.
+After paying, the visitor comes to a welcome page that waits for their pass and signs that
+browser in to Open Source Village. With `return_url` this happens without a click, and the visitor
+then lands on `return_url`, signed in: the app's "Sign in with Open Source Village" (section 9)
+needs no e-mail code. If signing in is not possible (the pass is not ready within two minutes, a
+payment is still processing), they land on `return_url` without it.
 
 To follow up, call `GET` on the base URL again:
 - `payment` is `unpaid` (a fresh `payment_url` is included), `processing` (a bank transfer or
