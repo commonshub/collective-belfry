@@ -90,7 +90,8 @@ export async function flush() {
         await dropOutbox(item.localId)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
-        const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg)
+        const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
+        if (msg.startsWith('restricted')) noteRefusal(msg)
         await putOutbox({ ...item, tries: item.tries + 1, status: permanent ? 'failed' : 'queued', error: msg })
         if (!permanent) break // keep the order: retry this one before later items
       }
@@ -162,7 +163,7 @@ async function relay(target: Target): Promise<Relay> {
     setRelay(url, 'auth')
     r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
       .then(() => { setRelay(url, 'up'); resubscribe(target) })
-      .catch(() => setRelay(url, 'down'))
+      .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
   }
   r.onclose = () => {
     setRelay(url, 'down')
@@ -209,10 +210,16 @@ function resubscribe(target: Target) {
   subs[target]?.close()
   subs[target] = r.subscribe(filters(target), {
     onevent: (e) => addEvents([e]),
+    oneose: () => { if (target === 'groups' && status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' }) },
     onclose: (reason) => {
       if (reason.startsWith('auth-required')) return // _onauth resubscribes
+      noteRefusal(reason)
     },
   })
+}
+
+function noteRefusal(reason: string) {
+  if (/^(restricted|blocked)|pass|member/i.test(reason)) setStatus({ access: 'denied', accessReason: reason })
 }
 
 async function connect(target: Target) {

@@ -1,15 +1,18 @@
 // Belfry endpoints. Everything Belfry-specific lives here so the native apps
 // can share the same values.
 export const BELFRY = {
-  apps: 'https://apps.belfry.opensourcevillage.org',
+  domain: 'belfry.opensourcevillage.org',
+  apps: 'https://apps.belfry.opensourcevillage.org', // Keycast: sign-in, bunker
+  pass: 'https://pass.belfry.opensourcevillage.org', // /api/me, /api/invites
+  shop: 'https://shop.belfry.opensourcevillage.org', // invite pages and payment
   groupsRelay: 'wss://groups-relay.belfry.opensourcevillage.org', // NIP-29 (zooid)
   mainRelay: 'wss://relay.belfry.opensourcevillage.org', // profiles, calendar (rnostr)
   blossom: 'https://blossom.belfry.opensourcevillage.org',
   bunkerRelay: 'wss://bunker.belfry.opensourcevillage.org',
 }
 
-// "demo" runs everything on this device (any 6-digit code, any invite code),
-// "belfry" talks to Belfry. Switch with ?backend=belfry|demo (remembered).
+// "belfry" is the real thing. "demo" keeps everything on this device and is only
+// for automated tests: ?backend=demo (remembered until ?backend=belfry).
 export type Backend = 'demo' | 'belfry'
 
 export function getBackend(): Backend {
@@ -22,7 +25,7 @@ export function getBackend(): Backend {
     const v = localStorage.getItem('osv-backend')
     if (v === 'demo' || v === 'belfry') return v
   } catch { /* private mode */ }
-  return (import.meta.env.VITE_BACKEND as Backend) || 'demo'
+  return 'belfry'
 }
 
 export const CLIENT_TAG = ['client', 'osv-village']

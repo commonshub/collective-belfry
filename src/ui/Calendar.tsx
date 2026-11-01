@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { createEvent, deleteEvent, rsvp, type NewEvent } from '../core/actions'
-import { calendar, displayName, type CalEvent, type Rsvp } from '../core/model'
+import { createEvent, deleteEvent, openEventChat, rsvp, type NewEvent } from '../core/actions'
+import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, back, fmtDay, go, Sheet, StatusPill } from './common'
@@ -131,7 +131,12 @@ export function EventPage({ coord }: { coord: string }) {
         </div>
       </div>
       <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'Tasks'], ['files', 'Files']]} />
-      {tab === 'chat' && <Conversation id={e.groupId} />}
+      {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <Conversation id={e.groupId} /> : (
+        <div className="scroll"><div className="empty">
+          <p>This session has no chat yet.</p>
+          <button className="btn small" onClick={() => openEventChat(e)}>Open a chat for it</button>
+        </div></div>
+      ))}
       {tab !== 'chat' && (
         <div className="scroll">
           {tab === 'people' && <People e={e} />}

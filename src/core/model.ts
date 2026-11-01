@@ -68,7 +68,7 @@ export function groups(): Group[] {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ev-'), pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -242,7 +242,7 @@ export function calendar(): CalEvent[] {
       description: e.content,
       location: tag(e, 'location'),
       allDay, start, end: parse(tag(e, 'end')),
-      groupId: tag(e, 'h') || 'ev-' + d,
+      groupId: tag(e, 'h') || 'ws-' + d.replace(/^session-/, ''),
       rsvps: new Map([...(rsvps.get(coord) ?? new Map()).entries()].map(([p, v]) => [p, v.s])),
     })
   }

@@ -1,4 +1,6 @@
-import { LABEL_NS, TZ } from '../config'
+import { sha256 } from '@noble/hashes/sha256'
+import { bytesToHex } from '@noble/hashes/utils'
+import { BELFRY, LABEL_NS, TZ } from '../config'
 import { listIdFor, type CalEvent, type Rsvp } from './model'
 import { enqueue, me, newId } from './sync'
 
@@ -51,12 +53,14 @@ export interface NewEvent {
   end: string
 }
 
-// NIP-52 calendar event on the main relay, plus a NIP-29 group for its chat.
+// A session (Belfry skill, section 7): NIP-52 event on the community relay, linked both
+// ways to a NIP-29 group: session-<x> ↔ ws-<x>.
 export async function createEvent(n: NewEvent) {
-  const d = newId(6)
-  const groupId = 'ev-' + d
+  const x = newId(4)
+  const d = 'session-' + x
+  const groupId = 'ws-' + x
   const ts = (v: string) => String(Math.floor(new Date(v).getTime() / 1000))
-  const tags: string[][] = [['d', d], ['title', n.title], ['h', groupId]]
+  const tags: string[][] = [['d', d], ['title', n.title], ['h', groupId, BELFRY.groupsRelay]]
   if (n.allDay) {
     tags.push(['start', n.start.slice(0, 10)])
     if (n.end) tags.push(['end', n.end.slice(0, 10)])
@@ -65,16 +69,31 @@ export async function createEvent(n: NewEvent) {
     if (n.end) tags.push(['end', ts(n.end)], ['end_tzid', TZ])
   }
   if (n.location) tags.push(['location', n.location])
-  await enqueue('main', { kind: n.allDay ? 31922 : 31923, content: n.description, tags })
-  await createChannel(n.title, n.description || 'Chat for this event', groupId)
+  const kind = n.allDay ? 31922 : 31923
+  await createChannel(n.title, n.description.split('\n')[0] || 'Chat for this session', groupId)
+  await enqueue('main', { kind, content: n.description, tags })
+  const when = n.allDay ? n.start.slice(0, 10) : new Date(n.start).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
+  await enqueue('groups', {
+    kind: 9,
+    content: `📅 ${n.title} · ${when}${n.location ? ' · ' + n.location : ''}`,
+    tags: [['h', groupId], ['a', `${kind}:${me()}:${d}`, BELFRY.mainRelay]],
+  })
   return groupId
 }
 
-export const rsvp = (e: CalEvent, status: Rsvp) =>
-  enqueue('main', {
+/** A chat for an event that has none (e.g. the village programme): same ws- convention. */
+export const openEventChat = (e: CalEvent) => createChannel(e.title, 'Chat about this session', e.groupId)
+
+export const rsvp = (e: CalEvent, status: Rsvp) => {
+  const [, author, d] = e.coord.split(':')
+  return enqueue('main', {
     kind: 31925,
-    tags: [['d', 'rsvp-' + e.coord.split(':').slice(1).join('-')], ['a', e.coord], ...(e.ev.pending ? [] : [['e', e.ev.id]]), ['status', status], ['p', e.ev.pubkey]],
+    tags: [
+      ['d', bytesToHex(sha256(`${me()}:${author}:${d}`)).slice(0, 30)],
+      ['a', e.coord], ...(e.ev.pending ? [] : [['e', e.ev.id]]), ['status', status], ['p', author],
+    ],
   })
+}
 
 export const deleteEvent = (e: CalEvent) =>
   enqueue('main', { kind: 5, tags: [['a', e.coord], ['e', e.ev.id]] })

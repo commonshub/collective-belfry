@@ -1,28 +1,37 @@
 import { useEffect, useState } from 'react'
 import { nip19 } from 'nostr-tools'
-import { clearSession, driver, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
-import { kvGet, kvSet, wipe } from '../core/db'
-import { groups } from '../core/model'
-import { loadAll, outboxItems, useVersion } from '../core/store'
+import { belfrySignOut, clearSession, demoSession, fetchMembership, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
+import { wipe } from '../core/db'
+import { groups, profiles } from '../core/model'
+import { loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, start, stop } from '../core/sync'
-import { getBackend } from '../config'
+import { BELFRY, getBackend } from '../config'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { ChannelList, ChannelView } from './Chat'
-import { go, StatusPill, useRoute } from './common'
-import { CodeScreen, EmailScreen, MembershipScreen } from './Login'
+import { Avatar, go, StatusPill, useRoute } from './common'
+import { MembershipScreen, WelcomeScreen } from './Login'
 
-type Phase = { p: 'loading' } | { p: 'email' } | { p: 'code'; email: string } | { p: 'in'; s: Session } | { p: 'error'; msg: string }
+type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
 export function App() {
   const [phase, setPhase] = useState<Phase>({ p: 'loading' })
-  const [lastEmail, setLastEmail] = useState('')
   const backend = getBackend()
 
-  // Offline first: a stored session opens straight into the app, from cache.
   useEffect(() => {
     void (async () => {
-      setLastEmail((await kvGet<string>('lastEmail')) ?? '')
+      // back from the village sign-in page?
+      try {
+        const fresh = await finishSignIn()
+        if (fresh) {
+          await wipe() // a new account: don't show the previous one's cache
+          await saveSession(fresh)
+          return setPhase({ p: 'in', s: fresh })
+        }
+      } catch (e) {
+        return setPhase({ p: 'out', error: e instanceof Error ? e.message : String(e) })
+      }
+      // Offline first: a stored session opens straight into the app, from cache.
       let s = await loadSession()
       if (s && s.backend !== backend) {
         // switching demo <-> belfry: never mix the two event logs
@@ -30,40 +39,34 @@ export function App() {
         await wipe()
         s = undefined
       }
-      setPhase(s ? { p: 'in', s } : { p: 'email' })
+      setPhase(s ? { p: 'in', s } : { p: 'out' })
     })()
   }, [])
 
   const enter = async (s: Session) => {
     await saveSession(s)
-    await kvSet('lastEmail', s.email)
     setPhase({ p: 'in', s })
   }
 
   const signOut = async () => {
     if (outboxItems().length && !confirm(`${outboxItems().length} messages are not sent yet and will be lost. Sign out anyway?`)) return
+    const s = phase.p === 'in' ? phase.s : undefined
     stop()
     await clearSession()
     await wipe()
     location.hash = ''
+    if (s?.backend === 'belfry') return belfrySignOut(s)
     location.reload()
   }
 
   if (phase.p === 'loading') return null
-  if (phase.p === 'error') return <div className="screen login"><h2>Something went wrong</h2><p>{phase.msg}</p><button className="btn" onClick={signOut}>Sign out</button></div>
-  if (phase.p === 'email')
-    return <EmailScreen backend={backend} initial={lastEmail} onSent={(email) => setPhase({ p: 'code', email })} />
-  if (phase.p === 'code')
-    return <CodeScreen backend={backend} email={phase.email} onBack={() => setPhase({ p: 'email' })} onVerified={enter} />
-  if (phase.s.membership.status !== 'active')
-    return <MembershipScreen session={phase.s} onUpdate={enter} onSignOut={signOut} />
-  return <Village session={phase.s} onSignOut={signOut} onError={(msg) => setPhase({ p: 'error', msg })} onSession={enter} />
+  if (phase.p === 'out') return <WelcomeScreen backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
+  return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} onSession={enter} />
 }
 
-function Village({ session, onSignOut, onError, onSession }: {
-  session: Session; onSignOut: () => void; onError: (m: string) => void; onSession: (s: Session) => void
-}) {
+function Village({ session, onSignOut, onSession }: { session: Session; onSignOut: () => void; onSession: (s: Session) => void }) {
   const [ready, setReady] = useState(false)
+  const [error, setError] = useState('')
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -73,22 +76,33 @@ function Village({ session, onSignOut, onError, onSession }: {
         if (cancelled) return
         await start(signer, { localOnly: session.backend === 'demo' })
         setReady(true)
-        // membership can change (revoked, renewed): check quietly when online
+        // where the key stands; quietly, the cached answer is fine offline
         if (session.backend === 'belfry' && navigator.onLine) {
-          driver('belfry').refreshMembership(session)
-            .then((m) => m.status !== session.membership.status && onSession({ ...session, membership: m }))
-            .catch(() => { /* offline or Belfry down: keep the cached status */ })
+          const m = await fetchMembership(signer)
+          if (m && !cancelled && (m.status !== session.membership.status || m.pass !== session.membership.pass)) onSession({ ...session, membership: m })
         }
       } catch (e) {
-        onError(e instanceof Error ? e.message : String(e))
+        setError(e instanceof Error ? e.message : String(e))
       }
     })()
-    return () => { cancelled = true }
-  }, [session])
+    return () => { cancelled = true; stop() }
+  }, [session.bunkerUrl, session.demoSecret])
 
   const route = useRoute()
   useVersion()
-  if (!ready) return null
+  if (error)
+    return (
+      <div className="screen login">
+        <h2>Can't reach your village key</h2>
+        <p>{error}</p>
+        <button className="btn" onClick={() => location.reload()}>Try again</button>
+        <div style={{ height: 12 }} />
+        <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+      </div>
+    )
+  if (!ready) return <div className="screen login"><p>Opening the village…</p></div>
+  if (session.membership.status === 'pending' || status.access === 'denied')
+    return <MembershipScreen session={session} reason={status.accessReason} onRetry={() => location.reload()} onSignOut={onSignOut} />
 
   const [section = 'c', a, b] = route
   let view
@@ -101,7 +115,6 @@ function Village({ session, onSignOut, onError, onSession }: {
     view = b === 'info' ? <ChannelInfo id={id} /> : <ChannelView id={id} />
   }
   const tab = section === 'cal' ? 'cal' : section === 'me' ? 'me' : 'chat'
-  // the composer sits above the tabs; hide tabs while inside a conversation's sub-pages
   return (
     <div className="screen">
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{view}</div>
@@ -125,36 +138,36 @@ addEventListener('hashchange', () => {
 function Me({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const m = session.membership
   const npub = me() ? nip19.npubEncode(me()) : ''
+  const p = profiles().get(me())
   return (
     <div className="screen">
       <div className="topbar"><h1 style={{ paddingLeft: 8 }}>Me</h1><StatusPill /></div>
       <div className="scroll pad">
-        <div className="card">
-          <div className="hint">Signed in as</div>
-          <div style={{ fontWeight: 600 }}>{session.email}</div>
+        <div className="card row" style={{ gap: 12 }}>
+          <Avatar pubkey={me()} size={48} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 650 }}>{p?.name ?? session.email ?? 'Villager'}</div>
+            <div className="hint" style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{m.nip05 ?? p?.nip05 ?? ''}</div>
+          </div>
         </div>
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div>
               <div className="hint">Pass</div>
-              <div style={{ fontWeight: 600 }}>{m.pass ?? 'Open Source Village 2027'}</div>
-              {m.member && <div className="hint">{m.member}</div>}
+              <div style={{ fontWeight: 600 }}>{m.pass ?? 'Open Source Village'}</div>
             </div>
-            <span className="badge lime">Active</span>
+            <span className="badge lime">{status.access === 'ok' || m.status === 'active' ? 'Active' : 'Checking…'}</span>
           </div>
-          <a className="btn ghost" style={{ marginTop: 12, textDecoration: 'none' }} href="https://pass.belfry.opensourcevillage.org/me" target="_blank" rel="noreferrer">Show my pass at the door</a>
+          <a className="btn ghost" style={{ marginTop: 12, textDecoration: 'none' }} href={`${BELFRY.pass}/me`} target="_blank" rel="noreferrer">Show my pass at the door</a>
         </div>
         <div className="card">
           <div className="hint">Your village key (Nostr)</div>
           <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, wordBreak: 'break-all' }}>{npub}</div>
           <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>
-            {session.backend === 'demo' ? 'Demo key, kept on this phone only.' : 'Belfry keeps this key safe for you; this app asks it to sign.'}
+            {session.backend === 'demo' ? 'Demo key, kept on this device only.' : 'The village keeps this key safe for you; this app asks it to sign.'}
           </div>
         </div>
         <button className="btn ghost" onClick={onSignOut}>Sign out</button>
-        <p className="hint" style={{ marginTop: 16, fontSize: 13 }}>
-          Backend: {session.backend}. {session.backend === 'demo' ? <a href="?backend=belfry">Switch to Belfry</a> : <a href="?backend=demo">Switch to demo</a>} (signs you out).
-        </p>
       </div>
     </div>
   )

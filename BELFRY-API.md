@@ -1,57 +1,24 @@
-# What the village app needs from Belfry
+# The app on Belfry
 
-The app runs today in **demo** mode (everything on the phone). To run against Belfry
-(`?backend=belfry`) it needs the endpoints below. Everything else it uses already exists.
+Sign-in follows the Belfry skill (`commonshub/collective-belfry`, `skills/open-source-village/SKILL.md`):
 
-## Already there (found by reading Belfry's own apps, 2026-10-31)
+- **Section 9, "Sign in with Open Source Village"**: OAuth code + PKCE against Keycast
+  (`https://apps.belfry.opensourcevillage.org`), client id `osv-village-app`, redirect back to
+  the app's own page. Belfry's sign-in page asks for the pass's e-mail and the mailed 6-digit
+  code; the token response's `bunker_url` signs for the participant's key (policy
+  `belfry-event`). Sign-out revokes the token and ends the Keycast session.
+- **Membership**: `GET https://pass.…/api/me` (NIP-98). Belfry answers browsers only from
+  origins in `API_CORS_ORIGINS`; until `https://xavierdamman.com` (and later the app's own
+  origin) is listed, the app falls back to the relays, which refuse keys without an active pass,
+  and shows "Membership pending" then.
+- **Invite codes** open the shop's invite page (`https://shop.…/belfry/invite/<code>`), which
+  shows the passes and takes the payment; the participant then signs in.
+- **Sessions** (section 7): kind 31923 `d=session-<x>` on the community relay with
+  `["h", "ws-<x>", <groups relay>]`, a NIP-29 group `ws-<x>`, a first message in it with the
+  session's `a` tag. RSVP `d` = first 30 hex of SHA-256 of `<me>:<author>:<d>`.
 
-| What | Where | Used for |
-|---|---|---|
-| NIP-29 groups relay (zooid), NIP-42 auth, members = active passes | `wss://groups-relay.belfry.opensourcevillage.org` | channels, messages (kind 9), tasks (2100–2103), member labels (1985) |
-| Main relay (rnostr), NIP-42 | `wss://relay.belfry.opensourcevillage.org` | profiles (0), calendar (31922/31923), RSVPs (31925) |
-| Blossom, BUD-02 upload with kind 24242 auth | `https://blossom.belfry.opensourcevillage.org/upload` | photos and files |
-| NIP-46 bunker holding members' keys | `wss://bunker.belfry.opensourcevillage.org` | signing |
-| Browser OAuth (PKCE) returning `{ bunker_url, refresh_token }` | `apps.belfry…/api/oauth/authorize`, `/api/oauth/token`, client ids `belfry-chat`, `belfry-calendar`, scope `policy:belfry-event` | how Belfry's apps sign in today |
+## Still needed from Belfry
 
-## Missing: in-app e-mail + code sign-in
-
-The OAuth flow sends the user to Belfry's web page, which can't give the app its own
-e-mail and 6-digit screens (and is awkward in a native app). Proposed, under
-`https://apps.belfry.opensourcevillage.org`, CORS open to the app's origins:
-
-```
-POST /api/app/login/start   { email, client_id: "osv-village" }              → 204
-     Sends the same e-mail as today: link + 6-digit code, 10 minutes. Always 204 (no account enumeration).
-
-POST /api/app/login/verify  { email, code, client_id, client_pubkey }        → 200
-     { token, membership, bunker_url? }
-     token:       opaque app token (long-lived, revocable), for the calls below
-     membership:  { status: "active" | "pending" | "revoked", pass?: "Two weeks · 25 Jan – 5 Feb 2027", member?: "OSV-0042" }
-     bunker_url:  bunker://<signer>?relay=wss://bunker.belfry…&secret=…  only when status is active;
-                  authorised for client_pubkey with the same policy as policy:belfry-event
-     400 { error: "That code is wrong or expired." }   (rate-limit per e-mail and per IP)
-
-GET  /api/app/membership    Authorization: Bearer <token>                    → { membership }
-
-POST /api/app/invite        Authorization: Bearer <token>  { code }          → { membership, bunker_url? }
-     Redeems an invite code for this e-mail. If the invite needs payment first, return
-     { membership: { status: "pending" }, pay_url } and the app opens pay_url.
-
-POST /api/app/logout        Authorization: Bearer <token>                    → 204 (revokes token + bunker grant)
-```
-
-"Pending" means: signed in with an e-mail that has no paid pass (yet). Today Belfry only
-creates accounts once a pass is paid, so this needs a lightweight "e-mail known, no pass"
-state, or `verify` returns 403 `{ status: "none" }` and the app shows the invite screen.
-
-## Signing policy
-
-The bunker policy for this client must allow kinds:
-`9, 5, 9007, 9002, 1985, 2100, 2101, 2102, 2103, 31922, 31923, 31925, 22242 (relay auth), 24242 (Blossom auth)`.
-
-## Questions
-
-- Can participants create groups (kind 9007) on the groups relay? The Groups app says "anyone can open one".
-- Does zooid accept the tasklist kinds (2100–2103) and labels (1985) with an `h` tag?
-- Should a calendar event's chat be a NIP-29 group `ev-<d>` (what the app does) or something Belfry creates?
-- Push notifications: does Belfry plan a push bridge (Flotilla's `VITE_PUSH_SERVER` is empty)?
+1. `API_CORS_ORIGINS` to include the app's origin (for `/api/me` and later `/api/invites`).
+2. Kinds **2100–2103** (tasklist.sh) in the `belfry-event` policy (`infra/keycast/policy.sql`),
+   and the groups relay accepting them with an `h` tag. Until then channel tasks can't be signed.

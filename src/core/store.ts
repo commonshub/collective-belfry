@@ -12,7 +12,13 @@ const outbox = new Map<string, OutboxItem>()
 let version = 0
 const listeners = new Set<() => void>()
 
-export const status = { online: navigator.onLine, relays: {} as Record<string, 'up' | 'down' | 'auth'> }
+export const status = {
+  online: navigator.onLine,
+  relays: {} as Record<string, 'up' | 'down' | 'auth'>,
+  // the relays only let in keys with an active pass: 'denied' means no pass (yet)
+  access: 'unknown' as 'unknown' | 'ok' | 'denied',
+  accessReason: '',
+}
 
 function bump() {
   version++
