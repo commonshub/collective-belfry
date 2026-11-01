@@ -777,6 +777,7 @@ Stripe: a test card would have activated a real pass).
 - Open: belfry2 books at tofauti's Odoo as the stand-in; XL Collective's own ids, user and key;
   the payment page still shows Belfry's internal invoice number as the reference.
 
+
 ## 3zr. Village Notes signs in with e-mail and code; sign-in without "Stay signed in?" — built 2026-10-31
 
 User: sign in to Village Notes with the e-mail and the one-time code; signing out and in again should ask again; the token count showed 0 with 50 tokens; no yes/no question about staying signed in; the Keycast page for an outside app was white on white; after signing out, back to the app.
@@ -797,6 +798,30 @@ User: Village Notes should create an invite code; describe it in the skill.
 - [x] `POST /api/invites` takes `email` as optional; the agent command's `invite` without an address makes a code. Skill section 6 updated, new section 10 (an invite code from an app).
 - [x] Village Notes: "Invite someone" for pass holders: a code (copy the code, a `/?invite=` link into the app or the shop link) or an invite mailed to an address; the holder's invites with their state, revoke for open ones.
 - Checks: Odoo 112 tests (1 new); onboarding 279 (1 new); `agentcheck` (smoke 6v) makes a code, reads its offer at the shop and revokes it; local smoke 234 ok. The Village Notes card itself was not tried in a browser.
+
+## 3zt. Straight to the checkout, back to the app (pass order API) — built 2026-11-01
+
+From the Village Notes walkthrough on belfry.tofauti.net: the order's `payment_url` opened Odoo's
+invoice with a Pay dialog (pick a method, press Pay) before Mollie's checkout, and after paying
+everyone landed on Belfry's welcome page, not back in the app.
+
+- [x] `payment_url` is `shop.<domain>/belfry/pay/<invite token>` (`controllers/pay.py`): in the
+  payer's browser it creates the transaction for the order's invoice, monitors it in that session
+  (so `/payment/status` polls and forwards) and redirects to Mollie's checkout. Without
+  `?method=<code>`, Mollie shows its own list (the method is left out of Mollie's payment request
+  and taken from Mollie at the webhook). Odoo's payment link stays as `payment_link` and is the
+  fallback: no provider with a checkout of its own (Stripe pays inside Odoo's page), an unknown
+  method, or any error. A paid order goes to its landing page.
+- [x] `return_url` in the order: kept on the pass, the landing page after paying instead of
+  `/welcome` (`belfry_landing_url`). Only on origins in `belfry.api_cors_origins` (`*`: any https
+  origin or http on localhost). Apps sign the payer in themselves afterwards (skill §9).
+- [x] `payment_methods` (code, name) in the offer and in the order, for apps that offer the choice.
+- [x] Module 19.0.1.27.0; Odoo tests (return_url, fallback, Mollie with and without a method, the
+  landing after the poll, a paid order); smoke 3b follows `payment_url`; skill §2 and §8.
+- [ ] Stripe on belfry2 still goes through Odoo's page (Stripe's Payment Element in Odoo's form).
+  Going straight to Stripe would need Stripe Checkout Sessions next to Odoo's Stripe module.
+- [ ] The invite page (`/belfry/invite/<token>`) still redirects to Odoo's payment link; it could
+  use `/belfry/pay` too.
 
 ## 4. Next
 

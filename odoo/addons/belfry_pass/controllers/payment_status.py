@@ -1,5 +1,6 @@
 """After paying for a pass, the payer lands on Belfry's welcome page (pass.<domain>/welcome/…),
-which waits for the activation and signs the browser in, instead of on Odoo's invoice page."""
+which waits for the activation and signs the browser in, or back in the app that ordered the pass
+(its ``return_url``), instead of on Odoo's invoice page."""
 
 from odoo import http
 from odoo.http import request
@@ -17,7 +18,7 @@ class BelfryPaymentPostProcessing(PaymentPostProcessing):
         tx = self._get_monitored_transaction()
         belfry_pass = request.env['belfry.pass'].sudo().search(
             [('invoice_id', 'in', tx.invoice_ids.ids)], limit=1) if tx else None
-        url = belfry_pass.belfry_welcome_url() if belfry_pass else False
+        url = belfry_pass.belfry_landing_url() if belfry_pass else False
         if url:
             values['landing_route'] = url
         return values

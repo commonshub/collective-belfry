@@ -111,6 +111,10 @@ Optional fields:
   `["method", "POST"]`, signed with that key in the visitor's own signer no more than 10 minutes
   before the order. Without these fields Belfry creates and keeps a key for the visitor, which
   they can replace with their own later. An app that holds the visitor's key: see section 8.
+- `return_url`: for an app the visitor uses in the browser. After paying, the visitor lands
+  there instead of on Belfry's welcome page, for example `https://your.app/?invite=<code>`. It
+  must be on an origin the Belfry lists for its API (`API_CORS_ORIGINS`; with `*`, any `https`
+  origin or `http://localhost`), otherwise the order is refused with `422`.
 
 ### After ordering
 
@@ -122,12 +126,21 @@ Answer `201`:
   "payment": "unpaid",
   "pass": {"tier": "week", "name": "Week pass"},
   "invoice": {"number": "INV/2026/00042", "amount_total": 80.0, "amount_tax": 13.88, "currency": "EUR"},
-  "payment_url": "https://shop.<domain>/payment/pay?..."
+  "payment_url": "https://shop.<domain>/belfry/pay/<token>",
+  "payment_link": "https://shop.<domain>/payment/pay?...",
+  "payment_methods": [{"code": "card", "name": "Card"}, {"code": "bancontact", "name": "Bancontact"}]
 }
 ```
 
-Give the visitor `payment_url` together with the amount. After paying they land on a welcome
-page that waits for their pass and then signs that browser in.
+Give the visitor `payment_url` together with the amount. It goes straight to the payment
+provider's checkout, where the visitor picks how to pay. If your app lets them pick already, add
+`?method=<code>` with a code from `payment_methods`. `payment_methods` is empty when the provider
+has no checkout page of its own (Stripe): `payment_url` then opens `payment_link`, Odoo's page with
+the invoice and a Pay button. In a browser app, open `payment_url` in the same tab and send
+`return_url` with the order.
+
+After paying, the visitor lands on `return_url`, or else on a welcome page that waits for their
+pass and then signs that browser in.
 
 To follow up, call `GET` on the base URL again:
 - `payment` is `unpaid` (a fresh `payment_url` is included), `processing` (a bank transfer or
@@ -466,8 +479,10 @@ app on the participant's own device. Then:
 - **Join with it.** Order the pass with `nostr_pubkey` and `nostr_proof` (section 2): the proof is
   a kind-27235 event signed with the new key, tags `["u", "<the full order URL>"]` and
   `["method", "POST"]`, no more than 10 minutes old. The key must not belong to anyone else.
-- **Wait for the pass.** After payment, poll `GET /api/me` (section 6) until `member` is true;
-  only then do the relays let the key in (NIP-42 AUTH, signed by the app with the key).
+- **Wait for the pass.** Order with `return_url` (section 2) so the payer comes back to the app.
+  After payment, poll `GET /api/me` (section 6) until `member` is true; only then do the relays
+  let the key in (NIP-42 AUTH, signed by the app with the key). A key Belfry keeps is reached by
+  signing in (section 9) once the pass is active.
 - **Belfry can't recover this key.** The mnemonic is the backup; tell the participant. A lost
   mnemonic means a lost key (the pass stays in Odoo; ask a steward).
 - **Signing in to Belfry's own apps** (chat, calendar, wallet) then goes through the app's own

@@ -28,6 +28,10 @@ class BelfryPass(models.Model):
     welcome_token = fields.Char(copy=False, readonly=True, index=True, groups='belfry_pass.group_admin',
                                 help="Secret of the page the payer lands on after paying (pass.<domain>/welcome/<token>).")
     welcome_used_at = fields.Datetime(copy=False, readonly=True)
+    # an app that ordered the pass through the API (controllers/api.py) gets the payer back
+    return_url = fields.Char(copy=False, readonly=True, groups='belfry_pass.group_admin',
+                             help="Where the payer lands after paying, instead of the welcome page: "
+                                  "the app that placed the order.")
 
     @api.model_create_multi
     def create(self, vals_list):
@@ -40,6 +44,11 @@ class BelfryPass(models.Model):
         base = (self.env['ir.config_parameter'].sudo().get_param('belfry.public_url') or '').rstrip('/')
         token = self.sudo().welcome_token
         return "%s/welcome/%s" % (base, token) if base and token else False
+
+    def belfry_landing_url(self):
+        """Where the payer goes after paying: the ordering app, or Belfry's welcome page."""
+        self.ensure_one()
+        return self.sudo().return_url or self.belfry_welcome_url()
 
     @api.model
     def _belfry_by_token(self, kind, token):

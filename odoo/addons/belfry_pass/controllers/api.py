@@ -4,6 +4,7 @@ pass, its sign-in link and certificate go to the attendee's e-mail, never to the
 
     GET  /belfry/api/invites/<token>              passes and prices, or the order waiting for payment
     POST /belfry/api/invites/<token>/order        order a pass: 201 with the invoice and payment link
+    GET  /belfry/pay/<token>[?method=<code>]      the payment_url: straight to the provider (pay.py)
     POST /belfry/api/invites/<token>/start-over   release an unpaid order, the invite is open again
 
 Errors are ``{"error": code, "message": text}``: 404 ``not_found``, 410 ``used`` / ``expired`` /
@@ -11,15 +12,19 @@ Errors are ``{"error": code, "message": text}``: 404 ``not_found``, 410 ``used``
 ``invalid_json``, 422 ``invalid`` (the message says what to fix).
 
 Pages on the origins in ``belfry.api_cors_origins`` (comma separated, or ``*``; bootstrap sets it
-from API_CORS_ORIGINS) may call the API from the browser; it takes no cookies."""
+from API_CORS_ORIGINS) may call the API from the browser; it takes no cookies. An order's
+``return_url`` (where the payer lands after paying, instead of Belfry's welcome page) must be on
+one of those origins; with ``*``, any https origin (or http on localhost)."""
 
 import json
 import logging
+from urllib.parse import urlsplit
 
 from odoo import _, http
 from odoo.http import request
 
 from .invite import ERROR_STATUS, InviteCheckout, InviteFormError
+from .pay import REDIRECT_PROVIDERS
 
 _logger = logging.getLogger(__name__)
 
@@ -58,8 +63,11 @@ class BelfryPassApi(InviteCheckout, http.Controller):
             return self._error('invalid_json', message=_("Send the order as a JSON object."), status=400)
         try:
             form = self._order_form(body)
+            return_url = self._return_url(body.get('return_url'))
             with request.env.cr.savepoint():
                 link = self._checkout(invite, form, path=API_PATH % token + '/order')
+                if return_url:
+                    invite.sudo().pass_id.return_url = return_url
         except InviteFormError as exc:
             return self._error('invalid', message=str(exc), status=422)
         invite.invalidate_recordset()
@@ -108,8 +116,11 @@ class BelfryPassApi(InviteCheckout, http.Controller):
             'skill_url': self._public_url() + '/skill.md',
             'order_fields': {
                 'required': ['tier or product_id', 'name', 'email'],
-                'optional': ['company_name', 'vat', 'promo_code', 'nostr_pubkey', 'nostr_proof'],
+                'optional': ['company_name', 'vat', 'promo_code', 'nostr_pubkey', 'nostr_proof',
+                             'return_url'],
             },
+            'payment_methods': self._payment_methods(request.env.ref('base.public_partner').sudo(),
+                                                     currency),
         }
 
     def _public_url(self):
@@ -121,6 +132,7 @@ class BelfryPassApi(InviteCheckout, http.Controller):
         invoice = belfry_pass.invoice_id
         values = {
             'state': 'reserved',
+            'payment_methods': self._payment_methods(invoice.partner_id, invoice.currency_id) if invoice else [],
             'payment': payment,
             'pass': {'tier': belfry_pass.tier, 'name': belfry_pass.tier_name},
             'invoice': {
@@ -130,10 +142,42 @@ class BelfryPassApi(InviteCheckout, http.Controller):
                 'currency': invoice.currency_id.name,
             } if invoice else None,
             'payment_url': None,
+            'payment_link': None,
         }
         if payment == 'unpaid':
-            values['payment_url'] = link or invite.belfry_payment_link()
+            values['payment_url'] = '%s/belfry/pay/%s' % (invite.get_base_url().rstrip('/'), invite.token)
+            # Odoo's own payment link (the invoice with a Pay dialog), where payment_url falls back to
+            values['payment_link'] = link or invite.belfry_payment_link()
         return values
+
+    def _payment_methods(self, partner, currency):
+        """Methods ``payment_url`` can go straight to (``?method=<code>``), for an app that offers
+        the choice itself; empty when the provider has no checkout page of its own (Stripe)."""
+        Provider = request.env['payment.provider'].sudo()
+        providers = Provider._get_compatible_providers(
+            request.env.company.id, partner.id, 0.0, currency_id=currency.id,
+        ).filtered(lambda p: p.code in REDIRECT_PROVIDERS)
+        methods = request.env['payment.method'].sudo()._get_compatible_payment_methods(
+            providers.ids, partner.id, currency_id=currency.id) if providers else []
+        return [{'code': m.code, 'name': m.name} for m in methods]
+
+    def _return_url(self, value):
+        """The order's ``return_url``, checked: an absolute http(s) URL on an origin that may call
+        the API. Raises InviteFormError otherwise."""
+        if value is None or value == '':
+            return False
+        if not isinstance(value, str) or len(value) > 2000:
+            raise InviteFormError(_("return_url must be a URL."))
+        parts = urlsplit(value.strip())
+        if parts.scheme not in ('http', 'https') or not parts.hostname or '@' in parts.netloc:
+            raise InviteFormError(_("return_url must be an http(s) URL."))
+        origin = '%s://%s' % (parts.scheme, parts.netloc.lower())
+        allowed = self._allowed_origins()
+        local = parts.hostname in ('localhost', '127.0.0.1')
+        if origin not in allowed and not ('*' in allowed and (parts.scheme == 'https' or local)):
+            raise InviteFormError(_(
+                "return_url must be on an origin that may use the API (%s).", ', '.join(allowed) or _("none")))
+        return value.strip()
 
     def _order_form(self, body):
         """The invite page's form from a JSON order: ``tier`` picks the pass by its tier,
@@ -160,9 +204,8 @@ class BelfryPassApi(InviteCheckout, http.Controller):
     def _cors_headers(self):
         """CORS for the calling page's origin when ``belfry.api_cors_origins`` allows it."""
         origin = request.httprequest.headers.get('Origin')
-        param = request.env['ir.config_parameter'].sudo().get_param('belfry.api_cors_origins') or ''
-        allowed = [o.strip().rstrip('/') for o in param.split(',') if o.strip()]
-        if not origin or not ('*' in allowed or origin.rstrip('/') in allowed):
+        allowed = self._allowed_origins()
+        if not origin or not ('*' in allowed or origin.rstrip('/').lower() in allowed):
             return []
         return [
             ('Access-Control-Allow-Origin', '*' if '*' in allowed else origin),
@@ -171,6 +214,10 @@ class BelfryPassApi(InviteCheckout, http.Controller):
             ('Access-Control-Max-Age', '600'),
             ('Vary', 'Origin'),
         ]
+
+    def _allowed_origins(self):
+        param = request.env['ir.config_parameter'].sudo().get_param('belfry.api_cors_origins') or ''
+        return [o.strip().rstrip('/').lower() for o in param.split(',') if o.strip()]
 
     def _preflight(self):
         headers = self._cors_headers()

@@ -158,6 +158,13 @@ API_CODE=$(curl -sS -o "$API_BODY" -w '%{http_code}' -X POST "$API_URL/order" -H
 [[ "$API_CODE" == 201 && "$(jq -r '.state + " " + .payment' "$API_BODY")" == "reserved unpaid" && "$(jq -r .payment_url "$API_BODY")" == http* ]] \
   && ok "POST order -> 201, invoice $(jq -r .invoice.number "$API_BODY") $(jq -r .invoice.amount_total "$API_BODY"), payment link" \
   || bad "POST order -> $API_CODE $(head -c 300 "$API_BODY")"
+# payment_url goes straight to the provider's checkout (Mollie) or falls back to Odoo's payment link
+PAY_TO=$(curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' "$(jq -r .payment_url "$API_BODY")")
+case "$PAY_TO" in
+  "303 https://www.mollie.com/"*) ok "payment_url -> Mollie's checkout (${PAY_TO#303 })" ;;
+  "303 $(jq -r .payment_link "$API_BODY")") ok "payment_url -> Odoo's payment link (no provider with its own checkout)" ;;
+  *) bad "payment_url -> $PAY_TO" ;;
+esac
 API_AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$API_URL/order" -H 'Content-Type: application/json' \
   --data-binary '{"tier":"day","name":"Twice","email":"twice@belfry.local"}')
 [[ "$API_AGAIN" == 409 ]] && ok "a second order on the same invite -> 409" || bad "second order -> $API_AGAIN"

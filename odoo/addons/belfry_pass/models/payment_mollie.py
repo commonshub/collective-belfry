@@ -54,6 +54,14 @@ class PaymentTransaction(models.Model):
              "while a chargeback is open and gives it back when it is reversed.",
     )
 
+    def _mollie_prepare_payment_request_payload(self):
+        """Without a payment method picked (/belfry/pay without ``method``), Mollie's checkout
+        shows its own list; the method Mollie reports at the webhook replaces the placeholder."""
+        payload = super()._mollie_prepare_payment_request_payload()
+        if self.env.context.get('belfry_any_method'):
+            payload.pop('method', None)
+        return payload
+
     def _send_refund_request(self):
         """Send a refund to Mollie (POST /payments/<id>/refunds)."""
         if self.provider_code != 'mollie':
