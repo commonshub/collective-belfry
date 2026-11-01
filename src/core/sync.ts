@@ -2,7 +2,7 @@ import { Relay, type Subscription } from 'nostr-tools/relay'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { BELFRY, CLIENT_TAG } from '../config'
+import { ACCESS_KINDS, BELFRY, CLIENT_TAG } from '../config'
 import type { Signer } from './auth'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { addEvents, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
@@ -10,7 +10,7 @@ import { addEvents, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRela
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
 
-export const KINDS_GROUPS = [39000, 39001, 39002, 9, 9007, 9002, 9008, 5, 1985, 2100, 2101, 2102, 2103]
+export const KINDS_GROUPS = [39000, 39001, 39002, 9, 9007, 9002, 9008, 5, 1985, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
 export const KINDS_MAIN = [0, 31922, 31923, 31925, 5]
 
 const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.mainRelay }
@@ -22,6 +22,11 @@ let lastCreatedAt = 0
 
 export function me() {
   return signer?.pubkey ?? ''
+}
+
+export function currentSigner() {
+  if (!signer) throw new Error('Not signed in.')
+  return signer
 }
 
 // created_at must grow per client so quick sequences (claim → done) fold in order
@@ -192,6 +197,31 @@ async function publish(target: Target, ev: NostrEvent) {
     if (!msg.startsWith('auth-required')) throw e
     await r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
     await r.publish(ev)
+  }
+}
+
+/** Publish at once, outside the outbox (gift wraps: they must not wait behind refused events). */
+export async function publishNow(target: Target, ev: NostrEvent) {
+  if (localOnly) throw new Error('Not in demo mode.')
+  await publish(target, ev)
+}
+
+/** One-off query up to EOSE. */
+export async function queryOnce(target: Target, filter: Filter, timeoutMs = 8000): Promise<NostrEvent[]> {
+  const r = await relay(target)
+  return new Promise((resolve) => {
+    const out: NostrEvent[] = []
+    const done = () => { clearTimeout(timer); sub.close(); resolve(out) }
+    const timer = setTimeout(done, timeoutMs)
+    const sub = r.subscribe([filter], { onevent: (e) => out.push(e), oneose: done, onclose: () => resolve(out) })
+  })
+}
+
+/** Ask the relays again whether this key is in (after a request, an invite code or an approval). */
+export function recheckAccess() {
+  for (const t of ['groups', 'main'] as Target[]) {
+    if (relays[t]?.connected) resubscribe(t)
+    else void connect(t)
   }
 }
 

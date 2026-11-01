@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react'
 import { nip19 } from 'nostr-tools'
-import { belfrySignOut, clearSession, demoSession, fetchMembership, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
+import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
+import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, start, stop } from '../core/sync'
 import { BELFRY, getBackend } from '../config'
+import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { ChannelList, ChannelView } from './Chat'
 import { Avatar, go, StatusPill, useRoute } from './common'
-import { MembershipScreen, WelcomeScreen } from './Login'
+import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
@@ -61,12 +63,14 @@ export function App() {
 
   if (phase.p === 'loading') return null
   if (phase.p === 'out') return <WelcomeScreen backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
-  return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} onSession={enter} />
+  return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} />
 }
 
-function Village({ session, onSignOut, onSession }: { session: Session; onSignOut: () => void; onSession: (s: Session) => void }) {
+function Village({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
+  const [, setTick] = useState(0)
+  useEffect(() => onAccessInfo(() => setTick((t) => t + 1)), [])
   useEffect(() => {
     let cancelled = false
     void (async () => {
@@ -76,11 +80,8 @@ function Village({ session, onSignOut, onSession }: { session: Session; onSignOu
         if (cancelled) return
         await start(signer, { localOnly: session.backend === 'demo' })
         setReady(true)
-        // where the key stands; quietly, the cached answer is fine offline
-        if (session.backend === 'belfry' && navigator.onLine) {
-          const m = await fetchMembership(signer)
-          if (m && !cancelled && (m.status !== session.membership.status || m.pass !== session.membership.pass)) onSession({ ...session, membership: m })
-        }
+        // the village's read-only state (admins, whether it needs a first admin)
+        if (session.backend === 'belfry') void loadAccessInfo()
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       }
@@ -90,6 +91,7 @@ function Village({ session, onSignOut, onSession }: { session: Session; onSignOu
 
   const route = useRoute()
   useVersion()
+  useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   if (error)
     return (
       <div className="screen login">
@@ -101,8 +103,8 @@ function Village({ session, onSignOut, onSession }: { session: Session; onSignOu
       </div>
     )
   if (!ready) return <div className="screen login"><p>Opening the village…</p></div>
-  if (session.membership.status === 'pending' || status.access === 'denied')
-    return <MembershipScreen session={session} reason={status.accessReason} onRetry={() => location.reload()} onSignOut={onSignOut} />
+  if (status.access === 'denied')
+    return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
 
   const [section = 'c', a, b] = route
   let view
@@ -110,11 +112,12 @@ function Village({ session, onSignOut, onSession }: { session: Session; onSignOu
   else if (section === 'cal' && a) view = <EventPage coord={a} />
   else if (section === 'cal') view = <CalendarList />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
+  else if (section === 'admin') view = <Admin sub={a} id={b} />
   else {
     const id = a ?? groups()[0]?.id ?? 'general'
     view = b === 'info' ? <ChannelInfo id={id} /> : <ChannelView id={id} />
   }
-  const tab = section === 'cal' ? 'cal' : section === 'me' ? 'me' : 'chat'
+  const tab = section === 'cal' ? 'cal' : section === 'me' || section === 'admin' ? 'me' : 'chat'
   return (
     <div className="screen">
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{view}</div>
@@ -137,6 +140,8 @@ addEventListener('hashchange', () => {
 
 function Me({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
   const m = session.membership
+  const g = myGrant()
+  const waiting = isAdmin() ? accessState().pending.length : 0
   const npub = me() ? nip19.npubEncode(me()) : ''
   const p = profiles().get(me())
   return (
@@ -153,13 +158,24 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div>
-              <div className="hint">Pass</div>
-              <div style={{ fontWeight: 600 }}>{m.pass ?? 'Open Source Village'}</div>
+              <div className="hint">{g ? 'Access' : 'Pass'}</div>
+              <div style={{ fontWeight: 600 }}>
+                {g ? `${g.role}${g.until ? ' · until ' + new Date(g.until * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : ''}` : m.pass ?? 'Open Source Village'}
+              </div>
             </div>
             <span className="badge lime">{status.access === 'ok' || m.status === 'active' ? 'Active' : 'Checking…'}</span>
           </div>
-          <a className="btn ghost" style={{ marginTop: 12, textDecoration: 'none' }} href={`${BELFRY.pass}/me`} target="_blank" rel="noreferrer">Show my pass at the door</a>
+          {!g && <a className="btn ghost" style={{ marginTop: 12, textDecoration: 'none' }} href={`${BELFRY.pass}/me`} target="_blank" rel="noreferrer">Show my pass at the door</a>}
         </div>
+        {isAdmin() && (
+          <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('admin')}>
+            <div>
+              <div style={{ fontWeight: 600 }}>Admin</div>
+              <div className="hint" style={{ fontSize: 14 }}>Requests, members and invite codes</div>
+            </div>
+            {waiting > 0 && <span className="badge orange">{waiting} waiting</span>}
+          </button>
+        )}
         <div className="card">
           <div className="hint">Your village key (Nostr)</div>
           <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, wordBreak: 'break-all' }}>{npub}</div>

@@ -1,4 +1,4 @@
-import { finalizeEvent, generateSecretKey, getPublicKey, type EventTemplate, type NostrEvent } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip44, type EventTemplate, type NostrEvent } from 'nostr-tools'
 import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -24,6 +24,9 @@ export interface Session {
 export interface Signer {
   pubkey: string
   sign(t: EventTemplate): Promise<NostrEvent>
+  // NIP-44 with the user's key: gift-wrapped requests and the admins' DMs (access.ts)
+  encrypt(peer: string, text: string): Promise<string>
+  decrypt(peer: string, payload: string): Promise<string>
 }
 
 // ---- "Sign in with Open Source Village" ----------------------------------------
@@ -101,34 +104,6 @@ export async function belfrySignOut(s: Session) {
   location.assign(`${BELFRY.apps}/api/auth/oidc/logout?return_to=${encodeURIComponent(redirectUri())}`)
 }
 
-// ---- where the key stands: GET /api/me (NIP-98) ------------------------------------
-// Belfry only answers browsers from origins in its API_CORS_ORIGINS. When ours is not
-// listed the request fails and the app falls back to what the relays say (they only
-// let in keys with an active pass): see sync.ts.
-
-type Me = { member: boolean; nip05?: string; email?: string | null; passes?: { state: string; tier: string; date_start: string; date_end: string }[] }
-
-export async function fetchMembership(signer: Signer): Promise<Membership | null> {
-  const url = `${BELFRY.pass}/api/me`
-  try {
-    const auth = await signer.sign({
-      kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000),
-      tags: [['u', url], ['method', 'GET']],
-    })
-    const res = await fetch(url, { headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)) } })
-    if (!res.ok) return null
-    const me = (await res.json()) as Me
-    const p = me.passes?.find((x) => x.state === 'active') ?? me.passes?.[0]
-    return {
-      status: me.member ? 'active' : 'pending',
-      pass: p ? `${p.tier} pass · ${p.date_start} → ${p.date_end}` : undefined,
-      nip05: me.nip05,
-    }
-  } catch {
-    return null // CORS, offline or bunker unreachable
-  }
-}
-
 // ---- demo (tests only: ?backend=demo) ------------------------------------------------
 
 export function demoSession(email: string): Session {
@@ -149,7 +124,13 @@ export const clearSession = () => kvDel('session')
 export async function makeSigner(s: Session): Promise<Signer> {
   if (s.demoSecret) {
     const sk = hexToBytes(s.demoSecret)
-    return { pubkey: getPublicKey(sk), sign: async (t) => finalizeEvent(t, sk) }
+    const key = (peer: string) => nip44.v2.utils.getConversationKey(sk, peer)
+    return {
+      pubkey: getPublicKey(sk),
+      sign: async (t) => finalizeEvent(t, sk),
+      encrypt: async (peer, text) => nip44.v2.encrypt(text, key(peer)),
+      decrypt: async (peer, payload) => nip44.v2.decrypt(payload, key(peer)),
+    }
   }
   if (!s.bunkerUrl) throw new Error('Not signed in.')
   const bp = await parseBunkerInput(s.bunkerUrl)
@@ -170,6 +151,14 @@ export async function makeSigner(s: Session): Promise<Signer> {
     async sign(t) {
       await ensure()
       return bunker.signEvent({ ...t, pubkey: pk })
+    },
+    async encrypt(peer, text) {
+      await ensure()
+      return bunker.nip44Encrypt(peer, text)
+    },
+    async decrypt(peer, payload) {
+      await ensure()
+      return bunker.nip44Decrypt(peer, payload)
     },
   }
 }
