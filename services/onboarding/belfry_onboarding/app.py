@@ -30,6 +30,7 @@ from . import (
     blossom,
     bridge,
     claim,
+    community,
     core,
     discovery,
     email_code,
@@ -183,6 +184,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     app.state.homepage = None
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    community.register(app)  # /monitor, /changelog, /proposals (community.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)

@@ -28,6 +28,9 @@ admin_keys=$(python3 "$INFRA_DIR/scripts/nostr_keys.py")
 server_nsec=$(python3 "$INFRA_DIR/scripts/nostr_keys.py" | python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_hex"])')
 
 mkdir -p "$SECRETS_DIR"
+# the changelog (scripts/changelog.sh), mounted into the onboarding service: made here, as the
+# deploying user, so Docker does not create it as root
+mkdir -p "$INFRA_DIR/data/changelog"
 chmod 700 "$SECRETS_DIR"
 python3 - "$EXAMPLE" "$ENV_FILE" "$MODE" "$SECRETS_DIR" "$admin_keys" "$server_nsec" "$(id -u)" "$(id -g)" <<'PYEOF'
 import json, os, re, secrets, subprocess, sys
