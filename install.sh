@@ -6,12 +6,13 @@
 #
 # It asks for what it needs at the start (or takes it from flags, BELFRY_* variables or a config
 # file), checks the server and the DNS, and only then changes the server:
-#   1. packages: Docker (get.docker.com when missing), nginx with the stream module, ufw, git, age
+#   1. packages: Docker (get.docker.com when missing), ufw, git, age
 #   2. ufw: SSH, 80 and 443 in; everything else incoming denied
 #   3. a user `belfry` (docker group, root's SSH keys), Belfry in /opt/belfry, a swap file on
 #      small machines
 #   4. settings and secrets: infra/.env and infra/secrets/ (every secret generated on this server)
-#   5. nginx on 80 and 443 in front of Belfry's own proxy (Caddy, which keeps doing TLS)
+#   5. Belfry's own proxy (Caddy) on 80 and 443: certificates, routing, admin and rate rules;
+#      with --nginx, nginx owns 80 and 443 instead and passes TLS through to Caddy (shared servers)
 #   6. the stack, bootstrap, the apps, the first steward, and the `belfry` command
 # Run it again to resume or to change settings: it keeps what exists. Log: /var/log/belfry-install.log
 #
@@ -45,7 +46,7 @@ main() {
   local REF=${BELFRY_REF:-main}
   local DIR=${BELFRY_DIR:-/opt/belfry}
   local LOG=/var/log/belfry-install.log
-  local ASSUME_YES=0 DRY_RUN=0 FORCE=0 HOST_ONLY=0 RUN_SMOKE=0 CUSTODY_ON_DISK=${BELFRY_CUSTODY_ON_DISK:-0}
+  local ASSUME_YES=0 DRY_RUN=0 FORCE=0 HOST_ONLY=0 RUN_SMOKE=0 NGINX=${BELFRY_NGINX:-0} CUSTODY_ON_DISK=${BELFRY_CUSTODY_ON_DISK:-0}
   local CONFIG=''
 
   local bold='' dim='' green='' yellow='' red='' reset=''
@@ -72,6 +73,8 @@ Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [optio
   --yes                    no questions: fail if something required is missing
   --dry-run                check the server and DNS, print the plan, change nothing
   --force                  continue despite failed checks (small server, DNS not ready)
+  --nginx                  put nginx on 80/443 in front of Belfry's proxy, for a server that
+                           also hosts other sites (default: Belfry's proxy, Caddy, on 80/443)
   --host-only              prepare the server (packages, ufw, nginx, user, code) without the stack
   --smoke                  run the end-to-end test at the end
   --ref REF                branch or tag of collective-belfry (default main)
@@ -119,6 +122,7 @@ EOF
       --force) FORCE=1 ;;
       --host-only) HOST_ONLY=1 ;;
       --smoke) RUN_SMOKE=1 ;;
+      --nginx) NGINX=1 ;;
       -h|--help) usage; exit 0 ;;
       --*-key|--*-password|--*secret*) die "$a: secrets never go on the command line; use --config FILE or the BELFRY_* variable" ;;
       *) usage >&2; die "unknown option $a" ;;
@@ -188,10 +192,11 @@ EOF
   else bad "$disk_gb GB free on /: needs 30 GB (images and the signer's build)"; problems=$((problems+1)); fi
   local p busy=''
   for p in 80 443; do
-    if ss -Hltnp "sport = :$p" 2>/dev/null | grep -q . && ! ss -Hltnp "sport = :$p" 2>/dev/null | grep -q '"nginx"'; then busy="$busy $p"; fi
+    # free, or already ours: Belfry's proxy (docker-proxy) or, with --nginx, nginx
+    if ss -Hltnp "sport = :$p" 2>/dev/null | grep -q . && ! ss -Hltnp "sport = :$p" 2>/dev/null | grep -qE '"docker-proxy"|"nginx"'; then busy="$busy $p"; fi
   done
-  if [[ -z "$busy" ]]; then ok "ports 80 and 443 free (or nginx's)"
-  else bad "port(s)$busy taken by another program; nginx needs them"; problems=$((problems+1)); fi
+  if [[ -z "$busy" ]]; then ok "ports 80 and 443 free (or already Belfry's)"
+  else bad "port(s)$busy taken by another program; Belfry needs them (or --nginx, to share them through nginx)"; problems=$((problems+1)); fi
   local ip4 ip6
   ip4=$(curl -fsS4 --max-time 6 https://api.ipify.org 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')
   ip6=$(curl -fsS6 --max-time 6 https://api64.ipify.org 2>/dev/null || true)
@@ -269,7 +274,7 @@ EOF
   accounting     ${BELFRY_ACCOUNTING_ODOO_URL:-the bundled Odoo only}
   custody seed   $custody_desc
   code           $REPO_URL @ $REF → $DIR
-  server         Docker, nginx (80/443 → Belfry's proxy), ufw (SSH, 80, 443), user belfry$( [[ $mem_mb -lt 12000 && $swap_mb -eq 0 && $disk_gb -ge 20 ]] && echo ", 4 GB swap" )
+  server         Docker, ufw (SSH, 80, 443), user belfry$( [[ $NGINX -eq 1 ]] && echo ", nginx on 80/443 → Belfry's proxy" )$( [[ $mem_mb -lt 12000 && $swap_mb -eq 0 && $disk_gb -ge 12 ]] && echo ", 4 GB swap" )
 EOF
   [[ $HOST_ONLY -eq 1 ]] && printf '  %s--host-only: the stack is not started%s\n' "$yellow" "$reset"
 
@@ -291,8 +296,10 @@ EOF
   step "Packages"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
-  apt-get install -y -qq ca-certificates curl git ufw nginx libnginx-mod-stream python3 openssl age jq unattended-upgrades >/dev/null
-  ok "nginx, ufw, git, python3, age, unattended-upgrades"
+  local pkgs=(ca-certificates curl git ufw python3 openssl age jq unattended-upgrades)
+  [[ $NGINX -eq 1 ]] && pkgs+=(nginx libnginx-mod-stream)
+  apt-get install -y -qq "${pkgs[@]}" >/dev/null
+  ok "${pkgs[*]:1}"
   if ! command -v docker >/dev/null; then
     curl -fsSL https://get.docker.com | sh >/dev/null
   fi
@@ -303,7 +310,7 @@ EOF
   systemctl enable --now docker >/dev/null 2>&1 || true
   ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose $cv"
 
-  if [[ $swap_mb -eq 0 && $((mem_mb)) -lt 12000 && ! -e /swapfile && $disk_gb -ge 20 ]]; then
+  if [[ $swap_mb -eq 0 && $((mem_mb)) -lt 12000 && ! -e /swapfile && $disk_gb -ge 12 ]]; then
     fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile >/dev/null && swapon /swapfile
     grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
     ok "4 GB swap file (the signer's build needs the room)"
@@ -317,8 +324,9 @@ EOF
   ufw default deny incoming >/dev/null
   ufw default allow outgoing >/dev/null
   for p in $sshports; do ufw allow "$p/tcp" comment 'SSH' >/dev/null; done
-  ufw allow 80/tcp comment 'Belfry (nginx)' >/dev/null
-  ufw allow 443/tcp comment 'Belfry (nginx)' >/dev/null
+  ufw allow 80/tcp comment 'Belfry' >/dev/null
+  ufw allow 443/tcp comment 'Belfry' >/dev/null
+  [[ $NGINX -eq 1 ]] || ufw allow 443/udp comment 'Belfry (HTTP/3)' >/dev/null
   ufw --force enable >/dev/null
   ok "in: SSH ($(echo $sshports | tr ' ' ',')), 80, 443; everything else denied"
   # not `ufw limit` on SSH: agents open many connections in a row and would lock themselves out
@@ -364,7 +372,7 @@ EOF
     rm -f infra/issuer/keys/issuer.* infra/issuer/keys/verifier.* infra/issuer/keys/ca.*
     as_belfry infra/scripts/gen-secrets.sh >/dev/null
   fi
-  : > infra/.nginx && chown belfry:belfry infra/.nginx
+  if [[ $NGINX -eq 1 ]]; then : > infra/.nginx && chown belfry:belfry infra/.nginx; else rm -f infra/.nginx; fi
   ok "infra/.env for $BELFRY_DOMAIN, secrets generated in infra/secrets/"
   # The admin pages answer this server's own addresses (bootstrap and smoke run here) and Docker's;
   # add the ZeroTier subnet later (DEPLOY.md, "Admin network").
@@ -398,6 +406,7 @@ EOF
     "$DIR/infra/scripts/belfry" config | sed 's/^/  /'
 
   # ── 9. nginx ────────────────────────────────────────────────────────────────────────────────
+  if [[ $NGINX -eq 1 ]]; then
   step "nginx"
   install -d /etc/nginx/stream.d
   sed "s/@@DOMAIN@@/$BELFRY_DOMAIN/g" infra/nginx/belfry-stream.conf > /etc/nginx/stream.d/belfry.conf
@@ -414,6 +423,7 @@ EOF
   systemctl enable nginx >/dev/null 2>&1
   systemctl reload nginx 2>/dev/null || systemctl restart nginx
   ok "80 → HTTPS (Let's Encrypt challenges to Belfry), 443 → Belfry's proxy, passed through with the visitor's address"
+  fi
 
   if [[ $HOST_ONLY -eq 1 ]]; then
     step "Server ready"
