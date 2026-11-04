@@ -804,6 +804,24 @@ else
   bad "no bunker URL for the agent command"
 fi
 
+step "6x. git server (ngit-grasp): members only; an agent announces a repository, pushes, clones, opens an issue"
+GIT_URL=${GIT_PUBLIC_URL:-http://localhost:3170}
+NIP11=$(curl -sS -H 'Accept: application/nostr+json' "$GIT_URL/")
+jq -e '.supported_grasps | index("GRASP-08")' <<<"$NIP11" >/dev/null && ok "git server: private (GRASP-08), $(jq -r .name <<<"$NIP11")" || bad "git server NIP-11: $(head -c 200 <<<"$NIP11")"
+GIT_MEMBERS=$("${COMPOSE[@]}" exec -T onboarding sh -c 'cat /git-members/members.txt' 2>/dev/null)
+[[ -n "${KC_PUB:-}" ]] && { grep -qx "$KC_PUB" <<<"$GIT_MEMBERS" && ok "the participant is in the git server's members file ($(grep -c '^[0-9a-f]' <<<"$GIT_MEMBERS") keys)" || bad "participant $KC_PUB not in the git members file"; }
+# The agent signs through a bunker of its own (one more "Connect to Nostr App", as in 6v).
+GIT_MAP=${GIT_MAP-localhost:3170=git:7334,localhost:3080=keycast-relay:8080}
+GIT_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
+if [[ -n "$GIT_BUNKER" ]]; then
+  GITCHECK=("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding.gitcheck "$GIT_BUNKER" --git "$GIT_URL")
+  [[ -n "$GIT_MAP" ]] && GITCHECK+=(--map "$GIT_MAP")
+  if OUT=$("${GITCHECK[@]}" 2>&1); then sed 's/^/  /' <<<"$OUT"; ok "agent on the git server: refused stranger, push, clone, issue and comment through the bunker"
+  else sed 's/^/  /' <<<"$OUT" >&2; bad "agent on the git server"; fi
+else
+  bad "no bunker URL for the git agent"
+fi
+
 step "6w. stewards get a free pass: add-steward activates a full-access pass on a zero invoice"
 STEWARD_EMAIL="steward-$(date +%s)@example.org"
 OUT=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding add-steward "$STEWARD_EMAIL" "Smoke Steward" 2>/dev/null | tail -n1)

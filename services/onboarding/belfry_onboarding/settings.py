@@ -173,6 +173,11 @@ class Settings(BaseSettings):
     # The groups relay's member API (groups_members.py), synced with the relay whitelist; signed
     # with the groups API key (secret groups_api_nsec, hex). Empty URL or key: no sync.
     groups_api_url: str = Field(default="", alias="GROUPS_API_URL")
+    # The git server's members file (git_members.py), written with the relay whitelist; the git
+    # server (ngit-grasp, git.<domain>) re-reads it. Empty: no git server.
+    git_members_path: str = Field(default="", alias="GIT_MEMBERS_PATH")
+    # The git server as clients reach it (discovery, the skill); empty: none.
+    git_public_url: str = Field(default="", alias="GIT_PUBLIC_URL")
     groups_api_nsec: str = Field(default="", alias="GROUPS_API_NSEC")
     programme_schedule_url: str = Field(
         default="https://opensourcevillage.org/schedule.json", alias="PROGRAMME_SCHEDULE_URL"

@@ -69,8 +69,8 @@ project() { compose config --format json | jq -r .name; }
 
 # What a backup holds. Volumes: state that is not derived from Odoo (the relay whitelist config,
 # the NIP-46 relay and Redis are). The SQLite and LMDB volumes are paused while they are copied.
-VOLUMES=(odoo-data mint-data vote-data blossom-data community-relay-data authentik-media)
-PAUSE=(mint vote blossom relay)
+VOLUMES=(odoo-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
+PAUSE=(mint vote blossom relay git)
 FILES=(infra/.env infra/keycast/master.key infra/issuer/keys infra/odoo/odoo.conf
   infra/issuer/config/issuer2-profiles.conf infra/issuer/config/issuer-service.conf
   infra/issuer/config/authentication-service.conf infra/verifier/config/verifier-service.conf

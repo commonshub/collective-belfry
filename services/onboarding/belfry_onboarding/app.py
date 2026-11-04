@@ -53,6 +53,7 @@ from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
 from .clients.verifier import VerifierClient
 from .core import Services
+from .git_members import GitMembers
 from .groups_members import GroupsMembers
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
@@ -130,6 +131,7 @@ def build_services(settings: Settings) -> Services:
             else None
         ),
         groups=_groups_members(settings),
+        git=GitMembers(settings.git_members_path) if settings.git_members_path else None,
         accounting=accounting.from_settings(settings),
     )
 

@@ -73,6 +73,8 @@ def document(settings: Any) -> dict[str, Any]:
         "api": {k: v for k, v in api.items() if v},
         "relays": {k: v for k, v in relays.items() if v},
         "blossom": _url(settings.blossom_public_url),
+        # the git server (ngit-grasp, GRASP-08): its relay and git HTTP share this address
+        "git": _url(settings.git_public_url),
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,

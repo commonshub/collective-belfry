@@ -29,6 +29,7 @@ from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
 from .clients.verifier import VerifierClient
 from .eudi import RegistryCerts
+from .git_members import GitMembers
 from .groups_members import GroupsMembers
 from .nostr import hex_to_npub
 from .relay import RelayPublisher
@@ -84,6 +85,7 @@ class Services:
     eudi: RegistryCerts | None = None
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
     groups: GroupsMembers | None = None  # the groups relay's members; None without its API
+    git: GitMembers | None = None  # the git server's members file; None without GIT_MEMBERS_PATH
     accounting: Accounting | None = None  # the ticket seller's Odoo; None: Belfry invoices
 
 
@@ -606,7 +608,7 @@ def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = 
     whose Odoo state is still pending). Best effort unless ``strict``: a failure is logged and
     the next sync (any later activation, revoke, expiry or the cron) catches up.
     """
-    if svc.whitelist is None and svc.groups is None:
+    if svc.whitelist is None and svc.groups is None and svc.git is None:
         return None
     pubkeys = [*active_pubkeys(svc), *include]
     result = None
@@ -628,6 +630,14 @@ def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = 
         if strict:
             raise
         log.warning("groups relay members not updated: %s", exc)
+    # The git server (ngit-grasp) reads its members from a file (git_members.py).
+    try:
+        if svc.git is not None:
+            svc.git.sync(pubkeys)
+    except Exception as exc:
+        if strict:
+            raise
+        log.warning("git server members not updated: %s", exc)
     return result
 
 

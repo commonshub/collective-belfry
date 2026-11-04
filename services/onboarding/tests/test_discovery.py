@@ -17,6 +17,7 @@ def test_discovery_document(services, client, monkeypatch):
     s.groups_relay_public_url = "wss://groups-relay.belfry.test"
     s.bunker_relays = "wss://bunker.belfry.test"
     s.blossom_public_url = "https://blossom.belfry.test/"
+    s.git_public_url = "https://git.belfry.test"
     s.nip05_domain = "belfry.test"
     monkeypatch.setenv("COMMUNITY_APPS", "Chat|https://chat.belfry.test|Messages;Bad|ftp://x|")
 
@@ -32,6 +33,7 @@ def test_discovery_document(services, client, monkeypatch):
         "signer": ["wss://bunker.belfry.test"],
     }
     assert doc["blossom"] == "https://blossom.belfry.test"
+    assert doc["git"] == "https://git.belfry.test"
     assert doc["api"]["me"] == BASE + "/api/me"
     assert doc["api"]["invite_offer"] == "https://shop.belfry.test/belfry/api/invites/{token}"
     assert doc["apps"] == [

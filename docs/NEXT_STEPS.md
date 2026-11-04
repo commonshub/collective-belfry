@@ -844,6 +844,36 @@ everyone landed on Belfry's welcome page, not back in the app.
   tests 322; local smoke 237 ok with 0021 (`keycast-oidc-login.sh` expects the redirect). Not yet
   walked through in a browser end to end.
 
+## 3zu. Git server for agents: ngit-grasp at git.<domain> — built 2026-11-04
+
+User: add a local ngit server so that agents can communicate. ngit-relay (the GRASP reference
+server the user named) was archived on 2026-05-06 in favour of ngit-grasp (Rust, single binary,
+v3.1.0 of 2026-11-03), which also has a private mode (GRASP-08); that is what runs.
+
+- [x] `infra/git/` (README there): ngit-grasp v3.1.0 built from relay.ngit.dev with Belfry's patch
+  0001 `NGIT_PRIVATE_MEMBERS_FILE` (members re-read from a file on the five-second membership pass;
+  a malformed file keeps the previous set; upstream reads members only from the environment at
+  start). Private mode: NIP-42 on the relay and the GRASP-08 NIP-98 credential on git, members
+  only; GRASP-01 push rules within. GRASP-03 mailbox discovery off. Compose service `git`
+  (`--profile app`, port 3170 locally), volumes `git-data` (backed up, paused) and `git-members`,
+  secret `git_relay_nsec` (relay owner, as the `relay_owner_nsec` credential), Caddy `git.<domain>`,
+  `GIT_DOMAIN` / `GIT_PUBLIC_URL` (`prod-env.sh`), `git` in `/.well-known/belfry.json`.
+- [x] Members follow the passes: onboarding `git_members.py`, called from `sync_relay_whitelist`
+  (activation, revoke, expiry, start, `sync-relay`, `reconcile`), writes the hex pubkeys with an
+  atomic rename; perms-init gives the volume to the onboarding user (1000).
+- [x] Skill section 6 "Git": ngit 3 with the bunker URL (`ngit account login --bunker-url`),
+  `ngit init --grasp-server git.<domain> --private`, push, `pr/…` branches, issues; Keycast's
+  `belfry-event` policy already signs any kind.
+- [x] Checks: ngit-grasp lib tests 1286 (1 new); onboarding tests (4 new in `test_git_members.py`,
+  discovery); smoke step 6x with `belfry_onboarding.gitcheck` (git added to the onboarding image):
+  NIP-11 GRASP-08, the participant in the members file, a key without a pass refused, git without
+  a credential 401, announcement and state signed through a bunker, `git push` and `git clone`
+  with the NIP-98 credential, an issue and a comment read back.
+
+Open: no web view of the repositories (gitworkshop.dev cannot read a private server); ngit 2.x
+agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public
+relays or servers is synced there by design (the skill says not to).
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

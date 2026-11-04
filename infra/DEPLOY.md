@@ -10,7 +10,7 @@ in front of everything and publishes no other port.
   image has no ARM build.
 - A domain. Every service gets a subdomain: `shop.` (Odoo; `ODOO_HOST_PREFIX` changes the
   name), `login.`, `apps.`, `pass.`, `relay.`, `bunker.`, `blossom.`, `mint.`, `issuer.`,
-  `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.`, plus the
+  `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.`, `git.`, plus the
   domain itself (NIP-05 names are `<member>@<domain>`). A wildcard record covers them all: A and
   AAAA for `<domain>` and `*.<domain>`. The participant apps also have short names on the domain
   itself (`<domain>/chat`, `/groups`, `/calendar`, `/programme`, `/vote`, `/people`, `/market`,
@@ -285,6 +285,7 @@ $C --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-m
 | `issuer.` | Issuer2, the wallet-facing part | `/issuer2/*` (management API) denied |
 | `verifier.` | Verifier2, only the request and response of a session | everything else denied |
 | `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.` | the community apps | |
+| `git.` | the git server (ngit-grasp: relay and Git Smart HTTP, `git/README.md`) | members only: NIP-42 on the relay, NIP-98 on git (the server checks both) |
 
 Protections on top:
 

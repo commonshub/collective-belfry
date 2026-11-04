@@ -60,6 +60,8 @@ values = {
     "PROGRAMME_PUBLIC_URL": f"https://programme.{domain}",
     "GROUPS_PUBLIC_URL": f"https://groups.{domain}",
     "GROUPS_RELAY_URL": f"wss://groups-relay.{domain}",
+    "GIT_DOMAIN": f"git.{domain}",
+    "GIT_PUBLIC_URL": f"https://git.{domain}",
 }
 lines = open(path).read().splitlines(keepends=True)
 seen = set()

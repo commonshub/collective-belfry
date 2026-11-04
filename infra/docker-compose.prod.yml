@@ -133,6 +133,9 @@ services:
   groups:
     ports: !reset []
     restart: unless-stopped
+  git:
+    ports: !reset []
+    restart: unless-stopped
   postgres:
     restart: unless-stopped
   redis:

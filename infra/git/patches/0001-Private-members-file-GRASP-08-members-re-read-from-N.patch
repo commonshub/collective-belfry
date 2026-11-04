@@ -1,0 +1,295 @@
+From 5c1a74333b84e92984be5117e30d9e29d739467a Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Wed, 4 Nov 2026 11:33:07 +0100
+Subject: [PATCH] Private members file: GRASP-08 members re-read from
+ NGIT_PRIVATE_MEMBERS_FILE
+
+For deployments whose members live in an external registry (Belfry: the active
+passes in Odoo). The file is re-read on the five-second membership
+reconciliation and joined with NGIT_PRIVATE_MEMBERS; a malformed file keeps the
+previous set.
+---
+ docs/reference/configuration.md | 19 +++++++++++
+ src/config.rs                   | 25 +++++++++++---
+ src/docs_export.rs              |  4 +--
+ src/private/access.rs           | 60 +++++++++++++++++++++++++++++++++
+ src/private/mod.rs              |  2 +-
+ src/server.rs                   | 12 ++++++-
+ src/sync/mod.rs                 | 29 ++++++++++++----
+ 7 files changed, 137 insertions(+), 14 deletions(-)
+
+diff --git a/docs/reference/configuration.md b/docs/reference/configuration.md
+index 82b4bc7..d4658e2 100644
+--- a/docs/reference/configuration.md
++++ b/docs/reference/configuration.md
+@@ -1119,6 +1119,25 @@ announcements. Relay owners are learned by the NIP-11 request already made for
+ sync limits; this does not open another connection or subscription. A relay
+ listed only by an unpromoted purgatory announcement cannot grant access.
+ 
++#### `NGIT_PRIVATE_MEMBERS_FILE`
++
++**Description:** File with further members, one npub or 64-hex pubkey per line
++**Type:** Path
++**Default:** Empty
++**Required:** No (private mode needs this or `NGIT_PRIVATE_MEMBERS`)
++
++```bash
++NGIT_PRIVATE_MEMBERS_FILE=/members/members.txt
++```
++
++For deployments whose member list lives in an external registry. The file is
++re-read on every five-second membership reconciliation and joined with
++`NGIT_PRIVATE_MEMBERS`; removing a pubkey closes its live sessions. Commas,
++whitespace and `#` comments are allowed. A missing file counts as empty. A
++file with any malformed entry is ignored with a warning and the previous set is
++kept, so a half-written file never locks members out; write it atomically
++(write a temporary file, then rename).
++
+ #### `NGIT_PRIVATE_PUBLIC_ORIGIN`
+ 
+ Optional canonical external HTTP origin for private Git authentication, such
+diff --git a/src/config.rs b/src/config.rs
+index 48e6a34..409dd0b 100644
+--- a/src/config.rs
++++ b/src/config.rs
+@@ -858,6 +858,14 @@ pub struct Config {
+     #[arg(long, env = "NGIT_PRIVATE_MEMBERS", default_value = "")]
+     pub private_members: String,
+ 
++    /// File with further GRASP-08 members, one npub or hex pubkey per line.
++    ///
++    /// Re-read on every five-second membership reconciliation, so an external
++    /// registry can add and remove members without a restart. A missing file
++    /// counts as empty; a file with a malformed entry keeps the previous set.
++    #[arg(long, env = "NGIT_PRIVATE_MEMBERS_FILE", default_value = "")]
++    pub private_members_file: String,
++
+     /// Canonical externally visible origin used by GRASP-08 NIP-98 `u` tags.
+     ///
+     /// Set this when TLS terminates upstream or a non-loopback deployment uses
+@@ -1323,14 +1331,16 @@ impl Config {
+         let repository_whitelist = WhitelistEntry::parse_whitelist(&self.repository_whitelist);
+ 
+         let private_members = self.parse_private_members()?;
+-        if self.private_mode && private_members.is_empty() {
++        let members_file = !self.private_members_file.trim().is_empty();
++        if self.private_mode && private_members.is_empty() && !members_file {
+             return Err(anyhow!(
+-                "NGIT_PRIVATE_MODE=true requires at least one npub in NGIT_PRIVATE_MEMBERS"
++                "NGIT_PRIVATE_MODE=true requires at least one npub in NGIT_PRIVATE_MEMBERS \
++                 or NGIT_PRIVATE_MEMBERS_FILE"
+             ));
+         }
+-        if !self.private_mode && !private_members.is_empty() {
++        if !self.private_mode && (!private_members.is_empty() || members_file) {
+             return Err(anyhow!(
+-                "NGIT_PRIVATE_MEMBERS requires NGIT_PRIVATE_MODE=true"
++                "NGIT_PRIVATE_MEMBERS and NGIT_PRIVATE_MEMBERS_FILE require NGIT_PRIVATE_MODE=true"
+             ));
+         }
+         if self.private_mode && self.grasp06_enable {
+@@ -1493,6 +1503,12 @@ impl Config {
+             .collect()
+     }
+ 
++    /// The configured members file, if any.
++    pub fn private_members_file_path(&self) -> Option<std::path::PathBuf> {
++        let path = self.private_members_file.trim();
++        (!path.is_empty()).then(|| std::path::PathBuf::from(path))
++    }
++
+     /// Get parsed archive configuration with computed read-only mode
+     ///
+     /// Read-only mode defaults to true if archive mode is enabled, false otherwise.
+@@ -1697,6 +1713,7 @@ impl Config {
+             grasp06_enable: false,
+             private_mode: false,
+             private_members: String::new(),
++            private_members_file: String::new(),
+             private_public_origin: String::new(),
+             repository_whitelist: String::new(),
+             repository_blacklist: String::new(),
+diff --git a/src/docs_export.rs b/src/docs_export.rs
+index 9bdbb5a..dfcce86 100644
+--- a/src/docs_export.rs
++++ b/src/docs_export.rs
+@@ -648,8 +648,8 @@ fn constraint_specs() -> Vec<ConstraintSpec> {
+         constraint("archive-services-with-archive-all", "relationship", "Archive GRASP services and archive-all mode are mutually exclusive.", &["NGIT_ARCHIVE_GRASP_SERVICES", "NGIT_ARCHIVE_ALL"], ConstraintDetails::MutuallyExclusive),
+         constraint("archive-services-with-whitelist", "relationship", "Archive GRASP services and the archive whitelist are mutually exclusive.", &["NGIT_ARCHIVE_GRASP_SERVICES", "NGIT_ARCHIVE_WHITELIST"], ConstraintDetails::MutuallyExclusive),
+         constraint("archive-read-only-requires-archive", "relationship", "Explicit read-only archive mode requires archive-all, an archive whitelist, or archive GRASP services.", &["NGIT_ARCHIVE_READ_ONLY", "NGIT_ARCHIVE_ALL", "NGIT_ARCHIVE_WHITELIST", "NGIT_ARCHIVE_GRASP_SERVICES"], ConstraintDetails::RequiresAny),
+-        constraint("private-mode-requires-members", "relationship", "Private mode requires at least one configured member.", &["NGIT_PRIVATE_MODE", "NGIT_PRIVATE_MEMBERS"], ConstraintDetails::Requires),
+-        constraint("private-members-require-mode", "relationship", "Configured private members require private mode.", &["NGIT_PRIVATE_MEMBERS", "NGIT_PRIVATE_MODE"], ConstraintDetails::Requires),
++        constraint("private-mode-requires-members", "relationship", "Private mode requires at least one configured member or a members file.", &["NGIT_PRIVATE_MODE", "NGIT_PRIVATE_MEMBERS", "NGIT_PRIVATE_MEMBERS_FILE"], ConstraintDetails::Requires),
++        constraint("private-members-require-mode", "relationship", "Configured private members and a members file require private mode.", &["NGIT_PRIVATE_MEMBERS", "NGIT_PRIVATE_MEMBERS_FILE", "NGIT_PRIVATE_MODE"], ConstraintDetails::Requires),
+         constraint("private-mode-with-grasp06", "relationship", "Private mode and the unauthenticated GRASP-06 contributor endpoint are mutually exclusive.", &["NGIT_PRIVATE_MODE", "NGIT_GRASP06_ENABLE"], ConstraintDetails::MutuallyExclusive),
+         constraint("private-members-format", "format", "Every private member must be a valid npub.", &["NGIT_PRIVATE_MEMBERS"], ConstraintDetails::Format),
+         constraint("private-public-origin-format", "format", "The private public origin, when set, must be an absolute HTTP(S) origin without a path, query, or fragment.", &["NGIT_PRIVATE_PUBLIC_ORIGIN"], ConstraintDetails::Format),
+diff --git a/src/private/access.rs b/src/private/access.rs
+index 7b9379d..fd81f54 100644
+--- a/src/private/access.rs
++++ b/src/private/access.rs
+@@ -73,6 +73,39 @@ impl PrivateAccess {
+     }
+ }
+ 
++/// Read a members file: one npub or 64-hex pubkey per line (commas and
++/// whitespace also separate entries), `#` starts a comment. A missing file is
++/// an empty set; any malformed entry fails the whole read, so a caller can keep
++/// its previous set instead of silently dropping members.
++pub fn read_members_file(path: &std::path::Path) -> anyhow::Result<HashSet<PublicKey>> {
++    use anyhow::Context;
++    use nostr_sdk::prelude::FromBech32;
++    let text = match std::fs::read_to_string(path) {
++        Ok(text) => text,
++        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
++        Err(err) => {
++            return Err(err).with_context(|| format!("reading {}", path.display()));
++        }
++    };
++    let mut members = HashSet::new();
++    for line in text.lines() {
++        let line = line.split('#').next().unwrap_or_default();
++        for entry in line.split(|c: char| c == ',' || c.is_whitespace()) {
++            if entry.is_empty() {
++                continue;
++            }
++            let key = if entry.starts_with("npub1") {
++                PublicKey::from_bech32(entry)
++            } else {
++                PublicKey::from_hex(entry)
++            }
++            .with_context(|| format!("invalid member '{entry}' in {}", path.display()))?;
++            members.insert(key);
++        }
++    }
++    Ok(members)
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -96,4 +129,31 @@ mod tests {
+         assert!(!access.replace([second]));
+         assert_eq!(*generation.borrow(), 1);
+     }
++
++    #[test]
++    fn members_file_reads_npubs_and_hex_and_fails_on_garbage() {
++        use nostr_sdk::prelude::ToBech32;
++        let dir = std::env::temp_dir().join(format!("ngit-members-{}", std::process::id()));
++        std::fs::create_dir_all(&dir).unwrap();
++        let path = dir.join("members");
++        assert!(read_members_file(&path).unwrap().is_empty());
++
++        let a = Keys::generate().public_key();
++        let b = Keys::generate().public_key();
++        std::fs::write(
++            &path,
++            format!(
++                "# members\n{}\n{} ,\n\n",
++                a.to_bech32().unwrap(),
++                b.to_hex()
++            ),
++        )
++        .unwrap();
++        let members = read_members_file(&path).unwrap();
++        assert_eq!(members, [a, b].into_iter().collect());
++
++        std::fs::write(&path, format!("{}\nnot-a-key\n", a.to_hex())).unwrap();
++        assert!(read_members_file(&path).is_err());
++        std::fs::remove_dir_all(&dir).unwrap();
++    }
+ }
+diff --git a/src/private/mod.rs b/src/private/mod.rs
+index a01a0df..84b3b58 100644
+--- a/src/private/mod.rs
++++ b/src/private/mod.rs
+@@ -8,5 +8,5 @@ pub mod nip98;
+ pub mod peers;
+ pub mod ws_auth;
+ 
+-pub use access::PrivateAccess;
++pub use access::{read_members_file, PrivateAccess};
+ pub use peers::Grasp08Peers;
+diff --git a/src/server.rs b/src/server.rs
+index 043901f..9adef7e 100644
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -111,7 +111,17 @@ impl RelayServer {
+         // as warnings.
+         config.validate()?;
+         let private_access = if config.private_mode {
+-            let access = PrivateAccess::new(config.parse_private_members()?);
++            let mut members = config.parse_private_members()?;
++            if let Some(path) = config.private_members_file_path() {
++                let from_file = crate::private::read_members_file(&path)?;
++                info!(
++                    "GRASP-08 members file {} lists {} member(s)",
++                    path.display(),
++                    from_file.len()
++                );
++                members.extend(from_file);
++            }
++            let access = PrivateAccess::new(members);
+             info!(
+                 "GRASP-08 private mode enabled for {} configured member(s)",
+                 access.len()
+diff --git a/src/sync/mod.rs b/src/sync/mod.rs
+index 91b9c95..ede2f4b 100644
+--- a/src/sync/mod.rs
++++ b/src/sync/mod.rs
+@@ -2723,6 +2723,10 @@ pub struct SyncManager {
+     grasp08_peers: Option<crate::private::Grasp08Peers>,
+     /// Operator-configured members form the permanent base of private access.
+     configured_private_members: HashSet<PublicKey>,
++    /// `NGIT_PRIVATE_MEMBERS_FILE`, re-read on every reconciliation.
++    private_members_file: Option<PathBuf>,
++    /// The members last read from that file (kept when a read fails).
++    file_private_members: std::sync::Mutex<HashSet<PublicKey>>,
+     /// Latest NIP-11 owner learned for each connected repository relay whose
+     /// NIP-11 also advertises GRASP-08. Only private-service owners can mint
+     /// derived membership: the owner of a public relay gains nothing
+@@ -2898,6 +2902,8 @@ impl SyncManager {
+             private_access,
+             grasp08_peers,
+             configured_private_members,
++            private_members_file: config.private_members_file_path(),
++            file_private_members: std::sync::Mutex::new(HashSet::new()),
+             relay_owners: HashMap::new(),
+             relay_sync_index: Arc::new(RwLock::new(HashMap::new())),
+             pending_sync_index: Arc::new(RwLock::new(HashMap::new())),
+@@ -5652,14 +5658,25 @@ impl SyncManager {
+             .filter_map(|relay| canonical_relay_key(relay).ok())
+             .collect();
+         drop(repo_index);
+-        let members = effective_private_members(
+-            &self.configured_private_members,
+-            &accepted_relays,
+-            &self.relay_owners,
+-        );
++        let mut configured = self.configured_private_members.clone();
++        if let Some(path) = &self.private_members_file {
++            let mut cached = self
++                .file_private_members
++                .lock()
++                .expect("private members file lock poisoned");
++            match crate::private::read_members_file(path) {
++                Ok(members) => *cached = members,
++                Err(err) => tracing::warn!(
++                    error = %err,
++                    "GRASP-08 members file unreadable; keeping the previous members"
++                ),
++            }
++            configured.extend(cached.iter().copied());
++        }
++        let members = effective_private_members(&configured, &accepted_relays, &self.relay_owners);
+         if access.replace(members) {
+             tracing::info!(
+-                configured_members = self.configured_private_members.len(),
++                configured_members = configured.len(),
+                 accepted_relay_count = accepted_relays.len(),
+                 effective_members = access.len(),
+                 "Reconciled GRASP-08 service membership"
+-- 
+2.53.0
+

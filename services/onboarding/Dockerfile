@@ -4,6 +4,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
+# git: the git server check (belfry_onboarding.gitcheck, smoke step 6x)
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 1000 belfry && useradd --uid 1000 --gid belfry --create-home belfry
 
 WORKDIR /app

@@ -296,7 +296,7 @@ services:
   # and chmod need.
   perms-init:
     image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -306,6 +306,9 @@ services:
       - mint-data:/v/mint
       - blossom-data:/v/blossom
       - relay-data:/v/keycast-relay
+      - git-data:/v/git
+      # written by the onboarding service (uid 1000), read by the git server
+      - git-members:/w/git-members
       - ./secrets:/s/secrets
       - ./issuer/config:/s/issuer-config
       - ./issuer/keys:/s/issuer-keys
@@ -624,6 +627,8 @@ services:
     ports: ["8100:8100"]
     volumes:
       - community-relay-config:/relay-config
+      # the git server's members (git_members.py)
+      - git-members:/git-members
       - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
@@ -658,6 +663,9 @@ services:
       POLLS_PUBKEY: ${POLLS_PUBKEY:-}
       # the groups relay's member API (groups_members.py); empty turns the member sync off
       GROUPS_API_URL: ${GROUPS_API_URL-http://groups-relay:3334}
+      # the git server's members file; empty turns the sync off
+      GIT_MEMBERS_PATH: ${GIT_MEMBERS_PATH-/git-members/members.txt}
+      GIT_PUBLIC_URL: ${GIT_PUBLIC_URL:-http://localhost:3170}
       # sync-programme (programme.py): empty URL disables that source
       PROGRAMME_SCHEDULE_URL: ${PROGRAMME_SCHEDULE_URL-https://opensourcevillage.org/schedule.json}
       PROGRAMME_ROOMS_URL: ${PROGRAMME_ROOMS_URL-https://raw.githubusercontent.com/commonshub/commonshub.brussels/main/src/settings/rooms.json}
@@ -899,6 +907,54 @@ services:
     networks: [edge]
     ports: ["3150:80"]
 
+  # The git server (git.<domain>): ngit-grasp, a GRASP relay and Git Smart HTTP server for NIP-34
+  # (repositories, patches, pull requests, issues and comments), private (GRASP-08): every relay
+  # session needs NIP-42 AUTH and every git request a NIP-98 credential from a member. Members are
+  # the active passes, from the file the onboarding service writes (git_members.py; Belfry's patch
+  # lets ngit-grasp re-read it). Agents of pass holders use it with ngit and their bunker.
+  # infra/git/README.md.
+  git:
+    profiles: ["app"]
+    image: belfry-git:local
+    build: ./git
+    <<: *nonroot
+    read_only: true
+    tmpfs: ["/tmp"]
+    pids_limit: 1024
+    environment:
+      # the host clients use (with its port locally); the relay is wss://<it>, repositories
+      # https://<it>/<npub>/<identifier>.git
+      NGIT_DOMAIN: ${GIT_DOMAIN:-localhost:3170}
+      NGIT_PRIVATE_PUBLIC_ORIGIN: ${GIT_PUBLIC_URL:-http://localhost:3170}
+      NGIT_PRIVATE_MODE: "true"
+      NGIT_PRIVATE_MEMBERS_FILE: /members/members.txt
+      # the relay's own key (secret git_relay_nsec), read as the systemd-style credential
+      CREDENTIALS_DIRECTORY: /run/secrets
+      # the proxy's forwarded client address counts (Docker's ranges)
+      NGIT_TRUSTED_PROXY_CIDRS: 172.16.0.0/12
+      # a private service: no lookups of members' mailboxes on public relays (private mode
+      # already publishes no identity to index relays)
+      NGIT_SYNC_PLUS_ENABLED: "false"
+      NGIT_RELAY_NAME: ${COMMUNITY_NAME:-Open Source Village} git
+      NGIT_RELAY_DESCRIPTION: Git repositories, patches and issues of ${COMMUNITY_NAME:-Open Source Village}, run by Belfry. Every participant with an active pass is a member.
+      NGIT_LOG_LEVEL: ${GIT_LOG_LEVEL:-info}
+    group_add: *secret-group
+    secrets: [{source: git_relay_nsec, target: relay_owner_nsec}]
+    volumes:
+      - git-data:/data
+      - git-members:/members:ro
+    depends_on:
+      perms-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -H 'Accept: application/nostr+json' http://127.0.0.1:7334/ >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    stop_grace_period: 1m
+    ports: ["3170:7334"]
+
 # default: service to service. data (internal, no internet): Postgres and Redis with their
 # clients only. edge: what only the browser reaches (the static apps; the production proxy).
 networks:
@@ -938,8 +994,11 @@ secrets:
   mint_seed: {file: ./secrets/mint_seed}
   stripe_webhook_secret: {file: ./secrets/stripe_webhook_secret}
   accounting_odoo_api_key: {file: ./secrets/accounting_odoo_api_key}
+  git_relay_nsec: {file: ./secrets/git_relay_nsec}
 
 volumes:
+  git-data:
+  git-members:
   blossom-data:
   vote-data:
   mint-data:
