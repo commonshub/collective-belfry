@@ -30,6 +30,8 @@ from . import (
     blossom,
     bridge,
     claim,
+    community,
+    console,
     core,
     discovery,
     email_code,
@@ -37,6 +39,7 @@ from . import (
     feedback,
     groups_members,
     holder_invites,
+    homepage,
     mypass,
     pages,
     programme,
@@ -121,6 +124,7 @@ def build_services(settings: Settings) -> Services:
                     for k in (
                         settings.relay_extra_pubkeys,
                         programme.programme_pubkey(settings),
+                        homepage.belfry_pubkey(settings),
                         settings.polls_pubkey,
                         groups_members.api_pubkey(settings.groups_api_nsec),
                     )
@@ -147,6 +151,18 @@ def _groups_members(settings: Settings) -> GroupsMembers | None:
     return GroupsMembers(settings.groups_api_url, key)
 
 
+def make_homepage(settings: Settings) -> homepage.Homepage | None:
+    """The apex homepage (HOMEPAGE); a broken setting keeps the start page and says why."""
+    try:
+        config = homepage.parse_config(settings)
+    except homepage.HomepageError as exc:
+        log.error("homepage: %s; showing the start page", exc)
+        return None
+    if config.mode != "start":
+        log.info("homepage: %s %s", config.mode, config.proxy_url or config.pubkey)
+    return homepage.Homepage(settings, config)
+
+
 def create_app(services: Services | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -157,6 +173,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         else:
             app.state.services = services
         claim.TEST_NOTICE = app.state.services.settings.test_run_notice
+        app.state.homepage = make_homepage(app.state.services.settings)
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
@@ -165,8 +182,11 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
     app.state.bridge = bridge.BridgeStore()
+    app.state.homepage = None
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    community.register(app)  # /monitor, /changelog, /proposals (community.py)
+    console.register(app)  # belfry.<domain>: overview, status, members, website (console.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
@@ -221,12 +241,57 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def home(request: Request) -> Response:
-        """The start page. With SITE_URL it lives there (the apex): other hosts forward."""
+        """The start page. With SITE_URL it lives there (the apex): other hosts forward. With a
+        homepage (HOMEPAGE, homepage.py) the apex shows it and the start page stays here."""
         settings = svc(request).settings
         site = httpx.URL(settings.site_url) if settings.site_url else None
-        if site is not None and request.headers.get("host", "").lower() != site.netloc.decode():
+        on_apex = (
+            site is not None and request.headers.get("host", "").lower() == site.netloc.decode()
+        )
+        hp = app.state.homepage
+        if hp is not None and hp.enabled:
+            if on_apex:
+                return await hp.serve(request)
+            return HTMLResponse(claim.home_page(settings))
+        if site is not None and not on_apex:
             return RedirectResponse(str(site), status_code=302)
         return HTMLResponse(claim.home_page(settings))
+
+    @app.middleware("http")
+    async def console_host(request: Request, call_next):
+        """belfry.<domain> answers under /console (console.py)."""
+        moved = console.map_host(request)
+        return moved if moved is not None else await call_next(request)
+
+    @app.middleware("http")
+    async def apex_homepage(request: Request, call_next):
+        """With a homepage, the apex answers Belfry's discovery files (/.well-known/*) itself,
+        sends its other onboarding pages to PUBLIC_URL (pass.<domain>) and gives every other path
+        to the homepage."""
+        hp = getattr(request.app.state, "homepage", None)
+        settings = svc(request).settings
+        if hp is None or not hp.enabled or not settings.site_url:
+            return await call_next(request)
+        if request.headers.get("host", "").lower() != httpx.URL(settings.site_url).netloc.decode():
+            return await call_next(request)
+        path = request.url.path
+        if path == "/" or path.startswith("/.well-known/"):
+            return await call_next(request)
+        from starlette.routing import Match
+
+        matched = any(
+            route.matches(request.scope)[0] != Match.NONE
+            for route in request.app.router.routes
+            if getattr(route, "path", "/") != "/"
+        )
+        if not matched:
+            return await hp.serve(request)
+        if request.method in ("GET", "HEAD"):
+            target = settings.public_url.rstrip("/") + path
+            if request.url.query:
+                target += "?" + request.url.query
+            return RedirectResponse(target, status_code=302)
+        return await call_next(request)
 
     def wants_html(request: Request) -> bool:
         return "text/html" in request.headers.get("accept", "")

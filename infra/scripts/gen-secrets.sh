@@ -28,6 +28,9 @@ admin_keys=$(python3 "$INFRA_DIR/scripts/nostr_keys.py")
 server_nsec=$(python3 "$INFRA_DIR/scripts/nostr_keys.py" | python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_hex"])')
 
 mkdir -p "$SECRETS_DIR"
+# the changelog (scripts/changelog.sh), mounted into the onboarding service: made here, as the
+# deploying user, so Docker does not create it as root
+mkdir -p "$INFRA_DIR/data/changelog"
 chmod 700 "$SECRETS_DIR"
 python3 - "$EXAMPLE" "$ENV_FILE" "$MODE" "$SECRETS_DIR" "$admin_keys" "$server_nsec" "$(id -u)" "$(id -g)" <<'PYEOF'
 import json, os, re, secrets, subprocess, sys
@@ -70,6 +73,7 @@ SECRETS = {
     "PROGRAMME_NSEC": rand(32),                # signs the programme's calendar events (hex key)
     "POLLS_NSEC": rand(32),                    # signs the polls' notes on Nostr (vote service, hex key)
     "GROUPS_RELAY_NSEC": rand(32),             # the groups relay's own key (zooid, hex)
+    "BELFRY_NSEC": rand(32),                   # the belfry's own Nostr key: homepage nsite (homepage.py, hex)
     "GROUPS_API_NSEC": rand(32),               # the onboarding service at the groups relay's API (hex)
     "ZOOID_DB_PASSWORD": rand(),               # role "zooid" (groups relay)
     "GIT_RELAY_NSEC": rand(32),                # the git server's own key (ngit-grasp relay owner, hex)

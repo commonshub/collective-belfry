@@ -61,7 +61,16 @@ def main(argv: list[str] | None = None) -> int:
         help="book a paid ticket at the ticket seller (all that are missing without a pass id)",
     )
     book.add_argument("pass_id", type=int, nargs="?")
+    pub = sub.add_parser(
+        "homepage-publish",
+        help="publish a static site (a tar archive on stdin) as the community's homepage nsite",
+    )
+    pub.add_argument("--title", default="")
+    pub.add_argument("--by", default="", help="who publishes, for the changelog")
+    sub.add_parser("homepage-status", help="what the apex serves and the published nsite")
     args = parser.parse_args(argv)
+    if args.command in ("homepage-publish", "homepage-status"):
+        return homepage_cli(args)
 
     settings = Settings()
     configure_logging(settings.log_level)
@@ -107,6 +116,40 @@ def main(argv: list[str] | None = None) -> int:
         result = {"result": core.send_login_link(services, args.pass_id), "pass_id": args.pass_id}
     else:
         result = core.expire(services)
+    json.dump(result, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def homepage_cli(args: argparse.Namespace) -> int:
+    from . import homepage
+
+    settings = Settings()
+    configure_logging(settings.log_level)
+    try:
+        if args.command == "homepage-publish":
+            files = homepage.files_from_tar(sys.stdin.buffer.read())
+            result = homepage.publish(settings, files, args.title, args.by)
+            result["serving"] = settings.homepage == "nsite"
+        else:
+            config = homepage.parse_config(settings)
+            result = {
+                "mode": config.mode,
+                "proxy": config.proxy_url,
+                "pubkey": config.pubkey,
+                "name": config.name,
+                "belfry_key": homepage.belfry_pubkey(settings),
+            }
+            if config.mode == "nsite":
+                site = homepage.Homepage(settings, config)._resolve()
+                result |= {
+                    "files": len(site.paths),
+                    "manifest": site.event_id,
+                    "servers": site.servers,
+                }
+    except homepage.HomepageError as exc:
+        print(f"homepage: {exc}", file=sys.stderr)
+        return 1
     json.dump(result, sys.stdout)
     sys.stdout.write("\n")
     return 0

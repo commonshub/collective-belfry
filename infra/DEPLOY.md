@@ -236,6 +236,75 @@ The Authentik admin `akadmin` signs in with its password at
 `https://login.<domain>/if/flow/default-authentication-flow/?next=/if/admin/`, over the admin
 network only.
 
+## The homepage (`HOMEPAGE`)
+
+The apex (`https://<domain>/`) shows Belfry's start page unless `HOMEPAGE` in `.env` says
+otherwise (`services/onboarding/belfry_onboarding/homepage.py`):
+
+- `https://site.example`: the community's website hosted elsewhere, through a proxy (visitors
+  stay on the apex);
+- `nsite`: a static site the belfry publishes itself (NIP-5A): the files go to its Blossom
+  server, the manifest (kind 15128) is signed with the belfry's own key (`secrets/belfry_nsec`)
+  on the community relay. Publish with
+  `tar -C dist -c . | $C --profile app exec -T onboarding python -m belfry_onboarding homepage-publish`;
+- `nsite:<npub>` or `nsite:<npub>/<name>`: another key's nsite, published with any NIP-5A tool
+  (`HOMEPAGE_RELAYS` adds relays to look for its manifest).
+
+With a homepage, the apex keeps `/.well-known/*` and the short names. Its onboarding pages move
+to `pass.<domain>`, whose `/` then shows the start page. The proxy gives onboarding pages
+their strict Content-Security-Policy unless the service sends one: the homepage sends the
+proxied site's policy or a default. Restart the onboarding service after changing
+`HOMEPAGE` (`$C --profile app up -d onboarding`). `skills/belfry-homepage/SKILL.md` has the
+details for an agent.
+
+## The belfry's own page: belfry.<domain>
+
+`https://belfry.<domain>` (`CONSOLE_URL`, set by `prod-env.sh`; `console.py`) is the belfry's
+page:
+
+- `/`: an overview: services answering and code version, members and admins, the website.
+- `/status`, also `/status.json`: every service checked from inside the stack, and the code's
+  version and last change. Public.
+- `/members`: everyone with an active pass. Members see names. Admins (the stewards group) see
+  e-mail addresses and add, edit and remove members by e-mail:
+  - adding gives a free pass, activated at once, so the welcome mail with the sign-in link goes out;
+  - "admin" is membership of the stewards group;
+  - removing revokes the pass. The member's key stays theirs.
+- `/website`: what the apex shows and the versions members proposed. An admin approves a version.
+
+People sign in with their pass: `belfry.<domain>/login` goes through `pass.<domain>/me`, which
+hands back a short ticket, and the console then sets its own cookie. Unlike `/steward`, these pages
+are not limited to the admin network.
+
+New installs (`install.sh`) set `HOMEPAGE=nsite`. Until a website is published, the apex shows a
+placeholder that explains how to ask an agent to publish one, who publishes and approves, and
+links to `belfry.<domain>`.
+
+## Community pages: /monitor, /changelog, /proposals
+
+Every belfry serves these pages (`services/onboarding/belfry_onboarding/community.py`). They're on
+the apex, or on `pass.<domain>` when a homepage is set:
+
+- `/proposals` (members): any member with an active pass proposes something; others support it
+  and comment. Behind the scenes these are Nostr events on the community relay:
+  - a proposal is a kind-1 note tagged `t=proposal`, addressed to the belfry's key (`p`), with a `subject`;
+  - a comment is a kind-1 reply (`e` root);
+  - support is a kind-7 `+`.
+
+  The page signs as the member through the signer. Members who hold their own key post the same
+  note from any Nostr client.
+- `/monitor` (members): the community relay live, with filters by author and kind, pause, and an
+  inspector. The page reads the members-only relay through the onboarding service, with the
+  belfry's key, as server-sent events.
+- `/changelog` (public, and `/changelog.json`): the deployed code's commits with their author and
+  co-authors, and the operations run on the server, each with who started it.
+  `infra/scripts/changelog.sh record "<summary>" [--by NAME] [--proposal EVENT_ID]` adds an
+  operation (`BELFRY_BY` names who, for example "Ana via Claude"). `changelog.sh build`
+  rewrites `infra/data/changelog/changelog.json`, which is mounted into the onboarding service.
+  Run it after every update. Settings are named, never their values.
+
+The members-only pages use the pass page's session (`/me`): signing in there opens them.
+
 ## Admin network (ZeroTier)
 
 The admin pages answer only over a private ZeroTier network: Odoo's back office and login

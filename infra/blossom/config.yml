@@ -5,7 +5,7 @@
 #   (blossom/Caddyfile -> onboarding /blossom/auth) additionally requires that the pubkey holds
 #   an active pass. Reads are public (content-addressed, no listing).
 # - no mirror (SSRF surface), no server-side media processing, no listing, no dashboard.
-# - size limit and MIME allowlist with retention.
+# - size limit and MIME allowlist with retention (media, documents, and web files for nsites).
 port: 3000
 host: 0.0.0.0
 publicDomain: "${BLOSSOM_PUBLIC_DOMAIN}"
@@ -34,6 +34,31 @@ storage:
       expiration: 1 year
     - type: "text/markdown"
       expiration: 1 year
+    # websites published as nsites (NIP-5A; services/onboarding/belfry_onboarding/homepage.py):
+    # kept for years, since the homepage serves them from its own cache and rarely reads them here.
+    # The blob host serves everything sandboxed (proxy/Caddyfile), so HTML here runs nowhere.
+    - type: "text/html"
+      expiration: 5 years
+    - type: "text/css"
+      expiration: 5 years
+    - type: "text/javascript"
+      expiration: 5 years
+    - type: "application/javascript"
+      expiration: 5 years
+    - type: "application/json"
+      expiration: 5 years
+    - type: "application/manifest+json"
+      expiration: 5 years
+    - type: "text/xml"
+      expiration: 5 years
+    - type: "application/xml"
+      expiration: 5 years
+    - type: "font/*"
+      expiration: 5 years
+    - type: "application/x-sh"
+      expiration: 5 years
+    - type: "application/wasm"
+      expiration: 5 years
 
 upload:
   enabled: true

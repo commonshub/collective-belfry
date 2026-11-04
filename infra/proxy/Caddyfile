@@ -112,6 +112,13 @@
 	header Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 }
 
+# import csp_default "<policy>": the same, unless the service sent a policy of its own (the apex
+# homepage, services/onboarding/belfry_onboarding/homepage.py, sends the proxied site's or the
+# nsite's policy; the onboarding pages send none and get this one).
+(csp_default) {
+	header ?Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+}
+
 # import vanity <path> <host prefix>: <domain>/<path>[/rest] redirects to <host prefix>.<domain>[/rest]
 # (query kept). 302, so the short names can be pointed elsewhere later without browsers keeping
 # the old target. The apps stay on their own hosts (own origins: their keys in localStorage, their
@@ -139,7 +146,7 @@
 	import limit {args[0]}-signin 120 1m /signin/* /welcome/*
 	import limit {args[0]}-api 60 1m /api/*
 	# the pages carry their own small inline scripts and the QR codes as data: images
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
+	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
 	reverse_proxy onboarding:8100
 }
 
@@ -152,6 +159,16 @@
 	import admin_only /odoo /odoo/* /web /web/ /web/login /web/login/* /web/reset_password* /web/signup* /web/database/* /web/session/* /web/become /xmlrpc/* /jsonrpc /json/*
 	import limit odoo-invite 120 1m /belfry/invite/* /belfry/api/*
 	reverse_proxy odoo:8069
+}
+
+# The belfry's own page (services/onboarding/belfry_onboarding/console.py): overview, status,
+# members (admins add and remove them by e-mail), website versions. The onboarding service maps
+# this host's paths under /console; sign-in goes through pass.<domain>/me.
+belfry.{$BELFRY_DOMAIN} {
+	import security
+	import limit console-forms 60 1m /members/* /website/*
+	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'"
+	reverse_proxy onboarding:8100
 }
 
 # Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
