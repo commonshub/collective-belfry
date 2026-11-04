@@ -8,6 +8,8 @@
 #   belfry add-steward EMAIL [NAME]  let someone use the steward pages (and give them a pass)
 #   belfry smoke                     the end-to-end test over HTTPS (creates a test participant)
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
+#   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
+#   belfry homepage status           what the apex serves
 #   belfry logs [SERVICE]            follow the logs
 #   belfry compose ARGS…             docker compose with the right files and profile
 #
@@ -24,6 +26,8 @@
 #                                    nothing)
 #   BELFRY_ENV_<NAME>=<value>        any other infra/.env setting, e.g. BELFRY_ENV_ACCOUNTING_JOURNAL=7
 # Secrets are written to infra/secrets/ and never printed; status shows only whether they are set.
+# Changes are recorded in the changelog (/changelog) with who started them: BELFRY_BY names who
+# ("Ana via Claude"), else the sudo user.
 set -euo pipefail
 
 SELF="$(readlink -f "${BASH_SOURCE[0]}")"
@@ -83,6 +87,14 @@ secret_set() {
   [[ "$1" =~ ^[a-z0-9_]+$ ]] || die "bad secret name $1"
   (umask 027; printf '%s' "$2" > "$SECRETS/$1")
   say "  secret $1 (${#2} characters)"
+  changes+=("secret $1")
+}
+
+# record "<summary>": an operation in the changelog (infra/scripts/changelog.sh), when present
+record() {
+  if [[ -x infra/scripts/changelog.sh ]]; then
+    BELFRY_BY=${BELFRY_BY:-${SUDO_USER:-$(id -un)}} infra/scripts/changelog.sh record "$1" >/dev/null || true
+  fi
 }
 
 secret_state() { [[ -s "$SECRETS/$1" ]] && echo set || echo "not set"; }
@@ -104,7 +116,7 @@ cmd_config() {
       export "$k=$v"
     done < "$1"
   fi
-  local -a pairs=()
+  local -a pairs=() changes=()
   local changed=0
   say "Settings"
   if [[ -n "${BELFRY_DOMAIN:-}" && -n "$(env_get BELFRY_DOMAIN)" && "$BELFRY_DOMAIN" != "$(env_get BELFRY_DOMAIN)" ]]; then
@@ -149,10 +161,11 @@ cmd_config() {
   if [[ ${#pairs[@]} -gt 0 ]]; then
     env_set "${pairs[@]}"
     local i
-    for ((i = 0; i < ${#pairs[@]}; i += 2)); do say "  ${pairs[i]}=${pairs[i+1]}"; done
+    for ((i = 0; i < ${#pairs[@]}; i += 2)); do say "  ${pairs[i]}=${pairs[i+1]}"; changes+=("${pairs[i]}"); done
     changed=1
   fi
   [[ $changed -eq 1 ]] || { say "  nothing to change (see belfry help)"; return 0; }
+  record "Settings changed: $(IFS=,; echo "${changes[*]}" | sed 's/,/, /g')"
   if [[ "${BELFRY_NO_APPLY:-}" == 1 ]]; then return 0; fi
   if compose ps --status running -q proxy 2>/dev/null | grep -q .; then cmd_apply; else say "The stack is not running; start it with: belfry apply"; fi
 }
@@ -173,6 +186,7 @@ cmd_apply() {
   say "The onboarding service and the apps"
   compose --profile app up -d --build
   compose --profile app restart onboarding
+  [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
   say "Done. belfry status shows the state."
 }
 
@@ -211,6 +225,7 @@ cmd_update() {
   git checkout -q "$ref" 2>/dev/null || git checkout -q -b "$ref" "origin/$ref"
   git merge -q --ff-only "origin/$ref"
   say "At $(git rev-parse --short HEAD)"
+  record "Updated the code to $(git rev-parse --short HEAD) ($ref)"
   infra/scripts/gen-secrets.sh >/dev/null
   cmd_apply
 }
@@ -222,6 +237,20 @@ cmd_smoke() {
   infra/scripts/smoke.sh
 }
 
+cmd_homepage() {
+  case "${1:-status}" in
+    publish)
+      local dir=${2:?usage: belfry homepage publish DIR [--title TITLE]}; shift 2
+      [[ -f "$dir/index.html" ]] || die "$dir has no index.html"
+      tar -C "$dir" -c . | compose --profile app exec -T onboarding python -m belfry_onboarding homepage-publish "$@"
+      record "Homepage published from $(basename "$(readlink -f "$dir")")"
+      [[ "$(env_get HOMEPAGE)" == nsite* ]] || say "To show it on the apex: BELFRY_ENV_HOMEPAGE=nsite in a file, then belfry config FILE"
+      ;;
+    status) compose --profile app exec -T onboarding python -m belfry_onboarding homepage-status ;;
+    *) die "usage: belfry homepage publish DIR | status" ;;
+  esac
+}
+
 case "${1:-help}" in
   status) cmd_status ;;
   config) shift; cmd_config "$@" ;;
@@ -230,6 +259,7 @@ case "${1:-help}" in
     compose --profile app exec -T onboarding python -m belfry_onboarding add-steward "$@" ;;
   smoke) cmd_smoke ;;
   update) shift; cmd_update "$@" ;;
+  homepage) shift; cmd_homepage "$@" ;;
   logs) shift; compose --profile app logs -f --tail=100 "$@" ;;
   compose) shift; compose "$@" ;;
   help|-h|--help) sed -n '2,/^set -euo/p' "$SELF" | sed '$d; s/^# \{0,1\}//' ;;
