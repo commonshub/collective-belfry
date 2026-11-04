@@ -1,0 +1,28 @@
+# Prebuilt images (.github/workflows/images.yml) instead of building on the server: a file after
+# docker-compose.prod.yml (and docker-compose.nginx.yml). `belfry apply` adds it and sets the tags
+# to the git tree hash of each build context in the checkout, so the image matches the code;
+# when GitHub has no image for that hash (a branch, a local change) it builds as before.
+#   BELFRY_IMAGES       registry and name prefix (default ghcr.io/commonshub/belfry)
+#   BELFRY_*_TAG        tree-<12 hex> of infra/keycast/build, infra/proxy, infra/groups-relay,
+#                       services/onboarding, infra/git
+name: belfry
+
+services:
+  keycast:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-keycast:${BELFRY_KEYCAST_TAG:?set by belfry apply}
+    build: !reset null
+  keycast-migrate:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-keycast:${BELFRY_KEYCAST_TAG:?set by belfry apply}
+    build: !reset null
+  proxy:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-proxy:${BELFRY_PROXY_TAG:?set by belfry apply}
+    build: !reset null
+  groups-relay:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-groups-relay:${BELFRY_GROUPS_RELAY_TAG:?set by belfry apply}
+    build: !reset null
+  git:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-git:${BELFRY_GIT_TAG:?set by belfry apply}
+    build: !reset null
+  onboarding:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-onboarding:${BELFRY_ONBOARDING_TAG:?set by belfry apply}
+    build: !reset null

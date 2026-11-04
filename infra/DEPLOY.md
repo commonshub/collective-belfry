@@ -57,6 +57,16 @@ memory; after a reboot a steward unlocks it (`custody-seed.sh unlock belfry@<hos
 recipients the seed stays on the server's disk, as in local development, and `belfry status` says
 so; move it under the YubiKeys before real members join ("Custody seed" below).
 
+**Prebuilt images.** GitHub Actions builds the parts that are the same for every community (the
+signer, the git server, the proxy, the groups relay and the onboarding service; `.github/workflows/images.yml`)
+and publishes them as `ghcr.io/commonshub/belfry-<name>:tree-<hash>`, where the hash is the git
+tree hash of the image's build context. `belfry apply` computes the same hashes from the checkout
+and pulls those images (`docker-compose.images.yml`); when there are none for that code (a
+branch, a local change) it builds them on the server as before, and `BELFRY_BUILD_LOCAL=1` always
+does. This skips the signer's Rust build (15 to 30 minutes, several GB of disk). The community
+apps (chat, calendar, wallet, vote, village, groups) carry the domain in their build and are
+still built on the server.
+
 **What stays manual:** the admin network (ZeroTier), the backups, and SMTP providers other than
 Resend (`BELFRY_SMTP_HOST`, `_PORT`, `_USER`, `_ENCRYPTION`, `BELFRY_SMTP_PASSWORD`).
 

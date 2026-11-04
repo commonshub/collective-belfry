@@ -1,0 +1,90 @@
+# Prebuilt images for the parts of Belfry that are the same for every community: the signer
+# (Keycast with Belfry's patches, a long Rust build), the git server (ngit-grasp, Rust), the reverse proxy (Caddy with the rate-limit
+# module), the groups relay and the onboarding service. A server pulls them instead of building
+# (install.sh, `belfry apply`, docker-compose.images.yml). The community apps bake the domain in
+# at build time and are still built on the server.
+#
+# Tag: tree-<12 hex>, the git tree hash of the image's build context. A server computes the same
+# hash from its checkout (`git rev-parse --short=12 HEAD:<context>`), so it pulls exactly the
+# image of the code it runs, and builds itself when none exists (a branch, a local change).
+name: Images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/keycast/build/**
+      - infra/proxy/**
+      - infra/groups-relay/**
+      - services/onboarding/**
+      - infra/git/**
+      - .github/workflows/images.yml
+  pull_request:
+    paths:
+      - infra/keycast/build/**
+      - infra/proxy/**
+      - infra/groups-relay/**
+      - services/onboarding/**
+      - infra/git/**
+      - .github/workflows/images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: keycast
+            context: infra/keycast/build
+          - name: proxy
+            context: infra/proxy
+          - name: groups-relay
+            context: infra/groups-relay
+          - name: onboarding
+            context: services/onboarding
+          - name: git
+            context: infra/git
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Tag from the build context's tree hash
+        id: tag
+        run: |
+          tree=$(git rev-parse --short=12 "HEAD:${{ matrix.context }}")
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/belfry-${{ matrix.name }}"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+          echo "tags=$image:tree-$tree" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            echo "tags=$image:tree-$tree,$image:main" >> "$GITHUB_OUTPUT"
+          fi
+          echo "$image:tree-$tree"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub's container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64
+          # pull requests only check that the image builds
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.tag.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=Belfry ${{ matrix.name }} (build context ${{ matrix.context }})
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
