@@ -177,14 +177,46 @@ bootstrap_env() {
   export ODOO_URL="https://$prefix.$d" AK_URL="https://login.$d" KC_URL="https://apps.$d"
 }
 
+free_gb() { df -Pk "$ROOT" | awk 'NR==2 {printf "%d", $4/1048576}'; }
+
+# Little disk (under 25 GB free): build one image at a time and empty the build cache after each,
+# so the peak is one build instead of all of them (a 20 GB server fits). Images that exist are
+# kept unless BELFRY_REBUILD=1 (belfry update sets it).
+lean_build() {
+  local svc image
+  say "Little disk ($(free_gb) GB free): building one image at a time"
+  while read -r svc image; do
+    [[ -n "$svc" ]] || continue
+    if [[ "${BELFRY_REBUILD:-}" != 1 ]] && docker image inspect "$image" >/dev/null 2>&1; then
+      say "  $svc: $image exists"
+      continue
+    fi
+    say "  $svc: building $image"
+    compose --profile app build "$svc"
+    docker builder prune -af >/dev/null
+  done < <(compose --profile app config --format json | python3 -c '
+import json, sys
+seen = set()
+for name, s in json.load(sys.stdin)["services"].items():
+    if "build" in s and s.get("image") not in seen:
+        seen.add(s.get("image"))
+        print(name, s.get("image") or name)
+')
+}
+
 cmd_apply() {
   bootstrap_env
   say "Starting the stack (the first start builds the signer: about 15 minutes)"
-  compose up -d --build
+  if [[ "$(free_gb)" -lt 25 ]]; then
+    lean_build
+    compose up -d
+  else
+    compose up -d --build
+  fi
   say "Bootstrap (Odoo, Authentik, the signer, Stripe and Mollie when their keys are set)"
   infra/scripts/bootstrap.sh
   say "The onboarding service and the apps"
-  compose --profile app up -d --build
+  if [[ "$(free_gb)" -lt 25 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
   compose --profile app restart onboarding
   [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
   say "Done. belfry status shows the state."
@@ -227,7 +259,7 @@ cmd_update() {
   say "At $(git rev-parse --short HEAD)"
   record "Updated the code to $(git rev-parse --short HEAD) ($ref)"
   infra/scripts/gen-secrets.sh >/dev/null
-  cmd_apply
+  BELFRY_REBUILD=1 cmd_apply
 }
 
 cmd_smoke() {
