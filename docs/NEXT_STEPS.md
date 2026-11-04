@@ -870,6 +870,11 @@ v3.1.0 of 2026-11-03), which also has a private mode (GRASP-08); that is what ru
   a credential 401, announcement and state signed through a bunker, `git push` and `git clone`
   with the NIP-98 credential, an issue and a comment read back.
 
+Local smoke 239 ok / 0 failed (after re-applying `keycast/policy.sql`: the local signer still had
+the kind list from before PR #1). Deployed 2026-11-04 to belfry.tofauti.net (image built locally
+and loaded, gen-secrets, `GIT_DOMAIN`/`GIT_PUBLIC_URL`, onboarding rebuilt, perms-init, `caddy
+reload`; no bootstrap): smoke 232 ok / 0 failed over TLS, 26 members. Not on belfry2 yet.
+
 Open: no web view of the repositories (gitworkshop.dev cannot read a private server); ngit 2.x
 agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public
 relays or servers is synced there by design (the skill says not to).
