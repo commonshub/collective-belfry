@@ -1,0 +1,237 @@
+#!/usr/bin/env bash
+# belfry: run a Belfry installed by install.sh (linked as /usr/local/bin/belfry).
+#
+#   belfry status                    containers, public checks, what is configured (no secrets shown)
+#   belfry config [FILE]             apply BELFRY_* settings from FILE (KEY=VALUE lines) or the
+#                                    environment to infra/.env and infra/secrets/, then `belfry apply`
+#   belfry apply                     start or update the stack: up, bootstrap, apps, onboarding restart
+#   belfry add-steward EMAIL [NAME]  let someone use the steward pages (and give them a pass)
+#   belfry smoke                     the end-to-end test over HTTPS (creates a test participant)
+#   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
+#   belfry logs [SERVICE]            follow the logs
+#   belfry compose ARGS…             docker compose with the right files and profile
+#
+# Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
+#   BELFRY_NAME                      community name (start page, belfry.json, mails)
+#   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
+#   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
+#   BELFRY_SMTP_HOST, _PORT, _USER, _ENCRYPTION (none|starttls|ssl), BELFRY_SMTP_PASSWORD (secret)
+#   BELFRY_STRIPE_PUBLISHABLE_KEY    pk_test_… / pk_live_…
+#   BELFRY_STRIPE_SECRET_KEY         secret: sk_… or a restricted rk_…
+#   BELFRY_MOLLIE_API_KEY            secret: test_… / live_…
+#   BELFRY_ACCOUNTING_ODOO_URL, _DB, _ISSUER, BELFRY_ACCOUNTING_ODOO_API_KEY (secret): book paid
+#                                    passes in another organisation's Odoo (the bundled Odoo needs
+#                                    nothing)
+#   BELFRY_ENV_<NAME>=<value>        any other infra/.env setting, e.g. BELFRY_ENV_ACCOUNTING_JOURNAL=7
+# Secrets are written to infra/secrets/ and never printed; status shows only whether they are set.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="$(cd "$(dirname "$SELF")/../.." && pwd)"
+INFRA="$ROOT/infra"
+ENV_FILE="$INFRA/.env"
+SECRETS="$INFRA/secrets"
+
+die() { echo "belfry: $*" >&2; exit 1; }
+say() { printf '%s\n' "$*"; }
+
+# Everything runs as the owner of the checkout (HOST_UID: the signer's files belong to it).
+OWNER=$(stat -c %U "$ROOT")
+if [[ "$(id -un)" != "$OWNER" ]]; then
+  [[ "$(id -u)" -eq 0 ]] || die "run as $OWNER or root"
+  exec runuser -u "$OWNER" -- "$SELF" "$@"
+fi
+cd "$ROOT"
+
+COMPOSE_FILES=(-f infra/docker-compose.yml -f infra/docker-compose.prod.yml)
+[[ -f infra/.nginx ]] && COMPOSE_FILES+=(-f infra/docker-compose.nginx.yml)
+compose() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
+
+env_get() { sed -nE "s/^$1=\"?([^\"#]*)\"?.*/\1/p" "$ENV_FILE" | tail -n1 | sed 's/[[:space:]]*$//'; }
+
+# env_set KEY VALUE…: replace or append KEY=VALUE in infra/.env (quoted when it has spaces).
+env_set() {
+  python3 - "$ENV_FILE" "$@" <<'PY'
+import re, sys
+path, pairs = sys.argv[1], sys.argv[2:]
+values = dict(zip(pairs[::2], pairs[1::2]))
+def fmt(v):
+    return f'"{v}"' if re.search(r'[\s#"\']', v) else v
+lines = open(path).read().splitlines(keepends=True)
+seen = set()
+for i, line in enumerate(lines):
+    m = re.match(r"^([A-Z0-9_]+)=", line)
+    if m and m.group(1) in values:
+        if m.group(1) in seen:
+            lines[i] = ""
+            continue
+        lines[i] = f"{m.group(1)}={fmt(values[m.group(1)])}\n"
+        seen.add(m.group(1))
+missing = [k for k in values if k not in seen]
+if missing:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append("\n# --- belfry config\n")
+    lines += [f"{k}={fmt(values[k])}\n" for k in missing]
+open(path, "w").write("".join(lines))
+PY
+}
+
+# secret_set NAME VALUE: infra/secrets/<name>, in place (a running container's mount keeps the
+# inode), mode 640; perms-init gives it group 10001 at the next start.
+secret_set() {
+  [[ "$1" =~ ^[a-z0-9_]+$ ]] || die "bad secret name $1"
+  (umask 027; printf '%s' "$2" > "$SECRETS/$1")
+  say "  secret $1 (${#2} characters)"
+}
+
+secret_state() { [[ -s "$SECRETS/$1" ]] && echo set || echo "not set"; }
+
+cmd_config() {
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE missing: run install.sh first"
+  if [[ -n "${1:-}" ]]; then
+    [[ -r "$1" ]] || die "cannot read $1"
+    # KEY=VALUE lines; only BELFRY_* keys, values taken literally (no shell evaluation)
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+      [[ "$line" =~ ^[[:space:]]*(export[[:space:]]+)?(BELFRY_[A-Z0-9_]+)=(.*)$ ]] || die "not a BELFRY_ setting: ${line%%=*}"
+      local k=${BASH_REMATCH[2]} v=${BASH_REMATCH[3]}
+      v=${v%$'\r'}
+      # a trailing comment after an unquoted value; surrounding blanks; quotes
+      if [[ ! "$v" =~ ^[\"\'] ]]; then v=${v%%[[:space:]]#*}; fi
+      v=${v%"${v##*[![:space:]]}"}
+      if [[ "$v" =~ ^\"(.*)\"$ || "$v" =~ ^\'(.*)\'$ ]]; then v=${BASH_REMATCH[1]}; fi
+      export "$k=$v"
+    done < "$1"
+  fi
+  local -a pairs=()
+  local changed=0
+  say "Settings"
+  if [[ -n "${BELFRY_DOMAIN:-}" && -n "$(env_get BELFRY_DOMAIN)" && "$BELFRY_DOMAIN" != "$(env_get BELFRY_DOMAIN)" ]]; then
+    die "this Belfry runs on $(env_get BELFRY_DOMAIN); moving it to another domain is not supported by config (certificates and passes carry the name)"
+  fi
+  if [[ -n "${BELFRY_NAME:-}" ]]; then pairs+=(COMMUNITY_NAME "$BELFRY_NAME" COMPANY_NAME "$BELFRY_NAME"); fi
+  if [[ -n "${BELFRY_MAIL_FROM:-}" ]]; then pairs+=(MAIL_FROM "$BELFRY_MAIL_FROM"); fi
+  if [[ -n "${BELFRY_RESEND_API_KEY:-}" ]]; then
+    [[ "$BELFRY_RESEND_API_KEY" == re_* ]] || say "  warning: a Resend API key starts with re_"
+    pairs+=(SMTP_HOST smtp.resend.com SMTP_PORT 587 SMTP_USER resend SMTP_ENCRYPTION starttls)
+    secret_set smtp_password "$BELFRY_RESEND_API_KEY"; changed=1
+  fi
+  local v
+  for v in HOST PORT USER ENCRYPTION; do
+    local n="BELFRY_SMTP_$v"
+    if [[ -n "${!n:-}" ]]; then pairs+=("SMTP_$v" "${!n}"); fi
+  done
+  if [[ -n "${BELFRY_SMTP_PASSWORD:-}" ]]; then secret_set smtp_password "$BELFRY_SMTP_PASSWORD"; changed=1; fi
+  if [[ -n "${BELFRY_STRIPE_PUBLISHABLE_KEY:-}" ]]; then
+    [[ "$BELFRY_STRIPE_PUBLISHABLE_KEY" == pk_* ]] || die "BELFRY_STRIPE_PUBLISHABLE_KEY must start with pk_"
+    pairs+=(STRIPE_PUBLISHABLE_KEY "$BELFRY_STRIPE_PUBLISHABLE_KEY")
+  fi
+  if [[ -n "${BELFRY_STRIPE_SECRET_KEY:-}" ]]; then
+    [[ "$BELFRY_STRIPE_SECRET_KEY" =~ ^(sk|rk)_(test|live)_ ]] || die "BELFRY_STRIPE_SECRET_KEY must start with sk_ or rk_ (test or live)"
+    secret_set stripe_secret_key "$BELFRY_STRIPE_SECRET_KEY"; changed=1
+  fi
+  if [[ -n "${BELFRY_MOLLIE_API_KEY:-}" ]]; then
+    [[ "$BELFRY_MOLLIE_API_KEY" =~ ^(test|live)_ ]] || die "BELFRY_MOLLIE_API_KEY must start with test_ or live_"
+    secret_set mollie_api_key "$BELFRY_MOLLIE_API_KEY"; changed=1
+  fi
+  for v in URL DB ISSUER; do
+    local n="BELFRY_ACCOUNTING_ODOO_$v"
+    if [[ -n "${!n:-}" ]]; then
+      case $v in URL) pairs+=(ACCOUNTING_ODOO_URL "${!n}") ;; DB) pairs+=(ACCOUNTING_ODOO_DB "${!n}") ;; ISSUER) pairs+=(ACCOUNTING_ISSUER "${!n}") ;; esac
+    fi
+  done
+  if [[ -n "${BELFRY_ACCOUNTING_ODOO_API_KEY:-}" ]]; then secret_set accounting_odoo_api_key "$BELFRY_ACCOUNTING_ODOO_API_KEY"; changed=1; fi
+  local name
+  while IFS= read -r name; do
+    pairs+=("${name#BELFRY_ENV_}" "${!name}")
+  done < <(compgen -e | grep -E '^BELFRY_ENV_[A-Z0-9_]+$' || true)
+  if [[ ${#pairs[@]} -gt 0 ]]; then
+    env_set "${pairs[@]}"
+    local i
+    for ((i = 0; i < ${#pairs[@]}; i += 2)); do say "  ${pairs[i]}=${pairs[i+1]}"; done
+    changed=1
+  fi
+  [[ $changed -eq 1 ]] || { say "  nothing to change (see belfry help)"; return 0; }
+  if [[ "${BELFRY_NO_APPLY:-}" == 1 ]]; then return 0; fi
+  if compose ps --status running -q proxy 2>/dev/null | grep -q .; then cmd_apply; else say "The stack is not running; start it with: belfry apply"; fi
+}
+
+bootstrap_env() {
+  local d prefix
+  d=$(env_get BELFRY_DOMAIN); [[ -n "$d" ]] || die "BELFRY_DOMAIN is not set in $ENV_FILE"
+  prefix=$(env_get ODOO_HOST_PREFIX); prefix=${prefix:-shop}
+  export ODOO_URL="https://$prefix.$d" AK_URL="https://login.$d" KC_URL="https://apps.$d"
+}
+
+cmd_apply() {
+  bootstrap_env
+  say "Starting the stack (the first start builds the signer: about 15 minutes)"
+  compose up -d --build
+  say "Bootstrap (Odoo, Authentik, the signer, Stripe and Mollie when their keys are set)"
+  infra/scripts/bootstrap.sh
+  say "The onboarding service and the apps"
+  compose --profile app up -d --build
+  compose --profile app restart onboarding
+  say "Done. belfry status shows the state."
+}
+
+cmd_status() {
+  local d; d=$(env_get BELFRY_DOMAIN)
+  say "Belfry at https://$d ($(git -C "$ROOT" rev-parse --abbrev-ref HEAD) $(git -C "$ROOT" rev-parse --short HEAD))"
+  compose --profile app ps --format 'table {{.Service}}\t{{.Status}}'
+  say ""
+  say "Public checks"
+  local u code
+  for u in "https://$d/" "https://pass.$d/status/1" "https://login.$d/application/o/keycast/.well-known/openid-configuration" "https://$d/.well-known/belfry.json"; do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$u" || true)
+    printf '  %s  %s\n' "${code:-000}" "$u"
+  done
+  say ""
+  say "Configured"
+  local smtp; smtp=$(env_get SMTP_HOST)
+  printf '  mail         %s (password %s), from %s\n' "${smtp:-none}" "$(secret_state smtp_password)" "$(env_get MAIL_FROM)"
+  printf '  stripe       publishable %s, secret %s\n' "$( [[ -n "$(env_get STRIPE_PUBLISHABLE_KEY)" ]] && echo set || echo 'not set')" "$(secret_state stripe_secret_key)"
+  printf '  mollie       %s\n' "$(secret_state mollie_api_key)"
+  printf '  accounting   %s (key %s)\n' "$(env_get ACCOUNTING_ODOO_URL || true)" "$(secret_state accounting_odoo_api_key)"
+  local seeddir; seeddir=$(env_get CUSTODY_SEED_DIR)
+  if [[ -z "$seeddir" ]]; then
+    printf '  custody seed on this disk (infra/secrets/custody); move it under YubiKeys: infra/DEPLOY.md\n'
+  elif [[ -s "$seeddir/custody-seed" ]]; then
+    printf '  custody seed unlocked in %s\n' "$seeddir"
+  else
+    printf '  custody seed LOCKED: new members wait until a steward runs custody-seed.sh unlock\n'
+  fi
+}
+
+cmd_update() {
+  local ref=${1:-$(git rev-parse --abbrev-ref HEAD)}
+  [[ -z "$(git status --porcelain --untracked-files=no)" ]] || die "the checkout has local changes; commit or stash them first"
+  git fetch -q origin "$ref"
+  git checkout -q "$ref" 2>/dev/null || git checkout -q -b "$ref" "origin/$ref"
+  git merge -q --ff-only "origin/$ref"
+  say "At $(git rev-parse --short HEAD)"
+  infra/scripts/gen-secrets.sh >/dev/null
+  cmd_apply
+}
+
+cmd_smoke() {
+  local d; d=$(env_get BELFRY_DOMAIN)
+  bootstrap_env
+  export ONB_URL="https://pass.$d" BLOSSOM_URL="https://blossom.$d" WALLET_MAP="" BUNKER_MAP="" ONB_ADMIN_EXEC=1
+  infra/scripts/smoke.sh
+}
+
+case "${1:-help}" in
+  status) cmd_status ;;
+  config) shift; cmd_config "$@" ;;
+  apply) cmd_apply ;;
+  add-steward) shift; [[ -n "${1:-}" ]] || die "usage: belfry add-steward EMAIL [NAME]"
+    compose --profile app exec -T onboarding python -m belfry_onboarding add-steward "$@" ;;
+  smoke) cmd_smoke ;;
+  update) shift; cmd_update "$@" ;;
+  logs) shift; compose --profile app logs -f --tail=100 "$@" ;;
+  compose) shift; compose "$@" ;;
+  help|-h|--help) sed -n '2,/^set -euo/p' "$SELF" | sed '$d; s/^# \{0,1\}//' ;;
+  *) die "unknown command $1 (belfry help)" ;;
+esac

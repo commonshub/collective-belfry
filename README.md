@@ -25,6 +25,17 @@ Refunds, chargebacks and expiry close the pass: the login, the signer, the relay
 certificate stop working. Participants can take their Nostr key into their own custody at any
 time.
 
+## Install
+
+On a fresh VM with 8 GB RAM and DNS for `<domain>` and `*.<domain>` pointing at it:
+
+```bash
+curl -fsSL https://belfry.sh/install.sh | sudo bash
+```
+
+It asks for the domain and the providers (mail, payments), sets up Docker, nginx and ufw and
+starts everything. `infra/DEPLOY.md` explains it, and the installation by hand.
+
 ## The parts
 
 | Part | What it does | Software |

@@ -4,6 +4,64 @@ Belfry runs on one VM with Docker Compose. The public deployment is the local st
 (`README.md`) plus `docker-compose.prod.yml`, which puts a Caddy reverse proxy with automatic TLS
 in front of everything and publishes no other port.
 
+## One command (install.sh)
+
+On a fresh Ubuntu 24.04/26.04 or Debian 12/13 VM (amd64, 8 GB RAM, 30 GB free), with A records
+for `<domain>` and `*.<domain>` pointing at it:
+
+```bash
+curl -fsSL https://belfry.sh/install.sh | sudo bash
+```
+
+It asks for the domain, an e-mail (Let's Encrypt notices, the first steward), the community's
+name, a Resend API key for the mails, optionally Stripe keys, another organisation's Odoo for
+the accounting, and the stewards' age recipients for the custody seed. It checks the server and
+the DNS before changing anything. Then it installs Docker, nginx and ufw (SSH, 80 and 443 in),
+creates the user `belfry`, clones this repository into `/opt/belfry`, runs `gen-secrets.sh` and
+`prod-env.sh`, writes the settings and secrets, starts the stack with bootstrap and the apps,
+and makes the e-mail a steward. `--dry-run` only checks; `--help` lists the options.
+
+For an agent, or any run without questions, the settings go into a file (secrets never go on
+the command line):
+
+```bash
+install -m 600 /dev/null /root/belfry.env && cat > /root/belfry.env <<'EOF'
+BELFRY_DOMAIN=belfry.example.org
+BELFRY_EMAIL=ops@example.org
+BELFRY_NAME="Example Commons"
+BELFRY_RESEND_API_KEY=re_…
+BELFRY_MAIL_FROM=belfry@example.org
+BELFRY_STRIPE_PUBLISHABLE_KEY=pk_test_…
+BELFRY_STRIPE_SECRET_KEY=sk_test_…
+EOF
+curl -fsSL https://belfry.sh/install.sh | bash -s -- --config /root/belfry.env --yes
+```
+
+Every setting is listed at the top of `install.sh` and in `belfry help`. Later changes use the
+same names: `belfry config <file>` writes them and applies them (bootstrap again).
+
+**nginx in front of Caddy.** With install.sh, nginx owns ports 80 and 443 on the host, so other
+sites can live on the same server. It does not decrypt Belfry's traffic: it routes by name
+(SNI, `ssl_preread`) and passes the connection to Belfry's Caddy on `127.0.0.1:8443` with a PROXY
+protocol header (`nginx/belfry-stream.conf`). Caddy keeps its certificates and every rule in
+`proxy/Caddyfile`, and still sees each visitor's own address for `ADMIN_NETS` and the rate
+limits. Port 80 sends Let's Encrypt's challenges to Caddy on `127.0.0.1:8080` and everything else
+to HTTPS (`nginx/belfry-http.conf`). The Compose overlay `docker-compose.nginx.yml` moves the
+proxy's ports to the loopback, which also keeps Docker from opening ports past ufw. Without
+install.sh nothing changes: Caddy binds 80 and 443 itself, as below.
+
+**The custody seed.** With `--custody-recipient age1…` (one per steward, YubiKey recipients
+work) the installer creates the seed, writes it encrypted to those recipients as
+`infra/secrets/custody-seed.age` (copy it to every steward and the backups) and unlocks it in
+memory; after a reboot a steward unlocks it (`custody-seed.sh unlock belfry@<host> …`). Without
+recipients the seed stays on the server's disk, as in local development, and `belfry status` says
+so; move it under the YubiKeys before real members join ("Custody seed" below).
+
+**What stays manual:** the admin network (ZeroTier), the backups, and SMTP providers other than
+Resend (`BELFRY_SMTP_HOST`, `_PORT`, `_USER`, `_ENCRYPTION`, `BELFRY_SMTP_PASSWORD`).
+
+The rest of this page is the same installation by hand, and what each part does.
+
 ## What you need
 
 - A VM with Docker and Compose v2, 4 vCPU and 8 GB RAM, ports 80 and 443 open. amd64: the relay
