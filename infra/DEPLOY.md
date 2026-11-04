@@ -168,6 +168,27 @@ The Authentik admin `akadmin` signs in with its password at
 `https://login.<domain>/if/flow/default-authentication-flow/?next=/if/admin/`, over the admin
 network only.
 
+## The homepage (`HOMEPAGE`)
+
+The apex (`https://<domain>/`) shows Belfry's start page unless `HOMEPAGE` in `.env` says
+otherwise (`services/onboarding/belfry_onboarding/homepage.py`):
+
+- `https://site.example`: the community's website hosted elsewhere, through a proxy (visitors
+  stay on the apex);
+- `nsite`: a static site the belfry publishes itself (NIP-5A): the files go to its Blossom
+  server, the manifest (kind 15128) is signed with the belfry's own key (`secrets/belfry_nsec`)
+  on the community relay. Publish with
+  `tar -C dist -c . | $C --profile app exec -T onboarding python -m belfry_onboarding homepage-publish`;
+- `nsite:<npub>` or `nsite:<npub>/<name>`: another key's nsite, published with any NIP-5A tool
+  (`HOMEPAGE_RELAYS` adds relays to look for its manifest).
+
+With a homepage, the apex keeps `/.well-known/*` and the short names. Its onboarding pages move
+to `pass.<domain>`, whose `/` then shows the start page. The proxy gives onboarding pages
+their strict Content-Security-Policy unless the service sends one: the homepage sends the
+proxied site's policy or a default. Restart the onboarding service after changing
+`HOMEPAGE` (`$C --profile app up -d onboarding`). `skills/belfry-homepage/SKILL.md` has the
+details for an agent.
+
 ## Admin network (ZeroTier)
 
 The admin pages answer only over a private ZeroTier network: Odoo's back office and login

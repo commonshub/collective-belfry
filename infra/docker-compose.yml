@@ -610,7 +610,7 @@ services:
     secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
               bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
               pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
-              programme_nsec, groups_api_nsec, accounting_odoo_api_key]
+              programme_nsec, groups_api_nsec, accounting_odoo_api_key, belfry_nsec]
     depends_on:
       odoo:
         condition: service_healthy
@@ -694,6 +694,9 @@ services:
       BRIDGE_CLIENT_ID: belfry-authentik
       EVENT_START: ${EVENT_START:-2027-01-25}
       SITE_URL: ${SITE_URL:-}
+      # the apex homepage: empty (start page), https://… (proxy), nsite, nsite:<npub>[/<name>]
+      HOMEPAGE: ${HOMEPAGE:-}
+      HOMEPAGE_RELAYS: ${HOMEPAGE_RELAYS:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect
       COMMUNITY_NAME: ${COMMUNITY_NAME:-Open Source Village}
       ODOO_PUBLIC_URL: ${ODOO_PUBLIC_URL:-http://localhost:8069}
@@ -981,6 +984,7 @@ secrets:
   pass_page_oidc_client_secret: {file: ./secrets/pass_page_oidc_client_secret}
   pass_page_secret: {file: ./secrets/pass_page_secret}
   programme_nsec: {file: ./secrets/programme_nsec}
+  belfry_nsec: {file: ./secrets/belfry_nsec}
   polls_nsec: {file: ./secrets/polls_nsec}
   groups_relay_nsec: {file: ./secrets/groups_relay_nsec}
   groups_api_nsec: {file: ./secrets/groups_api_nsec}
