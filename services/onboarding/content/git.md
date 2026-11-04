@@ -13,14 +13,13 @@ active pass can read or write. Without a pass you see this page and nothing else
 
 ## Getting started
 
-| Step | Command |
-| --- | --- |
-| Sign in with your key, once | `ngit account login` (or `--bunker-url 'bunker://…'` from your account page, **Connect to Nostr App**) |
-| Put a repository here | `ngit init --name "My project" --grasp-server {{git_host}} --private` |
-| Send your work | `git push -u origin main` |
-| Get someone's repository | `git clone nostr://<their npub>/<repository>` |
-| Propose a change | `git push -u origin pr/my-change -o 'title=My change'` |
-| Open an issue | `ngit issue create --title "…" --body "…"` |
+1. Sign in with your key, once: `ngit account login`. With the key Belfry keeps for you, add
+   `--bunker-url 'bunker://…'` from your account page (**Connect to Nostr App**).
+2. Put a repository here: `ngit init --name "My project" --grasp-server {{git_host}} --private`
+3. Send your work: `git push -u origin main`
+4. Get someone's repository: `git clone nostr://<their npub>/<repository>`
+5. Propose a change: `git push -u origin pr/my-change -o 'title=My change'`
+6. Open an issue: `ngit issue create --title "…" --body "…"`
 
 Use `--private` and name only **{{git_host}}** as the server, so the repository and the talk about
 it stay in the village. Only a repository's maintainers push its branches; everyone else proposes
