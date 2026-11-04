@@ -57,7 +57,7 @@ main() {
   warn() { printf '  %s!%s %s\n' "$yellow" "$reset" "$*"; }
   bad()  { printf '  %s✗%s %s\n' "$red" "$reset" "$*"; }
   die()  { printf '\n%sbelfry install: %s%s\n' "$red" "$*" "$reset" >&2; exit 1; }
-  step() { printf '\n%s%s%s\n' "$bold" "$*" "$reset"; }
+  step() { CURRENT_STEP="$*"; printf '\n%s%s%s\n' "$bold" "$*" "$reset"; }
 
   usage() {
     cat <<'EOF'
@@ -290,18 +290,24 @@ EOF
   confirm "Install Belfry on this server?" || die "nothing changed"
 
   exec > >(tee -a "$LOG") 2>&1
+  # main's locals are gone when the EXIT trap runs: it uses the global CURRENT_STEP only
+  CURRENT_STEP='start'
+  # shellcheck disable=SC2154
+  trap 'rc=$?; if [[ $rc -ne 0 ]]; then printf "\nbelfry install: stopped during \"%s\" (exit %s). Fix what the lines above say and run the installer again: it resumes. Log: /var/log/belfry-install.log\n" "${CURRENT_STEP:-?}" "$rc"; fi' EXIT
   printf '\n--- %s install.sh %s\n' "$(date -Is)" "$*" >>"$LOG"
 
   # ── 5. Packages ─────────────────────────────────────────────────────────────────────────────
   step "Packages"
-  export DEBIAN_FRONTEND=noninteractive
+  export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
   apt-get update -qq
   local pkgs=(ca-certificates curl git ufw python3 openssl age jq unattended-upgrades)
   [[ $NGINX -eq 1 ]] && pkgs+=(nginx libnginx-mod-stream)
   apt-get install -y -qq "${pkgs[@]}" >/dev/null
   ok "${pkgs[*]:1}"
   if ! command -v docker >/dev/null; then
-    curl -fsSL https://get.docker.com | sh >/dev/null
+    curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+    sh /tmp/get-docker.sh >>"$LOG" 2>&1 || die "Docker install failed: see $LOG"
+    rm -f /tmp/get-docker.sh
   fi
   local cv; cv=$(docker compose version --short 2>/dev/null || echo 0)
   if ! printf '%s\n%s\n' 2.33.0 "${cv#v}" | sort -V -C; then

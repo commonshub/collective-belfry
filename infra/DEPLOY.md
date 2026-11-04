@@ -6,7 +6,7 @@ in front of everything and publishes no other port.
 
 ## One command (install.sh)
 
-On a fresh Ubuntu 24.04/26.04 or Debian 12/13 VM (amd64, 8 GB RAM, 30 GB free), with A records
+On a fresh Ubuntu 24.04/26.04 or Debian 12/13 VM (amd64, 8 GB RAM, a 40 GB disk with 30 GB free), with A records
 for `<domain>` and `*.<domain>` pointing at it:
 
 ```bash

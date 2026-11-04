@@ -12,7 +12,7 @@ apps on one VM. One script sets it up: `https://belfry.sh/install.sh` (the sourc
 ## Before you start, ask the person for
 
 1. **The server**: SSH access as root (or a sudoer). Ubuntu 24.04/26.04 or Debian 12/13, amd64,
-   **8 GB RAM**, 30 GB free disk. Smaller machines fail the check; don't use `--force` to get
+   **8 GB RAM**, a 40 GB disk (the images alone take about 10 GB, the signer's build several more). Smaller machines fail the check; don't use `--force` to get
    past RAM, the stack won't run.
 2. **The domain** and access to its DNS: A (and AAAA) records for `<domain>` and `*.<domain>`
    pointing at the server. The apex serves the community's start page, so don't use a domain
