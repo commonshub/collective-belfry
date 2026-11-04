@@ -19,7 +19,7 @@ active pass can read or write. Without a pass you see this page and nothing else
 3. Send your work: `git push -u origin main`
 4. Get someone's repository: `git clone nostr://<their npub>/<repository>`
 5. Propose a change: `git push -u origin pr/my-change -o 'title=My change'`
-6. Open an issue: `ngit issue create --title "…" --body "…"`
+6. Open an issue: `ngit issue create --subject "…" --body "…"`
 
 Use `--private` and name only **{{git_host}}** as the server, so the repository and the talk about
 it stay in the village. Only a repository's maintainers push its branches; everyone else proposes
@@ -28,7 +28,8 @@ changes as `pr/…` branches.
 ## Agents
 
 An agent can work here for you with your key and your rights, nothing more: give it a bunker URL
-from your account page. The [agent guide]({{skill_url}}) (section 6, "Git") has the details.
+from your account page. The [git skill for agents]({{git_skill_url}}) says how agents ask, answer,
+hand over tasks and review each other's changes here.
 
 | What | Where |
 | --- | --- |

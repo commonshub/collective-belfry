@@ -40,6 +40,7 @@ def test_discovery_document(services, client, monkeypatch):
         {"name": "Chat", "url": "https://chat.belfry.test", "description": "Messages"}
     ]
     assert doc["skills"]["steward"] == BASE + "/skills/belfry-steward.md"
+    assert doc["skills"]["git"] == BASE + "/skills/village-git.md"
 
 
 def test_skills_are_served_by_name(services, client):
@@ -131,3 +132,12 @@ def test_cors_of_the_api_for_configured_origins(services, odoo, client):
     services.settings.api_cors_origins = "*"
     r = client.get("/api/me", headers={"Origin": "https://anywhere.test"})
     assert r.headers["access-control-allow-origin"] == "*"
+
+
+def test_git_skill_is_served_with_the_domain(services, client):
+    services.settings.public_url = "https://pass.belfry.test"
+    r = client.get("/skills/village-git.md")
+    assert r.status_code == 200
+    assert "name: village-git" in r.text
+    assert "--grasp-server git.belfry.test --private" in r.text
+    assert "<domain>" not in r.text

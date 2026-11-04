@@ -109,5 +109,5 @@ def test_git_page_names_the_server_and_links_the_skill(services, client):
     assert "<strong>git.belfry.test</strong> is where participants" in r.text
     assert "--grasp-server git.belfry.test --private" in r.text
     assert "<code>wss://git.belfry.test</code>" in r.text
-    assert 'href="https://pass.belfry.test/skill.md"' in r.text
+    assert 'href="https://pass.belfry.test/skills/village-git.md"' in r.text
     assert "gitworkshop.dev" not in r.text

@@ -160,6 +160,7 @@ def _values(settings: Any) -> dict[str, str]:
         "git_host": urlparse(git_url).netloc or "git.<domain>",
         "git_relay": re.sub(r"^http", "ws", git_url) if git_url else "",
         "skill_url": f"{public}/skill.md" if public else "/skill.md",
+        "git_skill_url": f"{public}/skills/village-git.md" if public else "/skills/village-git.md",
         "account": getattr(settings, "apps_public_url", "") or "/",
         "pass_page": f"{public}/me" if public else "/me",
         "app_list__html": f'<ul class="apps">{app_list}</ul>' if app_list else "",

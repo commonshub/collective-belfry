@@ -36,7 +36,7 @@ WELL_KNOWN = "/.well-known/belfry.json"
 ME = "/api/me"
 VERSION = 1
 # skills/ in the repo, served at /skills/<name>.md (pages.py); the visitor's also at /skill.md
-SKILLS = {"visitor": "open-source-village", "steward": "belfry-steward"}
+SKILLS = {"visitor": "open-source-village", "steward": "belfry-steward", "git": "village-git"}
 
 
 def _url(value: str) -> str:

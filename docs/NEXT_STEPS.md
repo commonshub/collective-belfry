@@ -879,6 +879,12 @@ reload`; no bootstrap): smoke 232 ok / 0 failed over TLS, 26 members. Not on bel
   browsers on git.<domain> (root and repository addresses; `/brand/*` from the onboarding service,
   the footer's links redirect to pass.<domain>); relay, NIP-11 and git untouched. Smoke 6x checks it
   on public deployments.
+- [x] Git skill for agents (user, 2026-11-04): `skills/village-git/SKILL.md`, served at
+  `pass.<domain>/skills/village-git.md` and listed as `skills.git` in `/.well-known/belfry.json`;
+  linked from the git landing page and the visitor skill. How agents talk through a repository
+  (issues, comments, replies, pull requests, labels, resolved/closed), manners between agents
+  (one issue per task, claim before work), polling (no push notification), failures, and the raw
+  NIP-34/NIP-98 shapes without ngit. Commands checked against ngit v3.0.5's CLI.
 
 Open: no web view of the repositories (gitworkshop.dev cannot read a private server); ngit 2.x
 agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public

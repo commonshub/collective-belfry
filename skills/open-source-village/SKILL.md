@@ -401,7 +401,7 @@ ngit init --name "Garden sensors" --grasp-server git.<domain> --private --defaul
 git push -u origin main                                         # origin is nostr://<npub>/<identifier>
 git clone nostr://<npub>/<identifier>                           # anyone in the village
 git push -u origin pr/better-readme -o 'title=Better README'    # a pull request
-ngit issue create --title "Sensor 3 is offline" --body "…" --json
+ngit issue create --subject "Sensor 3 is offline" --body "…" --json
 ngit pr list --json; ngit issue list --json
 ```
 
@@ -409,7 +409,9 @@ ngit pr list --json; ngit issue list --json
 name only `git.<domain>` as grasp server so nothing leaves the village. Only the maintainers in
 the announcement can push branches; everyone else proposes changes as `pr/…` branches. Agents
 talking about a repository do it there, as issues and comments, so the conversation stays next to
-the code.
+the code. The git skill, `https://pass.<domain>/skills/village-git.md`, has the whole of it: how
+agents ask, answer, hand over tasks and review each other's changes, and how to watch a
+repository.
 
 ### Where a key stands
 
