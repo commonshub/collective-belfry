@@ -11,6 +11,8 @@
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
 #   belfry logs [SERVICE]            follow the logs
+#   (apply and update pull prebuilt images when GitHub has them for this code; BELFRY_BUILD_LOCAL=1
+#   builds everything here)
 #   belfry compose ARGS…             docker compose with the right files and profile
 #
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
@@ -49,7 +51,27 @@ cd "$ROOT"
 
 COMPOSE_FILES=(-f infra/docker-compose.yml -f infra/docker-compose.prod.yml)
 [[ -f infra/.nginx ]] && COMPOSE_FILES+=(-f infra/docker-compose.nginx.yml)
-compose() { docker compose "${COMPOSE_FILES[@]}" "$@"; }
+
+# Prebuilt images (docker-compose.images.yml): each tag is the git tree hash of its build context,
+# so the image is the one GitHub built from exactly this code. infra/.images marks that the last
+# `belfry apply` found them; without it everything is built here, as before.
+PREBUILT_SERVICES=(keycast keycast-migrate proxy groups-relay onboarding)
+export BELFRY_KEYCAST_TAG BELFRY_PROXY_TAG BELFRY_GROUPS_RELAY_TAG BELFRY_ONBOARDING_TAG
+image_tags() {
+  t() { printf 'tree-%s' "$(git -C "$ROOT" rev-parse --short=12 "HEAD:$1")"; }
+  BELFRY_KEYCAST_TAG=$(t infra/keycast/build)
+  BELFRY_PROXY_TAG=$(t infra/proxy)
+  BELFRY_GROUPS_RELAY_TAG=$(t infra/groups-relay)
+  BELFRY_ONBOARDING_TAG=$(t services/onboarding)
+}
+image_tags
+# a build context with local changes has no prebuilt image
+local_changes() { [[ -n "$(git -C "$ROOT" status --porcelain -- infra/keycast/build infra/proxy infra/groups-relay services/onboarding)" ]]; }
+use_images() { [[ -f infra/.images ]] && ! local_changes; }
+compose() {
+  if use_images; then docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml "$@"
+  else docker compose "${COMPOSE_FILES[@]}" "$@"; fi
+}
 
 env_get() { sed -nE "s/^$1=\"?([^\"#]*)\"?.*/\1/p" "$ENV_FILE" | tail -n1 | sed 's/[[:space:]]*$//'; }
 
@@ -218,7 +240,17 @@ for name, s in json.load(sys.stdin)["services"].items():
 
 cmd_apply() {
   bootstrap_env
-  say "Starting the stack (the first start builds the signer: about 15 minutes)"
+  if [[ "${BELFRY_BUILD_LOCAL:-}" == 1 ]] || local_changes; then
+    rm -f infra/.images
+    say "Building every image here (BELFRY_BUILD_LOCAL=1 or local changes)"
+  elif docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml --profile app pull -q "${PREBUILT_SERVICES[@]}"; then
+    : > infra/.images
+    say "Prebuilt images for the signer, proxy, groups relay and onboarding service ($BELFRY_KEYCAST_TAG …)"
+  else
+    rm -f infra/.images
+    say "No prebuilt images for this version of the code: building them here (the signer takes 15 to 30 minutes)"
+  fi
+  say "Starting the stack"
   if [[ "$(free_gb)" -lt 25 ]]; then
     lean_build
     compose up -d

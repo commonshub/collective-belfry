@@ -189,7 +189,8 @@ EOF
   if [[ $mem_mb -ge 7400 ]]; then ok "$cpus vCPU, $((mem_mb/1024)) GB RAM"
   else bad "$cpus vCPU, ${mem_mb} MB RAM: the stack needs 8 GB (4 vCPU recommended)"; problems=$((problems+1)); fi
   if [[ $disk_gb -ge 30 ]]; then ok "$disk_gb GB free on /"
-  else bad "$disk_gb GB free on /: needs 30 GB (images and the signer's build)"; problems=$((problems+1)); fi
+  elif [[ $disk_gb -ge 15 ]]; then warn "$disk_gb GB free on /: enough with the prebuilt images (about 12 GB); 30 GB to build everything here"
+  else bad "$disk_gb GB free on /: needs 15 GB with the prebuilt images, 30 GB to build them here"; problems=$((problems+1)); fi
   local p busy=''
   for p in 80 443; do
     # free, or already ours: Belfry's proxy (docker-proxy) or, with --nginx, nginx
