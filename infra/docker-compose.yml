@@ -630,6 +630,8 @@ services:
       # the git server's members (git_members.py)
       - git-members:/git-members
       - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
+      # /changelog (community.py): written by scripts/changelog.sh, created by gen-secrets.sh
+      - ./data/changelog:/belfry-changelog:ro
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro

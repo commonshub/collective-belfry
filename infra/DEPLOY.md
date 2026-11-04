@@ -189,6 +189,31 @@ proxied site's policy or a default. Restart the onboarding service after changin
 `HOMEPAGE` (`$C --profile app up -d onboarding`). `skills/belfry-homepage/SKILL.md` has the
 details for an agent.
 
+## Community pages: /monitor, /changelog, /proposals
+
+Every belfry serves these pages (`services/onboarding/belfry_onboarding/community.py`). They're on
+the apex, or on `pass.<domain>` when a homepage is set:
+
+- `/proposals` (members): any member with an active pass proposes something; others support it
+  and comment. Behind the scenes these are Nostr events on the community relay:
+  - a proposal is a kind-1 note tagged `t=proposal`, addressed to the belfry's key (`p`), with a `subject`;
+  - a comment is a kind-1 reply (`e` root);
+  - support is a kind-7 `+`.
+
+  The page signs as the member through the signer. Members who hold their own key post the same
+  note from any Nostr client.
+- `/monitor` (members): the community relay live, with filters by author and kind, pause, and an
+  inspector. The page reads the members-only relay through the onboarding service, with the
+  belfry's key, as server-sent events.
+- `/changelog` (public, and `/changelog.json`): the deployed code's commits with their author and
+  co-authors, and the operations run on the server, each with who started it.
+  `infra/scripts/changelog.sh record "<summary>" [--by NAME] [--proposal EVENT_ID]` adds an
+  operation (`BELFRY_BY` names who, for example "Ana via Claude"). `changelog.sh build`
+  rewrites `infra/data/changelog/changelog.json`, which is mounted into the onboarding service.
+  Run it after every update. Settings are named, never their values.
+
+The members-only pages use the pass page's session (`/me`): signing in there opens them.
+
 ## Admin network (ZeroTier)
 
 The admin pages answer only over a private ZeroTier network: Odoo's back office and login

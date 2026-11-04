@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     # https:// URL = that website through a proxy; "nsite" = the site published with the homepage
     # key (homepage-publish); "nsite:<npub>[/<name>]" = another key's nsite (NIP-5A).
     homepage: str = Field(default="", alias="HOMEPAGE")
+    # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
+    changelog_path: str = Field(default="/belfry-changelog/changelog.json", alias="CHANGELOG_PATH")
     # Where nsite manifests are looked up besides the community relay (space or comma separated).
     homepage_relays: str = Field(default="", alias="HOMEPAGE_RELAYS")
     # The community's Blossom server inside Compose: reads (blobs) and the gate (uploads).
