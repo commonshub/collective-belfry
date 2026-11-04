@@ -874,6 +874,11 @@ Local smoke 239 ok / 0 failed (after re-applying `keycast/policy.sql`: the local
 the kind list from before PR #1). Deployed 2026-11-04 to belfry.tofauti.net (image built locally
 and loaded, gen-secrets, `GIT_DOMAIN`/`GIT_PUBLIC_URL`, onboarding rebuilt, perms-init, `caddy
 reload`; no bootstrap): smoke 232 ok / 0 failed over TLS, 26 members. Not on belfry2 yet.
+- [x] Belfry landing page for git.<domain> (user, 2026-11-04: ngit-grasp's page linked to
+  gitworkshop.dev, which looked public): onboarding `content/git.md` at `/git`, served by Caddy to
+  browsers on git.<domain> (root and repository addresses; `/brand/*` from the onboarding service,
+  the footer's links redirect to pass.<domain>); relay, NIP-11 and git untouched. Smoke 6x checks it
+  on public deployments.
 
 Open: no web view of the repositories (gitworkshop.dev cannot read a private server); ngit 2.x
 agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public

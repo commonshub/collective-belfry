@@ -808,6 +808,12 @@ step "6x. git server (ngit-grasp): members only; an agent announces a repository
 GIT_URL=${GIT_PUBLIC_URL:-http://localhost:3170}
 NIP11=$(curl -sS -H 'Accept: application/nostr+json' "$GIT_URL/")
 jq -e '.supported_grasps | index("GRASP-08")' <<<"$NIP11" >/dev/null && ok "git server: private (GRASP-08), $(jq -r .name <<<"$NIP11")" || bad "git server NIP-11: $(head -c 200 <<<"$NIP11")"
+if [[ "$GIT_URL" == https://* ]]; then  # behind the proxy: browsers get Belfry's page, not ngit-grasp's
+  H=$(curl -sS -H 'Accept: text/html' "$GIT_URL/")
+  [[ "$H" == *"<title>Git server</title>"* && "$H" == *"Open Source Village"* && "$H" != *"gitworkshop.dev"* ]] && ok "git server landing page is Belfry's (no gitworkshop.dev link)" || bad "git landing page: $(head -c 200 <<<"$H")"
+  H=$(curl -sS -H 'Accept: text/html' "$GIT_URL/npub1x/some-repo.git")
+  [[ "$H" == *"<title>Git server</title>"* ]] && ok "repository pages show the same page to browsers" || bad "git repository page for browsers: $(head -c 200 <<<"$H")"
+fi
 GIT_MEMBERS=$("${COMPOSE[@]}" exec -T onboarding sh -c 'cat /git-members/members.txt' 2>/dev/null)
 [[ -n "${KC_PUB:-}" ]] && { grep -qx "$KC_PUB" <<<"$GIT_MEMBERS" && ok "the participant is in the git server's members file ($(grep -c '^[0-9a-f]' <<<"$GIT_MEMBERS") keys)" || bad "participant $KC_PUB not in the git members file"; }
 # The agent signs through a bunker of its own (one more "Connect to Nostr App", as in 6v).

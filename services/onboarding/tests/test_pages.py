@@ -100,3 +100,14 @@ def test_skill_domain():
     assert pages.site_domain(S) == "example.org"
     S.site_url = "https://village.example"
     assert pages.site_domain(S) == "village.example"
+
+
+def test_git_page_names_the_server_and_links_the_skill(services, client):
+    services.settings.public_url = "https://pass.belfry.test"
+    services.settings.git_public_url = "https://git.belfry.test"
+    r = client.get("/git")
+    assert "<strong>git.belfry.test</strong> is where participants" in r.text
+    assert "--grasp-server git.belfry.test --private" in r.text
+    assert "<code>wss://git.belfry.test</code>" in r.text
+    assert 'href="https://pass.belfry.test/skill.md"' in r.text
+    assert "gitworkshop.dev" not in r.text

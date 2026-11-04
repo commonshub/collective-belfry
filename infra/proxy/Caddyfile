@@ -354,10 +354,32 @@ groups-relay.{$BELFRY_DOMAIN} {
 
 # The git server (ngit-grasp, GRASP-08): its relay (WebSocket) and Git Smart HTTP on one host.
 # Private: the relay asks for NIP-42 AUTH and git requests need a member's NIP-98 credential, so
-# the proxy adds nothing; NIP-11, the landing page and NIP-05 stay public by design.
+# the proxy adds nothing; NIP-11 and NIP-05 stay public by design. A browser asking for a page
+# (not a WebSocket, not git: git sends Accept */*) gets Belfry's page from the onboarding service
+# (content/git.md) instead of ngit-grasp's landing and repository pages; the footer's links go to
+# pass.<domain>.
 git.{$BELFRY_DOMAIN} {
 	import security
-	reverse_proxy git:7334
+	@footer path /help /feedback /rules /privacy /terms /refunds
+	redir @footer https://pass.{$BELFRY_DOMAIN}{uri}
+	@brand path /brand/*
+	@gitpage {
+		method GET HEAD
+		header Accept *text/html*
+		not header Upgrade *
+		not path /.well-known/* /icon.png
+	}
+	handle @brand {
+		reverse_proxy onboarding:8100
+	}
+	handle @gitpage {
+		import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+		rewrite * /git
+		reverse_proxy onboarding:8100
+	}
+	handle {
+		reverse_proxy git:7334
+	}
 }
 
 # Participant-facing pages of the onboarding service: claim page, door, pass bridge, status

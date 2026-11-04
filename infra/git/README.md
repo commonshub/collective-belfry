@@ -27,6 +27,13 @@ its live sessions closed. A file with a malformed line is ignored (previous memb
 the members, GRASP-01 decides writes: only maintainers listed in an announcement push its
 branches; anyone may push `pr/…` refs for a pull request event they signed.
 
+**Landing page.** Behind the proxy, a browser asking for a page on `git.<domain>` (the root or a
+repository's address) gets Belfry's page from the onboarding service (`content/git.md`, branded
+like the other pages: what the server is, that it is for pass holders, how to start with ngit,
+the agent guide) instead of ngit-grasp's own pages, which point to gitworkshop.dev. NIP-11,
+WebSocket and git requests still reach ngit-grasp. Locally (port 3170, no proxy) ngit-grasp's page
+shows.
+
 **Signing.** Participants' keys sign through Keycast like for the other apps; policy
 `belfry-event` allows any kind (NIP-34 kinds, 22242 for AUTH, 27235 for NIP-98). Agents use ngit
 3 with a bunker URL (`ngit account login --bunker-url …`).

@@ -1,4 +1,5 @@
-"""The text pages of pass.<domain>: /privacy, /terms, /refunds, /rules and /help.
+"""The text pages of pass.<domain>: /privacy, /terms, /refunds, /rules, /help and /git (the
+landing page of git.<domain>).
 
 The texts are Markdown files in ``content/`` (edit them there, not here). They are rendered by a
 small renderer for the subset they use: headings, paragraphs, lists, tables, block quotes, bold,
@@ -29,6 +30,8 @@ PAGES = {
     "refunds": "Refund policy",
     "rules": "Community rules",
     "help": "Help",
+    # the landing page of git.<domain> (Caddy routes browsers there to it)
+    "git": "Git server",
 }
 
 # The skill for an agent helping a visitor (skills/ in the repo, SKILLS_DIR in Compose), served at
@@ -151,7 +154,12 @@ def _values(settings: Any) -> dict[str, str]:
         f"{' · ' + html.escape(text) if text else ''}</li>"
         for name, url, text in apps
     )
+    git_url = (getattr(settings, "git_public_url", "") or "").rstrip("/")
     return {
+        "git_url": git_url,
+        "git_host": urlparse(git_url).netloc or "git.<domain>",
+        "git_relay": re.sub(r"^http", "ws", git_url) if git_url else "",
+        "skill_url": f"{public}/skill.md" if public else "/skill.md",
         "account": getattr(settings, "apps_public_url", "") or "/",
         "pass_page": f"{public}/me" if public else "/me",
         "app_list__html": f'<ul class="apps">{app_list}</ul>' if app_list else "",
