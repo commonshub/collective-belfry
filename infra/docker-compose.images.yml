@@ -4,7 +4,7 @@
 # when GitHub has no image for that hash (a branch, a local change) it builds as before.
 #   BELFRY_IMAGES       registry and name prefix (default ghcr.io/commonshub/belfry)
 #   BELFRY_*_TAG        tree-<12 hex> of infra/keycast/build, infra/proxy, infra/groups-relay,
-#                       services/onboarding
+#                       services/onboarding, infra/git
 name: belfry
 
 services:
@@ -19,6 +19,9 @@ services:
     build: !reset null
   groups-relay:
     image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-groups-relay:${BELFRY_GROUPS_RELAY_TAG:?set by belfry apply}
+    build: !reset null
+  git:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-git:${BELFRY_GIT_TAG:?set by belfry apply}
     build: !reset null
   onboarding:
     image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-onboarding:${BELFRY_ONBOARDING_TAG:?set by belfry apply}
