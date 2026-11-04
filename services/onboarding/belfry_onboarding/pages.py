@@ -186,6 +186,7 @@ PAGE_STYLE = """<style>
  .prose th, .prose td { text-align: left; vertical-align: top; padding: 8px 10px;
    border-bottom: 1px solid var(--osv-border); }
  .prose th { color: var(--osv-foreground-muted); font-weight: 600; }
+ .prose code { word-break: normal; overflow-wrap: anywhere; }
  .prose .apps { list-style: none; padding: 0; }
  .prose .apps li { margin: 8px 0; }
 </style>"""
