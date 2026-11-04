@@ -205,7 +205,7 @@ root = sys.argv[1]
 seen = set()
 for name, s in json.load(sys.stdin)["services"].items():
     b = s.get("build")
-    image = s.get("image") or name
+    image = s.get("image") or f"belfry-{name}"  # Compose names it <project>-<service>
     if not b or image in seen:
         continue
     seen.add(image)
