@@ -58,7 +58,7 @@ recipients the seed stays on the server's disk, as in local development, and `be
 so; move it under the YubiKeys before real members join ("Custody seed" below).
 
 **Prebuilt images.** GitHub Actions builds the parts that are the same for every community (the
-signer, the proxy, the groups relay and the onboarding service; `.github/workflows/images.yml`)
+signer, the git server, the proxy, the groups relay and the onboarding service; `.github/workflows/images.yml`)
 and publishes them as `ghcr.io/commonshub/belfry-<name>:tree-<hash>`, where the hash is the git
 tree hash of the image's build context. `belfry apply` computes the same hashes from the checkout
 and pulls those images (`docker-compose.images.yml`); when there are none for that code (a
