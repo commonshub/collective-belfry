@@ -61,6 +61,8 @@ PASS_FIELDS = [
     # joining with a key of one's own (invite page, belfry_pass models/nostr_proof.py)
     "own_pubkey",
     "own_pubkey_proof",
+    # a free day pass names the week pass it came with (daypass.py)
+    "free_of_pass_id",
 ]
 
 # The proof of an own key: a NIP-98 event for the invite page, signed with that key.
@@ -110,6 +112,28 @@ def odoo_date(value: Any) -> dt.date | None:
     if isinstance(value, dt.date):
         return value
     return dt.date.fromisoformat(str(value)[:10])
+
+
+PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}
+
+
+def pass_rank(row: dict[str, Any], today: dt.date) -> tuple[int, int, int, int]:
+    """Sort key of a partner's passes for showing one (the pass page /me, the account card):
+    by state (active first); among those, a pass valid today before one that is not, and the
+    shortest valid one first, so a free day pass outranks the week pass on its day
+    (daypass.py); passes not valid today by the day they start, the longer first. Use with
+    ``min`` over rows ordered newest first, so ties go to the newest."""
+    start, end = odoo_date(row.get("date_start")), odoo_date(row.get("date_end"))
+    state = PASS_STATE_ORDER.get(row.get("state"), 9)
+    length = (end - start).days if start and end else 10_000
+    if start and end and start <= today <= end:
+        return (state, 0, length, 0)
+    return (state, 1, start.toordinal() if start else 10**9, -length)
+
+
+def today_utc() -> dt.date:
+    """The day passes are judged by (check_pass, the credentials' exp): UTC."""
+    return dt.datetime.now(dt.UTC).date()
 
 
 def now_utc_str() -> str:
@@ -290,7 +314,8 @@ def issue_missing_tokens(svc: Services) -> dict[int, int]:
         return {}
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["cashu_amount", "=", 0]],
+        # free day passes bring no tokens: the week pass has them for its days already
+        [["state", "=", "active"], ["cashu_amount", "=", 0], ["free_of_pass_id", "=", False]],
         ["id", "tier", "product_id", "date_start", "date_end"],
     )
     issued: dict[int, int] = {}
@@ -927,9 +952,14 @@ def _finish_activation(
     date_start: dt.date,
     date_end: dt.date,
     extra: dict[str, Any],
+    *,
+    mint_tokens: bool = True,
+    login_link: bool = True,
 ) -> str:
     """Accounts, keys, sign-in link, tokens and the activating write, for a pass whose payment
-    (or, for volunteers, shifts) is settled. ``extra``: more pass fields for the same write."""
+    (or, for volunteers, shifts) is settled. ``extra``: more pass fields for the same write.
+    ``mint_tokens`` / ``login_link`` off (free day passes, daypass.py): no tokens, and no sign-in
+    link, so Odoo sends no activation mail either (it mails when the link is written)."""
     partner_id = partner["id"]
     member_number = _ensure_member_number(svc, partner)
     own_pubkey = own_key_of(pass_row)
@@ -947,7 +977,7 @@ def _finish_activation(
     # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
     _set_participant(svc, authentik_user_id, True)
     # Participants never get a password: Odoo mails this one-time sign-in link with the activation.
-    login_vals = _login_link(svc)
+    login_vals = _login_link(svc) if login_link else {}
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
@@ -977,7 +1007,7 @@ def _finish_activation(
     }
     vals.update(extra)
     # Tokens ride the same write, so the activation mail carries the tokens link.
-    if not pass_row.get("cashu_amount"):
+    if mint_tokens and not pass_row.get("cashu_amount"):
         vals.update(
             _mint_tokens(
                 svc,
@@ -1097,6 +1127,14 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
     sync_relay_whitelist(svc)
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
+    if state == "revoked":
+        # the free day passes a week pass gave go with it (daypass.py)
+        for day_pass in svc.odoo.search_read(
+            "belfry.pass",
+            [["free_of_pass_id", "=", pass_row["id"]], ["state", "in", ["pending", "active"]]],
+            PASS_FIELDS,
+        ):
+            _close_pass(svc, day_pass, "revoked", f"{reason} (week pass {pass_row['id']})")
     return result
 
 

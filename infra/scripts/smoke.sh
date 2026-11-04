@@ -1001,6 +1001,20 @@ FRIEND_ID=$(grep -o 'action="/me/invites/[0-9]*/revoke"' <<<"$INV_PAGE" | head -
 [[ "$INV_PAGE" == *"Invite link created"* && -n "$FRIEND_URL" ]] && ok "/me: invite link for a friend created" || bad "/me invite: $(grep -o 'class="bad">[^<]*' <<<"$INV_PAGE" | head -1)"
 [[ "$(curl -sS "$FRIEND_URL")" == *"You were invited by <strong>$NAME</strong>"* ]] && ok "the friend's invite page names $NAME" || bad "friend's invite page does not name the participant ($FRIEND_URL)"
 [[ -n "$FRIEND_ID" && "$(curl -sS -L -b "$MEJAR" --data "" "$ONB_URL/me/invites/$FRIEND_ID/revoke")" == *"Invite revoked"* ]] && ok "the participant revoked the unused invite" || bad "invite $FRIEND_ID not revoked"
+# A free day pass for the week-pass holder (daypass.py): the first open event day, once.
+FREE_DAY=$(grep -o 'name="day" value="[0-9-]*"><button class="small-btn" type="submit">Get a free' <<<"$INV_PAGE" | head -n1 | grep -o '[0-9]\{4\}-[0-9-]*')
+if [[ -z "$FREE_DAY" ]]; then
+  bad "/me offers no free day pass to the week-pass holder"
+else
+  DAY_PAGE=$(curl -sS -L -b "$MEJAR" --data "day=$FREE_DAY" "$ONB_URL/me/day-passes")
+  [[ "$DAY_PAGE" == *"Your free day pass is ready"* ]] && ok "/me: free day pass for $FREE_DAY taken" || bad "/me day pass: $(grep -o 'class="ok">[^<]*' <<<"$DAY_PAGE" | head -1)"
+  DAY_ROW=$(ox belfry.pass search_read "[[[\"free_of_pass_id\",\"=\",$PASS_ID]]]" '{"fields":["state","tier","date_start","date_end","cashu_amount","keycast_pubkey","login_setup_url"]}' | jq -c '.[0]')
+  DAY_PASS_ID=$(ox belfry.pass search_read "[[[\"free_of_pass_id\",\"=\",$PASS_ID]]]" '{"fields":["id"]}' | jq -r '.[0].id // empty')
+  WEEK_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["keycast_pubkey"]}' | jq -r '.[0].keycast_pubkey')
+  [[ "$(jq -r '[.state,.tier,.date_start,.date_end] | join(" ")' <<<"$DAY_ROW")" == "active day $FREE_DAY $FREE_DAY" && "$(jq -r .cashu_amount <<<"$DAY_ROW")" == 0 && "$(jq -r .login_setup_url <<<"$DAY_ROW")" == false && "$(jq -r .keycast_pubkey <<<"$DAY_ROW")" == "$WEEK_KEY" ]] \
+    && ok "day pass $DAY_PASS_ID: active on $FREE_DAY only, same key, no tokens, no mail" || bad "day pass: $DAY_ROW (week key $WEEK_KEY)"
+  [[ "$(curl -sS -L -b "$MEJAR" --data "day=$FREE_DAY" "$ONB_URL/me/day-passes")" == *"day pass for that day already"* ]] && ok "the same day cannot be taken twice" || bad "second day pass for $FREE_DAY not refused"
+fi
 rm -f "$MEJAR"
 
 step "9c. the start page and the feedback page"
@@ -1186,6 +1200,9 @@ bit() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T 
 [[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 0 ]] && ok "status list: pass $PASS_ID valid (bit 0)" || bad "status bit before revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
 REV=$(onb_post "/admin/passes/$PASS_ID/revoke?token=$HOOK_TOKEN")
 [[ "$(jq -r .result <<<"$REV")" == revoked ]] && ok "steward revoke -> revoked" || bad "revoke: $REV"
+if [[ -n "${DAY_PASS_ID:-}" ]]; then
+  [[ "$(ox belfry.pass read "[[$DAY_PASS_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == revoked ]] && ok "the free day pass went with the week pass" || bad "free day pass $DAY_PASS_ID still active after the week pass was revoked"
+fi
 STATUS_JWT=$(curl -sS "$ONB_URL/status/1")
 [[ "$(bit "$STATUS_JWT" "$PASS_ID")" == 1 ]] && ok "status list: pass $PASS_ID revoked (bit 1)" || bad "status bit after revoke: $(bit "$STATUS_JWT" "$PASS_ID")"
 sleep "$(( ${STATUS_LIST_TTL:-5} + 1 ))"   # the verifier may cache the list for STATUS_LIST_TTL seconds

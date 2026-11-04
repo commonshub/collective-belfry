@@ -879,6 +879,17 @@ Open: no web view of the repositories (gitworkshop.dev cannot read a private ser
 agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public
 relays or servers is synced there by design (the skill says not to).
 
+## 3zv. Free day passes for week-pass holders — built 2026-11-04
+
+User: a participant with a week pass gets a day pass for free; on that day the door shows the day pass. Decisions (user): the day pass is the holder's own (not a guest's), the day is picked when taking it, one per event day, and "ranked higher" means `/me` shows it on its day.
+
+- [x] Odoo `belfry_pass` 19.0.1.29.0 (`models/belfry_day_pass.py`): `free_of_pass_id` on the pass; `belfry_free_day_passes(partner)` lists every event day (`belfry.event_start`..`event_end`) as available, taken or past for a partner with an active week pass; `belfry_free_day_pass_create(partner, day)` makes a pending day pass valid that day only (`date_start` = `date_end`), no product or invoice, refusing a non-event or past day, a second day pass (free or paid) for the same day, and anyone without an active week pass (partner row locked against double clicks). 5 tests (not run here: no Docker).
+- [x] Onboarding `daypass.py`: "Free day passes" card on `/me` (a button per open day; "Add to your wallet" for a taken one; "Finish" for one whose activation failed), `POST /me/day-passes` (same-origin only). Activation goes through `core._finish_activation` with `mint_tokens=False, login_link=False`: same account and key, own claim link and status bit, no tokens (the week pass has them for its days; `issue_missing_tokens` skips free day passes too), no sign-in link and so no activation mail. Revoking the week pass revokes its day passes (`core._close_pass`, reason "<reason> (week pass <id>)").
+- [x] Ranking (`core.pass_rank`): an active pass valid today first, the shortest valid one first, so `/me`, its QR and the account card show the day pass on its day and the week pass otherwise; the card takes its tokens from the pass that has them. Refusal messages on `/me` come from a fixed list, never from the URL.
+- [x] Checks: onboarding 292 tests (8 new); smoke step 9b takes the first open day and checks it (active that day only, same key, no tokens, no mail, a second take refused), step 11 that it is revoked with the week pass. Smoke not run here.
+
+Found on the way (not changed): a paid day pass ends the day after it starts (`core._pass_dates`: `date_start + days`), so it is valid on two calendar days, and a week pass on eight; the free day pass is exactly its day. The wallet decides itself which of two credentials it presents at the door; Belfry cannot rank there.
+
 ## 4. Next
 
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).

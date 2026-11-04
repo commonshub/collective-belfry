@@ -16,8 +16,9 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Invites from participants (a limited number per active pass), belfry.feedback from the feedback page
 - Odoo's frontend error pages in the Open Source Village look
 - belfry.report: participants' reports of content in the community apps, handled by stewards
+- Free day passes for week-pass holders, one per event day (pass page)
 """,
-    'version': '19.0.1.28.0',
+    'version': '19.0.1.29.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',

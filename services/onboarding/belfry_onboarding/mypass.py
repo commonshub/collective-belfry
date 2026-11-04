@@ -36,9 +36,10 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import daypass
 from .claim import TIER_NAMES, page, qr_svg
 from .clients.odoo import OdooError
-from .core import Services, odoo_date
+from .core import Services, odoo_date, pass_rank, today_utc
 
 log = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ FLOW_COOKIE = "belfry_pass_flow"
 FLOW_SECONDS = 600
 QR_TTL_SECONDS = 90
 QR_REFRESH_SECONDS = 30
-PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}
 E = html.escape
 
 
@@ -139,15 +139,19 @@ class ScanLog:
 # -- the pass --------------------------------------------------------------------------------------
 
 
-def partner_pass(svc: Services, partner_id: int) -> dict[str, Any] | None:
-    """The partner's pass to show: the active one if any, else the newest."""
+def partner_pass(
+    svc: Services, partner_id: int, today: dt.date | None = None
+) -> dict[str, Any] | None:
+    """The partner's pass to show at the door: the active one valid today, the shortest such
+    (a free day pass on its day, daypass.py), else the next active one, else the newest."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["partner_id", "=", partner_id]],
         ["state", "tier", "date_start", "date_end"],
         order="id desc",
     )
-    return min(rows, key=lambda r: PASS_STATE_ORDER.get(r.get("state"), 9)) if rows else None
+    today = today or today_utc()
+    return min(rows, key=lambda r: pass_rank(r, today)) if rows else None
 
 
 def check_pass(svc: Services, pass_id: int, today: dt.date | None = None) -> dict[str, Any]:
@@ -338,6 +342,7 @@ def me_page(
     claim_url: str = "",
     invites: dict[str, Any] | None = None,
     msg: str = "",
+    days_html: str = "",
 ) -> str:
     if pass_row is None:
         body = """<div class="card"><h1>No pass</h1>
@@ -365,6 +370,7 @@ screenshot does not work. Turn the brightness up.</p>
 {wallet}
 <form method="post" action="/me/logout"><button class="link" type="submit">Sign out of this page</button></form>
 </div>
+{days_html}
 {invites_section(invites, msg)}
 <script>
 const box = document.getElementById('pass'), img = document.getElementById('qr'), clock = document.getElementById('clock');
@@ -385,7 +391,7 @@ let wake = null;
 async function lock() {{ try {{ wake = await navigator.wakeLock?.request('screen'); }} catch (e) {{}} }}
 lock();
 </script>"""
-    return page("Your pass", body + STYLE)
+    return page("Your pass", body + STYLE + daypass.STYLE)
 
 
 def check_page(result: dict[str, Any], scanned_before: float | None = None) -> str:
@@ -450,10 +456,19 @@ def register(app: FastAPI) -> None:
             claim_url = info or ""
         qr = qr_for(services, row["id"]) if active else None
         invites = None
+        days_html = ""
+        code = request.query_params.get("msg", "")
         if active:
             invites = await run_in_threadpool(participant_invites, services, sess["partner"])
-        msg = INVITE_MESSAGES.get(request.query_params.get("msg", ""), "")
-        response = HTMLResponse(me_page(row, qr, claim_url, invites, msg))
+            days = await run_in_threadpool(daypass.day_passes, services, sess["partner"])
+            claims = await run_in_threadpool(_day_pass_claims, services, days)
+            day_msg = DAY_MESSAGES.get(code, "")
+            if code == "day-refused":
+                why = request.query_params.get("why", "")
+                day_msg = daypass.REFUSALS.get(why, daypass.GENERIC)
+            days_html = daypass.section(days, claims, day_msg)
+        msg = INVITE_MESSAGES.get(code, "")
+        response = HTMLResponse(me_page(row, qr, claim_url, invites, msg, days_html))
         response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -526,6 +541,22 @@ def register(app: FastAPI) -> None:
             raise PassPageError(409, _odoo_message(exc)) from exc
         return RedirectResponse("/me?msg=created#invite", status_code=303)
 
+    @app.post("/me/day-passes")
+    async def me_take_day_pass(request: Request):
+        services, sess = guard(request)
+        if sess is None:
+            return RedirectResponse("/me/login", status_code=303)
+        same_origin(request, services)
+        day = str((await request.form()).get("day") or "")
+        try:
+            await run_in_threadpool(daypass.take, services, sess["partner"], day)
+        except daypass.DayPassError as exc:
+            query = urllib.parse.urlencode(
+                {"msg": "day-refused", "why": daypass.refusal_code(str(exc))}
+            )
+            return RedirectResponse(f"/me?{query}#day-passes", status_code=303)
+        return RedirectResponse("/me?msg=day-taken#day-passes", status_code=303)
+
     @app.post("/me/invites/{invite_id}/revoke")
     async def me_revoke_invite(invite_id: int, request: Request):
         services, sess = guard(request)
@@ -575,6 +606,10 @@ def register(app: FastAPI) -> None:
         return HTMLResponse(check_page(result, before), headers={"Cache-Control": "no-store"})
 
 
+DAY_MESSAGES = {
+    "day-taken": "Your free day pass is ready. On its day this page shows it at the door.",
+}
+
 INVITE_MESSAGES = {
     "created": "Invite link created: copy it or share it with your friend.",
     "revoked": "Invite revoked.",
@@ -610,6 +645,20 @@ def create_participant_invite(svc: Services, partner_id: int, note: str) -> dict
 
 def revoke_participant_invite(svc: Services, partner_id: int, invite_id: int) -> dict[str, Any]:
     return svc.odoo.call("belfry.invite", "belfry_participant_revoke", [partner_id, invite_id])
+
+
+def _day_pass_claims(svc: Services, info: dict[str, Any] | None) -> dict[int, str]:
+    """Claim URLs of the partner's active day passes (the "Add to your wallet" links)."""
+    ids = [
+        d["pass_id"]
+        for d in (info or {}).get("days") or []
+        if d.get("pass_id") and d.get("pass_state") == "active"
+    ]
+    if not ids:
+        return {}
+    base = svc.settings.public_url.rstrip("/") + "/claim/"
+    rows = svc.odoo.read("belfry.pass", ids, ["claim_token"])
+    return {r["id"]: base + r["claim_token"] for r in rows if r.get("claim_token")}
 
 
 def _claim_url(svc: Services, pass_id: int) -> str | None:

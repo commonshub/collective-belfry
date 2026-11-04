@@ -17,3 +17,4 @@ from . import test_api
 from . import test_holder_invites
 from . import test_key_code
 from . import test_accounting
+from . import test_day_pass

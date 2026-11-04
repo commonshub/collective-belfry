@@ -15,3 +15,4 @@ from . import belfry_volunteer
 from . import belfry_holder_invites
 from . import belfry_key_code
 from . import belfry_accounting
+from . import belfry_day_pass

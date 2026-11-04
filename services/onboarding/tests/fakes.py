@@ -17,7 +17,14 @@ M2O: dict[str, set[str]] = {
     "account.move": {"partner_id"},
     "account.move.line": {"move_id", "product_id"},
     "payment.transaction": {"source_transaction_id"},
-    "belfry.pass": {"partner_id", "product_id", "invoice_id", "transaction_id", "invite_id"},
+    "belfry.pass": {
+        "partner_id",
+        "product_id",
+        "invoice_id",
+        "transaction_id",
+        "invite_id",
+        "free_of_pass_id",
+    },
     "belfry.stripe.event": {"pass_id"},
     "belfry.invite": {"inviter_partner_id", "used_by_partner_id"},
     "belfry.feedback": {"partner_id"},
@@ -408,6 +415,64 @@ class FakeOdoo(OdooApi):
         info["below_minimum"] = p["state"] == "active" and info["count"] < 3
         return info
 
+    # belfry_day_pass.py: the event days and "today" the fake judges free day passes by
+    event_days = [f"2027-01-{d}" for d in range(25, 32)]
+    today = "2027-01-26"
+
+    def _free_day(self, method: str, args: list[Any]) -> Any:
+        """Odoo's models/belfry_day_pass.py: free day passes for week-pass holders."""
+        partner_id = args[0]
+        passes = [
+            p for p in self.tables["belfry.pass"].values() if p.get("partner_id") == partner_id
+        ]
+        week = max(
+            (p["id"] for p in passes if p.get("tier") == "week" and p.get("state") == "active"),
+            default=None,
+        )
+        held = {
+            p.get("date_start"): p
+            for p in passes
+            if p.get("tier") == "day" and p.get("state") in ("pending", "active")
+        }
+        if method == "belfry_free_day_passes":
+            if week is None:
+                return {"eligible": False, "days": []}
+            days = []
+            for day in self.event_days:
+                p = held.get(day)
+                state = "taken" if p else ("past" if day < self.today else "available")
+                days.append(
+                    {
+                        "date": day,
+                        "state": state,
+                        "pass_id": p["id"] if p else False,
+                        "pass_state": p["state"] if p else False,
+                    }
+                )
+            return {"eligible": True, "week_pass_id": week, "days": days}
+        day = args[1]
+
+        def refuse(message: str) -> None:
+            raise OdooError("UserError", {"message": message})
+
+        if week is None:
+            refuse("Free day passes come with an active week pass.")
+        if day not in self.event_days:
+            refuse("Pick a day of the event.")
+        if day < self.today:
+            refuse("That day is over.")
+        if day in held:
+            refuse("You have a day pass for that day already.")
+        return self.add(
+            "belfry.pass",
+            partner_id=partner_id,
+            tier="day",
+            state="pending",
+            date_start=day,
+            date_end=day,
+            free_of_pass_id=week,
+        )
+
     def _signin(self, method: str, *args: Any) -> dict[str, Any]:
         """Odoo's models/belfry_welcome.py, without the expiry of the welcome page."""
         kind, token = args if method == "belfry_use_signin" else ("welcome", args[0])
@@ -490,6 +555,11 @@ class FakeOdoo(OdooApi):
             return out
         if model == "belfry.pass" and method in ("belfry_use_signin", "belfry_welcome_info"):
             return self._signin(method, *args)
+        if model == "belfry.pass" and method in (
+            "belfry_free_day_passes",
+            "belfry_free_day_pass_create",
+        ):
+            return self._free_day(method, args)
         if model == "belfry.pass" and method == "belfry_find_or_create_for_invoice":
             if self.legacy_module:
                 raise OdooError(

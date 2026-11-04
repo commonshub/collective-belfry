@@ -13,7 +13,7 @@ from typing import Any
 import segno
 
 from . import credentials
-from .core import PASS_FIELDS, Services, m2o_id, odoo_date
+from .core import PASS_FIELDS, Services, m2o_id, odoo_date, pass_rank, today_utc
 
 log = logging.getLogger(__name__)
 
@@ -199,12 +199,12 @@ def error_page(status: int, home: str = "/") -> str:
 
 # -- pass info for the community apps ------------------------------------------------------------
 
-PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}
-
 
 def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
-    """The partner's pass as the community apps show it (Keycast's "Your pass" card): the active
-    pass if there is one, else the newest. None when the partner has no pass."""
+    """The partner's pass as the community apps show it (Keycast's "Your pass" card): the one
+    the pass page shows (core.pass_rank: a free day pass on its day, else the week pass), else
+    the newest. Tokens come from the shown pass or, for a free day pass, which brings none, from
+    the active pass that has them. None when the partner has no pass."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["partner_id", "=", partner_id]],
@@ -213,7 +213,13 @@ def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
     )
     if not rows:
         return None
-    row = min(rows, key=lambda r: PASS_STATE_ORDER.get(r.get("state"), 9))
+    today = today_utc()
+    row = min(rows, key=lambda r: pass_rank(r, today))
+    tokens_row = row
+    if not row.get("cashu_amount"):
+        tokens_row = next(
+            (r for r in rows if r.get("state") == "active" and r.get("cashu_amount")), row
+        )
     partners = svc.odoo.read("res.partner", [partner_id], ["belfry_member_number"])
     base = svc.settings.public_url.rstrip("/")
     active = row.get("state") == "active"
@@ -230,9 +236,9 @@ def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
         else None,
         # the pass as a renewing QR code for the door, no wallet needed (mypass.py)
         "show_url": f"{base}/me" if active else None,
-        "tokens": row.get("cashu_amount") or 0,
-        "tokens_url": f"{base}/tokens/{row['claim_token']}"
-        if active and row.get("claim_token") and row.get("cashu_amount")
+        "tokens": tokens_row.get("cashu_amount") or 0,
+        "tokens_url": f"{base}/tokens/{tokens_row['claim_token']}"
+        if active and tokens_row.get("claim_token") and tokens_row.get("cashu_amount")
         else None,
     }
 
