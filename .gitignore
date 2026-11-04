@@ -36,3 +36,7 @@ odoo/filestore/
 .vscode/
 *.swp
 .DS_Store
+infra/.built
+infra/.built.tmp
+infra/.images
+infra/.nginx

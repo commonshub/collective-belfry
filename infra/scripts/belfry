@@ -180,28 +180,40 @@ bootstrap_env() {
 free_gb() { df -Pk "$ROOT" | awk 'NR==2 {printf "%d", $4/1048576}'; }
 
 # Little disk (under 25 GB free): build one image at a time and empty the build cache after each,
-# so the peak is one build instead of all of them (a 20 GB server fits). Images that exist are
-# kept unless BELFRY_REBUILD=1 (belfry update sets it).
+# so the peak is one build instead of all of them (a 20 GB server fits). An image is rebuilt only
+# when its sources changed: infra/.built keeps the git tree hash each image was built from (the
+# Dockerfile's folder when the context is the whole repository). BELFRY_REBUILD=1 rebuilds all.
 lean_build() {
-  local svc image
+  local svc image src tree
   say "Little disk ($(free_gb) GB free): building one image at a time"
-  while read -r svc image; do
+  touch infra/.built
+  while read -r svc image src; do
     [[ -n "$svc" ]] || continue
-    if [[ "${BELFRY_REBUILD:-}" != 1 ]] && docker image inspect "$image" >/dev/null 2>&1; then
-      say "  $svc: $image exists"
+    tree=$(git -C "$ROOT" rev-parse "HEAD:$src" 2>/dev/null || echo unknown)
+    if [[ "${BELFRY_REBUILD:-}" != 1 ]] && docker image inspect "$image" >/dev/null 2>&1 \
+      && grep -qxF "$image $tree" infra/.built; then
+      say "  $svc: up to date"
       continue
     fi
     say "  $svc: building $image"
     compose --profile app build "$svc"
     docker builder prune -af >/dev/null
+    { grep -v "^$image " infra/.built || true; echo "$image $tree"; } > infra/.built.tmp && mv infra/.built.tmp infra/.built
   done < <(compose --profile app config --format json | python3 -c '
-import json, sys
+import json, os, sys
+root = sys.argv[1]
 seen = set()
 for name, s in json.load(sys.stdin)["services"].items():
-    if "build" in s and s.get("image") not in seen:
-        seen.add(s.get("image"))
-        print(name, s.get("image") or name)
-')
+    b = s.get("build")
+    image = s.get("image") or name
+    if not b or image in seen:
+        continue
+    seen.add(image)
+    ctx = os.path.relpath(b.get("context", "."), root)
+    if ctx == ".":  # the whole repository: the folder of the Dockerfile says what this is
+        ctx = os.path.dirname(b.get("dockerfile", "Dockerfile")) or "."
+    print(name, image, ctx)
+' "$ROOT")
 }
 
 cmd_apply() {
@@ -259,7 +271,7 @@ cmd_update() {
   say "At $(git rev-parse --short HEAD)"
   record "Updated the code to $(git rev-parse --short HEAD) ($ref)"
   infra/scripts/gen-secrets.sh >/dev/null
-  BELFRY_REBUILD=1 cmd_apply
+  cmd_apply
 }
 
 cmd_smoke() {
