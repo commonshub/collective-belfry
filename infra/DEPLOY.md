@@ -189,6 +189,29 @@ proxied site's policy or a default. Restart the onboarding service after changin
 `HOMEPAGE` (`$C --profile app up -d onboarding`). `skills/belfry-homepage/SKILL.md` has the
 details for an agent.
 
+## The belfry's own page: belfry.<domain>
+
+`https://belfry.<domain>` (`CONSOLE_URL`, set by `prod-env.sh`; `console.py`) is the belfry's
+page:
+
+- `/`: an overview: services answering and code version, members and admins, the website.
+- `/status`, also `/status.json`: every service checked from inside the stack, and the code's
+  version and last change. Public.
+- `/members`: everyone with an active pass. Members see names. Admins (the stewards group) see
+  e-mail addresses and add, edit and remove members by e-mail:
+  - adding gives a free pass, activated at once, so the welcome mail with the sign-in link goes out;
+  - "admin" is membership of the stewards group;
+  - removing revokes the pass. The member's key stays theirs.
+- `/website`: what the apex shows and the versions members proposed. An admin approves a version.
+
+People sign in with their pass: `belfry.<domain>/login` goes through `pass.<domain>/me`, which
+hands back a short ticket, and the console then sets its own cookie. Unlike `/steward`, these pages
+are not limited to the admin network.
+
+New installs (`install.sh`) set `HOMEPAGE=nsite`. Until a website is published, the apex shows a
+placeholder that explains how to ask an agent to publish one, who publishes and approves, and
+links to `belfry.<domain>`.
+
 ## Community pages: /monitor, /changelog, /proposals
 
 Every belfry serves these pages (`services/onboarding/belfry_onboarding/community.py`). They're on

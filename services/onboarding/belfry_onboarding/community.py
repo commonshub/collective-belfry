@@ -319,7 +319,7 @@ def changelog_page(data: dict[str, Any] | None) -> str:
                 at = dt.datetime.fromisoformat(x["at"])
             except (KeyError, ValueError):
                 continue
-            by = ", ".join(x.get("by") or []) or "someone"
+            by = ", ".join(x.get("by") or [])
             kind = x.get("type", "code")
             ref = x.get("ref", "")
             link = ""
@@ -329,10 +329,10 @@ def changelog_page(data: dict[str, Any] | None) -> str:
                 link += (
                     f' · <a class="meta" href="/proposals/{E(x["proposal"])}">from a proposal</a>'
                 )
-            badge = "code" if kind == "code" else "server"
+            badge = {"code": "code", "website": "website"}.get(kind, "server")
             days.setdefault(at.strftime("%-d %B %Y"), []).append(
                 f"""<div class="item"><span class="pill">{badge}</span> {E(x.get("summary", ""))}{link}
-<div class="meta">started by {E(by)} · {at.strftime("%H:%M")} UTC</div></div>"""
+<div class="meta">{("started by " + E(by) + " · ") if by else ""}{at.strftime("%H:%M")} UTC</div></div>"""
             )
         listing = "".join(f"<h2>{E(d)}</h2>{''.join(items)}" for d, items in days.items())
     return page(
@@ -342,6 +342,45 @@ def changelog_page(data: dict[str, Any] | None) -> str:
 <p class="muted">Every change to this belfry: the code it runs and what was changed on the server,
 with who started each change. Settings are named, never their values.</p>{listing}</div>""",
     )
+
+
+def website_changes(svc: Services) -> list[dict[str, Any]]:
+    """The website's versions: the belfry's manifest snapshots (NIP-5A kind 5128) on the relay."""
+    belfry = belfry_pubkey(svc.settings)
+    if not belfry or svc.relay is None:
+        return []
+    try:
+        snaps = query(svc, [{"kinds": [5128], "authors": [belfry], "limit": 100}])
+    except Exception as exc:
+        log.info("changelog: website history not readable: %s", exc)
+        return []
+    return [
+        {
+            "at": dt.datetime.fromtimestamp(e["created_at"], dt.UTC).isoformat(timespec="seconds"),
+            "type": "website",
+            "summary": (e.get("content") or "Website updated").strip(),
+            "by": [],
+            **(
+                {"proposal": t[1]}
+                if (t := next((t for t in e["tags"] if t[0] == "e"), None))
+                else {}
+            ),
+        }
+        for e in snaps
+    ]
+
+
+def full_changelog(svc: Services) -> dict[str, Any]:
+    data = read_changelog(svc.settings.changelog_path) or {"entries": []}
+    entries = [*data.get("entries", []), *website_changes(svc)]
+
+    def key(e: dict[str, Any]) -> float:
+        try:
+            return dt.datetime.fromisoformat(e["at"]).timestamp()
+        except (KeyError, ValueError):
+            return 0.0
+
+    return {**data, "entries": sorted(entries, key=key, reverse=True)}
 
 
 def read_changelog(path: str) -> dict[str, Any] | None:
@@ -463,12 +502,12 @@ def register(app: FastAPI) -> None:
 
     @app.get("/changelog", response_class=HTMLResponse)
     async def changelog(request: Request):
-        data = await run_in_threadpool(read_changelog, svc(request).settings.changelog_path)
+        data = await run_in_threadpool(full_changelog, svc(request))
         return HTMLResponse(changelog_page(data))
 
     @app.get("/changelog.json")
     async def changelog_json(request: Request):
-        data = await run_in_threadpool(read_changelog, svc(request).settings.changelog_path)
+        data = await run_in_threadpool(full_changelog, svc(request))
         return JSONResponse(data or {"entries": []})
 
     @app.get("/monitor", response_class=HTMLResponse)

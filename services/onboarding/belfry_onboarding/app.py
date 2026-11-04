@@ -31,6 +31,7 @@ from . import (
     bridge,
     claim,
     community,
+    console,
     core,
     discovery,
     email_code,
@@ -185,6 +186,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
     community.register(app)  # /monitor, /changelog, /proposals (community.py)
+    console.register(app)  # belfry.<domain>: overview, status, members, website (console.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
     reports.register(app)  # /admin/reports, /admin/moderation/hidden (reports.py)
     avatar.register(app)  # /avatar/<pubkey>.png|.svg: default avatars (avatar.py)
@@ -254,6 +256,12 @@ def create_app(services: Services | None = None) -> FastAPI:
         if site is not None and not on_apex:
             return RedirectResponse(str(site), status_code=302)
         return HTMLResponse(claim.home_page(settings))
+
+    @app.middleware("http")
+    async def console_host(request: Request, call_next):
+        """belfry.<domain> answers under /console (console.py)."""
+        moved = console.map_host(request)
+        return moved if moved is not None else await call_next(request)
 
     @app.middleware("http")
     async def apex_homepage(request: Request, call_next):

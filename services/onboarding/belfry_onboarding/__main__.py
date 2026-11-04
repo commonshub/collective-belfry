@@ -66,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
         help="publish a static site (a tar archive on stdin) as the community's homepage nsite",
     )
     pub.add_argument("--title", default="")
+    pub.add_argument("--by", default="", help="who publishes, for the changelog")
     sub.add_parser("homepage-status", help="what the apex serves and the published nsite")
     args = parser.parse_args(argv)
     if args.command in ("homepage-publish", "homepage-status"):
@@ -128,7 +129,7 @@ def homepage_cli(args: argparse.Namespace) -> int:
     try:
         if args.command == "homepage-publish":
             files = homepage.files_from_tar(sys.stdin.buffer.read())
-            result = homepage.publish(settings, files, args.title)
+            result = homepage.publish(settings, files, args.title, args.by)
             result["serving"] = settings.homepage == "nsite"
         else:
             config = homepage.parse_config(settings)

@@ -698,6 +698,7 @@ services:
       SITE_URL: ${SITE_URL:-}
       # the apex homepage: empty (start page), https://… (proxy), nsite, nsite:<npub>[/<name>]
       HOMEPAGE: ${HOMEPAGE:-}
+      CONSOLE_URL: ${CONSOLE_URL:-}
       HOMEPAGE_RELAYS: ${HOMEPAGE_RELAYS:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect
       COMMUNITY_NAME: ${COMMUNITY_NAME:-Open Source Village}

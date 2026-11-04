@@ -10,9 +10,9 @@ The apex of a belfry (`https://<domain>/`) is the community's front door. One se
 
 | `HOMEPAGE` | The apex shows | Use when |
 | --- | --- | --- |
-| *(empty)* | Belfry's start page: what the community is, how to join | there is no website yet |
+| `nsite` *(new installs)* | the website the belfry publishes under its own key; until one is published, a placeholder that explains how to publish it | the community's site lives on its own infrastructure (the default) |
+| *(empty)* | Belfry's start page: what the community is, how to join | older belfries; set it explicitly for a join page on the apex |
 | `https://site.example` | that website, through a proxy; visitors stay on `https://<domain>` | the site lives elsewhere (Vercel, Netlify, WordPress, GitHub Pages) and keeps being edited there |
-| `nsite` | a static site published by the belfry itself (the belfry's own key, `belfry_nsec`) | the community wants its site on its own infrastructure |
 | `nsite:<npub>` or `nsite:<npub>/<name>` | the root site (kind 15128) or named site (kind 35128, `d` = name) of another key | a member or a designer publishes the site with their own key and nsite tool |
 
 Whatever it is set to, the apex keeps:
@@ -47,7 +47,37 @@ Check: `curl -sI https://<domain>/` and, for nsites,
   loops or errors. Use the host's own deployment URL (for example `https://project.vercel.app`),
   not a custom domain that redirects.
 
-## A static site as an nsite (the belfry publishes it)
+## Who publishes, who approves
+
+- **Admins** (the stewards group) publish directly from the server (below), or approve a member's
+  version at `https://belfry.<domain>/website`.
+- **Members** propose a version: their agent publishes the site as an nsite with the member's own
+  key on this belfry, then proposes it. An admin approves it, and the belfry copies it as its own
+  root site (NIP-5A copy, with `a`/`A` tags naming the member's site). It also records a snapshot
+  (kind 5128) saying who proposed and who approved; `/changelog` shows it.
+
+### A member's agent proposes a version
+
+You need the member's bunker URL from their account page (`https://apps.<domain>`, "Connect to
+Nostr App"). Then:
+
+1. Build the site to a folder (`dist/`), with `index.html` at its root.
+2. Publish it as a named site `website` with ngit 3:
+   ```bash
+   ngit account login --bunker-url 'bunker://…' --alias member
+   ngit nsite publish dist --id website --title "<Community> website" \
+     --blossom-server https://blossom.<domain> --relay wss://relay.<domain> --repo-relay-only --defaults
+   ```
+   This uploads the files to the belfry's Blossom server (allowed for keys with an active pass) and
+   publishes the manifest (kind 35128, `d=website`) to the belfry's members-only relay.
+3. Propose it: a kind-1 note on `wss://relay.<domain>`, signed by the member, with the tags
+   `["t","proposal"]`, `["t","website"]`, `["p","<the belfry's pubkey>"]`,
+   `["subject","New website: <what changed>"]` and `["a","35128:<member pubkey hex>:website"]`.
+   The belfry's pubkey is `nostr.pubkey` in `https://<domain>/.well-known/belfry.json`. It then
+   appears at `https://belfry.<domain>/website` and in `https://pass.<domain>/proposals`.
+4. Tell the member that an admin needs to approve it.
+
+## A static site as an nsite (an admin publishes it)
 
 The belfry uploads every file to its Blossom server, `https://blossom.<domain>`, and signs a
 NIP-5A root site manifest (kind 15128) with its own key on its community relay. The site needs
@@ -61,8 +91,9 @@ an `index.html` at its root, and optionally a `404.html`. Dotfiles are skipped.
    ```
    It prints the number of files, how many were new, the manifest's id and the npub that signed
    it. From a laptop, stream the tar over SSH: `tar -C dist -c . | ssh root@<host> 'cd /opt/belfry && docker compose … exec -T onboarding …'`.
-3. The first time, set `HOMEPAGE=nsite` (above). Later publishes need nothing else: the apex
-   picks up a new manifest within a minute.
+3. New installs already have `HOMEPAGE=nsite`; older ones set it once (above). Later publishes need
+   nothing else: the apex picks up a new manifest within a minute. With the `belfry` command:
+   `BELFRY_BY="Ana via Claude" belfry homepage publish dist --title "Example Commons"`.
 
 ## An nsite published with another key
 

@@ -36,11 +36,22 @@ WELL_KNOWN = "/.well-known/belfry.json"
 ME = "/api/me"
 VERSION = 1
 # skills/ in the repo, served at /skills/<name>.md (pages.py); the visitor's also at /skill.md
-SKILLS = {"visitor": "open-source-village", "steward": "belfry-steward"}
+SKILLS = {
+    "visitor": "open-source-village",
+    "steward": "belfry-steward",
+    "website": "belfry-homepage",
+}
 
 
 def _url(value: str) -> str:
     return (value or "").strip().rstrip("/")
+
+
+def _belfry_key(settings: Any) -> dict[str, str]:
+    from .homepage import belfry_pubkey
+
+    pk = belfry_pubkey(settings)
+    return {"pubkey": pk, "npub": hex_to_npub(pk)} if pk else {}
 
 
 def document(settings: Any) -> dict[str, Any]:
@@ -75,6 +86,9 @@ def document(settings: Any) -> dict[str, Any]:
         "blossom": _url(settings.blossom_public_url),
         # the git server (ngit-grasp, GRASP-08): its relay and git HTTP share this address
         "git": _url(settings.git_public_url),
+        "console": _url(getattr(settings, "console_url", "")),
+        # the belfry's own key: signs its website (nsite) and receives proposals
+        "nostr": _belfry_key(settings),
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,

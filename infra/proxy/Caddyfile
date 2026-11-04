@@ -143,6 +143,16 @@
 	reverse_proxy odoo:8069
 }
 
+# The belfry's own page (services/onboarding/belfry_onboarding/console.py): overview, status,
+# members (admins add and remove them by e-mail), website versions. The onboarding service maps
+# this host's paths under /console; sign-in goes through pass.<domain>/me.
+belfry.{$BELFRY_DOMAIN} {
+	import security
+	import limit console-forms 60 1m /members/* /website/*
+	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'"
+	reverse_proxy onboarding:8100
+}
+
 # Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
 login.{$BELFRY_DOMAIN} {
 	import security

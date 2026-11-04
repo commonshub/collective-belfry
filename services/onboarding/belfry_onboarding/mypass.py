@@ -493,7 +493,11 @@ def register(app: FastAPI) -> None:
         cookie = await run_in_threadpool(
             finish_login, services, code, state, request.cookies.get(FLOW_COOKIE)
         )
-        response = RedirectResponse("/me", status_code=303)
+        # a sign-in started elsewhere (belfry.<domain>, console.py) continues there
+        after = request.cookies.get("belfry_pass_next") or ""
+        target = after if after.startswith("/me/console?") else "/me"
+        response = RedirectResponse(target, status_code=303)
+        response.delete_cookie("belfry_pass_next", path="/me")
         response.delete_cookie(FLOW_COOKIE, path="/me")
         response.set_cookie(
             SESSION_COOKIE,

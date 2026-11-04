@@ -41,6 +41,8 @@ values = {
     "VERIFIER_SAN": f"verifier.{domain}",
     "ONBOARDING_PUBLIC_URL": f"https://pass.{domain}",
     "SITE_URL": f"https://{domain}",
+    # belfry.<domain>: the belfry's own page, status and members (console.py)
+    "CONSOLE_URL": f"https://belfry.{domain}",
     "STATUS_LIST_URL": f"https://pass.{domain}/status/1",
     "STATUS_LIST_TTL": "300",
     "MAIL_FROM": mail_from,

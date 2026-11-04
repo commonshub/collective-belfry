@@ -318,6 +318,15 @@ class Homepage:
             site = await self.site()
         except HomepageError as exc:
             log.warning("homepage: %s", exc)
+            if self.config.pubkey == belfry_pubkey(self.settings):
+                # the belfry's own site, not published yet: the placeholder (console.py)
+                from .console import placeholder_html
+
+                return Response(
+                    placeholder_html(self.settings),
+                    media_type="text/html",
+                    headers={"Cache-Control": "no-store"},
+                )
             return Response(
                 "This site is not published yet.", status_code=503, media_type="text/plain"
             )
@@ -453,7 +462,9 @@ def blossom_auth(secret: bytes, verb: str, sha: str) -> str:
     return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()
 
 
-def publish(settings: Any, files: dict[str, bytes], title: str = "") -> dict[str, Any]:
+def publish(
+    settings: Any, files: dict[str, bytes], title: str = "", by: str = ""
+) -> dict[str, Any]:
     """Upload every file to the community's Blossom server (through its gate, as the belfry's key)
     and publish the root site manifest (kind 15128) on the community relay."""
     key = belfry_key(settings)
@@ -496,7 +507,22 @@ def publish(settings: Any, files: dict[str, bytes], title: str = "") -> dict[str
     event = sign_event(
         key.secret, {"kind": ROOT_KIND, "created_at": int(time.time()), "tags": tags, "content": ""}
     )
-    RelayPublisher(relay_url).publish(event, lambda e: sign_event(key.secret, e))
+    relay = RelayPublisher(relay_url)
+    relay.publish(event, lambda e: sign_event(key.secret, e))
+    # a manifest snapshot (NIP-5A kind 5128): the history the changelog shows
+    snapshot = sign_event(
+        key.secret,
+        {
+            "kind": 5128,
+            "created_at": event["created_at"],
+            "content": f"Website published from the server by {by or 'an admin'}.",
+            "tags": [
+                *[t for t in tags if t[0] in ("path", "x")],
+                ["a", f"{ROOT_KIND}:{event['pubkey']}:"],
+            ],
+        },
+    )
+    relay.publish(snapshot, lambda e: sign_event(key.secret, e))
     return {
         "files": len(paths),
         "uploaded": uploaded,

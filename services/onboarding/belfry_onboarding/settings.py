@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     # https:// URL = that website through a proxy; "nsite" = the site published with the homepage
     # key (homepage-publish); "nsite:<npub>[/<name>]" = another key's nsite (NIP-5A).
     homepage: str = Field(default="", alias="HOMEPAGE")
+    # belfry.<domain> (console.py): the belfry's own page, status and members; empty: off
+    console_url: str = Field(default="", alias="CONSOLE_URL")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
     changelog_path: str = Field(default="/belfry-changelog/changelog.json", alias="CHANGELOG_PATH")
     # Where nsite manifests are looked up besides the community relay (space or comma separated).
