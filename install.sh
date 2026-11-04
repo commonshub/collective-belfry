@@ -380,6 +380,9 @@ EOF
   fi
   if [[ $NGINX -eq 1 ]]; then : > infra/.nginx && chown belfry:belfry infra/.nginx; else rm -f infra/.nginx; fi
   ok "infra/.env for $BELFRY_DOMAIN, secrets generated in infra/secrets/"
+  # A new belfry's apex shows its own website (an nsite), and a placeholder that explains how to
+  # publish it until then; HOMEPAGE in belfry.env (BELFRY_ENV_HOMEPAGE) chooses otherwise.
+  if [[ $fresh -eq 1 ]]; then export BELFRY_ENV_HOMEPAGE=${BELFRY_ENV_HOMEPAGE:-nsite}; fi
   # The admin pages answer this server's own addresses (bootstrap and smoke run here) and Docker's;
   # add the ZeroTier subnet later (DEPLOY.md, "Admin network").
   local admin_nets="127.0.0.1/8 172.16.0.0/12 $ip4/32${ip6:+ $ip6/128}"
