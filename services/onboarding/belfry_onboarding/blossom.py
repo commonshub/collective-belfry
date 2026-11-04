@@ -128,6 +128,11 @@ def authorize(svc: Services, authorization: str | None, method: str) -> str:
     hosts = [h.strip().lower() for h in svc.settings.blossom_hosts.split(",") if h.strip()]
     event = parse_authorization(authorization)
     pubkey = check_event(event, method, hosts)
+    # the homepage key publishes the community's nsite (homepage.py); it holds no pass
+    from .homepage import belfry_pubkey
+
+    if pubkey == belfry_pubkey(svc.settings):
+        return pubkey
     if not pubkey_has_active_pass(svc, pubkey):
         log.info("blossom: %s refused for %s, no active pass", method, pubkey)
         raise BlossomAuthError(403, "no active pass for this key")

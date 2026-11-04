@@ -70,6 +70,7 @@ SECRETS = {
     "PROGRAMME_NSEC": rand(32),                # signs the programme's calendar events (hex key)
     "POLLS_NSEC": rand(32),                    # signs the polls' notes on Nostr (vote service, hex key)
     "GROUPS_RELAY_NSEC": rand(32),             # the groups relay's own key (zooid, hex)
+    "BELFRY_NSEC": rand(32),                   # the belfry's own Nostr key: homepage nsite (homepage.py, hex)
     "GROUPS_API_NSEC": rand(32),               # the onboarding service at the groups relay's API (hex)
     "ZOOID_DB_PASSWORD": rand(),               # role "zooid" (groups relay)
     "GIT_RELAY_NSEC": rand(32),                # the git server's own key (ngit-grasp relay owner, hex)

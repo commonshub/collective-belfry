@@ -82,6 +82,18 @@ class Settings(BaseSettings):
     # The start page's address (https://<domain>): this service's landing page, also served on the
     # apex; PUBLIC_URL's own "/" forwards there. Empty: the landing page stays on PUBLIC_URL.
     site_url: str = Field(default="", alias="SITE_URL")
+    # The community's homepage on the apex (homepage.py): empty = the start page above; an
+    # https:// URL = that website through a proxy; "nsite" = the site published with the homepage
+    # key (homepage-publish); "nsite:<npub>[/<name>]" = another key's nsite (NIP-5A).
+    homepage: str = Field(default="", alias="HOMEPAGE")
+    # Where nsite manifests are looked up besides the community relay (space or comma separated).
+    homepage_relays: str = Field(default="", alias="HOMEPAGE_RELAYS")
+    # The community's Blossom server inside Compose: reads (blobs) and the gate (uploads).
+    homepage_blossom_url: str = Field(default="http://blossom:3000", alias="HOMEPAGE_BLOSSOM_URL")
+    homepage_upload_url: str = Field(default="http://blossom-gate", alias="HOMEPAGE_UPLOAD_URL")
+    # secret belfry_nsec (hex): the belfry's own Nostr key (publishes the homepage nsite); the
+    # relay whitelist and the Blossom gate let its pubkey in.
+    belfry_nsec: str = Field(default="", alias="BELFRY_NSEC")
     # A notice on every page during a test run ("Test run: no real money …"); empty: none.
     test_run_notice: str = Field(default="", alias="TEST_RUN_NOTICE")
     # Tokens (decision 2026-10-24): Belfry's Cashu mint (cdk-mintd, no monetary value). MINT_URL is
