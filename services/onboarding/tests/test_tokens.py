@@ -191,8 +191,8 @@ def test_mint_errors_are_reported(router):
 
 def test_token_allowance(services):
     d = dt.date
-    assert core.token_allowance(services, "day", 1, d(2027, 1, 25), d(2027, 1, 26)) == 50
-    assert core.token_allowance(services, "week", 7, d(2027, 1, 25), d(2027, 2, 1)) == 350
+    assert core.token_allowance(services, "day", 1, d(2027, 1, 25), d(2027, 1, 25)) == 50
+    assert core.token_allowance(services, "week", 7, d(2027, 1, 25), d(2027, 1, 31)) == 350
     # full access: every event day from the start, both ends included (Jan 25..31 = 7)
     assert core.token_allowance(services, "full", None, d(2027, 1, 25), d(2027, 1, 31)) == 350
     assert core.token_allowance(services, "full", None, d(2027, 1, 28), d(2027, 1, 31)) == 200

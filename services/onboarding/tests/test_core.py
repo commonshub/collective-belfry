@@ -636,3 +636,31 @@ def test_starter_events_skip_participants_with_their_own_key(services, odoo, key
 
     assert core.publish_starter_events(services) == {"published": {}}
     assert relay.events == []
+
+
+@pytest.mark.parametrize(
+    "tier,days,paid,start,end",
+    [
+        ("day", 1, "2027-01-20", "2027-01-25", "2027-01-25"),  # before the event: its first day
+        ("week", 7, "2027-01-20", "2027-01-25", "2027-01-31"),
+        ("week", 7, "2027-01-28", "2027-01-28", "2027-01-31"),  # bought during the event: capped
+        ("day", 1, "2027-01-31", "2027-01-31", "2027-01-31"),
+        ("full", 0, "2027-01-27", "2027-01-27", "2027-01-31"),
+        ("week", 7, "2027-02-03", "2027-02-03", "2027-02-09"),  # paid after the event: not capped
+    ],
+)
+def test_pass_dates(settings, tier, days, paid, start, end):
+    got = core._pass_dates(settings, tier, days, dt.date.fromisoformat(paid))
+    assert got == (dt.date.fromisoformat(start), dt.date.fromisoformat(end))
+
+
+def test_tokens_follow_the_days_the_pass_covers(services):
+    def tokens(start, end):
+        return core.token_allowance(
+            services, "week", 7, dt.date.fromisoformat(start), dt.date.fromisoformat(end)
+        )
+
+    per_day = services.settings.tokens_per_day
+    assert tokens("2027-01-25", "2027-01-31") == 7 * per_day
+    assert tokens("2027-01-28", "2027-01-31") == 4 * per_day  # capped at the event's end
+    assert tokens("2027-01-31", "2027-01-31") == per_day

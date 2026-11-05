@@ -275,24 +275,27 @@ def _pass_dates(
 ) -> tuple[dt.date, dt.date]:
     """(date_start, date_end) of a paid pass, both days included (date_end is the last valid
     day everywhere: the door, the credential's exp, expiry): a day pass is its start day, a
-    week pass seven days. Before 2026-11-05 the end was one day later."""
+    week pass seven days, and no pass runs past the event's last day (a week pass bought during
+    the event ends with it), unless it was paid after the event and starts later itself. Before
+    2026-11-05 the end was one day later and not capped."""
     date_start = max(payment_date, settings.event_start)
     days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
     if tier == "full" or days <= 0:
         date_end = settings.event_end
     else:
         date_end = date_start + dt.timedelta(days=days - 1)
+    if date_start <= settings.event_end < date_end:
+        date_end = settings.event_end
     return date_start, date_end
 
 
 def token_allowance(
     svc: Services, tier: str, duration_days: int | None, date_start: dt.date, date_end: dt.date
 ) -> int:
-    """Tokens a pass brings: TOKENS_PER_DAY per day of the pass (day 1, week 7, full access every
-    event day from the start, both ends included)."""
-    days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
-    if tier == "full" or days <= 0:
-        days = (date_end - date_start).days + 1
+    """Tokens a pass brings: TOKENS_PER_DAY per day the pass covers, both ends included (day 1,
+    week 7, full access every event day from the start; a week pass capped at the event's end
+    fewer). ``tier`` and ``duration_days`` are kept for the callers; the dates decide."""
+    days = (date_end - date_start).days + 1
     return max(days, 1) * svc.settings.tokens_per_day
 
 
