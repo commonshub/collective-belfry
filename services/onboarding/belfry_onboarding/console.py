@@ -39,7 +39,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import community, core, homepage, mypass, steward
+from . import community, core, flash, homepage, mypass, steward
 from .claim import page
 from .core import Services
 from .nip46check import sign_event
@@ -628,8 +628,8 @@ def register(app: FastAPI) -> None:
         return me
 
     def back(path: str, msg: str = "", err: str = "") -> RedirectResponse:
-        q = urllib.parse.urlencode({k: v for k, v in (("msg", msg), ("err", err)) if v})
-        return RedirectResponse(path + ("?" + q if q else ""), status_code=303)
+        # the message rides in a signed cookie, never in the URL (flash.py)
+        return flash.redirect(app.state.services, path, msg, err)
 
     # sign-in: belfry.<domain>/login → pass.<domain>/me/console → belfry.<domain>/session
     @app.get("/console/login")
@@ -726,12 +726,14 @@ def register(app: FastAPI) -> None:
         )
 
     @app.get("/console/members", response_class=HTMLResponse)
-    async def members_page(request: Request, msg: str = "", err: str = ""):
+    async def members_page(request: Request):
         services = svc(request)
+        msg, err = flash.peek(request, services)
         me = await who(request)
         mem = await run_in_threadpool(members, services)
-        return HTMLResponse(
-            members_html(mem, me, msg[:200], err[:200]), headers={"Cache-Control": "no-store"}
+        return flash.clear(
+            HTMLResponse(members_html(mem, me, msg, err), headers={"Cache-Control": "no-store"}),
+            request,
         )
 
     @app.post("/console/members/add")
@@ -795,10 +797,13 @@ def register(app: FastAPI) -> None:
         return back("/members", msg="Removed: their pass ended.")
 
     @app.get("/console/website", response_class=HTMLResponse)
-    async def website(request: Request, msg: str = "", err: str = ""):
+    async def website(request: Request):
         services = svc(request)
+        msg, err = flash.peek(request, services)
         site = await run_in_threadpool(website_data, services)
-        return HTMLResponse(website_html(services, site, await who(request), msg[:200], err[:200]))
+        return flash.clear(
+            HTMLResponse(website_html(services, site, await who(request), msg, err)), request
+        )
 
     @app.post("/console/website/{event}/approve")
     async def website_approve(event: str, request: Request, csrf: str = Form("")):

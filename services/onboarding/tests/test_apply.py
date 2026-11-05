@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .fakes import flash_of
 from .test_steward import login as steward_login
 from .test_steward import stewarding, web  # noqa: F401 - fixtures are used by name
 
@@ -57,6 +58,6 @@ def test_stewards_invite_or_decline(web, odoo, stewarding):  # noqa: F811
     again = web.post(
         f"/steward/applications/{eve}/invite", data={"csrf": csrf}, follow_redirects=False
     )
-    assert "err=" in again.headers["location"]
+    assert flash_of(again)
     assert web.post(f"/steward/applications/{dan}/invite", data={"csrf": "bad"}).status_code == 403
     assert web.post(f"/steward/applications/{dan}/nope", data={"csrf": csrf}).status_code == 404

@@ -1122,3 +1122,19 @@ class FakeRelay:
                 hits = sorted(hits, key=lambda e: e["created_at"], reverse=True)[: min(caps)]
             out += [e for e in hits if e not in out]
         return out
+
+
+def flash_of(response) -> str:
+    """The one-shot message a redirect carries in its flash cookie (msg and err joined), decoded
+    without the key: tests only read it. Messages never travel in the URL."""
+    import jwt
+
+    from belfry_onboarding import flash
+
+    for header in response.headers.get_list("set-cookie"):
+        name, _, rest = header.partition("=")
+        if name.strip() == flash.COOKIE:
+            token = rest.split(";", 1)[0].strip('"')
+            claims = jwt.decode(token, options={"verify_signature": False})
+            return f"{claims.get('msg', '')} {claims.get('err', '')}".strip()
+    return ""

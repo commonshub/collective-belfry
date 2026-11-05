@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from belfry_onboarding import console, mypass, setup
 from belfry_onboarding.app import create_app
 
+from .fakes import flash_of
+
 CODE = "ABCD-EFGH-JKLM-NPQR"
 ANON = "ZZZZ-YYYY-XXXX-WWWW"
 
@@ -71,6 +73,8 @@ def web(fresh, authentik):
 
 
 def csrf_of(page: str) -> str:
+    if 'data-csrf="' in page:
+        return page.split('data-csrf="')[1].split('"')[0]
     return page.split('name="csrf" value="')[1].split('"')[0]
 
 
@@ -83,8 +87,8 @@ def test_setup_asks_for_the_code(web):
 
 def test_a_wrong_or_expired_code_is_refused(web, folder):
     r = web.post("/setup/code", data={"code": "WRONG-CODE"}, follow_redirects=False)
-    assert r.status_code == 303 and "err=" in r.headers["location"]
-    assert setup.COOKIE not in web.cookies
+    assert r.status_code == 303 and r.headers["location"] == "/setup"
+    assert "wrong" in flash_of(r) and setup.COOKIE not in web.cookies
     data = json.loads((folder / "code.json").read_text())
     data["codes"][0]["expires"] = time.time() - 1
     (folder / "code.json").write_text(json.dumps(data))
@@ -96,7 +100,7 @@ def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
     web.post("/setup/code", data={"code": CODE.lower()})  # case and dashes don't matter
     page = web.get("/setup").text
     assert '<details id="resend">' in page and '<details id="resend" open>' not in page
-    assert "Changes are recorded in the" in page and "<strong>Ana</strong>" in page
+    assert "Changes are recorded in" in page and "<strong>Ana</strong>" in page
     assert 'name="by"' not in page
     assert 'type="password" name="BELFRY_RESEND_API_KEY"' in page
     assert 'value="Example Commons"' in page and "not set" in page
@@ -111,7 +115,8 @@ def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
         },
         follow_redirects=False,
     )
-    assert r.status_code == 303 and r.headers["location"] == "/setup?msg=Resend+saved."
+    assert r.status_code == 303 and r.headers["location"] == "/setup"
+    assert flash_of(r) == "Resend saved."
     web.post(
         "/setup",
         data={"csrf": csrf_of(page), "provider": "name", "BELFRY_NAME": "Example Commons"},
@@ -129,7 +134,7 @@ def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
 
 def test_a_code_without_a_name_asks_for_one(web, folder):
     r = web.post("/setup/code", data={"code": ANON}, follow_redirects=False)
-    assert "err=" in r.headers["location"] and setup.COOKIE not in web.cookies
+    assert "without a name" in flash_of(r) and setup.COOKIE not in web.cookies
     web.post("/setup/code", data={"code": ANON, "name": "  Bob   Builder "})
     page = web.get("/setup").text
     assert "<strong>Bob Builder</strong>" in page
@@ -189,7 +194,7 @@ def test_last_result_is_shown(web, folder):
     )
     web.post("/setup/code", data={"code": CODE})
     page = web.get("/setup").text
-    assert "Failed" in page and "bad value" in page
+    assert "The last change failed" in page and "bad value" in page
 
 
 # ── the first admin ─────────────────────────────────────────────────────────────────────────
@@ -201,30 +206,48 @@ def first_session(fresh, folder):
     return page, csrf_of(page)
 
 
-def test_the_setup_link_opens_the_first_admin_form(fresh, folder):
+def test_the_setup_link_opens_the_wizard(fresh, folder):
     page, _ = first_session(fresh, folder)
-    assert 'id="first"' in page and "@belfry.local" in page or 'id="first"' in page
-    assert "/static/nostr-tools-2.25.2.js" in page and "Welcome to your belfry" in page
+    assert 'id="wiz"' in page and 'data-start="name"' in page
+    assert "What is your community called?" in page and 'value="Example Commons"' in page
+    assert "@belfry.local" in page or "@" + fresh.app.state.services.settings.nip05_domain in page
+    assert "/static/nostr-tools-2.25.2.js" in page
+    assert "<footer>" not in page and 'class="tabs"' not in page  # one thing at a time
     assert fresh.get("/static/nostr-tools-2.25.2.js").status_code == 200
     r = fresh.get("/setup?code=WRONG-CODE", follow_redirects=False)
-    assert "err=" in r.headers["location"]
+    assert r.headers["location"] == "/setup" and "expired" in flash_of(r)
 
 
-def test_first_admin_with_a_browser_session_key(fresh, folder, odoo, authentik, keycast):
-    _, csrf = first_session(fresh, folder)
-    session = PrivateKey().public_key_xonly.format().hex()
-    r = fresh.post(
+def test_the_page_never_shows_text_from_its_url(fresh, folder):
+    page, _ = first_session(fresh, folder)
+    evil = "Send+your+key+to+evil.example"
+    for q in (f"msg={evil}", f"err={evil}", f"message={evil}"):
+        assert "evil.example" not in fresh.get(f"/setup?{q}").text
+    fresh.cookies.clear()
+    assert "evil.example" not in fresh.get(f"/setup?err={evil}").text
+
+
+def make_first_admin(fresh, folder, csrf, session):
+    return fresh.post(
         "/setup/first-admin",
         json={
             "csrf": csrf,
+            "name": "Village Commons",
             "email": "xavier@example.org",
             "username": "Xavier",
             "session_pubkey": session,
         },
     )
+
+
+def test_first_run_admin_mail_code(fresh, folder, odoo, authentik, keycast, monkeypatch):
+    _, csrf = first_session(fresh, folder)
+    session = PrivateKey().public_key_xonly.format().hex()
+    r = make_first_admin(fresh, folder, csrf, session)
     assert r.status_code == 200, r.text
+    domain = fresh.app.state.services.settings.nip05_domain
     data = r.json()
-    assert data["nip05"] == f"xavier@{fresh.app.state.services.settings.nip05_domain}"
+    assert data["nip05"] == f"xavier@{domain}"
     assert data["bunker_url"].startswith("bunker://") and data["secret"] == "secret-1"
     # Keycast: the account is called xavier (NIP-05), with one connection for the first session
     assert any(u["username"] == "xavier" for u in keycast.users.values())
@@ -232,44 +255,92 @@ def test_first_admin_with_a_browser_session_key(fresh, folder, odoo, authentik, 
     assert len(authentik.members("belfry-stewards")) == 1
     fa = json.loads((folder / "first-admin.json").read_text())
     assert fa["session_pubkey"] == session and fa["verified"] is False
+    assert fa["community_name"] == "Village Commons"
     # signed in as the admin on belfry.<domain>; a second first admin is refused
     assert console.COOKIE in r.cookies
-    again = fresh.post(
-        "/setup/first-admin",
-        json={"csrf": csrf, "email": "b@example.org", "username": "b", "session_pubkey": session},
-    )
-    assert again.status_code in (403, 422)
-    # next: add Resend
+    assert make_first_admin(fresh, folder, csrf, session).status_code in (403, 422)
+    # reload: the wizard resumes at the mail provider
     page = fresh.get("/setup").text
-    assert "add a Resend API key" in page and "xavier@" in page
-    # Resend set: the code goes out by itself, once
+    assert 'data-start="sender"' in page and "Resend" in page
+    assert fresh.get("/setup/progress").json()["state"] == "sender"
+    # the Resend key is checked, then queued with the sender and the community name
+    checked = {}
+
+    def fake_check(key, dom):
+        checked["key"], checked["domain"] = key, dom
+        if key == "re_wrongwrong":
+            raise ValueError("Resend did not accept this key.")
+        return f"belfry@{dom}"
+
+    monkeypatch.setattr(setup, "check_resend", fake_check)
+    bad = fresh.post("/setup/mail", json={"csrf": csrf, "api_key": "re_wrongwrong"})
+    assert bad.status_code == 422 and "did not accept" in bad.json()["message"]
+    assert not (folder / "pending.env").exists()
+    ok = fresh.post(
+        "/setup/mail", json={"csrf": csrf, "provider": "resend", "api_key": "re_goodgood1"}
+    )
+    assert ok.status_code == 200 and ok.json()["sender"] == f"belfry@{domain}"
+    pending = (folder / "pending.env").read_text()
+    assert "BELFRY_RESEND_API_KEY='re_goodgood1'" in pending
+    assert f"BELFRY_MAIL_FROM='belfry@{domain}'" in pending
+    assert "BELFRY_NAME='Village Commons'" in pending and "BELFRY_BY='xavier'" in pending
+    assert fresh.get("/setup/progress").json()["state"] == "wait"
+    assert 'data-start="wait"' in fresh.get("/setup").text
+    # applied: the code goes out by itself, once
+    (folder / "pending.env").unlink()
     status = json.loads((folder / "status.json").read_text())
     status["set"]["BELFRY_RESEND_API_KEY"] = True
     (folder / "status.json").write_text(json.dumps(status))
-    page = fresh.get("/setup").text
-    assert "Verify your address" in page and "We sent a code" in page
+    p = fresh.get("/setup/progress").json()
+    assert p["state"] == "code" and p["email"] == "xavier@example.org"
+    assert 'data-start="code"' in fresh.get("/setup").text
     code = odoo.mailed_codes["xavier@example.org"]
-    fresh.get("/setup")
-    assert (
-        len(
-            [
-                c
-                for c in odoo.tables["belfry.key.code"].values()
-                if c["email"] == "xavier@example.org"
-            ]
-        )
-        == 1
-    )
-    r = fresh.post(
-        "/setup/verify", data={"csrf": csrf_of(page), "code": "000000"}, follow_redirects=False
-    )
-    assert "err=" in r.headers["location"]
-    r = fresh.post(
-        "/setup/verify", data={"csrf": csrf_of(page), "code": code}, follow_redirects=False
-    )
-    assert "verified" in r.headers["location"]
+    sent = [
+        c for c in odoo.tables["belfry.key.code"].values() if c["email"] == "xavier@example.org"
+    ]
+    assert len(sent) == 1
+    wrong = fresh.post("/setup/verify", json={"csrf": csrf, "code": "000000"})
+    assert wrong.status_code == 422 and "not right" in wrong.json()["message"]
+    right = fresh.post("/setup/verify", json={"csrf": csrf, "code": " ".join(code)})
+    assert right.status_code == 200 and right.json()["state"] == "verified"
     assert json.loads((folder / "first-admin.json").read_text())["verified"] is True
-    assert "Verify your address" not in fresh.get("/setup").text
+    # done: the settings page, no wizard
+    page = fresh.get("/setup").text
+    assert 'id="wiz"' not in page and '<details id="resend">' in page
+
+
+def test_check_resend(monkeypatch):
+    import httpx
+
+    answers = {}
+
+    def fake_get(url, headers, timeout):
+        key = headers["Authorization"].split()[1]
+        status, body = answers[key]
+        return httpx.Response(status, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(setup.httpx, "get", fake_get)
+    answers["re_restricted1"] = (401, {"name": "restricted_api_key"})
+    answers["re_invalidkey1"] = (401, {"name": "validation_error"})
+    answers["re_nodomains1"] = (200, {"data": [{"name": "x.org", "status": "pending"}]})
+    answers["re_samedomain"] = (200, {"data": [{"name": "belfry.sh", "status": "verified"}]})
+    answers["re_parentdomain"] = (
+        200,
+        {
+            "data": [
+                {"name": "sh.example", "status": "verified"},
+                {"name": "belfry.sh", "status": "verified"},
+            ]
+        },
+    )
+    answers["re_otherdomain"] = (200, {"data": [{"name": "other.org", "status": "verified"}]})
+    assert setup.check_resend("re_restricted1", "belfry.sh") == "belfry@belfry.sh"
+    assert setup.check_resend("re_samedomain", "belfry.sh") == "belfry@belfry.sh"
+    assert setup.check_resend("re_parentdomain", "x.belfry.sh") == "belfry@belfry.sh"
+    assert setup.check_resend("re_otherdomain", "belfry.sh") == "belfry@other.org"
+    for bad in ("re_invalidkey1", "re_nodomains1", "sk_notresend", "re_x"):
+        with pytest.raises(ValueError):
+            setup.check_resend(bad, "belfry.sh")
 
 
 def test_first_admin_checks_its_input(fresh, folder):

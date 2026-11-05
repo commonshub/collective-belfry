@@ -186,7 +186,8 @@ FRAME_STYLE = """
 """
 
 
-def frame(title: str, body: str, notice: str = "", wide: bool = False) -> str:
+def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: bool = False) -> str:
+    """The page: logo, BODY, footer. BARE leaves out the footer (the first-run setup wizard)."""
     t = current()
     css = "".join(f'<link rel="stylesheet" href="{E(h)}">' for h in t.css)
     strip = f'<div class="test-notice" role="note">{E(notice)}</div>' if notice else ""
@@ -206,8 +207,7 @@ def frame(title: str, body: str, notice: str = "", wide: bool = False) -> str:
 <style>{FRAME_STYLE}</style>{width}</head><body>{strip}<main>
 <header class="site"><a href="{E(t.url)}">{brand}</a></header>
 {body}
-<footer>{E(t.footer)}
-<nav>{links}</nav></footer>
+{"" if bare else f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"}
 </main></body></html>"""
 
 

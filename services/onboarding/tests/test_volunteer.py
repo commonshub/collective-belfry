@@ -7,6 +7,7 @@ import datetime as dt
 
 from belfry_onboarding import core
 
+from .fakes import flash_of
 from .test_steward import login as steward_login
 from .test_steward import stewarding, web  # noqa: F401 - fixtures are used by name
 
@@ -66,7 +67,7 @@ def test_full_shift_is_refused_on_the_page(web, odoo):  # noqa: F811
     odoo.tables["belfry.shift"][shift]["signups"] = [901, 902]
     _volunteer(odoo)
     r = web.post(f"/shifts/{'v' * 43}/{shift}/signup", follow_redirects=False)
-    assert "err=This+shift+is+full" in r.headers["location"]
+    assert "This shift is full" in flash_of(r)
 
 
 def test_shifts_api_roles(web, odoo, services, monkeypatch):  # noqa: F811

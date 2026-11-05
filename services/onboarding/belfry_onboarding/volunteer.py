@@ -18,7 +18,6 @@ import hmac
 import html
 import logging
 import threading
-import urllib.parse
 from collections.abc import Iterable
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -27,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import core
+from . import core, flash
 from .claim import page
 from .clients.odoo import OdooError
 from .core import Services
@@ -235,13 +234,16 @@ def register(app: FastAPI) -> None:
         return info
 
     @app.get("/shifts/{token}", response_class=HTMLResponse)
-    async def shifts(request: Request, token: str, msg: str = "", err: str = ""):
+    async def shifts(request: Request, token: str, msg: str = ""):
         services = svc(request)
+        _, err = flash.peek(request, services)
         info = await run_in_threadpool(volunteer_of, services, token)
         board = await run_in_threadpool(
             services.odoo.call, "belfry.shift", "belfry_shift_board", [info["partner_id"]]
         )
-        response = HTMLResponse(shift_page(services, token, info, board, msg, err))
+        response = flash.clear(
+            HTMLResponse(shift_page(services, token, info, board, msg, err)), request
+        )
         response.headers["Cache-Control"] = "no-store"
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
@@ -256,8 +258,7 @@ def register(app: FastAPI) -> None:
         try:
             result = await run_in_threadpool(run, services, info["partner_id"], shift_id)
         except OdooError as exc:
-            query = urllib.parse.urlencode({"err": _message(exc)})
-            return RedirectResponse(f"/shifts/{token}?{query}", status_code=303)
+            return flash.redirect(services, f"/shifts/{token}", err=_message(exc))
         msg = "active" if result.get("activation") == "activated" else action
         return RedirectResponse(f"/shifts/{token}?msg={msg}", status_code=303)
 

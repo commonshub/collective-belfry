@@ -30,7 +30,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import core
+from . import core, flash
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -952,9 +952,10 @@ def register(app: FastAPI) -> None:
         return services, session(services, request.cookies.get(SESSION_COOKIE))
 
     def back(msg: str = "", err: str = "", created: int | None = None) -> RedirectResponse:
-        query = {k: v for k, v in (("msg", msg), ("err", err), ("created", created)) if v}
+        # msg is a MESSAGES key; error text rides in a signed cookie, never in the URL (flash.py)
+        query = {k: v for k, v in (("msg", msg), ("created", created)) if v}
         target = "/steward" + ("?" + urllib.parse.urlencode(query) if query else "")
-        return RedirectResponse(target, status_code=303)
+        return flash.redirect(app.state.services, target, err=err)
 
     def signed_in(request: Request, csrf: str) -> tuple[Services, dict[str, Any]]:
         """A form post: requires the session and its CSRF token."""
@@ -971,7 +972,7 @@ def register(app: FastAPI) -> None:
         return HTMLResponse(error_page(exc), status_code=exc.status)
 
     @app.get("/steward", response_class=HTMLResponse)
-    async def steward_home(request: Request, msg: str = "", err: str = "", created: int = 0):
+    async def steward_home(request: Request, msg: str = "", created: int = 0):
         services, sess = guard(request)
         if sess is None:
             return RedirectResponse("/steward/login", status_code=303)
@@ -980,7 +981,8 @@ def register(app: FastAPI) -> None:
         if created:
             invite = next((i for i in data["invites"] if i["id"] == created), None)
             text = created_message(invite) if invite else text
-        return HTMLResponse(dashboard(sess, data, text, err[:300]))
+        _, err = flash.peek(request, services)
+        return flash.clear(HTMLResponse(dashboard(sess, data, text, err)), request)
 
     @app.get("/steward/login")
     async def steward_login(request: Request):

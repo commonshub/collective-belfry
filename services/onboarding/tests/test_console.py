@@ -13,6 +13,8 @@ from belfry_onboarding import community, console, homepage, mypass
 from belfry_onboarding.app import create_app
 from belfry_onboarding.nip46check import sign_event
 
+from .fakes import flash_of
+
 CONSOLE = {"Host": "belfry.belfry.test"}
 
 
@@ -191,7 +193,7 @@ def test_admin_adds_edits_and_removes_members(web, belfry, odoo, authentik):
         data={"csrf": csrf, "email": "Carol@Example.org", "name": "Carol"},
         follow_redirects=False,
     )
-    assert r.status_code == 303 and "carol%40example.org+is+a+member" in r.headers["location"]
+    assert r.status_code == 303 and "carol@example.org is a member" in flash_of(r)
     carol_pass = next(
         p
         for p in odoo.tables["belfry.pass"].values()
@@ -224,7 +226,7 @@ def test_members_forms_need_an_admin_and_the_csrf(web, belfry, odoo, authentik):
         data={"csrf": csrf, "email": "x@example.org"},
         follow_redirects=False,
     )
-    assert "Only+admins" in r.headers["location"]
+    assert "Only admins" in flash_of(r)
     make_admin(authentik, "alice@example.org")
     r = web.post(
         "/members/add",
@@ -232,18 +234,18 @@ def test_members_forms_need_an_admin_and_the_csrf(web, belfry, odoo, authentik):
         data={"csrf": "wrong", "email": "x@example.org"},
         follow_redirects=False,
     )
-    assert "Only+admins" in r.headers["location"]
+    assert "Only admins" in flash_of(r)
     r = web.post(
         "/members/add",
         headers=CONSOLE,
         data={"csrf": csrf, "email": "not-an-address"},
         follow_redirects=False,
     )
-    assert "e-mail" in r.headers["location"]
+    assert "e-mail" in flash_of(r)
     r = web.post(
         f"/members/{alice}/remove", headers=CONSOLE, data={"csrf": csrf}, follow_redirects=False
     )
-    assert "yourself" in r.headers["location"]
+    assert "yourself" in flash_of(r)
 
 
 # ── website ─────────────────────────────────────────────────────────────────────────────────
@@ -300,7 +302,7 @@ def test_admin_approves_a_members_website(web, belfry, odoo, authentik, relay):
         data={"csrf": csrf},
         follow_redirects=False,
     )
-    assert "Published" in r.headers["location"], r.headers["location"]
+    assert "Published" in flash_of(r), flash_of(r)
     root = next(e for e in relay.events if e["kind"] == 15128)
     assert root["pubkey"] == belfry_pk and ["path", "/index.html", index] in root["tags"]
     assert ["a", f"35128:{ben_pk}:website"] in root["tags"] and [
@@ -320,7 +322,7 @@ def test_admin_approves_a_members_website(web, belfry, odoo, authentik, relay):
         data={"csrf": csrf},
         follow_redirects=False,
     )
-    assert "Only+admins" in r.headers["location"]
+    assert "Only admins" in flash_of(r)
 
 
 def test_discovery_names_the_console_and_the_belfry_key(web, belfry):
