@@ -220,24 +220,26 @@ free_gb() { df -Pk "$ROOT" | awk 'NR==2 {printf "%d", $4/1048576}'; }
 
 # Little disk (under 25 GB free): build one image at a time and empty the build cache after each,
 # so the peak is one build instead of all of them (a 20 GB server fits). An image is rebuilt only
-# when its sources changed: infra/.built keeps the git tree hash each image was built from (the
+# when its sources changed: each build is tagged with the git tree hash of its sources (the
 # Dockerfile's folder when the context is the whole repository). BELFRY_REBUILD=1 rebuilds all.
 lean_build() {
-  local svc image src tree
+  local svc image src tree repo
   say "Little disk ($(free_gb) GB free): building one image at a time"
-  touch infra/.built
   while read -r svc image src; do
     [[ -n "$svc" ]] || continue
-    tree=$(git -C "$ROOT" rev-parse "HEAD:$src" 2>/dev/null || echo unknown)
-    if [[ "${BELFRY_REBUILD:-}" != 1 ]] && docker image inspect "$image" >/dev/null 2>&1 \
-      && grep -qxF "$image $tree" infra/.built; then
+    tree=$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --short=12 "HEAD:$src" 2>/dev/null || echo unknown)
+    # each build is also tagged <repo>:tree-<hash of its sources>, so a reinstall or another
+    # checkout of the same code finds it (BELFRY_REBUILD=1 rebuilds anyway)
+    repo=$image; [[ "${image##*/}" == *:* ]] && repo=${image%:*}
+    if [[ "${BELFRY_REBUILD:-}" != 1 && "$tree" != unknown ]] && docker image inspect "$repo:tree-$tree" >/dev/null 2>&1; then
+      docker tag "$repo:tree-$tree" "$image"
       say "  $svc: up to date"
       continue
     fi
     say "  $svc: building $image"
     compose --profile app build "$svc"
     docker builder prune -af >/dev/null
-    { grep -v "^$image " infra/.built || true; echo "$image $tree"; } > infra/.built.tmp && mv infra/.built.tmp infra/.built
+    [[ "$tree" == unknown ]] || docker tag "$image" "$repo:tree-$tree"
   done < <(compose --profile app config --format json | python3 -c '
 import json, os, sys
 root = sys.argv[1]
