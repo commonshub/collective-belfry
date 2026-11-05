@@ -541,7 +541,7 @@ case "${1:-help}" in
   smoke) cmd_smoke ;;
   update) shift; cmd_update "$@" ;;
   homepage) shift; cmd_homepage "$@" ;;
-  setup-code) cmd_setup_code ;;
+  setup-code) shift; cmd_setup_code "$@" ;;
   setup-apply) cmd_setup_apply ;;
   setup-units) cmd_setup_units ;;
   theme) shift; cmd_theme "$@" ;;
