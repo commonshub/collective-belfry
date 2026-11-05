@@ -399,8 +399,9 @@ def header(snap: Snapshot, rel: str = "") -> str:
         if snap.verified
         else '<span class="meta">unsigned</span>'
     )
+    path_line = f'<p class="crumbs">{crumbs}</p>' if rel else ""
     return (
-        f'<p class="crumbs">{crumbs}</p><p class="meta">{E(snap.branch)} · '
+        f'{path_line}<p class="meta">{E(snap.branch)} · '
         f'<code>{snap.sha[:12]}</code> · {badge} · <a href="/git/commits">commits</a></p>'
     )
 
@@ -443,8 +444,7 @@ def home_html(view: GitView, snap: Snapshot) -> str:
         try:
             text = view.blob(snap, name).decode("utf-8", "replace")
             if name.lower().endswith(".md"):
-                title, body = pages.render(text)
-                body = (f"<h2>{E(title)}</h2>" if title else "") + body
+                _, body = pages.render(text)
             else:
                 body = f'<pre class="code">{E(text)}</pre>'
             readme = f'<div class="readme">{body}</div>'

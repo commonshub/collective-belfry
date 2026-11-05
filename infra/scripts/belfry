@@ -64,7 +64,7 @@ COMPOSE_FILES=(-f infra/docker-compose.yml -f infra/docker-compose.prod.yml)
 PREBUILT_SERVICES=(keycast keycast-migrate proxy groups-relay onboarding git)
 export BELFRY_KEYCAST_TAG BELFRY_PROXY_TAG BELFRY_GROUPS_RELAY_TAG BELFRY_ONBOARDING_TAG BELFRY_GIT_TAG
 image_tags() {
-  t() { printf 'tree-%s' "$(git -C "$ROOT" rev-parse --short=12 "HEAD:$1")"; }
+  t() { printf 'tree-%s' "$(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --short=12 "HEAD:$1")"; }
   BELFRY_KEYCAST_TAG=$(t infra/keycast/build)
   BELFRY_PROXY_TAG=$(t infra/proxy)
   BELFRY_GROUPS_RELAY_TAG=$(t infra/groups-relay)
@@ -73,7 +73,7 @@ image_tags() {
 }
 image_tags
 # a build context with local changes has no prebuilt image
-local_changes() { [[ -n "$(git -C "$ROOT" status --porcelain -- infra/keycast/build infra/proxy infra/groups-relay services/onboarding infra/git)" ]]; }
+local_changes() { [[ -n "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain -- infra/keycast/build infra/proxy infra/groups-relay services/onboarding infra/git)" ]]; }
 use_images() { [[ -f infra/.images ]] && ! local_changes; }
 compose() {
   if use_images; then docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml "$@"
@@ -363,7 +363,7 @@ setup_folder() {
 # the values that are not secrets. Never a secret's value.
 setup_status() {
   [[ -d "$SETUP_DIR" ]] || return 0
-  python3 - "$SETUP_DIR/status.json" "$ENV_FILE" "$SECRETS" "${1:-}" "${2:-}" <<'PY' || true
+  python3 - "$SETUP_DIR/status.json" "$ENV_FILE" "$SECRETS" "${1:-${BELFRY_SETUP_APPLYING:-}}" "${2:-}" <<'PY' || true
 import json, os, re, sys, time
 path, env_file, secrets_dir, applying, last = sys.argv[1:6]
 env = {}
@@ -443,7 +443,7 @@ cmd_setup_apply() {
   done < "$work.in"
   rm -f "$work.in"
   setup_status 1
-  if ! (cmd_config "$work") >> "$log" 2>&1; then ok=false; fi
+  if ! (BELFRY_SETUP_APPLYING=1 cmd_config "$work") >> "$log" 2>&1; then ok=false; fi
   rm -f "$work"
   msg=$(grep -v "^  secret " "$log" | tail -n 3 | tr '\n' ' ' | cut -c1-300)
   rm -f "$log"
