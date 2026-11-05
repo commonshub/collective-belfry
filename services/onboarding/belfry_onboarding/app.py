@@ -45,6 +45,7 @@ from . import (
     pages,
     programme,
     reports,
+    sessions,
     setup,
     signin,
     steward,
@@ -183,13 +184,16 @@ def create_app(services: Services | None = None) -> FastAPI:
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
         await run_in_threadpool(core.sync_participants, app.state.services)
-        yield
+        app.state.sessions = sessions.Sessions(app.state.services)
+        async with sessions.running(app):  # name@domain sign-in by DM (sessions.py)
+            yield
 
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
     app.state.bridge = bridge.BridgeStore()
     app.state.homepage = None
     app.state.gitview = None
     theme.register(app)  # /theme/*: the base theme and the community's own files (theme.py)
+    sessions.register(app)  # /api/session: sign in to an app as name@domain (sessions.py)
     setup.register(app)  # belfry.<domain>/setup: settings over HTTPS (setup.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
@@ -211,6 +215,10 @@ def create_app(services: Services | None = None) -> FastAPI:
     # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
     brand_dir = Path(os.environ.get("BRAND_DIR") or Path(__file__).resolve().parents[3] / "brand")
+    # the setup page's browser library (nostr-tools), served from here: no third-party script
+    app.mount(
+        "/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static"
+    )
     if brand_dir.is_dir():
         mimetypes.add_type("font/woff2", ".woff2")  # python-slim knows no woff2
         app.mount("/brand", StaticFiles(directory=str(brand_dir)), name="brand")

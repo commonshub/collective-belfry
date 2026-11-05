@@ -2,7 +2,7 @@
 # Belfry installer: a digital belfry for your community on a fresh VPS.
 #
 #   curl -fsSL https://belfry.sh/install.sh | sudo bash
-#   curl -fsSL https://belfry.sh/install.sh | sudo bash -s -- --domain belfry.example.org --email ops@example.org
+#   curl -fsSL https://belfry.sh/install.sh | sudo bash -s -- --domain belfry.example.org
 #
 # It asks for what it needs at the start (or takes it from flags, BELFRY_* variables or a config
 # file), checks the server and the DNS, and only then changes the server:
@@ -21,7 +21,7 @@
 #
 #   cat > /root/belfry.env <<'EOF'
 #   BELFRY_DOMAIN=belfry.example.org          # required; A records for it and *.it → this server
-#   BELFRY_EMAIL=ops@example.org              # required; Let's Encrypt notices, first steward
+#   BELFRY_EMAIL=ops@example.org              # optional; Let's Encrypt account (default admin@<domain>)
 #   BELFRY_NAME="Example Commons"             # community name
 #   BELFRY_RESEND_API_KEY=re_…                # mail (or BELFRY_SMTP_HOST/_PORT/_USER/_PASSWORD)
 #   BELFRY_MAIL_FROM=belfry@example.org       # a sender your mail provider has verified
@@ -64,7 +64,7 @@ main() {
 Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [options])
 
   --domain DOMAIN          the belfry's domain (DNS: DOMAIN and *.DOMAIN → this server)
-  --email EMAIL            Let's Encrypt notices and the first steward
+  --email EMAIL            the Let's Encrypt account (default admin@<domain>)
   --name NAME              the community's name
   --mail-from ADDRESS      sender of the mails (default belfry@DOMAIN)
   --config FILE            BELFRY_* settings, one KEY=VALUE per line (secrets go here)
@@ -211,10 +211,12 @@ EOF
   BELFRY_DOMAIN=$(printf '%s' "${BELFRY_DOMAIN:-}" | tr 'A-Z' 'a-z' | sed -E 's#^https?://##; s#/.*$##; s/^[[:space:]]+//; s/[[:space:]]+$//')
   [[ "$BELFRY_DOMAIN" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$ ]] || die "a domain is required (--domain or BELFRY_DOMAIN); got \"$BELFRY_DOMAIN\""
   export BELFRY_DOMAIN
-  ask BELFRY_EMAIL "Your e-mail (certificate notices; you become the first steward):"
-  [[ "${BELFRY_EMAIL:-}" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]] || die "an e-mail address is required (--email or BELFRY_EMAIL)"
+  # The first admin, mail, payments and the rest are set in the browser afterwards (the setup
+  # link printed at the end); flags and BELFRY_* variables still set them here for agents.
+  if [[ -n "${BELFRY_EMAIL:-}" && ! "$BELFRY_EMAIL" =~ ^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$ ]]; then die "not an e-mail address: $BELFRY_EMAIL"; fi
+  export BELFRY_EMAIL=${BELFRY_EMAIL:-admin@$BELFRY_DOMAIN}
   ask BELFRY_NAME "Community name:" "$BELFRY_DOMAIN"
-  if [[ $HOST_ONLY -eq 0 ]]; then
+  if [[ $HOST_ONLY -eq 0 && "${BELFRY_ASK_ALL:-}" == 1 ]]; then
     if [[ -z "${BELFRY_RESEND_API_KEY:-}${BELFRY_SMTP_HOST:-}" ]]; then
       [[ $TTY -eq 1 ]] && printf '%sMail sends the sign-in links. Resend: resend.com → API Keys (sending access).%s\n' "$dim" "$reset"
       ask_secret BELFRY_RESEND_API_KEY "Resend API key:"
@@ -269,8 +271,8 @@ EOF
   cat <<EOF
   domain         https://$BELFRY_DOMAIN  (and login., pass., apps., relay., shop., chat., …)
   community      $BELFRY_NAME
-  first steward  $BELFRY_EMAIL
-  mail           $( if [[ -n "${BELFRY_RESEND_API_KEY:-}" ]]; then echo "Resend, from ${BELFRY_MAIL_FROM:-}"; elif [[ -n "${BELFRY_SMTP_HOST:-}" ]]; then echo "SMTP $BELFRY_SMTP_HOST, from ${BELFRY_MAIL_FROM:-}"; else echo "none yet: nobody can sign in until it is set (belfry config)"; fi )
+  first admin    created in the browser with the setup link (printed at the end)
+  mail           $( if [[ -n "${BELFRY_RESEND_API_KEY:-}" ]]; then echo "Resend, from ${BELFRY_MAIL_FROM:-}"; elif [[ -n "${BELFRY_SMTP_HOST:-}" ]]; then echo "SMTP $BELFRY_SMTP_HOST, from ${BELFRY_MAIL_FROM:-}"; else echo "none yet: added on the setup page"; fi )
   payments       $( [[ -n "${BELFRY_STRIPE_SECRET_KEY:-}" ]] && printf 'Stripe (%s) ' "$( [[ "$BELFRY_STRIPE_SECRET_KEY" == *_live_* ]] && echo live || echo test )"; [[ -n "${BELFRY_MOLLIE_API_KEY:-}" ]] && printf 'Mollie '; [[ -z "${BELFRY_STRIPE_SECRET_KEY:-}${BELFRY_MOLLIE_API_KEY:-}" ]] && printf 'none: stewards mark payments by hand' ; echo )
   accounting     ${BELFRY_ACCOUNTING_ODOO_URL:-the bundled Odoo only}
   custody seed   $custody_desc
@@ -447,19 +449,20 @@ EOF
   # ── 10. The stack ───────────────────────────────────────────────────────────────────────────
   step "The stack (the first start builds the signer: 15 to 30 minutes)"
   runuser -u belfry -- "$DIR/infra/scripts/belfry" apply
-  step "First steward"
-  runuser -u belfry -- "$DIR/infra/scripts/belfry" add-steward "$BELFRY_EMAIL" "${BELFRY_NAME:-Steward}" || warn "add-steward failed; run: belfry add-steward $BELFRY_EMAIL"
-  step "Setup page"
-  "$DIR/infra/scripts/belfry" setup-units || warn "the setup page's watcher is not installed; run: belfry setup-units"
-  runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code "$BELFRY_EMAIL" </dev/null || warn "no setup code; run: belfry setup-code"
+  "$DIR/infra/scripts/belfry" setup-units >/dev/null || warn "the setup page's watcher is not installed; run: belfry setup-units"
+  SETUP_LINK=$(runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code </dev/null | sed -n 's/^  \(https:.*\)/\1/p') || true
   if [[ $RUN_SMOKE -eq 1 ]]; then
     step "Smoke test"
     runuser -u belfry -- "$DIR/infra/scripts/belfry" smoke || warn "the smoke test failed: see above and $LOG"
   fi
 
   step "Your belfry is up"
+  if [[ -n "${SETUP_LINK:-}" ]]; then
+    printf '\n  %sOpen this link to finish (valid 24 hours):%s\n\n    %s\n\n' "$bold" "$reset" "$SETUP_LINK"
+    printf '  It makes you the first admin, then asks for a Resend API key so members can get\n  their sign-in codes by e-mail.\n\n'
+  fi
   cat <<EOF
-  https://belfry.$BELFRY_DOMAIN/setup     add mail, payments and the rest, with the code above
+  https://belfry.$BELFRY_DOMAIN/setup     settings (belfry setup-code makes a new link)
   https://belfry.$BELFRY_DOMAIN           this belfry's status and members
   https://$BELFRY_DOMAIN                  the homepage (a placeholder until you publish one)
   https://$BELFRY_DOMAIN/.well-known/belfry.json   what apps and agents read
@@ -472,7 +475,7 @@ EOF
   Still to do by hand (infra/DEPLOY.md): the admin network (ZeroTier), backups, and moving the
   custody seed under the stewards' YubiKeys if it is still on this disk.
 EOF
-  [[ -z "${BELFRY_RESEND_API_KEY:-}${BELFRY_SMTP_HOST:-}" ]] && warn "no mail provider yet: nobody can sign in until one is set (the setup page, or belfry config)"
+  true
   printf '\n'
 }
 

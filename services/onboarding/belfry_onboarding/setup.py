@@ -31,10 +31,11 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import console, mypass
+from . import console, mypass, nostr
+from .blossom import verify_signature
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -225,6 +226,150 @@ def state(settings: Any) -> dict[str, Any]:
     }
 
 
+# ── the first admin ─────────────────────────────────────────────────────────────────────────
+# On a new belfry the setup page creates the first admin: their e-mail address and username, and
+# a session key made in their browser. They become a steward (free pass, Keycast account named
+# <username>, so <username>@<domain> is their NIP-05), the browser key is their first NIP-46
+# session on that account, and the address waits for a verification code until mail works.
+USERNAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,29}$")
+FIRST_ADMIN = "first-admin.json"
+
+
+def first_admin(settings: Any) -> dict[str, Any]:
+    folder = setup_dir(settings)
+    return read_json(folder / FIRST_ADMIN) if folder else {}
+
+
+def save_first_admin(settings: Any, data: dict[str, Any]) -> None:
+    folder = setup_dir(settings)
+    if folder is None:
+        raise ValueError("no setup folder")
+    tmp = folder / f".{FIRST_ADMIN}.{secrets.token_hex(4)}"
+    tmp.write_text(json.dumps(data))
+    os.replace(tmp, folder / FIRST_ADMIN)
+
+
+def has_admin(svc: Services) -> bool:
+    if first_admin(svc.settings):
+        return True
+    try:
+        return bool(svc.authentik.group_member_emails(svc.settings.steward_group))
+    except Exception:  # noqa: BLE001 — Authentik not answering: don't offer a second first admin
+        return True
+
+
+def create_first_admin(
+    svc: Services, email: str, username: str, session_pubkey: str
+) -> dict[str, Any]:
+    from . import steward
+
+    email = email.strip()
+    username = username.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email) or len(email) > 254:
+        raise ValueError("That is not an e-mail address.")
+    if not USERNAME.fullmatch(username):
+        raise ValueError("A username is 1 to 30 letters, digits, dots, dashes or underscores.")
+    if not re.fullmatch(r"[0-9a-f]{64}", session_pubkey or ""):
+        raise ValueError("The browser did not make a session key.")
+    if has_admin(svc):
+        raise ValueError("This belfry has an admin already.")
+    made = steward.add_steward(svc, email, username)
+    row = svc.odoo.read_one(
+        "belfry.pass", made["pass"]["pass_id"], ["partner_id", "keycast_pubkey", "state"]
+    )
+    if not row or row.get("state") != "active" or not row.get("keycast_pubkey"):
+        raise ValueError("The admin's pass did not open; see the logs and try again.")
+    partner = (
+        row["partner_id"][0] if isinstance(row["partner_id"], list) else int(row["partner_id"])
+    )
+    result = svc.keycast.preload_user(
+        vine_id=f"odoo-partner-{partner}", username=username, display_name=username
+    )
+    pubkey, token = result["pubkey"], result["token"]
+    svc.keycast.set_username(token, username)
+    bunker = svc.keycast.create_bunker(token, "Setup page (first session)")
+    from .nip46check import parse_bunker_url
+
+    bunker_pk, relays, secret = parse_bunker_url(bunker["bunker_url"])
+    data = {
+        "partner": partner,
+        "email": email,
+        "username": username,
+        "pubkey": pubkey,
+        "nip05": f"{username}@{svc.settings.nip05_domain}",
+        "session_pubkey": session_pubkey,
+        "bunker_pubkey": bunker_pk,
+        "verified": False,
+        "code_sent_at": 0,
+        "at": int(time.time()),
+    }
+    save_first_admin(svc.settings, data)
+    log.info("setup: first admin %s (%s), session key %s", username, email, session_pubkey[:12])
+    return {
+        **data,
+        "npub": nostr.hex_to_npub(pubkey),
+        "bunker_url": bunker["bunker_url"],
+        "relays": relays,
+        "secret": secret,
+    }
+
+
+def relay_connect(settings: Any, event: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
+    """Publish the browser's NIP-46 connect request on the bunker relay and return the bunker's
+    answer (kind 24133 for the session key), so the page needs no WebSocket of its own."""
+    from websockets.sync.client import connect
+
+    url = getattr(settings, "session_relay_url", "")
+    if not url:
+        raise ValueError("no bunker relay (SESSION_RELAY_URL)")
+    bunker = next((t[1] for t in event.get("tags", []) if t[:1] == ["p"]), "")
+    with connect(url, open_timeout=timeout) as ws:
+        ws.send(
+            json.dumps(
+                [
+                    "REQ",
+                    "c",
+                    {
+                        "kinds": [24133],
+                        "authors": [bunker],
+                        "#p": [event["pubkey"]],
+                        "since": int(time.time()) - 10,
+                    },
+                ]
+            )
+        )
+        ws.send(json.dumps(["EVENT", event]))
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            msg = json.loads(ws.recv(timeout=max(0.1, deadline - time.monotonic())))
+            if msg[0] == "EVENT" and msg[1] == "c":
+                return msg[2]
+            if msg[0] == "OK" and msg[1] == event["id"] and not msg[2]:
+                raise ValueError(f"the relay refused the request: {msg[3] if len(msg) > 3 else ''}")
+    raise ValueError("the bunker did not answer")
+
+
+def send_admin_code(svc: Services) -> dict[str, Any]:
+    from . import email_code
+
+    fa = first_admin(svc.settings)
+    r = email_code.send(svc, fa["pubkey"], {"email": fa["email"], "app": "Setup"})
+    fa["code_sent_at"] = int(time.time())
+    save_first_admin(svc.settings, fa)
+    return r
+
+
+def verify_admin_code(svc: Services, code: str) -> None:
+    from . import email_code
+
+    fa = first_admin(svc.settings)
+    email_code.verify(svc, fa["pubkey"], {"email": fa["email"], "code": code})
+    fa["verified"] = True
+    fa["verified_at"] = int(time.time())
+    save_first_admin(svc.settings, fa)
+    log.info("setup: the first admin's address %s is verified", fa["email"])
+
+
 # ── pages ───────────────────────────────────────────────────────────────────────────────────
 STYLE = """<style>
 .providers{border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:16px 0}
@@ -240,6 +385,9 @@ border:1px solid var(--border);background:var(--surface-deep);color:inherit}
 .set{color:var(--ok,var(--accent));font-size:.85rem;white-space:nowrap}
 .missing{color:var(--fg-faint);font-size:.85rem;white-space:nowrap}
 .note{padding:10px 12px;border-radius:8px;background:var(--surface-deep);margin:0 0 14px}
+input[type=email]{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border-radius:8px;
+border:1px solid var(--border);background:var(--surface-deep);color:inherit}
+.linkish{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font:inherit;font-size:.9rem}
 </style>"""
 
 
@@ -264,10 +412,96 @@ def provider_state(st: dict[str, Any], fields: list[tuple[str, str, bool, str]])
     return "partly" if any(done) else "missing"
 
 
+FIRST_ADMIN_JS = """<script src="/static/nostr-tools-2.25.2.js"></script>
+<script>
+(() => {
+  const f = document.getElementById('first');
+  if (!f) return;
+  const email = f.elements.email, user = f.elements.username, out = document.getElementById('first-msg');
+  let edited = false;
+  user.addEventListener('input', () => { edited = true; });
+  email.addEventListener('input', () => {
+    if (!edited) user.value = (email.value.split('@')[0] || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 30);
+  });
+  f.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const T = window.NostrTools, btn = f.querySelector('button');
+    btn.disabled = true; out.textContent = 'Making your session key and your account…';
+    try {
+      const sk = T.generateSecretKey(), pk = T.getPublicKey(sk);
+      const keep = { nsec: T.nip19.nsecEncode(sk) };
+      try { localStorage.setItem('belfry:session', JSON.stringify(keep)); } catch (_) {}
+      const post = (url, body) => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csrf: f.elements.csrf.value, ...body }) }).then(async r => {
+          const d = await r.json(); if (!r.ok) throw new Error(d.message || 'failed'); return d; });
+      const a = await post('/setup/first-admin', { email: email.value, username: user.value, session_pubkey: pk });
+      out.textContent = 'Connecting this browser as your first session…';
+      const conv = T.nip44.getConversationKey(sk, a.bunker_pubkey);
+      const id = Math.random().toString(36).slice(2);
+      const ev = T.finalizeEvent({ kind: 24133, created_at: Math.floor(Date.now() / 1000), tags: [['p', a.bunker_pubkey]],
+        content: T.nip44.encrypt(JSON.stringify({ id, method: 'connect', params: [a.bunker_pubkey, a.secret] }), conv) }, sk);
+      let connected = false;
+      try {
+        const r = await post('/setup/first-admin/connect', { event: ev });
+        const reply = JSON.parse(T.nip44.decrypt(r.reply.content, conv));
+        connected = !reply.error;
+      } catch (_) {}
+      Object.assign(keep, { npub: a.npub, nip05: a.nip05, bunker: a.bunker_url, connected });
+      try { localStorage.setItem('belfry:session', JSON.stringify(keep)); } catch (_) {}
+      location.href = '/setup?msg=' + encodeURIComponent('You are the first admin: ' + a.nip05 + '.') + '&open=resend';
+    } catch (err) {
+      out.textContent = String(err.message || err); btn.disabled = false;
+    }
+  });
+})();
+</script>"""
+
+
+def first_admin_form(csrf: str, domain: str) -> str:
+    return f"""<h1>Welcome to your belfry</h1>
+<p class="muted">First, become its admin. Your browser makes a key for this session; your account
+is <em>username</em>@{E(domain)}, a Nostr address members and apps can find you by.</p>
+<form id="first">
+<input type="hidden" name="csrf" value="{E(csrf)}">
+<label>Your e-mail address</label><input type="email" name="email" required autocomplete="email">
+<label>Username</label><div class="row" style="flex-wrap:nowrap"><input type="text" name="username" required pattern="[a-z0-9][a-z0-9._-]{{0,29}}" autocomplete="username"><span class="meta">@{E(domain)}</span></div>
+<p><button class="btn" type="submit">Create my admin account</button></p>
+<p id="first-msg" class="meta" role="status"></p></form>
+{FIRST_ADMIN_JS}"""
+
+
+def admin_banner(fa: dict[str, Any], st: dict[str, Any], csrf: str) -> str:
+    if not fa or fa.get("verified"):
+        return ""
+    who = f"<strong>{E(fa.get('nip05', ''))}</strong> ({E(fa.get('email', ''))})"
+    if not st["set"].get("BELFRY_RESEND_API_KEY"):
+        return (
+            '<div class="note"><strong>One step before your belfry can be used: add a Resend API key.</strong> '
+            "Members sign in with a code sent by e-mail, so nothing works until mail does. "
+            f"Your admin account {who} is ready; its address is verified as soon as mail works. "
+            '<a href="/setup?open=resend#resend">Add Resend</a></div>'
+        )
+    sent = "We sent a code to your address. " if fa.get("code_sent_at") else ""
+    return f"""<div class="note"><strong>Verify your address.</strong> {sent}Type the 6-digit code
+that went to {E(fa.get("email", ""))}.
+<form method="post" action="/setup/verify" class="row" style="margin-top:8px">
+<input type="hidden" name="csrf" value="{E(csrf)}">
+<input type="text" name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{{6,7}}" required style="max-width:140px">
+<button class="btn" type="submit">Verify</button></form>
+<form method="post" action="/setup/verify/send" style="margin-top:6px"><input type="hidden" name="csrf" value="{E(csrf)}">
+<button type="submit" class="linkish">Send a new code</button></form></div>"""
+
+
 def settings_form(
-    st: dict[str, Any], csrf: str, who: str, msg: str, err: str, open_: str = ""
+    st: dict[str, Any],
+    csrf: str,
+    who: str,
+    msg: str,
+    err: str,
+    open_: str = "",
+    banner: str = "",
 ) -> str:
-    notes = ""
+    notes = banner
     if err:
         notes += f'<p class="note bad">{E(err)}</p>'
     if msg:
@@ -372,8 +606,26 @@ def register(app: FastAPI) -> None:
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
 
+    def start_session(request: Request, who: str, to: str) -> RedirectResponse:
+        cookie = mypass._sign(
+            svc(request),
+            {"kind": "setup", "csrf": secrets.token_urlsafe(24), "who": who},
+            SESSION_SECONDS,
+        )
+        response = RedirectResponse(to, status_code=303)
+        response.set_cookie(
+            COOKIE,
+            cookie,
+            max_age=SESSION_SECONDS,
+            httponly=True,
+            secure=secure(request),
+            samesite="lax",
+            path="/",
+        )
+        return response
+
     @app.get("/console/setup", response_class=HTMLResponse)
-    async def setup_page(request: Request, msg: str = "", err: str = ""):
+    async def setup_page(request: Request, msg: str = "", err: str = "", code: str = ""):
         services = svc(request)
         st = state(services.settings)
         if not st["available"]:
@@ -381,14 +633,189 @@ def register(app: FastAPI) -> None:
                 "<h1>Setup</h1><p>This belfry has no setup folder. Use <code>belfry config</code> on "
                 "the server.</p>"
             )
+        if code:
+            # the link the installer prints: belfry.<domain>/setup?code=…
+            entry = match_code(services.settings, code[:64])
+            if entry is None:
+                return RedirectResponse(
+                    "/setup?err=That+link+is+wrong+or+expired.", status_code=303
+                )
+            who = " ".join(str(entry.get("for") or "").split())[:MAX_NAME]
+            return start_session(request, who, "/setup")
         ok = await allowed(request)
         if ok is None:
             return page_(code_form(err[:200]))
+        csrf, who = ok
+        if not await run_in_threadpool(has_admin, services):
+            notes = f'<p class="note bad">{E(err[:200])}</p>' if err else ""
+            return page_(notes + first_admin_form(csrf, services.settings.nip05_domain))
+        fa = first_admin(services.settings)
+        if (
+            fa
+            and not fa.get("verified")
+            and not fa.get("code_sent_at")
+            and st["set"].get("BELFRY_RESEND_API_KEY")
+            and not st["pending"]
+            and not st["applying"]
+        ):
+            # mail works now: the first admin's code goes out once by itself
+            try:
+                await run_in_threadpool(send_admin_code, services)
+                fa = first_admin(services.settings)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("setup: the first admin's code was not sent: %s", exc)
         return page_(
             settings_form(
-                st, ok[0], ok[1], msg[:200], err[:200], request.query_params.get("open", "")
+                st,
+                csrf,
+                who or fa.get("username", "") or "the setup code",
+                msg[:200],
+                err[:200],
+                request.query_params.get("open", ""),
+                admin_banner(fa, st, csrf),
             ),
             refresh=st["pending"] or st["applying"],
+        )
+
+    async def json_body(request: Request) -> tuple[tuple[str, str] | None, dict[str, Any]]:
+        ok = await allowed(request)
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        if (
+            ok is None
+            or not same_origin(request)
+            or not ok[0]
+            or not hmac.compare_digest(str(body.get("csrf", "")), ok[0])
+        ):
+            return None, body
+        return ok, body
+
+    @app.post("/console/setup/first-admin")
+    async def setup_first_admin(request: Request):
+        ok, body = await json_body(request)
+        if ok is None:
+            return JSONResponse({"message": "Open the setup link again."}, status_code=403)
+        services = svc(request)
+        try:
+            made = await run_in_threadpool(
+                create_first_admin,
+                services,
+                str(body.get("email", "")),
+                str(body.get("username", "")),
+                str(body.get("session_pubkey", "")),
+            )
+        except ValueError as exc:
+            return JSONResponse({"message": str(exc)}, status_code=422)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("setup: first admin failed")
+            return JSONResponse({"message": f"That failed: {str(exc)[:200]}"}, status_code=500)
+        response = JSONResponse(
+            {
+                k: made[k]
+                for k in (
+                    "npub",
+                    "nip05",
+                    "bunker_url",
+                    "bunker_pubkey",
+                    "secret",
+                    "relays",
+                    "username",
+                )
+            }
+        )
+        # this browser is signed in to belfry.<domain> as the admin, and its setup session
+        # carries their name
+        cookie = mypass._sign(
+            services,
+            # the page's token, so its next calls (connect) pass as the admin's
+            {"kind": "console", "partner": made["partner"], "csrf": ok[0]},
+            services.settings.pass_page_session_days * 86400,
+        )
+        response.set_cookie(
+            console.COOKIE,
+            cookie,
+            max_age=services.settings.pass_page_session_days * 86400,
+            httponly=True,
+            secure=secure(request),
+            samesite="lax",
+            path="/",
+        )
+        setup_cookie = mypass._sign(
+            services, {"kind": "setup", "csrf": ok[0], "who": made["username"]}, SESSION_SECONDS
+        )
+        response.set_cookie(
+            COOKIE,
+            setup_cookie,
+            max_age=SESSION_SECONDS,
+            httponly=True,
+            secure=secure(request),
+            samesite="lax",
+            path="/",
+        )
+        return response
+
+    @app.post("/console/setup/first-admin/connect")
+    async def setup_first_connect(request: Request):
+        ok, body = await json_body(request)
+        if ok is None:
+            return JSONResponse({"message": "Open the setup link again."}, status_code=403)
+        services = svc(request)
+        fa = first_admin(services.settings)
+        event = body.get("event")
+        if (
+            not isinstance(event, dict)
+            or event.get("kind") != 24133
+            or event.get("pubkey") != fa.get("session_pubkey")
+            or ["p", fa.get("bunker_pubkey")] not in event.get("tags", [])
+            or not verify_signature(event)
+        ):
+            return JSONResponse(
+                {"message": "not the first session's connect request"}, status_code=422
+            )
+        try:
+            reply = await run_in_threadpool(relay_connect, services.settings, event)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("setup: first session connect: %s", exc)
+            return JSONResponse({"message": str(exc)[:200]}, status_code=502)
+        fa["session_connected"] = True
+        save_first_admin(services.settings, fa)
+        return JSONResponse({"reply": reply})
+
+    @app.post("/console/setup/verify/send")
+    async def setup_verify_send(request: Request, csrf: str = Form("")):
+        ok = await allowed(request)
+        if ok is None or not same_origin(request) or not hmac.compare_digest(csrf, ok[0] or "x"):
+            return RedirectResponse("/setup", status_code=303)
+        try:
+            await run_in_threadpool(send_admin_code, svc(request))
+        except Exception as exc:  # noqa: BLE001
+            return RedirectResponse(
+                "/setup?"
+                + urllib.parse.urlencode({"err": getattr(exc, "message", str(exc))[:200]}),
+                status_code=303,
+            )
+        return RedirectResponse("/setup?msg=A+new+code+is+on+its+way.", status_code=303)
+
+    @app.post("/console/setup/verify")
+    async def setup_verify(request: Request, csrf: str = Form(""), code: str = Form("")):
+        ok = await allowed(request)
+        if ok is None or not same_origin(request) or not hmac.compare_digest(csrf, ok[0] or "x"):
+            return RedirectResponse("/setup", status_code=303)
+        try:
+            await run_in_threadpool(verify_admin_code, svc(request), code.strip()[:12])
+        except Exception as exc:  # noqa: BLE001
+            return RedirectResponse(
+                "/setup?"
+                + urllib.parse.urlencode({"err": getattr(exc, "message", str(exc))[:200]}),
+                status_code=303,
+            )
+        return RedirectResponse(
+            "/setup?msg=Your+address+is+verified.+Your+belfry+is+ready%3A+members+and+apps+can+sign+in.",
+            status_code=303,
         )
 
     @app.post("/console/setup/code")

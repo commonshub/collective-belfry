@@ -307,6 +307,15 @@ The members-only pages use the pass page's session (`/me`): signing in there ope
 
 ## The setup page: belfry.<domain>/setup
 
+**First run.** The installer prints a link with a code in it (`/setup?code=…`, 24 hours). Opening
+it on a belfry without an admin asks for an e-mail address and a username; the browser makes a key
+pair (kept in its storage) and the belfry makes that person a steward with a Keycast account named
+after the username (`<username>@<domain>`, NIP-05), whose first NIP-46 session is the browser's key.
+The address stays unverified until mail works: the page then asks for a Resend API key, and once
+it is applied mails the admin a code to verify it. From then on any app can sign people in with
+their address (`skills/belfry-app`, `sessions.py`): a DM from the app's session key, a code by
+e-mail, and a `bunker://` connection back.
+
 Settings that would otherwise need SSH and `belfry config`: mail (Resend), the community's name,
 theme, homepage and `/git`, Stripe and Mollie keys, accounting. The installer prints a **setup
 code** for the first steward (valid 24 hours; `belfry setup-code "Name"` makes one for someone else, and the changelog names that person for what they change); an admin who can sign in needs no

@@ -41,6 +41,7 @@ SKILLS = {
     "steward": "belfry-steward",
     "website": "belfry-homepage",
     "theme": "belfry-theme",
+    "app": "belfry-app",
 }
 
 
@@ -96,6 +97,16 @@ def document(settings: Any) -> dict[str, Any]:
         "sign_in": {
             "login": _url(settings.authentik_public_url),
             "keycast": _url(settings.apps_public_url),
+            # name@domain sign-in for any app (sessions.py, skills/belfry-app): DM the belfry's
+            # key from the app's session key on these relays (NIP-17), or use the HTTP API
+            "sessions": {
+                **_belfry_key(settings),
+                "relays": [_url(r) for r in settings.bunker_relays.split(",") if r.strip()],
+                "api": public + "/api/session",
+                "skill": f"{public}/skills/belfry-app.md",
+            }
+            if _belfry_key(settings)
+            else None,
         },
         "credential": {"vct": settings.vct, "issuer": settings.credential_issuer}
         if settings.issuer_url

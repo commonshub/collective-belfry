@@ -706,6 +706,8 @@ services:
       HOMEPAGE: ${HOMEPAGE:-}
       THEME: ${THEME:-}
       GIT_REPO: ${GIT_REPO:-}
+      # name@domain sign-in: the belfry reads apps' DMs on the bunker relay (sessions.py)
+      SESSION_RELAY_URL: ${SESSION_RELAY_URL-ws://keycast-relay:8080}
       CONSOLE_URL: ${CONSOLE_URL:-}
       HOMEPAGE_RELAYS: ${HOMEPAGE_RELAYS:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect

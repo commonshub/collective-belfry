@@ -27,11 +27,14 @@ apps on one VM. One script sets it up: `https://belfry.sh/install.sh` (the sourc
 7. Optional but recommended before real members join: the stewards' **age or YubiKey
    recipients** (`age1…`) for the custody seed that members' keys derive from.
 
-Never ask for or print secrets in the chat. Ask the person to put them in the config file
-themselves, or to paste them into a file on the server, and refer to them by name. Simplest:
-install with only the domain, e-mail and name, then send the person to
-`https://belfry.<domain>/setup` with the setup code the installer printed; they type the keys
-there, over HTTPS, and you never see them.
+Simplest, and what to do unless the person asks otherwise: install with only the domain (and the
+community's name), then give the person the **setup link** the installer prints at the end
+(`https://belfry.<domain>/setup?code=…`). Opening it makes them the first admin (their e-mail and a
+username: `<username>@<domain>`; their browser makes the first session key), then asks for a
+Resend API key so members can get sign-in codes, then verifies their address. They type the keys
+there, over HTTPS; you never see them. `belfry setup-code` makes a new link if it expired.
+
+Never ask for or print secrets in the chat.
 
 ## Steps
 

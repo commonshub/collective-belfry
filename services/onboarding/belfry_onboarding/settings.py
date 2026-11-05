@@ -95,6 +95,9 @@ class Settings(BaseSettings):
     # The code shown at /git (gitview.py): nostr://<npub>/<relay>/<identifier> (ngit) or an
     # https:// git URL; empty = no /git.
     git_repo: str = Field(default="", alias="GIT_REPO")
+    # name@domain sign-in (sessions.py): the open relay apps reach the belfry on (the bunker
+    # relay, internal URL); its public URLs are BUNKER_PUBLIC_RELAYS (bunker_relays)
+    session_relay_url: str = Field(default="", alias="SESSION_RELAY_URL")
     # belfry.<domain>/setup (setup.py): pending.env, code.json and status.json (infra/data/setup)
     setup_dir: str = Field(default="/belfry-setup", alias="SETUP_DIR")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here

@@ -2,6 +2,10 @@
 
 - ``POST /api/admin/preload-user`` with the admin UCAN; idempotent on ``vine_id``.
 - ``PUT /api/admin/users/:pubkey/status`` with the service token.
+- With a user's UCAN (``preload_user`` returns one): ``POST /api/user/profile`` sets the username
+  (the NIP-05 name in Keycast's ``/.well-known/nostr.json``) and ``POST /api/user/bunker/create``
+  makes a NIP-46 connection (a ``bunker://`` URL whose secret binds the first client that
+  connects with it).
 """
 
 from __future__ import annotations
@@ -97,3 +101,35 @@ class KeycastClient:
             headers=self._service,
         )
         r.raise_for_status()
+
+    def set_username(self, token: str, username: str) -> None:
+        """The account's username: its NIP-05 name (``<username>@<tenant domain>``)."""
+        r = self._client.post(
+            f"{self.url}/api/user/profile",
+            json={"username": username},
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        if r.status_code == 409:
+            raise ValueError(f"the name {username} is taken")
+        r.raise_for_status()
+
+    def create_bunker(self, token: str, app_name: str) -> dict[str, Any]:
+        """A new NIP-46 connection for the token's user: ``{"bunker_url", "bunker_pubkey", …}``.
+        The URL's secret binds the client key that first sends ``connect`` with it."""
+        r = self._client.post(
+            f"{self.url}/api/user/bunker/create",
+            json={"app_name": app_name[:60] or "App"},
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def pubkey_for_name(self, name: str) -> str | None:
+        """The pubkey of ``<name>@<tenant domain>`` (Keycast's nostr.json), or None."""
+        r = self._client.get(
+            f"{self.url}/.well-known/nostr.json", params={"name": name}, headers=self._common
+        )
+        if r.status_code != 200:
+            return None
+        names = (r.json() or {}).get("names") or {}
+        return names.get(name.lower())

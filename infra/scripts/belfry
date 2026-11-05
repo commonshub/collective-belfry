@@ -10,7 +10,8 @@
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
-#   belfry setup-code [NAME]         a code for https://belfry.<domain>/setup, for NAME (valid 24 h)
+#   belfry setup-code [NAME]         a link to https://belfry.<domain>/setup with a code in it, for
+#                                    NAME (valid 24 h); a new belfry's link creates its first admin
 #   belfry setup-apply               apply what the setup page saved (run by belfry-setup.path)
 #   belfry setup-units               install the systemd units that watch the setup page (root)
 #   belfry theme set DIR | show | reset   the community's own look (custom.css, logo, theme.json)
@@ -436,9 +437,8 @@ print("-".join(raw[i:i + 4] for i in range(0, 16, 4)))
 PY
 )
   setup_status
-  say "Setup page: https://belfry.$(env_get BELFRY_DOMAIN)/setup"
-  say "Setup code${who:+ for $who}: $code   (valid ${BELFRY_SETUP_HOURS:-24} hours)"
-  [[ -n "$who" ]] || say "  made without a name: whoever uses it is asked for theirs"
+  say "Setup link${who:+ for $who} (valid ${BELFRY_SETUP_HOURS:-24} hours; whoever opens it can change the settings):"
+  say "  https://belfry.$(env_get BELFRY_DOMAIN)/setup?code=$code"
 }
 
 cmd_setup_apply() {

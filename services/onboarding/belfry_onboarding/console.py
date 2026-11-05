@@ -832,7 +832,7 @@ def map_host(request: Request) -> Response | None:
         return None
     path = request.scope["path"]
     if request.headers.get("host", "").lower() == host:
-        if not path.startswith(("/console", "/brand/", "/me/", "/theme/")):
+        if not path.startswith(("/console", "/brand/", "/me/", "/theme/", "/static/")):
             request.scope["path"] = "/console" + (path if path != "/" else "")
         return None
     if path.startswith("/console"):

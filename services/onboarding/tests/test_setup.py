@@ -7,7 +7,7 @@ import json
 import time
 
 import pytest
-from coincurve import PrivateKey
+from coincurve import PrivateKey  # noqa: F811
 from fastapi.testclient import TestClient
 
 from belfry_onboarding import console, mypass, setup
@@ -47,7 +47,8 @@ def folder(tmp_path):
 
 
 @pytest.fixture
-def web(services, authentik, folder):
+def fresh(services, authentik, folder):
+    """A new belfry: no admin yet."""
     s = services.settings
     s.pass_page_oidc_client_secret = "pass-secret"
     s.pass_page_secret = "p" * 32
@@ -59,6 +60,14 @@ def web(services, authentik, folder):
     console._admins["at"] = 0.0
     with TestClient(create_app(services), base_url="https://belfry.belfry.test") as c:
         yield c
+
+
+@pytest.fixture
+def web(fresh, authentik):
+    from .test_console import make_admin
+
+    make_admin(authentik, "boss@example.org")
+    return fresh
 
 
 def csrf_of(page: str) -> str:
@@ -181,3 +190,129 @@ def test_last_result_is_shown(web, folder):
     web.post("/setup/code", data={"code": CODE})
     page = web.get("/setup").text
     assert "Failed" in page and "bad value" in page
+
+
+# ── the first admin ─────────────────────────────────────────────────────────────────────────
+def first_session(fresh, folder):
+    r = fresh.get(f"/setup?code={ANON}", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/setup"
+    fresh.cookies.set(setup.COOKIE, r.cookies[setup.COOKIE])
+    page = fresh.get("/setup").text
+    return page, csrf_of(page)
+
+
+def test_the_setup_link_opens_the_first_admin_form(fresh, folder):
+    page, _ = first_session(fresh, folder)
+    assert 'id="first"' in page and "@belfry.local" in page or 'id="first"' in page
+    assert "/static/nostr-tools-2.25.2.js" in page and "Welcome to your belfry" in page
+    assert fresh.get("/static/nostr-tools-2.25.2.js").status_code == 200
+    r = fresh.get("/setup?code=WRONG-CODE", follow_redirects=False)
+    assert "err=" in r.headers["location"]
+
+
+def test_first_admin_with_a_browser_session_key(fresh, folder, odoo, authentik, keycast):
+    _, csrf = first_session(fresh, folder)
+    session = PrivateKey().public_key_xonly.format().hex()
+    r = fresh.post(
+        "/setup/first-admin",
+        json={
+            "csrf": csrf,
+            "email": "xavier@example.org",
+            "username": "Xavier",
+            "session_pubkey": session,
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["nip05"] == f"xavier@{fresh.app.state.services.settings.nip05_domain}"
+    assert data["bunker_url"].startswith("bunker://") and data["secret"] == "secret-1"
+    # Keycast: the account is called xavier (NIP-05), with one connection for the first session
+    assert any(u["username"] == "xavier" for u in keycast.users.values())
+    assert keycast.bunkers[0]["app_name"] == "Setup page (first session)"
+    assert len(authentik.members("belfry-stewards")) == 1
+    fa = json.loads((folder / "first-admin.json").read_text())
+    assert fa["session_pubkey"] == session and fa["verified"] is False
+    # signed in as the admin on belfry.<domain>; a second first admin is refused
+    assert console.COOKIE in r.cookies
+    again = fresh.post(
+        "/setup/first-admin",
+        json={"csrf": csrf, "email": "b@example.org", "username": "b", "session_pubkey": session},
+    )
+    assert again.status_code in (403, 422)
+    # next: add Resend
+    page = fresh.get("/setup").text
+    assert "add a Resend API key" in page and "xavier@" in page
+    # Resend set: the code goes out by itself, once
+    status = json.loads((folder / "status.json").read_text())
+    status["set"]["BELFRY_RESEND_API_KEY"] = True
+    (folder / "status.json").write_text(json.dumps(status))
+    page = fresh.get("/setup").text
+    assert "Verify your address" in page and "We sent a code" in page
+    code = odoo.mailed_codes["xavier@example.org"]
+    fresh.get("/setup")
+    assert (
+        len(
+            [
+                c
+                for c in odoo.tables["belfry.key.code"].values()
+                if c["email"] == "xavier@example.org"
+            ]
+        )
+        == 1
+    )
+    r = fresh.post(
+        "/setup/verify", data={"csrf": csrf_of(page), "code": "000000"}, follow_redirects=False
+    )
+    assert "err=" in r.headers["location"]
+    r = fresh.post(
+        "/setup/verify", data={"csrf": csrf_of(page), "code": code}, follow_redirects=False
+    )
+    assert "verified" in r.headers["location"]
+    assert json.loads((folder / "first-admin.json").read_text())["verified"] is True
+    assert "Verify your address" not in fresh.get("/setup").text
+
+
+def test_first_admin_checks_its_input(fresh, folder):
+    _, csrf = first_session(fresh, folder)
+    for body in (
+        {"email": "nope", "username": "x", "session_pubkey": "a" * 64},
+        {"email": "a@b.org", "username": "Bad Name!", "session_pubkey": "a" * 64},
+        {"email": "a@b.org", "username": "ok", "session_pubkey": "zz"},
+    ):
+        assert fresh.post("/setup/first-admin", json={"csrf": csrf, **body}).status_code == 422
+    assert (
+        fresh.post("/setup/first-admin", json={"csrf": "x", "email": "a@b.org"}).status_code == 403
+    )
+
+
+def test_first_session_connect_goes_through_the_bunker_relay(fresh, folder, monkeypatch, keycast):
+    from belfry_onboarding.nip46check import sign_event
+
+    _, csrf = first_session(fresh, folder)
+    key = PrivateKey()
+    session = key.public_key_xonly.format().hex()
+    data = fresh.post(
+        "/setup/first-admin",
+        json={"csrf": csrf, "email": "x@example.org", "username": "x", "session_pubkey": session},
+    ).json()
+    seen = {}
+
+    def fake_connect(settings, event, timeout=15.0):
+        seen["event"] = event
+        return {"kind": 24133, "content": "encrypted ack"}
+
+    monkeypatch.setattr(setup, "relay_connect", fake_connect)
+    event = sign_event(
+        key.secret,
+        {"kind": 24133, "created_at": 1, "tags": [["p", data["bunker_pubkey"]]], "content": "x"},
+    )
+    r = fresh.post("/setup/first-admin/connect", json={"csrf": csrf, "event": event})
+    assert r.status_code == 200 and r.json()["reply"]["content"] == "encrypted ack"
+    other = sign_event(
+        PrivateKey().secret,
+        {"kind": 24133, "created_at": 1, "tags": [["p", data["bunker_pubkey"]]], "content": "x"},
+    )
+    assert (
+        fresh.post("/setup/first-admin/connect", json={"csrf": csrf, "event": other}).status_code
+        == 422
+    )

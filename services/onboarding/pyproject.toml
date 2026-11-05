@@ -38,7 +38,7 @@ build-backend = "setuptools.build_meta"
 include = ["belfry_onboarding*"]
 
 [tool.setuptools.package-data]
-belfry_onboarding = ["themes/**/*"]
+belfry_onboarding = ["themes/**/*", "static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -63,6 +63,8 @@ select = ["E", "F", "I", "UP", "B"]
 "belfry_onboarding/theme.py" = ["E501"]
 "belfry_onboarding/setup.py" = ["E501"]
 "belfry_onboarding/gitview.py" = ["E501"]
+"belfry_onboarding/sessions.py" = ["E501"]
+"tests/test_sessions.py" = ["E501"]
 "tests/test_theme.py" = ["E501"]
 "tests/test_setup.py" = ["E501"]
 "tests/test_gitview.py" = ["E501"]

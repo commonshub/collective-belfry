@@ -91,6 +91,15 @@ class FakeOdoo(OdooApi):
             partner = next(
                 (p for p in self.tables["res.partner"].values() if p.get("email") == email), None
             )
+            from belfry_onboarding.nostr import hex_to_npub
+
+            if (
+                partner
+                and partner.get("belfry_npub")
+                and partner["belfry_npub"] != hex_to_npub(pubkey)
+            ):
+                # like Odoo: the right code, but the contact holds another key (its own)
+                return {"state": "other_key", "email": email, "npub": partner["belfry_npub"]}
             pid = partner["id"] if partner else self.add("res.partner", name=email, email=email)
             self.tables["res.partner"][pid]["belfry_verified_pubkey"] = pubkey
             return {"state": "bound", "email": email, "npub": "npub-of-" + pubkey, "member": False}
@@ -837,6 +846,14 @@ class FakeKeycast:
         router.put(
             url__regex=rf"{re.escape(base)}/api/admin/users/(?P<pubkey>[0-9a-f]+)/status"
         ).mock(side_effect=self._set_status)
+        # the user API with the last preloaded user's UCAN (the fake hands out one token)
+        self.last_pubkey = ""
+        self.bunkers: list[
+            dict[str, Any]
+        ] = []  # {"pubkey", "app_name", "bunker_url", "secret", "bunker_secret"}
+        router.post(f"{base}/api/user/profile").mock(side_effect=self._profile)
+        router.post(f"{base}/api/user/bunker/create").mock(side_effect=self._bunker)
+        router.get(f"{base}/.well-known/nostr.json").mock(side_effect=self._nip05)
 
     def _preload(self, request: httpx.Request) -> httpx.Response:
         self.preloads += 1
@@ -857,9 +874,53 @@ class FakeKeycast:
                 pubkey = f"{len(self.users) + 1:064x}"
             self.users[vine_id] = {"pubkey": pubkey, "username": body["username"]}
             self.status[pubkey] = "active"
+        self.last_pubkey = self.users[vine_id]["pubkey"]
         return httpx.Response(
             200, json={"pubkey": self.users[vine_id]["pubkey"], "token": "ucan-token"}
         )
+
+    def _profile(self, request: httpx.Request) -> httpx.Response:
+        name = json.loads(request.content)["username"].lower()
+        for u in self.users.values():
+            if u["username"].lower() == name and u["pubkey"] != self.last_pubkey:
+                return httpx.Response(409, json={"error": "Username is not available."})
+        for u in self.users.values():
+            if u["pubkey"] == self.last_pubkey:
+                u["username"] = name
+        return httpx.Response(200, json={"success": True})
+
+    def _bunker(self, request: httpx.Request) -> httpx.Response:
+        from coincurve import PrivateKey
+
+        body = json.loads(request.content)
+        key = PrivateKey()
+        bunker_pk = key.public_key_xonly.format().hex()
+        secret = f"secret-{len(self.bunkers) + 1}"
+        url = f"bunker://{bunker_pk}?relay=wss%3A%2F%2Fbunker.belfry.test&secret={secret}"
+        self.bunkers.append(
+            {
+                "pubkey": self.last_pubkey,
+                "app_name": body["app_name"],
+                "bunker_url": url,
+                "secret": secret,
+                "bunker_secret": key.secret,
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "bunker_url": url,
+                "bunker_pubkey": bunker_pk,
+                "app_name": body["app_name"],
+                "origin": None,
+                "created_at": "2026-11-05T00:00:00Z",
+            },
+        )
+
+    def _nip05(self, request: httpx.Request) -> httpx.Response:
+        name = (request.url.params.get("name") or "").lower()
+        names = {u["username"].lower(): u["pubkey"] for u in self.users.values()}
+        return httpx.Response(200, json={"names": {name: names[name]} if name in names else {}})
 
     def _sign(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
