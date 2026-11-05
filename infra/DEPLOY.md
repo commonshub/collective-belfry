@@ -305,6 +305,34 @@ the apex, or on `pass.<domain>` when a homepage is set:
 
 The members-only pages use the pass page's session (`/me`): signing in there opens them.
 
+## The setup page: belfry.<domain>/setup
+
+Settings that would otherwise need SSH and `belfry config`: mail (Resend), the community's name,
+theme, homepage and `/git`, Stripe and Mollie keys, accounting. The installer prints a **setup
+code** (valid 24 hours; `belfry setup-code` prints a new one); an admin who can sign in needs no
+code. Secrets are write-only: the page shows whether each one is set, never its value.
+
+The onboarding container has no Docker socket and cannot write `infra/.env`. The page writes
+`infra/data/setup/pending.env`; the systemd unit `belfry-setup.path` (installed by install.sh, or
+`belfry setup-units` as root) sees it and runs `belfry setup-apply`, which takes only the page's
+keys, runs `belfry config` (secret files, `.env`, changelog, restart) and writes `status.json`,
+which the page shows. `/setup/code` is rate-limited (10 a minute per address).
+
+## Themes: rebranding without a fork
+
+`THEME=belfry` (new installs) or `osv` (when THEME is unset, as before) is the base look. The
+community's own files live in `infra/data/theme/` (data, not git: `belfry update` keeps them):
+`custom.css` (CSS variables such as `--accent`, `--font-title`), `logo.svg`, `favicon.svg`,
+`theme.json` (name, URL, footer, links) and fonts. `belfry theme set DIR | show | reset`. Details
+and the variables: `skills/belfry-theme/SKILL.md`.
+
+## /git: the community's code
+
+`GIT_REPO` (`BELFRY_GIT_REPO`): `nostr://<npub>/<relay>/<identifier>` (ngit) or an `https://` git
+URL; empty means no `/git`. The page reads the repository announcement and the maintainers'
+signed state from the relays, fetches the code (shallow, refreshed every five minutes) and says
+whether what it shows is the signed state. It answers on the apex as well as on `pass.<domain>`.
+
 ## Admin network (ZeroTier)
 
 The admin pages answer only over a private ZeroTier network: Odoo's back office and login

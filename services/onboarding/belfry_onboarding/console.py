@@ -385,10 +385,10 @@ STYLE = (
     community.STYLE
     + """<style>
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
-.tile{border:1px solid var(--osv-border);border-radius:10px;padding:14px;text-decoration:none;color:inherit;display:block}
-.tile:hover{border-color:var(--osv-accent)} .big{font-size:1.6rem;font-weight:600}
-table{width:100%;border-collapse:collapse;font-size:.92rem} td,th{text-align:left;padding:6px 4px;border-bottom:1px solid var(--osv-border)}
-.up{color:var(--osv-accent)} .down{color:var(--osv-accent-2)} form.inline{display:inline}
+.tile{border:1px solid var(--border);border-radius:10px;padding:14px;text-decoration:none;color:inherit;display:block}
+.tile:hover{border-color:var(--accent)} .big{font-size:1.6rem;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:.92rem} td,th{text-align:left;padding:6px 4px;border-bottom:1px solid var(--border)}
+.up{color:var(--accent)} .down{color:var(--accent-2)} form.inline{display:inline}
 details summary{cursor:pointer}
 </style>"""
 )
@@ -400,6 +400,7 @@ def nav(current: str, who: dict[str, Any] | None) -> str:
         ("/status", "Status"),
         ("/members", "Members"),
         ("/website", "Website"),
+        ("/setup", "Setup"),
     ]
     parts = "".join(
         f'<a href="{h}" class="{"on" if h == current else ""}">{t}</a>' for h, t in links
@@ -831,7 +832,7 @@ def map_host(request: Request) -> Response | None:
         return None
     path = request.scope["path"]
     if request.headers.get("host", "").lower() == host:
-        if not path.startswith(("/console", "/brand/", "/me/")):
+        if not path.startswith(("/console", "/brand/", "/me/", "/theme/")):
             request.scope["path"] = "/console" + (path if path != "/" else "")
         return None
     if path.startswith("/console"):

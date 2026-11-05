@@ -10,6 +10,10 @@
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
+#   belfry setup-code                a new code for https://belfry.<domain>/setup (valid 24 h)
+#   belfry setup-apply               apply what the setup page saved (run by belfry-setup.path)
+#   belfry setup-units               install the systemd units that watch the setup page (root)
+#   belfry theme set DIR | show | reset   the community's own look (custom.css, logo, theme.json)
 #   belfry logs [SERVICE]            follow the logs
 #   (apply and update pull prebuilt images when GitHub has them for this code; BELFRY_BUILD_LOCAL=1
 #   builds everything here)
@@ -17,6 +21,8 @@
 #
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
 #   BELFRY_NAME                      community name (start page, belfry.json, mails)
+#   BELFRY_THEME                     belfry | osv: the pages' base look (own files: belfry theme)
+#   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
 #   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
 #   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
 #   BELFRY_SMTP_HOST, _PORT, _USER, _ENCRYPTION (none|starttls|ssl), BELFRY_SMTP_PASSWORD (secret)
@@ -43,7 +49,7 @@ say() { printf '%s\n' "$*"; }
 
 # Everything runs as the owner of the checkout (HOST_UID: the signer's files belong to it).
 OWNER=$(stat -c %U "$ROOT")
-if [[ "$(id -un)" != "$OWNER" ]]; then
+if [[ "$(id -un)" != "$OWNER" && "${1:-}" != setup-units ]]; then
   [[ "$(id -u)" -eq 0 ]] || die "run as $OWNER or root"
   exec runuser -u "$OWNER" -- "$SELF" "$@"
 fi
@@ -147,6 +153,14 @@ cmd_config() {
   fi
   if [[ -n "${BELFRY_NAME:-}" ]]; then pairs+=(COMMUNITY_NAME "$BELFRY_NAME" COMPANY_NAME "$BELFRY_NAME"); fi
   if [[ -n "${BELFRY_MAIL_FROM:-}" ]]; then pairs+=(MAIL_FROM "$BELFRY_MAIL_FROM"); fi
+  if [[ -n "${BELFRY_THEME:-}" ]]; then
+    [[ "$BELFRY_THEME" =~ ^(belfry|osv)$ ]] || die "BELFRY_THEME is belfry or osv"
+    pairs+=(THEME "$BELFRY_THEME")
+  fi
+  if [[ -n "${BELFRY_GIT_REPO:-}" ]]; then
+    [[ "$BELFRY_GIT_REPO" =~ ^(nostr|https):// ]] || die "BELFRY_GIT_REPO is a nostr:// (ngit) or https:// URL"
+    pairs+=(GIT_REPO "$BELFRY_GIT_REPO")
+  fi
   if [[ -n "${BELFRY_RESEND_API_KEY:-}" ]]; then
     [[ "$BELFRY_RESEND_API_KEY" == re_* ]] || say "  warning: a Resend API key starts with re_"
     pairs+=(SMTP_HOST smtp.resend.com SMTP_PORT 587 SMTP_USER resend SMTP_ENCRYPTION starttls)
@@ -189,6 +203,7 @@ cmd_config() {
   fi
   [[ $changed -eq 1 ]] || { say "  nothing to change (see belfry help)"; return 0; }
   record "Settings changed: $(IFS=,; echo "${changes[*]}" | sed 's/,/, /g')"
+  setup_status
   if [[ "${BELFRY_NO_APPLY:-}" == 1 ]]; then return 0; fi
   if compose ps --status running -q proxy 2>/dev/null | grep -q .; then cmd_apply; else say "The stack is not running; start it with: belfry apply"; fi
 }
@@ -241,6 +256,7 @@ for name, s in json.load(sys.stdin)["services"].items():
 
 cmd_apply() {
   bootstrap_env
+  mkdir -p infra/data/changelog infra/data/theme "$SETUP_DIR"
   if [[ "${BELFRY_BUILD_LOCAL:-}" == 1 ]] || local_changes; then
     rm -f infra/.images
     say "Building every image here (BELFRY_BUILD_LOCAL=1 or local changes)"
@@ -328,6 +344,179 @@ cmd_homepage() {
   esac
 }
 
+# ── the setup page (belfry.<domain>/setup, services/onboarding/belfry_onboarding/setup.py) ──
+# The page writes infra/data/setup/pending.env; belfry-setup.path runs `belfry setup-apply`,
+# which takes only these keys (the page's fields) and runs `belfry config` on them.
+SETUP_DIR="$INFRA/data/setup"
+SETUP_KEYS=(BELFRY_RESEND_API_KEY BELFRY_MAIL_FROM BELFRY_NAME BELFRY_THEME BELFRY_ENV_HOMEPAGE
+  BELFRY_GIT_REPO BELFRY_STRIPE_PUBLISHABLE_KEY BELFRY_STRIPE_SECRET_KEY BELFRY_MOLLIE_API_KEY
+  BELFRY_ACCOUNTING_ODOO_URL BELFRY_ACCOUNTING_ODOO_DB BELFRY_ACCOUNTING_ODOO_ISSUER
+  BELFRY_ACCOUNTING_ODOO_API_KEY)
+
+setup_folder() {
+  mkdir -p "$SETUP_DIR"
+  # the onboarding container (uid 1000) writes pending.env; this user reads it (setgid group)
+  chmod 2770 "$SETUP_DIR" 2>/dev/null || true
+}
+
+# setup_status [APPLYING] [LAST_JSON]: status.json for the page; whether each setting is set and
+# the values that are not secrets. Never a secret's value.
+setup_status() {
+  [[ -d "$SETUP_DIR" ]] || return 0
+  python3 - "$SETUP_DIR/status.json" "$ENV_FILE" "$SECRETS" "${1:-}" "${2:-}" <<'PY' || true
+import json, os, re, sys, time
+path, env_file, secrets_dir, applying, last = sys.argv[1:6]
+env = {}
+for line in open(env_file):
+    m = re.match(r'^([A-Z0-9_]+)=(.*)$', line.rstrip("\n"))
+    if m:
+        v = m.group(2).strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        env[m.group(1)] = v
+def secret(n):
+    p = os.path.join(secrets_dir, n)
+    return os.path.isfile(p) and os.path.getsize(p) > 0
+names = {"BELFRY_NAME": "COMMUNITY_NAME", "BELFRY_MAIL_FROM": "MAIL_FROM", "BELFRY_THEME": "THEME",
+         "BELFRY_ENV_HOMEPAGE": "HOMEPAGE", "BELFRY_GIT_REPO": "GIT_REPO",
+         "BELFRY_STRIPE_PUBLISHABLE_KEY": "STRIPE_PUBLISHABLE_KEY",
+         "BELFRY_ACCOUNTING_ODOO_URL": "ACCOUNTING_ODOO_URL",
+         "BELFRY_ACCOUNTING_ODOO_DB": "ACCOUNTING_ODOO_DB",
+         "BELFRY_ACCOUNTING_ODOO_ISSUER": "ACCOUNTING_ISSUER"}
+values = {k: env.get(v, "") for k, v in names.items()}
+is_set = {k: bool(v) for k, v in values.items()}
+is_set.update({
+    "BELFRY_RESEND_API_KEY": env.get("SMTP_HOST") == "smtp.resend.com" and secret("smtp_password"),
+    "BELFRY_STRIPE_SECRET_KEY": secret("stripe_secret_key"),
+    "BELFRY_MOLLIE_API_KEY": secret("mollie_api_key"),
+    "BELFRY_ACCOUNTING_ODOO_API_KEY": secret("accounting_odoo_api_key"),
+})
+try:
+    old = json.load(open(path))
+except (OSError, ValueError):
+    old = {}
+data = {"set": is_set, "values": values, "applying": applying == "1",
+        "last": json.loads(last) if last else old.get("last", {}), "at": int(time.time())}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f)
+os.chmod(tmp, 0o644)
+os.replace(tmp, path)
+PY
+}
+
+cmd_setup_code() {
+  setup_folder
+  local code
+  code=$(python3 - "$SETUP_DIR/code.json" "${BELFRY_SETUP_HOURS:-24}" <<'PY'
+import hashlib, json, os, secrets, sys, time
+alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+raw = "".join(secrets.choice(alphabet) for _ in range(16))
+tmp = sys.argv[1] + ".tmp"
+with open(tmp, "w") as f:
+    json.dump({"sha256": hashlib.sha256(raw.encode()).hexdigest(),
+               "expires": int(time.time() + float(sys.argv[2]) * 3600)}, f)
+os.chmod(tmp, 0o644)
+os.replace(tmp, sys.argv[1])
+print("-".join(raw[i:i + 4] for i in range(0, 16, 4)))
+PY
+)
+  setup_status
+  say "Setup page: https://belfry.$(env_get BELFRY_DOMAIN)/setup"
+  say "Setup code: $code   (valid ${BELFRY_SETUP_HOURS:-24} hours; belfry setup-code makes a new one)"
+}
+
+cmd_setup_apply() {
+  local pending="$SETUP_DIR/pending.env" work log keys=() line k ok=true msg=""
+  [[ -f "$pending" ]] || return 0
+  work=$(mktemp); log=$(mktemp)
+  # take the file first, so a new save while this runs starts a new round
+  mv "$pending" "$work.in"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    k=${line%%=*}
+    if [[ "$k" == BELFRY_BY ]] || printf '%s\n' "${SETUP_KEYS[@]}" | grep -qxF "$k"; then
+      printf '%s\n' "$line" >> "$work"
+      [[ "$k" == BELFRY_BY ]] || keys+=("$k")
+    else
+      echo "ignored: $k" >> "$log"
+    fi
+  done < "$work.in"
+  rm -f "$work.in"
+  setup_status 1
+  if ! (cmd_config "$work") >> "$log" 2>&1; then ok=false; fi
+  rm -f "$work"
+  msg=$(grep -v "^  secret " "$log" | tail -n 3 | tr '\n' ' ' | cut -c1-300)
+  rm -f "$log"
+  setup_status 0 "$(python3 -c 'import json,sys,datetime; print(json.dumps({"ok": sys.argv[1]=="true", "keys": sys.argv[3:], "message": sys.argv[2], "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")}))' "$ok" "$msg" "${keys[@]}")"
+  $ok || die "setup: applying failed: $msg"
+}
+
+cmd_setup_units() {
+  [[ "$(id -u)" -eq 0 ]] || die "setup-units installs systemd units: run as root"
+  cat > /etc/systemd/system/belfry-setup.path <<EOF
+[Unit]
+Description=Belfry: watch the setup page's saved settings
+
+[Path]
+PathExists=$SETUP_DIR/pending.env
+Unit=belfry-setup.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/belfry-setup.service <<EOF
+[Unit]
+Description=Belfry: apply the settings saved on the setup page
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/belfry setup-apply
+EOF
+  systemctl daemon-reload
+  systemctl enable --now belfry-setup.path >/dev/null
+  say "belfry-setup.path watches $SETUP_DIR/pending.env"
+}
+
+# ── the community's own look (infra/data/theme, served at /theme/custom/; theme.py) ──
+THEME_DIR="$INFRA/data/theme"
+cmd_theme() {
+  case "${1:-show}" in
+    set)
+      local src=${2:?usage: belfry theme set DIR}
+      [[ -d "$src" ]] || die "$src is not a folder"
+      local f n=0
+      mkdir -p "$THEME_DIR.new"
+      for f in "$src"/*; do
+        [[ -f "$f" ]] || continue
+        case "${f##*.}" in
+          css|svg|png|jpg|jpeg|webp|ico|woff2|woff|gif|json) install -m 644 "$f" "$THEME_DIR.new/"; n=$((n+1)) ;;
+          *) say "  skipped $(basename "$f")" ;;
+        esac
+      done
+      [[ $n -gt 0 ]] || { rm -rf "$THEME_DIR.new"; die "$src has no theme files (custom.css, logo.svg, favicon.svg, theme.json, fonts)"; }
+      if [[ -f "$THEME_DIR.new/theme.json" ]]; then python3 -m json.tool "$THEME_DIR.new/theme.json" >/dev/null || die "theme.json is not valid JSON"; fi
+      rm -rf "$THEME_DIR.old"; [[ -d "$THEME_DIR" ]] && mv "$THEME_DIR" "$THEME_DIR.old"
+      mv "$THEME_DIR.new" "$THEME_DIR"
+      say "Theme: $n files in $THEME_DIR (the previous ones in $THEME_DIR.old)"
+      record "Theme changed ($n files)"
+      compose --profile app restart onboarding >/dev/null
+      ;;
+    reset)
+      [[ -d "$THEME_DIR" ]] || { say "No theme files"; return 0; }
+      rm -rf "$THEME_DIR.old"; mv "$THEME_DIR" "$THEME_DIR.old"; mkdir -p "$THEME_DIR"
+      record "Theme reset to the base theme"
+      compose --profile app restart onboarding >/dev/null
+      say "Back to the base theme ($(env_get THEME)); the files are in $THEME_DIR.old"
+      ;;
+    show)
+      say "Base theme: $(env_get THEME || true) (THEME; belfry or osv)"
+      say "Community name: $(env_get COMMUNITY_NAME)"
+      if [[ -d "$THEME_DIR" ]] && [[ -n "$(ls -A "$THEME_DIR")" ]]; then ls -l "$THEME_DIR"; else say "No own files in $THEME_DIR"; fi
+      ;;
+    *) die "usage: belfry theme set DIR | show | reset" ;;
+  esac
+}
+
 case "${1:-help}" in
   status) cmd_status ;;
   config) shift; cmd_config "$@" ;;
@@ -337,6 +526,10 @@ case "${1:-help}" in
   smoke) cmd_smoke ;;
   update) shift; cmd_update "$@" ;;
   homepage) shift; cmd_homepage "$@" ;;
+  setup-code) cmd_setup_code ;;
+  setup-apply) cmd_setup_apply ;;
+  setup-units) cmd_setup_units ;;
+  theme) shift; cmd_theme "$@" ;;
   logs) shift; compose --profile app logs -f --tail=100 "$@" ;;
   compose) shift; compose "$@" ;;
   help|-h|--help) sed -n '2,/^set -euo/p' "$SELF" | sed '$d; s/^# \{0,1\}//' ;;

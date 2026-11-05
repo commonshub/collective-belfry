@@ -296,7 +296,7 @@ services:
   # and chmod need.
   perms-init:
     image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; chown 1000:${HOST_GID:-1000} /w/setup && chmod 2770 /w/setup; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -309,6 +309,8 @@ services:
       - git-data:/v/git
       # written by the onboarding service (uid 1000), read by the git server
       - git-members:/w/git-members
+      # written by the onboarding service (the setup page), read by `belfry setup-apply` (HOST_GID)
+      - ./data/setup:/w/setup
       - ./secrets:/s/secrets
       - ./issuer/config:/s/issuer-config
       - ./issuer/keys:/s/issuer-keys
@@ -632,6 +634,10 @@ services:
       - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
       # /changelog (community.py): written by scripts/changelog.sh, created by gen-secrets.sh
       - ./data/changelog:/belfry-changelog:ro
+      # the community's own look (custom.css, logo, theme.json; belfry theme set) and the setup
+      # page's hand-over to the host (pending.env → belfry setup-apply); data, never in git
+      - ./data/theme:/belfry-theme:ro
+      - ./data/setup:/belfry-setup
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro
@@ -698,6 +704,8 @@ services:
       SITE_URL: ${SITE_URL:-}
       # the apex homepage: empty (start page), https://… (proxy), nsite, nsite:<npub>[/<name>]
       HOMEPAGE: ${HOMEPAGE:-}
+      THEME: ${THEME:-}
+      GIT_REPO: ${GIT_REPO:-}
       CONSOLE_URL: ${CONSOLE_URL:-}
       HOMEPAGE_RELAYS: ${HOMEPAGE_RELAYS:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect

@@ -384,6 +384,9 @@ EOF
   # A new belfry's apex shows its own website (an nsite), and a placeholder that explains how to
   # publish it until then; HOMEPAGE in belfry.env (BELFRY_ENV_HOMEPAGE) chooses otherwise.
   if [[ $fresh -eq 1 ]]; then export BELFRY_ENV_HOMEPAGE=${BELFRY_ENV_HOMEPAGE:-nsite}; fi
+  # New belfries wear Belfry's own look and the community's name (THEME; own colours and logo
+  # later with `belfry theme set DIR`); without THEME the pages keep Open Source Village's.
+  if [[ $fresh -eq 1 ]]; then export BELFRY_THEME=${BELFRY_THEME:-belfry}; fi
   # The admin pages answer this server's own addresses (bootstrap and smoke run here) and Docker's;
   # add the ZeroTier subnet later (DEPLOY.md, "Admin network").
   local admin_nets="127.0.0.1/8 172.16.0.0/12 $ip4/32${ip6:+ $ip6/128}"
@@ -446,6 +449,9 @@ EOF
   runuser -u belfry -- "$DIR/infra/scripts/belfry" apply
   step "First steward"
   runuser -u belfry -- "$DIR/infra/scripts/belfry" add-steward "$BELFRY_EMAIL" "${BELFRY_NAME:-Steward}" || warn "add-steward failed; run: belfry add-steward $BELFRY_EMAIL"
+  step "Setup page"
+  "$DIR/infra/scripts/belfry" setup-units || warn "the setup page's watcher is not installed; run: belfry setup-units"
+  runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code || warn "no setup code; run: belfry setup-code"
   if [[ $RUN_SMOKE -eq 1 ]]; then
     step "Smoke test"
     runuser -u belfry -- "$DIR/infra/scripts/belfry" smoke || warn "the smoke test failed: see above and $LOG"
@@ -453,7 +459,9 @@ EOF
 
   step "Your belfry is up"
   cat <<EOF
-  https://$BELFRY_DOMAIN                  the start page
+  https://belfry.$BELFRY_DOMAIN/setup     add mail, payments and the rest, with the code above
+  https://belfry.$BELFRY_DOMAIN           this belfry's status and members
+  https://$BELFRY_DOMAIN                  the homepage (a placeholder until you publish one)
   https://$BELFRY_DOMAIN/.well-known/belfry.json   what apps and agents read
   https://pass.$BELFRY_DOMAIN/steward     steward pages (admin network only: infra/DEPLOY.md)
 
@@ -464,7 +472,7 @@ EOF
   Still to do by hand (infra/DEPLOY.md): the admin network (ZeroTier), backups, and moving the
   custody seed under the stewards' YubiKeys if it is still on this disk.
 EOF
-  [[ -z "${BELFRY_RESEND_API_KEY:-}${BELFRY_SMTP_HOST:-}" ]] && warn "no mail provider yet: nobody can sign in until one is set (belfry config)"
+  [[ -z "${BELFRY_RESEND_API_KEY:-}${BELFRY_SMTP_HOST:-}" ]] && warn "no mail provider yet: nobody can sign in until one is set (the setup page, or belfry config)"
   printf '\n'
 }
 

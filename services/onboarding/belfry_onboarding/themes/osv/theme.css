@@ -1,0 +1,10 @@
+/* Open Source Village: its tokens (/brand/tokens.css, loaded first) under the theme's names. */
+:root {
+  --bg: var(--osv-background); --surface: var(--osv-surface); --surface-deep: var(--osv-surface-deep);
+  --fg: var(--osv-foreground); --fg-muted: var(--osv-foreground-muted); --fg-faint: var(--osv-foreground-faint);
+  --border: var(--osv-border); --border-strong: var(--osv-border-strong);
+  --accent: var(--osv-accent); --accent-hover: var(--osv-accent-hover); --accent-2: var(--osv-accent-2);
+  --on-accent: var(--osv-on-accent); --ok: var(--osv-accent);
+  --font-sans: var(--osv-font-sans); --font-title: var(--osv-font-sans); --font-mono: var(--osv-font-mono);
+  --radius: 12px;
+}

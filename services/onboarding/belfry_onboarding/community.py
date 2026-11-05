@@ -153,14 +153,14 @@ def text_html(text: str) -> str:
 STYLE = """<style>
 .tabs{display:flex;gap:14px;margin:0 0 16px;font-size:.95rem}.tabs a{text-decoration:none}
 .tabs a.on{font-weight:600;text-decoration:underline}
-.item{border-top:1px solid var(--osv-border);padding:12px 0}.item:first-child{border-top:0}
-.meta{font-size:.85rem;color:var(--osv-foreground-muted)}
+.item{border-top:1px solid var(--border);padding:12px 0}.item:first-child{border-top:0}
+.meta{font-size:.85rem;color:var(--fg-muted)}
 input[type=text],textarea,select{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;
-border-radius:8px;border:1px solid var(--osv-border);background:var(--osv-surface-deep);color:inherit}
+border-radius:8px;border:1px solid var(--border);background:var(--surface-deep);color:inherit}
 textarea{min-height:120px}button{font:inherit;cursor:pointer}
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .pill{display:inline-block;font-size:.8rem;padding:1px 8px;border-radius:99px;
-background:var(--osv-surface-deep);border:1px solid var(--osv-border)}
+background:var(--surface-deep);border:1px solid var(--border)}
 </style>"""
 
 
@@ -433,8 +433,8 @@ def monitor_page() -> str:
         + """<style>main{max-width:1100px}.mon{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 @media(max-width:760px){.mon{grid-template-columns:1fr}}
 #list{max-height:70vh;overflow:auto}.ev{display:block;width:100%;text-align:left;background:none;color:inherit;
-border:0;border-top:1px solid var(--osv-border);padding:8px 4px}.ev.on{background:var(--osv-surface-deep)}
-#inspect{white-space:pre-wrap;word-break:break-all;font:12px/1.4 var(--osv-font-mono);max-height:70vh;overflow:auto;margin:0}
+border:0;border-top:1px solid var(--border);padding:8px 4px}.ev.on{background:var(--surface-deep)}
+#inspect{white-space:pre-wrap;word-break:break-all;font:12px/1.4 var(--font-mono);max-height:70vh;overflow:auto;margin:0}
 .row select{width:auto;flex:1}</style>"""
         + f"""<div class="card">{tabs("/monitor")}<h1>Monitor</h1>
 <p class="muted">Events published to this community's relay, live. Select one to inspect it.

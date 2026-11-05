@@ -40,6 +40,7 @@ SKILLS = {
     "visitor": "open-source-village",
     "steward": "belfry-steward",
     "website": "belfry-homepage",
+    "theme": "belfry-theme",
 }
 
 

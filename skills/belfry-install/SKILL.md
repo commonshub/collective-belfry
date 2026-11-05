@@ -28,7 +28,10 @@ apps on one VM. One script sets it up: `https://belfry.sh/install.sh` (the sourc
    recipients** (`age1…`) for the custody seed that members' keys derive from.
 
 Never ask for or print secrets in the chat. Ask the person to put them in the config file
-themselves, or to paste them into a file on the server, and refer to them by name.
+themselves, or to paste them into a file on the server, and refer to them by name. Simplest:
+install with only the domain, e-mail and name, then send the person to
+`https://belfry.<domain>/setup` with the setup code the installer printed; they type the keys
+there, over HTTPS, and you never see them.
 
 ## Steps
 
@@ -53,14 +56,16 @@ themselves, or to paste them into a file on the server, and refer to them by nam
 
 ## Changing settings later
 
-Write the changed `BELFRY_*` lines to a file on the server and run `belfry config <file>`; it
+`https://belfry.<domain>/setup` (an admin, or the code from `belfry setup-code`) covers mail,
+payments, accounting, the name, the theme, the homepage and `/git`. Over SSH: write the changed `BELFRY_*` lines to a file on the server and run `belfry config <file>`; it
 writes them, runs bootstrap again and restarts what needs it. `BELFRY_ENV_<NAME>=<value>` sets
 any other `infra/.env` setting. `belfry update` moves to the latest code. `belfry help` lists the
-rest. The domain cannot be changed this way.
+rest. The domain cannot be changed this way. The look of the pages: the `belfry-theme` skill.
 
 ## What the installer does to the server
 
-Docker, nginx and ufw (SSH, 80, 443 in; the rest denied), a 4 GB swap file on machines under
-12 GB, a user `belfry` that also takes root's SSH keys, the code in `/opt/belfry`. nginx passes
-HTTPS through to Belfry's own proxy (Caddy), which does the certificates; other sites can be
-added to nginx (`/etc/nginx/stream.d/belfry.conf` explains how).
+Docker and ufw (SSH, 80, 443 in; the rest denied), nginx only with `--nginx`, a 4 GB swap file on machines under
+12 GB, a user `belfry` that also takes root's SSH keys, the code in `/opt/belfry`. Belfry's own
+proxy (Caddy) does the certificates; with `--nginx`, nginx passes HTTPS through to it so other
+sites can share the server (`/etc/nginx/stream.d/belfry.conf` explains how). The systemd unit
+`belfry-setup.path` applies what the setup page saves.

@@ -88,6 +88,15 @@ class Settings(BaseSettings):
     homepage: str = Field(default="", alias="HOMEPAGE")
     # belfry.<domain> (console.py): the belfry's own page, status and members; empty: off
     console_url: str = Field(default="", alias="CONSOLE_URL")
+    # The look of the pages (theme.py): THEME = belfry | osv (empty: osv, as before themes), and
+    # the community's own files (custom.css, logo, theme.json) in THEME_DIR (infra/data/theme).
+    theme: str = Field(default="", alias="THEME")
+    theme_dir: str = Field(default="/belfry-theme", alias="THEME_DIR")
+    # The code shown at /git (gitview.py): nostr://<npub>/<relay>/<identifier> (ngit) or an
+    # https:// git URL; empty = no /git.
+    git_repo: str = Field(default="", alias="GIT_REPO")
+    # belfry.<domain>/setup (setup.py): pending.env, code.json and status.json (infra/data/setup)
+    setup_dir: str = Field(default="/belfry-setup", alias="SETUP_DIR")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
     changelog_path: str = Field(default="/belfry-changelog/changelog.json", alias="CHANGELOG_PATH")
     # Where nsite manifests are looked up besides the community relay (space or comma separated).

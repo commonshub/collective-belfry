@@ -37,6 +37,7 @@ from . import (
     email_code,
     eudi,
     feedback,
+    gitview,
     groups_members,
     holder_invites,
     homepage,
@@ -44,8 +45,10 @@ from . import (
     pages,
     programme,
     reports,
+    setup,
     signin,
     steward,
+    theme,
     volunteer,
     wallet_tokens,
 )
@@ -173,7 +176,9 @@ def create_app(services: Services | None = None) -> FastAPI:
         else:
             app.state.services = services
         claim.TEST_NOTICE = app.state.services.settings.test_run_notice
+        theme.CURRENT = theme.load(app.state.services.settings)
         app.state.homepage = make_homepage(app.state.services.settings)
+        app.state.gitview = gitview.make(app.state.services.settings)
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
@@ -183,6 +188,10 @@ def create_app(services: Services | None = None) -> FastAPI:
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
     app.state.bridge = bridge.BridgeStore()
     app.state.homepage = None
+    app.state.gitview = None
+    theme.register(app)  # /theme/*: the base theme and the community's own files (theme.py)
+    setup.register(app)  # belfry.<domain>/setup: settings over HTTPS (setup.py)
+    gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
     community.register(app)  # /monitor, /changelog, /proposals (community.py)
@@ -275,8 +284,10 @@ def create_app(services: Services | None = None) -> FastAPI:
         if request.headers.get("host", "").lower() != httpx.URL(settings.site_url).netloc.decode():
             return await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith("/.well-known/"):
+        if path == "/" or path.startswith(("/.well-known/", "/theme/")):
             return await call_next(request)
+        if (path == "/git" or path.startswith("/git/")) and request.app.state.gitview is not None:
+            return await call_next(request)  # the website's /git is the community's code
         from starlette.routing import Match
 
         matched = any(

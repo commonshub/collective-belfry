@@ -1,0 +1,9 @@
+/* The older pages' variable names (the Open Source Village pages), mapped to the theme's. */
+:root {
+  --osv-background: var(--bg); --osv-surface: var(--surface); --osv-surface-deep: var(--surface-deep);
+  --osv-foreground: var(--fg); --osv-foreground-muted: var(--fg-muted); --osv-foreground-faint: var(--fg-faint);
+  --osv-border: var(--border); --osv-border-strong: var(--border-strong);
+  --osv-accent: var(--accent); --osv-accent-hover: var(--accent-hover); --osv-accent-2: var(--accent-2);
+  --osv-on-accent: var(--on-accent); --osv-accent-foreground: var(--on-accent);
+  --osv-font-sans: var(--font-sans); --osv-font-mono: var(--font-mono);
+}

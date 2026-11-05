@@ -39,41 +39,11 @@ def qr_svg(data: str) -> str:
 TEST_NOTICE = ""
 
 
-def page(title: str, body: str) -> str:
-    """Open Source Village page frame, dark theme (brand/tokens.css, served at /brand): wordmark,
-    one card, footer "run by Belfry". Mail clients never see this; the pages are small."""
-    notice = (
-        f'<div class="test-notice" role="note">{html.escape(TEST_NOTICE)}</div>'
-        if TEST_NOTICE
-        else ""
-    )
-    return f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark"><meta name="theme-color" content="#2b3a31">
-<link rel="icon" href="/brand/favicon.svg" type="image/svg+xml"><link rel="icon" href="/brand/favicon.ico" sizes="any">
-<link rel="stylesheet" href="/brand/fonts.css"><link rel="stylesheet" href="/brand/tokens.css">
-<title>{html.escape(title)}</title>
-<style>
- body {{ font: 16px/1.5 var(--osv-font-sans); margin: 0; background: var(--osv-background); color: var(--osv-foreground); }}
- main {{ max-width: 640px; margin: 0 auto; padding: 32px 16px 48px; }}
- header {{ margin: 0 0 24px; }} header img {{ height: 28px; width: auto; display: block; }}
- .card {{ background: var(--osv-surface); border: 1px solid var(--osv-border); border-radius: 12px; padding: 24px; }}
- h1 {{ font-size: 1.5rem; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 4px; }}
- .muted {{ color: var(--osv-foreground-muted); }} a {{ color: var(--osv-accent); }}
- .qr {{ margin: 20px 0; }} .qr img {{ display: block; width: 280px; max-width: 100%; background: #fff; padding: 12px; border-radius: 12px; box-sizing: border-box; }}
- .btn {{ display: inline-block; background: var(--osv-accent); color: var(--osv-on-accent); font-weight: 600; padding: 10px 18px; border-radius: 8px; text-decoration: none; }}
- .btn:hover {{ background: var(--osv-accent-hover); }}
- .ok {{ color: var(--osv-accent); font-weight: 600; }} .bad {{ color: var(--osv-accent-2); font-weight: 600; }}
- code {{ font-family: var(--osv-font-mono); word-break: break-all; background: var(--osv-surface-deep); padding: 2px 6px; border-radius: 4px; }}
- footer {{ margin-top: 24px; font-size: 0.85rem; color: var(--osv-foreground-faint); }}
- footer nav {{ margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 14px; }} footer nav a {{ color: var(--osv-foreground-muted); }}
- .test-notice {{ background: var(--osv-accent-2); color: var(--osv-on-accent); font-weight: 600; text-align: center; padding: 8px 16px; font-size: 0.95rem; }}
-</style></head><body>{notice}<main>
-<header><a href="https://opensourcevillage.org"><img src="/brand/osv-logo-horizontal-white.svg" alt="Open Source Village"></a></header>
-{body}
-<footer>Open Source Village, run by Belfry
-<nav><a href="/help">Help</a><a href="/feedback">Feedback</a><a href="/rules">Community rules</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/refunds">Refunds</a></nav></footer>
-</main></body></html>"""
+def page(title: str, body: str, wide: bool = False) -> str:
+    """The page frame of the theme (theme.py): logo, one card, footer. Mail clients never see it."""
+    from . import theme
+
+    return theme.frame(title, body, TEST_NOTICE, wide=wide)
 
 
 def home_page(settings: Any) -> str:
@@ -99,12 +69,27 @@ def home_page(settings: Any) -> str:
         for url, name, text in apps
         if url
     )
-    body = f"""<div class="card hero">
-<h1>Open Source Village</h1>
+    from . import theme
+
+    look = theme.current()
+    if look.base == "osv":
+        hero = """<h1>Open Source Village</h1>
 <p class="lead">A gathering of people who make and use open source: to work, learn and live
 together for a few days. <a href="https://opensourcevillage.org">About the village</a></p>
 <p class="muted">Belfry runs the village's passes, sign-in and community apps: everything here is
-open source too.</p>
+open source too.</p>"""
+    else:
+        about = (
+            f' <a href="{html.escape(look.url)}">About us</a>'
+            if look.url.startswith("http")
+            else ""
+        )
+        hero = f"""<h1>{html.escape(look.name)}</h1>
+<p class="lead">Members of {html.escape(look.name)} sign in, chat, share photos and files and
+hold their pass here, on a server the community runs.{about}</p>
+<p class="muted">It runs on <a href="https://belfry.sh">Belfry</a>, which is open source.</p>"""
+    body = f"""<div class="card hero">
+{hero}
 </div>
 <div class="card">
 <h2>How to join</h2>
@@ -131,7 +116,7 @@ someone who is already in, or <a href="/apply">apply</a> and the stewards answer
  .links a:hover {{ border-color: var(--osv-accent); }}
  .links strong {{ display: block; color: var(--osv-accent); }}
 </style>"""
-    return page("Open Source Village", body)
+    return page(look.name, body)
 
 
 def not_found_page(home: str = "/") -> str:
@@ -167,11 +152,11 @@ ERROR_TEXTS = {
     ),
     502: (
         "Not reachable right now",
-        "A part of Open Source Village did not answer. Try again in a minute.",
+        "A part of this service did not answer. Try again in a minute.",
     ),
     503: (
         "Not reachable right now",
-        "This part of Open Source Village is not available right now. Try again in a minute.",
+        "This part of the service is not available right now. Try again in a minute.",
     ),
 }
 
