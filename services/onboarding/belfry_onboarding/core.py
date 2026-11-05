@@ -273,12 +273,15 @@ def _ensure_member_number(svc: Services, partner: dict[str, Any]) -> str:
 def _pass_dates(
     settings: Settings, tier: str, duration_days: int | None, payment_date: dt.date
 ) -> tuple[dt.date, dt.date]:
+    """(date_start, date_end) of a paid pass, both days included (date_end is the last valid
+    day everywhere: the door, the credential's exp, expiry): a day pass is its start day, a
+    week pass seven days. Before 2026-11-05 the end was one day later."""
     date_start = max(payment_date, settings.event_start)
     days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
     if tier == "full" or days <= 0:
         date_end = settings.event_end
     else:
-        date_end = date_start + dt.timedelta(days=days)
+        date_end = date_start + dt.timedelta(days=days - 1)
     return date_start, date_end
 
 

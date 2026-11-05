@@ -30,7 +30,7 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     assert partner["belfry_member_number"] == "OSV-0001"
     # dates: payment 2027-01-20 < EVENT_START 2027-01-25 -> start at event start, 7 days
     assert p["date_start"] == "2027-01-25"
-    assert p["date_end"] == "2027-02-01"
+    assert p["date_end"] == "2027-01-31"  # both ends included
     assert p["transaction_id"] == ids["transaction"]
     assert p["stripe_payment_intent"] == "pi_123"
     assert p["activated_at"]
@@ -307,13 +307,13 @@ def test_refund_keeps_keycast_active_with_second_active_pass(services, odoo, key
 def test_expire_only_passes_past_date_end(services, odoo, keycast, monkeypatch):
     fake_today = dt.date(2027, 1, 28)
     monkeypatch.setattr(core, "today", lambda: fake_today)
-    a = seed_paid_invoice(odoo, tier="day")  # ends 2027-01-26
+    a = seed_paid_invoice(odoo, tier="day")  # valid 2027-01-25 only
     core.activate_pass(services, a["invoice"])
     b = seed_paid_invoice(odoo, tier="full")  # ends 2027-01-31
     odoo.get("payment.transaction", b["transaction"])["provider_reference"] = "pi_b"
     core.activate_pass(services, b["invoice"])
-    c = seed_paid_invoice(odoo, tier="week")  # ends 2027-02-01, still pending (never activated)
-    assert active_pass(odoo, a["invoice"])["date_end"] == "2027-01-26"
+    c = seed_paid_invoice(odoo, tier="week")  # ends 2027-01-31, still pending (never activated)
+    assert active_pass(odoo, a["invoice"])["date_end"] == "2027-01-25"
 
     result = core.expire(services)
     assert result["expired"] == [active_pass(odoo, a["invoice"])["id"]]
@@ -397,7 +397,7 @@ def test_legacy_module_fallbacks(settings, authentik, keycast):
         odoo.get("res.partner", ids["partner"])["belfry_member_number"]
         == f"OSV-{ids['partner']:04d}"
     )
-    assert p["date_end"] == "2027-01-26"
+    assert p["date_end"] == "2027-01-25"  # a day pass is its start day
 
 
 def test_existing_authentik_user_found_by_email_is_reused(services, odoo, authentik):

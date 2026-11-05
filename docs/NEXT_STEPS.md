@@ -888,7 +888,7 @@ User: a participant with a week pass gets a day pass for free; on that day the d
 - [x] Ranking (`core.pass_rank`): an active pass valid today first, the shortest valid one first, so `/me`, its QR and the account card show the day pass on its day and the week pass otherwise; the card takes its tokens from the pass that has them. Refusal messages on `/me` come from a fixed list, never from the URL.
 - [x] Checks: onboarding 292 tests (8 new); smoke step 9b takes the first open day and checks it (active that day only, same key, no tokens, no mail, a second take refused), step 11 that it is revoked with the week pass. Smoke not run here.
 
-Found on the way (not changed): a paid day pass ends the day after it starts (`core._pass_dates`: `date_start + days`), so it is valid on two calendar days, and a week pass on eight; the free day pass is exactly its day. The wallet decides itself which of two credentials it presents at the door; Belfry cannot rank there.
+Found on the way, fixed 2026-11-05: a paid day pass ended the day after it started (`core._pass_dates`: `date_start + days`), so it was valid on two calendar days and a week pass on eight (one bought before the event ran to 1 February). `date_end` is the last valid day everywhere (door, `/check`, the credential's `exp`, expiry), so the end is now `date_start + days - 1`: a day pass is its start day, a week pass seven days. Tokens are unchanged (they count the product's days). Passes activated before keep their stored dates (Odoo is not rewritten). A week pass bought during the event can still run past `EVENT_END` (not capped). The wallet decides itself which of two credentials it presents at the door; Belfry cannot rank there.
 
 ## 4. Next
 
