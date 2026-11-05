@@ -186,10 +186,19 @@ EOF
   mem_mb=$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)
   swap_mb=$(awk '/SwapTotal/ {printf "%d", $2/1024}' /proc/meminfo)
   disk_gb=$(df -Pk / | awk 'NR==2 {printf "%d", $4/1048576}')
+  # Measured on belfry.sh (2026-11): the whole stack runs in 3.8 GB with 1 GB of swap; 8 GB is
+  # comfortable under real use.
   if [[ $mem_mb -ge 7400 ]]; then ok "$cpus vCPU, $((mem_mb/1024)) GB RAM"
-  else bad "$cpus vCPU, ${mem_mb} MB RAM: the stack needs 8 GB (4 vCPU recommended)"; problems=$((problems+1)); fi
+  elif [[ $mem_mb -ge 3500 ]]; then warn "$cpus vCPU, $((mem_mb/1024)) GB RAM: it runs, tight; 8 GB is comfortable for real use"
+  else bad "$cpus vCPU, ${mem_mb} MB RAM: the stack needs at least 4 GB (8 GB recommended)"; problems=$((problems+1)); fi
+  # Images already on this server (a reinstall, or a second try) need no room again.
+  local have_images=0
+  if command -v docker >/dev/null 2>&1; then
+    have_images=$(docker images --format '{{.Repository}}' 2>/dev/null | grep -c '^belfry-' || true)
+  fi
   if [[ $disk_gb -ge 30 ]]; then ok "$disk_gb GB free on /"
-  elif [[ $disk_gb -ge 15 ]]; then warn "$disk_gb GB free on /: enough with the prebuilt images (about 12 GB); 30 GB to build everything here"
+  elif [[ $have_images -ge 8 && $disk_gb -ge 2 ]]; then ok "$disk_gb GB free on /, with Belfry's images already here ($have_images)"
+  elif [[ $disk_gb -ge 15 ]]; then warn "$disk_gb GB free on /: enough with the prebuilt images (about 12 GB); a server under 25 GB builds one image at a time"
   else bad "$disk_gb GB free on /: needs 15 GB with the prebuilt images, 30 GB to build them here"; problems=$((problems+1)); fi
   local p busy=''
   for p in 80 443; do
