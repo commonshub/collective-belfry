@@ -10,7 +10,7 @@
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
-#   belfry setup-code                a new code for https://belfry.<domain>/setup (valid 24 h)
+#   belfry setup-code [NAME]         a code for https://belfry.<domain>/setup, for NAME (valid 24 h)
 #   belfry setup-apply               apply what the setup page saved (run by belfry-setup.path)
 #   belfry setup-units               install the systemd units that watch the setup page (root)
 #   belfry theme set DIR | show | reset   the community's own look (custom.css, logo, theme.json)
@@ -405,25 +405,40 @@ os.replace(tmp, path)
 PY
 }
 
+# belfry setup-code [NAME]: a code for https://belfry.<domain>/setup, made for one person (the
+# changelog names them for what they change). Several people can hold codes at once.
 cmd_setup_code() {
+  local who="${1:-}"
+  if [[ -z "$who" && -t 0 ]]; then read -r -p "Who is this code for (their name)? " who; fi
   setup_folder
   local code
-  code=$(python3 - "$SETUP_DIR/code.json" "${BELFRY_SETUP_HOURS:-24}" <<'PY'
+  code=$(python3 - "$SETUP_DIR/code.json" "${BELFRY_SETUP_HOURS:-24}" "$who" <<'PY'
 import hashlib, json, os, secrets, sys, time
+path, hours, who = sys.argv[1], float(sys.argv[2]), " ".join(sys.argv[3].split())[:120]
 alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 raw = "".join(secrets.choice(alphabet) for _ in range(16))
-tmp = sys.argv[1] + ".tmp"
+try:
+    data = json.load(open(path))
+except (OSError, ValueError):
+    data = {}
+codes = data.get("codes") if isinstance(data.get("codes"), list) else []
+now = time.time()
+# keep the others' codes that still work; a new code for the same person replaces theirs
+codes = [c for c in codes if c.get("expires", 0) > now and (not who or c.get("for") != who)]
+codes.append({"sha256": hashlib.sha256(raw.encode()).hexdigest(),
+              "expires": int(now + hours * 3600), "for": who})
+tmp = path + ".tmp"
 with open(tmp, "w") as f:
-    json.dump({"sha256": hashlib.sha256(raw.encode()).hexdigest(),
-               "expires": int(time.time() + float(sys.argv[2]) * 3600)}, f)
+    json.dump({"codes": codes}, f)
 os.chmod(tmp, 0o644)
-os.replace(tmp, sys.argv[1])
+os.replace(tmp, path)
 print("-".join(raw[i:i + 4] for i in range(0, 16, 4)))
 PY
 )
   setup_status
   say "Setup page: https://belfry.$(env_get BELFRY_DOMAIN)/setup"
-  say "Setup code: $code   (valid ${BELFRY_SETUP_HOURS:-24} hours; belfry setup-code makes a new one)"
+  say "Setup code${who:+ for $who}: $code   (valid ${BELFRY_SETUP_HOURS:-24} hours)"
+  [[ -n "$who" ]] || say "  made without a name: whoever uses it is asked for theirs"
 }
 
 cmd_setup_apply() {

@@ -14,6 +14,11 @@ from belfry_onboarding import console, mypass, setup
 from belfry_onboarding.app import create_app
 
 CODE = "ABCD-EFGH-JKLM-NPQR"
+ANON = "ZZZZ-YYYY-XXXX-WWWW"
+
+
+def digest(code: str) -> str:
+    return hashlib.sha256(code.replace("-", "").encode()).hexdigest()
 
 
 @pytest.fixture
@@ -23,8 +28,10 @@ def folder(tmp_path):
     (d / "code.json").write_text(
         json.dumps(
             {
-                "sha256": hashlib.sha256(CODE.replace("-", "").encode()).hexdigest(),
-                "expires": time.time() + 3600,
+                "codes": [
+                    {"sha256": digest(CODE), "expires": time.time() + 3600, "for": "Ana"},
+                    {"sha256": digest(ANON), "expires": time.time() + 3600, "for": ""},
+                ]
             }
         )
     )
@@ -61,6 +68,7 @@ def csrf_of(page: str) -> str:
 def test_setup_asks_for_the_code(web):
     page = web.get("/setup").text
     assert 'action="/setup/code"' in page and "belfry setup-code" in page
+    assert 'name="name"' in page
     assert 'name="BELFRY_RESEND_API_KEY"' not in page
 
 
@@ -69,39 +77,60 @@ def test_a_wrong_or_expired_code_is_refused(web, folder):
     assert r.status_code == 303 and "err=" in r.headers["location"]
     assert setup.COOKIE not in web.cookies
     data = json.loads((folder / "code.json").read_text())
-    data["expires"] = time.time() - 1
+    data["codes"][0]["expires"] = time.time() - 1
     (folder / "code.json").write_text(json.dumps(data))
     web.post("/setup/code", data={"code": CODE})
     assert setup.COOKIE not in web.cookies
 
 
-def test_the_code_opens_the_form_and_secrets_stay_write_only(web, folder):
+def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
     web.post("/setup/code", data={"code": CODE.lower()})  # case and dashes don't matter
     page = web.get("/setup").text
+    assert '<details id="resend">' in page and '<details id="resend" open>' not in page
+    assert "Changes are recorded in the" in page and "<strong>Ana</strong>" in page
+    assert 'name="by"' not in page
     assert 'type="password" name="BELFRY_RESEND_API_KEY"' in page
-    assert 'value="Example Commons"' in page and "missing" in page
+    assert 'value="Example Commons"' in page and "not set" in page
+    assert '<details id="stripe" open>' in web.get("/setup?open=stripe").text
     r = web.post(
         "/setup",
         data={
             "csrf": csrf_of(page),
+            "provider": "resend",
             "BELFRY_RESEND_API_KEY": "re_secret'value",
-            "BELFRY_NAME": "Example Commons",  # unchanged: not sent
             "BELFRY_MAIL_FROM": "hello@belfry.test",
-            "BELFRY_STRIPE_SECRET_KEY": "",  # empty secret: kept
-            "by": "Ana",
         },
         follow_redirects=False,
     )
-    assert r.status_code == 303 and r.headers["location"] == "/setup?msg=Saved."
+    assert r.status_code == 303 and r.headers["location"] == "/setup?msg=Resend+saved."
+    web.post(
+        "/setup",
+        data={"csrf": csrf_of(page), "provider": "name", "BELFRY_NAME": "Example Commons"},
+    )  # unchanged: not sent
     pending = (folder / "pending.env").read_text()
     assert 'BELFRY_RESEND_API_KEY="re_secret\'value"\n' in pending
     assert "BELFRY_MAIL_FROM='hello@belfry.test'" in pending
     assert "BELFRY_NAME" not in pending and "BELFRY_STRIPE_SECRET_KEY" not in pending
-    assert "BELFRY_BY='Ana via the setup code'" in pending
+    assert "BELFRY_BY='Ana'" in pending
     assert oct((folder / "pending.env").stat().st_mode & 0o777) == "0o660"
     page = web.get("/setup").text
     assert "re_secret" not in page and "Applying the changes" in page
     assert 'http-equiv="refresh"' in page
+
+
+def test_a_code_without_a_name_asks_for_one(web, folder):
+    r = web.post("/setup/code", data={"code": ANON}, follow_redirects=False)
+    assert "err=" in r.headers["location"] and setup.COOKIE not in web.cookies
+    web.post("/setup/code", data={"code": ANON, "name": "  Bob   Builder "})
+    page = web.get("/setup").text
+    assert "<strong>Bob Builder</strong>" in page
+    web.post("/setup", data={"csrf": csrf_of(page), "BELFRY_MAIL_FROM": "b@belfry.test"})
+    assert "BELFRY_BY='Bob Builder'" in (folder / "pending.env").read_text()
+
+
+def test_a_named_code_ignores_a_typed_name(web, folder):
+    web.post("/setup/code", data={"code": CODE, "name": "Mallory"})
+    assert "<strong>Ana</strong>" in web.get("/setup").text
 
 
 def test_setup_refuses_bad_forms(web, folder):
@@ -129,6 +158,7 @@ def test_an_admin_signed_in_needs_no_code(web, odoo, authentik, folder):
     web.cookies.set(console.COOKIE, cookie)
     page = web.get("/setup").text
     assert csrf_of(page) == "c" * 24
+    assert "<strong>Ana</strong>" in page
     web.post("/setup", data={"csrf": "c" * 24, "BELFRY_MAIL_FROM": "x@belfry.test"})
     assert "BELFRY_BY='Ana'" in (folder / "pending.env").read_text()
 

@@ -451,7 +451,7 @@ EOF
   runuser -u belfry -- "$DIR/infra/scripts/belfry" add-steward "$BELFRY_EMAIL" "${BELFRY_NAME:-Steward}" || warn "add-steward failed; run: belfry add-steward $BELFRY_EMAIL"
   step "Setup page"
   "$DIR/infra/scripts/belfry" setup-units || warn "the setup page's watcher is not installed; run: belfry setup-units"
-  runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code || warn "no setup code; run: belfry setup-code"
+  runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code "$BELFRY_EMAIL" </dev/null || warn "no setup code; run: belfry setup-code"
   if [[ $RUN_SMOKE -eq 1 ]]; then
     step "Smoke test"
     runuser -u belfry -- "$DIR/infra/scripts/belfry" smoke || warn "the smoke test failed: see above and $LOG"

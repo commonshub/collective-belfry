@@ -309,7 +309,7 @@ The members-only pages use the pass page's session (`/me`): signing in there ope
 
 Settings that would otherwise need SSH and `belfry config`: mail (Resend), the community's name,
 theme, homepage and `/git`, Stripe and Mollie keys, accounting. The installer prints a **setup
-code** (valid 24 hours; `belfry setup-code` prints a new one); an admin who can sign in needs no
+code** for the first steward (valid 24 hours; `belfry setup-code "Name"` makes one for someone else, and the changelog names that person for what they change); an admin who can sign in needs no
 code. Secrets are write-only: the page shows whether each one is set, never its value.
 
 The onboarding container has no Docker socket and cannot write `infra/.env`. The page writes

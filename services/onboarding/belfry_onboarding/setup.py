@@ -43,14 +43,16 @@ E = html.escape
 COOKIE = "belfry_setup"
 SESSION_SECONDS = 3600
 
-# (key, label, secret, help); keys are the names `belfry config` takes. Must match SETUP_KEYS in
+# Providers, each folded until opened: (id, name, what it is for, fields). A field is (key, label,
+# secret, help); keys are the names `belfry config` takes. Must match SETUP_KEYS in
 # infra/scripts/belfry, which filters pending.env again on the host.
-GROUPS: list[tuple[str, str, list[tuple[str, str, bool, str]]]] = [
+PROVIDERS: list[tuple[str, str, str, list[tuple[str, str, bool, str]]]] = [
     (
-        "Mail",
-        "Sign-in links and notices go out by e-mail; nobody can sign in until this works.",
+        "resend",
+        "Resend",
+        "E-mail: sign-in links and notices. Nobody can sign in until this works.",
         [
-            ("BELFRY_RESEND_API_KEY", "Resend API key", True, "re_…, from resend.com/api-keys"),
+            ("BELFRY_RESEND_API_KEY", "API key", True, "re_…, from resend.com/api-keys"),
             (
                 "BELFRY_MAIL_FROM",
                 "Sender address",
@@ -60,51 +62,72 @@ GROUPS: list[tuple[str, str, list[tuple[str, str, bool, str]]]] = [
         ],
     ),
     (
-        "Community",
-        "How the belfry names itself and what it shows.",
+        "name",
+        "Community name",
+        "On every page and in the mails.",
+        [("BELFRY_NAME", "Name", False, "")],
+    ),
+    (
+        "theme",
+        "Theme",
+        "The pages' base look; your own colours and logo: belfry theme set.",
+        [("BELFRY_THEME", "Theme", False, "belfry or osv")],
+    ),
+    (
+        "homepage",
+        "Homepage",
+        "What https://<domain> shows.",
         [
-            ("BELFRY_NAME", "Community name", False, "on every page and in the mails"),
-            ("BELFRY_THEME", "Theme", False, "belfry or osv; colours and logo: belfry theme set"),
             (
                 "BELFRY_ENV_HOMEPAGE",
                 "Homepage",
                 False,
                 "nsite (published with the belfry key), nsite:npub…, or an https:// site to proxy",
-            ),
-            (
-                "BELFRY_GIT_REPO",
-                "Code shown at /git",
-                False,
-                "nostr://npub…/relay.example/repo (ngit), or empty for no /git",
-            ),
+            )
         ],
     ),
     (
-        "Payments",
-        "Only for paid passes.",
+        "git",
+        "Code (/git)",
+        "The repository shown at /git.",
         [
             (
-                "BELFRY_STRIPE_PUBLISHABLE_KEY",
-                "Stripe publishable key",
+                "BELFRY_GIT_REPO",
+                "Repository",
                 False,
-                "pk_test_… / pk_live_…",
-            ),
-            ("BELFRY_STRIPE_SECRET_KEY", "Stripe secret key", True, "sk_… or a restricted rk_…"),
-            ("BELFRY_MOLLIE_API_KEY", "Mollie API key", True, "test_… / live_…"),
+                "nostr://npub…/relay.example/repo, or https://…",
+            )
         ],
     ),
     (
-        "Accounting",
+        "stripe",
+        "Stripe",
+        "Card payments for paid passes.",
+        [
+            ("BELFRY_STRIPE_PUBLISHABLE_KEY", "Publishable key", False, "pk_test_… / pk_live_…"),
+            ("BELFRY_STRIPE_SECRET_KEY", "Secret key", True, "sk_… or a restricted rk_…"),
+        ],
+    ),
+    (
+        "mollie",
+        "Mollie",
+        "Payments for paid passes (Bancontact, iDEAL, cards).",
+        [("BELFRY_MOLLIE_API_KEY", "API key", True, "test_… / live_…")],
+    ),
+    (
+        "odoo",
+        "Odoo accounting",
         "Book paid passes in your organisation's own Odoo (the bundled Odoo needs nothing).",
         [
             ("BELFRY_ACCOUNTING_ODOO_URL", "Odoo URL", False, "https://yourorg.odoo.com"),
-            ("BELFRY_ACCOUNTING_ODOO_DB", "Odoo database", False, ""),
+            ("BELFRY_ACCOUNTING_ODOO_DB", "Database", False, ""),
             ("BELFRY_ACCOUNTING_ODOO_ISSUER", "Issuer (company) name", False, ""),
-            ("BELFRY_ACCOUNTING_ODOO_API_KEY", "Odoo API key", True, ""),
+            ("BELFRY_ACCOUNTING_ODOO_API_KEY", "API key", True, ""),
         ],
     ),
 ]
-FIELDS = {k: (label, secret) for _, _, fields in GROUPS for k, label, secret, _ in fields}
+FIELDS = {k: (label, secret) for _, _, _, fields in PROVIDERS for k, label, secret, _ in fields}
+MAX_NAME = 120
 MAX_VALUE = 1000
 
 
@@ -121,16 +144,28 @@ def read_json(path: Path) -> dict[str, Any]:
         return {}
 
 
-def code_ok(settings: Any, code: str) -> bool:
+def match_code(settings: Any, code: str) -> dict[str, Any] | None:
+    """The unexpired code entry ({"sha256", "expires", "for"}) CODE matches, or None. code.json
+    holds {"codes": [...]}, one per person it was made for (`belfry setup-code NAME`)."""
     folder = setup_dir(settings)
     if folder is None:
-        return False
+        return None
     data = read_json(folder / "code.json")
-    want, until = str(data.get("sha256", "")), data.get("expires", 0)
+    entries = data.get("codes") if isinstance(data.get("codes"), list) else [data]
     norm = re.sub(r"[^A-Z0-9]", "", code.upper())
-    if not want or not norm or not isinstance(until, (int, float)) or until < time.time():
-        return False
-    return hmac.compare_digest(hashlib.sha256(norm.encode()).hexdigest(), want)
+    if not norm:
+        return None
+    digest = hashlib.sha256(norm.encode()).hexdigest()
+    found = None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        want, until = str(entry.get("sha256", "")), entry.get("expires", 0)
+        if not want or not isinstance(until, (int, float)) or until < time.time():
+            continue
+        if hmac.compare_digest(digest, want):
+            found = entry
+    return found
 
 
 def clean(value: str) -> str:
@@ -192,11 +227,18 @@ def state(settings: Any) -> dict[str, Any]:
 
 # ── pages ───────────────────────────────────────────────────────────────────────────────────
 STYLE = """<style>
-fieldset{border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin:0 0 14px}
-legend{font-weight:600;padding:0 6px} label{display:block;margin:10px 0 4px;font-weight:500}
+.providers{border:1px solid var(--border);border-radius:10px;overflow:hidden;margin:16px 0}
+.providers details{border-top:1px solid var(--border)} .providers details:first-child{border-top:0}
+.providers summary{list-style:none;cursor:pointer;display:flex;gap:12px;align-items:center;padding:12px 14px}
+.providers summary::-webkit-details-marker{display:none}
+.providers summary .what{flex:1;min-width:0} .providers summary strong{display:block}
+.providers summary .act{font-size:.9rem;color:var(--accent);white-space:nowrap}
+.providers details[open] summary .act{visibility:hidden}
+.providers form{padding:0 14px 14px} label{display:block;margin:10px 0 4px;font-weight:500}
 input[type=password]{width:100%;box-sizing:border-box;font:inherit;padding:8px 10px;border-radius:8px;
 border:1px solid var(--border);background:var(--surface-deep);color:inherit}
-.set{color:var(--ok,var(--accent))} .missing{color:var(--accent-2)}
+.set{color:var(--ok,var(--accent));font-size:.85rem;white-space:nowrap}
+.missing{color:var(--fg-faint);font-size:.85rem;white-space:nowrap}
 .note{padding:10px 12px;border-radius:8px;background:var(--surface-deep);margin:0 0 14px}
 </style>"""
 
@@ -204,15 +246,27 @@ border:1px solid var(--border);background:var(--surface-deep);color:inherit}
 def code_form(err: str = "") -> str:
     error = f'<p class="note bad">{E(err)}</p>' if err else ""
     return f"""{error}<h1>Set up this belfry</h1>
-<p class="muted">Type the setup code the installer printed. On the server, <code>belfry setup-code</code>
-prints a new one (valid 24 hours). Admins who can already sign in can <a href="/login?to=/setup">sign in</a>
-instead.</p>
-<form method="post" action="/setup/code" class="row">
+<p class="muted">Type the setup code you were given. On the server, <code>belfry setup-code "Your name"</code>
+makes one for a person (valid 24 hours). Admins who can already sign in can
+<a href="/login?to=/setup">sign in</a> instead.</p>
+<form method="post" action="/setup/code">
+<label>Setup code</label>
 <input type="text" name="code" autocomplete="one-time-code" placeholder="XXXX-XXXX-XXXX-XXXX" required style="max-width:280px">
-<button class="btn" type="submit">Continue</button></form>"""
+<label>Your name <span class="meta">(only if the code was made without one; the changelog shows it)</span></label>
+<input type="text" name="name" autocomplete="name" maxlength="{MAX_NAME}" style="max-width:280px">
+<p><button class="btn" type="submit">Continue</button></p></form>"""
 
 
-def settings_form(st: dict[str, Any], csrf: str, msg: str, err: str) -> str:
+def provider_state(st: dict[str, Any], fields: list[tuple[str, str, bool, str]]) -> str:
+    done = [bool(st["set"].get(k)) for k, *_ in fields]
+    if all(done):
+        return "set"
+    return "partly" if any(done) else "missing"
+
+
+def settings_form(
+    st: dict[str, Any], csrf: str, who: str, msg: str, err: str, open_: str = ""
+) -> str:
     notes = ""
     if err:
         notes += f'<p class="note bad">{E(err)}</p>'
@@ -237,35 +291,43 @@ def settings_form(st: dict[str, Any], csrf: str, msg: str, err: str) -> str:
             )
             + "</p>"
         )
-    groups = ""
-    for title, about, fields in GROUPS:
-        rows = ""
+    rows = ""
+    for pid, name, about, fields in PROVIDERS:
+        state_ = provider_state(st, fields)
+        badge = {
+            "set": '<span class="set">✓ set</span>',
+            "partly": '<span class="missing">partly set</span>',
+            "missing": '<span class="missing">not set</span>',
+        }[state_]
+        inputs = ""
         for key, label, secret, help_ in fields:
             is_set = bool(st["set"].get(key))
-            badge = (
-                '<span class="set">set</span>' if is_set else '<span class="missing">missing</span>'
-            )
             if secret:
                 hint = "set: leave empty to keep it" if is_set else help_
-                field = (
-                    f'<input type="password" name="{key}" autocomplete="off" '
-                    f'placeholder="{E(hint)}">'
+                inputs += (
+                    f'<label>{E(label)}</label><input type="password" name="{key}" '
+                    f'autocomplete="off" placeholder="{E(hint)}">'
                 )
             else:
                 current = str(st["values"].get(key, ""))
-                field = f'<input type="text" name="{key}" value="{E(current)}" placeholder="{E(help_)}">'
-            rows += f"<label>{E(label)} · {badge}</label>{field}"
-            if help_ and not secret:
-                rows += f'<div class="meta">{E(help_)}</div>'
-        groups += f'<fieldset><legend>{E(title)}</legend><div class="meta">{E(about)}</div>{rows}</fieldset>'
+                inputs += (
+                    f'<label>{E(label)}</label><input type="text" name="{key}" '
+                    f'value="{E(current)}" placeholder="{E(help_)}">'
+                )
+        act = "Change" if state_ == "set" else "Set up"
+        rows += (
+            f'<details id="{pid}"{" open" if pid == open_ else ""}><summary>'
+            f'<span class="what"><strong>{E(name)}</strong><span class="meta">{E(about)}</span></span>'
+            f'{badge}<span class="act">{act}</span></summary>'
+            f'<form method="post" action="/setup"><input type="hidden" name="csrf" value="{E(csrf)}">'
+            f'<input type="hidden" name="provider" value="{pid}">{inputs}'
+            f'<p><button class="btn" type="submit">Save {E(name)}</button></p></form></details>'
+        )
     return f"""{notes}<h1>Setup</h1>
-<p class="muted">Secrets are sent over HTTPS, written to the server's secret files and never shown
-again. Each change is recorded in the <a href="/changelog">changelog</a> with who made it.</p>
-<form method="post" action="/setup">
-<input type="hidden" name="csrf" value="{E(csrf)}">
-{groups}
-<label>Who is making this change</label><input type="text" name="by" placeholder="your name (shown in the changelog)">
-<p><button class="btn" type="submit">Save and apply</button></p></form>"""
+<p class="muted">Open a provider to set it up. Secrets go over HTTPS to the server's secret files
+and are never shown again. Changes are recorded in the <a href="/changelog">changelog</a> as made
+by <strong>{E(who)}</strong>.</p>
+<div class="providers">{rows}</div>"""
 
 
 def register(app: FastAPI) -> None:
@@ -300,7 +362,7 @@ def register(app: FastAPI) -> None:
             return str(who.get("csrf", "")), who.get("name") or who.get("email") or "an admin"
         sess = code_session(request)
         if sess is not None:
-            return str(sess.get("csrf", "")), "the setup code"
+            return str(sess.get("csrf", "")), str(sess.get("who") or "someone with the setup code")
         return None
 
     def page_(body: str, refresh: bool = False) -> HTMLResponse:
@@ -323,21 +385,34 @@ def register(app: FastAPI) -> None:
         if ok is None:
             return page_(code_form(err[:200]))
         return page_(
-            settings_form(st, ok[0], msg[:200], err[:200]),
+            settings_form(
+                st, ok[0], ok[1], msg[:200], err[:200], request.query_params.get("open", "")
+            ),
             refresh=st["pending"] or st["applying"],
         )
 
     @app.post("/console/setup/code")
-    async def setup_code(request: Request, code: str = Form("")):
+    async def setup_code(request: Request, code: str = Form(""), name: str = Form("")):
         services = svc(request)
-        if not same_origin(request) or not code_ok(services.settings, code[:64]):
+        entry = match_code(services.settings, code[:64]) if same_origin(request) else None
+        if entry is None:
             log.warning(
                 "setup: wrong or expired code from %s",
                 request.client.host if request.client else "?",
             )
             return RedirectResponse("/setup?err=That+code+is+wrong+or+expired.", status_code=303)
+        who = " ".join(str(entry.get("for") or "").split())[:MAX_NAME]
+        if not who:
+            who = " ".join(name.split())[:MAX_NAME]
+        if not who:
+            return RedirectResponse(
+                "/setup?err=This+code+was+made+without+a+name%3A+give+yours+with+it.",
+                status_code=303,
+            )
         cookie = mypass._sign(
-            services, {"kind": "setup", "csrf": secrets.token_urlsafe(24)}, SESSION_SECONDS
+            services,
+            {"kind": "setup", "csrf": secrets.token_urlsafe(24), "who": who},
+            SESSION_SECONDS,
         )
         response = RedirectResponse("/setup", status_code=303)
         response.set_cookie(
@@ -349,7 +424,7 @@ def register(app: FastAPI) -> None:
             samesite="strict",
             path="/",
         )
-        log.info("setup: signed in with the setup code")
+        log.info("setup: %s signed in with a setup code", who)
         return response
 
     @app.post("/console/setup")
@@ -363,6 +438,7 @@ def register(app: FastAPI) -> None:
         if not csrf or not hmac.compare_digest(str(form.get("csrf", "")), csrf):
             return RedirectResponse("/setup?err=The+form+expired%3B+try+again.", status_code=303)
         st = state(services.settings)
+        provider = str(form.get("provider", ""))
         values: dict[str, str] = {}
         for key, (_, secret) in FIELDS.items():
             raw = form.get(key)
@@ -378,14 +454,15 @@ def register(app: FastAPI) -> None:
             values[key] = raw
         if not values:
             return RedirectResponse("/setup?msg=Nothing+changed.", status_code=303)
-        by = str(form.get("by", "") or "").strip()
-        by = f"{by} via {who}" if by else who
         try:
-            keys = write_pending(services.settings, values, by)
+            keys = write_pending(services.settings, values, who)
         except ValueError as exc:
             return RedirectResponse(
                 "/setup?" + urllib.parse.urlencode({"err": str(exc)}),
                 status_code=303,
             )
         log.info("setup: %s queued %s", who, ", ".join(keys))
-        return RedirectResponse("/setup?msg=Saved.", status_code=303)
+        name = next((n for pid, n, _, _ in PROVIDERS if pid == provider), "Settings")
+        return RedirectResponse(
+            "/setup?" + urllib.parse.urlencode({"msg": f"{name} saved."}), status_code=303
+        )
