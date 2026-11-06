@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Markdown } from './markdown'
 import { createEvent, deleteEvent, openEventChat, rsvp, type NewEvent } from '../core/actions'
 import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
@@ -90,7 +91,7 @@ function NewEventSheet({ onClose }: { onClose: () => void }) {
         <label className="field"><span>Where</span>
           <input className="input" value={n.location} onChange={(e) => set({ location: e.target.value })} /></label>
         <label className="field"><span>Description</span>
-          <textarea className="input" rows={3} value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
+          <textarea className="input" rows={3} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
         <button className="btn" disabled={!n.title.trim() || !n.start}>Post event</button>
         <p className="hint" style={{ marginTop: 10 }}>The event gets its own chat, task list and files.</p>
       </form>
@@ -121,7 +122,7 @@ export function EventPage({ coord }: { coord: string }) {
       <div style={{ padding: '10px 12px 0' }}>
         <div className="card" style={{ marginBottom: 8 }}>
           {e.location && <div>📍 {e.location}</div>}
-          {e.description && <div className="hint" style={{ whiteSpace: 'pre-wrap', marginTop: 6, maxHeight: 96, overflowY: 'auto' }}>{e.description}</div>}
+          {e.description && <Markdown className="hint" text={e.description} style={{ marginTop: 6, maxHeight: 160, overflowY: 'auto' }} />}
           <div className="hint" style={{ marginTop: 6, fontSize: 13 }}>Posted by {displayName(e.ev.pubkey)} · {going(e)} going</div>
           <div className="rsvp" style={{ marginTop: 10 }}>
             {(['accepted', 'tentative', 'declined'] as Rsvp[]).map((s) => (

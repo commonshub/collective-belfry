@@ -278,6 +278,12 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
     void connect('main')
   })
   window.addEventListener('offline', () => setStatus({ online: false }))
+  // A send that failed for a passing reason (a timeout, a relay away) waits in the outbox: try
+  // again every 15 seconds and whenever the app comes back to the foreground.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { void connect('groups'); void connect('main'); void flush() }
+  })
+  setInterval(() => { if (outboxItems().some((o) => o.status !== 'failed')) void flush() }, 15_000)
   if (localOnly) {
     if (!latestCreatedAt((e) => e.kind === 39000)) {
       await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })

@@ -21,6 +21,7 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body, #root { height: 100%; margin: 0; }
+html, body { overflow-x: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
@@ -234,3 +235,23 @@ a { color: var(--accent); }
 [data-theme='belfry'] .login .app-logo small { display: block; font-size: 13px; color: var(--muted); }
 [data-theme='belfry'] .app-icon { width: 44px; height: 44px; border-radius: 12px; background: var(--accent); color: var(--on-accent); display: grid; place-items: center; }
 [data-theme='belfry'] .login h2 { font-weight: 600; letter-spacing: -0.02em; }
+
+/* ---- no sideways scrolling on phones: iOS gives date inputs a wide intrinsic size ---- */
+.sheet { overflow-x: hidden; }
+.field, .input { min-width: 0; max-width: 100%; }
+input[type='date'].input, input[type='datetime-local'].input, input[type='time'].input {
+  -webkit-appearance: none; appearance: none; display: block; width: 100%; min-height: 46px; text-align: left;
+}
+input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-webkit-date-and-time-value { text-align: left; }
+
+/* ---- Markdown in descriptions ---- */
+.md p, .md ul, .md ol, .md blockquote { margin: 0 0 8px; }
+.md > :last-child { margin-bottom: 0; }
+.md ul, .md ol { padding-left: 20px; }
+.md blockquote { border-left: 3px solid var(--line); padding-left: 10px; color: var(--muted); }
+.md code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
+.md .md-h { font-weight: 650; color: var(--text); margin: 4px 0 6px; }
+.md .md-h1 { font-size: 1.15em; }
+.md strong { color: var(--text); }
+.md a { color: var(--text); text-decoration: underline; overflow-wrap: anywhere; }
+.md { overflow-wrap: anywhere; }

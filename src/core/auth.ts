@@ -135,30 +135,44 @@ export async function makeSigner(s: Session): Promise<Signer> {
   if (!s.bunkerUrl) throw new Error('Not signed in.')
   const bp = await parseBunkerInput(s.bunkerUrl)
   if (!bp) throw new Error('Belfry sent a signer link this app does not understand.')
-  const bunker = new BunkerSigner(hexToBytes(s.clientSecret), bp)
-  // The pubkey is cached so the app opens offline; the bunker is reached only to sign.
+  // The connection to the signer is a WebSocket on the bunker relay: a phone that sleeps or
+  // changes network can leave it dead without telling. Every request gets a timeout; on a
+  // timeout the connection is rebuilt and the request fails (the outbox tries again).
+  const secret = hexToBytes(s.clientSecret)
+  let bunker = new BunkerSigner(secret, bp)
   let connected: Promise<void> | null = null
   const ensure = () => (connected ??= bunker.connect().catch((e) => { connected = null; throw e }))
+  const TIMEOUT = 20_000
+  const call = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        (async () => { await ensure(); return fn() })(),
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout: the signer did not answer')), TIMEOUT) }),
+      ])
+    } catch (e) {
+      if (e instanceof Error && e.message.startsWith('timeout')) {
+        const old = bunker
+        bunker = new BunkerSigner(secret, bp)
+        connected = null
+        void old.close().catch(() => { /* already gone */ })
+      }
+      throw e
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  // The pubkey is cached so the app opens offline; the bunker is reached only to sign.
   let pubkey = await kvGet<string>('pubkey')
   if (!pubkey) {
-    await ensure()
-    pubkey = await bunker.getPublicKey()
+    pubkey = await call(() => bunker.getPublicKey())
     await kvSet('pubkey', pubkey)
   }
   const pk = pubkey
   return {
     pubkey: pk,
-    async sign(t) {
-      await ensure()
-      return bunker.signEvent({ ...t, pubkey: pk })
-    },
-    async encrypt(peer, text) {
-      await ensure()
-      return bunker.nip44Encrypt(peer, text)
-    },
-    async decrypt(peer, payload) {
-      await ensure()
-      return bunker.nip44Decrypt(peer, payload)
-    },
+    sign: (t) => call(() => bunker.signEvent({ ...t, pubkey: pk })),
+    encrypt: (peer, text) => call(() => bunker.nip44Encrypt(peer, text)),
+    decrypt: (peer, payload) => call(() => bunker.nip44Decrypt(peer, payload)),
   }
 }
