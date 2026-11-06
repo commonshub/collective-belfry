@@ -34,6 +34,9 @@ CAL = "https://calendar.example.org/app"
 
 
 def approve(services, member, uri, name=""):
+    from belfry_onboarding import console
+
+    console._admins["at"] = 0.0
     apps.forget()
     apps.decide(services, member, uri, name, True)
 

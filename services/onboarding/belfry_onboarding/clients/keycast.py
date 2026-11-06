@@ -124,6 +124,33 @@ class KeycastClient:
         r.raise_for_status()
         return r.json()
 
+    def get_profile(self, token: str) -> dict[str, Any]:
+        """The token's user: ``{"username", "nip05"}`` (either may be null)."""
+        r = self._client.get(
+            f"{self.url}/api/user/profile",
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    def list_sessions(self, token: str) -> list[dict[str, Any]]:
+        """The token's user's NIP-46 connections: application_name, redirect_origin,
+        bunker_pubkey, client_pubkey, created_at, last_activity, activity_count."""
+        r = self._client.get(
+            f"{self.url}/api/user/sessions",
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+        return list((r.json() or {}).get("sessions") or [])
+
+    def revoke_session(self, token: str, bunker_pubkey: str) -> None:
+        r = self._client.post(
+            f"{self.url}/api/user/sessions/revoke",
+            json={"bunker_pubkey": bunker_pubkey},
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+
     def pubkey_for_name(self, name: str) -> str | None:
         """The pubkey of ``<name>@<tenant domain>`` (Keycast's nostr.json), or None."""
         r = self._client.get(

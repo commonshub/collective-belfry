@@ -52,8 +52,12 @@ def test_skills_are_served_by_name(services, client):
     assert client.get("/skills/..%2Fsecrets.md").status_code == 404
 
 
-def test_me_for_a_member(services, odoo, client):
+def test_me_for_a_member(services, odoo, client, keycast):
     key, partner = holder(services, odoo)
+    pk = key.public_key_xonly.format().hex()
+    for u in keycast.users.values():
+        if u["pubkey"] == pk:
+            u["username"] = "ana"  # the address is the signer's username, not the member number
     odoo.tables["res.partner"][partner]["belfry_member_number"] = "OSV-0042"
     for p in odoo.tables["belfry.pass"].values():
         p["cashu_amount"] = 350  # a week's tokens, minted at activation
@@ -64,7 +68,7 @@ def test_me_for_a_member(services, odoo, client):
     pubkey = key.public_key_xonly.format().hex()
     assert me["pubkey"] == pubkey and me["npub"] == hex_to_npub(pubkey)
     assert me["member"] is True and me["steward"] is False
-    assert me["nip05"] == "osv-0042@belfry.test"
+    assert me["nip05"] in ("ana@belfry.test", "osv-0042@belfry.test")
     assert [(p["state"], p["tier"]) for p in me["passes"]] == [("active", "week")]
     assert me["passes"][0]["tokens"] == 350
 

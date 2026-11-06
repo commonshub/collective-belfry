@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 import respx
+from coincurve import PrivateKey
 
 from belfry_onboarding.clients.odoo import OdooApi, OdooError
 
@@ -855,6 +856,9 @@ class FakeKeycast:
         ] = []  # {"pubkey", "app_name", "bunker_url", "secret", "bunker_secret"}
         router.post(f"{base}/api/user/profile").mock(side_effect=self._profile)
         router.post(f"{base}/api/user/bunker/create").mock(side_effect=self._bunker)
+        router.get(f"{base}/api/user/profile").mock(side_effect=self._get_profile)
+        router.get(f"{base}/api/user/sessions").mock(side_effect=self._sessions)
+        router.post(f"{base}/api/user/sessions/revoke").mock(side_effect=self._revoke)
         router.get(f"{base}/.well-known/nostr.json").mock(side_effect=self._nip05)
 
     def _preload(self, request: httpx.Request) -> httpx.Response:
@@ -890,6 +894,36 @@ class FakeKeycast:
             if u["pubkey"] == self.last_pubkey:
                 u["username"] = name
         return httpx.Response(200, json={"success": True})
+
+    def _get_profile(self, request: httpx.Request) -> httpx.Response:
+        u = next((u for u in self.users.values() if u["pubkey"] == self.last_pubkey), None)
+        name = u["username"] if u else None
+        return httpx.Response(
+            200, json={"username": name, "nip05": f"{name}@belfry.test" if name else None}
+        )
+
+    def _sessions(self, request: httpx.Request) -> httpx.Response:
+        rows = [
+            {
+                "application_name": b["app_name"],
+                "redirect_origin": "",
+                "bunker_pubkey": PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex(),
+                "client_pubkey": None,
+                "created_at": "2026-11-05T00:00:00Z",
+                "last_activity": None,
+                "activity_count": 0,
+            }
+            for b in self.bunkers
+            if b["pubkey"] == self.last_pubkey and not b.get("revoked")
+        ]
+        return httpx.Response(200, json={"sessions": rows})
+
+    def _revoke(self, request: httpx.Request) -> httpx.Response:
+        bp = json.loads(request.content)["bunker_pubkey"]
+        for b in self.bunkers:
+            if PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex() == bp:
+                b["revoked"] = True
+        return httpx.Response(200, json={"success": True, "message": "revoked"})
 
     def _bunker(self, request: httpx.Request) -> httpx.Response:
         from coincurve import PrivateKey

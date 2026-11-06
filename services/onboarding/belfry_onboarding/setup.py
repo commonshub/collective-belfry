@@ -288,6 +288,7 @@ def create_first_admin(
     )
     pubkey, token = result["pubkey"], result["token"]
     svc.keycast.set_username(token, username)
+    publish_profile(svc, partner, username)
     bunker = svc.keycast.create_bunker(token, "Setup page (first session)")
     from .nip46check import parse_bunker_url
 
@@ -314,6 +315,39 @@ def create_first_admin(
         "relays": relays,
         "secret": secret,
     }
+
+
+def publish_profile(svc: Services, partner: int, username: str) -> None:
+    """The member's kind-0 profile with their chosen address (<username>@<domain>), signed with
+    their own key, keeping what the profile already says (picture, about)."""
+    from . import community
+
+    try:
+        signer = community.member_signer(svc, partner)
+        if signer is None or svc.relay is None:
+            return
+        pubkey, sign = signer
+        current: dict[str, Any] = {}
+        found = community.query(svc, [{"kinds": [0], "authors": [pubkey], "limit": 1}])
+        if found:
+            try:
+                current = json.loads(found[0].get("content") or "{}")
+            except ValueError:
+                current = {}
+        if not isinstance(current, dict):
+            current = {}
+        content = {
+            **current,
+            "name": username,
+            "display_name": current.get("display_name") or username,
+            "nip05": f"{username}@{svc.settings.nip05_domain}",
+        }
+        event = sign(
+            {"kind": 0, "created_at": int(time.time()), "tags": [], "content": json.dumps(content)}
+        )
+        svc.relay.publish(event, sign)
+    except Exception as exc:  # noqa: BLE001 — the account works without it
+        log.warning("setup: profile of %s not published: %s", username, exc)
 
 
 def relay_connect(settings: Any, event: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:

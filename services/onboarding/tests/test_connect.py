@@ -201,3 +201,40 @@ def test_bad_links_and_addresses(web):
     assert apps.app_uri("http://localhost:5173/") == "http://localhost:5173/"
     with pytest.raises(ValueError):
         apps.app_uri("javascript:alert(1)")
+
+
+def test_a_member_lists_and_ends_their_sessions(services, odoo, keycast, client):
+    """GET /api/me/sessions and POST /api/me/sessions/revoke, NIP-98 with the member's key."""
+    from .test_holder_invites import get, post
+
+    services.settings.public_url = "https://pass.belfry.test"
+    key = PrivateKey()
+    pk = key.public_key_xonly.format().hex()
+    partner = odoo.add(
+        "res.partner", name="Cleo", email="cleo@example.org", belfry_member_number="M-7"
+    )
+    odoo.add("belfry.pass", partner_id=partner, tier="week", state="active", keycast_pubkey=pk)
+    keycast.users[f"odoo-partner-{partner}"] = {"pubkey": pk, "username": "cleo"}
+    keycast.last_pubkey = pk
+    services.keycast.create_bunker("ucan-token", "Chat")
+    services.keycast.create_bunker("ucan-token", "Notes")
+    r = get(client, key, "/api/me/sessions")
+    assert r.status_code == 200, r.text
+    rows = r.json()["sessions"]
+    assert [s["application_name"] for s in rows] == ["Chat", "Notes"]
+    r = post(client, key, "/api/me/sessions/revoke", {"bunker_pubkey": rows[0]["bunker_pubkey"]})
+    assert r.status_code == 200
+    import time
+
+    time.sleep(1.1)  # a NIP-98 authorization is single use; the next one needs another second
+    assert [
+        s["application_name"] for s in get(client, key, "/api/me/sessions").json()["sessions"]
+    ] == ["Notes"]
+    # the address comes from the signer's username, not the member number
+    assert get(client, key, "/api/me").json()["nip05"].startswith("cleo@")
+    assert (
+        post(
+            client, PrivateKey(), "/api/me/sessions/revoke", {"bunker_pubkey": "a" * 64}
+        ).status_code
+        == 403
+    )

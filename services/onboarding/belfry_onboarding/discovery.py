@@ -17,23 +17,27 @@ authenticate the NIP-98 header, so a page can only act with a key it signs with.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import re
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import pages
 from .core import Services, m2o_id
-from .holder_invites import authenticate
+from .holder_invites import ApiError, authenticate
 from .nostr import hex_to_npub
 
 log = logging.getLogger(__name__)
 
 WELL_KNOWN = "/.well-known/belfry.json"
 ME = "/api/me"
+SESSIONS = "/api/me/sessions"
 VERSION = 1
 # skills/ in the repo, served at /skills/<name>.md (pages.py); the visitor's also at /skill.md
 SKILLS = {
@@ -181,20 +185,52 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         "npub": hex_to_npub(pubkey),
         "member": active is not None,
         "steward": steward,
-        "nip05": f"{number.lower()}@{svc.settings.nip05_domain}" if active and number else None,
+        "nip05": member_nip05(svc, partner_id, number, pubkey) if active else None,
         # the address of the contact behind the passes or the one this key proved by e-mail
         "email": partner.get("email") or None,
         "passes": passes,
     }
 
 
-def allowed_origin(settings: Any, origin: str | None) -> str | None:
+def member_nip05(
+    svc: Services, partner_id: int | None, number: str = "", pubkey: str = ""
+) -> str | None:
+    """The member's address: their username in the signer (``<username>@<domain>``), else the
+    member number (the username the signer gives a new account)."""
+    if partner_id:
+        try:
+            from . import community
+
+            found = community.member_token(svc, int(partner_id))
+            if found and (not pubkey or found[0] == pubkey):
+                name = (svc.keycast.get_profile(found[1]) or {}).get("username")
+                if name:
+                    return f"{name}@{svc.settings.nip05_domain}"
+        except Exception as exc:  # noqa: BLE001 — the signer not answering: the member number
+            log.info("discovery: no username for partner %s: %s", partner_id, exc)
+    return f"{number.lower()}@{svc.settings.nip05_domain}" if number else None
+
+
+def allowed_origin(settings: Any, origin: str | None, svc: Services | None = None) -> str | None:
+    """API_CORS_ORIGINS, plus the origin of every app an admin approved (apps.py)."""
     if not origin:
         return None
     allowed = [o.strip().rstrip("/") for o in settings.api_cors_origins.split(",") if o.strip()]
     if "*" in allowed:
         return "*"
-    return origin if origin.rstrip("/") in allowed else None
+    if origin.rstrip("/") in allowed:
+        return origin
+    if svc is not None:
+        from . import apps
+
+        try:
+            for uri, a in apps.state(svc).items():
+                u = httpx.URL(uri)
+                if a["approved"] and origin.rstrip("/") == f"{u.scheme}://{u.netloc.decode()}":
+                    return origin
+        except Exception as exc:  # noqa: BLE001 — no relay: only the configured origins
+            log.info("discovery: approved apps not readable: %s", exc)
+    return None
 
 
 def cors_headers(origin: str) -> dict[str, str]:
@@ -217,7 +253,9 @@ def register(app: FastAPI) -> None:
             origin: str | None = "*"
         elif path.startswith("/api/"):
             settings = request.app.state.services.settings
-            origin = allowed_origin(settings, request.headers.get("origin"))
+            origin = await run_in_threadpool(
+                allowed_origin, settings, request.headers.get("origin"), request.app.state.services
+            )
         else:
             return await call_next(request)
         if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
@@ -233,6 +271,61 @@ def register(app: FastAPI) -> None:
     async def well_known(request: Request) -> JSONResponse:
         doc = document(request.app.state.services.settings)
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
+
+    async def session_owner(
+        request: Request, method: str, path: str, body: bytes
+    ) -> tuple[int, str]:
+        services: Services = request.app.state.services
+        pubkey = authenticate(
+            services,
+            request.app.state.api_seen,
+            request.headers.get("authorization"),
+            method,
+            path,
+            body,
+        )
+        from . import community
+        from .holder_invites import holder
+
+        partner = (await run_in_threadpool(holder, services, pubkey))["partner_id"]
+        found = await run_in_threadpool(community.member_token, services, partner)
+        if found is None or found[0] != pubkey:
+            raise ApiError(409, "own_key", "This key is your own: its sessions are not here.")
+        return partner, found[1]
+
+    @app.get(SESSIONS)
+    async def api_sessions(request: Request) -> JSONResponse:
+        """The signed-in member's sessions (NIP-46 connections in the signer), NIP-98."""
+        services: Services = request.app.state.services
+        _, token = await session_owner(request, "GET", SESSIONS, b"")
+        rows = await run_in_threadpool(services.keycast.list_sessions, token)
+        keep = (
+            "application_name",
+            "redirect_origin",
+            "bunker_pubkey",
+            "client_pubkey",
+            "created_at",
+            "last_activity",
+            "activity_count",
+        )
+        return JSONResponse(
+            {"sessions": [{k: r.get(k) for k in keep} for r in rows]},
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post(SESSIONS + "/revoke")
+    async def api_sessions_revoke(request: Request) -> JSONResponse:
+        services: Services = request.app.state.services
+        body = await request.body()
+        _, token = await session_owner(request, "POST", SESSIONS + "/revoke", body)
+        try:
+            bunker = str(json.loads(body or b"{}").get("bunker_pubkey", ""))
+        except ValueError:
+            bunker = ""
+        if not re.fullmatch(r"[0-9a-f]{64}", bunker):
+            raise ApiError(422, "invalid", "bunker_pubkey: 64 hex characters")
+        await run_in_threadpool(services.keycast.revoke_session, token, bunker)
+        return JSONResponse({"state": "revoked"})
 
     @app.get(ME)
     async def api_me(request: Request) -> JSONResponse:
