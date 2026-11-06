@@ -2,7 +2,7 @@ import { Relay, type Subscription } from 'nostr-tools/relay'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { ACCESS_KINDS, BELFRY, CLIENT_TAG } from '../config'
+import { ACCESS_KINDS, BELFRY, CLIENT_TAG, NAME } from '../config'
 import type { Signer } from './auth'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { addEvents, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
@@ -240,7 +240,11 @@ function resubscribe(target: Target) {
   subs[target]?.close()
   subs[target] = r.subscribe(filters(target), {
     onevent: (e) => addEvents([e]),
-    oneose: () => { if (target === 'groups' && status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' }) },
+    oneose: () => {
+      if (target !== 'groups') return
+      if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })
+      void firstChannel()
+    },
     onclose: (reason) => {
       if (reason.startsWith('auth-required')) return // _onauth resubscribes
       noteRefusal(reason)
@@ -283,6 +287,17 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
     void connect('groups')
     void connect('main')
   }
+  void flush()
+}
+
+// A new belfry's groups relay has no channel yet: the first member in opens #general (any member
+// may create a group; its creator administers it). Once per page load, after the relay's EOSE.
+let firstChannelTried = false
+async function firstChannel() {
+  if (firstChannelTried || latestCreatedAt((e) => e.kind === 39000)) return
+  firstChannelTried = true
+  await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
+  await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${NAME}. Say hi 👋`]] })
   void flush()
 }
 
