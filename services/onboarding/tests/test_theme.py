@@ -67,7 +67,9 @@ def test_the_base_stylesheets_are_not_swallowed_by_a_comment():
     from belfry_onboarding import theme as t
 
     for base in ("belfry", "osv"):
+        import re
+
         css = (t.BUILTIN / base / "theme.css").read_text()
-        # the opening comment closes before the first rule
-        assert css.index("*/") < css.index("{")
         assert css.count("/*") == css.count("*/")
+        rules = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+        assert ":root {" in rules and "--bg:" in rules
