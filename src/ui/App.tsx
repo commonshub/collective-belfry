@@ -6,7 +6,7 @@ import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, start, stop } from '../core/sync'
-import { BELFRY, getBackend } from '../config'
+import { BELFRY, NAME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
@@ -160,7 +160,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
             <div>
               <div className="hint">{g ? 'Access' : 'Pass'}</div>
               <div style={{ fontWeight: 600 }}>
-                {g ? `${g.role}${g.until ? ' · until ' + new Date(g.until * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : ''}` : m.pass ?? 'Open Source Village'}
+                {g ? `${g.role}${g.until ? ' · until ' + new Date(g.until * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : ''}` : m.pass ?? NAME}
               </div>
             </div>
             <span className="badge lime">{status.access === 'ok' || m.status === 'active' ? 'Active' : 'Checking…'}</span>

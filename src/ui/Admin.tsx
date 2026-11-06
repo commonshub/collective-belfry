@@ -4,7 +4,7 @@ import { accessInfo, accessState, createInvite, grant, inviteCode, loadAccessInf
 import { displayName } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { ACCESS } from '../config'
+import { ACCESS, NAME } from '../config'
 import { Avatar, back, go, Sheet, StatusPill } from './common'
 import { Tabs } from './ChannelInfo'
 
@@ -194,7 +194,7 @@ function Invites({ invites }: { invites: ReturnType<typeof accessState>['invites
 const inviteLink = (code: string) => `${location.origin}${location.pathname}?invite=${encodeURIComponent(code)}`
 
 async function share(code: string) {
-  const text = `Join Open Source Village with this invite code: ${code}\n${inviteLink(code)}`
+  const text = `Join ${NAME} with this invite code: ${code}\n${inviteLink(code)}`
   try {
     if (navigator.share) return await navigator.share({ text })
     await navigator.clipboard.writeText(text)

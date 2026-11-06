@@ -2,9 +2,26 @@ import { useEffect, useState } from 'react'
 import { startSignIn, type Session } from '../core/auth'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
-import { BELFRY, type Backend } from '../config'
+import { BELFRY, NAME, THEME, type Backend } from '../config'
 
-const Logo = () => <img className="logo" src="./icons/osv-logo-horizontal-white.svg" alt="Open Source Village" />
+// The arms: a tower over water on a shield (the Belfry mark).
+export const Arms = ({ size = 18 }: { size?: number }) => (
+  <svg width={size} height={Math.round(size * 70 / 64)} viewBox="0 0 64 70" aria-hidden="true">
+    <path d="M8 6a2 2 0 0 1 2-2h44a2 2 0 0 1 2 2v24c0 17-11 29-24 35C19 59 8 47 8 30Z" fill="currentColor" />
+    <path d="M22 43V24h-2v-6h4v3h3v-3h4v3h2v-3h4v3h3v-3h4v6h-2v19Z" fill="var(--accent)" />
+    
+  </svg>
+)
+
+const Logo = () =>
+  THEME === 'belfry' ? (
+    <div className="logo app-logo">
+      <span className="app-icon"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4Z" fill="currentColor" /></svg></span>
+      <span><b>Chat</b><small>{NAME}</small></span>
+    </div>
+  ) : (
+    <img className="logo" src="./icons/osv-logo-horizontal-white.svg" alt="Open Source Village" />
+  )
 
 // An invite code typed before signing in (or from ?invite=) waits here until there is a key
 // to send it with.
@@ -39,8 +56,17 @@ export function WelcomeScreen({ backend, error, onDemo }: { backend: Backend; er
   return (
     <div className="screen login">
       <Logo />
-      <h2>Welcome to the village</h2>
-      <p>Sign in with your e-mail address. We'll mail you a 6-digit code. No password, ever.</p>
+      {THEME === 'belfry' ? (
+        <>
+          <h2>Talk with your community</h2>
+          <p>Channels, events and files for the people of {NAME}. You sign in on {BELFRY.domain}: no password, a 6-digit code by e-mail.</p>
+        </>
+      ) : (
+        <>
+          <h2>Welcome to the village</h2>
+          <p>Sign in with your e-mail address. We'll mail you a 6-digit code. No password, ever.</p>
+        </>
+      )}
       {error && <div className="error">{error}</div>}
       {invite ? (
         <form onSubmit={(e) => { e.preventDefault(); saveCode(code); signIn() }}>
@@ -53,13 +79,13 @@ export function WelcomeScreen({ backend, error, onDemo }: { backend: Backend; er
         </form>
       ) : (
         <>
-          <button className="btn" disabled={busy} onClick={signIn}>{busy ? 'Opening…' : 'Sign in with e-mail'}</button>
+          <button className="btn" disabled={busy} onClick={signIn}>{busy ? 'Opening…' : THEME === 'belfry' ? <><Arms /> Sign in with {BELFRY.domain}</> : 'Sign in with e-mail'}</button>
           <div style={{ height: 28 }} />
           <button className="btn ghost" onClick={() => setInvite(true)}>I have an invite code</button>
         </>
       )}
       <p className="hint" style={{ marginTop: 18, fontSize: 14 }}>
-        No invite? Sign in all the same and ask to join: the village's admins get your note.
+        No invite? Sign in all the same and ask to join: {THEME === 'belfry' ? 'the admins' : "the village's admins"} get your note.
       </p>
     </div>
   )
