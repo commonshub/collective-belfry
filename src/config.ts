@@ -24,6 +24,24 @@ export const BELFRY = {
   bunkerRelay: `wss://bunker.${DOMAIN}`,
 }
 
+// Where "Sign in with <domain>" happens (OAuth code + PKCE). The Belfry look uses the belfry's
+// own sign-in page (belfry.<domain>/connect: approved apps only); the village look keeps the
+// signer's (Keycast) until its belfry has that page too. VITE_SIGNIN=connect|keycast overrides.
+const CONNECT = (env.VITE_SIGNIN || (THEME === 'belfry' ? 'connect' : 'keycast')) === 'connect'
+export const SIGNIN = CONNECT
+  ? {
+      authorize: `https://belfry.${DOMAIN}/connect/authorize`,
+      token: `https://belfry.${DOMAIN}/connect/token`,
+      revoke: `https://belfry.${DOMAIN}/connect/revoke`,
+      logout: `https://belfry.${DOMAIN}/connect/logout`,
+    }
+  : {
+      authorize: `${BELFRY.apps}/api/oauth/authorize`,
+      token: `${BELFRY.apps}/api/oauth/token`,
+      revoke: `${BELFRY.apps}/api/oauth/revoke`,
+      logout: `${BELFRY.apps}/api/auth/oidc/logout`,
+    }
+
 // "belfry" is the real thing. "demo" keeps everything on this device and is only
 // for automated tests: ?backend=demo (remembered until ?backend=belfry).
 export type Backend = 'demo' | 'belfry'

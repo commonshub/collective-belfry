@@ -2,7 +2,7 @@ import { finalizeEvent, generateSecretKey, getPublicKey, nip44, type EventTempla
 import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { BELFRY, type Backend } from '../config'
+import { BELFRY, SIGNIN, type Backend } from '../config'
 import { kvDel, kvGet, kvSet } from './db'
 
 export interface Membership {
@@ -57,7 +57,7 @@ export async function startSignIn(silent = false) {
     state: flow.state, code_challenge: challenge, code_challenge_method: 'S256',
   })
   if (silent) q.set('prompt', 'none')
-  location.assign(`${BELFRY.apps}/api/oauth/authorize?${q}`)
+  location.assign(`${SIGNIN.authorize}?${q}`)
 }
 
 /** Back from Keycast with ?code&state (or ?error): returns a session, or null if this
@@ -71,7 +71,7 @@ export async function finishSignIn(): Promise<Session | null> {
   if (!flow || q.get('state') !== flow.state) throw new Error('This sign-in did not start here. Please try again.')
   const err = q.get('error')
   if (err) throw new Error(err === 'access_denied' ? 'Sign-in was cancelled.' : `Not signed in (${err}).`)
-  const res = await fetch(`${BELFRY.apps}/api/oauth/token`, {
+  const res = await fetch(SIGNIN.token, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -94,14 +94,14 @@ export async function finishSignIn(): Promise<Session | null> {
 /** Ends this app's authorization and the sign-in for every village app, then comes back. */
 export async function belfrySignOut(s: Session) {
   if (s.refreshToken) {
-    await fetch(`${BELFRY.apps}/api/oauth/revoke`, {
+    await fetch(SIGNIN.revoke, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: s.refreshToken, client_id: CLIENT_ID }),
       signal: AbortSignal.timeout(3000),
     }).catch(() => { /* offline: the token expires by itself */ })
   }
-  location.assign(`${BELFRY.apps}/api/auth/oidc/logout?return_to=${encodeURIComponent(redirectUri())}`)
+  location.assign(`${SIGNIN.logout}?return_to=${encodeURIComponent(redirectUri())}`)
 }
 
 // ---- demo (tests only: ?backend=demo) ------------------------------------------------
