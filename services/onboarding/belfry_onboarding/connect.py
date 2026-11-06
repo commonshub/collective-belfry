@@ -331,8 +331,9 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
     else:
         intro = (
             '<h1>This app isn\'t approved yet</h1><p class="muted">Only the admins of '
-            f"{E(domain)} can allow a new app to open sessions for members. Sign in so they know "
-            "who is asking, or to approve it yourself if you are an admin.</p>"
+            f"{E(domain)} can approve a new app. Once it is approved, you open a session in it "
+            "with your own account. Sign in so they know who is asking, or to approve it yourself "
+            "if you are an admin.</p>"
         )
     boxes = "".join(
         ('<span class="sep"></span>' if i == 3 else "")
@@ -378,8 +379,8 @@ belfry.{E(domain)} › Apps.</p>
 
 <section data-step="approve" hidden>{chip}
 <h1>Approve this app?</h1>
-<p class="muted">You are an admin of {E(domain)}. Once approved, every member can open a session in
-{E(addr)} with their own account. What the app signs is signed as that member.</p>
+<p class="muted">You are an admin of {E(domain)}. Once approved, any member can open a session in
+{E(addr)} with their own account. What the app signs in that session is signed as them.</p>
 <form><p class="err" role="alert"></p>
 <div class="actions" style="flex-direction:column;align-items:stretch;gap:10px">
 <button class="btn full" type="submit">Approve for everyone</button>
