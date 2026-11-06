@@ -5,7 +5,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { ACCESS_KINDS, BELFRY, CLIENT_TAG, NAME } from '../config'
 import type { Signer } from './auth'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
-import { addEvents, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
+import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
 
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
@@ -137,6 +137,45 @@ async function send(item: OutboxItem): Promise<NostrEvent> {
 }
 
 // ---- Blossom (BUD-02) ---------------------------------------------------------
+
+/** A new profile picture: resized on the device, uploaded to Blossom (or kept as a small data
+ *  URL in demo mode), then the kind-0 profile is republished with it, the rest kept. */
+export async function setAvatar(file: File) {
+  if (!signer) throw new Error('Not signed in.')
+  const small = await resize(file, localOnly ? 160 : 512)
+  const url = localOnly
+    ? await new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(small) })
+    : await upload(small, { blobKey: '', name: 'avatar.jpg', mime: 'image/jpeg', size: small.size })
+  const mine = all(signer.pubkey).filter((e) => e.kind === 0 && e.pubkey === signer!.pubkey).sort((a, b) => b.created_at - a.created_at)[0]
+  let content: Record<string, unknown> = {}
+  try { content = mine ? JSON.parse(mine.content) : {} } catch { content = {} }
+  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, picture: url }), tags: [] })
+}
+
+async function resize(file: File, max: number): Promise<Blob> {
+  const img = await createImageBitmap(file)
+  const scale = Math.min(1, max / Math.max(img.width, img.height))
+  const side = (n: number) => Math.max(1, Math.round(n * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = side(img.width)
+  canvas.height = side(img.height)
+  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height)
+  return new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('Could not read the image.'))), 'image/jpeg', 0.85))
+}
+
+/** fetch() with a NIP-98 Authorization signed by the member's key (through the session). */
+export async function signedFetch(url: string, method = 'GET', body?: unknown): Promise<Response> {
+  if (!signer) throw new Error('Not signed in.')
+  const text = body === undefined ? '' : JSON.stringify(body)
+  const tags = [['u', url], ['method', method]]
+  if (text) tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(text)))])
+  const auth = await signer.sign({ kind: 27235, content: '', tags, created_at: Math.floor(Date.now() / 1000) })
+  return fetch(url, {
+    method,
+    headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), ...(text ? { 'Content-Type': 'application/json' } : {}) },
+    body: text || undefined,
+  })
+}
 
 async function upload(blob: Blob, a: Attachment): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer())

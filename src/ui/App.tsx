@@ -5,11 +5,12 @@ import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { loadAll, outboxItems, status, useVersion } from '../core/store'
-import { me, start, stop } from '../core/sync'
+import { me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
+import { Connections } from './Connections'
 import { ChannelList, ChannelView } from './Chat'
 import { Avatar, go, StatusPill, useRoute } from './common'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
@@ -111,6 +112,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   if (section === 'channels') view = <ChannelList />
   else if (section === 'cal' && a) view = <EventPage coord={a} />
   else if (section === 'cal') view = <CalendarList />
+  else if (section === 'me' && a === 'connections') view = <Connections session={session} />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else {
@@ -142,17 +144,29 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
   const m = session.membership
   const g = myGrant()
   const waiting = isAdmin() ? accessState().pending.length : 0
-  const npub = me() ? nip19.npubEncode(me()) : ''
   const p = profiles().get(me())
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [avatarError, setAvatarError] = useState('')
   return (
     <div className="screen">
       <div className="topbar"><h1 style={{ paddingLeft: 8 }}>Me</h1><StatusPill /></div>
       <div className="scroll pad">
         <div className="card row" style={{ gap: 12 }}>
-          <Avatar pubkey={me()} size={48} />
+          <label className="avatar-edit" aria-label="Change your picture">
+            <Avatar pubkey={me()} size={56} />
+            <span className="avatar-badge" aria-hidden="true">{avatarBusy ? '…' : '✎'}</span>
+            <input type="file" accept="image/*" hidden disabled={avatarBusy} onChange={async (e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (!f) return
+              setAvatarBusy(true); setAvatarError('')
+              try { await setAvatar(f) } catch (x) { setAvatarError(x instanceof Error ? x.message : String(x)) } finally { setAvatarBusy(false) }
+            }} />
+          </label>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 650 }}>{p?.name ?? session.email ?? 'Villager'}</div>
             <div className="hint" style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{m.nip05 ?? p?.nip05 ?? ''}</div>
+            {avatarError && <div className="error" style={{ margin: '4px 0 0' }}>{avatarError}</div>}
           </div>
         </div>
         <div className="card">
@@ -176,13 +190,13 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
             {waiting > 0 && <span className="badge orange">{waiting} waiting</span>}
           </button>
         )}
-        <div className="card">
-          <div className="hint">Your village key (Nostr)</div>
-          <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, wordBreak: 'break-all' }}>{npub}</div>
-          <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>
-            {session.backend === 'demo' ? 'Demo key, kept on this device only.' : 'The village keeps this key safe for you; this app asks it to sign.'}
+        <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/connections')}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Connections</div>
+            <div className="hint" style={{ fontSize: 14 }}>Your key and the apps signed in as you</div>
           </div>
-        </div>
+          <span className="hint" aria-hidden="true">›</span>
+        </button>
         <button className="btn ghost" onClick={onSignOut}>Sign out</button>
       </div>
     </div>
