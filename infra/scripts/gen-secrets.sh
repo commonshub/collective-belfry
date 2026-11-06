@@ -30,7 +30,7 @@ server_nsec=$(python3 "$INFRA_DIR/scripts/nostr_keys.py" | python3 -c 'import js
 mkdir -p "$SECRETS_DIR"
 # the changelog (scripts/changelog.sh), mounted into the onboarding service: made here, as the
 # deploying user, so Docker does not create it as root
-mkdir -p "$INFRA_DIR/data/changelog" "$INFRA_DIR/data/theme" "$INFRA_DIR/data/setup"
+mkdir -p "$INFRA_DIR/data/changelog" "$INFRA_DIR/data/theme" "$INFRA_DIR/data/setup" "$INFRA_DIR/data/apps/_routes"
 chmod 700 "$SECRETS_DIR"
 python3 - "$EXAMPLE" "$ENV_FILE" "$MODE" "$SECRETS_DIR" "$admin_keys" "$server_nsec" "$(id -u)" "$(id -g)" <<'PYEOF'
 import json, os, re, secrets, subprocess, sys

@@ -18,6 +18,7 @@
 #   belfry logs [SERVICE]            follow the logs
 #   (apply and update pull prebuilt images when GitHub has them for this code; BELFRY_BUILD_LOCAL=1
 #   builds everything here)
+#   belfry app install NAME DIR      serve a built web app at apps.<domain>/NAME/ (list, remove NAME)
 #   belfry compose ARGS…             docker compose with the right files and profile
 #
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
@@ -534,6 +535,74 @@ cmd_theme() {
   esac
 }
 
+# ── a belfry's own static apps: apps.<domain>/<name>/ (infra/data/apps/<name>/) ──
+# Data, like the theme: `belfry update` never touches them. Each installed app gets a route file
+# in infra/data/apps/_routes/, which the proxy imports into the apps.<domain> site. The apps share
+# their origin with the signer (Keycast) on apps.<domain>: install only apps the admins trust.
+APPS_DIR="$INFRA/data/apps"
+APP_RESERVED=" api admin auth login logout register dashboard settings keys oauth static assets health well-known _routes "
+reload_proxy() {
+  compose exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
+    || compose restart proxy >/dev/null
+}
+app_route() {
+  local name=$1
+  local csp="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https://*.{\$BELFRY_DOMAIN} wss://*.{\$BELFRY_DOMAIN} https://{\$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+  printf '%s\n' \
+    "# apps.<domain>/$name/: written by 'belfry app install $name'; do not edit." \
+    "redir /$name /$name/ 308" \
+    "handle /$name/* {" \
+    "	import csp \"$csp\"" \
+    "	@fresh path /$name/ /$name/index.html /$name/sw.js" \
+    "	header @fresh Cache-Control \"no-cache\"" \
+    "	root * /srv/apps" \
+    "	try_files {path} /$name/index.html" \
+    "	file_server" \
+    "}"
+}
+cmd_app() {
+  case "${1:-list}" in
+    install)
+      local name=${2:?usage: belfry app install NAME DIR} src=${3:?usage: belfry app install NAME DIR}
+      [[ "$name" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || die "an app name is 2 to 31 lowercase letters, digits or dashes"
+      [[ "$APP_RESERVED" != *" $name "* ]] || die "$name is a path the signer uses on apps.<domain>; pick another name"
+      [[ -f "$src/index.html" ]] || die "$src has no index.html (give the built app: its dist/ folder)"
+      mkdir -p "$APPS_DIR/_routes"
+      rm -rf "${APPS_DIR:?}/.$name.new"
+      cp -R "$src/." "$APPS_DIR/.$name.new/"
+      chmod -R u=rwX,go=rX "$APPS_DIR/.$name.new"
+      rm -rf "${APPS_DIR:?}/.$name.old"
+      if [[ -d "$APPS_DIR/$name" ]]; then mv "$APPS_DIR/$name" "$APPS_DIR/.$name.old"; fi
+      mv "$APPS_DIR/.$name.new" "$APPS_DIR/$name"
+      app_route "$name" > "$APPS_DIR/_routes/$name.caddy"
+      chmod 644 "$APPS_DIR/_routes/$name.caddy"
+      reload_proxy
+      record "App $name installed at apps.$(env_get BELFRY_DOMAIN)/$name/"
+      say "https://apps.$(env_get BELFRY_DOMAIN)/$name/"
+      ;;
+    remove)
+      local name=${2:?usage: belfry app remove NAME}
+      [[ "$name" =~ ^[a-z][a-z0-9-]{1,30}$ && -d "$APPS_DIR/$name" ]] || die "no app $name"
+      rm -f "$APPS_DIR/_routes/$name.caddy"
+      rm -rf "${APPS_DIR:?}/.$name.old"
+      mv "$APPS_DIR/$name" "$APPS_DIR/.$name.old"
+      reload_proxy
+      record "App $name removed"
+      say "Removed $name (its files are in $APPS_DIR/.$name.old)"
+      ;;
+    list)
+      local f any=0
+      for f in "$APPS_DIR"/_routes/*.caddy; do
+        [[ -f "$f" ]] || continue
+        any=1; f=$(basename "$f" .caddy)
+        say "$f  https://apps.$(env_get BELFRY_DOMAIN)/$f/"
+      done
+      [[ $any = 1 ]] || say "No apps installed (belfry app install NAME DIR)"
+      ;;
+    *) die "usage: belfry app install NAME DIR | remove NAME | list" ;;
+  esac
+}
+
 case "${1:-help}" in
   status) cmd_status ;;
   config) shift; cmd_config "$@" ;;
@@ -547,6 +616,7 @@ case "${1:-help}" in
   setup-apply) cmd_setup_apply ;;
   setup-units) cmd_setup_units ;;
   theme) shift; cmd_theme "$@" ;;
+  app) shift; cmd_app "$@" ;;
   logs) shift; compose --profile app logs -f --tail=100 "$@" ;;
   compose) shift; compose "$@" ;;
   help|-h|--help) sed -n '2,/^set -euo/p' "$SELF" | sed '$d; s/^# \{0,1\}//' ;;

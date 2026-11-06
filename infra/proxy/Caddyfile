@@ -191,6 +191,9 @@ apps.{$BELFRY_DOMAIN} {
 	error @admin 404
 	import admin_only /admin /admin/*
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data:; connect-src 'self' https://login.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; form-action 'self' https://login.{$BELFRY_DOMAIN}"
+	# The belfry's own static apps at apps.<domain>/<name>/ (`belfry app install` writes one route
+	# file per app into infra/data/apps/_routes/). None installed: the glob matches nothing.
+	import /srv/apps/_routes/*.caddy
 	reverse_proxy keycast:3000
 }
 

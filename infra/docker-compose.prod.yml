@@ -43,6 +43,8 @@ services:
       # the directory, not the file: a git update replaces the Caddyfile (new inode), which a
       # single-file mount would never show; `caddy reload` then picks up the new one
       - ./proxy:/etc/caddy:ro
+      # the belfry's own static apps and their routes (belfry app install)
+      - ./data/apps:/srv/apps:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:
