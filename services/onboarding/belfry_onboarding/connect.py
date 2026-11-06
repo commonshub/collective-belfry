@@ -263,7 +263,7 @@ JS = """<script>
     }
   }
   function step(name, run) {
-    const f = sec(name).querySelector('form'); if (!f) return;
+    const sc = sec(name); if (!sc) return; const f = sc.querySelector('form'); if (!f) return;
     f.addEventListener('submit', async (e) => {
       e.preventDefault(); const b = f.querySelector('button[type=submit]'); if (b.disabled) return;
       err(name, ''); b.disabled = true;

@@ -61,3 +61,13 @@ def test_a_broken_theme_json_is_skipped(settings, tmp_path):
     assert theme.load(settings).base == "belfry"
     settings.theme = "unknown"
     assert theme.load(settings).base == "belfry"
+
+
+def test_the_base_stylesheets_are_not_swallowed_by_a_comment():
+    from belfry_onboarding import theme as t
+
+    for base in ("belfry", "osv"):
+        css = (t.BUILTIN / base / "theme.css").read_text()
+        # the opening comment closes before the first rule
+        assert css.index("*/") < css.index("{")
+        assert css.count("/*") == css.count("*/")
