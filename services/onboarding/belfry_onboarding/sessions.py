@@ -17,6 +17,10 @@ session on the member's key.
 The same two steps work over HTTPS for apps that don't do NIP-17, NIP-98 signed with the session
 key: ``POST /api/session {"nip05", "app"}`` then ``POST /api/session/verify {"code"}``.
 
+``app`` is the app's address (https://…). Only apps an admin approved get a session (apps.py):
+for any other app the right code sends the admins a request (a Nostr event signed by the member)
+and the answer is ``app_not_approved``.
+
 Messages are text for people and tags for apps: a request is any message naming the address
 (``{"nip05": …, "app": …}`` JSON works too); replies carry ``["belfry", "code_sent" | "open" |
 "error"]``, and the last one ``["bunker", <url>]``.
@@ -39,6 +43,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import apps as apps_mod
 from . import homepage, nostr
 from .blossom import event_id, verify_signature
 from .clients.odoo import OdooError
@@ -165,8 +170,15 @@ class Sessions:
                 "unknown",
                 f"This belfry answers for {self.svc.settings.nip05_domain}, not {domain}.",
             )
+        try:
+            app = apps_mod.app_uri(app)
+        except ValueError as exc:
+            raise SessionError(
+                422,
+                "app_address",
+                "Name the app by its address (https://…): admins approve apps by address.",
+            ) from exc
         pubkey, pid, email = self._member(name)
-        app = " ".join((app or "").split())[:60]
         try:
             row = self.svc.odoo.call(
                 "belfry.key.code", "belfry_key_code_send", [email, session, app or False]
@@ -221,13 +233,40 @@ class Sessions:
         if state != "other_key" or row.get("npub") != nostr.hex_to_npub(req["pubkey"]):
             raise SessionError(409, "mismatch", "This address does not belong to that member.")
         name = req["name"]
+        if not apps_mod.is_approved(self.svc, req["app"]):
+            member = {
+                "partner": req["partner"],
+                "pubkey": req["pubkey"],
+                "name": name,
+                "email": req["email"],
+            }
+            where = f"{self.svc.settings.console_url.rstrip('/')}/apps"
+            with self._lock:
+                self.pending.pop(session, None)
+            if apps_mod.is_admin(self.svc, member):
+                raise SessionError(
+                    403,
+                    "app_not_approved",
+                    f"{apps_mod.address(req['app'])} isn't approved yet. You are an admin: approve it at {where}, then sign in again.",
+                )
+            try:
+                apps_mod.request(self.svc, member, req["app"], "")
+            except Exception as exc:  # noqa: BLE001 — the refusal stands either way
+                log.warning("sessions: request for %s not published: %s", req["app"], exc)
+            raise SessionError(
+                403,
+                "app_not_approved",
+                f"{apps_mod.address(req['app'])} isn't approved yet. We asked the admins; sign in again once they approve it.",
+            )
         result = self.svc.keycast.preload_user(
             vine_id=f"odoo-partner-{req['partner']}", username=name, display_name=name
         )
         if result.get("pubkey") != req["pubkey"]:
             raise SessionError(409, "mismatch", "The member's key moved; ask again.")
         try:
-            bunker = self.svc.keycast.create_bunker(result["token"], req["app"] or "App")
+            bunker = self.svc.keycast.create_bunker(
+                result["token"], apps_mod.display_name(self.svc, req["app"])
+            )
         except Exception as exc:  # noqa: BLE001 — a self-custody member has no key here
             log.warning("sessions: no bunker for %s: %s", name, exc)
             raise SessionError(

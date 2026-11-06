@@ -97,6 +97,14 @@ def document(settings: Any) -> dict[str, Any]:
         "sign_in": {
             "login": _url(settings.authentik_public_url),
             "keycast": _url(settings.apps_public_url),
+            # Sign in with <domain> for web apps: OAuth code + PKCE, approved apps only (connect.py)
+            "connect": {
+                "authorize": _url(getattr(settings, "console_url", "")) + "/connect/authorize",
+                "token": _url(getattr(settings, "console_url", "")) + "/connect/token",
+                "logout": _url(getattr(settings, "console_url", "")) + "/connect/logout",
+            }
+            if getattr(settings, "console_url", "")
+            else None,
             # name@domain sign-in for any app (sessions.py, skills/belfry-app): DM the belfry's
             # key from the app's session key on these relays (NIP-17), or use the HTTP API
             "sessions": {

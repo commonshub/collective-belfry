@@ -400,6 +400,7 @@ def nav(current: str, who: dict[str, Any] | None) -> str:
         ("/status", "Status"),
         ("/members", "Members"),
         ("/website", "Website"),
+        ("/apps", "Apps"),
         ("/setup", "Setup"),
     ]
     parts = "".join(

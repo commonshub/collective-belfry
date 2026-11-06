@@ -52,6 +52,9 @@ KIND_NAMES = {
     7: "reaction",
     9: "group message",
     1059: "gift wrap (DM)",
+    8550: "app approval request",
+    8551: "app approved",
+    8552: "app approval withdrawn",
     1063: "file",
     10002: "relay list",
     10050: "DM relays",
@@ -86,6 +89,20 @@ def belfry_signer(svc: Services):
 
 def member_signer(svc: Services, partner_id: int):
     """(pubkey, sign) for a member whose key the signer holds; None for a key of their own."""
+    found = member_token(svc, partner_id)
+    if found is None:
+        return None
+    pubkey, token = found
+
+    def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
+        return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
+
+    return pubkey, sign
+
+
+def member_token(svc: Services, partner_id: int) -> tuple[str, str] | None:
+    """(pubkey, signer token) for a member whose key the signer holds; None for a key of their
+    own."""
     rows = svc.odoo.read(
         "res.partner",
         [partner_id],
@@ -102,12 +119,7 @@ def member_signer(svc: Services, partner_id: int):
         display_name=partner.get("name") or str(number),
         key_version=int(partner.get("belfry_key_version") or 0),
     )
-    pubkey, token = result["pubkey"], result["token"]
-
-    def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
-        return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
-
-    return pubkey, sign
+    return result["pubkey"], result["token"]
 
 
 def query(svc: Services, filters: list[dict[str, Any]]) -> list[dict[str, Any]]:

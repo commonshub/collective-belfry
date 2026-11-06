@@ -667,6 +667,8 @@ class FakeOdoo(OdooApi):
             return actual != value
         if op == "in":
             return actual in value
+        if op == "=ilike":
+            return isinstance(actual, str) and actual.lower() == str(value).lower()
         if op == "not in":
             return actual not in value
         if actual in (None, False):

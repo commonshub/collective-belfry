@@ -26,11 +26,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import (
     accounting,
     apply,
+    apps,
     avatar,
     blossom,
     bridge,
     claim,
     community,
+    connect,
     console,
     core,
     discovery,
@@ -195,6 +197,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     theme.register(app)  # /theme/*: the base theme and the community's own files (theme.py)
     sessions.register(app)  # /api/session: sign in to an app as name@domain (sessions.py)
     setup.register(app)  # belfry.<domain>/setup: settings over HTTPS (setup.py)
+    connect.register(app)  # belfry.<domain>/connect: Sign in with <domain> for apps (connect.py)
+    apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
