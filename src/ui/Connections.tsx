@@ -10,6 +10,7 @@ import { back } from './common'
 
 interface Conn {
   application_name: string
+  device?: string
   redirect_origin: string
   bunker_pubkey: string
   created_at: string
@@ -91,6 +92,7 @@ export function Connections({ session }: { session: Session }) {
             <div key={c.bunker_pubkey} className="card row" style={{ justifyContent: 'space-between', gap: 12 }}>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontWeight: 600, overflowWrap: 'anywhere' }}>{c.application_name}{here && <span className="badge" style={{ marginLeft: 8 }}>This app</span>}</div>
+                {c.device && <div style={{ fontSize: 14 }}>{c.device}</div>}
                 <div className="hint" style={{ fontSize: 13 }}>
                   Since {day(c.created_at)}{c.last_activity ? ` · last used ${day(c.last_activity)}` : ''}
                 </div>

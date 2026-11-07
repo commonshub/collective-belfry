@@ -53,9 +53,10 @@ export interface NewEvent {
   end: string
 }
 
-// A session (Belfry skill, section 7): NIP-52 event on the community relay, linked both
-// ways to a NIP-29 group: session-<x> ↔ ws-<x>.
-export async function createEvent(n: NewEvent) {
+// An event is a sub-channel of the channel it is posted in: a NIP-52 event on the community
+// relay, linked both ways to its own NIP-29 group (session-<x> ↔ ws-<x>), and a post in the
+// parent channel that links to it (`a` tag), shown there as the event's card.
+export async function createEvent(n: NewEvent, channel = 'general') {
   const x = newId(4)
   const d = 'session-' + x
   const groupId = 'ws-' + x
@@ -70,15 +71,15 @@ export async function createEvent(n: NewEvent) {
   }
   if (n.location) tags.push(['location', n.location])
   const kind = n.allDay ? 31922 : 31923
-  await createChannel(n.title, n.description.split('\n')[0] || 'Chat for this session', groupId)
+  await createChannel(n.title, n.description.split('\n')[0] || 'Chat for this event', groupId)
   await enqueue('main', { kind, content: n.description, tags })
   const when = n.allDay ? n.start.slice(0, 10) : new Date(n.start).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })
   await enqueue('groups', {
     kind: 9,
     content: `📅 ${n.title} · ${when}${n.location ? ' · ' + n.location : ''}`,
-    tags: [['h', groupId], ['a', `${kind}:${me()}:${d}`, BELFRY.mainRelay]],
+    tags: [['h', channel], ['a', `${kind}:${me()}:${d}`, BELFRY.mainRelay]],
   })
-  return groupId
+  return `${kind}:${me()}:${d}`
 }
 
 /** A chat for an event that has none (e.g. the village programme): same ws- convention. */

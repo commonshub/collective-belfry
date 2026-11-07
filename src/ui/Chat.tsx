@@ -1,9 +1,10 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, deleteMessage, postMessage } from '../core/actions'
-import { displayName, groups, messages, profiles, type Message } from '../core/model'
+import { displayName, eventCoordOf, groups, messages, profiles, type Message } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, StatusPill } from './common'
+import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -29,8 +30,13 @@ export function ChannelList({ current }: { current?: string }) {
         <h1 style={{ paddingLeft: 8 }}>Channels</h1>
         <StatusPill />
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
+        <MeButton />
       </div>
       <div className="scroll">
+        <button className="chan" onClick={() => go('cal')}>
+          <span className="hash">📅</span>
+          <span className="t"><b>All events</b><small>Every channel's events</small></span>
+        </button>
         <div className="section-title">Channels <span>{chans.length}</span></div>
         {chans.map((g) => <Row key={g.id} id={g.id} name={g.name} about={g.about} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the village relay answers.</div>}
@@ -75,19 +81,30 @@ export function ChannelView({ id }: { id: string }) {
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Channels" onClick={() => go('channels')}>☰</button>
-        <h1 onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
+        <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
           {g?.isEvent ? '📅 ' : '# '}{g?.name ?? id}
           {g?.about && <small>{g.about}</small>}
         </h1>
         <StatusPill />
-        <button className="icon-btn" aria-label="Channel info, tasks and members" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>ⓘ</button>
+        <MeButton />
       </div>
-      <Conversation id={id} />
+      <EventsBar channel={id} />
+      <Conversation id={id} events />
     </div>
   )
 }
 
-export function Conversation({ id }: { id: string }) {
+/** Top right: your avatar, which opens Me. */
+export function MeButton() {
+  return (
+    <button className="icon-btn me-btn" aria-label="Me" onClick={() => go('me')}>
+      <Avatar pubkey={me()} size={30} />
+    </button>
+  )
+}
+
+export function Conversation({ id, events = false }: { id: string; events?: boolean }) {
+  const [newEvent, setNewEvent] = useState(false)
   useVersion()
   const list = messages(id)
   const ps = profiles()
@@ -108,7 +125,9 @@ export function Conversation({ id }: { id: string }) {
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id} />)}
         </div>
       </div>
-      <Composer onSend={(text, files) => { stick.current = true; return postMessage(id, text, files) }} />
+      <Composer onSend={(text, files) => { stick.current = true; return postMessage(id, text, files) }}
+        onEvent={events ? () => setNewEvent(true) : undefined} />
+      {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
   )
 }
@@ -131,7 +150,7 @@ function Row({ m, prev, name, groupId }: { m: Message; prev?: Message; name: str
         {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
           {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
-          {m.text && <div className="text">{m.text}</div>}
+          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : m.text && <div className="text">{m.text}</div>}
           <MediaGrid media={m.media} />
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
@@ -145,8 +164,9 @@ function Row({ m, prev, name, groupId }: { m: Message; prev?: Message; name: str
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; placeholder?: string }) {
+export function Composer({ onSend, onEvent, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; placeholder?: string }) {
   const [text, setText] = useState('')
+  const [menu, setMenu] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const ta = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
@@ -182,7 +202,8 @@ export function Composer({ onSend, placeholder = 'Message' }: { onSend: (text: s
         </div>
       )}
       <div className="bar">
-        <button className="icon-btn" aria-label="Add photos or files" onClick={() => picker.current?.click()}>＋</button>
+        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files or an event' : 'Add photos or files'}
+          onClick={() => (onEvent ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
         <textarea ref={ta} rows={1} placeholder={placeholder} value={text} onChange={(e) => setText(e.target.value)}
@@ -192,6 +213,13 @@ export function Composer({ onSend, placeholder = 'Message' }: { onSend: (text: s
           }} />
         <button className="send" aria-label="Send" disabled={!text.trim() && !files.length} onClick={() => void send()}>↑</button>
       </div>
+      {menu && onEvent && (
+        <Sheet title="Add" onClose={() => setMenu(false)}>
+          <button className="btn ghost" onClick={() => { setMenu(false); picker.current?.click() }}>📷 Photos or files</button>
+          <div style={{ height: 8 }} />
+          <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>
+        </Sheet>
+      )}
     </div>
   )
 }

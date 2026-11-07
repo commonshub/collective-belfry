@@ -12,7 +12,7 @@ import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView } from './Chat'
-import { Avatar, go, StatusPill, useRoute } from './common'
+import { Avatar, back, go, StatusPill, useRoute } from './common'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
@@ -116,25 +116,16 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else {
-    const id = a ?? groups()[0]?.id ?? 'general'
-    view = b === 'info' ? <ChannelInfo id={id} /> : <ChannelView id={id} />
+    const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
+    view = b === 'info' ? <ChannelInfo id={id} /> : b === 'events' ? <CalendarList channel={id} /> : <ChannelView id={id} />
   }
-  const tab = section === 'cal' ? 'cal' : section === 'me' || section === 'admin' ? 'me' : 'chat'
-  return (
-    <div className="screen">
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{view}</div>
-      <nav className="tabs">
-        <button className={tab === 'chat' ? 'on' : ''} onClick={() => go(section === 'c' ? 'channels' : 'c/' + (lastChannel() ?? ''))}><span>💬</span>Chat</button>
-        <button className={tab === 'cal' ? 'on' : ''} onClick={() => go('cal')}><span>📅</span>Calendar</button>
-        <button className={tab === 'me' ? 'on' : ''} onClick={() => go('me')}><span>🙂</span>Me</button>
-      </nav>
-    </div>
-  )
+  // no tab bar: channels behind ☰, Me behind your avatar (top right), events under each channel's name
+  return <div className="screen">{view}</div>
 }
 
 function lastChannel() {
   const m = /#\/c\/([^/]+)/.exec(sessionStorage.getItem('osv-last-channel') ?? '')
-  return m?.[1]
+  return m ? decodeURIComponent(m[1]) : undefined
 }
 addEventListener('hashchange', () => {
   if (location.hash.startsWith('#/c/')) try { sessionStorage.setItem('osv-last-channel', location.hash) } catch { /* ignore */ }
@@ -149,7 +140,10 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
   const [avatarError, setAvatarError] = useState('')
   return (
     <div className="screen">
-      <div className="topbar"><h1 style={{ paddingLeft: 8 }}>Me</h1><StatusPill /></div>
+      <div className="topbar">
+        <button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button>
+        <h1>Me</h1><StatusPill />
+      </div>
       <div className="scroll pad">
         <div className="card row" style={{ gap: 12 }}>
           <label className="avatar-edit" aria-label="Change your picture">

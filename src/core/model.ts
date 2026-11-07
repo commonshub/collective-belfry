@@ -202,7 +202,17 @@ export interface CalEvent {
   start: Date
   end?: Date
   groupId: string
+  /** The channel it was posted in (a sub-channel of it): where the post linking to it is. */
+  channel: string
   rsvps: Map<string, Rsvp>
+}
+
+export const isEventKind = (k: number) => k === 31922 || k === 31923
+
+/** The event a chat post links to (its `a` tag), if any. */
+export const eventCoordOf = (e: Ev) => {
+  const a = tag(e, 'a')
+  return a && isEventKind(Number(a.split(':')[0])) ? a : undefined
 }
 
 export function calendar(): CalEvent[] {
@@ -228,6 +238,14 @@ export function calendar(): CalEvent[] {
     if (!prev || prev.at <= e.created_at) m.set(e.pubkey, { s, at: e.created_at })
     rsvps.set(a, m)
   }
+  // where each event was posted: the first post linking to it outside the event's own chat
+  const posted = new Map<string, string>()
+  for (const e of [...list].sort(byTime)) {
+    if (e.kind !== 9 || del.has(e.id)) continue
+    const a = eventCoordOf(e)
+    const h = tag(e, 'h')
+    if (a && h && !h.startsWith('ws-') && !posted.has(a)) posted.set(a, h)
+  }
   const out: CalEvent[] = []
   for (const [coord, e] of latest) {
     if (del.has(coord)) continue
@@ -243,6 +261,7 @@ export function calendar(): CalEvent[] {
       location: tag(e, 'location'),
       allDay, start, end: parse(tag(e, 'end')),
       groupId: tag(e, 'h') || 'ws-' + d.replace(/^session-/, ''),
+      channel: posted.get(coord) ?? 'general',
       rsvps: new Map([...(rsvps.get(coord) ?? new Map()).entries()].map(([p, v]) => [p, v.s])),
     })
   }

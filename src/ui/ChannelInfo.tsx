@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { addTask, commentTask, editChannel, setMemberLabels, taskAction } from '../core/actions'
-import { displayName, groups, listIdFor, memberLabels, messages, tasklist, type Task } from '../core/model'
+import { displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, back, MediaGrid, Sheet } from './common'
@@ -87,7 +87,6 @@ export function Tasks({ groupId }: { groupId: string }) {
       {[...todo, ...done].map((t) => (
         <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
       ))}
-      <p className="hint pad">Same protocol as <a href={`https://tasklist.sh/#${listIdFor(groupId)}`} target="_blank" rel="noreferrer">tasklist.sh</a> (kinds 2100–2103), kept on the village relay.</p>
     </div>
   )
 }

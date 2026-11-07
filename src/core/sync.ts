@@ -210,6 +210,7 @@ async function relay(target: Target): Promise<Relay> {
       .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
   }
   r.onclose = () => {
+    if (relays[target] && relays[target] !== r) return // an older socket
     setRelay(url, 'down')
     delete relays[target]
     setTimeout(() => void connect(target), backoff(target))
@@ -295,34 +296,65 @@ function noteRefusal(reason: string) {
   if (/^(restricted|blocked)|pass|member/i.test(reason)) setStatus({ access: 'denied', accessReason: reason })
 }
 
-async function connect(target: Target) {
-  if (localOnly || !signer) return
-  try {
-    await relay(target)
-    resubscribe(target)
+const connecting: Partial<Record<Target, Promise<void>>> = {}
+function connect(target: Target): Promise<void> {
+  if (localOnly || !signer) return Promise.resolve()
+  if (relays[target]?.connected) return Promise.resolve()
+  // offline: nothing to try; the 'online' event (or the watchdog) calls again
+  if (!navigator.onLine) { setRelay(URLS[target], 'down'); return Promise.resolve() }
+  return (connecting[target] ??= (async () => {
+    try {
+      await relay(target)
+      resubscribe(target) // catches up from the last event seen (since = latest − 1 h)
+      void flush()
+    } catch {
+      setRelay(URLS[target], 'down')
+      setTimeout(() => void connect(target), backoff(target))
+    } finally {
+      delete connecting[target]
+    }
+  })())
+}
+
+// Going offline and back online syncs by itself: the browser's online/offline events, the app
+// coming back to the foreground, and a watchdog every 15 s (the online flag can lie, and a
+// socket can die silently while a phone sleeps) all reconnect, catch up and send the outbox.
+let watching = false
+function watchNetwork() {
+  if (watching) return
+  watching = true
+  const wake = () => {
+    if (!signer) return
+    attempts.groups = attempts.main = 0
+    void connect('groups')
+    void connect('main')
     void flush()
-  } catch {
-    setRelay(URLS[target], 'down')
-    setTimeout(() => void connect(target), backoff(target))
   }
+  window.addEventListener('online', () => { setStatus({ online: true }); wake() })
+  window.addEventListener('offline', () => {
+    setStatus({ online: false })
+    // the sockets are dead even if they don't know it yet: drop them, reconnect when back
+    for (const t of ['groups', 'main'] as Target[]) {
+      const r = relays[t]
+      delete relays[t]
+      if (r) { r.onclose = null; try { r.close() } catch { /* already closed */ } }
+      setRelay(URLS[t], 'down')
+    }
+  })
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake() })
+  setInterval(() => {
+    if (!signer) return
+    if (status.online !== navigator.onLine) setStatus({ online: navigator.onLine })
+    if (!localOnly && navigator.onLine) for (const t of ['groups', 'main'] as Target[]) if (!relays[t]?.connected) void connect(t)
+    if (outboxItems().some((o) => o.status !== 'failed')) void flush()
+  }, 15_000)
 }
 
 export async function start(s: Signer, opts: { localOnly: boolean }) {
   signer = s
   localOnly = opts.localOnly
   lastCreatedAt = Math.max(lastCreatedAt, latestCreatedAt((e) => e.pubkey === s.pubkey))
-  window.addEventListener('online', () => {
-    setStatus({ online: true })
-    void connect('groups')
-    void connect('main')
-  })
-  window.addEventListener('offline', () => setStatus({ online: false }))
-  // A send that failed for a passing reason (a timeout, a relay away) waits in the outbox: try
-  // again every 15 seconds and whenever the app comes back to the foreground.
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') { void connect('groups'); void connect('main'); void flush() }
-  })
-  setInterval(() => { if (outboxItems().some((o) => o.status !== 'failed')) void flush() }, 15_000)
+  watchNetwork()
   if (localOnly) {
     if (!latestCreatedAt((e) => e.kind === 39000)) {
       await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })

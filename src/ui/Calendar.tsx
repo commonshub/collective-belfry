@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Markdown } from './markdown'
+import { THEME } from '../config'
 import { createEvent, deleteEvent, openEventChat, rsvp, type NewEvent } from '../core/actions'
 import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
@@ -16,48 +17,112 @@ const when = (e: CalEvent) => {
 
 const going = (e: CalEvent) => [...e.rsvps.values()].filter((s) => s === 'accepted').length
 
-export function CalendarList() {
+type Filter = 'going' | 'maybe' | 'all'
+
+const endOf = (e: CalEvent) => +(e.end ?? e.start)
+const startOfToday = () => +new Date(new Date().toDateString())
+
+/** Upcoming events (today onwards), of one channel or of all. */
+export const upcoming = (channel?: string) =>
+  calendar().filter((e) => endOf(e) >= startOfToday() && (!channel || e.channel === channel))
+
+export function CalendarList({ channel }: { channel?: string }) {
   useVersion()
   const [creating, setCreating] = useState(false)
-  const [past, setPast] = useState(false)
-  const startOfToday = new Date(new Date().toDateString())
-  const all = calendar()
-  const list = all.filter((e) => (past ? +(e.end ?? e.start) < +startOfToday : +(e.end ?? e.start) >= +startOfToday))
-  if (past) list.reverse()
-  let lastDay = ''
+  const [filter, setFilter] = useState<Filter>('all')
+  const g = channel ? groups().find((x) => x.id === channel) : undefined
+  const mine = (e: CalEvent) => e.rsvps.get(me())
+  const soon = upcoming(channel).filter((e) =>
+    filter === 'going' ? mine(e) === 'accepted' : filter === 'maybe' ? mine(e) === 'tentative' : true)
+  const past = filter === 'all'
+    ? calendar().filter((e) => endOf(e) < startOfToday() && (!channel || e.channel === channel)).reverse()
+    : []
+  const empty = { going: "You're not going to anything yet.", maybe: 'No maybes.', all: 'Nothing planned yet. Post the first event.' }[filter]
   return (
     <div className="screen">
       <div className="topbar">
-        <h1 style={{ paddingLeft: 8 }}>Calendar</h1>
+        <button className="icon-btn" aria-label="Back" onClick={() => back(channel ? 'c/' + encodeURIComponent(channel) : 'c')}>‹</button>
+        <h1>Events{g && <small># {g.name}</small>}</h1>
         <StatusPill />
         <button className="icon-btn" aria-label="New event" onClick={() => setCreating(true)}>＋</button>
       </div>
-      <Tabs tab={past ? 'past' : 'upcoming'} setTab={(t) => setPast(t === 'past')} tabs={[['upcoming', 'Upcoming'], ['past', 'Past']]} />
+      <Tabs tab={filter} setTab={setFilter} tabs={[['going', 'Going'], ['maybe', 'Maybe'], ['all', 'All']]} />
       <div className="scroll">
-        {list.length === 0 && <div className="empty">{past ? 'No past events.' : 'Nothing planned yet. Post the first event.'}</div>}
-        {list.map((e) => {
-          const day = fmtDay(e.start)
-          const header = day !== lastDay ? <div className="section-title">{day}</div> : null
-          lastDay = day
-          const mine = e.rsvps.get(me())
-          return (
-            <div key={e.coord}>
-              {header}
-              <button className="ev" onClick={() => go('cal/' + encodeURIComponent(e.coord))} style={{ opacity: e.ev.pending ? 0.6 : 1 }}>
-                <div className="date"><small>{e.start.toLocaleDateString([], { month: 'short' })}</small><b>{e.start.getDate()}</b></div>
-                <div className="info">
-                  <b>{e.title}</b>
-                  <small>{when(e)}{e.location ? ' · ' + e.location : ''}</small>
-                  <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
-                </div>
-              </button>
-            </div>
-          )
-        })}
+        {soon.length === 0 && <div className="empty">{empty}</div>}
+        <EventRows list={soon} />
+        {past.length > 0 && <><div className="section-title">Past</div><EventRows list={past} days={false} /></>}
         <div style={{ padding: 16 }}><button className="btn ghost" onClick={() => setCreating(true)}>＋ Post an event</button></div>
       </div>
-      {creating && <NewEventSheet onClose={() => setCreating(false)} />}
+      {creating && <NewEventSheet channel={channel} onClose={() => setCreating(false)} />}
     </div>
+  )
+}
+
+function EventRows({ list, days = true }: { list: CalEvent[]; days?: boolean }) {
+  let lastDay = ''
+  return (
+    <>
+      {list.map((e) => {
+        const day = fmtDay(e.start)
+        const header = days && day !== lastDay ? <div className="section-title">{day}</div> : null
+        lastDay = day
+        return <div key={e.coord}>{header}<EventRow e={e} /></div>
+      })}
+    </>
+  )
+}
+
+function EventRow({ e }: { e: CalEvent }) {
+  const mine = e.rsvps.get(me())
+  return (
+    <button className="ev" onClick={() => go('cal/' + encodeURIComponent(e.coord))} style={{ opacity: e.ev.pending ? 0.6 : 1 }}>
+      <DateChip d={e.start} />
+      <div className="info">
+        <b>{e.title}</b>
+        <small>{when(e)}{e.location ? ' · ' + e.location : ''}</small>
+        <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
+      </div>
+    </button>
+  )
+}
+
+const DateChip = ({ d }: { d: Date }) => (
+  <div className="date"><small>{d.toLocaleDateString([], { month: 'short' })}</small><b>{d.getDate()}</b></div>
+)
+
+/** Under a channel's name: its next event, and a link to the others. Nothing when none. */
+export function EventsBar({ channel }: { channel: string }) {
+  useVersion()
+  const list = upcoming(channel)
+  if (!list.length) return null
+  const e = list[0]
+  return (
+    <div className="events-bar">
+      <button className="next" onClick={() => go('cal/' + encodeURIComponent(e.coord))}>
+        <span aria-hidden="true">📅</span>
+        <span className="t"><b>{e.title}</b><small>{fmtDay(e.start)} · {when(e)}</small></span>
+      </button>
+      <button className="more" onClick={() => go(`c/${encodeURIComponent(channel)}/events`)}>
+        {list.length > 1 ? `+${list.length - 1} more` : 'All events'}
+      </button>
+    </div>
+  )
+}
+
+/** The post an event leaves in its channel: a card that opens the event. */
+export function EventCard({ coord, fallback }: { coord: string; fallback: string }) {
+  const e = calendar().find((x) => x.coord === coord)
+  if (!e) return <div className="text">{fallback}</div>
+  const mine = e.rsvps.get(me())
+  return (
+    <button className="ev-card" onClick={() => go('cal/' + encodeURIComponent(e.coord))}>
+      <DateChip d={e.start} />
+      <span className="info">
+        <b>{e.title}</b>
+        <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}</small>
+        <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
+      </span>
+    </button>
   )
 }
 
@@ -68,18 +133,19 @@ function localInput(d: Date) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
 }
 
-function NewEventSheet({ onClose }: { onClose: () => void }) {
+export function NewEventSheet({ channel, onClose }: { channel?: string; onClose: () => void }) {
   const start = new Date()
   start.setHours(start.getHours() + 1, 0, 0, 0)
   const end = new Date(+start + 3600_000)
-  const [n, setN] = useState<NewEvent>({ title: '', description: '', location: 'Commons Hub Brussels', allDay: false, start: localInput(start), end: localInput(end) })
+  const [n, setN] = useState<NewEvent>({ title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false, start: localInput(start), end: localInput(end) })
   const set = (patch: Partial<NewEvent>) => setN({ ...n, ...patch })
   return (
     <Sheet title="Post an event" onClose={onClose}>
       <form onSubmit={async (e) => {
         e.preventDefault()
-        await createEvent(n)
+        const coord = await createEvent(n, channel ?? 'general')
         onClose()
+        go('cal/' + encodeURIComponent(coord))
       }}>
         <label className="field"><span>Title</span>
           <input className="input" autoFocus placeholder="e.g. Nix workshop" value={n.title} onChange={(e) => set({ title: e.target.value })} /></label>
@@ -93,7 +159,7 @@ function NewEventSheet({ onClose }: { onClose: () => void }) {
         <label className="field"><span>Description</span>
           <textarea className="input" rows={3} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
         <button className="btn" disabled={!n.title.trim() || !n.start}>Post event</button>
-        <p className="hint" style={{ marginTop: 10 }}>The event gets its own chat, task list and files.</p>
+        <p className="hint" style={{ marginTop: 10 }}>Posted in #{groups().find((g) => g.id === (channel ?? 'general'))?.name ?? 'general'}. The event gets its own chat, task list and files.</p>
       </form>
     </Sheet>
   )
@@ -107,7 +173,7 @@ export function EventPage({ coord }: { coord: string }) {
   const e = calendar().find((x) => x.coord === coord)
   if (!e) return (
     <div className="screen">
-      <div className="topbar"><button className="icon-btn" onClick={() => back('cal')}>‹</button><h1>Event</h1></div>
+      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Event</h1></div>
       <div className="empty">This event is not here (yet). It may still be syncing.</div>
     </div>
   )
@@ -115,7 +181,7 @@ export function EventPage({ coord }: { coord: string }) {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back('cal')}>‹</button>
+        <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + encodeURIComponent(e.channel))}>‹</button>
         <h1>{e.title}<small>{fmtDay(e.start)} · {when(e)}</small></h1>
         <StatusPill />
       </div>
@@ -163,7 +229,7 @@ function People({ e }: { e: CalEvent }) {
       ))}
       {e.ev.pubkey === me() && (
         <div className="pad">
-          <button className="btn ghost" onClick={async () => { if (confirm('Delete this event?')) { await deleteEvent(e); go('cal') } }}>Delete event</button>
+          <button className="btn ghost" onClick={async () => { if (confirm('Delete this event?')) { await deleteEvent(e); go('c/' + encodeURIComponent(e.channel)) } }}>Delete event</button>
         </div>
       )}
     </div>
