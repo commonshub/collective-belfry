@@ -1,3 +1,4 @@
+import { Drawer } from 'vaul'
 import { useEffect, useState, type ReactNode } from 'react'
 import { db } from '../core/db'
 import { displayName, profiles, type Media } from '../core/model'
@@ -90,15 +91,20 @@ export function MediaGrid({ media }: { media: Media[] }) {
 
 // ---- sheet ---------------------------------------------------------------------
 
+/** A bottom drawer (Vaul, what shadcn/ui's Drawer is built on): slide it down, tap outside or
+ *  press Escape to close it. */
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
   return (
-    <div className="sheet-bg" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={title}>
-        <div className="grab" />
-        <h3>{title}</h3>
-        {children}
-      </div>
-    </div>
+    <Drawer.Root open onOpenChange={(open) => { if (!open) onClose() }}>
+      <Drawer.Portal>
+        <Drawer.Overlay className="sheet-bg" />
+        <Drawer.Content className="sheet" aria-describedby={undefined}>
+          <Drawer.Handle className="grab" />
+          <Drawer.Title asChild><h3>{title}</h3></Drawer.Title>
+          {children}
+        </Drawer.Content>
+      </Drawer.Portal>
+    </Drawer.Root>
   )
 }
 
