@@ -371,7 +371,9 @@ def soon(svc: Services, now: float | None = None) -> dict[str, int]:
 
 
 def tick(svc: Services) -> None:
-    for job in (ensure_channels, soon, morning):
+    from .drops import ensure_profile
+
+    for job in (ensure_channels, ensure_profile, soon, morning):
         try:
             job(svc)
         except Exception as exc:  # noqa: BLE001 — retried on the next round

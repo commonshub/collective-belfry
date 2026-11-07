@@ -143,6 +143,7 @@
 	import limit {args[0]}-door 600 1m /door /door/*
 	import limit {args[0]}-feedback 30 1m /feedback
 	import limit {args[0]}-follow 20 1m /follow /follow/*
+	import limit {args[0]}-drop 60 1m /drop/*
 	import limit {args[0]}-apply 30 1m /apply
 	import limit {args[0]}-signin 120 1m /signin/* /welcome/*
 	import limit {args[0]}-api 60 1m /api/*
