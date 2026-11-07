@@ -59,8 +59,10 @@ class PassPageError(Exception):
 
 
 def enabled(svc: Services) -> bool:
+    from . import passlogin  # its own sign-in needs no authentik client
+
     s = svc.settings
-    return bool(s.pass_page_oidc_client_secret and s.pass_page_secret)
+    return bool(s.pass_page_secret and (s.pass_page_oidc_client_secret or passlogin.own(svc)))
 
 
 def redirect_uri(svc: Services) -> str:
@@ -470,6 +472,10 @@ def register(app: FastAPI) -> None:
     @app.get("/me/login")
     async def me_login(request: Request):
         services, _sess = guard(request)
+        from . import passlogin  # its own page: e-mail and code (not the Village look)
+
+        if passlogin.own(services):
+            return passlogin.login_page(request)
         url, flow = start_login(services)
         response = RedirectResponse(url, status_code=303)
         response.set_cookie(

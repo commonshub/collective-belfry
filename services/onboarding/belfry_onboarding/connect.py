@@ -243,7 +243,7 @@ APP_ICON = (
 JS = """<script>
 (() => {
   const W = document.getElementById('wiz'); if (!W) return;
-  const fid = W.dataset.flow, csrf = W.dataset.csrf;
+  const fid = W.dataset.flow, csrf = W.dataset.csrf, base = W.dataset.base || '/connect';
   const sec = (s) => W.querySelector('section[data-step="' + s + '"]');
   const err = (s, t) => { const e = sec(s).querySelector('.err'); if (e) e.textContent = t || ''; };
   function show(step) {
@@ -271,9 +271,9 @@ JS = """<script>
     });
   }
   W.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', (e) => { e.preventDefault(); show(b.dataset.go); }));
-  step('known', async () => after(await post('/connect/continue', {})));
+  step('known', async () => after(await post(base + '/continue', {})));
   step('email', async (f) => {
-    const d = await post('/connect/send', { email: f.elements.email.value.trim() });
+    const d = await post(base + '/send', { email: f.elements.email.value.trim() });
     sec('code').querySelector('.to').textContent = d.to; show('code');
   });
   const boxes = [...sec('code').querySelectorAll('.otp input')], codeForm = sec('code').querySelector('form');
@@ -294,14 +294,14 @@ JS = """<script>
   });
   step('code', async () => {
     if (!full()) throw new Error('Type the 6 digits from the e-mail.');
-    try { after(await post('/connect/verify', { code: boxes.map((x) => x.value).join('') })); }
+    try { after(await post(base + '/verify', { code: boxes.map((x) => x.value).join('') })); }
     catch (x) { boxes.forEach((y) => { y.value = ''; }); boxes[0].focus(); throw x; }
   });
   const again = sec('code').querySelector('[data-again]');
   again.addEventListener('click', async () => { again.disabled = true; err('code', '');
-    try { await post('/connect/send', { email: W.querySelector('input[name=email]').value.trim() }); again.textContent = 'A new code is on its way.'; }
+    try { await post(base + '/send', { email: W.querySelector('input[name=email]').value.trim() }); again.textContent = 'A new code is on its way.'; }
     catch (x) { err('code', x.message); again.disabled = false; } });
-  step('approve', async () => after(await post('/connect/approve', {})));
+  step('approve', async () => after(await post(base + '/approve', {})));
   show(W.dataset.start);
 })();
 </script>"""

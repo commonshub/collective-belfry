@@ -142,6 +142,16 @@ def ensure_channels(svc: Services) -> dict[str, Any]:
 _names: dict[str, tuple[float, str]] = {}
 
 
+def chat_link(svc: Services, channel: str) -> str:
+    """Where a channel opens in the community's chat (apps.<domain>/chat, ``#/c/<id>``)."""
+    from . import theme
+
+    if theme.current().base == "osv":
+        return svc.settings.chat_public_url or ""
+    host = svc.settings.nip05_domain or domain(svc)
+    return f"https://apps.{host}/chat/#/c/{urllib.parse.quote(channel, safe='')}"
+
+
 def channel_label(svc: Services, channel: str) -> str:
     """How mails and pages name a channel: ``#general``, or a pod's or event's own name."""
     held = _names.get(channel)

@@ -186,9 +186,26 @@ FRAME_STYLE = """
 """
 
 
+# Pages written for the first belfry say "Open Source Village"; any other belfry shows its own name.
+OSV_WORDS = (
+    ("Open Source Village pass", "{name} pass"),
+    ("Village pass", "membership pass"),
+    ("village tokens", "community tokens"),
+    ("Open Source Village", "{name}"),
+)
+
+
+def renamed(text: str, name: str) -> str:
+    for old, new in OSV_WORDS:
+        text = text.replace(old, new.format(name=E(name)))
+    return text
+
+
 def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: bool = False) -> str:
     """The page: logo, BODY, footer. BARE leaves out the footer (the first-run setup wizard)."""
     t = current()
+    if t.base != "osv":
+        title, body = renamed(title, t.name), renamed(body, t.name)
     css = "".join(f'<link rel="stylesheet" href="{E(h)}">' for h in t.css)
     strip = f'<div class="test-notice" role="note">{E(notice)}</div>' if notice else ""
     brand = (

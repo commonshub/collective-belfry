@@ -33,13 +33,14 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import segno
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
 
 from . import community, followers
 from .claim import page
+from .connect import ConnectError
 from .core import Services
 from .homepage import belfry_key, blossom_auth
 
@@ -223,15 +224,30 @@ def ensure_profile(svc: Services) -> None:
 
 # ── pages ───────────────────────────────────────────────────────────────────────────────────
 STYLE = """<style>
-.drop input[type=file]{display:block;width:100%;margin:14px 0;padding:18px;border:2px dashed var(--border-strong,#d4d4d8);border-radius:12px;background:var(--surface-deep,#f4f4f5);font:inherit}
-.drop input[type=text]{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--fg);box-sizing:border-box}
+.drop h1 a{color:inherit;text-decoration:underline;text-decoration-thickness:2px;text-underline-offset:4px}
+.drop input[type=text],.drop input[type=email]{width:100%;font:inherit;padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--surface);color:var(--fg);box-sizing:border-box}
+.drop .zone{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;box-sizing:border-box;width:100%;max-width:100%;min-height:120px;margin:16px 0;padding:18px;border:2px dashed var(--border-strong,var(--border));border-radius:12px;background:var(--surface-deep,transparent);text-align:center;cursor:pointer;overflow:hidden}
+.drop .zone input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.drop .zone b{font-weight:600}
+.drop .zone small{color:var(--fg-muted);font-size:.85rem;overflow-wrap:anywhere}
 .drop .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.drop .row input{flex:1 1 180px}
+.drop .row input{flex:1 1 160px;min-width:0}
 .drop button{font:inherit;cursor:pointer}
+.drop .full{display:block;width:100%;box-sizing:border-box;text-align:center}
 .drop .done{font-size:2.2rem;line-height:1;margin:0 0 6px}
 .drop .step{border-top:1px solid var(--border);margin-top:20px;padding-top:16px}
-.drop .ghost{background:transparent;color:var(--fg);border:1px solid var(--border);padding:9px 16px;border-radius:8px;text-decoration:none;display:inline-block}
-</style>"""
+.drop .or{display:flex;align-items:center;gap:12px;color:var(--fg-muted);font-size:.85rem;margin:18px 0}
+.drop .or:before,.drop .or:after{content:"";flex:1;border-top:1px solid var(--border)}
+.drop .ghost{background:transparent;color:var(--fg);border:1px solid var(--border);padding:9px 16px;border-radius:8px;text-decoration:none;display:inline-block;box-sizing:border-box}
+.drop label.l{display:block;font-weight:500;font-size:14px;margin:0 0 8px}
+</style>
+<script>
+document.addEventListener('change', (e) => {
+  const i = e.target; if (!i.matches || !i.matches('.zone input')) return;
+  const n = i.files ? i.files.length : 0, s = i.closest('.zone').querySelector('b');
+  s.textContent = n === 0 ? 'Choose photos or files' : n === 1 ? i.files[0].name : n + ' files chosen';
+});
+</script>"""
 
 
 def _when(svc: Services, ts: int) -> str:
@@ -243,6 +259,13 @@ def _shell(body: str) -> HTMLResponse:
         page("Drop box", STYLE + f'<div class="card drop">{body}</div>'),
         headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
     )
+
+
+def channel(svc: Services, ch: str) -> str:
+    """The channel's name, linked to it in the chat."""
+    label = E(followers.channel_label(svc, ch))
+    href = followers.chat_link(svc, ch)
+    return f'<a href="{E(href)}">{label}</a>' if href else label
 
 
 def gone_page() -> HTMLResponse:
@@ -257,30 +280,62 @@ def member_name(svc: Services, partner: int) -> str:
     return row.get("name") or "you"
 
 
+def signin_form(svc: Services, t: str, button: str, u: str = "", k: str = "") -> str:
+    """The e-mail address, right here; the code comes next on the sign-in page."""
+    from . import passlogin
+
+    q = urllib.parse.urlencode({"u": u, "k": k}) if u else ""
+    if not passlogin.own(svc):
+        return f'<p><a class="btn full" href="/drop/{t}/signin{"?" + E(q) if q else ""}">{E(button)}</a></p>'
+    hidden = (
+        f'<input type="hidden" name="u" value="{E(u)}"><input type="hidden" name="k" value="{E(k)}">'
+        if u
+        else ""
+    )
+    return f"""<form method="post" action="/drop/{t}/signin">{hidden}
+<label class="l" for="d-mail">E-mail</label>
+<input id="d-mail" type="email" name="email" required autocomplete="email" placeholder="you@example.org">
+<p style="margin:12px 0 0"><button class="btn full">{E(button)}</button></p>
+<p class="muted" style="font-size:.85rem">No password: we e-mail you a code.</p></form>"""
+
+
 def form_page(
-    svc: Services, d: dict[str, Any], partner: int | None, error: str = ""
+    svc: Services,
+    d: dict[str, Any],
+    partner: int | None,
+    error: str = "",
+    guest: bool = False,
 ) -> HTMLResponse:
-    label = E(followers.channel_label(svc, d["channel"]))
+    ch = channel(svc, d["channel"])
     where = E(followers.domain(svc))
     t = E(d["token"])
-    err = f'<p class="bad">{E(error)}</p>' if error else ""
-    if d["login"] and partner is None:
-        body = f"""<h1>Send files to {label}</h1>
-<p>On {where}. This drop box takes files from signed-in members only.</p>
-<p><a class="btn" href="/drop/{t}/signin">Sign in to upload</a></p>"""
+    err = f'<p class="bad" role="alert">{E(error)}</p>' if error else ""
+    until = f'<p class="muted" style="font-size:.85rem">This link works until {E(_when(svc, d["expires"]))}.</p>'
+    if partner is None and (d["login"] or not guest):
+        if d["login"]:
+            body = f"""<h1>Send files to {ch}</h1>
+<p>On {where}. This drop box takes files from signed-in members only.</p>{err}
+{signin_form(svc, t, "Sign in to upload")}{until}"""
+        else:
+            body = f"""<h1>Send files to {ch}</h1>
+<p>Photos, videos or files go straight to {ch} on {where}. Sign in to post them as yourself.</p>{err}
+{signin_form(svc, t, "Sign in")}
+<div class="or">or</div>
+<a class="ghost full" href="/drop/{t}?as=guest">Upload as a guest</a>
+<p class="muted" style="font-size:.85rem">No account needed. You can add your name afterwards.</p>{until}"""
         return _shell(body)
     who = (
         f'<p class="muted">Signed in as {E(member_name(svc, partner))}: your files are posted as you.</p>'
         if partner is not None
-        else '<p class="muted">No account needed. You can add your name afterwards.</p>'
+        else '<p class="muted">As a guest. You can add your name afterwards.</p>'
     )
-    body = f"""<h1>Send files to {label}</h1>
-<p>Photos, videos or files go straight to {label} on {where}.</p>{err}
+    body = f"""<h1>Send files to {ch}</h1>
+<p>Photos, videos or files go straight to {ch} on {where}.</p>{err}
 <form method="post" action="/drop/{t}" enctype="multipart/form-data">
-<input type="file" name="files" multiple required aria-label="Photos or files">
-<button class="btn">Upload</button>
-</form>{who}
-<p class="muted" style="font-size:.85rem">Up to {MAX_FILES} files of 25 MB each. This link works until {E(_when(svc, d["expires"]))}.</p>"""
+<label class="zone"><input type="file" name="files" multiple required aria-label="Photos or files">
+<b>Choose photos or files</b><small>Up to {MAX_FILES} files of 25 MB each</small></label>
+<button class="btn full">Upload</button>
+</form>{who}{until}"""
     return _shell(body)
 
 
@@ -292,28 +347,32 @@ def done_page(
     partner: int | None,
     name: str = "",
 ) -> HTMLResponse:
-    label = E(followers.channel_label(svc, d["channel"]))
+    ch = channel(svc, d["channel"])
     t, eid, k = E(d["token"]), E(event["id"]), E(proof(svc, event["id"]))
     what = f"{count} file{'s' if count != 1 else ''}"
-    head = f"""<p class="done">✓</p><h1>Done</h1><p>{what} sent to {label}.</p>"""
+    head = f"""<p class="done">✓</p><h1>Done</h1><p>{what} sent to {ch}.</p>"""
     if partner is not None:
         body = head + f'<p class="muted">Posted as {E(member_name(svc, partner))}.</p>'
     else:
         step_name = (
-            f"<p>Thanks{', ' + E(name) if name else ''}: your name is on it.</p>"
+            f"<p>Thanks, {E(name)}: your name is on it.</p>"
             if name
             else f"""<p><strong>Want credit?</strong> Add your name (optional).</p>
 <form method="post" action="/drop/{t}/name" class="row"><input type="hidden" name="u" value="{eid}"><input type="hidden" name="k" value="{k}">
 <input type="text" name="name" maxlength="80" placeholder="Your name" aria-label="Your name" autocomplete="name"><button class="ghost">Add my name</button></form>"""
         )
-        link_q = urllib.parse.urlencode({"u": event["id"], "k": proof(svc, event["id"])})
         body = (
             head
             + f'<div class="step">{step_name}</div>'
-            + f"""<div class="step"><p><strong>A member here?</strong> Sign in to link this upload to your identity.</p>
-<p><a class="ghost" href="/drop/{t}/signin?{E(link_q)}">Sign in and link it to me</a></p></div>"""
+            + '<div class="step"><p><strong>A member here?</strong> Sign in to link this upload to your identity.</p>'
+            + signin_form(svc, t, "Sign in and link it to me", event["id"], proof(svc, event["id"]))
+            + "</div>"
         )
-    body += f'<p style="margin-top:20px"><a href="/drop/{t}">Send more</a></p>'
+    href = followers.chat_link(svc, d["channel"])
+    label = E(followers.channel_label(svc, d["channel"]))
+    end = f'<a class="btn full" href="{E(href)}">Open {label}</a>' if href else ""
+    again = f"/drop/{t}" + ("" if partner is not None else "?as=guest")
+    body += f'<div class="step">{end}<p style="text-align:center"><a href="{again}">Send more</a></p></div>'
     return _shell(body)
 
 
@@ -333,12 +392,17 @@ def register(app: FastAPI) -> None:
         return not origin or origin.rstrip("/") in allowed
 
     @app.get("/drop/{token}", response_class=HTMLResponse)
-    async def drop_page(token: str, request: Request):
+    async def drop_page(token: str, request: Request, as_: str = Query("", alias="as")):
         d = await run_in_threadpool(find, svc(request), token)
         if d is None:
             return gone_page()
         return await run_in_threadpool(
-            form_page, svc(request), d, await run_in_threadpool(me, request)
+            form_page,
+            svc(request),
+            d,
+            await run_in_threadpool(me, request),
+            "",
+            as_ == "guest",
         )
 
     @app.get("/drop/{token}/qr.svg")
@@ -367,17 +431,19 @@ def register(app: FastAPI) -> None:
         form = await request.form(max_files=MAX_FILES + 1)
         items = [f for f in form.getlist("files") if isinstance(f, UploadFile) and f.filename]
         if not items:
-            return await run_in_threadpool(form_page, s, d, partner, "Choose at least one file.")
+            return await run_in_threadpool(
+                form_page, s, d, partner, "Choose at least one file.", True
+            )
         if len(items) > MAX_FILES:
             return await run_in_threadpool(
-                form_page, s, d, partner, f"At most {MAX_FILES} files at once."
+                form_page, s, d, partner, f"At most {MAX_FILES} files at once.", True
             )
         files = []
         for f in items:
             body = await f.read(MAX_BYTES + 1)
             if len(body) > MAX_BYTES:
                 return await run_in_threadpool(
-                    form_page, s, d, partner, f"{f.filename} is over 25 MB."
+                    form_page, s, d, partner, f"{f.filename} is over 25 MB.", True
                 )
             ctype = (
                 f.content_type
@@ -392,7 +458,7 @@ def register(app: FastAPI) -> None:
         except Exception as exc:  # noqa: BLE001 — the person sees a retry, the log the reason
             log.warning("drop: upload to %s failed: %s", d["channel"], exc)
             return await run_in_threadpool(
-                form_page, s, d, partner, "The upload did not go through. Try again."
+                form_page, s, d, partner, "The upload did not go through. Try again.", True
             )
         log.info(
             "drop: %d files to %s (%s)", len(files), d["channel"], "member" if partner else "guest"
@@ -438,6 +504,37 @@ def register(app: FastAPI) -> None:
         )
         return response
 
+    @app.post("/drop/{token}/signin")
+    async def drop_signin_email(token: str, request: Request):
+        """The address typed on the drop page: the code is sent, the sign-in page asks for it."""
+        from . import passlogin
+
+        s = svc(request)
+        d = await run_in_threadpool(find, s, token)
+        if d is None:
+            return gone_page()
+        form = await request.form()
+        u, k = str(form.get("u") or ""), str(form.get("k") or "")
+        if not passlogin.own(s) or not same_origin(request):
+            return RedirectResponse(f"/drop/{d['token']}/signin", status_code=303)
+        try:
+            f = await run_in_threadpool(
+                passlogin.start_with_email, s, str(form.get("email") or "")[:254]
+            )
+        except ConnectError as exc:
+            if owns(s, u, k):
+                return await run_in_threadpool(done_page, s, d, {"id": u}, 1, None)
+            return await run_in_threadpool(form_page, s, d, None, exc.message)
+        after = f"/drop/{d['token']}"
+        if owns(s, u, k):
+            after += "/link?" + urllib.parse.urlencode({"u": u, "k": k})
+        response = RedirectResponse("/me/login", status_code=303)
+        passlogin.set_flow(response, s, f)
+        response.set_cookie(
+            "belfry_pass_next", after, max_age=900, httponly=True, samesite="lax", path="/me"
+        )
+        return response
+
     @app.get("/drop/{token}/link", response_class=HTMLResponse)
     async def drop_link_page(token: str, request: Request, u: str = "", k: str = ""):
         s = svc(request)
@@ -453,7 +550,7 @@ def register(app: FastAPI) -> None:
         who = E(await run_in_threadpool(member_name, s, partner))
         return _shell(
             f"""<h1>Link your upload</h1>
-<p>Post your upload to {E(followers.channel_label(s, d["channel"]))} as {who}?</p>
+<p>Post your upload to {channel(s, d["channel"])} as {who}?</p>
 <form method="post" action="/drop/{E(d["token"])}/link"><input type="hidden" name="u" value="{E(u)}"><input type="hidden" name="k" value="{E(k)}">
 <button class="btn">Yes, post it as me</button></form>"""
         )

@@ -89,7 +89,12 @@ def link(relay, login=False, exp=None):
 
 
 @pytest.fixture
-def web(services):
+def web(services, monkeypatch):
+    from belfry_onboarding import theme
+
+    services.settings.theme = "belfry"
+    services.settings.nip05_domain = "belfry.test"
+    monkeypatch.setattr(theme, "CURRENT", theme.load(services.settings))
     services.settings.site_url = "https://belfry.test"
     services.settings.public_url = "https://pass.belfry.test"
     services.settings.pass_page_secret = "p" * 32
@@ -117,13 +122,16 @@ def test_unknown_expired_or_ended_links_do_not_work(web, relay):
 def test_anonymous_upload_then_a_name_then_a_member(web, relay, services, monkeypatch):
     link(relay)
     page = web.get(f"/drop/{TOKEN}").text
-    assert "Send files to #garden" in page and "No account needed" in page
+    assert "Upload as a guest" in page and 'type="email"' in page and 'type="file"' not in page
+    assert 'href="https://apps.' in page and "/chat/#/c/garden" in page
+    page = web.get(f"/drop/{TOKEN}", params={"as": "guest"}).text
+    assert "Send files to" in page and 'type="file"' in page
     assert web.get(f"/drop/{TOKEN}/qr.svg").headers["content-type"].startswith("image/svg")
     r = web.post(
         f"/drop/{TOKEN}",
         files=[("files", ("a.jpg", b"x", "image/jpeg")), ("files", ("b.jpg", b"y", "image/jpeg"))],
     )
-    assert "2 files sent to #garden" in r.text and "Add my name" in r.text
+    assert "2 files sent to" in r.text and "Add my name" in r.text and "Open #garden" in r.text
     [msg] = [e for e in relay.events if e["kind"] == 9]
     assert msg["pubkey"] == API and msg["content"].startswith("📥 Dropped anonymously")
     assert ["h", "garden"] in msg["tags"] and sum(t[0] == "imeta" for t in msg["tags"]) == 2
@@ -179,3 +187,37 @@ def test_too_many_files(web, relay):
     files = [("files", (f"{i}.jpg", b"x", "image/jpeg")) for i in range(drops.MAX_FILES + 1)]
     r = web.post(f"/drop/{TOKEN}", files=files)
     assert f"At most {drops.MAX_FILES} files" in r.text
+
+
+def test_sign_in_with_an_e_mail_code_from_the_drop_page(web, relay, services, monkeypatch):
+    from belfry_onboarding import connect, mypass
+
+    link(relay)
+    sent = {}
+
+    def send(svc, f, email):
+        if "@" not in email:
+            raise connect.ConnectError(404, "No member of belfry.test has this address.")
+        f["pending"] = {"email": email, "partner": 7, "pubkey": "b" * 64}
+        sent["session"] = f["session"]
+        return {"to": email}
+
+    monkeypatch.setattr(connect, "send_code", send)
+    monkeypatch.setattr(
+        connect, "verify_code", lambda svc, f, code: f["pending"] if code == "123456" else None
+    )
+    r = web.post(f"/drop/{TOKEN}/signin", data={"email": "nope"})
+    assert "No member of belfry.test" in r.text
+    r = web.post(f"/drop/{TOKEN}/signin", data={"email": "ana@x.org"}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/me/login"
+    page = web.get("/me/login").text
+    assert 'data-start="code"' in page and "ana@x.org" in page and "Open Source Village" not in page
+    fid = re.search(r'data-flow="([^"]+)"', page).group(1)
+    csrf = re.search(r'data-csrf="([^"]+)"', page).group(1)
+    assert (
+        web.post("/me/login/verify", json={"flow": fid, "csrf": "x", "code": "1"}).status_code
+        == 410
+    )
+    r = web.post("/me/login/verify", json={"flow": fid, "csrf": csrf, "code": "123456"})
+    assert r.json() == {"next": "in", "to": f"/drop/{TOKEN}"}
+    assert r.cookies.get(mypass.SESSION_COOKIE)

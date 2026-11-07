@@ -47,6 +47,7 @@ from . import (
     homepage,
     mypass,
     pages,
+    passlogin,
     programme,
     reports,
     sessions,
@@ -204,6 +205,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     setup.register(app)  # belfry.<domain>/setup: settings over HTTPS (setup.py)
     connect.register(app)  # belfry.<domain>/connect: Sign in with <domain> for apps (connect.py)
     followers.register(app)  # <domain>/follow: the announcements by e-mail (followers.py)
+    passlogin.register(app)  # pass.<domain>/me/login: e-mail + code (passlogin.py)
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
