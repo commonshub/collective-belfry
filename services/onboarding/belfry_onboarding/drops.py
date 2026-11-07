@@ -152,7 +152,12 @@ def _urls(imeta: list[list[str]]) -> str:
 
 
 def post(
-    svc: Services, channel: str, text: str, imeta: list[list[str]], partner: int | None
+    svc: Services,
+    channel: str,
+    text: str,
+    imeta: list[list[str]],
+    partner: int | None,
+    client: str = "belfry-drop",
 ) -> dict[str, Any]:
     """The upload as a message in CHANNEL: signed by the member, else by the groups API key."""
     got = followers._relay(svc)
@@ -163,7 +168,7 @@ def post(
         "kind": 9,
         "created_at": int(time.time()),
         "content": (text + "\n" + _urls(imeta)).strip(),
-        "tags": [["h", channel], *imeta, ["client", "belfry-drop"]],
+        "tags": [["h", channel], *imeta, ["client", client]],
     }
     if partner is not None:
         found = community.member_signer(svc, partner)

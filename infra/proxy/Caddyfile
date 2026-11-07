@@ -133,7 +133,7 @@
 # import onboarding_site <zone prefix>: the onboarding service as one site, on pass.<domain> and
 # (for the start page) on the apex; the same rules on both hosts.
 (onboarding_site) {
-	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
+	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /internal/* /docs /openapi.json /redoc
 	error @internal 404
 	import admin_only /steward /steward/*
 	import limit {args[0]}-claim 120 1m /claim/* /tokens/* /wallet/*
@@ -170,6 +170,8 @@ belfry.{$BELFRY_DOMAIN} {
 	import security
 	import limit console-forms 60 1m /members/* /website/*
 	import limit setup-code 10 1m /setup/code
+	# the mail-in service's hand-over (mail.py) stays on the Compose network
+	error /internal/* 404
 	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'"
 	reverse_proxy onboarding:8100
 }
@@ -202,6 +204,14 @@ apps.{$BELFRY_DOMAIN} {
 # NIP-05 on Belfry's own domain: <member>@<domain> resolves through Keycast's nostr.json.
 {$BELFRY_DOMAIN} {
 	import security
+	# Nostr Mail: the bridge's key is _smtp@<domain>, answered by the onboarding service (mail.py)
+	@smtpname {
+		path /.well-known/nostr.json
+		query name=_smtp
+	}
+	handle @smtpname {
+		reverse_proxy onboarding:8100
+	}
 	@nip05 path /.well-known/nostr.json
 	handle @nip05 {
 		# Keycast already answers with Access-Control-Allow-Origin: *.

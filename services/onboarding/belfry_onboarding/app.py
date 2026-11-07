@@ -45,6 +45,7 @@ from . import (
     groups_members,
     holder_invites,
     homepage,
+    mail,
     mypass,
     pages,
     passlogin,
@@ -193,6 +194,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         async with (
             sessions.running(app),  # name@domain sign-in by DM (sessions.py)
             followers.running(app),  # the announcements channel and its digests (followers.py)
+            mail.running(app),  # members' outgoing mail, gift-wrapped to the belfry (mail.py)
         ):
             yield
 
@@ -207,6 +209,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     followers.register(app)  # <domain>/follow: the announcements by e-mail (followers.py)
     passlogin.register(app)  # pass.<domain>/me/login: e-mail + code (passlogin.py)
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
+    mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)

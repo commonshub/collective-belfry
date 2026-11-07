@@ -110,6 +110,16 @@ class Settings(BaseSettings):
     # secret belfry_nsec (hex): the belfry's own Nostr key (publishes the homepage nsite); the
     # relay whitelist and the Blossom gate let its pubkey in.
     belfry_nsec: str = Field(default="", alias="BELFRY_NSEC")
+    # E-mail as messages (mail.py): <username>@<domain> and <channel>@<domain> receive mail
+    # (the mail-in service on port 25 hands it over); members answer as <username>@<domain>
+    # through the same SMTP server Odoo uses. MAIL_IN=0 turns both off.
+    mail_in: bool = Field(default=True, alias="MAIL_IN")
+    mail_max_bytes: int = Field(default=15_000_000, alias="MAIL_MAX_BYTES")
+    smtp_host: str = Field(default="", alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_user: str = Field(default="", alias="SMTP_USER")
+    smtp_encryption: str = Field(default="starttls", alias="SMTP_ENCRYPTION")
+    smtp_password: str = Field(default="", alias="SMTP_PASSWORD")
     # A notice on every page during a test run ("Test run: no real money …"); empty: none.
     test_run_notice: str = Field(default="", alias="TEST_RUN_NOTICE")
     # Tokens (decision 2026-10-24): Belfry's Cashu mint (cdk-mintd, no monetary value). MINT_URL is

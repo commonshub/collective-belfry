@@ -120,6 +120,12 @@ services:
   onboarding:
     ports: !reset []
     restart: unless-stopped
+  mail-in:
+    # the mail server of the domain: MX <domain> → this host, port 25 open (belfry mail)
+    ports: !override ["25:2525"]
+    restart: unless-stopped
+    volumes:
+      - caddy-data:/caddy:ro
   calendar:
     ports: !reset []
     restart: unless-stopped

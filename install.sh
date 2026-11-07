@@ -7,7 +7,7 @@
 # It asks for what it needs at the start (or takes it from flags, BELFRY_* variables or a config
 # file), checks the server and the DNS, and only then changes the server:
 #   1. packages: Docker (get.docker.com when missing), ufw, git, age
-#   2. ufw: SSH, 80 and 443 in; everything else incoming denied
+#   2. ufw: SSH, 80, 443 and 25 (mail) in; everything else incoming denied
 #   3. a user `belfry` (docker group, root's SSH keys), Belfry in /opt/belfry, a swap file on
 #      small machines
 #   4. settings and secrets: infra/.env and infra/secrets/ (every secret generated on this server)
@@ -345,8 +345,10 @@ EOF
   ufw allow 80/tcp comment 'Belfry' >/dev/null
   ufw allow 443/tcp comment 'Belfry' >/dev/null
   [[ $NGINX -eq 1 ]] || ufw allow 443/udp comment 'Belfry (HTTP/3)' >/dev/null
+  # incoming mail for name@ and channel@<domain> (the mail-in service; Docker publishes it too)
+  ufw allow 25/tcp comment 'Belfry mail' >/dev/null
   ufw --force enable >/dev/null
-  ok "in: SSH ($(echo $sshports | tr ' ' ',')), 80, 443; everything else denied"
+  ok "in: SSH ($(echo $sshports | tr ' ' ',')), 80, 443, 25 (mail); everything else denied"
   # not `ufw limit` on SSH: agents open many connections in a row and would lock themselves out
 
   # ── 7. The belfry user and the code ─────────────────────────────────────────────────────────

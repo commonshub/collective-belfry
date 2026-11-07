@@ -612,7 +612,7 @@ services:
     secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
               bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
               pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
-              programme_nsec, groups_api_nsec, accounting_odoo_api_key, belfry_nsec]
+              programme_nsec, groups_api_nsec, accounting_odoo_api_key, belfry_nsec, smtp_password]
     depends_on:
       odoo:
         condition: service_healthy
@@ -708,6 +708,13 @@ services:
       GIT_REPO: ${GIT_REPO:-}
       # name@domain sign-in: the belfry reads apps' DMs on the bunker relay (sessions.py)
       SESSION_RELAY_URL: ${SESSION_RELAY_URL-ws://keycast-relay:8080}
+      # e-mail as messages (mail.py): name@ and channel@<domain> receive mail (the mail-in
+      # service), members answer through the same SMTP server as Odoo (secret smtp_password)
+      MAIL_IN: ${MAIL_IN:-1}
+      SMTP_HOST: ${SMTP_HOST:-mailpit}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_ENCRYPTION: ${SMTP_ENCRYPTION:-none}
       CONSOLE_URL: ${CONSOLE_URL:-}
       HOMEPAGE_RELAYS: ${HOMEPAGE_RELAYS:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect
@@ -739,6 +746,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # Incoming mail for <username>@ and <channel>@<domain> (belfry_onboarding/mailfront.py): a thin
+  # SMTP server that hands every address and message to the onboarding service (mail.py) and
+  # keeps nothing. Port 25 on the host in production (docker-compose.prod.yml), STARTTLS with
+  # Caddy's certificate for the domain (its user, its data volume read-only). MX <domain> → here.
+  mail-in:
+    image: belfry-onboarding
+    pull_policy: never
+    profiles: ["app"]
+    <<: *nonroot
+    read_only: true
+    group_add: *secret-group
+    secrets: [hook_token]
+    command: ["python", "-m", "belfry_onboarding.mailfront"]
+    depends_on:
+      onboarding:
+        condition: service_started
+    ports: ["2525:2525"]
+    environment:
+      NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
+      MAIL_BACKEND: http://onboarding:8100
+      MAIL_PORT: "2525"
+      MAIL_CERTS: /caddy/caddy/certificates
+      MAIL_MAX_BYTES: ${MAIL_MAX_BYTES:-15000000}
 
   # Community app: the Open Source Village calendar (Calendar by Form*, NIP-52), a static build
   # (infra/apps/calendar). The relay and brand URLs are baked in at build time: rebuild the image
@@ -998,6 +1029,7 @@ secrets:
   pass_page_secret: {file: ./secrets/pass_page_secret}
   programme_nsec: {file: ./secrets/programme_nsec}
   belfry_nsec: {file: ./secrets/belfry_nsec}
+  smtp_password: {file: ./secrets/smtp_password}
   polls_nsec: {file: ./secrets/polls_nsec}
   groups_relay_nsec: {file: ./secrets/groups_relay_nsec}
   groups_api_nsec: {file: ./secrets/groups_api_nsec}

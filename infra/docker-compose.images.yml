@@ -26,3 +26,5 @@ services:
   onboarding:
     image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-onboarding:${BELFRY_ONBOARDING_TAG:?set by belfry apply}
     build: !reset null
+  mail-in:
+    image: ${BELFRY_IMAGES:-ghcr.io/commonshub/belfry}-onboarding:${BELFRY_ONBOARDING_TAG:?set by belfry apply}
