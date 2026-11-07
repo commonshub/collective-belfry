@@ -25,6 +25,9 @@ function bump() {
   listeners.forEach((l) => l())
 }
 
+/** Something outside the event log changed (decrypted messages): views read again. */
+export function touch() { bump() }
+
 export function subscribe(l: () => void) {
   listeners.add(l)
   return () => listeners.delete(l)

@@ -1,4 +1,4 @@
-import { finalizeEvent, generateSecretKey, getPublicKey, nip44, type EventTemplate, type NostrEvent } from 'nostr-tools'
+import { finalizeEvent, generateSecretKey, getPublicKey, nip04, nip44, type EventTemplate, type NostrEvent } from 'nostr-tools'
 import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
@@ -27,6 +27,8 @@ export interface Signer {
   // NIP-44 with the user's key: gift-wrapped requests and the admins' DMs (access.ts)
   encrypt(peer: string, text: string): Promise<string>
   decrypt(peer: string, payload: string): Promise<string>
+  // NIP-04, only to read old direct messages (kind 4)
+  decrypt04?(peer: string, payload: string): Promise<string>
 }
 
 // ---- "Sign in with Open Source Village" ----------------------------------------
@@ -130,6 +132,7 @@ export async function makeSigner(s: Session): Promise<Signer> {
       sign: async (t) => finalizeEvent(t, sk),
       encrypt: async (peer, text) => nip44.v2.encrypt(text, key(peer)),
       decrypt: async (peer, payload) => nip44.v2.decrypt(payload, key(peer)),
+      decrypt04: async (peer, payload) => nip04.decrypt(sk, peer, payload),
     }
   }
   if (!s.bunkerUrl) throw new Error('Not signed in.')
@@ -174,5 +177,6 @@ export async function makeSigner(s: Session): Promise<Signer> {
     sign: (t) => call(() => bunker.signEvent({ ...t, pubkey: pk })),
     encrypt: (peer, text) => call(() => bunker.nip44Encrypt(peer, text)),
     decrypt: (peer, payload) => call(() => bunker.nip44Decrypt(peer, payload)),
+    decrypt04: (peer, payload) => call(() => bunker.nip04Decrypt(peer, payload)),
   }
 }

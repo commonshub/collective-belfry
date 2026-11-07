@@ -276,7 +276,18 @@ function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
   // overlap by an hour: relays may deliver late events with older timestamps
   const since = Math.max(0, latestCreatedAt((e) => kinds.includes(e.kind)) - 3600)
-  return [{ kinds, since, limit: 2000 }]
+  if (target === 'groups' || !signer) return [{ kinds, since, limit: 2000 }]
+  // direct messages and e-mail (dm.ts) on the community relay, my DM relay (10050): gift wraps
+  // are back-dated up to two days (NIP-59), so they overlap by three
+  const p = signer.pubkey
+  const wrapsSince = Math.max(0, latestCreatedAt((e) => e.kind === 1059) - 3 * 86400)
+  const oldSince = Math.max(0, latestCreatedAt((e) => e.kind === 4) - 3600)
+  return [
+    { kinds, since, limit: 2000 },
+    { kinds: [1059], '#p': [p], since: wrapsSince, limit: 1000 },
+    { kinds: [4], '#p': [p], since: oldSince, limit: 500 },
+    { kinds: [4], authors: [p], since: oldSince, limit: 500 },
+  ]
 }
 
 function resubscribe(target: Target) {

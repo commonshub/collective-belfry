@@ -12,6 +12,8 @@ import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView } from './Chat'
+import { MessagesList, MessageThread } from './Messages'
+import { demoMail, setMyAddress, startDms } from '../core/dm'
 import { Avatar, back, go, useRoute } from './common'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
@@ -80,6 +82,10 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         const signer = await makeSigner(session)
         if (cancelled) return
         await start(signer, { localOnly: session.backend === 'demo' })
+        // direct messages and e-mail (dm.ts); my address is my name@domain
+        setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
+        startDms()
+        if (session.backend === 'demo') (window as unknown as { demoMail: typeof demoMail }).demoMail = demoMail
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -110,6 +116,8 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   const [section = 'c', a, b, c] = route
   let view
   if (section === 'channels') view = <ChannelList />
+  else if (section === 'dm' && a) view = <MessageThread conv={a} />
+  else if (section === 'dm') view = <MessagesList />
   else if (section === 'cal' && a) view = <EventPage coord={a} />
   else if (section === 'cal') view = <CalendarList />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />

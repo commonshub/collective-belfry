@@ -1,5 +1,6 @@
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
+import { address, unreadTotal } from '../core/dm'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
@@ -48,6 +49,11 @@ export function ChannelList({ current }: { current?: string }) {
         <MeButton />
       </div>
       <div className="scroll">
+        <button className="chan" onClick={() => go('dm')}>
+          <span className="hash">✉</span>
+          <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
+          {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
+        </button>
         <button className="chan" onClick={() => go('cal')}>
           <span className="hash">📅</span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
@@ -109,6 +115,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
           {sub && <small>{sub}</small>}
         </h1>
         <FollowButton channel={id} />
+        <MessagesButton />
         <MeButton />
       </div>
       <EventsBar channel={id} />
@@ -250,6 +257,15 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
 }
 
 /** Top right: your avatar, which opens Me. */
+export function MessagesButton() {
+  const n = unreadTotal()
+  return (
+    <button className="icon-btn msg-btn" aria-label={n ? `Messages, ${n} unread` : 'Messages'} onClick={() => go('dm')}>
+      ✉{n > 0 && <span className="dot" aria-hidden="true" />}
+    </button>
+  )
+}
+
 export function MeButton() {
   return (
     <button className="icon-btn me-btn" aria-label="Me" onClick={() => go('me')}>
