@@ -15,6 +15,8 @@ function deleted(list: Ev[]) {
   const out = new Set<string>()
   const authors = new Map(list.map((e) => [e.id, e.pubkey]))
   for (const e of list) {
+    // kind 9005: a moderator removed it (the relay only takes those from moderators)
+    if (e.kind === 9005) for (const t of e.tags) if (t[0] === 'e' && t[1]) out.add(t[1])
     if (e.kind !== 5) continue
     for (const t of e.tags) {
       if (t[0] === 'e' && authors.get(t[1]) === e.pubkey) out.add(t[1])
@@ -170,6 +172,25 @@ export function groups(): Group[] {
  *  Any member can tag one; only the admins' count (here and in Belfry's e-mails to followers). */
 export const ANNOUNCE = 'announcement'
 export const isAnnouncement = (m: Message, g?: Group) => m.topics.includes(ANNOUNCE) && !!g?.admins.has(m.ev.pubkey)
+
+/** A drop box link: anyone with it uploads to this channel (NIP-78 kind 30078, `d` drop:<token>,
+ *  NIP-40 `expiration`, `login` when uploaders must be signed in). Belfry serves the page. */
+export interface DropLink { token: string; groupId: string; expires: number; login: boolean; author: string; ev: Ev }
+export function dropLinks(groupId: string): DropLink[] {
+  const list = all(me())
+  const del = deleted(list)
+  const now = Date.now() / 1000
+  const out: DropLink[] = []
+  for (const e of list) {
+    const d = tag(e, 'd') ?? ''
+    if (e.kind !== 30078 || !d.startsWith('drop:') || tag(e, 'h') !== groupId) continue
+    if (del.has(e.id) || del.has(`30078:${e.pubkey}:${d}`)) continue
+    const expires = Number(tag(e, 'expiration') ?? 0)
+    if (!(expires > now)) continue
+    out.push({ token: d.slice(5), groupId, expires, login: e.tags.some((t) => t[0] === 'login'), author: e.pubkey, ev: e })
+  }
+  return out.sort((a, b) => b.ev.created_at - a.ev.created_at)
+}
 
 export const group = (id: string) => groups().find((g) => g.id === id)
 

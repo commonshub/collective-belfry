@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { channelIcon, displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
+import { DropBox } from './Drop'
 import { me } from '../core/sync'
 import { Avatar, back, fmtTime, go, MediaGrid, Sheet } from './common'
 import { AccessFields } from './Chat'
@@ -218,6 +219,10 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
 export function Files({ groupId }: { groupId: string }) {
   useVersion()
   const media = messages(groupId).flatMap((m) => m.media).reverse()
-  if (!media.length) return <div className="empty">Photos and files posted in this channel show up here.</div>
-  return <div className="pad"><MediaGrid media={media} /></div>
+  return (
+    <div className="pad">
+      <DropBox groupId={groupId} />
+      {media.length ? <MediaGrid media={media} /> : <div className="empty">Photos and files posted in this channel show up here.</div>}
+    </div>
+  )
 }

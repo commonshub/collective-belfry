@@ -284,7 +284,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
           {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
-          {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id}
+          {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} groupId={id}
+            name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
             reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)} />)}
         </div>
       </div>

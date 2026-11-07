@@ -239,3 +239,26 @@ export async function setProposalStatus(p: Proposal, status: ProposalStatus) {
 
 export const vote = (p: Proposal, option: string) =>
   p.poll && enqueue('groups', { kind: 1018, tags: [['h', p.groupId], ['e', p.poll.ev.id], ['response', option]] })
+
+
+// ---- drop box links: upload to a channel without an account --------------------------------
+
+/** A new drop box link for a channel: a NIP-78 event in the group with a NIP-40 expiry. The
+ *  token in its `d` tag is the link's only credential (https://<domain>/drop/<token>). */
+export async function createDropLink(groupId: string, days: number, login: boolean) {
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const token = btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+  const expires = Math.floor(Date.now() / 1000) + Math.round(days * 86400)
+  await enqueue('groups', {
+    kind: 30078, content: '',
+    tags: [['d', `drop:${token}`], ['h', groupId], ['expiration', String(expires)], ...(login ? [['login']] : []),
+      ['alt', 'Drop box link: upload photos and files to this channel']],
+  })
+  return token
+}
+
+export const dropUrl = (token: string) => `https://${BELFRY.domain}/drop/${token}`
+
+/** End a drop box link (kind 5 by its author: the event and its address). */
+export const endDropLink = (groupId: string, ev: { id: string; pubkey: string }, token: string) =>
+  enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', ev.id], ['a', `30078:${ev.pubkey}:drop:${token}`]] })
