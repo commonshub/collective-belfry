@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
-import { channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
+import { ANNOUNCEMENTS, channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
@@ -116,7 +116,8 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
           <span className="badge orange">Review</span>
         </button>
       )}
-      <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
+      <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={(!!g?.isPod && g.closed && !g.members.has(me())) || (id === ANNOUNCEMENTS && !g?.members.has(me()))} />
+      {id === ANNOUNCEMENTS && !g?.members.has(me()) && <div className="join-bar"><span>Only admins post here. Everyone can read, and anyone can follow by e-mail from the website.</span></div>}
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
   )
