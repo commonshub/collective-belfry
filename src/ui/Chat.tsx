@@ -1,9 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createChannel, deleteMessage, postMessage } from '../core/actions'
-import { displayName, eventCoordOf, groups, messages, profiles, type Message } from '../core/model'
+import { createChannel, deleteMessage, postMessage, react, topEmojis } from '../core/actions'
+import { displayName, eventCoordOf, groups, messages, profiles, reactions, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, StatusPill } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -28,7 +28,6 @@ export function ChannelList({ current }: { current?: string }) {
     <div className="screen">
       <div className="topbar">
         <h1 style={{ paddingLeft: 8 }}>Channels</h1>
-        <StatusPill />
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
         <MeButton />
       </div>
@@ -85,7 +84,6 @@ export function ChannelView({ id }: { id: string }) {
           {g?.isEvent ? '📅 ' : '# '}{g?.name ?? id}
           {g?.about && <small>{g.about}</small>}
         </h1>
-        <StatusPill />
         <MeButton />
       </div>
       <EventsBar channel={id} />
@@ -99,6 +97,7 @@ export function MeButton() {
   return (
     <button className="icon-btn me-btn" aria-label="Me" onClick={() => go('me')}>
       <Avatar pubkey={me()} size={30} />
+      <SyncDot />
     </button>
   )
 }
@@ -108,6 +107,8 @@ export function Conversation({ id, events = false }: { id: string; events?: bool
   useVersion()
   const list = messages(id)
   const ps = profiles()
+  const rx = reactions(id)
+  const [acting, setActing] = useState<Message | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
 
@@ -122,43 +123,91 @@ export function Conversation({ id, events = false }: { id: string; events?: bool
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
           {list.length === 0 && <div className="empty">No messages yet. Say hi 👋</div>}
-          {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id} />)}
+          {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id}
+            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} />)}
         </div>
       </div>
       <Composer onSend={(text, files) => { stick.current = true; return postMessage(id, text, files) }}
         onEvent={events ? () => setNewEvent(true) : undefined} />
+      {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
   )
 }
 
-function Row({ m, prev, name, groupId }: { m: Message; prev?: Message; name: string; groupId: string }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void }) {
   const d = new Date(m.ev.created_at * 1000)
   const newDay = !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString()
   const first = newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
   const p = m.ev.pending
-  const mine = m.ev.pubkey === me()
+  // press and hold (phones) or right-click: react, or delete your own
+  const hold = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
   return (
     <>
       {newDay && <div className="day">{fmtDay(d)}</div>}
       <div className={'msg' + (first ? ' first' : '') + (p ? ' pending' : '')}
-        onContextMenu={(e) => {
-          if (!mine || p) return
-          e.preventDefault()
-          if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id)
-        }}>
+        onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
+        onPointerDown={(e) => {
+          if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
+          hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
+        }}
+        onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
         {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
           {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
           {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : m.text && <div className="text">{m.text}</div>}
           <MediaGrid media={m.media} />
+          {rx.length > 0 && (
+            <div className="reactions">
+              {rx.map((r) => (
+                <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
+                  onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
+                  <span>{r.emoji}</span> {r.who.size}
+                </button>
+              ))}
+            </div>
+          )}
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
           )}
           {p && p.status === 'queued' && <div className="state">{p.tries ? 'Waiting for connection…' : 'Sending…'}</div>}
         </div>
+        {!p && <button className="react-btn" aria-label="React" onClick={onAct}>☺</button>}
       </div>
     </>
+  )
+}
+
+const MORE_EMOJIS = [
+  '👍', '❤️', '😂', '🎉', '🙏', '👀', '🔥', '👏', '😍', '🤔', '😮', '😢',
+  '😅', '🙌', '💪', '✅', '❌', '💯', '🚀', '✨', '🌱', '☕', '🍕', '🍻',
+  '😊', '😎', '🤗', '🥳', '😴', '🤯', '😬', '🙈', '👋', '🤝', '👌', '✌️',
+  '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
+]
+
+function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void }) {
+  const [more, setMore] = useState(false)
+  const pick = (emoji: string) => {
+    void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
+    onClose()
+  }
+  const isOn = (emoji: string) => mine.some((r) => r.emoji === emoji && r.mine)
+  return (
+    <Sheet title="React" onClose={onClose}>
+      <div className="emoji-row">
+        {topEmojis(6).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
+        <button aria-label="More emojis" className={more ? 'on' : ''} onClick={() => setMore(!more)}>＋</button>
+      </div>
+      {more && (
+        <div className="emoji-grid">
+          {MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
+        </div>
+      )}
+      {m.ev.pubkey === me() && (
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }}>Delete message</button>
+      )}
+    </Sheet>
   )
 }
 

@@ -104,15 +104,20 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
 
 // ---- sync status -----------------------------------------------------------------
 
-export function StatusPill() {
-  useVersion()
+/** The sync state as a dot (on your avatar, top right): green synced, orange sending, grey offline / demo. */
+export function syncState(): { cls: 'ok' | 'busy' | 'off'; label: string } {
   const queued = outboxItems().length
-  if (isLocalOnly()) return <span className="status">Demo · this device</span>
+  if (isLocalOnly()) return { cls: 'off', label: 'Demo: kept on this device' }
   const up = status.relays[BELFRY.groupsRelay] === 'up'
-  if (!status.online || !up)
-    return <span className="status off">Offline{queued ? ` · ${queued} to send` : ''}</span>
-  if (queued) return <span className="status">Sending {queued}…</span>
-  return <span className="status ok">Synced</span>
+  if (!status.online || !up) return { cls: 'off', label: `Offline${queued ? `, ${queued} to send` : ''}` }
+  if (queued) return { cls: 'busy', label: `Sending ${queued}` }
+  return { cls: 'ok', label: 'Synced' }
+}
+
+export function SyncDot() {
+  useVersion()
+  const s = syncState()
+  return <span className={'sync-dot ' + s.cls} title={s.label} aria-label={s.label} role="status" />
 }
 
 export function fmtTime(ts: number) {

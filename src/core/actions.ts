@@ -26,6 +26,34 @@ export const postMessage = (groupId: string, text: string, files: File[]) =>
 export const deleteMessage = (groupId: string, id: string) =>
   enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', id]] })
 
+// ---- reactions: one tap adds, a second removes; the emojis you use most come first ------
+
+const USAGE = 'belfry-emoji-usage'
+export const DEFAULT_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏', '👀']
+
+function usage(): Record<string, number> {
+  try { return JSON.parse(localStorage.getItem(USAGE) ?? '{}') } catch { return {} }
+}
+
+/** Your most used emojis, topped up with the defaults. */
+export function topEmojis(n = 6): string[] {
+  const used = Object.entries(usage()).sort((a, b) => b[1] - a[1]).map(([e]) => e)
+  return [...new Set([...used, ...DEFAULT_EMOJIS])].slice(0, n)
+}
+
+export async function react(groupId: string, msg: { id: string; pubkey: string }, emoji: string, mine?: { id: string; pending?: unknown }) {
+  if (mine) {
+    if (mine.pending) return // not sent yet: nothing to take back on the relay
+    return enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', mine.id], ['k', '7']] })
+  }
+  try {
+    const u = usage()
+    u[emoji] = (u[emoji] ?? 0) + 1
+    localStorage.setItem(USAGE, JSON.stringify(u))
+  } catch { /* private mode: no memory, defaults stay */ }
+  return enqueue('groups', { kind: 7, content: emoji, tags: [['h', groupId], ['e', msg.id], ['p', msg.pubkey], ['k', '9']] })
+}
+
 export const setMemberLabels = (groupId: string, pubkey: string, labels: string[]) =>
   enqueue('groups', {
     kind: 1985,

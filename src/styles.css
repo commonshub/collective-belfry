@@ -281,3 +281,23 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 .ev-card .info { min-width: 0; flex: 1; }
 .ev-card .info b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-card .info small { display: block; color: var(--muted); font-size: 13px; }
+
+/* ---- sync dot on your avatar ---- */
+.me-btn { position: relative; }
+.sync-dot { position: absolute; left: 4px; bottom: 4px; width: 11px; height: 11px; border-radius: 99px; border: 2px solid var(--bg); background: var(--muted); }
+.sync-dot.ok { background: #22c55e; }
+.sync-dot.busy { background: #f59e0b; }
+.sync-dot.off { background: #a1a1aa; }
+
+/* ---- reactions ---- */
+.msg { position: relative; -webkit-touch-callout: none; }
+.reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+.reactions button { font-size: 13px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
+.reactions button span { font-size: 15px; }
+.reactions button.on { border-color: var(--accent); color: var(--text); font-weight: 600; }
+.react-btn { display: none; position: absolute; right: 10px; top: 2px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 16px; }
+@media (hover: hover) and (pointer: fine) { .msg:hover .react-btn { display: grid; place-items: center; } }
+.emoji-row { display: flex; justify-content: space-between; gap: 4px; }
+.emoji-row button, .emoji-grid button { font-size: 26px; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; }
+.emoji-row button.on, .emoji-grid button.on { background: var(--surface-2, var(--surface)); outline: 1px solid var(--accent); }
+.emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; margin-top: 10px; max-height: 40vh; overflow-y: auto; }

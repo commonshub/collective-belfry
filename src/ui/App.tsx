@@ -12,7 +12,7 @@ import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView } from './Chat'
-import { Avatar, back, go, StatusPill, useRoute } from './common'
+import { Avatar, back, go, useRoute } from './common'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
@@ -142,7 +142,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button>
-        <h1>Me</h1><StatusPill />
+        <h1>Me</h1>
       </div>
       <div className="scroll pad">
         <div className="card row" style={{ gap: 12 }}>

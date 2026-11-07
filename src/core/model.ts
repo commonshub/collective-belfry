@@ -131,6 +131,29 @@ export function messages(groupId: string): Message[] {
     .map(parseMedia)
 }
 
+// ---- reactions (NIP-25, kind 7 in the group: e = the message, content = the emoji) -----
+
+export interface Reaction { emoji: string; who: Set<string>; mine?: Ev }
+
+/** Per message id: its reactions, most given first; `mine` is your reaction event (to undo it). */
+export function reactions(groupId: string): Map<string, Reaction[]> {
+  const list = all(me())
+  const del = deleted(list)
+  const byMsg = new Map<string, Map<string, Reaction>>()
+  for (const e of list.filter((x) => x.kind === 7 && tag(x, 'h') === groupId && !del.has(x.id)).sort(byTime)) {
+    const target = e.tags.filter((t) => t[0] === 'e').at(-1)?.[1]
+    const emoji = (e.content || '+').trim() === '+' ? '👍' : e.content.trim()
+    if (!target || !emoji || emoji.length > 16) continue
+    const m = byMsg.get(target) ?? new Map<string, Reaction>()
+    const r = m.get(emoji) ?? { emoji, who: new Set<string>() }
+    r.who.add(e.pubkey)
+    if (e.pubkey === me()) r.mine = e
+    m.set(emoji, r)
+    byMsg.set(target, m)
+  }
+  return new Map([...byMsg].map(([id, m]) => [id, [...m.values()].sort((a, b) => b.who.size - a.who.size)]))
+}
+
 // ---- member labels (NIP-32, one kind 1985 per member, latest wins) ------------
 
 export function memberLabels(groupId: string): Map<string, string[]> {

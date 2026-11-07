@@ -5,7 +5,7 @@ import { createEvent, deleteEvent, openEventChat, rsvp, type NewEvent } from '..
 import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, fmtDay, go, Sheet, StatusPill } from './common'
+import { Avatar, back, fmtDay, go, Sheet } from './common'
 import { Conversation } from './Chat'
 import { Files, Tabs, Tasks } from './ChannelInfo'
 
@@ -43,7 +43,6 @@ export function CalendarList({ channel }: { channel?: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back(channel ? 'c/' + encodeURIComponent(channel) : 'c')}>‹</button>
         <h1>Events{g && <small># {g.name}</small>}</h1>
-        <StatusPill />
         <button className="icon-btn" aria-label="New event" onClick={() => setCreating(true)}>＋</button>
       </div>
       <Tabs tab={filter} setTab={setFilter} tabs={[['going', 'Going'], ['maybe', 'Maybe'], ['all', 'All']]} />
@@ -183,7 +182,6 @@ export function EventPage({ coord }: { coord: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + encodeURIComponent(e.channel))}>‹</button>
         <h1>{e.title}<small>{fmtDay(e.start)} · {when(e)}</small></h1>
-        <StatusPill />
       </div>
       <div style={{ padding: '10px 12px 0' }}>
         <div className="card" style={{ marginBottom: 8 }}>

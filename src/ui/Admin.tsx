@@ -5,7 +5,7 @@ import { displayName } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { ACCESS, NAME } from '../config'
-import { Avatar, back, go, Sheet, StatusPill } from './common'
+import { Avatar, back, go, Sheet } from './common'
 import { Tabs } from './ChannelInfo'
 
 type Tab = 'requests' | 'members' | 'invites'
@@ -25,7 +25,6 @@ export function Admin({ sub, id }: { sub?: string; id?: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('me')}>‹</button>
         <h1>Admin<small>Who is in the village</small></h1>
-        <StatusPill />
       </div>
       <Tabs tab={tab} setTab={(t) => go('admin/' + t)} tabs={[['requests', `Requests${pending.length ? ` (${pending.length})` : ''}`], ['members', 'Members'], ['invites', 'Invites']]} />
       <div className="scroll">
