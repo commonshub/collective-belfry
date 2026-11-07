@@ -6,6 +6,7 @@
         <field name="arch" type="xml">
             <list create="false">
                 <field name="email"/>
+                <field name="channel"/>
                 <field name="partner_id"/>
                 <field name="state"/>
                 <field name="frequency"/>

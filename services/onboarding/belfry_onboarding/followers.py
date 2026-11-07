@@ -1,23 +1,23 @@
-"""Public announcements: a channel only admins post in, mailed to followers every morning.
+"""Announcements: messages a channel's admins flag as such, followed by e-mail like an account.
 
-**The channel.** ``announcements`` is a NIP-29 group on the groups relay, made at start next to
-``general`` (both by the groups API key, the relay's owner, when they are missing). It is
-``closed`` (zooid then refuses posts from non-members and never adds anyone on a join request)
-and its members are the belfry's admins: the stewards group in Authentik, by the key of their
-active pass, kept in step with kind 9000/9001 put/remove-user events every few minutes. Every
-member of the relay reads it.
+**Announcements.** Any channel, pod or event (a NIP-29 group on the groups relay) can have them:
+a kind-9 message tagged ``["t", "announcement"]`` (NIP-24) by one of the group's admins (its
+creator, kind 9007, and the keys of its kind 39001). The relay lets any member tag a message;
+only the admins' count, here and in the chat. ``general`` is made at start when missing (by the
+groups API key, the relay's owner): its announcements are the community's public ones.
 
-**Followers.** Anyone may follow the announcements by e-mail without being a member: the
-website posts the address to ``/follow`` (on the apex, the homepage's own origin), Odoo keeps a
-contact for it (``belfry.follower``, created when the address is new) and the belfry mails a link
-to confirm. The token in that link and in every digest's footer is the follower's only
-credential. Opening the confirmation link confirms (monthly unless the follower picks otherwise);
+**Followers.** Members follow any channel from the chat (``/api/me/follows``, NIP-98: their own
+address, no confirmation); anyone may follow ``general`` from the website, which posts the
+address to ``/follow`` (on the apex, the homepage's own origin). Odoo keeps a contact for it
+(``belfry.follower``, one per contact and channel) and the belfry mails a link to confirm. The
+token in that link and in every mail's footer is the follow's only credential. Opening the
+confirmation link confirms (monthly unless the follower picks otherwise);
 ``/follow?t=…[&f=asap|monthly|stop]`` shows where they stand and a button for the change (a
-button, not the link itself: mail scanners open every link of a message).
-Mails carry RFC 8058 one-click ``List-Unsubscribe``.
+button, not the link itself: mail scanners open every link of a message). Mails carry RFC 8058
+one-click ``List-Unsubscribe``.
 
-**Digests.** Followers choose "as soon as possible" (the posts of the last few minutes, mailed
-together once each post is ``ASAP_DELAY`` old, so a slip deleted right away is never mailed) or
+**Mails.** Followers choose "as soon as possible" (the announcements of the last few minutes,
+mailed together once each is ``ASAP_DELAY`` old, so a slip deleted right away is never mailed) or
 monthly (on the 1st, after ``DIGEST_HOUR`` local time in ``DIGEST_TZ``; the first worker to claim
 the day sends). Nothing new, no mail.
 
@@ -40,7 +40,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import flash
@@ -53,8 +53,10 @@ from .relay import RelayPublisher
 log = logging.getLogger(__name__)
 E = html.escape
 
-GROUP = "announcements"
 GENERAL = "general"
+TAG = "announcement"  # the t tag of an announcement
+FOLLOWS = "/api/me/follows"
+CHANNEL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 MODEL = "belfry.follower"
 CHOICES = ("asap", "monthly")
 ASAP_DELAY = 300  # seconds a post waits before it is mailed
@@ -113,107 +115,89 @@ def _publish(relay: RelayPublisher, sign: Any, kind: int, tags: list[list[str]])
     )
 
 
-def admin_pubkeys(svc: Services) -> set[str]:
-    """Keys of the active passes of the stewards group (the console's admins)."""
-    from .console import admin_emails
-
-    emails = sorted(admin_emails(svc))
-    if not emails:
-        return set()
-    domain_ = ["|"] * (len(emails) - 1) + [["email", "=ilike", e] for e in emails]
-    partners = svc.odoo.search_read("res.partner", domain_, ["id"])
-    ids = [p["id"] for p in partners]
-    if not ids:
-        return set()
-    rows = svc.odoo.search_read(
-        "belfry.pass",
-        [["partner_id", "in", ids], ["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey"],
-    )
-    return {r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")}
-
-
 def ensure_channels(svc: Services) -> dict[str, Any]:
-    """Create ``general`` and ``announcements`` when missing; make the announcements' members
-    the admins. Best effort: logged, retried on the next round."""
+    """Create ``general`` when missing. Best effort: logged, retried on the next round."""
     got = _relay(svc)
     if got is None:
         return {}
     relay, sign = got
-    meta = {
-        e["tags"][0][1]: e
-        for e in relay.query([{"kinds": [39000], "#d": [GENERAL, GROUP]}], sign)
-        if e.get("tags") and e["tags"][0][0] == "d"
-    }
-    where = domain(svc)
-    made = []
-    if GENERAL not in meta:
-        _publish(relay, sign, 9007, [["h", GENERAL]])
-        _publish(
-            relay,
-            sign,
-            9002,
-            [
-                ["h", GENERAL],
-                ["name", GENERAL],
-                ["about", f"Everything about {where}. Say hi 👋"],
-                ["open"],
-            ],
-        )
-        made.append(GENERAL)
-    if GROUP not in meta:
-        _publish(relay, sign, 9007, [["h", GROUP]])
-        _publish(
-            relay,
-            sign,
-            9002,
-            [
-                ["h", GROUP],
-                ["name", GROUP],
-                [
-                    "about",
-                    f"Public announcements of {where}. Only admins post here; everyone can "
-                    "read, and anyone can follow them by e-mail from the website.",
-                ],
-                ["closed"],
-            ],
-        )
-        made.append(GROUP)
-    wanted = admin_pubkeys(svc)
-    current: set[str] = set()
-    for e in relay.query([{"kinds": [39002], "#d": [GROUP]}], sign):
-        current = {t[1] for t in e.get("tags", []) if len(t) > 1 and t[0] == "p"}
-    own = svc.groups.key.public_key_xonly.format().hex()
-    added = sorted(wanted - current)
-    removed = sorted(current - wanted - {own})
-    if not wanted:
-        removed = []  # the stewards group unreadable or empty: never empty the channel
-    for p in added:
-        _publish(relay, sign, 9000, [["h", GROUP], ["p", p]])
-    for p in removed:
-        _publish(relay, sign, 9001, [["h", GROUP], ["p", p]])
-    if made or added or removed:
-        log.info(
-            "announcements: made %s, %d admins added, %d removed", made, len(added), len(removed)
-        )
-    return {"made": made, "added": added, "removed": removed}
+    if relay.query([{"kinds": [39000], "#d": [GENERAL]}], sign):
+        return {"made": []}
+    _publish(relay, sign, 9007, [["h", GENERAL]])
+    _publish(
+        relay,
+        sign,
+        9002,
+        [
+            ["h", GENERAL],
+            ["name", GENERAL],
+            ["about", f"Everything about {domain(svc)}. Say hi 👋"],
+            ["open"],
+        ],
+    )
+    log.info("announcements: made %s", GENERAL)
+    return {"made": [GENERAL]}
+
+
+_names: dict[str, tuple[float, str]] = {}
+
+
+def channel_label(svc: Services, channel: str) -> str:
+    """How mails and pages name a channel: ``#general``, or a pod's or event's own name."""
+    held = _names.get(channel)
+    if held and time.monotonic() - held[0] < 600:
+        return held[1]
+    label = f"#{channel}"
+    got = _relay(svc)
+    if got is not None:
+        relay, sign = got
+        try:
+            for e in relay.query([{"kinds": [39000], "#d": [channel]}], sign):
+                n = next((t[1] for t in e.get("tags", []) if t[0] == "name" and len(t) > 1), "")
+                if n:
+                    plain = not channel.startswith(("ws-", "ev-", "pod-", "prop-"))
+                    label = f"#{n}" if plain else n
+        except Exception as exc:  # noqa: BLE001 — the id is a fine fallback
+            log.warning("announcements: no name for %s: %s", channel, exc)
+    _names[channel] = (time.monotonic(), label[:80])
+    return label[:80]
+
+
+def whose(svc: Services, channel: str) -> str:
+    """ "belfry.sh" for general (the community's public announcements), else "#x on belfry.sh"."""
+    return domain(svc) if channel == GENERAL else f"{channel_label(svc, channel)} on {domain(svc)}"
 
 
 def announcements(
-    svc: Services, since: int, until: int
+    svc: Services, channel: str, since: int, until: int
 ) -> tuple[list[dict[str, Any]], dict[str, str]]:
-    """Messages of the announcements channel in (since, until], oldest first, without deleted
+    """The admins' announcements in CHANNEL in (since, until], oldest first, without deleted
     ones; and the authors' names."""
     got = _relay(svc)
     if got is None:
         return [], {}
     relay, sign = got
     posts = relay.query(
-        [{"kinds": [9], "#h": [GROUP], "since": since + 1, "until": until, "limit": 300}], sign
+        [
+            {
+                "kinds": [9],
+                "#h": [channel],
+                "#t": [TAG],
+                "since": since + 1,
+                "until": until,
+                "limit": 300,
+            }
+        ],
+        sign,
     )
+    if not posts:
+        return [], {}
+    admins = {e["pubkey"] for e in relay.query([{"kinds": [9007], "#h": [channel]}], sign)}
+    for e in relay.query([{"kinds": [39001], "#d": [channel]}], sign):
+        admins |= {t[1] for t in e.get("tags", []) if len(t) > 1 and t[0] == "p"}
     gone = {
         t[1]
-        for e in relay.query([{"kinds": [5, 9005], "#h": [GROUP], "since": since + 1}], sign)
+        for e in relay.query([{"kinds": [5, 9005], "#h": [channel], "since": since + 1}], sign)
         for t in e.get("tags", [])
         if len(t) > 1 and t[0] == "e"
     }
@@ -221,7 +205,8 @@ def announcements(
         (
             e
             for e in posts
-            if e["id"] not in gone
+            if e["pubkey"] in admins
+            and e["id"] not in gone
             and since < e["created_at"] <= until
             and e.get("content", "").strip()
         ),
@@ -253,7 +238,7 @@ def _shell(svc: Services, body: str, footer: str) -> str:
 </div>"""
 
 
-def footer(svc: Services, token: str, frequency: str) -> str:
+def footer(svc: Services, token: str, frequency: str, channel: str = GENERAL) -> str:
     """The digest's footer: the current frequency in bold, the others and unsubscribe as links."""
     parts = []
     for choice in CHOICES:
@@ -265,8 +250,8 @@ def footer(svc: Services, token: str, frequency: str) -> str:
             )
     parts.append(f'<a href="{E(link(svc, token, "stop"))}" style="color:{MUTED}">unsubscribe</a>')
     return (
-        f"You receive this e-mail because you subscribed to the public announcements of "
-        f"{E(domain(svc))}.<br>Receive such announcements " + " · ".join(parts)
+        f"You receive this e-mail because you subscribed to the announcements of "
+        f"{E(whose(svc, channel))}.<br>Receive such announcements " + " · ".join(parts)
     )
 
 
@@ -297,21 +282,22 @@ def text_html(text: str) -> str:
     return "".join(out).strip().replace("\n", "<br>")
 
 
-def confirm_mail(svc: Services, token: str) -> tuple[str, str]:
-    where = domain(svc)
+def confirm_mail(svc: Services, token: str, channel: str = GENERAL) -> tuple[str, str]:
+    where = whose(svc, channel)
     body = f"""<p style="margin:0 0 12px">Hello,</p>
-<p style="margin:0 0 12px">Someone (we hope you) asked to receive the public announcements of {E(where)} at this address.</p>
+<p style="margin:0 0 12px">Someone (we hope you) asked to receive the announcements of {E(where)} at this address.</p>
 <p style="margin:20px 0"><a href="{E(link(svc, token))}" style="display:inline-block;background:#a4532b;color:#ffffff;font-weight:600;padding:11px 20px;border-radius:8px;text-decoration:none">Confirm</a></p>
 <p style="margin:0;color:{MUTED}">If you did not ask for this, ignore this mail: nothing is sent without your confirmation.</p>"""
     return f"Confirm the announcements of {where}", _shell(
-        svc, body, f"{E(name(svc))} · {E(where)}"
+        svc, body, f"{E(name(svc))} · {E(domain(svc))}"
     )
 
 
 def digest_mail(
     svc: Services, f: dict[str, Any], posts: list[dict[str, Any]], names: dict[str, str]
 ) -> tuple[str, str]:
-    where = domain(svc)
+    channel = f.get("channel") or GENERAL
+    where = whose(svc, channel)
     items = []
     for e in posts:
         when = dt.datetime.fromtimestamp(e["created_at"], ZoneInfo(svc.settings.digest_tz))
@@ -326,17 +312,27 @@ def digest_mail(
     subject = f"{where}: {first}" if len(posts) == 1 else f"{len(posts)} announcements from {where}"
     title = "New announcement" if len(posts) == 1 else f"{len(posts)} new announcements"
     body = f'<h1 style="margin:0 0 4px;font-size:20px">{title}</h1>' + "".join(items)
-    return subject, _shell(svc, body, footer(svc, f["token"], f["frequency"]))
+    return subject, _shell(svc, body, footer(svc, f["token"], f["frequency"], channel))
 
 
 def send_digests(svc: Services, frequency: str, until: int) -> dict[str, int]:
     due = odoo(svc, "belfry_follow_due", frequency)
     if not due:
         return {"due": 0, "sent": 0}
-    since = min(int(f["since"] or 0) for f in due)
-    posts, names = announcements(svc, since, until)
+    by_channel: dict[str, list[dict[str, Any]]] = {}
+    for f in due:
+        by_channel.setdefault(f.get("channel") or GENERAL, []).append(f)
+    found: dict[str, tuple[list[dict[str, Any]], dict[str, str]]] = {}
+    for channel, fs in by_channel.items():
+        try:
+            found[channel] = announcements(
+                svc, channel, min(int(f["since"] or 0) for f in fs), until
+            )
+        except Exception as exc:  # noqa: BLE001 — that channel waits for the next round
+            log.warning("announcements: %s not read: %s", channel, exc)
     sent = 0
     for f in due:
+        posts, names = found.get(f.get("channel") or GENERAL, ([], {}))
         mine = [e for e in posts if e["created_at"] > int(f["since"] or 0)]
         if not mine:
             continue
@@ -346,14 +342,16 @@ def send_digests(svc: Services, frequency: str, until: int) -> dict[str, int]:
             sent += 1
         except OdooError as exc:
             log.warning("announcements: digest for follower %s not queued: %s", f["id"], exc)
-    log.info(
-        "announcements: %s, %d posts, %d of %d followers mailed",
-        frequency,
-        len(posts),
-        sent,
-        len(due),
-    )
-    return {"due": len(due), "sent": sent, "posts": len(posts)}
+    total = sum(len(p) for p, _ in found.values())
+    if sent or total:
+        log.info(
+            "announcements: %s, %d posts, %d of %d followers mailed",
+            frequency,
+            total,
+            sent,
+            len(due),
+        )
+    return {"due": len(due), "sent": sent, "posts": total}
 
 
 def morning(svc: Services, now: dt.datetime | None = None) -> dict[str, Any] | None:
@@ -424,6 +422,7 @@ def state_page(svc: Services, token: str, state: dict[str, Any], want: str, msg:
 <p class="muted">It may be cut off, or the subscription is gone. Subscribe again on the
 <a href="{E(base_url(svc))}/">website of {where}</a>.</p>"""
         return page("Announcements", f'<div class="card follow">{body}</div>')
+    where = E(whose(svc, state.get("channel") or GENERAL))
     if s == "active":
         top = ""
         if want in CHOICES and want != freq:
@@ -479,9 +478,9 @@ def register(app: FastAPI) -> None:
                 status_code=422,
             )
         try:
-            got = await run_in_threadpool(odoo, s, "belfry_follow_request", email)
+            got = await run_in_threadpool(odoo, s, "belfry_follow_request", email, GENERAL)
             if got.get("state") == "send":
-                subject, body = confirm_mail(s, got["token"])
+                subject, body = confirm_mail(s, got["token"], GENERAL)
                 await run_in_threadpool(
                     odoo,
                     s,
@@ -541,6 +540,56 @@ def register(app: FastAPI) -> None:
         else:
             msg = f"Saved. You will receive the announcements {SAID[f]}."
         return flash.redirect(s, "/follow?" + urllib.parse.urlencode({"t": t}), msg=msg)
+
+    async def member(request: Request, method: str, body: bytes) -> int:
+        from .holder_invites import authenticate, holder
+
+        s = svc(request)
+        pubkey = authenticate(
+            s,
+            request.app.state.api_seen,
+            request.headers.get("authorization"),
+            method,
+            FOLLOWS,
+            body,
+        )
+        return (await run_in_threadpool(holder, s, pubkey))["partner_id"]
+
+    @app.get(FOLLOWS)
+    async def api_follows(request: Request) -> JSONResponse:
+        """The signed-in member's follows (NIP-98): ``{"email", "follows": [{channel,
+        frequency, state}]}``."""
+        partner = await member(request, "GET", b"")
+        s = svc(request)
+        rows = await run_in_threadpool(odoo, s, "belfry_follow_member_list", partner)
+        email = (s.odoo.read("res.partner", [partner], ["email"]) or [{}])[0].get("email") or ""
+        return JSONResponse(
+            {"email": email, "follows": rows}, headers={"Cache-Control": "no-store"}
+        )
+
+    @app.post(FOLLOWS)
+    async def api_follow(request: Request) -> JSONResponse:
+        """Follow a channel's announcements: ``{"channel", "frequency": "asap"|"monthly"|"stop"}``."""
+        from .holder_invites import ApiError
+
+        body = await request.body()
+        partner = await member(request, "POST", body)
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_json", "Send a JSON object.")
+        channel, choice = str(data.get("channel") or ""), str(data.get("frequency") or "")
+        if not CHANNEL.match(channel) or choice not in (*CHOICES, "stop"):
+            raise ApiError(422, "invalid", "channel: a group id; frequency: asap, monthly or stop")
+        try:
+            row = await run_in_threadpool(
+                odoo, svc(request), "belfry_follow_member_set", partner, channel, choice
+            )
+        except OdooError as exc:
+            raise ApiError(422, "refused", "The belfry could not save this.") from exc
+        return JSONResponse(row)
 
     @app.post("/follow/unsubscribe")
     async def follow_unsubscribe(request: Request, t: str = ""):

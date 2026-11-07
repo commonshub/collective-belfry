@@ -27,11 +27,14 @@ class Store:
     def by_token(self, token):
         return next((r for r in self.rows.values() if r["token"] == token), None)
 
-    def belfry_follow_request(self, email):
-        row = next((r for r in self.rows.values() if r["email"] == email), None)
+    def belfry_follow_request(self, email, channel="general"):
+        row = next(
+            (r for r in self.rows.values() if r["email"] == email and r["channel"] == channel), None
+        )
         if row is None:
             i = len(self.rows) + 1
             row = self.rows[i] = {
+                "channel": channel,
                 "id": i,
                 "email": email,
                 "state": "pending",
@@ -46,7 +49,9 @@ class Store:
     def belfry_follow_get(self, token):
         r = self.by_token(token)
         return (
-            {k: r[k] for k in ("id", "state", "frequency", "email")} if r else {"state": "unknown"}
+            {k: r[k] for k in ("id", "state", "frequency", "email", "channel")}
+            if r
+            else {"state": "unknown"}
         )
 
     def belfry_follow_set(self, token, choice):
@@ -75,6 +80,19 @@ class Store:
             for r in self.rows.values()
             if r["state"] == "active" and r["frequency"] == frequency
         ]
+
+    def belfry_follow_member_list(self, partner):
+        return [
+            {k: r[k] for k in ("channel", "frequency", "state")}
+            for r in self.rows.values()
+            if r["email"] == f"member{partner}@example.org"
+        ]
+
+    def belfry_follow_member_set(self, partner, channel, choice):
+        email = f"member{partner}@example.org"
+        got = self.belfry_follow_request(email, channel)
+        r = self.belfry_follow_set(got["token"], choice)
+        return {"channel": channel, "state": r["state"], "frequency": r["frequency"]}
 
     def belfry_follow_claim_day(self, day):
         if day in self.days:
@@ -153,9 +171,12 @@ def test_footer_bolds_the_current_frequency(services):
     services.settings.site_url = "https://belfry.test"
     html = followers.footer(services, "tok", "monthly")
     assert "<strong>monthly</strong>" in html
-    assert 'href="https://belfry.test/follow?t=tok&amp;f=asap"' in html and ">as soon as possible</a>" in html
+    assert (
+        'href="https://belfry.test/follow?t=tok&amp;f=asap"' in html
+        and ">as soon as possible</a>" in html
+    )
     assert "f=monthly" not in html and "f=stop" in html
-    assert "subscribed to the public announcements of belfry.test" in html
+    assert "subscribed to the announcements of belfry.test." in html
 
 
 def test_text_html_escapes_and_links():
@@ -168,7 +189,7 @@ def posts_of(monkeypatch, posts):
     monkeypatch.setattr(
         followers,
         "announcements",
-        lambda svc, since, until: (
+        lambda svc, channel, since, until: (
             [e for e in posts if since < e["created_at"] <= until],
             {"p" * 64: "Ana"},
         ),
@@ -210,3 +231,70 @@ def test_monthly_on_the_first_morning_only(services, store, monkeypatch):
     assert followers.morning(services, at) == {"due": 1, "sent": 1, "posts": 1}
     assert "<strong>monthly</strong>" in store.mails[0]["body"]
     assert followers.morning(services, at) is None  # once that day
+
+
+def test_a_member_follows_any_channel_from_the_chat(services, odoo, store, monkeypatch):
+    """GET and POST /api/me/follows, NIP-98 with the member's key; a pod's mails name it."""
+    import time
+
+    from coincurve import PrivateKey
+
+    from .test_holder_invites import get, post
+
+    services.settings.site_url = "https://belfry.test"
+    services.settings.public_url = "https://pass.belfry.test"
+    key = PrivateKey()
+    pk = key.public_key_xonly.format().hex()
+    partner = odoo.add("res.partner", name="Cleo", email="cleo@example.org")
+    odoo.add("belfry.pass", partner_id=partner, tier="week", state="active", keycast_pubkey=pk)
+    with TestClient(create_app(services), base_url="https://pass.belfry.test") as client:
+        body = {"channel": "pod-garden-1a2b", "frequency": "asap"}
+        r = post(client, key, "/api/me/follows", body)
+        assert r.status_code == 200, r.text
+        assert r.json() == {"channel": "pod-garden-1a2b", "state": "active", "frequency": "asap"}
+        time.sleep(1.1)  # a NIP-98 authorization is single use
+        r = get(client, key, "/api/me/follows")
+        assert r.json()["follows"] == [
+            {"channel": "pod-garden-1a2b", "frequency": "asap", "state": "active"}
+        ]
+        assert r.json()["email"] == "cleo@example.org"
+        time.sleep(1.1)
+        bad = post(client, key, "/api/me/follows", {"channel": "no spaces", "frequency": "asap"})
+        assert bad.status_code == 422
+    monkeypatch.setattr(followers, "channel_label", lambda svc, c: "Garden crew")
+    html = followers.footer(services, "tok", "asap", "pod-garden-1a2b")
+    assert "the announcements of Garden crew on belfry.test." in html
+
+
+def test_only_the_admins_announcements_count(services, monkeypatch):
+    admin, member = "a" * 64, "b" * 64
+    events = [
+        {"id": "1", "kind": 9, "pubkey": admin, "created_at": 10, "content": "Real", "tags": []},
+        {"id": "2", "kind": 9, "pubkey": member, "created_at": 11, "content": "Fake", "tags": []},
+        {"id": "3", "kind": 9, "pubkey": admin, "created_at": 12, "content": "Gone", "tags": []},
+        {"id": "4", "kind": 9007, "pubkey": admin, "created_at": 1, "content": "", "tags": []},
+        {
+            "id": "5",
+            "kind": 9005,
+            "pubkey": admin,
+            "created_at": 13,
+            "content": "",
+            "tags": [["e", "3"]],
+        },
+        {
+            "id": "6",
+            "kind": 0,
+            "pubkey": admin,
+            "created_at": 1,
+            "content": '{"name":"Ana"}',
+            "tags": [],
+        },
+    ]
+
+    class Relay:
+        def query(self, filters, sign):
+            return [e for e in events if e["kind"] in filters[0]["kinds"]]
+
+    monkeypatch.setattr(followers, "_relay", lambda svc: (Relay(), None))
+    posts, names = followers.announcements(services, "general", 0, 100)
+    assert [e["content"] for e in posts] == ["Real"] and names == {admin: "Ana"}
