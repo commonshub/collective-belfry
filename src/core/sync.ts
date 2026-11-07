@@ -10,7 +10,7 @@ import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, se
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
 
-export const KINDS_GROUPS = [39000, 39001, 39002, 9, 7, 9007, 9002, 9008, 9021, 9022, 5, 1985, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
+export const KINDS_GROUPS = [39000, 39001, 39002, 9, 7, 9007, 9002, 9008, 9000, 9001, 9021, 9022, 5, 1985, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
 export const KINDS_MAIN = [0, 31922, 31923, 31925, 5]
 
 const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.mainRelay }

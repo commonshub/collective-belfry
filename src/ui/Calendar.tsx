@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { Markdown } from './markdown'
 import { THEME } from '../config'
-import { createEvent, deleteEvent, openEventChat, rsvp, type NewEvent } from '../core/actions'
+import { createEvent, deleteEvent, jitsiLink, meetingLabel, openEventChat, rsvp, type NewEvent } from '../core/actions'
 import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, back, fmtDay, go, Sheet } from './common'
 import { Conversation } from './Chat'
+import { TopicsBar } from './Topics'
 import { Files, Tabs, Tasks } from './ChannelInfo'
 
 const when = (e: CalEvent) => {
@@ -78,7 +79,7 @@ function EventRow({ e }: { e: CalEvent }) {
       <DateChip d={e.start} />
       <div className="info">
         <b>{e.title}</b>
-        <small>{when(e)}{e.location ? ' · ' + e.location : ''}</small>
+        <small>{when(e)}{e.location ? ' · ' + e.location : ''}{e.links.length ? ' · 🎥 online' : ''}</small>
         <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
       </div>
     </button>
@@ -138,6 +139,13 @@ export function NewEventSheet({ channel, onClose }: { channel?: string; onClose:
   const end = new Date(+start + 3600_000)
   const [n, setN] = useState<NewEvent>({ title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false, start: localInput(start), end: localInput(end) })
   const set = (patch: Partial<NewEvent>) => setN({ ...n, ...patch })
+  // places already used for events in this channel (most recent first), then elsewhere
+  const where = channel ?? 'general'
+  const byRecent = [...calendar()].sort((a, b) => b.ev.created_at - a.ev.created_at)
+  const places = [...new Set([
+    ...byRecent.filter((e) => e.channel === where).map((e) => e.location),
+    ...byRecent.map((e) => e.location),
+  ].filter((l): l is string => !!l?.trim()))].slice(0, 8)
   return (
     <Sheet title="Post an event" onClose={onClose}>
       <form onSubmit={async (e) => {
@@ -154,10 +162,22 @@ export function NewEventSheet({ channel, onClose }: { channel?: string; onClose:
         <label className="field"><span>Ends</span>
           <input className="input" type={n.allDay ? 'date' : 'datetime-local'} value={n.allDay ? n.end.slice(0, 10) : n.end} onChange={(e) => set({ end: e.target.value })} /></label>
         <label className="field"><span>Where</span>
-          <input className="input" value={n.location} onChange={(e) => set({ location: e.target.value })} /></label>
+          <input className="input" placeholder="A place, or leave empty if online only" value={n.location} onChange={(e) => set({ location: e.target.value })} /></label>
+        {places.length > 0 && (
+          <div className="chips" style={{ margin: '-6px 0 14px' }}>
+            {places.map((pl) => <button type="button" key={pl} className={'chip' + (n.location === pl ? ' on' : '')} onClick={() => set({ location: n.location === pl ? '' : pl })}>📍 {pl}</button>)}
+          </div>
+        )}
+        <label className="field"><span>Online</span>
+          <input className="input" type="url" inputMode="url" placeholder="Paste a Google Meet, Zoom or other link" value={n.online ?? ''} onChange={(e) => set({ online: e.target.value })} /></label>
+        <div className="chips" style={{ margin: '-6px 0 14px' }}>
+          <button type="button" className="chip" onClick={() => set({ online: jitsiLink(n.title || 'meeting') })}>🎥 New Jitsi link</button>
+          <a className="chip" href="https://meet.google.com/new" target="_blank" rel="noreferrer">🎥 New Google Meet ↗</a>
+        </div>
+        {n.online && !/^https:\/\//.test(n.online.trim()) && <p className="error" style={{ marginTop: -8 }}>The link should start with https://</p>}
         <label className="field"><span>Description</span>
           <textarea className="input" rows={3} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
-        <button className="btn" disabled={!n.title.trim() || !n.start}>Post event</button>
+        <button className="btn" disabled={!n.title.trim() || !n.start || (!!n.online?.trim() && !/^https:\/\//.test(n.online.trim()))}>Post event</button>
         <p className="hint" style={{ marginTop: 10 }}>Posted in #{groups().find((g) => g.id === (channel ?? 'general'))?.name ?? 'general'}. The event gets its own chat, task list and files.</p>
       </form>
     </Sheet>
@@ -169,6 +189,7 @@ type EvTab = 'chat' | 'people' | 'tasks' | 'files'
 export function EventPage({ coord }: { coord: string }) {
   useVersion()
   const [tab, setTab] = useState<EvTab>('chat')
+  const [topic, setTopic] = useState<string | undefined>()
   const e = calendar().find((x) => x.coord === coord)
   if (!e) return (
     <div className="screen">
@@ -186,6 +207,9 @@ export function EventPage({ coord }: { coord: string }) {
       <div style={{ padding: '10px 12px 0' }}>
         <div className="card" style={{ marginBottom: 8 }}>
           {e.location && <div>📍 {e.location}</div>}
+          {e.links.map((l) => (
+            <a key={l} className="btn small" style={{ display: 'inline-flex', marginTop: 8, marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join on {meetingLabel(l)}</a>
+          ))}
           {e.description && <Markdown className="hint" text={e.description} style={{ marginTop: 6, maxHeight: 160, overflowY: 'auto' }} />}
           <div className="hint" style={{ marginTop: 6, fontSize: 13 }}>Posted by {displayName(e.ev.pubkey)} · {going(e)} going</div>
           <div className="rsvp" style={{ marginTop: 10 }}>
@@ -196,7 +220,7 @@ export function EventPage({ coord }: { coord: string }) {
         </div>
       </div>
       <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'Tasks'], ['files', 'Files']]} />
-      {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <Conversation id={e.groupId} /> : (
+      {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <><TopicsBar groupId={e.groupId} active={topic} onOpen={setTopic} /><Conversation id={e.groupId} topic={topic} onTopic={setTopic} /></> : (
         <div className="scroll"><div className="empty">
           <p>This session has no chat yet.</p>
           <button className="btn small" onClick={() => openEventChat(e)}>Open a chat for it</button>

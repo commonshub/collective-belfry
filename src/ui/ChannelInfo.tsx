@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { addTask, commentTask, editChannel, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
+import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { channelIcon, displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, go, MediaGrid, Sheet } from './common'
+import { Avatar, back, fmtTime, go, MediaGrid, Sheet } from './common'
+import { AccessFields } from './Chat'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files'
 
@@ -42,6 +43,7 @@ function About({ id }: { id: string }) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(g?.name ?? '')
   const [about, setAbout] = useState(g?.about ?? '')
+  const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
   if (!g) return null
   return (
     <div className="pad">
@@ -61,16 +63,24 @@ function About({ id }: { id: string }) {
         <div className="hint">Members</div>
         <div>{g.members.size}</div>
       </div>
+      {g.isPod && (
+        <div className="card">
+          <div className="hint">Who can join</div>
+          <div>{g.closed ? 'Closed: apply, admins admit' : 'Open: any member joins'}</div>
+          {g.closed && <div className="hint" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>Question: {g.prompt || '—'}</div>}
+        </div>
+      )}
       {g.isPod && (g.members.has(me())
         ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
-        : <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
-      <button className="btn ghost" onClick={() => { setName(g.name); setAbout(g.about); setEditing(true) }}>Edit name and description</button>
+        : !g.closed && <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
+      <button className="btn ghost" onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setEditing(true) }}>{g.isPod ? 'Edit the pod' : 'Edit name and description'}</button>
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
         <Sheet title="Edit channel" onClose={() => setEditing(false)}>
-          <form onSubmit={async (e) => { e.preventDefault(); await editChannel(id, name.trim(), about.trim()); setEditing(false) }}>
+          <form onSubmit={async (e) => { e.preventDefault(); await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim())); setEditing(false) }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+            {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
             <button className="btn" disabled={!name.trim()}>Save</button>
           </form>
         </Sheet>
@@ -142,10 +152,24 @@ export function Members({ groupId }: { groupId: string }) {
   const g = groups().find((x) => x.id === groupId)
   const labels = memberLabels(groupId)
   const [editing, setEditing] = useState<string | null>(null)
-  const members = [...new Set([...(g?.members ?? []), ...labels.keys(), me()])].filter(Boolean)
+  const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   const vocab = [...new Set([...labels.values()].flat())].sort()
+  const reviewing = g?.isPod && g.admins.has(me()) ? g.applications : []
   return (
     <div>
+      {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
+      {reviewing.map((a) => (
+        <div key={a.pubkey} className="appl">
+          <div className="who"><Avatar pubkey={a.pubkey} size={28} />{displayName(a.pubkey)}<span className="hint" style={{ fontWeight: 400, fontSize: 12 }}>{fmtTime(a.at)}</span></div>
+          {g?.prompt && <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>{g.prompt}</div>}
+          <blockquote>{a.answer || '(no answer)'}</blockquote>
+          <div className="row">
+            <button className="btn small" onClick={() => void admit(groupId, a.pubkey)}>Admit</button>
+            <button className="btn small ghost" onClick={() => { if (confirm(`Decline ${displayName(a.pubkey)}?`)) void decline(groupId, a.pubkey) }}>Decline</button>
+          </div>
+        </div>
+      ))}
+      {reviewing.length > 0 && <div className="section-title">Members <span>{g?.members.size}</span></div>}
       {members.map((p) => (
         <button key={p} className="member" onClick={() => setEditing(p)}>
           <Avatar pubkey={p} />

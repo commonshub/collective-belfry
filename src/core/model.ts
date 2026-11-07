@@ -63,8 +63,17 @@ export interface Group {
   isPod: boolean
   /** For a pod: the channel or pod it lives in ('general' when unknown). */
   parent?: string
+  /** NIP-29 `closed`: joining takes an application (9021) that an admin admits (9000). */
+  closed: boolean
+  /** The question applicants answer (our `prompt` tag on the group's 9002). */
+  prompt?: string
+  admins: Set<string>
+  /** Open applications to a closed group: the latest 9021 of someone not admitted nor declined. */
+  applications: Application[]
   pending: boolean
 }
+
+export interface Application { pubkey: string; answer: string; at: number; ev: Ev }
 
 export type ChannelType = 'channel' | 'event' | 'pod'
 export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g?.isPod ? 'pod' : 'channel')
@@ -79,10 +88,12 @@ export const podOf = (e: Ev) => {
 export function groups(): Group[] {
   const list = all(me())
   const map = new Map<string, Group & { metaAt: Record<string, number> }>()
+  const applied = new Map<string, Ev>() // group id + pubkey → latest 9021
+  const decided = new Map<string, number>() // group id + pubkey → latest 9000 / 9001
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -103,13 +114,29 @@ export function groups(): Group[] {
         g.metaAt[k] = e.created_at
       }
     }
+    if (e.kind === 9007 || e.kind === 9002 || e.kind === 39000) {
+      const access = e.tags.some((t) => t[0] === 'closed') ? true : e.tags.some((t) => t[0] === 'open') ? false : undefined
+      if (access !== undefined && (g.metaAt.closed ?? 0) <= e.created_at) { g.closed = access; g.metaAt.closed = e.created_at }
+      const prompt = tag(e, 'prompt')
+      if (prompt !== undefined && (g.metaAt.prompt ?? 0) <= e.created_at) { g.prompt = prompt; g.metaAt.prompt = e.created_at }
+    }
+    if (e.kind === 9007) g.admins.add(e.pubkey) // its creator administers it (Belfry's relay patch)
+    if (e.kind === 39001) for (const t of e.tags) if (t[0] === 'p') g.admins.add(t[1])
     if (e.kind === 39002) g.members = new Set(e.tags.filter((t) => t[0] === 'p').map((t) => t[1]))
+    // admitted (9000 put-user) or removed / declined (9001 remove-user) by an admin
+    if (e.kind === 9000 || e.kind === 9001) {
+      const p = tag(e, 'p')
+      if (p) { if (e.kind === 9000) g.members.add(p); else g.members.delete(p); decided.set(id + p, e.created_at) }
+    }
     if (e.kind === 9) {
       g.lastActivity = Math.max(g.lastActivity, e.created_at)
       g.members.add(e.pubkey)
     }
     // join / leave (NIP-29 9021 / 9022): counted here too, whether or not the relay folds them in
-    if (e.kind === 9021) g.members.add(e.pubkey)
+    if (e.kind === 9021) {
+      if (!g.closed) g.members.add(e.pubkey)
+      else applied.set(id + e.pubkey, e)
+    }
     if (e.kind === 9022) g.members.delete(e.pubkey)
   }
   // a pod lives where it was announced: the first post carrying its `pod` tag
@@ -120,6 +147,11 @@ export function groups(): Group[] {
     if (g && h && h !== pod && !g.parent) g.parent = h
   }
   for (const g of map.values()) if (g.isPod && !g.parent) g.parent = 'general'
+  for (const [k, e] of applied) {
+    const g = map.get(k.slice(0, -64))
+    if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
+    g.applications.push({ pubkey: e.pubkey, answer: e.content, at: e.created_at, ev: e })
+  }
   const gone = new Set([...map.values()].filter((g) => list.some((e) => e.kind === 9008 && tag(e, 'h') === g.id)).map((g) => g.id))
   return [...map.values()]
     .filter((g) => !gone.has(g.id))
@@ -131,7 +163,25 @@ export const group = (id: string) => groups().find((g) => g.id === id)
 // ---- messages -----------------------------------------------------------------
 
 export interface Media { url: string; mime: string; name?: string; w?: number; h?: number }
-export interface Message { ev: Ev; text: string; media: Media[] }
+export interface Message { ev: Ev; text: string; media: Media[]; topics: string[] }
+
+// ---- topics: hashtags (NIP-24 `t` tags, lowercase) and a channel's pinned ones -------------
+
+export const HASHTAG = /(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu
+export const normTopic = (t: string) => t.toLowerCase().replace(/^#/, '')
+export const hashtags = (text: string) => [...new Set([...text.matchAll(HASHTAG)].map((m) => normTopic(m[2])))]
+export const TOPIC_NS = '#t'
+
+/** A channel's pinned topics: the latest NIP-32 label event in the group with namespace `#t`
+ *  (its `l` tags are the topics, in order). Any member may pin or unpin. */
+export function topics(groupId: string): string[] {
+  let latest: Ev | undefined
+  for (const e of all(me())) {
+    if (e.kind !== 1985 || tag(e, 'h') !== groupId || tag(e, 'L') !== TOPIC_NS) continue
+    if (!latest || byTime(latest, e) < 0) latest = e
+  }
+  return latest ? latest.tags.filter((t) => t[0] === 'l' && t[2] === TOPIC_NS).map((t) => normTopic(t[1])) : []
+}
 
 export function parseMedia(e: Ev): Message {
   const media: Media[] = []
@@ -144,7 +194,7 @@ export function parseMedia(e: Ev): Message {
   }
   let text = e.content
   for (const m of media) text = text.split(m.url).join('')
-  return { ev: e, text: text.trim(), media }
+  return { ev: e, text: text.trim(), media, topics: [...new Set(e.tags.filter((t) => t[0] === 't' && t[1]).map((t) => normTopic(t[1])))] }
 }
 
 export function messages(groupId: string): Message[] {
@@ -250,6 +300,8 @@ export interface CalEvent {
   start: Date
   end?: Date
   groupId: string
+  /** Online meeting links (NIP-52 `r` tags: video calls, documents). */
+  links: string[]
   /** The channel it was posted in (a sub-channel of it): where the post linking to it is. */
   channel: string
   rsvps: Map<string, Rsvp>
@@ -307,6 +359,7 @@ export function calendar(): CalEvent[] {
       title: tag(e, 'title') || tag(e, 'name') || 'Untitled',
       description: e.content,
       location: tag(e, 'location'),
+      links: e.tags.filter((t) => t[0] === 'r' && /^https:\/\//.test(t[1] ?? '')).map((t) => t[1]),
       allDay, start, end: parse(tag(e, 'end')),
       groupId: tag(e, 'h') || 'ws-' + d.replace(/^session-/, ''),
       channel: posted.get(coord) ?? 'general',

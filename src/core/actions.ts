@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { listIdFor, type CalEvent, type Rsvp } from './model'
+import { hashtags, listIdFor, normTopic, TOPIC_NS, type CalEvent, type Rsvp } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -17,11 +17,18 @@ export async function createChannel(name: string, about: string, id = slug(name)
   return id
 }
 
+export interface PodAccess { closed: boolean; prompt: string }
+export const DEFAULT_PROMPT = 'Why do you want to join, and what would you bring?'
+
+/** NIP-29 metadata tags for a pod's access: `open` or `closed`, and our `prompt` (the question). */
+const accessTags = (a: PodAccess) => [a.closed ? ['closed'] : ['open'], ...(a.closed ? [['prompt', a.prompt.trim() || DEFAULT_PROMPT]] : [])]
+
 /** A pod (working group): its own group `pod-…`, announced in its parent (channel or pod),
  *  which is what links the two. Pods nest: a pod can hold pods. */
-export async function createPod(name: string, about: string, parent = 'general') {
+export async function createPod(name: string, about: string, parent = 'general', access: PodAccess = { closed: false, prompt: '' }) {
   const id = 'pod-' + slug(name).slice(0, 24) + '-' + newId(2)
-  await createChannel(name, about, id)
+  await enqueue('groups', { kind: 9007, tags: [['h', id]] })
+  await enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
   await enqueue('groups', {
     kind: 9,
     content: `⬡ New pod: ${name}${about ? ' · ' + about : ''}`,
@@ -30,14 +37,31 @@ export async function createPod(name: string, about: string, parent = 'general')
   return id
 }
 
-export const joinGroup = (id: string) => enqueue('groups', { kind: 9021, tags: [['h', id]] })
+export const editPod = (id: string, name: string, about: string, access: PodAccess) =>
+  enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
+
+/** NIP-29 join request: in an open group it lets you in; in a closed one it is your application,
+ *  with your answer to the pod's question as its content. */
+export const joinGroup = (id: string, answer = '') => enqueue('groups', { kind: 9021, content: answer.slice(0, 2000), tags: [['h', id]] })
 export const leaveGroup = (id: string) => enqueue('groups', { kind: 9022, tags: [['h', id]] })
+/** An admin admits an applicant (9000 put-user) or declines / removes them (9001 remove-user). */
+export const admit = (id: string, pubkey: string) => enqueue('groups', { kind: 9000, tags: [['h', id], ['p', pubkey, 'member']] })
+export const decline = (id: string, pubkey: string) => enqueue('groups', { kind: 9001, tags: [['h', id], ['p', pubkey]] })
 
 export const editChannel = (id: string, name: string, about: string) =>
   enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })
 
-export const postMessage = (groupId: string, text: string, files: File[]) =>
-  enqueue('groups', { kind: 9, content: text, tags: [['h', groupId]] }, files)
+/** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a
+ *  `t` tag too, without being written in the text. */
+export const postMessage = (groupId: string, text: string, files: File[], topic?: string) =>
+  enqueue('groups', {
+    kind: 9, content: text,
+    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...hashtags(text)])].map((t) => ['t', t])],
+  }, files)
+
+/** Pin / unpin a channel's topics: one NIP-32 label event with the whole list (latest wins). */
+export const setTopics = (groupId: string, list: string[]) =>
+  enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', TOPIC_NS], ...[...new Set(list.map(normTopic))].map((t) => ['l', t, TOPIC_NS])] })
 
 export const deleteMessage = (groupId: string, id: string) =>
   enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', id]] })
@@ -95,6 +119,20 @@ export interface NewEvent {
   allDay: boolean
   start: string // datetime-local or date value
   end: string
+  /** An online meeting (Google Meet, Zoom, Jitsi…): a NIP-52 `r` link. */
+  online?: string
+}
+
+/** A video call link anyone can open straight away, no account to create it: Jitsi Meet. */
+export const jitsiLink = (title: string) => `https://meet.jit.si/${slug(title).replace(/^channel-.*/, 'meeting')}-${newId(5)}`
+
+export function meetingLabel(url: string) {
+  const h = (() => { try { return new URL(url).hostname } catch { return '' } })()
+  if (/meet\.google\.com$/.test(h)) return 'Google Meet'
+  if (/(^|\.)zoom\.us$/.test(h)) return 'Zoom'
+  if (/jit\.si$|jitsi/.test(h)) return 'Jitsi'
+  if (/teams\.(microsoft|live)\.com$/.test(h)) return 'Teams'
+  return h || 'Online'
 }
 
 // An event is a sub-channel of the channel it is posted in: a NIP-52 event on the community
@@ -114,6 +152,7 @@ export async function createEvent(n: NewEvent, channel = 'general') {
     if (n.end) tags.push(['end', ts(n.end)], ['end_tzid', TZ])
   }
   if (n.location) tags.push(['location', n.location])
+  if (n.online && /^https:\/\//.test(n.online.trim())) tags.push(['r', n.online.trim()])
   const kind = n.allDay ? 31922 : 31923
   await createChannel(n.title, n.description.split('\n')[0] || 'Chat for this event', groupId)
   await enqueue('main', { kind, content: n.description, tags })

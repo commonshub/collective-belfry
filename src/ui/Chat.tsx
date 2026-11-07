@@ -1,10 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createChannel, createPod, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
-import { channelIcon, displayName, eventCoordOf, groups, messages, podOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
+import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
+import { channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
+import { RichText, TopicsBar } from './Topics'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -86,7 +87,8 @@ function NewChannel({ onClose }: { onClose: () => void }) {
 
 // ---- a channel's messages ------------------------------------------------------
 
-export function ChannelView({ id }: { id: string }) {
+export function ChannelView({ id, topic }: { id: string; topic?: string }) {
+  const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const all = groups()
   const g = all.find((x) => x.id === id)
@@ -105,14 +107,49 @@ export function ChannelView({ id }: { id: string }) {
       </div>
       <EventsBar channel={id} />
       <PodsBar channel={id} />
-      <Conversation id={id} events />
-      {g?.isPod && !g.members.has(me()) && (
-        <div className="join-bar">
-          <span>You're not in this pod yet.</span>
-          <button className="btn small" onClick={() => void joinGroup(id)}>Join</button>
-        </div>
+      <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
+      {g?.isPod && g.admins.has(me()) && g.applications.length > 0 && (
+        <button className="join-bar" style={{ borderTop: 0, borderBottom: '1px solid var(--line)', width: '100%' }} onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
+          <span>{g.applications.length} {g.applications.length === 1 ? 'person asks' : 'people ask'} to join</span>
+          <span className="badge orange">Review</span>
+        </button>
       )}
+      <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
+      {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
+  )
+}
+
+/** Not in this pod: join it (open), or apply by answering its question (closed). */
+function JoinBar({ g }: { g: Group }) {
+  const [asking, setAsking] = useState(false)
+  const [answer, setAnswer] = useState('')
+  const applied = groups().find((x) => x.id === g.id)?.applications.some((a) => a.pubkey === me())
+  if (!g.closed)
+    return (
+      <div className="join-bar">
+        <span>You're not in this pod yet.</span>
+        <button className="btn small" onClick={() => void joinGroup(g.id)}>Join</button>
+      </div>
+    )
+  return (
+    <>
+      <div className="join-bar">
+        <span>{applied ? 'Application sent. The pod’s admins will answer.' : 'This pod is closed: apply to join.'}</span>
+        {!applied && <button className="btn small" onClick={() => setAsking(true)}>Apply</button>}
+      </div>
+      {asking && (
+        <Sheet title={`Apply to ${g.name}`} onClose={() => setAsking(false)}>
+          <form onSubmit={async (e) => { e.preventDefault(); await joinGroup(g.id, answer.trim()); setAsking(false) }}>
+            <p className="apply-q">{g.prompt || DEFAULT_PROMPT}</p>
+            <textarea className="input" rows={4} autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} />
+            <div style={{ height: 12 }} />
+            <button className="btn" disabled={!answer.trim()}>Send my application</button>
+            <p className="hint" style={{ marginTop: 10 }}>The pod’s admins see your answer and admit you, or not.</p>
+          </form>
+        </Sheet>
+      )}
+    </>
   )
 }
 
@@ -140,22 +177,40 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
       <span className="info">
         <b>{g.name}</b>
         {g.about && <small>{g.about}</small>}
-        <small>Pod · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : ''}</small>
+        <small>{g.closed ? 'Closed pod' : 'Pod'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : ''}</small>
       </span>
-      {!inIt && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
+      {!inIt && !g.closed && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
+      {!inIt && g.closed && <span className="badge">Closed</span>}
     </div>
+  )
+}
+
+export function AccessFields({ closed, prompt, set }: { closed: boolean; prompt: string; set: (a: { closed: boolean; prompt: string }) => void }) {
+  return (
+    <>
+      <div className="field"><span>Who can join</span></div>
+      <div className="choice" style={{ marginTop: -8 }}>
+        <button type="button" className={!closed ? 'on' : ''} onClick={() => set({ closed: false, prompt })}><b>Open</b><small>Any member joins</small></button>
+        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt })}><b>Closed</b><small>Apply, admins admit</small></button>
+      </div>
+      {closed && (
+        <label className="field"><span>Question applicants answer</span>
+          <textarea className="input" rows={2} placeholder={DEFAULT_PROMPT} value={prompt} onChange={(e) => set({ closed, prompt: e.target.value })} /></label>
+      )}
+    </>
   )
 }
 
 function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
+  const [access, setAccess] = useState({ closed: false, prompt: '' })
   const where = groups().find((g) => g.id === parent)
   return (
     <Sheet title="New pod" onClose={onClose}>
       <form onSubmit={async (e) => {
         e.preventDefault()
-        const id = await createPod(name.trim(), about.trim(), parent)
+        const id = await createPod(name.trim(), about.trim(), parent, access)
         onClose()
         go('c/' + encodeURIComponent(id))
       }}>
@@ -163,6 +218,7 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
           <input className="input" autoFocus placeholder="e.g. Garden crew" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>What is it working on?</span>
           <textarea className="input" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+        <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />
         <button className="btn" disabled={!name.trim()}>Create pod</button>
         <p className="hint" style={{ marginTop: 10 }}>A working group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, tasks and pods.</p>
       </form>
@@ -180,11 +236,11 @@ export function MeButton() {
   )
 }
 
-export function Conversation({ id, events = false }: { id: string; events?: boolean }) {
+export function Conversation({ id, events = false, readOnly = false, topic, onTopic }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
   useVersion()
-  const list = messages(id)
+  const list = messages(id).filter((m) => !topic || m.topics.includes(topic))
   const ps = profiles()
   const rx = reactions(id)
   const [acting, setActing] = useState<Message | null>(null)
@@ -201,13 +257,13 @@ export function Conversation({ id, events = false }: { id: string; events?: bool
       <div className="scroll" ref={scroller}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
-          {list.length === 0 && <div className="empty">No messages yet. Say hi 👋</div>}
+          {list.length === 0 && <div className="empty">{topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id}
-            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} />)}
+            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} />)}
         </div>
       </div>
-      <Composer onSend={(text, files) => { stick.current = true; return postMessage(id, text, files) }}
-        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} />
+      {!readOnly && <Composer placeholder={topic ? `Message #${topic}` : undefined} onSend={(text, files) => { stick.current = true; return postMessage(id, text, files, topic) }}
+        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
@@ -215,7 +271,10 @@ export function Conversation({ id, events = false }: { id: string; events?: bool
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void }) {
+  // topics it carries that its text doesn't show (sent inside an open topic), except the open one
+  const inText = new Set(hashtags(m.text))
+  const extra = m.topics.filter((t) => !inText.has(t) && t !== topic)
   const d = new Date(m.ev.created_at * 1000)
   const newDay = !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString()
   const first = newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
@@ -236,7 +295,8 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct }: { m: Message; pre
         {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
           {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
-          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : m.text && <div className="text">{m.text}</div>}
+          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
+          {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
           {rx.length > 0 && (
             <div className="reactions">
