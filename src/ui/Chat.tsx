@@ -1,3 +1,4 @@
+import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
 import { ANNOUNCEMENTS, channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
@@ -96,6 +97,8 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   const parent = g?.isPod || g?.isProposal ? all.find((x) => x.id === g.parent) : undefined
   const where = `${g?.isProposal ? 'Proposal' : 'Pod'} in ${channelIcon(parent)}${parent?.isPod ? ' ' : ''}${parent?.name ?? g?.parent}`
   const sub = g?.isPod || g?.isProposal ? (g.about ? `${where} · ${g.about}` : where) : g?.about
+  const [podTab, setPodTab] = useState<'chat' | 'tasks' | 'members' | 'files'>('chat')
+  useEffect(() => setPodTab('chat'), [id])
   return (
     <div className="screen">
       <div className="topbar">
@@ -109,15 +112,25 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
       <EventsBar channel={id} />
       <PodsBar channel={id} />
       {g?.isProposal && <ProposalHeader groupId={id} />}
-      <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
       {g?.isPod && g.admins.has(me()) && g.applications.length > 0 && (
         <button className="join-bar" style={{ borderTop: 0, borderBottom: '1px solid var(--line)', width: '100%' }} onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
           <span>{g.applications.length} {g.applications.length === 1 ? 'person asks' : 'people ask'} to join</span>
           <span className="badge orange">Review</span>
         </button>
       )}
-      <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={(!!g?.isPod && g.closed && !g.members.has(me())) || (id === ANNOUNCEMENTS && !g?.members.has(me()))} />
-      {id === ANNOUNCEMENTS && !g?.members.has(me()) && <div className="join-bar"><span>Only admins post here. Everyone can read, and anyone can follow by e-mail from the website.</span></div>}
+      {g?.isPod && <Tabs tab={podTab} setTab={setPodTab} tabs={[['chat', 'Chat'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']]} />}
+      {podTab === 'chat' && <>
+        <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
+        <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={(!!g?.isPod && g.closed && !g.members.has(me())) || (id === ANNOUNCEMENTS && !g?.members.has(me()))} />
+        {id === ANNOUNCEMENTS && !g?.members.has(me()) && <div className="join-bar"><span>Only admins post here. Everyone can read, and anyone can follow by e-mail from the website.</span></div>}
+      </>}
+      {podTab !== 'chat' && (
+        <div className="scroll">
+          {podTab === 'tasks' && <Tasks groupId={id} />}
+          {podTab === 'members' && <Members groupId={id} />}
+          {podTab === 'files' && <Files groupId={id} />}
+        </div>
+      )}
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
   )
