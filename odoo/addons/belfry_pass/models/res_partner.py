@@ -9,7 +9,7 @@ class ResPartner(models.Model):
         copy=False,
         readonly=True,
         index=True,
-        help="Immutable member identifier (OSV-0001). Assigned when the partner first gets a pass. "
+        help="Immutable member identifier (0001). Assigned when the partner first gets a pass. "
              "Used as the subject of the pass bridge and the Authentik source link.",
     )
     belfry_authentik_user_id = fields.Integer(string="Authentik user id", copy=False, index=True)

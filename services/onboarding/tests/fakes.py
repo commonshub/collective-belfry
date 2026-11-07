@@ -495,7 +495,7 @@ class FakeOdoo(OdooApi):
                 partner = self.tables[model][pid]
                 if not partner.get("belfry_member_number"):
                     self._seq += 1
-                    partner["belfry_member_number"] = f"OSV-{self._seq:04d}"
+                    partner["belfry_member_number"] = f"{self._seq:04d}"
                 out.append(partner["belfry_member_number"])
             return out
         if model == "belfry.pass" and method in ("belfry_use_signin", "belfry_welcome_info"):

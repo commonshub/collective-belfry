@@ -127,7 +127,7 @@ def test_an_admin_approves_and_the_app_gets_a_session(web, odoo, relay, keycast)
     t = web.post(
         "/connect/token",
         json={**body, "code": code},
-        headers={"Origin": "https://chat.example.org"},
+        headers={"Origin": "https://chat.example.org", "User-Agent": IPHONE},
     )
     assert t.status_code == 200, t.text
     assert (
@@ -135,7 +135,7 @@ def test_an_admin_approves_and_the_app_gets_a_session(web, odoo, relay, keycast)
         and t.json()["pubkey"] == web.people["Ana"]["pubkey"]
     )
     assert t.headers["access-control-allow-origin"] == "https://chat.example.org"
-    assert keycast.bunkers[-1]["app_name"] == "chat.example.org/app"
+    assert keycast.bunkers[-1]["app_name"] == "chat.example.org/app · Safari on iPhone"
     assert web.post("/connect/token", json={**body, "code": code}).status_code == 400  # single use
 
 
@@ -203,6 +203,25 @@ def test_bad_links_and_addresses(web):
         apps.app_uri("javascript:alert(1)")
 
 
+IPHONE = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_1 like Mac OS X) AppleWebKit/605.1.15 "
+    "(KHTML, like Gecko) Version/18.1 Mobile/15E148 Safari/604.1"
+)
+
+
+def test_device_labels():
+    from belfry_onboarding import device
+
+    assert device.label(IPHONE) == "Safari on iPhone"
+    android = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/130.0 Mobile Safari/537.36"
+    assert device.label(android) == "Chrome on Android"
+    mac = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:132.0) Gecko/20100101 Firefox/132.0"
+    assert device.label(mac) == "Firefox on Mac"
+    assert device.label("") == "" and device.name("Chat", "") == "Chat"
+    assert device.split("Chat · Safari on iPhone") == ("Chat", "Safari on iPhone")
+    assert device.split("Tea · Biscuits") == ("Tea · Biscuits", "")
+
+
 def test_a_member_lists_and_ends_their_sessions(services, odoo, keycast, client):
     """GET /api/me/sessions and POST /api/me/sessions/revoke, NIP-98 with the member's key."""
     from .test_holder_invites import get, post
@@ -216,12 +235,13 @@ def test_a_member_lists_and_ends_their_sessions(services, odoo, keycast, client)
     odoo.add("belfry.pass", partner_id=partner, tier="week", state="active", keycast_pubkey=pk)
     keycast.users[f"odoo-partner-{partner}"] = {"pubkey": pk, "username": "cleo"}
     keycast.last_pubkey = pk
-    services.keycast.create_bunker("ucan-token", "Chat")
+    services.keycast.create_bunker("ucan-token", "Chat · Firefox on Linux")
     services.keycast.create_bunker("ucan-token", "Notes")
     r = get(client, key, "/api/me/sessions")
     assert r.status_code == 200, r.text
     rows = r.json()["sessions"]
     assert [s["application_name"] for s in rows] == ["Chat", "Notes"]
+    assert [s["device"] for s in rows] == ["Firefox on Linux", ""]
     r = post(client, key, "/api/me/sessions/revoke", {"bunker_pubkey": rows[0]["bunker_pubkey"]})
     assert r.status_code == 200
     import time

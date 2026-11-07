@@ -38,7 +38,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, claim, community, console, mypass, nostr, setup, theme
+from . import apps, claim, community, console, device, mypass, nostr, setup, theme
 from .clients.odoo import OdooError
 from .core import Services
 
@@ -188,7 +188,7 @@ def verify_code(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
     return member
 
 
-def token(svc: Services, body: dict[str, Any]) -> dict[str, Any]:
+def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
     with _lock:
         _sweep()
         c = CODES.pop(str(body.get("code", "")), None)
@@ -208,7 +208,7 @@ def token(svc: Services, body: dict[str, Any]) -> dict[str, Any]:
     found = community.member_token(svc, c["partner"])
     if found is None or found[0] != c["pubkey"]:
         raise ConnectError(409, "own_key")
-    bunker = svc.keycast.create_bunker(found[1], apps.display_name(svc, c["uri"]))
+    bunker = svc.keycast.create_bunker(found[1], device.name(apps.display_name(svc, c["uri"]), ua))
     return {
         "bunker_url": bunker["bunker_url"],
         "token_type": "bunker",
@@ -558,7 +558,9 @@ def register(app: FastAPI) -> None:
             else:
                 body = dict(await request.form())
             body = body if isinstance(body, dict) else {}
-            result = await run_in_threadpool(token, svc(request), body)
+            result = await run_in_threadpool(
+                token, svc(request), body, request.headers.get("user-agent", "")
+            )
             return cors(request, JSONResponse(result, headers={"Cache-Control": "no-store"}))
         except ConnectError as exc:
             return cors(request, JSONResponse({"error": exc.message}, status_code=exc.status))

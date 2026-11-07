@@ -121,7 +121,7 @@ def today() -> dt.date:
 
 
 def member_number_fallback(partner_id: int) -> str:
-    return f"OSV-{partner_id:04d}"
+    return f"{partner_id:04d}"
 
 
 # -- activation ---------------------------------------------------------------------------------
@@ -232,7 +232,7 @@ def _ensure_member_number(svc: Services, partner: dict[str, Any]) -> str:
     except OdooError as exc:
         if not exc.is_missing_method:
             raise
-        log.warning("res.partner.belfry_ensure_member_number missing, using OSV-<partner id>")
+        log.warning("res.partner.belfry_ensure_member_number missing, using the partner id")
         svc.odoo.write(
             "res.partner",
             [partner_id],

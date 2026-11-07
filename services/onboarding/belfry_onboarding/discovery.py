@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import pages
+from . import device, pages
 from .core import Services, m2o_id
 from .holder_invites import ApiError, authenticate
 from .nostr import hex_to_npub
@@ -243,6 +243,12 @@ def cors_headers(origin: str) -> dict[str, str]:
     }
 
 
+def _session_row(r: dict[str, Any], keep: tuple[str, ...]) -> dict[str, Any]:
+    row = {k: r.get(k) for k in keep}
+    row["application_name"], row["device"] = device.split(r.get("application_name"))
+    return row
+
+
 def register(app: FastAPI) -> None:
     """Mount /.well-known/belfry.json, /api/me and the CORS of /api/* (create_app calls this)."""
 
@@ -309,7 +315,7 @@ def register(app: FastAPI) -> None:
             "activity_count",
         )
         return JSONResponse(
-            {"sessions": [{k: r.get(k) for k in keep} for r in rows]},
+            {"sessions": [_session_row(r, keep) for r in rows]},
             headers={"Cache-Control": "no-store"},
         )
 

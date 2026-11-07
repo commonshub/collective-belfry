@@ -27,7 +27,7 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     partner = odoo.get("res.partner", ids["partner"])
     assert p["state"] == "active"
     assert p["tier"] == "week"
-    assert partner["belfry_member_number"] == "OSV-0001"
+    assert partner["belfry_member_number"] == "0001"
     # dates: payment 2027-01-20 < EVENT_START 2027-01-25 -> start at event start, 7 days
     assert p["date_start"] == "2027-01-25"
     assert p["date_end"] == "2027-02-01"
@@ -38,24 +38,24 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     assert authentik.user_creates == 1
     assert authentik.connection_creates == 1
     user = authentik.users[0]
-    assert user["username"] == "osv-0001"
+    assert user["username"] == "0001"
     assert user["path"] == "belfry/participants"
     assert user["attributes"] == {
-        "belfry_member_number": "OSV-0001",
+        "belfry_member_number": "0001",
         "odoo_partner_id": ids["partner"],
     }
     assert authentik.connections[0] == {
         "pk": 1,
         "user": 1,
         "source": "pass-bridge",
-        "identifier": "OSV-0001",
+        "identifier": "0001",
     }
     assert partner["belfry_authentik_user_id"] == 1
     assert p["authentik_user_id"] == 1
 
     assert keycast.preloads == 1
     kc_user = keycast.users[f"odoo-partner-{ids['partner']}"]
-    assert kc_user["username"] == "osv-0001"
+    assert kc_user["username"] == "0001"
     assert p["keycast_pubkey"] == kc_user["pubkey"]
     assert p["npub"] == partner["belfry_npub"] == hex_to_npub(kc_user["pubkey"])
     assert p["npub"].startswith("npub1")
@@ -74,7 +74,7 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     assert json.loads(ev["content"]) == {
         "name": partner["name"],
         "display_name": partner["name"],
-        "nip05": "osv-0001@belfry.local",
+        "nip05": "0001@belfry.local",
         "picture": f"{services.settings.public_url}/avatar/{ev['pubkey']}.png",
     }
     # empty follow list; both relay lists name the community relay (RELAY_URL without a public one)
@@ -102,11 +102,11 @@ def test_starter_events_use_the_public_relay_and_never_overwrite(services, odoo,
     relay.events = [
         {**e, "tags": [["p", "ab" * 32]]} if e["kind"] == 3 else e for e in relay.events
     ]
-    assert core.publish_starter_events(services) == {"published": {"OSV-0001": [10050]}}
+    assert core.publish_starter_events(services) == {"published": {"0001": [10050]}}
     follows = [e for e in relay.events if e["kind"] == 3]
     assert len(follows) == 1 and follows[0]["tags"] == [["p", "ab" * 32]]
     assert [e["kind"] for e in relay.events if e["pubkey"] == pubkey].count(10050) == 1
-    assert core.publish_starter_events(services) == {"published": {"OSV-0001": []}}
+    assert core.publish_starter_events(services) == {"published": {"0001": []}}
 
 
 def test_profile_carries_the_default_avatar_and_the_backfill_adds_it(services, odoo, relay):
@@ -123,12 +123,12 @@ def test_profile_carries_the_default_avatar_and_the_backfill_adds_it(services, o
     relay.events = [e for e in relay.events if e["kind"] != 0] + [
         {**profile, "content": json.dumps(own), "created_at": 2_000_000_000, "tags": [["x", "1"]]}
     ]
-    assert core.publish_starter_events(services) == {"published": {"OSV-0001": [0]}}
+    assert core.publish_starter_events(services) == {"published": {"0001": [0]}}
     latest = max((e for e in relay.events if e["kind"] == 0), key=lambda e: e["created_at"])
     assert json.loads(latest["content"]) == {**own, "picture": picture}
     assert latest["tags"] == [["x", "1"]] and latest["created_at"] == 2_000_000_001
     # with a picture of their own nothing is touched
-    assert core.publish_starter_events(services) == {"published": {"OSV-0001": []}}
+    assert core.publish_starter_events(services) == {"published": {"0001": []}}
 
 
 def test_relay_failure_does_not_block_activation(services, odoo, relay):
@@ -394,8 +394,7 @@ def test_legacy_module_fallbacks(settings, authentik, keycast):
     p = active_pass(odoo, ids["invoice"])
     assert p["tier"] == "day"
     assert (
-        odoo.get("res.partner", ids["partner"])["belfry_member_number"]
-        == f"OSV-{ids['partner']:04d}"
+        odoo.get("res.partner", ids["partner"])["belfry_member_number"] == f"{ids['partner']:04d}"
     )
     assert p["date_end"] == "2027-01-26"
 
@@ -419,7 +418,7 @@ def test_keycast_client_sends_tenant_host_header(router):
         return_value=httpx.Response(200, json={"pubkey": "ab" * 32, "token": "t"})
     )
     KeycastClient("http://keycast.test", "a", "s", tenant_domain="belfry.example").preload_user(
-        "odoo-partner-1", "osv-0001", "Alice"
+        "odoo-partner-1", "0001", "Alice"
     )
     assert route.calls.last.request.headers["host"] == "belfry.example"
     assert route.calls.last.request.headers["authorization"] == "Bearer a"

@@ -67,7 +67,7 @@ def test_claim_offer_carries_the_pass_claims(client, services, odoo, issuer):
     overrides = issuer.offers[0]["runtimeOverrides"]
     data = overrides["credentialData"]
     assert data["pass_tier"] == "week"
-    assert data["member_number"] == "OSV-0001"
+    assert data["member_number"] == "0001"
     assert data["display_name"] == "Alice Example"
     assert data["npub"] == p["npub"]
     assert data["exp"] > data["nbf"] and data["iat"] <= data["nbf"] or data["nbf"] <= data["iat"]

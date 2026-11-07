@@ -38,7 +38,7 @@ The webhook URL of a server action is a stored string. `models/ir_config_paramet
 
 ## RPC entry points for the onboarding service
 
-- `res.partner.belfry_ensure_member_number()` on a recordset: assigns `OSV-0001`-style numbers from sequence `belfry.member` where missing and returns the list of numbers. `execute_kw res.partner belfry_ensure_member_number [[partner_id]]`.
+- `res.partner.belfry_ensure_member_number()` on a recordset: assigns `0001`-style numbers (no prefix; databases created before keep their own) from sequence `belfry.member` where missing and returns the list of numbers. `execute_kw res.partner belfry_ensure_member_number [[partner_id]]`.
 - `belfry.pass.belfry_find_or_create_for_invoice(invoice_id)`: returns the pass id for a customer invoice, creating a pending pass from the invoice's pass product line when the invoice was not made through the invite flow. The holder is the delivery address (the person) when the invoice is billed to a company. `execute_kw belfry.pass belfry_find_or_create_for_invoice [invoice_id]`.
 - `belfry.invite.belfry_steward_create(steward_email, note)` and `belfry.pass.belfry_steward_mark_paid(steward_email)` on a pending pass: what the steward pages do (create an invite in a steward's name; register the invoice payment by hand and record who did it in `manual_paid_by`).
 - Writing a pass to `state = active` assigns the holder's member number if it is still missing.
