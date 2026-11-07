@@ -283,6 +283,7 @@ cmd_apply() {
   say "The onboarding service and the apps"
   if [[ "$(free_gb)" -lt 25 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
   compose --profile app restart onboarding
+  reload_proxy  # a running proxy keeps its old Caddyfile until told
   [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
   say "Done. belfry status shows the state."
 }
