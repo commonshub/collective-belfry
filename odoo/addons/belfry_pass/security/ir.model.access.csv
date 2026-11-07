@@ -19,3 +19,5 @@ access_belfry_shift_admin,belfry.shift admin,model_belfry_shift,group_admin,1,1,
 access_belfry_shift_signup_steward,belfry.shift.signup steward,model_belfry_shift_signup,group_steward,1,0,0,0
 access_belfry_shift_signup_admin,belfry.shift.signup admin,model_belfry_shift_signup,group_admin,1,1,1,1
 access_belfry_key_code_admin,belfry.key.code admin,model_belfry_key_code,group_admin,1,1,1,0
+access_belfry_follower_steward,belfry.follower steward,model_belfry_follower,group_steward,1,0,0,0
+access_belfry_follower_admin,belfry.follower admin,model_belfry_follower,group_admin,1,1,1,0

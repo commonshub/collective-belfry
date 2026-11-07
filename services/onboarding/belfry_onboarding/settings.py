@@ -200,6 +200,10 @@ class Settings(BaseSettings):
 
     # The groups relay's member API (groups_members.py), synced with the relay whitelist; signed
     # with the groups API key (secret groups_api_nsec, hex). Empty URL or key: no sync.
+    # Morning digest of the announcements channel to its e-mail followers (followers.py): sent
+    # once a day after this hour, local time in this zone.
+    digest_hour: int = Field(default=8, alias="DIGEST_HOUR")
+    digest_tz: str = Field(default="Europe/Brussels", alias="DIGEST_TZ")
     groups_api_url: str = Field(default="", alias="GROUPS_API_URL")
     # The git server's members file (git_members.py), written with the relay whitelist; the git
     # server (ngit-grasp, git.<domain>) re-reads it. Empty: no git server.

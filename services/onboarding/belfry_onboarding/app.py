@@ -39,6 +39,7 @@ from . import (
     email_code,
     eudi,
     feedback,
+    followers,
     gitview,
     groups_members,
     holder_invites,
@@ -187,7 +188,10 @@ def create_app(services: Services | None = None) -> FastAPI:
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
         await run_in_threadpool(core.sync_participants, app.state.services)
         app.state.sessions = sessions.Sessions(app.state.services)
-        async with sessions.running(app):  # name@domain sign-in by DM (sessions.py)
+        async with (
+            sessions.running(app),  # name@domain sign-in by DM (sessions.py)
+            followers.running(app),  # the announcements channel and its digests (followers.py)
+        ):
             yield
 
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
@@ -198,6 +202,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     sessions.register(app)  # /api/session: sign in to an app as name@domain (sessions.py)
     setup.register(app)  # belfry.<domain>/setup: settings over HTTPS (setup.py)
     connect.register(app)  # belfry.<domain>/connect: Sign in with <domain> for apps (connect.py)
+    followers.register(app)  # <domain>/follow: the announcements by e-mail (followers.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
@@ -296,7 +301,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         if request.headers.get("host", "").lower() != httpx.URL(settings.site_url).netloc.decode():
             return await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith(("/.well-known/", "/theme/")):
+        if path == "/" or path.startswith(("/.well-known/", "/theme/", "/follow")):
             return await call_next(request)
         if (path == "/git" or path.startswith("/git/")) and request.app.state.gitview is not None:
             return await call_next(request)  # the website's /git is the community's code
