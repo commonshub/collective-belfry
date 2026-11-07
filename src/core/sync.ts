@@ -10,7 +10,7 @@ import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, se
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
 
-export const KINDS_GROUPS = [39000, 39001, 39002, 9, 7, 9007, 9002, 9008, 5, 1985, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
+export const KINDS_GROUPS = [39000, 39001, 39002, 9, 7, 9007, 9002, 9008, 9021, 9022, 5, 1985, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
 export const KINDS_MAIN = [0, 31922, 31923, 31925, 5]
 
 const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.mainRelay }
@@ -82,9 +82,13 @@ async function dims(f: File): Promise<{ width?: number; height?: number }> {
 // ---- flushing the outbox ----------------------------------------------------
 
 let flushing = false
+let again = false // something was queued while a flush ran: run once more right after
 export async function flush() {
-  if (!signer || flushing) return
+  if (!signer) return
+  if (flushing) { again = true; return }
   flushing = true
+  again = false
+  let stalled = false
   try {
     for (const item of outboxItems()) {
       if (item.status === 'failed') continue
@@ -98,12 +102,13 @@ export async function flush() {
         const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
         if (msg.startsWith('restricted')) noteRefusal(msg)
         await putOutbox({ ...item, tries: item.tries + 1, status: permanent ? 'failed' : 'queued', error: msg })
-        if (!permanent) break // keep the order: retry this one before later items
+        if (!permanent) { stalled = true; break } // keep the order: retry this one before later items
       }
     }
   } finally {
     flushing = false
   }
+  if (again && !stalled) void flush()
 }
 
 export async function retry(localId: string) {

@@ -301,3 +301,13 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 .emoji-row button, .emoji-grid button { font-size: 26px; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; }
 .emoji-row button.on, .emoji-grid button.on { background: var(--surface-2, var(--surface)); outline: 1px solid var(--accent); }
 .emoji-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 4px; margin-top: 10px; max-height: 40vh; overflow-y: auto; }
+
+/* ---- pods ---- */
+.pods-bar { display: flex; gap: 6px; overflow-x: auto; padding: 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); scrollbar-width: none; }
+.pods-bar::-webkit-scrollbar { display: none; }
+.pods-bar button { flex: none; font-size: 13px; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); white-space: nowrap; }
+.pods-bar button small { margin-left: 6px; color: var(--muted); }
+.pod-card { cursor: pointer; }
+.pod-card .pod-ic { display: grid; place-items: center; font-size: 22px; height: 44px; padding: 0; }
+.pod-card .info small { white-space: normal; }
+.join-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--line); background: var(--surface); font-size: 14px; }

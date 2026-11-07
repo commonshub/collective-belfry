@@ -17,6 +17,22 @@ export async function createChannel(name: string, about: string, id = slug(name)
   return id
 }
 
+/** A pod (working group): its own group `pod-…`, announced in its parent (channel or pod),
+ *  which is what links the two. Pods nest: a pod can hold pods. */
+export async function createPod(name: string, about: string, parent = 'general') {
+  const id = 'pod-' + slug(name).slice(0, 24) + '-' + newId(2)
+  await createChannel(name, about, id)
+  await enqueue('groups', {
+    kind: 9,
+    content: `⬡ New pod: ${name}${about ? ' · ' + about : ''}`,
+    tags: [['h', parent], ['pod', id]],
+  })
+  return id
+}
+
+export const joinGroup = (id: string) => enqueue('groups', { kind: 9021, tags: [['h', id]] })
+export const leaveGroup = (id: string) => enqueue('groups', { kind: 9022, tags: [['h', id]] })
+
 export const editChannel = (id: string, name: string, about: string) =>
   enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })
 

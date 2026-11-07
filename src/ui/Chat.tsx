@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createChannel, deleteMessage, postMessage, react, topEmojis } from '../core/actions'
-import { displayName, eventCoordOf, groups, messages, profiles, reactions, type Message, type Reaction } from '../core/model'
+import { createChannel, createPod, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
+import { channelIcon, displayName, eventCoordOf, groups, messages, podOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
@@ -12,18 +12,30 @@ export function ChannelList({ current }: { current?: string }) {
   useVersion()
   const [creating, setCreating] = useState(false)
   const all = groups()
-  const chans = all.filter((g) => !g.isEvent)
+  const chans = all.filter((g) => !g.isEvent && !g.isPod)
   const events = all.filter((g) => g.isEvent)
+  const pods = all.filter((g) => g.isPod)
+  const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
     const m = messages(id).at(-1)
     return m ? `${displayName(m.ev.pubkey)}: ${m.text || (m.media.length ? '📷 photo' : '')}` : undefined
   }
-  const Row = ({ id, name, about, ev }: { id: string; name: string; about: string; ev?: boolean }) => (
-    <button className={'chan' + (id === current ? ' on' : '')} onClick={() => go('c/' + encodeURIComponent(id))}>
-      <span className="hash">{ev ? '📅' : '#'}</span>
-      <span className="t"><b>{name}</b><small>{last(id) ?? about}</small></span>
+  const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
+    <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
+      onClick={() => go('c/' + encodeURIComponent(g.id))}>
+      <span className="hash">{channelIcon(g)}</span>
+      <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
     </button>
   )
+  // pods nest under the channel or pod they were posted in: a tree, as deep as it goes
+  const Tree = ({ g, depth = 0, seen = new Set<string>() }: { g: Group; depth?: number; seen?: Set<string> }) => (
+    <>
+      <Row g={g} depth={depth} />
+      {pods.filter((x) => x.parent === g.id && !seen.has(x.id)).map((x) =>
+        <Tree key={x.id} g={x} depth={depth + 1} seen={new Set([...seen, g.id])} />)}
+    </>
+  )
+  const orphans = pods.filter((x) => !x.parent || !ids.has(x.parent))
   return (
     <div className="screen">
       <div className="topbar">
@@ -36,11 +48,12 @@ export function ChannelList({ current }: { current?: string }) {
           <span className="hash">📅</span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
         </button>
-        <div className="section-title">Channels <span>{chans.length}</span></div>
-        {chans.map((g) => <Row key={g.id} id={g.id} name={g.name} about={g.about} />)}
+        <div className="section-title">Channels and pods <span>{chans.length + pods.length}</span></div>
+        {chans.map((g) => <Tree key={g.id} g={g} />)}
+        {orphans.map((g) => <Tree key={g.id} g={g} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the village relay answers.</div>}
         {events.length > 0 && <div className="section-title">Event chats <span>{events.length}</span></div>}
-        {events.map((g) => <Row key={g.id} id={g.id} name={g.name} about={g.about} ev />)}
+        {events.map((g) => <Row key={g.id} g={g} />)}
         <div style={{ padding: 16 }}>
           <button className="btn ghost" onClick={() => setCreating(true)}>＋ Create a channel</button>
         </div>
@@ -75,20 +88,85 @@ function NewChannel({ onClose }: { onClose: () => void }) {
 
 export function ChannelView({ id }: { id: string }) {
   useVersion()
-  const g = groups().find((x) => x.id === id)
+  const all = groups()
+  const g = all.find((x) => x.id === id)
+  const parent = g?.isPod ? all.find((x) => x.id === g.parent) : undefined
+  const where = `Pod in ${channelIcon(parent)}${parent?.isPod ? ' ' : ''}${parent?.name ?? g?.parent}`
+  const sub = g?.isPod ? (g.about ? `${where} · ${g.about}` : where) : g?.about
   return (
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Channels" onClick={() => go('channels')}>☰</button>
         <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
-          {g?.isEvent ? '📅 ' : '# '}{g?.name ?? id}
-          {g?.about && <small>{g.about}</small>}
+          {channelIcon(g)} {g?.name ?? id}
+          {sub && <small>{sub}</small>}
         </h1>
         <MeButton />
       </div>
       <EventsBar channel={id} />
+      <PodsBar channel={id} />
       <Conversation id={id} events />
+      {g?.isPod && !g.members.has(me()) && (
+        <div className="join-bar">
+          <span>You're not in this pod yet.</span>
+          <button className="btn small" onClick={() => void joinGroup(id)}>Join</button>
+        </div>
+      )}
     </div>
+  )
+}
+
+/** Under a channel's name (after its events): the pods inside it. Nothing when none. */
+function PodsBar({ channel }: { channel: string }) {
+  const pods = groups().filter((x) => x.isPod && x.parent === channel)
+  if (!pods.length) return null
+  return (
+    <div className="pods-bar">
+      {pods.map((p) => (
+        <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>⬡ {p.name}<small>{p.members.size}</small></button>
+      ))}
+    </div>
+  )
+}
+
+/** The post a pod leaves in its parent: a card to open (or join) it. */
+function PodCard({ id, fallback }: { id: string; fallback: string }) {
+  const g = groups().find((x) => x.id === id)
+  if (!g) return <div className="text">{fallback}</div>
+  const inIt = g.members.has(me())
+  return (
+    <div className="ev-card pod-card" role="button" tabIndex={0} onClick={() => go('c/' + encodeURIComponent(id))}>
+      <div className="date pod-ic">⬡</div>
+      <span className="info">
+        <b>{g.name}</b>
+        {g.about && <small>{g.about}</small>}
+        <small>Pod · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : ''}</small>
+      </span>
+      {!inIt && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
+    </div>
+  )
+}
+
+function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
+  const [name, setName] = useState('')
+  const [about, setAbout] = useState('')
+  const where = groups().find((g) => g.id === parent)
+  return (
+    <Sheet title="New pod" onClose={onClose}>
+      <form onSubmit={async (e) => {
+        e.preventDefault()
+        const id = await createPod(name.trim(), about.trim(), parent)
+        onClose()
+        go('c/' + encodeURIComponent(id))
+      }}>
+        <label className="field"><span>Name</span>
+          <input className="input" autoFocus placeholder="e.g. Garden crew" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="field"><span>What is it working on?</span>
+          <textarea className="input" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+        <button className="btn" disabled={!name.trim()}>Create pod</button>
+        <p className="hint" style={{ marginTop: 10 }}>A working group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, tasks and pods.</p>
+      </form>
+    </Sheet>
   )
 }
 
@@ -104,6 +182,7 @@ export function MeButton() {
 
 export function Conversation({ id, events = false }: { id: string; events?: boolean }) {
   const [newEvent, setNewEvent] = useState(false)
+  const [newPod, setNewPod] = useState(false)
   useVersion()
   const list = messages(id)
   const ps = profiles()
@@ -128,7 +207,8 @@ export function Conversation({ id, events = false }: { id: string; events?: bool
         </div>
       </div>
       <Composer onSend={(text, files) => { stick.current = true; return postMessage(id, text, files) }}
-        onEvent={events ? () => setNewEvent(true) : undefined} />
+        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} />
+      {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
@@ -156,7 +236,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct }: { m: Message; pre
         {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
           {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
-          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : m.text && <div className="text">{m.text}</div>}
+          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : m.text && <div className="text">{m.text}</div>}
           <MediaGrid media={m.media} />
           {rx.length > 0 && (
             <div className="reactions">
@@ -213,7 +293,7 @@ function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: st
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; placeholder?: string }) {
+export function Composer({ onSend, onEvent, onPod, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; placeholder?: string }) {
   const [text, setText] = useState('')
   const [menu, setMenu] = useState(false)
   const [files, setFiles] = useState<File[]>([])
@@ -251,7 +331,7 @@ export function Composer({ onSend, onEvent, placeholder = 'Message' }: { onSend:
         </div>
       )}
       <div className="bar">
-        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files or an event' : 'Add photos or files'}
+        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event or a pod' : 'Add photos or files'}
           onClick={() => (onEvent ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
@@ -267,6 +347,7 @@ export function Composer({ onSend, onEvent, placeholder = 'Message' }: { onSend:
           <button className="btn ghost" onClick={() => { setMenu(false); picker.current?.click() }}>📷 Photos or files</button>
           <div style={{ height: 8 }} />
           <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>
+          {onPod && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onPod() }}>⬡ A pod (working group)</button></>}
         </Sheet>
       )}
     </div>

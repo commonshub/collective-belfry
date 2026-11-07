@@ -59,7 +59,21 @@ export interface Group {
   lastActivity: number
   members: Set<string>
   isEvent: boolean
+  /** A working group: a channel with a parent (where it was posted), members, events, sub-pods. */
+  isPod: boolean
+  /** For a pod: the channel or pod it lives in ('general' when unknown). */
+  parent?: string
   pending: boolean
+}
+
+export type ChannelType = 'channel' | 'event' | 'pod'
+export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g?.isPod ? 'pod' : 'channel')
+export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? '⬡' : '#')
+export const isPodId = (id: string) => id.startsWith('pod-')
+/** The pod a chat post announces (its `pod` tag), if any. */
+export const podOf = (e: Ev) => {
+  const v = tag(e, 'pod')
+  return v && isPodId(v) ? v : undefined
 }
 
 export function groups(): Group[] {
@@ -68,7 +82,7 @@ export function groups(): Group[] {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -94,7 +108,18 @@ export function groups(): Group[] {
       g.lastActivity = Math.max(g.lastActivity, e.created_at)
       g.members.add(e.pubkey)
     }
+    // join / leave (NIP-29 9021 / 9022): counted here too, whether or not the relay folds them in
+    if (e.kind === 9021) g.members.add(e.pubkey)
+    if (e.kind === 9022) g.members.delete(e.pubkey)
   }
+  // a pod lives where it was announced: the first post carrying its `pod` tag
+  for (const e of [...list].sort(byTime)) {
+    const pod = e.kind === 9 ? podOf(e) : undefined
+    const h = tag(e, 'h')
+    const g = pod ? map.get(pod) : undefined
+    if (g && h && h !== pod && !g.parent) g.parent = h
+  }
+  for (const g of map.values()) if (g.isPod && !g.parent) g.parent = 'general'
   const gone = new Set([...map.values()].filter((g) => list.some((e) => e.kind === 9008 && tag(e, 'h') === g.id)).map((g) => g.id))
   return [...map.values()]
     .filter((g) => !gone.has(g.id))

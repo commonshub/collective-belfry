@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { addTask, commentTask, editChannel, setMemberLabels, taskAction } from '../core/actions'
-import { displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
+import { addTask, commentTask, editChannel, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
+import { channelIcon, displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, MediaGrid, Sheet } from './common'
+import { Avatar, back, go, MediaGrid, Sheet } from './common'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files'
 
@@ -15,7 +15,7 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + id)}>‹</button>
-        <h1>{g?.isEvent ? '📅 ' : '# '}{g?.name ?? id}</h1>
+        <h1>{channelIcon(g)} {g?.name ?? id}</h1>
       </div>
       <Tabs tab={tab} setTab={setTab} />
       <div className="scroll">
@@ -49,12 +49,23 @@ function About({ id }: { id: string }) {
         <div className="hint" style={{ marginBottom: 4 }}>Description</div>
         <div style={{ whiteSpace: 'pre-wrap' }}>{g.about || <span className="hint">No description yet.</span>}</div>
       </div>
+      {g.isPod && (
+        <div className="card">
+          <div className="hint">Pod in</div>
+          <button className="link" onClick={() => go('c/' + encodeURIComponent(g.parent ?? 'general'))}>
+            {channelIcon(groups().find((x) => x.id === g.parent))} {groups().find((x) => x.id === g.parent)?.name ?? g.parent}
+          </button>
+        </div>
+      )}
       <div className="card">
         <div className="hint">Members</div>
         <div>{g.members.size}</div>
       </div>
+      {g.isPod && (g.members.has(me())
+        ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
+        : <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
       <button className="btn ghost" onClick={() => { setName(g.name); setAbout(g.about); setEditing(true) }}>Edit name and description</button>
-      <p className="hint" style={{ marginTop: 16 }}>Channel id <code>{g.id}</code></p>
+      <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
         <Sheet title="Edit channel" onClose={() => setEditing(false)}>
           <form onSubmit={async (e) => { e.preventDefault(); await editChannel(id, name.trim(), about.trim()); setEditing(false) }}>
