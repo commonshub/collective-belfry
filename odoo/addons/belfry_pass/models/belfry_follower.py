@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import secrets
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from odoo import api, fields, models
 from odoo.exceptions import UserError
@@ -11,7 +11,7 @@ from .belfry_steward import _check_service_caller
 
 _logger = logging.getLogger(__name__)
 
-FREQUENCIES = [('daily', 'Daily'), ('weekly', 'Weekly'), ('monthly', 'Monthly')]
+FREQUENCIES = [('asap', 'As soon as possible'), ('monthly', 'Monthly')]
 ASKS_PER_DAY = 3  # confirmation mails to one address within 24 hours
 EMAIL = re.compile(r'^[^@\s]+@[^@\s]+\.[^@\s]+$')
 DIGEST_DAY_PARAM = 'belfry.announcements_digest_day'
@@ -42,7 +42,7 @@ class BelfryFollower(models.Model):
         [('pending', 'Not confirmed'), ('active', 'Following'), ('stopped', 'Unsubscribed')],
         default='pending', required=True, readonly=True,
     )
-    frequency = fields.Selection(FREQUENCIES, default='daily', required=True)
+    frequency = fields.Selection(FREQUENCIES, default='monthly', required=True)
     token = fields.Char(required=True, copy=False, index=True, readonly=True,
                         default=lambda self: secrets.token_urlsafe(24), groups='belfry_pass.group_admin')
     confirmed_at = fields.Datetime(readonly=True)
@@ -128,13 +128,13 @@ class BelfryFollower(models.Model):
         return follower._belfry_public()
 
     @api.model
-    def belfry_follow_due(self, day):
-        """Followers whose digest is due on DAY (``YYYY-MM-DD``): daily ones every day, weekly
-        ones on Mondays, monthly ones on the 1st. ``since``: what they got already."""
+    def belfry_follow_due(self, frequency):
+        """Active followers of FREQUENCY (``asap``: mailed a few minutes after a post;
+        ``monthly``: on the 1st). ``since``: what they got already."""
         _check_service_caller(self.env)
-        d = date.fromisoformat(day)
-        freqs = ['daily'] + (['weekly'] if d.weekday() == 0 else []) + (['monthly'] if d.day == 1 else [])
-        rows = self.sudo().search([('state', '=', 'active'), ('frequency', 'in', freqs)])
+        if frequency not in dict(FREQUENCIES):
+            raise UserError("Unknown frequency.")
+        rows = self.sudo().search([('state', '=', 'active'), ('frequency', '=', frequency)])
         return [{'id': f.id, 'email': f.email or '', 'frequency': f.frequency, 'token': f.token,
                  'since': f.sent_until} for f in rows if f.email]
 

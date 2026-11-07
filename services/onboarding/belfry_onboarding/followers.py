@@ -11,13 +11,15 @@ member of the relay reads it.
 website posts the address to ``/follow`` (on the apex, the homepage's own origin), Odoo keeps a
 contact for it (``belfry.follower``, created when the address is new) and the belfry mails a link
 to confirm. The token in that link and in every digest's footer is the follower's only
-credential; ``/follow?t=…[&f=daily|weekly|monthly|stop]`` shows where they stand and a button for
-the change (a button, not the link itself: mail scanners open every link of a message).
+credential. Opening the confirmation link confirms (monthly unless the follower picks otherwise);
+``/follow?t=…[&f=asap|monthly|stop]`` shows where they stand and a button for the change (a
+button, not the link itself: mail scanners open every link of a message).
 Mails carry RFC 8058 one-click ``List-Unsubscribe``.
 
-**Digests.** Every morning after ``DIGEST_HOUR`` (local time, ``DIGEST_TZ``) the first worker to
-claim the day mails each due follower the announcements posted since their last digest: daily
-followers every day, weekly ones on Mondays, monthly ones on the 1st; nothing new, no mail.
+**Digests.** Followers choose "as soon as possible" (the posts of the last few minutes, mailed
+together once each post is ``ASAP_DELAY`` old, so a slip deleted right away is never mailed) or
+monthly (on the 1st, after ``DIGEST_HOUR`` local time in ``DIGEST_TZ``; the first worker to claim
+the day sends). Nothing new, no mail.
 
 Pages show fixed text only: never text taken from their address (flash.py).
 """
@@ -54,18 +56,19 @@ E = html.escape
 GROUP = "announcements"
 GENERAL = "general"
 MODEL = "belfry.follower"
-CHOICES = ("daily", "weekly", "monthly")
+CHOICES = ("asap", "monthly")
+ASAP_DELAY = 300  # seconds a post waits before it is mailed
 LOOP_SECONDS = 300
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 URL = re.compile(r"https?://[^\s<>\"']+")
 IMAGE = re.compile(r"\.(png|jpe?g|gif|webp|avif)(\?.*)?$", re.I)
 
 # Fixed messages, picked by key (a POST's outcome rides the flash cookie).
-SAID = {"daily": "every day", "weekly": "every week", "monthly": "every month"}
+LABEL = {"asap": "as soon as possible", "monthly": "monthly"}
+SAID = {"asap": "as soon as possible", "monthly": "once a month"}
 WHEN = {
-    "daily": "every morning, when there is something new",
-    "weekly": "on Monday mornings, when there is something new",
-    "monthly": "on the 1st of the month, when there is something new",
+    "asap": "a few minutes after each post",
+    "monthly": "on the 1st of each month, when there is something new",
 }
 
 
@@ -255,10 +258,10 @@ def footer(svc: Services, token: str, frequency: str) -> str:
     parts = []
     for choice in CHOICES:
         if choice == frequency:
-            parts.append(f"<strong>{choice}</strong>")
+            parts.append(f"<strong>{LABEL[choice]}</strong>")
         else:
             parts.append(
-                f'<a href="{E(link(svc, token, choice))}" style="color:{MUTED}">{choice}</a>'
+                f'<a href="{E(link(svc, token, choice))}" style="color:{MUTED}">{LABEL[choice]}</a>'
             )
     parts.append(f'<a href="{E(link(svc, token, "stop"))}" style="color:{MUTED}">unsubscribe</a>')
     return (
@@ -297,8 +300,7 @@ def text_html(text: str) -> str:
 def confirm_mail(svc: Services, token: str) -> tuple[str, str]:
     where = domain(svc)
     body = f"""<p style="margin:0 0 12px">Hello,</p>
-<p style="margin:0 0 12px">Someone (we hope you) asked to receive the public announcements of {E(where)} at this address.
-Confirm, and choose how often:</p>
+<p style="margin:0 0 12px">Someone (we hope you) asked to receive the public announcements of {E(where)} at this address.</p>
 <p style="margin:20px 0"><a href="{E(link(svc, token))}" style="display:inline-block;background:#a4532b;color:#ffffff;font-weight:600;padding:11px 20px;border-radius:8px;text-decoration:none">Confirm</a></p>
 <p style="margin:0;color:{MUTED}">If you did not ask for this, ignore this mail: nothing is sent without your confirmation.</p>"""
     return f"Confirm the announcements of {where}", _shell(
@@ -327,8 +329,8 @@ def digest_mail(
     return subject, _shell(svc, body, footer(svc, f["token"], f["frequency"]))
 
 
-def send_digests(svc: Services, day: str, until: int) -> dict[str, int]:
-    due = odoo(svc, "belfry_follow_due", day)
+def send_digests(svc: Services, frequency: str, until: int) -> dict[str, int]:
+    due = odoo(svc, "belfry_follow_due", frequency)
     if not due:
         return {"due": 0, "sent": 0}
     since = min(int(f["since"] or 0) for f in due)
@@ -345,8 +347,8 @@ def send_digests(svc: Services, day: str, until: int) -> dict[str, int]:
         except OdooError as exc:
             log.warning("announcements: digest for follower %s not queued: %s", f["id"], exc)
     log.info(
-        "announcements: %s, %d posts, %d of %d due followers mailed",
-        day,
+        "announcements: %s, %d posts, %d of %d followers mailed",
+        frequency,
         len(posts),
         sent,
         len(due),
@@ -355,19 +357,23 @@ def send_digests(svc: Services, day: str, until: int) -> dict[str, int]:
 
 
 def morning(svc: Services, now: dt.datetime | None = None) -> dict[str, Any] | None:
-    """Send today's digests once the morning hour has come, and only once a day."""
+    """On the 1st, once the morning hour has come, the monthly digests (once that day)."""
     tz = ZoneInfo(svc.settings.digest_tz)
     local = (now or dt.datetime.now(tz)).astimezone(tz)
-    if local.hour < svc.settings.digest_hour:
+    if local.day != 1 or local.hour < svc.settings.digest_hour:
         return None
-    day = local.date().isoformat()
-    if not odoo(svc, "belfry_follow_claim_day", day):
+    if not odoo(svc, "belfry_follow_claim_day", local.date().isoformat()):
         return None
-    return send_digests(svc, day, int(local.timestamp()))
+    return send_digests(svc, "monthly", int(local.timestamp()))
+
+
+def soon(svc: Services, now: float | None = None) -> dict[str, int]:
+    """The "as soon as possible" followers: posts at least ASAP_DELAY old they did not get yet."""
+    return send_digests(svc, "asap", int((now or time.time()) - ASAP_DELAY))
 
 
 def tick(svc: Services) -> None:
-    for job in (ensure_channels, morning):
+    for job in (ensure_channels, soon, morning):
         try:
             job(svc)
         except Exception as exc:  # noqa: BLE001 — retried on the next round
@@ -412,34 +418,21 @@ def _button(token: str, choice: str, label: str, cls: str) -> str:
 def state_page(svc: Services, token: str, state: dict[str, Any], want: str, msg: str) -> str:
     where = E(domain(svc))
     note = f'<p class="msg">{E(msg)}</p>' if msg else ""
-    s, freq = state.get("state"), state.get("frequency") or "daily"
+    s, freq = state.get("state"), state.get("frequency") or "monthly"
     if s == "unknown":
         body = f"""<h1>This link does not work</h1>
 <p class="muted">It may be cut off, or the subscription is gone. Subscribe again on the
 <a href="{E(base_url(svc))}/">website of {where}</a>.</p>"""
         return page("Announcements", f'<div class="card follow">{body}</div>')
-    if s == "pending":
-        opts = "".join(
-            _button(
-                token,
-                c,
-                f"Confirm, {SAID[c]}",
-                "btn" if c == (want if want in CHOICES else "daily") else "ghost",
-            )
-            for c in CHOICES
-        )
-        body = f"""<h1>Confirm the announcements</h1>
-<p>You asked to receive the public announcements of {where} by e-mail. How often?</p>
-<div class="opts">{opts}</div>
-<p class="muted">One mail at most per period, only when something was posted.</p>"""
-    elif s == "active":
+    if s == "active":
         top = ""
         if want in CHOICES and want != freq:
             top = f'<div class="opts">{_button(token, want, f"Receive them {SAID[want]} instead", "btn")}</div>'
         elif want == "stop":
             top = f'<div class="opts">{_button(token, "stop", "Unsubscribe", "btn")}</div>'
         opts = "".join(
-            _button(token, c, c.capitalize(), "ghost on" if c == freq else "ghost") for c in CHOICES
+            _button(token, c, LABEL[c].capitalize(), "ghost on" if c == freq else "ghost")
+            for c in CHOICES
         )
         body = f"""<h1>You follow {where}</h1>
 <p>Announcements reach {E(state.get("email") or "you")} {WHEN[freq]}.</p>{top}
@@ -523,6 +516,11 @@ def register(app: FastAPI) -> None:
         )
         msg, _ = flash.peek(request, s)
         want = f if f in (*CHOICES, "stop") else ""
+        if state.get("state") == "pending":
+            # the confirmation link: opening it confirms, monthly unless the link says otherwise
+            choice = want if want in CHOICES else "monthly"
+            state = await run_in_threadpool(odoo, s, "belfry_follow_set", t, choice)
+            msg, want = f"Confirmed. You will receive the announcements {SAID[choice]}.", ""
         body = state_page(s, t, state, want, msg)
         headers_ = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
         return flash.clear(HTMLResponse(body, headers=headers_), request)
@@ -538,8 +536,6 @@ def register(app: FastAPI) -> None:
             msg = ""
         elif f == "stop":
             msg = "Done: you are unsubscribed."
-        elif before.get("state") == "pending":
-            msg = f"Confirmed. You will receive the announcements {SAID[f]}."
         elif before.get("state") == "stopped":
             msg = f"Welcome back. You will receive the announcements {SAID[f]}."
         else:
@@ -553,4 +549,4 @@ def register(app: FastAPI) -> None:
         return Response(status_code=200)
 
 
-__all__ = ["register", "running", "ensure_channels", "send_digests", "morning", "footer"]
+__all__ = ["register", "running", "ensure_channels", "send_digests", "morning", "soon", "footer"]
