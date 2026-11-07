@@ -191,6 +191,7 @@ export function EventPage({ coord }: { coord: string }) {
   useVersion()
   const [tab, setTab] = useState<EvTab>('chat')
   const [topic, setTopic] = useState<string | undefined>()
+  const [open, setOpen] = useState<boolean | null>(null) // null: details shown until you answer
   const e = calendar().find((x) => x.coord === coord)
   if (!e) return (
     <div className="screen">
@@ -207,19 +208,30 @@ export function EventPage({ coord }: { coord: string }) {
         {groups().some((g) => g.id === e.groupId) && <FollowButton channel={e.groupId} />}
       </div>
       <div style={{ padding: '10px 12px 0' }}>
-        <div className="card" style={{ marginBottom: 8 }}>
-          {e.location && <div>📍 {e.location}</div>}
-          {e.links.map((l) => (
-            <a key={l} className="btn small" style={{ display: 'inline-flex', marginTop: 8, marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join on {meetingLabel(l)}</a>
-          ))}
-          {e.description && <Markdown className="hint" text={e.description} style={{ marginTop: 6, maxHeight: 160, overflowY: 'auto' }} />}
-          <div className="hint" style={{ marginTop: 6, fontSize: 13 }}>Posted by {displayName(e.ev.pubkey)} · {going(e)} going</div>
-          <div className="rsvp" style={{ marginTop: 10 }}>
-            {(['accepted', 'tentative', 'declined'] as Rsvp[]).map((s) => (
-              <button key={s} className={mine === s ? 'on' : ''} onClick={() => rsvp(e, s)}>{LABEL[s]}</button>
+        {mine && !(open ?? false) ? (
+          <button className="card ev-status" style={{ marginBottom: 8 }} aria-expanded={false} onClick={() => setOpen(true)}>
+            <span><b>{mine === 'accepted' ? '✓ ' : ''}{LABEL[mine]}</b> · {going(e)} going</span>
+            <span className="hint">Details ▾</span>
+          </button>
+        ) : (
+          <div className="card" style={{ marginBottom: 8 }}>
+            {mine && <button className="ev-status" aria-expanded onClick={() => setOpen(false)}>
+              <span><b>{mine === 'accepted' ? '✓ ' : ''}{LABEL[mine]}</b> · {going(e)} going</span>
+              <span className="hint">Hide ▴</span>
+            </button>}
+            {e.location && <div style={{ marginTop: mine ? 8 : 0 }}>📍 {e.location}</div>}
+            {e.links.map((l) => (
+              <a key={l} className="btn small" style={{ display: 'inline-flex', marginTop: 8, marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join on {meetingLabel(l)}</a>
             ))}
+            {e.description && <Markdown className="hint" text={e.description} style={{ marginTop: 6, maxHeight: 160, overflowY: 'auto' }} />}
+            <div className="hint" style={{ marginTop: 6, fontSize: 13 }}>Posted by {displayName(e.ev.pubkey)}{mine ? '' : ` · ${going(e)} going`}</div>
+            <div className="rsvp" style={{ marginTop: 10 }}>
+              {(['accepted', 'tentative', 'declined'] as Rsvp[]).map((s) => (
+                <button key={s} className={mine === s ? 'on' : ''} onClick={() => { rsvp(e, s); setOpen(null) }}>{LABEL[s]}</button>
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
       <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'Tasks'], ['files', 'Files']]} />
       {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <><TopicsBar groupId={e.groupId} active={topic} onOpen={setTopic} /><Conversation id={e.groupId} topic={topic} onTopic={setTopic} /></> : (
