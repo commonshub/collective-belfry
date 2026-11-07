@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
-import { channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
+import { channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
+import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -13,9 +14,9 @@ export function ChannelList({ current }: { current?: string }) {
   useVersion()
   const [creating, setCreating] = useState(false)
   const all = groups()
-  const chans = all.filter((g) => !g.isEvent && !g.isPod)
+  const chans = all.filter((g) => !g.isEvent && !g.isPod && !g.isProposal)
   const events = all.filter((g) => g.isEvent)
-  const pods = all.filter((g) => g.isPod)
+  const pods = all.filter((g) => g.isPod || g.isProposal)
   const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
     const m = messages(id).at(-1)
@@ -49,7 +50,7 @@ export function ChannelList({ current }: { current?: string }) {
           <span className="hash">📅</span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
         </button>
-        <div className="section-title">Channels and pods <span>{chans.length + pods.length}</span></div>
+        <div className="section-title">Channels <span>{chans.length + pods.length}</span></div>
         {chans.map((g) => <Tree key={g.id} g={g} />)}
         {orphans.map((g) => <Tree key={g.id} g={g} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the village relay answers.</div>}
@@ -92,9 +93,9 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   useVersion()
   const all = groups()
   const g = all.find((x) => x.id === id)
-  const parent = g?.isPod ? all.find((x) => x.id === g.parent) : undefined
-  const where = `Pod in ${channelIcon(parent)}${parent?.isPod ? ' ' : ''}${parent?.name ?? g?.parent}`
-  const sub = g?.isPod ? (g.about ? `${where} · ${g.about}` : where) : g?.about
+  const parent = g?.isPod || g?.isProposal ? all.find((x) => x.id === g.parent) : undefined
+  const where = `${g?.isProposal ? 'Proposal' : 'Pod'} in ${channelIcon(parent)}${parent?.isPod ? ' ' : ''}${parent?.name ?? g?.parent}`
+  const sub = g?.isPod || g?.isProposal ? (g.about ? `${where} · ${g.about}` : where) : g?.about
   return (
     <div className="screen">
       <div className="topbar">
@@ -107,6 +108,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
       </div>
       <EventsBar channel={id} />
       <PodsBar channel={id} />
+      {g?.isProposal && <ProposalHeader groupId={id} />}
       <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
       {g?.isPod && g.admins.has(me()) && g.applications.length > 0 && (
         <button className="join-bar" style={{ borderTop: 0, borderBottom: '1px solid var(--line)', width: '100%' }} onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
@@ -155,12 +157,18 @@ function JoinBar({ g }: { g: Group }) {
 
 /** Under a channel's name (after its events): the pods inside it. Nothing when none. */
 function PodsBar({ channel }: { channel: string }) {
-  const pods = groups().filter((x) => x.isPod && x.parent === channel)
-  if (!pods.length) return null
+  const subs = groups().filter((x) => (x.isPod || x.isProposal) && x.parent === channel)
+  const props = new Map(subs.filter((x) => x.isProposal).map((x) => [x.id, proposalFor(x.id)]))
+  // pods, then proposals still in play (passed, rejected and closed ones stay in the channel list)
+  const shown = [...subs.filter((x) => x.isPod), ...subs.filter((x) => x.isProposal && !['passed', 'rejected', 'closed'].includes(props.get(x.id)?.status ?? 'draft'))]
+  if (!shown.length) return null
   return (
     <div className="pods-bar">
-      {pods.map((p) => (
-        <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>⬡ {p.name}<small>{p.members.size}</small></button>
+      {shown.map((p) => (
+        <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>
+          {channelIcon(p)} {p.name}
+          {p.isPod ? <small>{p.members.size}</small> : props.get(p.id) && <small>v{props.get(p.id)!.version}</small>}
+        </button>
       ))}
     </div>
   )
@@ -239,6 +247,7 @@ export function MeButton() {
 export function Conversation({ id, events = false, readOnly = false, topic, onTopic }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
+  const [newProp, setNewProp] = useState(false)
   useVersion()
   const list = messages(id).filter((m) => !topic || m.topics.includes(topic))
   const ps = profiles()
@@ -263,7 +272,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         </div>
       </div>
       {!readOnly && <Composer placeholder={topic ? `Message #${topic}` : undefined} onSend={(text, files) => { stick.current = true; return postMessage(id, text, files, topic) }}
-        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} />}
+        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
+      {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
@@ -295,7 +305,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic }: {
         {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
           {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
-          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
+          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
           {rx.length > 0 && (
@@ -353,7 +363,7 @@ function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: st
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; placeholder?: string }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string }) {
   const [text, setText] = useState('')
   const [menu, setMenu] = useState(false)
   const [files, setFiles] = useState<File[]>([])
@@ -391,7 +401,7 @@ export function Composer({ onSend, onEvent, onPod, placeholder = 'Message' }: { 
         </div>
       )}
       <div className="bar">
-        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event or a pod' : 'Add photos or files'}
+        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a pod' : 'Add photos or files'}
           onClick={() => (onEvent ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
@@ -407,6 +417,7 @@ export function Composer({ onSend, onEvent, onPod, placeholder = 'Message' }: { 
           <button className="btn ghost" onClick={() => { setMenu(false); picker.current?.click() }}>📷 Photos or files</button>
           <div style={{ height: 8 }} />
           <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>
+          {onProposal && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onProposal() }}>📝 A proposal</button></>}
           {onPod && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onPod() }}>⬡ A pod (working group)</button></>}
         </Sheet>
       )}

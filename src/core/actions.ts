@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { hashtags, listIdFor, normTopic, TOPIC_NS, type CalEvent, type Rsvp } from './model'
+import { hashtags, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -183,3 +183,58 @@ export const deleteEvent = (e: CalEvent) =>
   enqueue('main', { kind: 5, tags: [['a', e.coord], ['e', e.ev.id]] })
 
 export const isMine = (pubkey: string) => pubkey === me()
+
+// ---- proposals ------------------------------------------------------------------------------
+
+export interface NewProposal { title: string; summary: string; text: string; status: ProposalStatus }
+
+const proposalTags = (d: string, groupId: string, n: NewProposal, version: number, status: ProposalStatus) => [
+  ['d', d], ['title', n.title], ['summary', n.summary], ['t', 'proposal'], ['h', groupId, BELFRY.groupsRelay],
+  ['version', String(version)], ['status', status], ['published_at', String(Math.floor(Date.now() / 1000))],
+]
+
+/** A proposal: its own chat `prop-…` (for feedback), its text (NIP-23, version 1) and a card in
+ *  the parent channel or pod. */
+export async function createProposal(n: NewProposal, parent = 'general') {
+  const x = newId(3)
+  const groupId = 'prop-' + slug(n.title).slice(0, 24) + '-' + x
+  const d = 'proposal-' + x
+  await createChannel(n.title, n.summary || 'Proposal', groupId)
+  await enqueue('main', { kind: 30023, content: n.text, tags: proposalTags(d, groupId, n, 1, n.status) })
+  const coord = `30023:${me()}:${d}`
+  await enqueue('groups', {
+    kind: 9,
+    content: `📝 Proposal: ${n.title}${n.summary ? ' · ' + n.summary : ''}`,
+    tags: [['h', parent], ['proposal', groupId], ['a', coord, BELFRY.mainRelay]],
+  })
+  if (n.status === 'voting') await openVote(groupId, coord, n.title, 1)
+  return groupId
+}
+
+/** A new version: the text replaced (same d, version + 1) and a note in its chat saying what changed. */
+export async function reviseProposal(p: Proposal, n: Omit<NewProposal, 'status'>, note: string) {
+  const version = p.version + 1
+  await enqueue('main', { kind: 30023, content: n.text, tags: proposalTags(p.d, p.groupId, { ...n, status: p.status }, version, p.status) })
+  await enqueue('groups', {
+    kind: 9,
+    content: `📝 Version ${version}${note.trim() ? ': ' + note.trim() : ''}`,
+    tags: [['h', p.groupId], ['a', p.coord, BELFRY.mainRelay], ['version', String(version)]],
+  })
+  // a vote is on one version: a new version under vote opens a new poll
+  if (p.status === 'voting') await openVote(p.groupId, p.coord, n.title, version)
+}
+
+const openVote = (groupId: string, coord: string, title: string, version: number) =>
+  enqueue('groups', {
+    kind: 1068,
+    content: `${title} (version ${version}): do you approve?`,
+    tags: [['h', groupId], ['a', coord], ['version', String(version)], ['polltype', 'singlechoice'], ...VOTE_OPTIONS.map(([id, label]) => ['option', id, label])],
+  })
+
+export async function setProposalStatus(p: Proposal, status: ProposalStatus) {
+  await enqueue('groups', { kind: 1985, tags: [['h', p.groupId], ['L', PROPOSAL_NS], ['l', status, PROPOSAL_NS], ['a', p.coord]] })
+  if (status === 'voting' && (!p.poll || p.poll.version !== p.version)) await openVote(p.groupId, p.coord, p.title, p.version)
+}
+
+export const vote = (p: Proposal, option: string) =>
+  p.poll && enqueue('groups', { kind: 1018, tags: [['h', p.groupId], ['e', p.poll.ev.id], ['response', option]] })

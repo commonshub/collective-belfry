@@ -61,7 +61,9 @@ export interface Group {
   isEvent: boolean
   /** A working group: a channel with a parent (where it was posted), members, events, sub-pods. */
   isPod: boolean
-  /** For a pod: the channel or pod it lives in ('general' when unknown). */
+  /** A proposal: a channel holding one NIP-23 text (versioned), a status and a vote. */
+  isProposal: boolean
+  /** For a pod or proposal: the channel or pod it lives in ('general' when unknown). */
   parent?: string
   /** NIP-29 `closed`: joining takes an application (9021) that an admin admits (9000). */
   closed: boolean
@@ -75,14 +77,20 @@ export interface Group {
 
 export interface Application { pubkey: string; answer: string; at: number; ev: Ev }
 
-export type ChannelType = 'channel' | 'event' | 'pod'
-export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g?.isPod ? 'pod' : 'channel')
-export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? '⬡' : '#')
+export type ChannelType = 'channel' | 'event' | 'pod' | 'proposal'
+export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g?.isPod ? 'pod' : g?.isProposal ? 'proposal' : 'channel')
+export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? '⬡' : g?.isProposal ? '📝' : '#')
 export const isPodId = (id: string) => id.startsWith('pod-')
+export const isProposalId = (id: string) => id.startsWith('prop-')
 /** The pod a chat post announces (its `pod` tag), if any. */
 export const podOf = (e: Ev) => {
   const v = tag(e, 'pod')
   return v && isPodId(v) ? v : undefined
+}
+/** The proposal a chat post announces (its `proposal` tag), if any. */
+export const proposalOf = (e: Ev) => {
+  const v = tag(e, 'proposal')
+  return v && isProposalId(v) ? v : undefined
 }
 
 export function groups(): Group[] {
@@ -93,7 +101,7 @@ export function groups(): Group[] {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -141,12 +149,12 @@ export function groups(): Group[] {
   }
   // a pod lives where it was announced: the first post carrying its `pod` tag
   for (const e of [...list].sort(byTime)) {
-    const pod = e.kind === 9 ? podOf(e) : undefined
+    const pod = e.kind === 9 ? podOf(e) ?? proposalOf(e) : undefined
     const h = tag(e, 'h')
     const g = pod ? map.get(pod) : undefined
     if (g && h && h !== pod && !g.parent) g.parent = h
   }
-  for (const g of map.values()) if (g.isPod && !g.parent) g.parent = 'general'
+  for (const g of map.values()) if ((g.isPod || g.isProposal) && !g.parent) g.parent = 'general'
   for (const [k, e] of applied) {
     const g = map.get(k.slice(0, -64))
     if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
@@ -367,4 +375,92 @@ export function calendar(): CalEvent[] {
     })
   }
   return out.sort((a, b) => +a.start - +b.start)
+}
+
+// ---- proposals ----------------------------------------------------------------------------
+// The text: a NIP-23 long-form event (kind 30023, `t` proposal, `h` its chat, `version` N), on
+// the community relay; only its author edits it. The status: the latest NIP-32 label (namespace
+// below) in its chat by the author or an admin. The vote: a NIP-88 poll (1068) in its chat,
+// answered with 1018 responses (latest per member counts).
+
+export type ProposalStatus = 'draft' | 'feedback' | 'voting' | 'passed' | 'rejected' | 'closed'
+export const PROPOSAL_NS = 'belfry/proposal-status'
+export const STATUS_LABEL: Record<ProposalStatus, string> = {
+  draft: 'Draft', feedback: 'Open for feedback', voting: 'Open for votes', passed: 'Passed', rejected: 'Rejected', closed: 'Closed',
+}
+export const STATUSES = Object.keys(STATUS_LABEL) as ProposalStatus[]
+export const VOTE_OPTIONS = [['yes', 'Yes'], ['no', 'No'], ['abstain', 'Abstain']] as const
+
+export interface Proposal {
+  coord: string
+  d: string
+  ev: Ev
+  author: string
+  groupId: string
+  title: string
+  summary: string
+  text: string
+  version: number
+  status: ProposalStatus
+  /** The latest poll on it, with its version and each member's latest answer. */
+  poll?: { ev: Ev; version: number; votes: Map<string, string> }
+}
+
+export function proposals(): Proposal[] {
+  const list = all(me())
+  const del = deleted(list)
+  const latest = new Map<string, Ev>()
+  for (const e of list) {
+    if (e.kind !== 30023 || !e.tags.some((t) => t[0] === 't' && t[1] === 'proposal')) continue
+    const coord = `30023:${e.pubkey}:${tag(e, 'd')}`
+    const prev = latest.get(coord)
+    if (!prev || byTime(prev, e) < 0) latest.set(coord, e)
+  }
+  const gs = new Map(groups().map((g) => [g.id, g]))
+  const out: Proposal[] = []
+  for (const [coord, e] of latest) {
+    if (del.has(coord)) continue
+    const groupId = tag(e, 'h') ?? ''
+    const g = gs.get(groupId)
+    const parent = g?.parent ? gs.get(g.parent) : undefined
+    const may = (pk: string) => pk === e.pubkey || !!g?.admins.has(pk) || !!parent?.admins.has(pk)
+    let status = (tag(e, 'status') as ProposalStatus) || 'draft'
+    let statusAt = 0
+    let poll: Proposal['poll']
+    for (const x of list) {
+      if (tag(x, 'h') !== groupId) continue
+      if (x.kind === 1985 && tag(x, 'L') === PROPOSAL_NS && may(x.pubkey) && x.created_at >= statusAt) {
+        const l = x.tags.find((t) => t[0] === 'l' && t[2] === PROPOSAL_NS)?.[1] as ProposalStatus | undefined
+        if (l && l in STATUS_LABEL) { status = l; statusAt = x.created_at }
+      }
+      if (x.kind === 1068 && tag(x, 'a') === coord && (!poll || byTime(poll.ev, x) < 0))
+        poll = { ev: x, version: Number(tag(x, 'version')) || 1, votes: new Map() }
+    }
+    if (poll) {
+      const at = new Map<string, number>()
+      for (const x of list) {
+        if (x.kind !== 1018 || tag(x, 'e') !== poll.ev.id) continue
+        if ((at.get(x.pubkey) ?? -1) > x.created_at) continue
+        const r = tag(x, 'response')
+        if (r) { poll.votes.set(x.pubkey, r); at.set(x.pubkey, x.created_at) }
+      }
+    }
+    out.push({
+      coord, d: tag(e, 'd')!, ev: e, author: e.pubkey, groupId,
+      title: tag(e, 'title') || 'Untitled proposal', summary: tag(e, 'summary') ?? '', text: e.content,
+      version: Number(tag(e, 'version')) || 1, status, poll,
+    })
+  }
+  return out
+}
+
+export const proposalFor = (groupId: string) => proposals().find((p) => p.groupId === groupId)
+
+/** Who may change a proposal's status: its author and the admins of its chat or its parent. */
+export function canDecide(p: Proposal) {
+  const gs = groups()
+  const g = gs.find((x) => x.id === p.groupId)
+  const parent = gs.find((x) => x.id === g?.parent)
+  const k = me()
+  return k === p.author || !!g?.admins.has(k) || !!parent?.admins.has(k)
 }

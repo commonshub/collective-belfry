@@ -335,3 +335,16 @@ a.chip { text-decoration: none; color: inherit; }
 [data-theme='belfry'] .hashtag { text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .msg-topics { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
 .msg-topics button { font-size: 12px; color: var(--muted); padding: 1px 7px; border-radius: 99px; background: var(--surface); }
+
+/* ---- proposals ---- */
+.prop-head { padding: 8px 12px 10px; border-bottom: 1px solid var(--line); background: var(--bg); max-height: 45vh; overflow-y: auto; flex: none; }
+.prop-line { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; font-size: 13px; }
+.prop-line .hint:last-child { margin-left: auto; }
+.prop-text { margin-top: 8px; font-size: 15px; }
+.badge.st-draft { background: var(--surface-2, var(--surface)); color: var(--muted); }
+.badge.st-feedback { background: #dbeafe; color: #1e3a8a; }
+.badge.st-voting { background: #fef3c7; color: #78350f; }
+.badge.st-passed { background: #dcfce7; color: #14532d; }
+.badge.st-rejected { background: #fee2e2; color: #7f1d1d; }
+.badge.st-closed { background: var(--surface-2, var(--surface)); color: var(--muted); }
+.rsvp button small { margin-left: 4px; opacity: 0.7; }
