@@ -163,12 +163,13 @@ export function groups(): Group[] {
   const gone = new Set([...map.values()].filter((g) => list.some((e) => e.kind === 9008 && tag(e, 'h') === g.id)).map((g) => g.id))
   return [...map.values()]
     .filter((g) => !gone.has(g.id))
-    .sort((a, b) => rank(a.id) - rank(b.id) || b.lastActivity - a.lastActivity)
+    .sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.lastActivity - a.lastActivity))
 }
 
-/** Admins only post there (closed, admins are its members); Belfry makes it next to general. */
-export const ANNOUNCEMENTS = 'announcements'
-const rank = (id: string) => (id === 'general' ? 0 : id === ANNOUNCEMENTS ? 1 : 2)
+/** An announcement: a message tagged `t announcement` (NIP-24) by one of its channel's admins.
+ *  Any member can tag one; only the admins' count (here and in Belfry's e-mails to followers). */
+export const ANNOUNCE = 'announcement'
+export const isAnnouncement = (m: Message, g?: Group) => m.topics.includes(ANNOUNCE) && !!g?.admins.has(m.ev.pubkey)
 
 export const group = (id: string) => groups().find((g) => g.id === id)
 

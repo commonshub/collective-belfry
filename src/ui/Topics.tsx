@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { setTopics } from '../core/actions'
-import { HASHTAG, normTopic, topics } from '../core/model'
+import { ANNOUNCE, group, HASHTAG, isAnnouncement, messages, normTopic, topics } from '../core/model'
 import { useVersion } from '../core/store'
 import { Sheet } from './common'
 
@@ -72,12 +72,15 @@ export function RichText({ text, groupId, onOpen }: { text: string; groupId: str
 /** The pinned topics, a scrolling line; the open one highlighted (shown even if not pinned). */
 export function TopicsBar({ groupId, active, onOpen }: { groupId: string; active?: string; onOpen: (t?: string) => void }) {
   useVersion()
-  const list = topics(groupId)
-  const all = active && !list.includes(active) ? [active, ...list] : list
+  const list = topics(groupId).filter((t) => t !== ANNOUNCE)
+  const all = active && active !== ANNOUNCE && !list.includes(active) ? [active, ...list] : list
+  const g = group(groupId)
+  const announced = active === ANNOUNCE || messages(groupId).some((m) => isAnnouncement(m, g))
   const [menu, setMenu] = useState<string | null>(null)
-  if (!all.length) return null
+  if (!all.length && !announced) return null
   return (
     <div className="topics-bar">
+      {announced && <button className={active === ANNOUNCE ? 'on' : ''} onClick={() => onOpen(active === ANNOUNCE ? undefined : ANNOUNCE)}>📣 Announcements{active === ANNOUNCE && <span aria-hidden="true"> ✕</span>}</button>}
       {all.map((t) => <TopicChip key={t} t={t} on={t === active} onTap={() => onOpen(t === active ? undefined : t)} onHold={() => setMenu(t)} />)}
       {menu && <TopicMenu groupId={groupId} topic={menu} onClose={() => setMenu(null)} />}
     </div>

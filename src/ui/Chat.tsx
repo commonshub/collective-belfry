@@ -1,7 +1,8 @@
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
+import { FollowButton } from './Follow'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
-import { ANNOUNCEMENTS, channelIcon, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
+import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
@@ -107,6 +108,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
           {channelIcon(g)} {g?.name ?? id}
           {sub && <small>{sub}</small>}
         </h1>
+        <FollowButton channel={id} />
         <MeButton />
       </div>
       <EventsBar channel={id} />
@@ -121,8 +123,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
       {g?.isPod && <Tabs tab={podTab} setTab={setPodTab} tabs={[['chat', 'Chat'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']]} />}
       {podTab === 'chat' && <>
         <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
-        <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={(!!g?.isPod && g.closed && !g.members.has(me())) || (id === ANNOUNCEMENTS && !g?.members.has(me()))} />
-        {id === ANNOUNCEMENTS && !g?.members.has(me()) && <div className="join-bar"><span>Only admins post here. Everyone can read, and anyone can follow by e-mail from the website.</span></div>}
+        <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       </>}
       {podTab !== 'chat' && (
         <div className="scroll">
@@ -263,7 +264,9 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
   useVersion()
-  const list = messages(id).filter((m) => !topic || m.topics.includes(topic))
+  const g = group(id)
+  const admin = !!g?.admins.has(me())
+  const list = messages(id).filter((m) => !topic || (topic === ANNOUNCE ? isAnnouncement(m, g) : m.topics.includes(topic)))
   const ps = profiles()
   const rx = reactions(id)
   const [acting, setActing] = useState<Message | null>(null)
@@ -280,12 +283,13 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       <div className="scroll" ref={scroller}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
-          {list.length === 0 && <div className="empty">{topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
+          {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} name={displayName(m.ev.pubkey, ps)} groupId={id}
-            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} />)}
+            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)} />)}
         </div>
       </div>
-      {!readOnly && <Composer placeholder={topic ? `Message #${topic}` : undefined} onSend={(text, files) => { stick.current = true; return postMessage(id, text, files, topic) }}
+      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+        onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce) }}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
@@ -295,10 +299,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
-  const extra = m.topics.filter((t) => !inText.has(t) && t !== topic)
+  const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
   const d = new Date(m.ev.created_at * 1000)
   const newDay = !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString()
   const first = newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
@@ -309,16 +313,16 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic }: {
   return (
     <>
       {newDay && <div className="day">{fmtDay(d)}</div>}
-      <div className={'msg' + (first ? ' first' : '') + (p ? ' pending' : '')}
+      <div className={'msg' + (first || announce ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
         onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
         onPointerDown={(e) => {
           if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
           hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
         }}
         onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
-        {first ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
+        {first || announce ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
-          {first && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time></div>}
+          {(first || announce) && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time>{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
@@ -377,8 +381,10 @@ function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: st
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message' }: { onSend: (text: string, files: File[]) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message', canAnnounce = false, announcing = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean }) {
   const [text, setText] = useState('')
+  const [ann, setAnn] = useState(announcing)
+  useEffect(() => setAnn(announcing), [announcing])
   const [menu, setMenu] = useState(false)
   const [files, setFiles] = useState<File[]>([])
   const ta = useRef<HTMLTextAreaElement>(null)
@@ -397,13 +403,21 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
     if (!text.trim() && !files.length) return
     const t = text.trim()
     const f = files
+    const a = canAnnounce && ann
     setText('')
     setFiles([])
-    await onSend(t, f)
+    if (!announcing) setAnn(false)
+    await onSend(t, f, a)
   }
 
   return (
     <div className="composer">
+      {canAnnounce && ann && (
+        <div className="announce-mode">
+          <span>📣 Announcement: sent to the channel and e-mailed to its followers</span>
+          {!announcing && <button aria-label="Not an announcement" onClick={() => setAnn(false)}>✕</button>}
+        </div>
+      )}
       {files.length > 0 && (
         <div className="previews">
           {files.map((f, i) => (
@@ -416,21 +430,22 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
       )}
       <div className="bar">
         <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a pod' : 'Add photos or files'}
-          onClick={() => (onEvent ? setMenu(true) : picker.current?.click())}>＋</button>
+          onClick={() => (onEvent || canAnnounce ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
-        <textarea ref={ta} rows={1} placeholder={placeholder} value={text} onChange={(e) => setText(e.target.value)}
+        <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             // Enter sends on a keyboard; on phones the return key adds a line
             if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() }
           }} />
         <button className="send" aria-label="Send" disabled={!text.trim() && !files.length} onClick={() => void send()}>↑</button>
       </div>
-      {menu && onEvent && (
+      {menu && (onEvent || canAnnounce) && (
         <Sheet title="Add" onClose={() => setMenu(false)}>
           <button className="btn ghost" onClick={() => { setMenu(false); picker.current?.click() }}>📷 Photos or files</button>
           <div style={{ height: 8 }} />
-          <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>
+          {canAnnounce && <><button className="btn ghost" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}>📣 An announcement</button><div style={{ height: 8 }} /></>}
+          {onEvent && <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>}
           {onProposal && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onProposal() }}>📝 A proposal</button></>}
           {onPod && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onPod() }}>⬡ A pod (working group)</button></>}
         </Sheet>

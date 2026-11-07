@@ -9,6 +9,7 @@ import { Avatar, back, fmtDay, go, Sheet } from './common'
 import { Conversation } from './Chat'
 import { TopicsBar } from './Topics'
 import { Files, Tabs, Tasks } from './ChannelInfo'
+import { FollowButton } from './Follow'
 
 const when = (e: CalEvent) => {
   if (e.allDay) return 'All day'
@@ -203,6 +204,7 @@ export function EventPage({ coord }: { coord: string }) {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + encodeURIComponent(e.channel))}>‹</button>
         <h1>{e.title}<small>{fmtDay(e.start)} · {when(e)}</small></h1>
+        {groups().some((g) => g.id === e.groupId) && <FollowButton channel={e.groupId} />}
       </div>
       <div style={{ padding: '10px 12px 0' }}>
         <div className="card" style={{ marginBottom: 8 }}>

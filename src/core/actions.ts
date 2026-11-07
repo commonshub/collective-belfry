@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { hashtags, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp } from './model'
+import { hashtags, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -52,11 +52,12 @@ export const editChannel = (id: string, name: string, about: string) =>
   enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })
 
 /** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a
- *  `t` tag too, without being written in the text. */
-export const postMessage = (groupId: string, text: string, files: File[], topic?: string) =>
+ *  `t` tag too, without being written in the text, and so is `announcement` for an admin's
+ *  announcement (mailed to the channel's followers). */
+export const postMessage = (groupId: string, text: string, files: File[], topic?: string, announce = false) =>
   enqueue('groups', {
     kind: 9, content: text,
-    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...hashtags(text)])].map((t) => ['t', t])],
+    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t])],
   }, files)
 
 /** Pin / unpin a channel's topics: one NIP-32 label event with the whole list (latest wins). */

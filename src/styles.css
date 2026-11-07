@@ -348,3 +348,11 @@ a.chip { text-decoration: none; color: inherit; }
 .badge.st-rejected { background: #fee2e2; color: #7f1d1d; }
 .badge.st-closed { background: var(--surface-2, var(--surface)); color: var(--muted); }
 .rsvp button small { margin-left: 4px; opacity: 0.7; }
+
+/* announcements: an admin's message flagged for the channel's followers */
+.msg.announce .body { background: color-mix(in srgb, var(--accent, #a4532b) 7%, transparent); border-radius: 12px; padding: 6px 10px 8px; margin-right: 8px; }
+.announce-badge { margin-left: 8px; font-size: 11px; font-weight: 600; }
+.announce-mode { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.announce-mode button { background: none; border: 0; font: inherit; cursor: pointer; color: var(--muted, #6b6460); }
+.follow-btn { font-size: 18px; }
+.follow-btn:not(.on) { filter: grayscale(1); opacity: 0.45; }
