@@ -134,7 +134,7 @@ async function fromRumor(rumor: NostrEvent): Promise<Dm | null> {
 }
 
 const b64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0))
-async function fetchLarge(l: { url: string; key: string; nonce: string }): Promise<string> {
+export async function fetchLarge(l: { url: string; key: string; nonce: string }): Promise<string> {
   const blob = new Uint8Array(await (await fetch(l.url)).arrayBuffer())
   const key = await crypto.subtle.importKey('raw', b64(l.key), 'AES-GCM', false, ['decrypt'])
   return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64(l.nonce) }, key, blob))

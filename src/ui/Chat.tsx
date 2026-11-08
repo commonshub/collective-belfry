@@ -10,6 +10,7 @@ import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
 import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
+import { FullMail, mailOf, mailText, ViaMail } from './MailPost'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -324,23 +325,28 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const newDay = !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString()
   const first = newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
   const p = m.ev.pending
+  const mail = mailOf(m.ev)
+  const [fullMail, setFullMail] = useState(false)
   // press and hold (phones) or right-click: react, or delete your own
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
   return (
     <>
       {newDay && <div className="day">{fmtDay(d)}</div>}
-      <div className={'msg' + (first || announce ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
+      <div className={'msg' + (first || announce || mail ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
         onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
         onPointerDown={(e) => {
           if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
           hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
         }}
         onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
-        {first || announce ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
+        {first || announce || mail ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
         <div className="body">
-          {(first || announce) && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time>{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
-          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
+          {(first || announce || mail) && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
+          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
+          {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
+          {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
           {rx.length > 0 && (

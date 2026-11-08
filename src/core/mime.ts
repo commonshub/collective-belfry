@@ -7,6 +7,8 @@ export interface Mail {
   subject: string
   from: string
   text: string
+  /** the whole text, quoted history included */
+  full: string
   attachments: Part[]
 }
 
@@ -122,6 +124,7 @@ export function parseMail(raw: string): Mail {
     subject: decodeWords(headers.get('subject') ?? ''),
     from: decodeWords(headers.get('from') ?? ''),
     text: withoutQuote(out.text || htmlText(out.html)),
+    full: (out.text || htmlText(out.html)).replace(/\r\n/g, '\n').trim(),
     attachments: out.attachments,
   }
 }
