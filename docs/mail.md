@@ -8,7 +8,16 @@ A belfry receives mail for its members and channels, and members answer from the
 | `<channel>@<domain>` | the channel, pod or event chat, posted as the member who sent it (members only, and the mail must pass DKIM or SPF aligned with its From). The post carries `client belfry-mail`, a `subject` tag and `mail-original` (the whole e-mail, AES-GCM on Blossom: url, key, nonce); the chat shows it as the member's message with a "via e-mail" tag and a "Full e-mail" link |
 | `postmaster@`, `abuse@` | the admins' Messages |
 
-Usernames win over channel names. Anything else is refused at `RCPT TO` (550).
+Usernames win over channel names.
+
+## Shared inboxes
+
+A channel's admins can turn it into a **shared inbox** (channel settings in the chat; a NIP-78 kind 30078 event in the group, `d` = `belfry:inbox`, content `{"on": true}`; only its admins' setting counts). Then:
+
+- mail from **anyone** to `<channel>@<domain>` lands in the channel as an **e-mail card**: a kind 9 posted by the groups key with `client belfry-mail`, `mail-from`, `mail-name`, `subject`, `message-id`, `in-reply-to`, `belfry-auth` and `mail-original`. The chat shows a card only when the groups key posted it; that key is published as `_groups@<domain>` in nostr.json. Mail from a member's proven address still shows as their own message;
+- the team talks about a card in its **thread** (NIP-22 kind 1111 in the group); threads never leave the belfry;
+- the channel's **admins** answer with **Reply by e-mail**: a separate sheet (To, From = the channel's address, Subject), then an 8-second Undo. The app sends a kind 1301 with `mail-from` = the channel's address and `e` = the card to the bridge, which checks that the sender is one of the group's admins and has an active pass, sends it signed "<name> for <channel>", and posts what went out in the channel (kind 9, `client belfry-mail-out`, `sent-by`, `mail-to`, `e` = the card). Only the bridge posts these, so a note can never pass for something the sender received;
+- a card is Open, Answered (after an answer) or Closed, and someone can take it: NIP-32 labels (kind 1985, namespace `belfry/inbox`: `l open|closed|assigned`, `e` = the card, `p` = who has it). Anything else is refused at `RCPT TO` (550).
 
 ## Protocol
 
@@ -37,3 +46,4 @@ The chat app reads NIP-17 (kind 14), old NIP-04 (kind 4) and Nostr Mail in one M
 - SPF is skipped for mail arriving over IPv6. Docker's proxy hides the sender's address there, so DKIM is what counts.
 - Members can't attach files to outgoing mail yet, and the bridge doesn't send large (Blossom) outgoing mail.
 - A NIP-17 DM between members is not copied to e-mail.
+- Shared inboxes: no "Ask for review" drafts yet, no rules or auto-assignment, no notification e-mails to the team, and a sender's later replies arrive as new cards (not yet joined to the first).

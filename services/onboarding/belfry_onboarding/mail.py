@@ -118,6 +118,43 @@ def channel_exists(svc: Services, channel: str) -> bool:
     return bool(relay.query([{"kinds": [39000], "#d": [channel], "limit": 1}], sign))
 
 
+INBOX_D = "belfry:inbox"  # a group's NIP-78 setting (kind 30078): {"on": true} = shared inbox
+
+
+def group_admins(svc: Services, channel: str) -> set[str]:
+    got = followers._relay(svc)
+    if got is None:
+        return set()
+    relay, sign = got
+    found = relay.query([{"kinds": [39001], "#d": [channel], "limit": 1}], sign)
+    return {t[1] for e in found[:1] for t in e.get("tags", []) if t[0] == "p" and len(t) > 1}
+
+
+def inbox_on(svc: Services, channel: str) -> bool:
+    """Whether CHANNEL takes mail from anyone: its admins' latest setting (cached a minute)."""
+    with _lock:
+        held = _cache.get("inbox:" + channel)
+    if held and time.monotonic() - held[0] < 60:
+        return bool(held[1])
+    got = followers._relay(svc)
+    on = False
+    if got is not None:
+        relay, sign = got
+        admins = group_admins(svc, channel)
+        found = relay.query(
+            [{"kinds": [30078], "#d": [INBOX_D], "#h": [channel], "limit": 20}], sign
+        )
+        mine = sorted(
+            (e for e in found if e.get("pubkey") in admins), key=lambda e: e["created_at"]
+        )
+        if mine:
+            with contextlib.suppress(ValueError, TypeError, AttributeError):
+                on = bool(json.loads(mine[-1].get("content") or "{}").get("on"))
+    with _lock:
+        _cache["inbox:" + channel] = (time.monotonic(), {"on": on} if on else None)
+    return on
+
+
 def resolve(svc: Services, address: str) -> dict[str, Any] | None:
     """What ADDRESS is here: a member, a channel or the admins (cached a minute), else None."""
     local, _, dom = address.strip().lower().rpartition("@")
@@ -414,6 +451,8 @@ def to_channel(
     svc: Services, channel: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
 ) -> None:
     member = apps.member_by_email(svc, sender)
+    if not (member and auth.get("aligned")) and inbox_on(svc, channel):
+        return to_inbox(svc, channel, raw, msg, sender, auth)
     if member is None:
         raise MailError(550, f"5.7.1 Only members of {domain(svc)} can post to channels by e-mail.")
     if not auth.get("aligned"):
@@ -430,16 +469,41 @@ def to_channel(
     if community.member_signer(svc, member["partner"]) is None:
         text = f"✉️ From {member['name']}\n\n{text}"  # their own key: posted by the belfry
     # the whole e-mail, encrypted on Blossom; the key travels in the (members-only) message
-    found = {t[0]: t[1] for t in store_large(svc, raw)}
-    extra = [
-        ["subject", subject[:300]],
-        ["mail-original", found["url"], found["decryption-key"], found["decryption-nonce"]],
-    ]
+    extra = [["subject", subject[:300]], _original(svc, raw)]
     try:
         drops.post(svc, channel, text, imeta + extra, member["partner"], client="belfry-mail")
     except Exception as exc:  # noqa: BLE001 — the relay refuses non-members of closed channels
         log.info("mail: post to %s refused: %s", channel, exc)
         raise MailError(550, f"5.7.1 You cannot post in {channel}.") from exc
+
+
+def _original(svc: Services, raw: bytes) -> list[str]:
+    found = {t[0]: t[1] for t in store_large(svc, raw)}
+    return ["mail-original", found["url"], found["decryption-key"], found["decryption-nonce"]]
+
+
+def to_inbox(
+    svc: Services, channel: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
+) -> None:
+    """Mail from anyone to a shared inbox: an e-mail card in the channel, posted by the groups
+    key (the chat knows it as ``_groups@<domain>`` and only then shows the card)."""
+    subject = str(msg["Subject"] or "").strip()
+    body = text_of(msg)[:8000]
+    name = email.utils.parseaddr(str(msg["From"] or ""))[0].strip()
+    files = [f for f in attachments(msg) if len(f[2]) <= 20_000_000]
+    imeta = drops.upload(svc, files) if files else []
+    text = "\n\n".join(x for x in (f"**{subject}**" if subject else "", body) if x)
+    extra = [
+        ["subject", subject[:300]],
+        _original(svc, raw),
+        ["mail-from", sender],
+        ["mail-name", name[:100]],
+        ["message-id", str(msg["Message-ID"] or "").strip()[:300]],
+        ["belfry-auth", "pass" if auth.get("aligned") else "none"],
+    ]
+    if msg["In-Reply-To"]:
+        extra.append(["in-reply-to", str(msg["In-Reply-To"]).strip()[:300]])
+    drops.post(svc, channel, text or "(empty)", imeta + extra, None, client="belfry-mail")
 
 
 # ── in: one message, every recipient ────────────────────────────────────────────────────────
@@ -498,8 +562,11 @@ def smtp_send(svc: Services, mail_from: str, rcpts: list[str], raw: bytes) -> tu
     return 250, "OK"
 
 
-def outgoing(svc: Services, sender: str, rumor: dict[str, Any]) -> tuple[list[str], int, str]:
-    """Send a member's kind 1301; (recipients, SMTP code, answer). MailError: refused here."""
+def outgoing(
+    svc: Services, sender: str, rumor: dict[str, Any]
+) -> tuple[list[str], int, str, tuple[str, EmailMessage] | None]:
+    """Send a member's kind 1301: (recipients, SMTP code, answer, (channel, message) when sent
+    as a shared inbox). MailError: refused here."""
     mail_from = tag(rumor, "mail-from").lower()
     rcpts = [r.strip() for r in tags(rumor, "rcpt-to") if "@" in r][:MAX_RCPT]
     local, _, dom = mail_from.rpartition("@")
@@ -507,8 +574,17 @@ def outgoing(svc: Services, sender: str, rumor: dict[str, Any]) -> tuple[list[st
         raise MailError(554, "No recipient (rcpt-to).")
     if dom != domain(svc) or not LOCAL.match(local) or local in RESERVED:
         raise MailError(554, f"You can only send as your own address at {domain(svc)}.")
+    as_channel = None
     if svc.keycast.pubkey_for_name(local) != sender or not active_pubkey(svc, sender):
-        raise MailError(554, f"{mail_from} is not yours, or your membership is not active.")
+        # a shared inbox answers as the channel: its admins only
+        if not (
+            channel_exists(svc, local)
+            and inbox_on(svc, local)
+            and sender in group_admins(svc, local)
+            and active_pubkey(svc, sender)
+        ):
+            raise MailError(554, f"{mail_from} is not yours, or your membership is not active.")
+        as_channel = local
     if _limited("out:" + sender, SENT_PER_HOUR, 3600):
         raise MailError(451, "Too many mails this hour; try again later.")
     raw = rumor.get("content") or ""
@@ -534,7 +610,25 @@ def outgoing(svc: Services, sender: str, rumor: dict[str, Any]) -> tuple[list[st
         answer = str(why)
     except (smtplib.SMTPException, OSError) as exc:
         code, answer = 451, str(exc)
-    return rcpts, code, answer
+    return rcpts, code, answer, (as_channel, msg) if as_channel else None
+
+
+def sent_card(
+    svc: Services, channel: str, sender: str, msg: EmailMessage, rcpts: list[str], reply_to: str
+) -> None:
+    """What went out as the channel, in the channel: only the bridge posts these."""
+    subject = str(msg["Subject"] or "").strip()
+    tags_ = [
+        ["subject", subject[:300]],
+        ["mail-to", ", ".join(rcpts)[:600]],
+        ["sent-by", sender],
+        ["message-id", str(msg["Message-ID"] or "").strip()[:300]],
+    ]
+    if re.fullmatch(r"[0-9a-f]{64}", reply_to or ""):
+        tags_.append(["e", reply_to, "", "reply"])
+    drops.post(
+        svc, channel, text_of(msg)[:8000] or "(empty)", tags_, None, client="belfry-mail-out"
+    )
 
 
 def report(svc: Services, sender: str, email_id: str, rcpts: list[str], code: int, answer: str):
@@ -584,12 +678,18 @@ def handle_wrap(svc: Services, wrap: dict[str, Any]) -> None:
     email_id = tag(rumor, "email-id") or rumor.get("id") or wrap["id"]
     if reported(svc, email_id):
         return  # sent before a restart
+    sent = None
     try:
-        rcpts, code, answer = outgoing(svc, sender, rumor)
+        rcpts, code, answer, sent = outgoing(svc, sender, rumor)
     except MailError as exc:
         rcpts, code, answer = tags(rumor, "rcpt-to")[:MAX_RCPT], exc.code, exc.message
     log.info("mail: out from %s… to %d recipients: %s", sender[:8], len(rcpts), code)
     report(svc, sender, email_id, rcpts, code, answer)
+    if sent and 200 <= code < 300:
+        try:
+            sent_card(svc, sent[0], sender, sent[1], rcpts, tag(rumor, "e"))
+        except Exception as exc:  # noqa: BLE001 — the mail is gone; the card is a courtesy
+            log.warning("mail: sent card in %s failed: %r", sent[0], exc)
 
 
 async def listen(app: FastAPI) -> None:
@@ -715,6 +815,16 @@ def register(app: FastAPI) -> None:
     async def smtp_name(request: Request, name: str = ""):
         """Nostr Mail: the bridge's key is ``_smtp@<domain>`` (the proxy sends only that here)."""
         services = svc(request)
+        if name == "_groups" and services.groups is not None and services.settings.mail_in:
+            # the key that posts e-mail cards in shared inboxes (the chat trusts only it)
+            gpub = services.groups.own
+            return JSONResponse(
+                {"names": {"_groups": gpub}},
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Cache-Control": "public, max-age=300",
+                },
+            )
         pub = homepage.belfry_pubkey(services.settings)
         if name != "_smtp" or not pub or not services.settings.mail_in:
             return JSONResponse({"names": {}}, headers={"Access-Control-Allow-Origin": "*"})

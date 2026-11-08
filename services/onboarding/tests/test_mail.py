@@ -179,7 +179,9 @@ def test_dkim_aligned_with_from_marks_mail_verified():
         mail.DNSFUNC = None
 
 
-def outgoing_wrap(frm="ana@belfry.test", header_from="Ana <ana@belfry.test>", email_id="e1"):
+def outgoing_wrap(
+    frm="ana@belfry.test", header_from="Ana <ana@belfry.test>", email_id="e1", extra_tags=()
+):
     raw = (
         f"From: {header_from}\r\nTo: bob@example.org\r\nBcc: spy@example.org\r\n"
         "Subject: Re: Hello\r\nIn-Reply-To: <m1@example.org>\r\n\r\nThanks!\r\n"
@@ -189,7 +191,12 @@ def outgoing_wrap(frm="ana@belfry.test", header_from="Ana <ana@belfry.test>", em
         "pubkey": ANA_PUB,
         "created_at": int(time.time()),
         "content": raw,
-        "tags": [["email-id", email_id], ["mail-from", frm], ["rcpt-to", "bob@example.org"]],
+        "tags": [
+            ["email-id", email_id],
+            ["mail-from", frm],
+            ["rcpt-to", "bob@example.org"],
+            *extra_tags,
+        ],
     }
     return mail.gift_wrap(ANA.secret, rumor, BELFRY_PUB)
 
@@ -234,6 +241,76 @@ def test_no_one_sends_as_someone_else(m, monkeypatch, frm, header, why):
     mail.handle_wrap(m, outgoing_wrap(frm, header, email_id="x" + why[:3]))
     report = dsn_of(m, "x" + why[:3])
     assert report["status"] == "failed" and why in report["details"]
+
+
+@pytest.fixture
+def inbox(m, monkeypatch):
+    """garden@ is a shared inbox; Ana is one of its admins."""
+    posted = []
+    monkeypatch.setattr(
+        drops,
+        "post",
+        lambda svc, ch, text, imeta, partner, client="": posted.append(
+            {"channel": ch, "text": text, "tags": imeta, "partner": partner, "client": client}
+        ),
+    )
+    monkeypatch.setattr(
+        drops, "upload", lambda svc, files: [["imeta", "url https://blossom.belfry.test/abc"]]
+    )
+    monkeypatch.setattr(mail, "channel_exists", lambda svc, ch: ch == "garden")
+    monkeypatch.setattr(mail, "inbox_on", lambda svc, ch: ch == "garden")
+    monkeypatch.setattr(
+        mail, "group_admins", lambda svc, ch: {ANA_PUB} if ch == "garden" else set()
+    )
+    monkeypatch.setattr(apps, "member_by_email", lambda svc, e: None)
+    return posted
+
+
+def test_a_shared_inbox_takes_mail_from_anyone_as_an_e_mail_card(m, inbox):
+    raw = message(
+        frm="Marie Dubois <marie@example.org>", subject="Renting the hall", to="garden@belfry.test"
+    )
+    code, _ = mail.deliver(m, raw, "203.0.113.5", "h", "", ["garden@belfry.test"])
+    assert code == 250
+    [card] = inbox
+    found = {t[0]: t[1:] for t in card["tags"]}
+    assert (
+        card["channel"] == "garden" and card["partner"] is None and card["client"] == "belfry-mail"
+    )
+    assert found["mail-from"] == ["marie@example.org"] and found["mail-name"] == ["Marie Dubois"]
+    assert found["message-id"] == ["<m1@example.org>"] and found["belfry-auth"] == ["none"]
+    assert card["text"].startswith("**Renting the hall**") and "old" not in card["text"]
+    # a channel that is not an inbox still refuses strangers
+    code, why = mail.deliver(m, raw, "203.0.113.5", "h", "", ["kitchen@belfry.test"])
+    assert code == 550
+
+
+def test_an_admin_answers_as_the_inbox_and_the_answer_shows_in_the_channel(m, inbox, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        mail, "smtp_send", lambda svc, frm, rcpts, data: sent.append((frm, data)) or (250, "OK")
+    )
+    card = "c" * 64
+    mail.handle_wrap(
+        m,
+        outgoing_wrap(
+            "garden@belfry.test", "Ana for Garden <garden@belfry.test>", "g1", [["e", card]]
+        ),
+    )
+    [(frm, data)] = sent
+    assert frm == "garden@belfry.test" and dsn_of(m, "g1")["status"] == "delivered"
+    [out] = inbox
+    found = {t[0]: t[1:] for t in out["tags"]}
+    assert out["client"] == "belfry-mail-out" and out["text"] == "Thanks!"
+    assert found["sent-by"] == [ANA_PUB] and found["mail-to"] == ["bob@example.org"]
+    assert found["e"][0] == card
+
+
+def test_only_the_inbox_admins_answer_as_it(m, inbox, monkeypatch):
+    monkeypatch.setattr(mail, "group_admins", lambda svc, ch: set())
+    monkeypatch.setattr(mail, "smtp_send", lambda *a: pytest.fail("must not send"))
+    mail.handle_wrap(m, outgoing_wrap("garden@belfry.test", "G <garden@belfry.test>", "g2"))
+    assert "not yours" in dsn_of(m, "g2")["details"] and not inbox
 
 
 def test_the_mail_in_service_asks_with_the_hook_token(m):

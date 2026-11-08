@@ -204,10 +204,11 @@ apps.{$BELFRY_DOMAIN} {
 # NIP-05 on Belfry's own domain: <member>@<domain> resolves through Keycast's nostr.json.
 {$BELFRY_DOMAIN} {
 	import security
-	# Nostr Mail: the bridge's key is _smtp@<domain>, answered by the onboarding service (mail.py)
+	# Nostr Mail: the bridge's key is _smtp@<domain>, and _groups@<domain> the key that posts
+	# e-mail cards in shared inboxes; both answered by the onboarding service (mail.py)
 	@smtpname {
 		path /.well-known/nostr.json
-		query name=_smtp
+		query name=_smtp name=_groups
 	}
 	handle @smtpname {
 		reverse_proxy onboarding:8100
