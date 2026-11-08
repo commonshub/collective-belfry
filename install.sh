@@ -73,6 +73,8 @@ Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [optio
   --yes                    no questions: fail if something required is missing
   --dry-run                check the server and DNS, print the plan, change nothing
   --force                  continue despite failed checks (small server, DNS not ready)
+  --odoo                   keep who is who in Odoo (the add-on: billing, volunteer shifts, CRM);
+                           without it the belfry keeps its own register and runs no Odoo
   --nginx                  put nginx on 80/443 in front of Belfry's proxy, for a server that
                            also hosts other sites (default: Belfry's proxy, Caddy, on 80/443)
   --host-only              prepare the server (packages, ufw, nginx, user, code) without the stack
@@ -123,6 +125,7 @@ EOF
       --host-only) HOST_ONLY=1 ;;
       --smoke) RUN_SMOKE=1 ;;
       --nginx) NGINX=1 ;;
+      --odoo) export BELFRY_REGISTER=odoo ;;
       -h|--help) usage; exit 0 ;;
       --*-key|--*-password|--*secret*) die "$a: secrets never go on the command line; use --config FILE or the BELFRY_* variable" ;;
       *) usage >&2; die "unknown option $a" ;;
@@ -400,6 +403,9 @@ EOF
   # New belfries wear Belfry's own look and the community's name (THEME; own colours and logo
   # later with `belfry theme set DIR`); without THEME the pages keep Open Source Village's.
   if [[ $fresh -eq 1 ]]; then export BELFRY_THEME=${BELFRY_THEME:-belfry}; fi
+  # New belfries keep their own register (people, passes, invites) and run no Odoo; --odoo
+  # keeps Odoo as the add-on (BELFRY_REGISTER=odoo).
+  if [[ $fresh -eq 1 ]]; then export BELFRY_REGISTER=${BELFRY_REGISTER:-belfry}; fi
   # The admin pages answer this server's own addresses (bootstrap and smoke run here) and Docker's;
   # add the ZeroTier subnet later (DEPLOY.md, "Admin network").
   local admin_nets="127.0.0.1/8 172.16.0.0/12 $ip4/32${ip6:+ $ip6/128}"

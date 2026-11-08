@@ -79,7 +79,7 @@ odoo_exec() {
 
 # ---------- 1. health ----------
 log "1/6 waiting for services"
-wait_for odoo "$ODOO_URL/web/health"
+[[ "${REGISTER:-}" == belfry ]] || wait_for odoo "$ODOO_URL/web/health"
 wait_for authentik "$AK_URL/-/health/ready/"
 wait_for keycast "$KC_URL/health"
 # Issuer2's own metadata: behind the proxy the credential issuer metadata comes through the
@@ -98,6 +98,11 @@ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'zooid') \gexec
 SQL
 echo "groups relay database: zooid"
 
+# Without Odoo (REGISTER=belfry) the onboarding service keeps its own register: steps 2 and 3 are
+# Odoo's (docker-compose.noodoo.yml leaves Odoo out).
+if [[ "${REGISTER:-}" == belfry ]]; then
+  echo "register: the belfry's own (no Odoo)"
+else
 # ---------- 2. Odoo database ----------
 log "2/6 Odoo database"
 mkdir -p "$REPO_DIR/odoo/addons"
@@ -370,6 +375,8 @@ VAT_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" product.template belfry_setup_vat "
   || die "could not set up VAT on the pass products"
 echo "VAT ${PASS_VAT_RATE:-21}% on the passes (included, excluded tax ids: $VAT_IDS)"
 
+fi  # Odoo
+
 # ---------- 4. Keycast ----------
 log "4/6 Keycast admin and policy"
 # Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
@@ -453,6 +460,10 @@ SQL
 echo "registered clients: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select string_agg(client_id || ' ' || array_to_string(allowed_redirect_uris, ','), '; ' order by client_id) from registered_clients where client_id like 'belfry-%' and tenant_id = (select id from tenants where domain = '${KEYCAST_TENANT_DOMAIN:-localhost}')")"
 [[ -n "$("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from registered_clients r join tenants t on t.id = r.tenant_id where t.domain = '${KEYCAST_TENANT_DOMAIN:-localhost}' and r.client_id = 'belfry-chat'")" ]] \
   || die "belfry-chat is not registered for tenant ${KEYCAST_TENANT_DOMAIN:-localhost} (no tenant row yet?)"
+
+# the SMTP password (set in the Odoo step too; needed here without Odoo)
+SMTP_PASSWORD=${SMTP_PASSWORD:-$(cat "$INFRA_DIR/secrets/smtp_password" 2>/dev/null || true)}
+export SMTP_PASSWORD
 
 # ---------- 5. Authentik ----------
 log "5/6 Authentik"

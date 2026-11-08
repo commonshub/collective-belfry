@@ -263,6 +263,8 @@ def token_allowance(
 ) -> int:
     """Tokens a pass brings: TOKENS_PER_DAY per day of the pass (day 1, week 7, full access every
     event day from the start, both ends included)."""
+    if tier == "member":
+        return 0  # a free membership (the belfry's own register) brings no tokens
     days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
     if tier == "full" or days <= 0:
         days = (date_end - date_start).days + 1
@@ -996,6 +998,58 @@ def _finish_activation(
         date_end,
     )
     return "activated"
+
+
+MEMBERSHIP_END = dt.date(2099, 12, 31)  # a free membership has no end; revoking ends it
+
+
+def activate_free_pass(svc: Services, pass_id: int) -> str:
+    """Open a membership that has no invoice: the belfry's own register (register.py), where an
+    accepted invite or an admin opens it. Same accounts, keys and sign-in link as a paid pass."""
+    with _activation_locks_guard:
+        lock = _activation_locks.setdefault(("free", pass_id), threading.Lock())
+    with lock:
+        row = svc.odoo.read_one(
+            "belfry.pass",
+            pass_id,
+            [
+                "partner_id",
+                "state",
+                "tier",
+                "claim_token",
+                "cashu_amount",
+                "own_pubkey",
+                "own_pubkey_proof",
+                "invoice_id",
+            ],
+        )
+        if row is None:
+            return "not_found"
+        if row.get("invoice_id"):
+            return activate_pass(svc, m2o_id(row["invoice_id"]))
+        if row.get("state") == "active":
+            return "already_active"
+        if row.get("state") in ("revoked", "expired"):
+            return f"already_{row['state']}"
+        partner_id = m2o_id(row.get("partner_id"))
+        if partner_id is None:
+            raise RuntimeError(f"pass {pass_id} has no person")
+        partner = svc.odoo.read(
+            "res.partner",
+            [partner_id],
+            [
+                "name",
+                "email",
+                "belfry_member_number",
+                "belfry_authentik_user_id",
+                "belfry_npub",
+                "belfry_key_version",
+                "belfry_key_custody",
+            ],
+        )[0]
+        return _finish_activation(
+            svc, row, partner, row.get("tier") or "member", None, today(), MEMBERSHIP_END, {}
+        )
 
 
 # -- revocation, expiry, reactivation -----------------------------------------------------------

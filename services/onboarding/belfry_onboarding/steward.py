@@ -473,6 +473,8 @@ def steward_pass(
     result = "already_" + row["state"] if row["state"] != "pending" else "pending"
     if row["state"] == "pending" and row.get("invoice_id"):
         result = (activate or (lambda i: core.activate_pass(svc, i)))(row["invoice_id"])
+    elif row["state"] == "pending":  # the belfry's own register: a membership has no invoice
+        result = core.activate_free_pass(svc, row["pass_id"])
     # Odoo's own invoice-paid webhook may have activated it first ("already_active")
     state = (svc.odoo.read_one("belfry.pass", row["pass_id"], ["state"]) or {}).get("state")
     log.info("steward pass for %s: pass %s, %s, %s", email, row["pass_id"], result, state)

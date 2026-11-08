@@ -296,7 +296,7 @@ services:
   # and chmod need.
   perms-init:
     image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; chown 1000:${HOST_GID:-1000} /w/setup && chmod 2770 /w/setup; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members /w/register; chown 1000:${HOST_GID:-1000} /w/setup && chmod 2770 /w/setup; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -309,6 +309,8 @@ services:
       - git-data:/v/git
       # written by the onboarding service (uid 1000), read by the git server
       - git-members:/w/git-members
+      # the belfry's own register (REGISTER=belfry), written by the onboarding service (uid 1000)
+      - register-data:/w/register
       # written by the onboarding service (the setup page), read by `belfry setup-apply` (HOST_GID)
       - ./data/setup:/w/setup
       - ./secrets:/s/secrets
@@ -631,6 +633,8 @@ services:
       - community-relay-config:/relay-config
       # the git server's members (git_members.py)
       - git-members:/git-members
+      # the belfry's own register when it runs without Odoo (REGISTER=belfry, register.py)
+      - register-data:/data/register
       - ./relay/rnostr.toml:/relay-template/rnostr.toml:ro
       # /changelog (community.py): written by scripts/changelog.sh, created by gen-secrets.sh
       - ./data/changelog:/belfry-changelog:ro
@@ -650,6 +654,10 @@ services:
     environment:
       BRAND_DIR: /brand
       SKILLS_DIR: /skills
+      # who is who: Odoo (the add-on) or the belfry's own register (belfry; docker-compose.noodoo.yml)
+      REGISTER: ${REGISTER:-}
+      REGISTER_PATH: /data/register/register.sqlite
+      MAIL_FROM: ${MAIL_FROM:-}
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
       ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}
@@ -1048,6 +1056,7 @@ secrets:
 volumes:
   git-data:
   git-members:
+  register-data:
   blossom-data:
   vote-data:
   mint-data:

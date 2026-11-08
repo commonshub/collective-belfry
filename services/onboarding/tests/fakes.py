@@ -28,6 +28,7 @@ M2O: dict[str, set[str]] = {
     "product.product": set(),
     "res.partner": set(),
     "belfry.key.code": set(),
+    "belfry.follower": {"partner_id"},
 }
 UNIQUE: dict[str, list[str]] = {
     "belfry.pass": ["invoice_id", "stripe_payment_intent", "claim_token"],

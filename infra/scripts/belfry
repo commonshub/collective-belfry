@@ -24,6 +24,8 @@
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
 #   BELFRY_NAME                      community name (start page, belfry.json, mails)
 #   BELFRY_THEME                     belfry | osv: the pages' base look (own files: belfry theme)
+#   BELFRY_REGISTER                  belfry | odoo: who is who lives in the belfry's own register
+#                                    (no Odoo) or in Odoo (the add-on: billing, shifts, CRM)
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
 #   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
 #   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
@@ -77,9 +79,14 @@ image_tags
 # a build context with local changes has no prebuilt image
 local_changes() { [[ -n "$(git -c safe.directory="$ROOT" -C "$ROOT" status --porcelain -- infra/keycast/build infra/proxy infra/groups-relay services/onboarding infra/git)" ]]; }
 use_images() { [[ -f infra/.images ]] && ! local_changes; }
+# REGISTER=belfry: no Odoo (the belfry's own register; docker-compose.noodoo.yml)
+no_odoo() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get REGISTER)" == belfry ]]; }
+
 compose() {
-  if use_images; then docker compose "${COMPOSE_FILES[@]}" -f infra/docker-compose.images.yml "$@"
-  else docker compose "${COMPOSE_FILES[@]}" "$@"; fi
+  local files=("${COMPOSE_FILES[@]}")
+  if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
+  if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "$@"
+  else docker compose "${files[@]}" "$@"; fi
 }
 
 env_get() { sed -nE "s/^$1=\"?([^\"#]*)\"?.*/\1/p" "$ENV_FILE" | tail -n1 | sed 's/[[:space:]]*$//'; }
@@ -158,6 +165,10 @@ cmd_config() {
   if [[ -n "${BELFRY_THEME:-}" ]]; then
     [[ "$BELFRY_THEME" =~ ^(belfry|osv)$ ]] || die "BELFRY_THEME is belfry or osv"
     pairs+=(THEME "$BELFRY_THEME")
+  fi
+  if [[ -n "${BELFRY_REGISTER:-}" ]]; then
+    [[ "$BELFRY_REGISTER" =~ ^(belfry|odoo)$ ]] || die "BELFRY_REGISTER is belfry or odoo"
+    pairs+=(REGISTER "$BELFRY_REGISTER")
   fi
   if [[ -n "${BELFRY_GIT_REPO:-}" ]]; then
     [[ "$BELFRY_GIT_REPO" =~ ^(nostr|https):// ]] || die "BELFRY_GIT_REPO is a nostr:// (ngit) or https:// URL"

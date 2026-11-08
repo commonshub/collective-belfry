@@ -26,7 +26,13 @@ class Settings(BaseSettings):
     odoo_url: str = Field(default="http://odoo:8069", alias="ODOO_URL")
     odoo_db: str = Field(default="odoo", alias="ODOO_DB")
     odoo_user: str = Field(default="onboarding@belfry.local", alias="ODOO_USER")
-    odoo_api_key: str = Field(alias="ODOO_API_KEY")
+    odoo_api_key: str = Field(default="", alias="ODOO_API_KEY")
+    # Where people, passes and invites live: "odoo" (the Odoo add-on) or "belfry" (the belfry's
+    # own register, one SQLite file: register.py). Empty: Odoo when it has an API key.
+    register: str = Field(default="", alias="REGISTER")
+    register_path: str = Field(default="/data/register/register.sqlite", alias="REGISTER_PATH")
+    # The sender of the belfry's own mails (register mode; Odoo has its own otherwise)
+    mail_from: str = Field(default="", alias="MAIL_FROM")
 
     authentik_url: str = Field(default="http://authentik-server:9000", alias="AUTHENTIK_URL")
     # Authentik as the participant's browser reaches it. The sign-in links authentik
@@ -268,3 +274,9 @@ class Settings(BaseSettings):
 
     log_level: str = Field(default="info", alias="LOG_LEVEL")
     reconcile_days: int = Field(default=30, alias="RECONCILE_DAYS")
+
+
+def uses_register(settings: Settings) -> bool:
+    """True when the belfry keeps its own register instead of Odoo (register.py)."""
+    mode = (settings.register or "").strip().lower()
+    return mode == "belfry" or (mode != "odoo" and not settings.odoo_api_key)

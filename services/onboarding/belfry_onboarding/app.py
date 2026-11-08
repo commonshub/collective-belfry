@@ -45,6 +45,7 @@ from . import (
     groups_members,
     holder_invites,
     homepage,
+    invite,
     mail,
     mypass,
     pages,
@@ -68,9 +69,10 @@ from .clients.verifier import VerifierClient
 from .core import Services
 from .git_members import GitMembers
 from .groups_members import GroupsMembers
+from .register import Register
 from .relay import RelayPublisher
 from .relay_whitelist import RelayWhitelist
-from .settings import Settings
+from .settings import Settings, uses_register
 from .stripe_sig import StripeSignatureError, verify_signature
 
 log = logging.getLogger(__name__)
@@ -113,8 +115,12 @@ def build_services(settings: Settings) -> Services:
             if settings.mint_url
             else None
         ),
-        odoo=OdooClient(
-            settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
+        odoo=(
+            Register(settings.register_path, settings)
+            if uses_register(settings)
+            else OdooClient(
+                settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
+            )
         ),
         authentik=AuthentikClient(settings.authentik_url, settings.authentik_token),
         keycast=KeycastClient(
@@ -209,6 +215,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     followers.register(app)  # <domain>/follow: the announcements by e-mail (followers.py)
     passlogin.register(app)  # pass.<domain>/me/login: e-mail + code (passlogin.py)
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
+    invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)

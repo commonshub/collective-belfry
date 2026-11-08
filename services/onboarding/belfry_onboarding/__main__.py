@@ -68,12 +68,27 @@ def main(argv: list[str] | None = None) -> int:
     pub.add_argument("--title", default="")
     pub.add_argument("--by", default="", help="who publishes, for the changelog")
     sub.add_parser("homepage-status", help="what the apex serves and the published nsite")
+    imp = sub.add_parser(
+        "register-import",
+        help="copy people, passes and invites from Odoo into the belfry's own register",
+    )
+    imp.add_argument("--force", action="store_true", help="replace what the register holds")
     args = parser.parse_args(argv)
     if args.command in ("homepage-publish", "homepage-status"):
         return homepage_cli(args)
 
     settings = Settings()
     configure_logging(settings.log_level)
+    if args.command == "register-import":
+        from .clients.odoo import OdooClient
+        from .register import Register
+        from .register_import import run as register_import
+
+        odoo = OdooClient(
+            settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
+        )
+        print(register_import(odoo, Register(settings.register_path, settings), args.force))
+        return 0
     services = build_services(settings)
     if args.command == "reconcile":
         result = core.reconcile(services)

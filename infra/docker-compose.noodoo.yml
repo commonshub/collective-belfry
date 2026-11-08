@@ -1,0 +1,33 @@
+# A belfry without Odoo (REGISTER=belfry): people, passes and invites live in the onboarding
+# service's own register (services/onboarding/belfry_onboarding/register.py, one SQLite file in
+# the register-data volume). The belfry command adds this file when REGISTER=belfry in .env;
+# Odoo then only starts with `--profile odoo` (never, normally), and nothing waits for it.
+services:
+  odoo:
+    profiles: ["odoo"]
+  onboarding:
+    depends_on: !override
+      authentik-server:
+        condition: service_healthy
+      keycast:
+        condition: service_healthy
+      relay:
+        condition: service_healthy
+      issuer:
+        condition: service_healthy
+      verifier:
+        condition: service_healthy
+  proxy:
+    depends_on: !override
+      perms-init:
+        condition: service_completed_successfully
+      authentik-server:
+        condition: service_started
+      keycast:
+        condition: service_started
+      relay:
+        condition: service_started
+      issuer:
+        condition: service_started
+      verifier:
+        condition: service_started
