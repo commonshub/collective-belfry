@@ -240,6 +240,41 @@ export function messages(groupId: string): Message[] {
     .map(parseMedia)
 }
 
+// ---- threads (NIP-22: kind 1111 in the group, `E` = the message it hangs off) -----------
+// A thread is a side conversation about one message, like Discord's. It exists once someone
+// replies; replies never show in the channel itself.
+
+export const rootOf = (e: Ev) => e.tags.find((t) => t[0] === 'E')?.[1]
+
+export function threadReplies(groupId: string, rootId: string): Message[] {
+  const list = all(me())
+  const del = deleted(list)
+  return list
+    .filter((e) => e.kind === 1111 && tag(e, 'h') === groupId && rootOf(e) === rootId && !del.has(e.id))
+    .sort(byTime)
+    .map(parseMedia)
+}
+
+export interface ThreadInfo { count: number; last: number; who: string[] }
+
+/** Per message id in GROUP: how many replies its thread has, the latest time, who wrote. */
+export function threadsOf(groupId: string): Map<string, ThreadInfo> {
+  const list = all(me())
+  const del = deleted(list)
+  const out = new Map<string, ThreadInfo>()
+  for (const e of list) {
+    if (e.kind !== 1111 || tag(e, 'h') !== groupId || del.has(e.id)) continue
+    const root = rootOf(e)
+    if (!root) continue
+    const t = out.get(root) ?? { count: 0, last: 0, who: [] }
+    t.count++
+    t.last = Math.max(t.last, e.created_at)
+    if (!t.who.includes(e.pubkey)) t.who.push(e.pubkey)
+    out.set(root, t)
+  }
+  return out
+}
+
 // ---- reactions (NIP-25, kind 7 in the group: e = the message, content = the emoji) -----
 
 export interface Reaction { emoji: string; who: Set<string>; mine?: Ev }

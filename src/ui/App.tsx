@@ -11,7 +11,7 @@ import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
-import { ChannelList, ChannelView } from './Chat'
+import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, setMyAddress, startDms } from '../core/dm'
 import { demoMailPost } from './MailPost'
@@ -126,7 +126,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
-    view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} />
+    view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} />
   }
   // no tab bar: channels behind ☰, Me behind your avatar (top right), events under each channel's name
   return <div className="screen">{view}</div>

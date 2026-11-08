@@ -60,6 +60,14 @@ export const postMessage = (groupId: string, text: string, files: File[], topic?
     tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t])],
   }, files)
 
+/** A reply in the thread of message ROOT (NIP-22 comment, kept in the group by its `h` tag). */
+export const postThreadReply = (groupId: string, root: { id: string; pubkey: string; kind: number }, text: string, files: File[]) =>
+  enqueue('groups', {
+    kind: 1111, content: text,
+    tags: [['h', groupId], ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey],
+      ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t])],
+  }, files)
+
 /** Pin / unpin a channel's topics: one NIP-32 label event with the whole list (latest wins). */
 export const setTopics = (groupId: string, list: string[]) =>
   enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', TOPIC_NS], ...[...new Set(list.map(normTopic))].map((t) => ['l', t, TOPIC_NS])] })

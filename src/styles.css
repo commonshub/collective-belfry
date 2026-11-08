@@ -407,3 +407,12 @@ a.chip { text-decoration: none; color: inherit; }
 .full-mail dt { color: var(--faint); }
 .full-mail dd { margin: 0; overflow-wrap: anywhere; }
 .full-mail pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 14px; margin: 0; max-height: 60vh; overflow: auto; }
+
+/* threads: a side conversation about one message */
+.thread-chip { display: inline-flex; align-items: center; gap: 8px; margin-top: 6px; padding: 6px 10px; border: 0; border-radius: 8px;
+  background: var(--chip, rgba(127,127,127,.12)); color: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.thread-chip time { font-weight: 400; color: var(--faint); font-size: 12px; }
+.thread-chip .faces { display: inline-flex; }
+.thread-chip .faces > * + * { margin-left: -6px; }
+.thread-sep { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; margin: 10px 0; }
+.thread-sep i { flex: 1; height: 1px; background: var(--line); }

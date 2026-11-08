@@ -2,8 +2,8 @@ import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, type Group, type Message, type Reaction } from '../core/model'
+import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
@@ -286,6 +286,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const list = messages(id).filter((m) => !topic || (topic === ANNOUNCE ? isAnnouncement(m, g) : m.topics.includes(topic)))
   const ps = profiles()
   const rx = reactions(id)
+  const th = threadsOf(id)
+  const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(true)
@@ -303,7 +305,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} groupId={id}
             name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
-            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)} />)}
+            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
+            thread={th.get(m.ev.id)} onThread={() => openThread(m)} />)}
         </div>
       </div>
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
@@ -311,19 +314,55 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
-      {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
+      {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
+        thread={th.get(acting.ev.id)} onThread={() => openThread(acting)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce }: { m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean }) {
+/** A thread: the message it hangs off, then the replies (#/c/<id>/thread/<message id>). */
+export function ThreadView({ groupId, rootId }: { groupId: string; rootId: string }) {
+  useVersion()
+  const g = group(groupId)
+  const ps = profiles()
+  const rx = reactions(groupId)
+  const root = messages(groupId).find((m) => m.ev.id === rootId)
+  const replies = threadReplies(groupId, rootId)
+  const [acting, setActing] = useState<Message | null>(null)
+  const scroller = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
+  const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
+  const back = () => go(`c/${encodeURIComponent(groupId)}`)
+  return (
+    <div className="screen">
+      <div className="topbar">
+        <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>
+        <h1>Thread<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
+        <MeButton />
+      </div>
+      <div className="scroll" ref={scroller}>
+        <div className="messages">
+          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={() => setActing(root)} announce={isAnnouncement(root, g)} />
+            : <div className="empty">This message is not here (yet, or any more).</div>}
+          <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
+          {replies.map((m, i) => <Row key={m.ev.id} m={m} prev={replies[i - 1]} head={i === 0} name={nameOf(m)} groupId={groupId}
+            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} announce={false} />)}
+        </div>
+      </div>
+      {root && <Composer placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {acting && <MessageActions m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
+    </div>
+  )
+}
+
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, head }: { head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
   const d = new Date(m.ev.created_at * 1000)
-  const newDay = !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString()
-  const first = newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
+  const newDay = !head && (!prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString())
+  const first = head || newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
   const p = m.ev.pending
   const mail = mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
@@ -359,6 +398,12 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
               ))}
             </div>
           )}
+          {thread && thread.count > 0 && onThread && (
+            <button className="thread-chip" onClick={onThread}>
+              <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
+              {thread.count} {thread.count === 1 ? 'reply' : 'replies'}<time>{fmtTime(thread.last)}</time>
+            </button>
+          )}
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
           )}
@@ -377,7 +422,7 @@ const MORE_EMOJIS = [
   '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
 ]
 
-function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void }) {
+function MessageActions({ m, groupId, mine, onClose, thread, onThread }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void }) {
   const [more, setMore] = useState(false)
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
@@ -385,7 +430,7 @@ function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: st
   }
   const isOn = (emoji: string) => mine.some((r) => r.emoji === emoji && r.mine)
   return (
-    <Sheet title="React" onClose={onClose}>
+    <Sheet title="Message" onClose={onClose}>
       <div className="emoji-row">
         {topEmojis(6).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
         <button aria-label="More emojis" className={more ? 'on' : ''} onClick={() => setMore(!more)}>＋</button>
@@ -394,6 +439,11 @@ function MessageActions({ m, groupId, mine, onClose }: { m: Message; groupId: st
         <div className="emoji-grid">
           {MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
         </div>
+      )}
+      {onThread && (
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); onThread() }}>
+          {thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'}
+        </button>
       )}
       {m.ev.pubkey === me() && (
         <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }}>Delete message</button>
