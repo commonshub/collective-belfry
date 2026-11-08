@@ -8,6 +8,8 @@
 #   belfry add-steward EMAIL [NAME]  let someone use the steward pages (and give them a pass)
 #   belfry smoke                     the end-to-end test over HTTPS (creates a test participant)
 #   belfry update [REF]              fetch REF (default: the checked-out branch), rebuild, apply
+#   belfry version                   the code this belfry runs, and whether a newer one is out
+#   belfry update-request            run an update asked for in the admin console (belfry-update.path)
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
 #   belfry setup-code [NAME]         a link to https://belfry.<domain>/setup with a code in it, for
@@ -29,6 +31,8 @@
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
 #   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
 #   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
+#   BELFRY_LETTERMINT_API_KEY        secret: mail through Lettermint, in the EU (a project's API
+#                                    token; SMTP smtp.lettermint.co:587, user lettermint)
 #   BELFRY_SMTP_HOST, _PORT, _USER, _ENCRYPTION (none|starttls|ssl), BELFRY_SMTP_PASSWORD (secret)
 #   BELFRY_STRIPE_PUBLISHABLE_KEY    pk_test_… / pk_live_…
 #   BELFRY_STRIPE_SECRET_KEY         secret: sk_… or a restricted rk_…
@@ -179,6 +183,10 @@ cmd_config() {
     pairs+=(SMTP_HOST smtp.resend.com SMTP_PORT 587 SMTP_USER resend SMTP_ENCRYPTION starttls)
     secret_set smtp_password "$BELFRY_RESEND_API_KEY"; changed=1
   fi
+  if [[ -n "${BELFRY_LETTERMINT_API_KEY:-}" ]]; then
+    pairs+=(SMTP_HOST smtp.lettermint.co SMTP_PORT 587 SMTP_USER lettermint SMTP_ENCRYPTION starttls)
+    secret_set smtp_password "$BELFRY_LETTERMINT_API_KEY"; changed=1
+  fi
   local v
   for v in HOST PORT USER ENCRYPTION; do
     local n="BELFRY_SMTP_$v"
@@ -296,6 +304,7 @@ cmd_apply() {
   compose --profile app restart onboarding
   reload_proxy  # a running proxy keeps its old Caddyfile until told
   [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
+  write_version fetch || true
   say "Done. belfry status shows the state."
 }
 
@@ -332,11 +341,87 @@ cmd_update() {
   [[ -z "$(git status --porcelain --untracked-files=no)" ]] || die "the checkout has local changes; commit or stash them first"
   git fetch -q origin "$ref"
   git checkout -q "$ref" 2>/dev/null || git checkout -q -b "$ref" "origin/$ref"
-  git merge -q --ff-only "origin/$ref"
+  if ! git merge -q --ff-only "origin/$ref" 2>/dev/null; then
+    # the branch was rewritten upstream (rebased): an install never commits, so it follows the
+    # branch, unless this checkout holds commits of its own
+    local own; own=$(git cherry "origin/$ref" HEAD 2>/dev/null | grep -c '^+' || true)
+    [[ "$own" -eq 0 ]] || die "this checkout has $own commit(s) of its own that $ref does not have; update by hand"
+    git reset -q --hard "origin/$ref"
+  fi
   say "At $(git rev-parse --short HEAD)"
   record "Updated the code to $(git rev-parse --short HEAD) ($ref)"
   infra/scripts/gen-secrets.sh >/dev/null
   cmd_apply
+}
+
+# version.json in the setup folder: what the admin console shows (Status) and belfry.json reports
+write_version() {
+  [[ -d "$SETUP_DIR" ]] || return 0
+  local ref latest behind
+  ref=$(git rev-parse --abbrev-ref HEAD)
+  if [[ "${1:-}" == fetch ]]; then git fetch -q origin "$ref" 2>/dev/null || true; fi
+  latest=$(git rev-parse --short "origin/$ref" 2>/dev/null || true)
+  behind=$(git rev-list --count "HEAD..origin/$ref" 2>/dev/null || echo 0)
+  python3 - "$SETUP_DIR/version.json" "$ref" "$(git rev-parse HEAD)" "$(git log -1 --format=%cI)" \
+    "$(git log -1 --format=%s)" "${latest:-}" "$behind" "$(git log --format=%s -n 5 "HEAD..origin/$ref" 2>/dev/null || true)" <<'PY'
+import datetime, json, os, sys
+path, ref, commit, date, subject, latest, behind, newer = sys.argv[1:9]
+data = {"branch": ref, "commit": commit, "short": commit[:7], "date": date, "subject": subject,
+        "latest": latest, "behind": int(behind or 0), "newer": [x for x in newer.splitlines() if x],
+        "checked_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f)
+os.chmod(tmp, 0o664)
+os.replace(tmp, path)
+PY
+}
+
+cmd_version() {
+  write_version fetch
+  python3 - "$SETUP_DIR/version.json" <<'PY'
+import json, sys
+v = json.load(open(sys.argv[1]))
+print(f"Belfry {v['short']} ({v['branch']}, {v['date'][:10]}): {v['subject']}")
+if v["behind"]:
+    print(f"{v['behind']} newer commit(s) on {v['branch']} (latest {v['latest']}); update with: belfry update")
+    for s in v["newer"]:
+        print("  - " + s)
+else:
+    print("Up to date.")
+PY
+}
+
+# An update asked for in the admin console: the page writes update.request into the setup folder,
+# belfry-update.path runs this; update.json tells the page how it went.
+update_status() {
+  python3 - "$SETUP_DIR/update.json" "$@" <<'PY'
+import datetime, json, os, sys
+path, state, frm, to, msg = (sys.argv[1:] + ["", "", "", ""])[:5]
+data = {"state": state, "from": frm, "to": to, "message": msg[:400],
+        "at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+tmp = path + ".tmp"
+with open(tmp, "w") as f:
+    json.dump(data, f)
+os.chmod(tmp, 0o664)
+os.replace(tmp, path)
+PY
+}
+
+cmd_update_request() {
+  local req="$SETUP_DIR/update.request" from log
+  [[ -f "$req" ]] || return 0
+  rm -f "$req"
+  from=$(git rev-parse --short HEAD)
+  update_status running "$from"
+  log=$(mktemp)
+  if ( BELFRY_BY=console cmd_update ) >"$log" 2>&1; then
+    update_status ok "$from" "$(git rev-parse --short HEAD)" "$(tail -n 1 "$log")"
+  else
+    update_status failed "$from" "$(git rev-parse --short HEAD)" "$(grep -v '^[[:space:]]*$' "$log" | tail -n 3 | tr '\n' ' ')"
+  fi
+  rm -f "$log"
+  write_version
 }
 
 cmd_smoke() {
@@ -364,7 +449,7 @@ cmd_homepage() {
 # The page writes infra/data/setup/pending.env; belfry-setup.path runs `belfry setup-apply`,
 # which takes only these keys (the page's fields) and runs `belfry config` on them.
 SETUP_DIR="$INFRA/data/setup"
-SETUP_KEYS=(BELFRY_RESEND_API_KEY BELFRY_MAIL_FROM BELFRY_NAME BELFRY_THEME BELFRY_ENV_HOMEPAGE
+SETUP_KEYS=(BELFRY_RESEND_API_KEY BELFRY_LETTERMINT_API_KEY BELFRY_MAIL_FROM BELFRY_NAME BELFRY_THEME BELFRY_ENV_HOMEPAGE
   BELFRY_GIT_REPO BELFRY_STRIPE_PUBLISHABLE_KEY BELFRY_STRIPE_SECRET_KEY BELFRY_MOLLIE_API_KEY
   BELFRY_ACCOUNTING_ODOO_URL BELFRY_ACCOUNTING_ODOO_DB BELFRY_ACCOUNTING_ODOO_ISSUER
   BELFRY_ACCOUNTING_ODOO_API_KEY)
@@ -403,6 +488,7 @@ values = {k: env.get(v, "") for k, v in names.items()}
 is_set = {k: bool(v) for k, v in values.items()}
 is_set.update({
     "BELFRY_RESEND_API_KEY": env.get("SMTP_HOST") == "smtp.resend.com" and secret("smtp_password"),
+    "BELFRY_LETTERMINT_API_KEY": env.get("SMTP_HOST") == "smtp.lettermint.co" and secret("smtp_password"),
     "BELFRY_STRIPE_SECRET_KEY": secret("stripe_secret_key"),
     "BELFRY_MOLLIE_API_KEY": secret("mollie_api_key"),
     "BELFRY_ACCOUNTING_ODOO_API_KEY": secret("accounting_odoo_api_key"),
@@ -502,9 +588,29 @@ Description=Belfry: apply the settings saved on the setup page
 Type=oneshot
 ExecStart=/usr/local/bin/belfry setup-apply
 EOF
+  cat > /etc/systemd/system/belfry-update.path <<EOF
+[Unit]
+Description=Belfry: watch for an update asked for in the admin console
+
+[Path]
+PathExists=$SETUP_DIR/update.request
+Unit=belfry-update.service
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  cat > /etc/systemd/system/belfry-update.service <<EOF
+[Unit]
+Description=Belfry: update the code (asked for in the admin console)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3h
+ExecStart=/usr/local/bin/belfry update-request
+EOF
   systemctl daemon-reload
-  systemctl enable --now belfry-setup.path >/dev/null
-  say "belfry-setup.path watches $SETUP_DIR/pending.env"
+  systemctl enable --now belfry-setup.path belfry-update.path >/dev/null
+  say "belfry-setup.path watches $SETUP_DIR/pending.env, belfry-update.path $SETUP_DIR/update.request"
 }
 
 # ── the community's own look (infra/data/theme, served at /theme/custom/; theme.py) ──
@@ -623,6 +729,8 @@ case "${1:-help}" in
     compose --profile app exec -T onboarding python -m belfry_onboarding add-steward "$@" ;;
   smoke) cmd_smoke ;;
   update) shift; cmd_update "$@" ;;
+  version) cmd_version ;;
+  update-request) cmd_update_request ;;
   homepage) shift; cmd_homepage "$@" ;;
   setup-code) shift; cmd_setup_code "$@" ;;
   setup-apply) cmd_setup_apply ;;

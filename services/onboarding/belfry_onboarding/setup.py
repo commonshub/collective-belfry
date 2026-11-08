@@ -63,6 +63,19 @@ PROVIDERS: list[tuple[str, str, str, list[tuple[str, str, bool, str]]]] = [
         ],
     ),
     (
+        "lettermint",
+        "Lettermint",
+        "E-mail through Lettermint instead (an EU service): one of the two is enough.",
+        [
+            (
+                "BELFRY_LETTERMINT_API_KEY",
+                "API token",
+                True,
+                "a project's API token, from dash.lettermint.co (SMTP turned on)",
+            ),
+        ],
+    ),
+    (
         "name",
         "Community name",
         "On every page and in the mails.",
@@ -453,6 +466,34 @@ def check_resend(key: str, domain: str) -> str:
     return f"belfry@{(near or verified)[0]}"
 
 
+LETTERMINT_SMTP = ("smtp.lettermint.co", 587)
+MAIL_KEYS = ("BELFRY_RESEND_API_KEY", "BELFRY_LETTERMINT_API_KEY")
+
+
+def check_lettermint(key: str, domain: str) -> str:
+    """Try KEY (a Lettermint project's API token) by signing in to Lettermint's SMTP server, which
+    sends nothing; the sender is belfry@DOMAIN, a domain verified in that Lettermint project.
+    Raises ValueError with a message for the person."""
+    import smtplib
+    import ssl
+
+    key = key.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_.:|=-]{16,300}", key):
+        raise ValueError("That does not look like a Lettermint API token. Copy it again.")
+    try:
+        with smtplib.SMTP(*LETTERMINT_SMTP, timeout=15) as conn:
+            conn.starttls(context=ssl.create_default_context())
+            conn.login("lettermint", key)
+    except smtplib.SMTPAuthenticationError as exc:
+        raise ValueError(
+            "Lettermint did not accept this token. Use a project's API token, and turn SMTP on "
+            "for that project in Lettermint."
+        ) from exc
+    except (smtplib.SMTPException, OSError) as exc:
+        log.warning("setup: could not reach Lettermint to check the token: %s", exc)
+    return f"belfry@{domain}"
+
+
 SEND_TRIES = 20  # progress polls (every 3 s) before a code that won't go out counts as an error
 
 
@@ -476,13 +517,13 @@ def progress(svc: Services) -> dict[str, Any]:
     if st["pending"] or st["applying"]:
         return {**out, "state": "wait"}
     last = st["last"]
-    if last and not last.get("ok") and "BELFRY_RESEND_API_KEY" in (last.get("keys") or []):
+    if last and not last.get("ok") and set(MAIL_KEYS) & set(last.get("keys") or []):
         return {
             **out,
             "state": "mail_error",
             "message": "The belfry could not switch mail on. Check the key and try again.",
         }
-    if not st["set"].get("BELFRY_RESEND_API_KEY"):
+    if not any(st["set"].get(k) for k in MAIL_KEYS):
         return {**out, "state": "sender"}
     if not fa.get("code_sent_at"):
         try:
@@ -650,10 +691,27 @@ WIZARD_JS = """<script src="/static/nostr-tools-2.25.2.js"></script>
     try { localStorage.setItem('belfry:session', JSON.stringify(keep)); } catch (_) {}
     show('sender');
   });
-  step('sender', async () => { show('resend'); });
+  const PROVIDER = {
+    resend: { name: 'Resend', title: 'Your Resend API key', link: 'https://resend.com/api-keys',
+      where: 'resend.com/api-keys', ph: 're_…', label: 'Resend API key' },
+    lettermint: { name: 'Lettermint', title: 'Your Lettermint API token', link: 'https://dash.lettermint.co',
+      where: 'dash.lettermint.co (a project, its API tokens; turn SMTP on for it)', ph: 'Paste the token', label: 'Lettermint API token' },
+  };
+  let provider = 'resend';
+  function useProvider(p) {
+    provider = PROVIDER[p] ? p : 'resend';
+    const P = PROVIDER[provider], s = sec('resend');
+    s.querySelector('h1').textContent = P.title;
+    const a = s.querySelector('[data-where]');
+    a.href = P.link; a.textContent = P.where;
+    const i = s.querySelector('input[name=key]');
+    i.placeholder = P.ph; i.setAttribute('aria-label', P.label);
+    sec('wait').querySelector('h1').textContent = 'Connecting ' + P.name;
+  }
+  step('sender', async (f) => { useProvider((f.elements.provider || {}).value); show('resend'); });
   step('resend', async (f, b) => {
     b.textContent = 'Checking the key…';
-    await post('/setup/mail', { provider: 'resend', api_key: f.elements.key.value.trim() });
+    await post('/setup/mail', { provider, api_key: f.elements.key.value.trim() });
     f.elements.key.value = '';
     show('wait');
   });
@@ -777,12 +835,14 @@ def wizard(start: str, csrf: str, settings: Any, info: dict[str, Any]) -> str:
 <p class="muted">Members sign in with a code sent by e-mail, so this comes first.</p>
 <form novalidate><label class="option"><input type="radio" name="provider" value="resend" checked>
 <span><strong>Resend</strong><small>An e-mail service with a free plan, at resend.com.</small></span></label>
+<label class="option"><input type="radio" name="provider" value="lettermint">
+<span><strong>Lettermint</strong><small>A European e-mail service (Netherlands), at lettermint.co.</small></span></label>
 <p class="err" role="alert"></p>{actions("Next")}</form>
 </section>
 
 <section data-step="resend" hidden>
 <h1>Your Resend API key</h1>
-<p class="muted">Create one at <a href="https://resend.com/api-keys" target="_blank" rel="noopener">resend.com/api-keys</a>.
+<p class="muted">Create one at <a data-where href="https://resend.com/api-keys" target="_blank" rel="noopener">resend.com/api-keys</a>.
 Your belfry sends from belfry@{E(domain)}; you can change that later.</p>
 <form novalidate><input type="password" name="key" autocomplete="off" spellcheck="false" placeholder="re_…" aria-label="Resend API key">
 <p class="err" role="alert">{E(info.get("message", "") if start == "resend" else "")}</p>{actions("Connect", "sender")}</form>
@@ -1142,12 +1202,19 @@ def register(app: FastAPI) -> None:
         fa = first_admin(services.settings)
         if not fa:
             return JSONResponse({"message": "Create the admin account first."}, status_code=409)
-        if body.get("provider", "resend") != "resend":
-            return JSONResponse({"message": "Only Resend is supported for now."}, status_code=422)
+        provider = body.get("provider", "resend")
+        if provider not in ("resend", "lettermint"):
+            return JSONResponse({"message": "Choose Resend or Lettermint."}, status_code=422)
         key = str(body.get("api_key", "")).strip()
         try:
-            sender = await run_in_threadpool(check_resend, key, services.settings.nip05_domain)
-            values = {"BELFRY_RESEND_API_KEY": key, "BELFRY_MAIL_FROM": sender}
+            check = check_lettermint if provider == "lettermint" else check_resend
+            sender = await run_in_threadpool(check, key, services.settings.nip05_domain)
+            values = {
+                "BELFRY_LETTERMINT_API_KEY"
+                if provider == "lettermint"
+                else "BELFRY_RESEND_API_KEY": key,
+                "BELFRY_MAIL_FROM": sender,
+            }
             name = str(fa.get("community_name") or "")
             if name and name != services.settings.community_name:
                 values["BELFRY_NAME"] = name
@@ -1158,7 +1225,7 @@ def register(app: FastAPI) -> None:
             return JSONResponse({"message": str(exc)}, status_code=422)
         fa.update(code_sent_at=0, send_tries=0)
         save_first_admin(services.settings, fa)
-        log.info("setup: mail queued (Resend, sender %s)", sender)
+        log.info("setup: mail queued (%s, sender %s)", provider, sender)
         return JSONResponse({"sender": sender})
 
     @app.post("/console/setup/verify/send")

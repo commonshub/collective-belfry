@@ -387,3 +387,71 @@ def test_first_session_connect_goes_through_the_bunker_relay(fresh, folder, monk
         fresh.post("/setup/first-admin/connect", json={"csrf": csrf, "event": other}).status_code
         == 422
     )
+
+
+def test_first_run_with_lettermint(fresh, folder, monkeypatch):
+    _, csrf = first_session(fresh, folder)
+    session = PrivateKey().public_key_xonly.format().hex()
+    assert make_first_admin(fresh, folder, csrf, session).status_code == 200
+    assert "Lettermint" in fresh.get("/setup").text
+    seen = {}
+
+    def fake_check(key, dom):
+        seen["key"] = key
+        if key == "lm_wrong_token_123456":
+            raise ValueError("Lettermint did not accept this token.")
+        return f"belfry@{dom}"
+
+    monkeypatch.setattr(setup, "check_lettermint", fake_check)
+    monkeypatch.setattr(setup, "check_resend", lambda *a: pytest.fail("not Resend"))
+    bad = fresh.post(
+        "/setup/mail",
+        json={"csrf": csrf, "provider": "lettermint", "api_key": "lm_wrong_token_123456"},
+    )
+    assert bad.status_code == 422 and "did not accept" in bad.json()["message"]
+    ok = fresh.post(
+        "/setup/mail",
+        json={"csrf": csrf, "provider": "lettermint", "api_key": "lm_good_token_1234567"},
+    )
+    assert ok.status_code == 200
+    pending = (folder / "pending.env").read_text()
+    assert "BELFRY_LETTERMINT_API_KEY='lm_good_token_1234567'" in pending
+    assert "BELFRY_RESEND_API_KEY" not in pending
+    assert (
+        fresh.post("/setup/mail", json={"csrf": csrf, "provider": "x", "api_key": "k"}).status_code
+        == 422
+    )
+    (folder / "pending.env").unlink()
+    status = json.loads((folder / "status.json").read_text())
+    status["set"]["BELFRY_LETTERMINT_API_KEY"] = True
+    (folder / "status.json").write_text(json.dumps(status))
+    assert fresh.get("/setup/progress").json()["state"] == "code"
+
+
+def test_check_lettermint_signs_in_to_its_smtp_server(monkeypatch):
+    import smtplib
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout=0):
+            assert (host, port) == ("smtp.lettermint.co", 587)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def starttls(self, context=None):
+            pass
+
+        def login(self, user, password):
+            assert user == "lettermint"
+            if password != "lm_valid_token_12345678":
+                raise smtplib.SMTPAuthenticationError(535, b"bad credentials")
+
+    monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    assert setup.check_lettermint("lm_valid_token_12345678", "enspiral.eu") == "belfry@enspiral.eu"
+    with pytest.raises(ValueError, match="did not accept"):
+        setup.check_lettermint("lm_other_token_12345678", "enspiral.eu")
+    with pytest.raises(ValueError, match="does not look like"):
+        setup.check_lettermint("short", "enspiral.eu")

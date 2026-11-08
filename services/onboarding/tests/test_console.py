@@ -330,3 +330,56 @@ def test_discovery_names_the_console_and_the_belfry_key(web, belfry):
     assert doc["console"] == "https://belfry.belfry.test"
     assert doc["nostr"]["pubkey"] == homepage.belfry_pubkey(belfry.settings)
     assert doc["skills"]["website"].endswith("/skills/belfry-homepage.md")
+
+
+def test_status_shows_the_version_and_admins_can_update(web, belfry, odoo, authentik, tmp_path):
+    import json as _json
+
+    belfry.settings.setup_dir = str(tmp_path)
+    (tmp_path / "version.json").write_text(
+        _json.dumps(
+            {
+                "branch": "belfry-sh",
+                "commit": "abc1234def",
+                "short": "abc1234",
+                "date": "2026-11-08T10:00:00+00:00",
+                "subject": "Shared inboxes",
+                "latest": "fff9999",
+                "behind": 2,
+                "newer": ["Lettermint in the setup", "Version and updates"],
+                "checked_at": "2026-11-08T12:00:00Z",
+            }
+        )
+    )
+    page = web.get("/status", headers=CONSOLE).text
+    assert "abc1234" in page and "2 updates available" in page and "Lettermint in the setup" in page
+    assert "Update now" not in page  # signed out
+    from belfry_onboarding import discovery
+
+    assert discovery.document(belfry.settings)["code"]["short"] == "abc1234"
+    plain = member(odoo, "Bob", "bob@example.org")
+    csrf = sign_in(web, belfry, plain)
+    assert "Update now" not in web.get("/status", headers=CONSOLE).text
+    r = web.post("/update", data={"csrf": csrf}, headers=CONSOLE, follow_redirects=False)
+    assert r.status_code == 303 and not (tmp_path / "update.request").exists()
+    admin = member(odoo, "Ada", "ada@example.org")
+    make_admin(authentik, "ada@example.org")
+    csrf = sign_in(web, belfry, admin)
+    assert "Update now" in web.get("/status", headers=CONSOLE).text
+    r = web.post("/update", data={"csrf": csrf}, headers=CONSOLE, follow_redirects=False)
+    assert r.status_code == 303 and (tmp_path / "update.request").exists()
+    page = web.get("/status", headers=CONSOLE).text
+    assert "Updating" in page and "Update now" not in page
+    (tmp_path / "update.request").unlink()
+    (tmp_path / "update.json").write_text(
+        _json.dumps(
+            {
+                "state": "failed",
+                "from": "abc1234",
+                "to": "abc1234",
+                "message": "no space left",
+                "at": "2026-11-08T13:00:00Z",
+            }
+        )
+    )
+    assert "The last update failed" in web.get("/status", headers=CONSOLE).text

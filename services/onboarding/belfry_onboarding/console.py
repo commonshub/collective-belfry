@@ -173,6 +173,87 @@ async def status_data(svc: Services) -> dict[str, Any]:
     return data
 
 
+# ── the code: version and updates (version.json / update.json from the host's belfry command) ─
+def code_info(settings: Any) -> dict[str, Any]:
+    """What the belfry runs and whether newer code is out (``belfry version`` / ``belfry apply``
+    write version.json), and the last update asked for here (update.json, update.request)."""
+    from .setup import read_json, setup_dir
+
+    folder = setup_dir(settings)
+    if folder is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "version": read_json(folder / "version.json"),
+        "update": read_json(folder / "update.json"),
+        "requested": (folder / "update.request").is_file(),
+    }
+
+
+def request_update(settings: Any, by: str) -> bool:
+    from .setup import setup_dir
+
+    folder = setup_dir(settings)
+    if folder is None:
+        return False
+    tmp = folder / "update.request.tmp"
+    tmp.write_text(json.dumps({"by": by, "at": int(time.time())}))
+    tmp.replace(folder / "update.request")
+    return True
+
+
+def code_html(info: dict[str, Any], who: dict[str, Any] | None, msg: str, err: str) -> str:
+    v, up = info.get("version") or {}, info.get("update") or {}
+    if not info.get("available") and not v:
+        return '<h2>Code</h2><p class="muted">This belfry does not report its version.</p>'
+    running = info.get("requested") or up.get("state") == "running"
+    line = (
+        f"Version <code>{E(v.get('short', '?'))}</code> ({E(v.get('branch', ''))}, "
+        f"{E((v.get('date') or '')[:10])}): {E(v.get('subject', ''))}"
+        if v
+        else "Version unknown (run <code>belfry version</code> on the server)."
+    )
+    newer = ""
+    if v.get("behind"):
+        items = "".join(f"<li>{E(x)}</li>" for x in v.get("newer") or [])
+        more = v["behind"] - len(v.get("newer") or [])
+        newer = (
+            f"<p><strong>{v['behind']} update{'s' if v['behind'] > 1 else ''} available</strong> "
+            f"(latest <code>{E(v.get('latest', ''))}</code>):</p><ul>{items}"
+            f"{f'<li>and {more} more</li>' if more > 0 else ''}</ul>"
+        )
+    elif v:
+        newer = f'<p class="up">Up to date (checked {E((v.get("checked_at") or "")[:16].replace("T", " "))} UTC).</p>'
+    last = ""
+    if running:
+        last = (
+            '<p role="status"><strong>Updating…</strong> The belfry fetches the new code and restarts '
+            "its services; this page may stop answering for a few minutes.</p>"
+            '<meta http-equiv="refresh" content="20">'
+        )
+    elif up.get("state") == "ok":
+        last = (
+            f'<p class="meta">Last update: from <code>{E(up.get("from", ""))}</code> to '
+            f"<code>{E(up.get('to', ''))}</code>, {E((up.get('at') or '')[:16].replace('T', ' '))} UTC.</p>"
+        )
+    elif up.get("state") == "failed":
+        last = (
+            f'<p class="error">The last update failed ({E((up.get("at") or "")[:16].replace("T", " "))} UTC): '
+            f"{E(up.get('message', ''))}</p>"
+        )
+    button = ""
+    if who and who["admin"] and not running and info.get("available"):
+        label = "Update now" if v.get("behind") else "Check again and update"
+        button = (
+            '<form method="post" action="/update"><input type="hidden" name="csrf" '
+            f'value="{E(who["csrf"])}"><button class="btn" type="submit">{label}</button></form>'
+        )
+    note = (f'<p class="up">{E(msg)}</p>' if msg else "") + (
+        f'<p class="error">{E(err)}</p>' if err else ""
+    )
+    return f"<h2>Code</h2>{note}<p>{line}</p>{newer}{last}{button}"
+
+
 # ── members ─────────────────────────────────────────────────────────────────────────────────
 def members(svc: Services) -> list[dict[str, Any]]:
     passes = svc.odoo.search_read(
@@ -465,7 +546,7 @@ def overview_html(
     )
 
 
-def status_html(status: dict[str, Any], who: dict[str, Any] | None) -> str:
+def status_html(status: dict[str, Any], who: dict[str, Any] | None, code: str = "") -> str:
     rows = "".join(
         f'<tr><td>{E(x["name"])}</td><td class="{"up" if x["up"] else "down"}">{"up" if x["up"] else "down"}</td>'
         f'<td class="meta">{x["ms"]} ms · {E(x["detail"])}</td></tr>'
@@ -479,7 +560,7 @@ def status_html(status: dict[str, Any], who: dict[str, Any] | None) -> str:
         f"""<h1>Status</h1><p class="muted">{status["up"]} of {status["total"]} services answer, checked from inside the belfry at
 {community.when(status["checked"])}.</p>
 <table><tr><th>Service</th><th>State</th><th>Answer</th></tr>{rows}</table>
-<h2>Code</h2><p>Version <code>{E(status["version"] or "unknown")}</code>: {E(status["version_summary"])}</p>
+{code}
 <p class="meta">Last change: {E(last.get("summary", "—"))} · started by {E(", ".join(last.get("by") or []) or "—")}.
 All changes: <a href="/changelog">changelog</a>. Machine-readable: <a href="/status.json">status.json</a>.</p>""",
     )
@@ -714,11 +795,34 @@ def register(app: FastAPI) -> None:
 
     @app.get("/console/status", response_class=HTMLResponse)
     async def status(request: Request):
-        return HTMLResponse(status_html(await status_data(svc(request)), await who(request)))
+        services = svc(request)
+        me = await who(request)
+        msg, err = flash.peek(request, services)
+        data = await status_data(services)
+        info = await run_in_threadpool(code_info, services.settings)
+        if not (info.get("version") or {}) and data["version"]:
+            # no version.json (an older host command): the changelog's last code entry
+            info["version"] = {"short": data["version"], "subject": data["version_summary"]}
+        code = code_html(info, me, msg, err)
+        page_ = HTMLResponse(status_html(data, me, code), headers={"Cache-Control": "no-store"})
+        return flash.clear(page_, request)
 
     @app.get("/console/status.json")
     async def status_json(request: Request):
-        return JSONResponse(await status_data(svc(request)))
+        services = svc(request)
+        info = await run_in_threadpool(code_info, services.settings)
+        return JSONResponse({**await status_data(services), "code": info.get("version") or {}})
+
+    @app.post("/console/update")
+    async def update(request: Request, csrf: str = Form("")):
+        me = await admin_form(request, csrf)
+        if me is None:
+            return back("/status", err="Only admins can update the belfry. Sign in again.")
+        services = svc(request)
+        if not await run_in_threadpool(request_update, services.settings, me.get("email", "")):
+            return back("/status", err="This belfry cannot update from here: run belfry update.")
+        log.info("console: update asked for by %s", me.get("email"))
+        return back("/status", msg="Update asked for. It starts within a few seconds.")
 
     @app.get("/console/changelog")
     async def changelog_redirect(request: Request):

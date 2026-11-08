@@ -81,6 +81,7 @@ def document(settings: Any) -> dict[str, Any]:
     }
     doc = {
         "belfry": VERSION,
+        "code": _code(settings),
         "name": settings.community_name,
         "domain": domain,
         "nip05_domain": settings.nip05_domain,
@@ -346,3 +347,12 @@ def register(app: FastAPI) -> None:
         )
         data = await run_in_threadpool(me, services, pubkey)
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
+
+
+def _code(settings: Any) -> dict[str, str]:
+    """The code this belfry runs (version.json, written by the host's belfry command)."""
+    from .setup import read_json, setup_dir
+
+    folder = setup_dir(settings)
+    v = read_json(folder / "version.json") if folder else {}
+    return {k: str(v[k]) for k in ("short", "commit", "branch", "date") if v.get(k)}
