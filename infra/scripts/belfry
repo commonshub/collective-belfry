@@ -686,7 +686,7 @@ app_route() {
 # (infra/data/apps/_removed/<name>) or replaced with their own build stays as it is.
 SHIPPED_APPS="$INFRA/shipped-apps"
 app_brand() {  # the shipped builds carry the village's name: give them the community's
-  local dir=$1 name; name=$(env_get BELFRY_NAME); [[ -n "$name" ]] || return 0
+  local dir=$1 name; name=$(env_get COMMUNITY_NAME); [[ -n "$name" ]] || return 0
   BELFRY_NAME="$name" python3 - "$dir" <<'PY' || true
 import html, json, os, pathlib, sys
 d, name = pathlib.Path(sys.argv[1]), os.environ["BELFRY_NAME"]
