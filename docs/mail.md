@@ -5,7 +5,7 @@ A belfry receives mail for its members and channels, and members answer from the
 | Address | Goes to |
 |---|---|
 | `<username>@<domain>` | the member (active pass), in the chat's **Messages** |
-| `<channel>@<domain>` | the channel, pod or event chat, posted as the member who sent it (members only, and the mail must pass DKIM or SPF aligned with its From) |
+| `<channel>@<domain>` | the channel, pod or event chat, posted as the member who sent it (members only, and the mail must pass DKIM or SPF aligned with its From). The post carries `client belfry-mail`, a `subject` tag and `mail-original` (the whole e-mail, AES-GCM on Blossom: url, key, nonce); the chat shows it as the member's message with a "via e-mail" tag and a "Full e-mail" link |
 | `postmaster@`, `abuse@` | the admins' Messages |
 
 Usernames win over channel names. Anything else is refused at `RCPT TO` (550).
@@ -18,6 +18,8 @@ There is no numbered NIP for e-mail. Belfry follows **Nostr Mail** ([nogringo/no
 - the belfry is the bridge, `_smtp@<domain>` in its nostr.json (the belfry key);
 - incoming mail: a 1301 from the bridge with `mail-from` (the legacy sender), plus Belfry's `belfry-auth` tag (`pass` when DKIM or SPF aligned with From). A message over 60 kB is stored on Blossom encrypted with AES-GCM; the rumor carries `x`, `url`, `decryption-key` and `decryption-nonce` (Nostr Mail's large-MIME scheme);
 - outgoing mail: the member's app wraps a 1301 with `email-id`, `mail-from` (their `username@domain`) and `rcpt-to` to the bridge, and a copy to themselves. The belfry checks that the address is the sender's and that the From header matches, removes Bcc, sends through the belfry's SMTP server (the same one Odoo uses) and answers with a kind **7679** delivery report (no `p` tag, encrypted to the sender with a throwaway key). The reports are also how a restart knows what was already sent.
+
+Only what the sender wrote is kept in the message: the quoted history (Gmail, Outlook, Apple Mail, Thunderbird; English, French, German, Spanish, Dutch, Italian, Portuguese headers), the signature after `-- ` and phone footers ("Sent from my iPhone") are cut. The whole e-mail stays one tap away.
 
 The chat app reads NIP-17 (kind 14), old NIP-04 (kind 4) and Nostr Mail in one Messages list.
 

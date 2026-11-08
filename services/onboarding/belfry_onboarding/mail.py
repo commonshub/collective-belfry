@@ -191,8 +191,59 @@ def address_of(header: Any) -> str:
     return email.utils.parseaddr(str(header or ""))[1].lower()
 
 
+# Where the quoted history starts in a reply, in the languages members are likely to write in.
+_QUOTE_HEAD = re.compile(
+    r"^\s*(On\b.{4,300}\bwrote\s*:"
+    r"|Le\b.{4,300}\ba [ée]crit\s*:"
+    r"|Am\b.{4,300}\bschrieb.{0,80}:"
+    r"|El\b.{4,300}\bescribi[óo]\s*:"
+    r"|Op\b.{4,300}\bschreef.{0,80}:"
+    r"|Il\b.{4,300}\bha scritto\s*:"
+    r"|Em\b.{4,300}\bescreveu\s*:"
+    r"|-{2,}\s*(Original Message|Message d'origine|Ursprüngliche Nachricht|Mensaje original"
+    r"|Oorspronkelijk bericht|Forwarded message|Message transféré)\s*-{2,}"
+    r"|_{10,})\s*$",
+    re.I,
+)
+# Outlook's header block: "From: …" followed within a few lines by "Sent:/Date:/To:/Subject:".
+_HDR = re.compile(r"^\s*\*?(From|De|Von|Van|Da)\s*:\*?\s", re.I)
+_HDR_NEXT = re.compile(
+    r"^\s*\*?(Sent|Date|To|Subject|Envoy[ée]|Datum|Gesendet|Aan|Onderwerp|Enviado|Asunto|Objet|À|An|Betreff)\s*:",
+    re.I,
+)
+# Lines that end a message without being part of it: signatures and phone footers.
+_FOOTER = re.compile(
+    r"^\s*(--|—|Sent from my \w+.*|Sent from (Mail|Outlook|Yahoo|Proton).*|Get Outlook for .*"
+    r"|Envoy[ée] de mon \w+.*|Von meinem \w+ gesendet.*|Verstuurd vanaf mijn \w+.*"
+    r"|Enviado desde mi \w+.*|Inviato da .*)\s*$",
+    re.I,
+)
+
+
+def _html_text(text: str) -> str:
+    import html
+
+    text = re.sub(r"(?is)<(script|style|head)\b.*?</\1>", "", text)
+    # the quoted history in HTML replies: Gmail, Apple Mail and Thunderbird, Outlook
+    text = re.sub(r"(?is)<blockquote\b.*", "", text) if "<blockquote" in text.lower() else text
+    text = re.sub(
+        r'(?is)<div[^>]+(class="[^"]*(gmail_quote|moz-cite-prefix|yahoo_quoted)[^"]*"'
+        r'|id="(appendonsend|divRplyFwdMsg|mail-editor-reference-message-container)").*',
+        "",
+        text,
+    )
+    text = (
+        re.sub(r"(?is)<hr\b.*", "", text)
+        if re.search(r"(?i)<hr\b[^>]*>\s*<div[^>]*>\s*<(b|font|span)", text)
+        else text
+    )
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>|</tr>|</h\d>", "\n", text)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text.replace("&nbsp;", " ")).replace("\xa0", " ")
+
+
 def text_of(msg: EmailMessage) -> str:
-    """The plain text of a message, without the quoted message a reply carries."""
+    """What the sender actually wrote: no quoted history, no signature, no phone footer."""
     part = msg.get_body(preferencelist=("plain", "html"))
     if part is None:
         return ""
@@ -201,21 +252,24 @@ def text_of(msg: EmailMessage) -> str:
     except (LookupError, ValueError):
         text = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
     if part.get_content_type() == "text/html":
-        text = re.sub(r"(?is)<(script|style).*?</\1>", "", text)
-        text = re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", text)
-        text = re.sub(r"<[^>]+>", "", text)
-        text = re.sub(r"&nbsp;", " ", text)
-        import html
-
-        text = html.unescape(text)
-    lines = []
-    for line in text.replace("\r\n", "\n").split("\n"):
-        if re.match(r"^\s*(On .{4,200} wrote:|-----\s*Original Message\s*-----)\s*$", line):
+        text = _html_text(text)
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        # "On Mon, 3 Nov 2026 at 10:00, Ana <ana@x.org>" + "wrote:" on the next line (Gmail wraps)
+        joined = line + " " + lines[i + 1] if i + 1 < len(lines) else line
+        if _QUOTE_HEAD.match(line) or (
+            _QUOTE_HEAD.match(joined) and not line.strip().endswith(":")
+        ):
             break
-        if line.startswith(">"):
+        if _HDR.match(line) and any(_HDR_NEXT.match(n) for n in lines[i + 1 : i + 5]):
+            break
+        if _FOOTER.match(line):
+            break
+        if line.lstrip().startswith(">"):
             continue
-        lines.append(line.rstrip())
-    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+        out.append(line.rstrip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def attachments(msg: EmailMessage) -> list[tuple[str, str, bytes]]:
@@ -356,7 +410,9 @@ def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender:
 
 
 # ── in: a channel's mail ────────────────────────────────────────────────────────────────────
-def to_channel(svc: Services, channel: str, msg: EmailMessage, sender: str, auth: dict) -> None:
+def to_channel(
+    svc: Services, channel: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
+) -> None:
     member = apps.member_by_email(svc, sender)
     if member is None:
         raise MailError(550, f"5.7.1 Only members of {domain(svc)} can post to channels by e-mail.")
@@ -373,8 +429,14 @@ def to_channel(svc: Services, channel: str, msg: EmailMessage, sender: str, auth
         raise MailError(550, "5.6.0 This mail is empty.")
     if community.member_signer(svc, member["partner"]) is None:
         text = f"✉️ From {member['name']}\n\n{text}"  # their own key: posted by the belfry
+    # the whole e-mail, encrypted on Blossom; the key travels in the (members-only) message
+    found = {t[0]: t[1] for t in store_large(svc, raw)}
+    extra = [
+        ["subject", subject[:300]],
+        ["mail-original", found["url"], found["decryption-key"], found["decryption-nonce"]],
+    ]
     try:
-        drops.post(svc, channel, text, imeta, member["partner"], client="belfry-mail")
+        drops.post(svc, channel, text, imeta + extra, member["partner"], client="belfry-mail")
     except Exception as exc:  # noqa: BLE001 — the relay refuses non-members of closed channels
         log.info("mail: post to %s refused: %s", channel, exc)
         raise MailError(550, f"5.7.1 You cannot post in {channel}.") from exc
@@ -398,7 +460,7 @@ def deliver(
             if target is None:
                 raise MailError(550, f"5.1.1 No one is called {rcpt} here.")
             if target["kind"] == "channel":
-                to_channel(svc, target["channel"], msg, sender, auth)
+                to_channel(svc, target["channel"], raw, msg, sender, auth)
             else:
                 for pubkey in target["pubkeys"]:
                     to_member(svc, pubkey, raw, msg, sender, auth)

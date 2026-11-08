@@ -115,7 +115,12 @@ def test_channel_mail_only_from_members_who_prove_it(m, monkeypatch):
     monkeypatch.setattr(
         drops,
         "post",
-        lambda svc, ch, text, imeta, partner, client="": posted.append((ch, text, partner, client)),
+        lambda svc, ch, text, imeta, partner, client="": posted.append(
+            (ch, text, partner, client, imeta)
+        ),
+    )
+    monkeypatch.setattr(
+        drops, "upload", lambda svc, files: [["imeta", "url https://blossom.belfry.test/abc"]]
     )
     monkeypatch.setattr(community, "member_signer", lambda svc, p: ("b" * 64, None))
     monkeypatch.setattr(
@@ -133,9 +138,13 @@ def test_channel_mail_only_from_members_who_prove_it(m, monkeypatch):
     )
     code, _ = mail.deliver(m, message(frm="Ana <ana@x.org>", subject="Seeds"), *args)
     assert code == 250
-    [(ch, text, partner, client)] = posted
+    [(ch, text, partner, client, tags)] = posted
     assert ch == "garden" and partner == 7 and client == "belfry-mail"
     assert text.startswith("**Seeds**") and "See you there." in text and "old" not in text
+    found = {t[0]: t[1:] for t in tags}
+    assert found["subject"] == ["Seeds"]
+    url, key, nonce = found["mail-original"]
+    assert url == "https://blossom.belfry.test/abc" and len(base64.b64decode(key)) == 32
 
 
 def test_dkim_aligned_with_from_marks_mail_verified():
@@ -265,6 +274,68 @@ def test_reading_a_reply_keeps_only_the_new_text():
     )
     assert mail.text_of(mail.parse(html)).startswith("Hello\nthere")
     assert mail.text_of(mail.parse(message())) == "Hi Ana,\n\nSee you there."
+
+
+UTF8 = "Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n"
+
+
+Y = "Yes, Sunday works.\n\n"
+
+
+@pytest.mark.parametrize(
+    "body,extra",
+    [
+        # Gmail: the "wrote:" line wraps, then the quote
+        (
+            Y + "On Mon, 3 Nov 2026 at 10:00, Ana Lopez <ana@x.org>\nwrote:\n> Sunday?",
+            "",
+        ),
+        (
+            Y + "Le lun. 3 nov. 2026 à 10:00, Ana <ana@x.org> a écrit :\n> Dimanche ?",
+            UTF8,
+        ),
+        (
+            Y + "Am Mo., 3. Nov. 2026 um 10:00 Uhr schrieb Ana <ana@x.org>:\n> x",
+            "",
+        ),
+        # Outlook: a header block, no ">" at all
+        (
+            Y + "From: Ana Lopez <ana@x.org>\n"
+            "Sent: Monday, 3 November 2026 10:00\n"
+            "To: hello@belfry.test\nSubject: Sunday\n\nSunday?",
+            "",
+        ),
+        (Y + "-----Original Message-----\nFrom: Ana\nSunday?", ""),
+        # signature and phone footers
+        (Y + "-- \nTom Peeters\nGarden team, +32 400 00 00 00", ""),
+        (Y + "Sent from my iPhone", ""),
+        (Y + "Envoyé de mon iPhone", UTF8),
+        # HTML: Gmail quote div, Outlook reply block, Apple blockquote
+        (
+            '<div dir="ltr">Yes, Sunday works.</div><br><div class="gmail_quote">'
+            "<div>On Mon, Ana wrote:</div>"
+            "<blockquote>Sunday?</blockquote></div>",
+            "Content-Type: text/html; charset=utf-8\r\n",
+        ),
+        (
+            '<div>Yes, Sunday works.</div><div id="appendonsend"></div><hr><div id="divRplyFwdMsg">'
+            "<b>From:</b> Ana</div><div>Sunday?</div>",
+            "Content-Type: text/html; charset=utf-8\r\n",
+        ),
+        (
+            "<div>Yes, Sunday works.<br></div><div><br>"
+            '<blockquote type="cite">Sunday?</blockquote></div>',
+            "Content-Type: text/html; charset=utf-8\r\n",
+        ),
+    ],
+)
+def test_the_noise_of_a_reply_is_removed(body, extra):
+    assert mail.text_of(mail.parse(message(body=body, extra=extra))) == "Yes, Sunday works."
+
+
+def test_a_line_that_only_looks_like_a_quote_header_stays():
+    body = "From: the garden team\nWe planted 40 beds.\n\nOn Sunday we eat."
+    assert mail.text_of(mail.parse(message(body=body))) == body
 
 
 def test_the_smtp_front_asks_the_belfry_for_every_address_and_message(tmp_path, monkeypatch):
