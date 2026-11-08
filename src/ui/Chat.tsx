@@ -12,11 +12,41 @@ import { RichText, TopicsBar } from './Topics'
 import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
+import { BELFRY, NAME, THEME } from '../config'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
-export function ChannelList({ current }: { current?: string }) {
+/** The community's name from the belfry (/.well-known/belfry.json), else the domain. */
+let communityName = ''
+let asked = false
+function useCommunityName(fallback: string) {
+  const [, bump] = useState(0)
+  useEffect(() => {
+    if (asked || THEME !== 'belfry') return
+    asked = true
+    fetch(`https://${BELFRY.domain}/.well-known/belfry.json`).then((r) => r.json()).then((j) => {
+      if (typeof j?.name === 'string' && j.name.trim()) { communityName = j.name.trim().slice(0, 60); bump((n) => n + 1) }
+    }).catch(() => {})
+  }, [])
+  return communityName || fallback
+}
+
+/** On a laptop: who is signed in, bottom left (opens Me). */
+function SideUser() {
   useVersion()
+  const p = profiles().get(me())
+  return (
+    <button className="side-user" onClick={() => go('me')} aria-label="Me: your profile and settings">
+      <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
+      <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address() ?? p?.nip05 ?? ''}</small></span>
+      <span className="hint" aria-hidden="true">⚙</span>
+    </button>
+  )
+}
+
+export function ChannelList({ current, side = false, section }: { current?: string; side?: boolean; section?: string }) {
+  useVersion()
+  const title = useCommunityName(side ? NAME : 'Channels')
   const [creating, setCreating] = useState(false)
   const all = groups()
   const chans = all.filter((g) => !g.isEvent && !g.isPod && !g.isProposal)
@@ -46,17 +76,17 @@ export function ChannelList({ current }: { current?: string }) {
   return (
     <div className="screen">
       <div className="topbar">
-        <h1 style={{ paddingLeft: 8 }}>Channels</h1>
+        <h1 style={{ paddingLeft: 8 }}>{side ? title : 'Channels'}</h1>
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
-        <MeButton />
+        {!side && <MeButton />}
       </div>
       <div className="scroll">
-        <button className="chan" onClick={() => go('dm')}>
+        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => go('dm')}>
           <span className="hash">✉</span>
           <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
           {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
         </button>
-        <button className="chan" onClick={() => go('cal')}>
+        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => go('cal')}>
           <span className="hash">📅</span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
         </button>
@@ -70,6 +100,7 @@ export function ChannelList({ current }: { current?: string }) {
           <button className="btn ghost" onClick={() => setCreating(true)}>＋ Create a channel</button>
         </div>
       </div>
+      {side && <SideUser />}
       {creating && <NewChannel onClose={() => setCreating(false)} />}
     </div>
   )
@@ -111,7 +142,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Channels" onClick={() => go('channels')}>☰</button>
+        <button className="icon-btn menu-btn" aria-label="Channels" onClick={() => go('channels')}>☰</button>
         <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
           {channelIcon(g)} {g?.name ?? id}
           {sub && <small>{sub}</small>}

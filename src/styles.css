@@ -451,3 +451,18 @@ a.chip { text-decoration: none; color: inherit; }
 .toast span { flex: 1; }
 .toast button { border: 0; background: none; color: #fdba74; font-weight: 650; font-size: 14px; padding: 8px 10px; cursor: pointer; }
 .thread-private { padding: 8px 14px; font-size: 12px; font-weight: 500; background: rgba(127,127,127,.12); }
+
+/* ---- laptop: channel list always on the left, you at its bottom ---- */
+.layout.wide { height: 100%; display: flex; }
+.layout.wide .side { flex: 0 0 320px; max-width: 360px; border-right: 1px solid var(--line); min-width: 0; display: flex; flex-direction: column; background: var(--bg); }
+.layout.wide .side > .screen { height: 100%; }
+.layout.wide .main { flex: 1; min-width: 0; height: 100%; }
+.layout.wide .main .menu-btn, .layout.wide .main .me-btn { display: none; }
+.layout.wide .main .topbar { padding-left: 16px; }
+.side-user { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px calc(var(--bottom, 0px) + 10px); border-top: 1px solid var(--line); text-align: left; background: var(--bg); }
+.side-user:hover { background: var(--surface); }
+.side-user .me-btn { position: relative; display: grid; flex: none; }
+.side-user .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.side-user .t b { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-user .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.layout.wide .main .scroll.pad > * { max-width: 720px; margin-left: auto; margin-right: auto; }

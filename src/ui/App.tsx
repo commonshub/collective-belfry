@@ -99,6 +99,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   }, [session.bunkerUrl, session.demoSecret])
 
   const route = useRoute()
+  const wide = useWide()
   useVersion()
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   if (error)
@@ -117,7 +118,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
 
   const [section = 'c', a, b, c] = route
   let view
-  if (section === 'channels') view = <ChannelList />
+  if (section === 'channels' && !wide) view = <ChannelList />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
   else if (section === 'cal' && a) view = <EventPage coord={a} />
@@ -129,8 +130,29 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
     view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} />
   }
-  // no tab bar: channels behind ☰, Me behind your avatar (top right), events under each channel's name
-  return <div className="screen">{view}</div>
+  // phone: no tab bar: channels behind ☰, Me behind your avatar (top right), events under each
+  // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
+  if (!wide) return <div className="screen">{view}</div>
+  const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : undefined
+  return (
+    <div className="layout wide">
+      <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>
+      <main className="main screen">{view}</main>
+    </div>
+  )
+}
+
+/** True on a laptop-wide window: the channel list stays open beside the conversation. */
+function useWide() {
+  const q = '(min-width: 900px)'
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(q).matches)
+  useEffect(() => {
+    const m = matchMedia(q)
+    const on = () => setWide(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return wide
 }
 
 function lastChannel() {
