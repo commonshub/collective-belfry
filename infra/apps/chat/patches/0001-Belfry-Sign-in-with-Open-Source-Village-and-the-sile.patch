@@ -1,0 +1,276 @@
+From e9136436df69c9f5a091c71d7818b7f4f8afde02 Mon Sep 17 00:00:00 2001
+From: friedger <friedger@gmail.com>
+Date: Fri, 23 Oct 2026 22:57:37 +0200
+Subject: [PATCH] Belfry: Sign in with Open Source Village and the silent
+ sign-in check
+
+OAuth authorization code + PKCE against Keycast (VITE_KEYCAST_URL, client
+VITE_OAUTH_CLIENT_ID, default belfry-chat); the token response's bunker URL
+is connected like the bunker login screen does. Without a session the app
+tries prompt=none once per tab; a failure opens the login screen, which
+offers the button first.
+---
+ src/app/views/Login.svelte |   6 ++
+ src/belfry/sso.ts          | 170 +++++++++++++++++++++++++++++++++++++
+ src/main.js                |  28 +++++-
+ 3 files changed, 201 insertions(+), 3 deletions(-)
+ create mode 100644 src/belfry/sso.ts
+
+diff --git a/src/app/views/Login.svelte b/src/app/views/Login.svelte
+index 9e349c8..99f6e94 100644
+--- a/src/app/views/Login.svelte
++++ b/src/app/views/Login.svelte
+@@ -21,6 +21,7 @@
+   import {login} from "src/engine/core"
+   import {router} from "src/app/util/router"
+   import {boot} from "src/app/state"
++  import {ssoEnabled, startSignIn} from "src/belfry/sso"
+ 
+   const signUp = () => router.at("signup").replaceModal()
+ 
+@@ -69,6 +70,11 @@
+       </p>
+     </div>
+     <div class="relative flex flex-col gap-4">
++      {#if ssoEnabled()}
++        <Button class="btn btn-tall btn-accent" on:click={() => startSignIn(false)}>
++          <i class="fa fa-right-to-bracket" /> Sign in with Open Source Village
++        </Button>
++      {/if}
+       {#if getNip07()}
+         <Button class="btn btn-tall btn-accent" on:click={useExtension}>
+           <i class="fa fa-puzzle-piece" /> Use Browser Extension
+diff --git a/src/belfry/sso.ts b/src/belfry/sso.ts
+new file mode 100644
+index 0000000..1f18665
+--- /dev/null
++++ b/src/belfry/sso.ts
+@@ -0,0 +1,170 @@
++// Belfry: "Sign in with Open Source Village" and the silent sign-in check.
++//
++// OAuth 2.0 authorization code + PKCE against Keycast (the community signer). Keycast signs the
++// participant in through Authentik; its token response carries a fresh bunker:// URL, which this
++// module connects with like the "Login with bunker" screen does. On load without a session the
++// app redirects once per tab with prompt=none: Keycast answers with a code when the participant
++// is signed in (Keycast or Authentik session, Belfry's apps skip consent), otherwise with
++// error=login_required and the login screen opens.
++
++import {Nip46Broker} from "@welshman/signer"
++import {makeSecret} from "@welshman/util"
++import {toSession, nip46} from "@welshman/app"
++import {nip46Perms} from "src/util/nostr"
++import {login} from "src/engine/core"
++
++const KEYCAST_URL = ((import.meta.env.VITE_KEYCAST_URL as string) || "").replace(/\/+$/, "")
++const CLIENT_ID = (import.meta.env.VITE_OAUTH_CLIENT_ID as string) || "belfry-chat"
++const SCOPE = "policy:belfry-event"
++const CALLBACK_PATH = "/oauth/callback"
++const FLOW_KEY = "belfry-sso-flow"
++const TRIED_KEY = "belfry-sso-silent-tried"
++
++type Flow = {state: string; verifier: string; silent: boolean; returnTo: string}
++
++export type SsoResult = {ok: true} | {ok: false; silent: boolean; error: string}
++
++export const ssoEnabled = () => Boolean(KEYCAST_URL)
++
++export const isSsoCallback = () => window.location.pathname === CALLBACK_PATH
++
++const redirectUri = () => window.location.origin + CALLBACK_PATH
++
++const store = {
++  get: (key: string) => {
++    try {
++      return window.sessionStorage.getItem(key)
++    } catch {
++      return null
++    }
++  },
++  set: (key: string, value: string) => {
++    try {
++      window.sessionStorage.setItem(key, value)
++      return true
++    } catch {
++      return false
++    }
++  },
++  remove: (key: string) => {
++    try {
++      window.sessionStorage.removeItem(key)
++    } catch {
++      // storage unavailable: nothing to remove
++    }
++  },
++}
++
++const b64url = (bytes: Uint8Array) =>
++  btoa(String.fromCharCode(...bytes))
++    .replace(/\+/g, "-")
++    .replace(/\//g, "_")
++    .replace(/=+$/, "")
++
++const randomString = (length = 32) => b64url(crypto.getRandomValues(new Uint8Array(length)))
++
++const challengeFor = async (verifier: string) =>
++  b64url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))))
++
++/** Redirects to Keycast. Interactive by default; `silent` adds prompt=none. */
++export const startSignIn = async (silent = false) => {
++  const here = window.location.pathname + window.location.search + window.location.hash
++  const flow: Flow = {
++    state: randomString(),
++    verifier: randomString(48),
++    silent,
++    returnTo: isSsoCallback() ? "/" : here,
++  }
++
++  // Without storage the callback could not check the state: do not start a flow it cannot finish.
++  if (!store.set(FLOW_KEY, JSON.stringify(flow))) return false
++
++  const url = new URL(KEYCAST_URL + "/api/oauth/authorize")
++  url.searchParams.set("client_id", CLIENT_ID)
++  url.searchParams.set("redirect_uri", redirectUri())
++  url.searchParams.set("scope", SCOPE)
++  url.searchParams.set("state", flow.state)
++  url.searchParams.set("code_challenge", await challengeFor(flow.verifier))
++  url.searchParams.set("code_challenge_method", "S256")
++  if (silent) url.searchParams.set("prompt", "none")
++
++  window.location.assign(url.toString())
++  return true
++}
++
++/** One silent attempt per tab. True when the page is being redirected. */
++export const trySilentSignIn = async () => {
++  if (!ssoEnabled() || store.get(TRIED_KEY)) return false
++  if (!store.set(TRIED_KEY, "1")) return false
++  return startSignIn(true)
++}
++
++export const connectBunker = async (bunkerUrl: string) => {
++  const clientSecret = makeSecret()
++  const {signerPubkey, connectSecret, relays} = Nip46Broker.parseBunkerUrl(bunkerUrl)
++  const broker = new Nip46Broker({relays, clientSecret, signerPubkey})
++
++  try {
++    const result = await broker.connect(connectSecret, nip46Perms)
++    const pubkey = await broker.getPublicKey()
++
++    if (!pubkey || !["ack", connectSecret].includes(result)) {
++      throw new Error("the signer did not accept the connection")
++    }
++
++    await login(toSession(nip46, {clientSecret, signerPubkey, relays: broker.params.relays}))
++  } finally {
++    broker.cleanup()
++  }
++}
++
++/** Handles /oauth/callback: exchanges the code and connects. Restores the original URL. */
++export const finishSignIn = async (): Promise<SsoResult> => {
++  const params = new URLSearchParams(window.location.search)
++  const raw = store.get(FLOW_KEY)
++  store.remove(FLOW_KEY)
++
++  let flow: Flow | undefined
++  try {
++    flow = raw ? (JSON.parse(raw) as Flow) : undefined
++  } catch {
++    flow = undefined
++  }
++
++  window.history.replaceState(null, "", flow?.returnTo || "/")
++
++  const silent = Boolean(flow?.silent)
++  const fail = (error: string): SsoResult => ({ok: false, silent, error})
++
++  if (!flow || params.get("state") !== flow.state) return fail("state_mismatch")
++  if (params.get("error")) return fail(params.get("error") as string)
++
++  const code = params.get("code")
++  if (!code) return fail("missing_code")
++
++  try {
++    const response = await fetch(KEYCAST_URL + "/api/oauth/token", {
++      method: "POST",
++      headers: {"Content-Type": "application/json"},
++      body: JSON.stringify({
++        grant_type: "authorization_code",
++        code,
++        client_id: CLIENT_ID,
++        redirect_uri: redirectUri(),
++        code_verifier: flow.verifier,
++      }),
++    })
++    const body = await response.json().catch(() => ({}))
++
++    if (!response.ok || !body.bunker_url) {
++      return fail(body.error || `token_${response.status}`)
++    }
++
++    await connectBunker(body.bunker_url)
++  } catch (e) {
++    console.error("Sign-in with Open Source Village failed", e)
++    return fail("connect_failed")
++  }
++
++  return {ok: true}
++}
+diff --git a/src/main.js b/src/main.js
+index d6f2c5a..2b2c8a8 100644
+--- a/src/main.js
++++ b/src/main.js
+@@ -1,7 +1,7 @@
+ import "src/app.css"
+ import "@capacitor-community/safe-area"
+ import "src/engine/storage"
+-import {login, restoreSession} from "src/engine/core"
++import {login, restoreSession, pubkey} from "src/engine/core"
+ import {syncAppConfig} from "src/engine/state"
+ import {toSession, nip01, nip46} from "@welshman/app"
+ import {Nip46Broker} from "@welshman/signer"
+@@ -11,6 +11,8 @@ import {nsecDecode, nip46Perms} from "src/util/nostr"
+ import {router} from "src/app/util"
+ import App from "src/app/App.svelte"
+ import {installPrompt} from "src/partials/state"
++import {boot} from "src/app/state"
++import {isSsoCallback, finishSignIn, trySilentSignIn} from "src/belfry/sso"
+ 
+ // Nstart login - hash is replaced somewhere else, maybe router?
+ if (window.location.hash?.startsWith("#nostr-login")) {
+@@ -79,10 +81,30 @@ CapacitorApp.addListener("backButton", ({canGoBack}) => {
+   }
+ })
+ 
+-export default restoreSession().then(() => {
++// Belfry: finish "Sign in with Open Source Village", or try it silently once per tab.
++const belfrySignIn = async () => {
++  if (isSsoCallback()) return finishSignIn()
++  if (!pubkey.get() && (await trySilentSignIn())) return "redirecting"
++  return undefined
++}
++
++export default restoreSession().then(async () => {
++  const sso = await belfrySignIn()
++
++  // The page is on its way to the signer; mounting now would only flash the logged-out app.
++  if (sso === "redirecting") return
++
+   syncAppConfig()
+ 
+-  return new App({
++  const app = new App({
+     target: document.getElementById("app"),
+   })
++
++  if (sso?.ok) {
++    setTimeout(boot, 300)
++  } else if (sso && !pubkey.get()) {
++    setTimeout(() => router.at("login").open(), 300)
++  }
++
++  return app
+ })
+-- 
+2.53.0
+

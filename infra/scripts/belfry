@@ -680,11 +680,11 @@ app_route() {
     "	file_server" \
     "}"
 }
-# The apps a belfry ships (infra/apps/<name>/, built elsewhere: chat = the village app's
+# The apps a belfry ships (infra/shipped-apps/<name>/, built elsewhere: chat = the village app's
 # belfry-chat build, its commit in .build). `belfry apply` installs each one that is missing, and
 # updates the ones it installed itself when the shipped build changes; an app an admin removed
 # (infra/data/apps/_removed/<name>) or replaced with their own build stays as it is.
-SHIPPED_APPS="$INFRA/apps"
+SHIPPED_APPS="$INFRA/shipped-apps"
 app_brand() {  # the shipped builds carry the village's name: give them the community's
   local dir=$1 name; name=$(env_get BELFRY_NAME); [[ -n "$name" ]] || return 0
   BELFRY_NAME="$name" python3 - "$dir" <<'PY' || true

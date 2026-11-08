@@ -1,0 +1,17 @@
+/* Open Source Village, run by Belfry (appended to Coracle's src/app.css by the image build).
+   Coracle puts white text on the accent; the OSV accent is lime, so text on it is dark. */
+.bg-accent,
+.bg-accent *,
+.btn.btn-accent,
+.btn.btn-accent:hover,
+.bg-accent.hover\:text-white:hover {
+  color: #1a231d !important;
+}
+
+/* The Open Source Village app bar (brand/osv-bar.js) is fixed above the app: Coracle offsets every
+   fixed and padded top part by --sait, which reads --safe-area-inset-top. */
+html.osv-bar {
+  --safe-area-inset-top: var(--osv-bar-h);
+  /* above the nav (z-nav 2) and chat (3), below popovers, modals and the sidebar */
+  --osv-bar-z: 3;
+}
