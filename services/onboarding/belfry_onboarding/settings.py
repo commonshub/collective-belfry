@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     odoo_api_key: str = Field(default="", alias="ODOO_API_KEY")
     # Where people, passes and invites live: "odoo" (the Odoo add-on) or "belfry" (the belfry's
     # own register, one SQLite file: register.py). Empty: Odoo when it has an API key.
-    register: str = Field(default="", alias="REGISTER")
+    register_mode: str = Field(default="", alias="REGISTER")
     register_path: str = Field(default="/data/register/register.sqlite", alias="REGISTER_PATH")
     # The sender of the belfry's own mails (register mode; Odoo has its own otherwise)
     mail_from: str = Field(default="", alias="MAIL_FROM")
@@ -278,5 +278,5 @@ class Settings(BaseSettings):
 
 def uses_register(settings: Settings) -> bool:
     """True when the belfry keeps its own register instead of Odoo (register.py)."""
-    mode = (settings.register or "").strip().lower()
+    mode = (settings.register_mode or "").strip().lower()
     return mode == "belfry" or (mode != "odoo" and not settings.odoo_api_key)
