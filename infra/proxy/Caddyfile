@@ -198,6 +198,12 @@ apps.{$BELFRY_DOMAIN} {
 	# The belfry's own static apps at apps.<domain>/<name>/ (`belfry app install` writes one route
 	# file per app into infra/data/apps/_routes/). None installed: the glob matches nothing.
 	import /srv/apps/_routes/*.caddy
+	# apps.<domain>/ itself lists the installed apps in the belfry's look (appshome.py)
+	@home path / /brand/* /theme/*
+	handle @home {
+		rewrite / /apps-home
+		reverse_proxy onboarding:8100
+	}
 	reverse_proxy keycast:3000
 }
 

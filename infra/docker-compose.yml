@@ -642,6 +642,7 @@ services:
       # page's hand-over to the host (pending.env → belfry setup-apply); data, never in git
       - ./data/theme:/belfry-theme:ro
       - ./data/setup:/belfry-setup
+      - ./data/apps:/belfry-apps:ro
       - ./issuer/keys/issuer.jwk.json:/keys/issuer.jwk.json:ro
       - ./issuer/keys/issuer.x5c.json:/keys/issuer.x5c.json:ro
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro

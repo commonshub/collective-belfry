@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     session_relay_url: str = Field(default="", alias="SESSION_RELAY_URL")
     # belfry.<domain>/setup (setup.py): pending.env, code.json and status.json (infra/data/setup)
     setup_dir: str = Field(default="/belfry-setup", alias="SETUP_DIR")
+    # the installed static apps (infra/data/apps, read-only), listed at apps.<domain>/ (appshome.py)
+    apps_dir: str = Field(default="/belfry-apps", alias="APPS_DIR")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
     changelog_path: str = Field(default="/belfry-changelog/changelog.json", alias="CHANGELOG_PATH")
     # Where nsite manifests are looked up besides the community relay (space or comma separated).

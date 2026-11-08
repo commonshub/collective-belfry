@@ -27,6 +27,7 @@ from . import (
     accounting,
     apply,
     apps,
+    appshome,
     avatar,
     blossom,
     bridge,
@@ -221,6 +222,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    appshome.register(app)  # apps.<domain>/: the installed apps (appshome.py)
     community.register(app)  # /monitor, /changelog, /proposals (community.py)
     console.register(app)  # belfry.<domain>: overview, status, members, website (console.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)

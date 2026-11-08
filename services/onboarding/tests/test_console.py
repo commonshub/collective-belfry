@@ -401,3 +401,25 @@ def test_no_odoo_check_without_odoo(belfry):
     assert not any("Odoo" in name for name, _, _ in console.checks(s))
     s.register_mode = "odoo"
     assert any("Odoo" in name for name, _, _ in console.checks(s))
+
+
+def test_apps_home_lists_the_installed_apps(web, belfry, tmp_path):
+    apps = tmp_path / "apps"
+    (apps / "_routes").mkdir(parents=True)
+    for name in ("chat", "notes", "gone"):
+        (apps / name).mkdir()
+        (apps / name / "index.html").write_text("<p>app</p>")
+    (apps / "chat" / "manifest.webmanifest").write_text(
+        json.dumps({"name": "Open Source Village", "icons": [{"src": "icons/icon-192.png"}]})
+    )
+    (apps / "notes" / "manifest.webmanifest").write_text(
+        json.dumps({"short_name": "<b>Notes</b>", "icons": [{"src": "https://x.org/i.png"}]})
+    )
+    (apps / "_routes" / "chat.caddy").write_text("")
+    (apps / "_routes" / "notes.caddy").write_text("")
+    belfry.settings.apps_dir = str(apps)
+    r = web.get("/apps-home", headers={"Host": "apps.belfry.test"})
+    assert r.status_code == 200
+    assert 'href="/chat/"' in r.text and 'src="/chat/icons/icon-192.png"' in r.text
+    assert "Chat" in r.text and "&lt;b&gt;Notes" in r.text and "https://x.org" not in r.text
+    assert "/gone/" not in r.text and "Open Source Village" not in r.text
