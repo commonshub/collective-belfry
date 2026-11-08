@@ -108,8 +108,14 @@ def viewer(svc: Services, sess: dict[str, Any] | None) -> dict[str, Any] | None:
 def checks(settings: Any) -> list[tuple[str, str, dict[str, str]]]:
     """(name, internal URL, headers) of every service worth checking."""
     nostr = {"Accept": "application/nostr+json"}
-    out = [
-        ("Registry and billing (Odoo)", settings.odoo_url.rstrip("/") + "/web/health", {}),
+    out = []
+    from .settings import uses_register
+
+    if not uses_register(settings):
+        out.append(
+            ("Registry and billing (Odoo)", settings.odoo_url.rstrip("/") + "/web/health", {})
+        )
+    out += [
         ("Sign-in (Authentik)", settings.authentik_url.rstrip("/") + "/-/health/live/", {}),
         ("Signer (Keycast)", settings.keycast_url.rstrip("/") + "/", {}),
     ]
@@ -481,6 +487,7 @@ def nav(current: str, who: dict[str, Any] | None) -> str:
         ("/status", "Status"),
         ("/members", "Members"),
         ("/website", "Website"),
+        ("/monitor", "Monitor"),
         ("/apps", "Apps"),
         ("/setup", "Setup"),
     ]
@@ -510,7 +517,11 @@ def overview_html(
 ) -> str:
     s = svc.settings
     last = status.get("last_change") or {}
-    member_line = f"{counts['members']} members · {counts['admins']} admins"
+
+    def n(k: int, word: str) -> str:
+        return f"{k} {word}" + ("" if k == 1 else "s")
+
+    member_line = f"{n(counts['members'], 'member')} · {n(counts['admins'], 'admin')}"
     names = ""
     if mem is not None:
         names = ", ".join(E(m["name"]) for m in mem[:8]) + ("…" if len(mem) > 8 else "")
@@ -806,6 +817,45 @@ def register(app: FastAPI) -> None:
         code = code_html(info, me, msg, err)
         page_ = HTMLResponse(status_html(data, me, code), headers={"Cache-Control": "no-store"})
         return flash.clear(page_, request)
+
+    @app.get("/console/monitor", response_class=HTMLResponse)
+    async def monitor(request: Request):
+        me = await who(request)
+        if me is None:
+            body = (
+                "<h1>Monitor</h1><p>The community relay, live. For members: "
+                '<a href="/login?to=/monitor">sign in</a>.</p>'
+            )
+        else:
+            body = community.monitor_body()
+        return HTMLResponse(
+            page(
+                "Monitor",
+                STYLE
+                + "<style>main{max-width:1100px}</style>"
+                + f'<div class="card">{nav("/monitor", me)}{body}</div>',
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/console/monitor/stream")
+    async def monitor_stream(request: Request, author: str = "", kind: str = ""):
+        if await who(request) is None:
+            return JSONResponse({"detail": "members only"}, status_code=401)
+        from fastapi.responses import StreamingResponse
+
+        return StreamingResponse(
+            community.relay_stream(svc(request), community.monitor_filter(author, kind), request),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/console/monitor/names")
+    async def monitor_names(request: Request, p: str = ""):
+        if await who(request) is None:
+            return JSONResponse({"detail": "members only"}, status_code=401)
+        keys = community.hex_keys(p)[:50]
+        return JSONResponse(await run_in_threadpool(community.names_for, svc(request), keys))
 
     @app.get("/console/status.json")
     async def status_json(request: Request):

@@ -438,24 +438,45 @@ connect();
 """
 
 
-def monitor_page() -> str:
-    return page(
-        "Monitor",
-        STYLE
-        + """<style>main{max-width:1100px}.mon{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+MONITOR_STYLE = """<style>.mon{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
 @media(max-width:760px){.mon{grid-template-columns:1fr}}
 #list{max-height:70vh;overflow:auto}.ev{display:block;width:100%;text-align:left;background:none;color:inherit;
 border:0;border-top:1px solid var(--border);padding:8px 4px}.ev.on{background:var(--surface-deep)}
 #inspect{white-space:pre-wrap;word-break:break-all;font:12px/1.4 var(--font-mono);max-height:70vh;overflow:auto;margin:0}
 .row select{width:auto;flex:1}</style>"""
-        + f"""<div class="card">{tabs("/monitor")}<h1>Monitor</h1>
+
+
+def monitor_body() -> str:
+    """The monitor itself; its script reads /monitor/stream and /monitor/names on the same host."""
+    return f"""{MONITOR_STYLE}<h1>Monitor</h1>
 <p class="muted">Events published to this community's relay, live. Select one to inspect it.
 <span class="pill" id="status">…</span> <span class="meta" id="count"></span></p>
 <div class="row"><select id="fauthor"><option value="">All authors</option></select>
 <select id="fkind"><option value="">All kinds</option></select><button class="btn" id="pause" type="button">Pause</button></div>
-<div class="mon"><div id="list"></div><pre id="inspect" class="meta">Select an event.</pre></div></div>
-<script>{MONITOR_JS % json.dumps(KIND_NAMES)}</script>""",
+<div class="mon"><div id="list"></div><pre id="inspect" class="meta">Select an event.</pre></div>
+<script>{MONITOR_JS % json.dumps(KIND_NAMES)}</script>"""
+
+
+def monitor_page() -> str:
+    return page(
+        "Monitor",
+        STYLE
+        + "<style>main{max-width:1100px}</style>"
+        + f'<div class="card">{tabs("/monitor")}{monitor_body()}</div>',
     )
+
+
+def monitor_filter(author: str, kind: str) -> dict[str, Any]:
+    flt: dict[str, Any] = {"limit": 50}
+    if len(author) == 64 and all(c in "0123456789abcdef" for c in author):
+        flt["authors"] = [author]
+    if kind.isdigit():
+        flt["kinds"] = [int(kind)]
+    return flt
+
+
+def hex_keys(p: str) -> list[str]:
+    return [k for k in p.split(",") if len(k) == 64 and all(c in "0123456789abcdef" for c in k)]
 
 
 async def relay_stream(svc: Services, flt: dict[str, Any], request: Request):
@@ -524,6 +545,9 @@ def register(app: FastAPI) -> None:
 
     @app.get("/monitor", response_class=HTMLResponse)
     async def monitor(request: Request):
+        console = (getattr(svc(request).settings, "console_url", "") or "").rstrip("/")
+        if console:  # the monitor lives on the console, belfry.<domain>/monitor (console.py)
+            return RedirectResponse(console + "/monitor", status_code=302)
         if await partner(request) is None:
             return HTMLResponse(sign_in_card("Monitor", "The community relay, live."))
         return HTMLResponse(monitor_page(), headers={"Cache-Control": "no-store"})
@@ -532,13 +556,8 @@ def register(app: FastAPI) -> None:
     async def monitor_stream(request: Request, author: str = "", kind: str = ""):
         if await partner(request) is None:
             return JSONResponse({"detail": "members only"}, status_code=401)
-        flt: dict[str, Any] = {"limit": 50}
-        if len(author) == 64 and all(c in "0123456789abcdef" for c in author):
-            flt["authors"] = [author]
-        if kind.isdigit():
-            flt["kinds"] = [int(kind)]
         return StreamingResponse(
-            relay_stream(svc(request), flt, request),
+            relay_stream(svc(request), monitor_filter(author, kind), request),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
@@ -547,8 +566,8 @@ def register(app: FastAPI) -> None:
     async def monitor_names(request: Request, p: str = ""):
         if await partner(request) is None:
             return JSONResponse({"detail": "members only"}, status_code=401)
-        keys = [k for k in p.split(",") if len(k) == 64 and all(c in "0123456789abcdef" for c in k)]
-        return JSONResponse(await run_in_threadpool(names_for, svc(request), keys[:50]))
+        keys = hex_keys(p)[:50]
+        return JSONResponse(await run_in_threadpool(names_for, svc(request), keys))
 
     async def proposals_context(request: Request):
         pid = await partner(request)

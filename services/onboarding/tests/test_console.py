@@ -383,3 +383,21 @@ def test_status_shows_the_version_and_admins_can_update(web, belfry, odoo, authe
         )
     )
     assert "The last update failed" in web.get("/status", headers=CONSOLE).text
+
+
+def test_the_monitor_lives_on_the_console(web, belfry, odoo):
+    r = web.get("/monitor", headers={"Host": "pass.belfry.test"}, follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"] == "https://belfry.belfry.test/monitor"
+    page = web.get("/monitor", headers=CONSOLE)
+    assert page.status_code == 200 and "sign in" in page.text and "EventSource" not in page.text
+    assert 'href="/monitor"' in page.text  # in the console's tabs
+    assert web.get("/monitor/stream", headers=CONSOLE).status_code == 401
+    assert web.get("/monitor/names?p=" + "a" * 64, headers=CONSOLE).status_code == 401
+
+
+def test_no_odoo_check_without_odoo(belfry):
+    s = belfry.settings
+    s.register_mode = "belfry"
+    assert not any("Odoo" in name for name, _, _ in console.checks(s))
+    s.register_mode = "odoo"
+    assert any("Odoo" in name for name, _, _ in console.checks(s))
