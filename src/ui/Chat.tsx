@@ -3,14 +3,15 @@ import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
 import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
-import { FullMail, mailOf, mailText, ViaMail } from './MailPost'
+import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
+import { knownGroupsKey } from '../core/dm'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -287,6 +288,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const ps = profiles()
   const rx = reactions(id)
   const th = threadsOf(id)
+  const gkey = knownGroupsKey()
+  const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
@@ -306,7 +309,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} groupId={id}
             name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
             reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-            thread={th.get(m.ev.id)} onThread={() => openThread(m)} />)}
+            thread={th.get(m.ev.id)} onThread={() => openThread(m)} inbox={inbox} />)}
         </div>
       </div>
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
@@ -334,6 +337,9 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => go(`c/${encodeURIComponent(groupId)}`)
+  const gkey = knownGroupsKey()
+  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: !!g?.admins.has(me()), name: g?.name ?? groupId }
+  const card = root ? cardOf(root.ev, gkey) : null
   return (
     <div className="screen">
       <div className="topbar">
@@ -341,9 +347,10 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
         <h1>Thread<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
         <MeButton />
       </div>
+      {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={() => setActing(root)} announce={isAnnouncement(root, g)} />
+          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={() => setActing(root)} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
           {replies.map((m, i) => <Row key={m.ev.id} m={m} prev={replies[i - 1]} head={i === 0} name={nameOf(m)} groupId={groupId}
@@ -356,7 +363,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, head }: { head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -364,11 +371,23 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const newDay = !head && (!prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString())
   const first = head || newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
   const p = m.ev.pending
-  const mail = mailOf(m.ev)
+  const card = inbox ? cardOf(m.ev, inbox.key) : null
+  const sent = inbox && !card ? sentOf(m.ev, inbox.key) : null
+  const mail = card || sent ? null : mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
   // press and hold (phones) or right-click: react, or delete your own
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
+  if (card || sent) return (
+    <>
+      {newDay && <div className="day">{fmtDay(d)}</div>}
+      <div className="msg first card-row">
+        {card ? <InboxCardView m={m} card={card} groupId={groupId} channelName={inbox!.name} state={inbox!.states.get(m.ev.id)} canSend={inbox!.canSend}
+          thread={thread} onThread={onThread ?? (() => {})} />
+          : <SentCardView m={m} sent={sent!} groupId={groupId} />}
+      </div>
+    </>
+  )
   return (
     <>
       {newDay && <div className="day">{fmtDay(d)}</div>}

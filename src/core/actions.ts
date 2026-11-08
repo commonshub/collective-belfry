@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { hashtags, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE } from './model'
+import { hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -67,6 +67,16 @@ export const postThreadReply = (groupId: string, root: { id: string; pubkey: str
     tags: [['h', groupId], ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey],
       ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t])],
   }, files)
+
+/** Turn a channel's shared inbox on or off (admins: the bridge ignores anyone else's setting). */
+export const setInbox = (groupId: string, on: boolean) =>
+  enqueue('groups', { kind: 30078, content: JSON.stringify({ on }), tags: [['d', INBOX_D], ['h', groupId]] })
+
+/** Close or reopen an e-mail card; ASSIGNEE '' = nobody. */
+export const setCardStatus = (groupId: string, card: string, status: 'open' | 'closed') =>
+  enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', INBOX_NS], ['l', status, INBOX_NS], ['e', card]] })
+export const assignCard = (groupId: string, card: string, assignee: string) =>
+  enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', INBOX_NS], ['l', 'assigned', INBOX_NS], ['e', card], ...(assignee ? [['p', assignee]] : [])] })
 
 /** Pin / unpin a channel's topics: one NIP-32 label event with the whole list (latest wins). */
 export const setTopics = (groupId: string, list: string[]) =>

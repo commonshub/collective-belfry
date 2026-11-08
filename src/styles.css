@@ -416,3 +416,38 @@ a.chip { text-decoration: none; color: inherit; }
 .thread-chip .faces > * + * { margin-left: -6px; }
 .thread-sep { display: flex; align-items: center; gap: 10px; color: var(--faint); font-size: 12px; margin: 10px 0; }
 .thread-sep i { flex: 1; height: 1px; background: var(--line); }
+
+/* shared inbox: e-mail cards (bronze = it came from, or went to, outside the belfry) */
+.card-row { display: block; }
+.mailcard { border: 1px solid color-mix(in srgb, #a4532b 30%, var(--line)); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.mc-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; font-weight: 650;
+  background: color-mix(in srgb, #a4532b 10%, transparent); color: #8a4322; }
+.mc-head.out { background: #a4532b; color: #fff; }
+@media (prefers-color-scheme: dark) { .mc-head:not(.out) { color: #f0a77f; } }
+.mc-body { padding: 10px 12px 4px; }
+.mc-from { font-size: 12px; color: var(--faint); margin-bottom: 4px; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mc-subject { display: block; font-size: 15px; margin-bottom: 2px; }
+.mc-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px 0; }
+.mc-foot .thread-chip { margin: 0 0 0 auto; }
+.mc-pill { font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; }
+.mc-pill.open { background: #e0f2fe; color: #075985; }
+.mc-pill.waiting { background: #fef3c7; color: #92400e; }
+.mc-pill.closed { background: rgba(127,127,127,.15); color: var(--faint); }
+.mc-who { border: 0; background: none; padding: 6px 2px; font-size: 12px; color: inherit; cursor: pointer; text-decoration: underline dotted; }
+.mc-acts { display: flex; gap: 8px; padding: 10px 12px 12px; flex-wrap: wrap; }
+.mc-reply { border: 0; border-radius: 9px; padding: 10px 14px; font-weight: 650; background: #a4532b; color: #fff; cursor: pointer; }
+.mc-sec { width: auto; padding: 9px 14px; margin: 0; }
+.mail-sheet dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 13px; }
+.mail-sheet dt { color: var(--faint); }
+.mail-sheet dd { margin: 0; overflow-wrap: anywhere; }
+.mail-sheet dd small { display: block; color: var(--faint); }
+.mail-sheet textarea { width: 100%; box-sizing: border-box; }
+.mail-warn { margin: 10px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: color-mix(in srgb, #a4532b 10%, transparent); color: #8a4322; }
+@media (prefers-color-scheme: dark) { .mail-warn { color: #f0a77f; } }
+.mail-send { background: #a4532b !important; color: #fff !important; }
+.toast { position: fixed; left: 12px; right: 12px; bottom: 84px; z-index: 50; display: flex; align-items: center; gap: 10px; max-width: 520px; margin: 0 auto;
+  background: #18181b; color: #fff; border-radius: 12px; padding: 10px 8px 10px 14px; font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+.toast span { flex: 1; }
+.toast button { border: 0; background: none; color: #fdba74; font-weight: 650; font-size: 14px; padding: 8px 10px; cursor: pointer; }
+.thread-private { padding: 8px 14px; font-size: 12px; font-weight: 500; background: rgba(127,127,127,.12); }

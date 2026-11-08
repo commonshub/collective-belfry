@@ -4,7 +4,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY } from '../config'
 import { kvGet, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
-import { displayName } from './model'
+import { displayName, realName } from './model'
 import { addEvents, all, subscribe, touch } from './store'
 import { currentSigner, isLocalOnly, me, publishNow, queryOnce } from './sync'
 
@@ -64,6 +64,55 @@ export async function bridge(): Promise<string | undefined> {
     if (k && /^[0-9a-f]{64}$/.test(k)) { bridgeKey = k; void kvSet('dm-bridge', k) }
   } catch { /* offline: the stored one */ }
   return bridgeKey
+}
+
+let groupsKeyCache: string | undefined
+export const DEMO_GROUPS = bytesToHex(sha256('osv-demo-groups')) // demo mode only: the key that posts e-mail cards
+
+/** The key that posts e-mail cards in shared inboxes (`_groups@<domain>`): only its cards show as e-mail. */
+export async function groupsKey(): Promise<string | undefined> {
+  if (isLocalOnly()) return (groupsKeyCache = getPublicKey(hexToBytes(DEMO_GROUPS)))
+  if (groupsKeyCache) return groupsKeyCache
+  groupsKeyCache = await kvGet<string>('dm-groups-key')
+  try {
+    const r = await fetch(`https://${BELFRY.domain}/.well-known/nostr.json?name=_groups`)
+    const k = ((await r.json()) as { names?: Record<string, string> }).names?._groups
+    if (k && /^[0-9a-f]{64}$/.test(k)) { groupsKeyCache = k; void kvSet('dm-groups-key', k) }
+  } catch { /* offline: the stored one */ }
+  touch()
+  return groupsKeyCache
+}
+export const knownGroupsKey = () => groupsKeyCache
+
+const channelSends = new Set<string>() // email-ids sent as a shared inbox, still without a report
+
+/** Answer an e-mail card as the shared inbox CHANNEL (only its admins can: the bridge checks).
+ *  Resolves with the email-id; `report(id)` then follows its delivery. */
+export async function sendAsChannel(m: { channel: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; cardId: string }): Promise<string> {
+  const b = await bridge()
+  if (!b) throw new Error('This belfry does not send e-mail yet.')
+  const from = `${m.channel}@${BELFRY.domain}`
+  const { raw } = buildMail({ fromName: realName(me()) ? `${realName(me())} for ${m.channelName}` : m.channelName, from, to: m.to, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo, domain: BELFRY.domain })
+  const emailId = crypto.randomUUID()
+  const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', from], ['rcpt-to', m.to], ['subject', m.subject], ['e', m.cardId]], raw)
+  reports.set(emailId, { status: 'queued', details: 'Sending…' })
+  channelSends.add(emailId)
+  touch()
+  if (isLocalOnly()) { demoSent(m, emailId); return emailId }
+  await deliver(rumor, [b], false)
+  for (const wait of [2000, 5000, 10000, 30000]) setTimeout(() => void checkReports(), wait)
+  return emailId
+}
+
+function demoSent(m: { channel: string; to: string; subject: string; text: string; cardId: string }, emailId: string) {
+  const sk = hexToBytes(DEMO_GROUPS)
+  setTimeout(() => {
+    addEvents([finalizeEvent({ kind: 9, created_at: Math.floor(Date.now() / 1000), content: m.text,
+      tags: [['h', m.channel], ['subject', m.subject], ['mail-to', m.to], ['sent-by', me()], ['e', m.cardId, '', 'reply'], ['client', 'belfry-mail-out']] }, sk)])
+    reports.set(emailId, { status: 'delivered', details: '' })
+    channelSends.delete(emailId)
+    touch()
+  }, 800)
 }
 
 // ---- reading -------------------------------------------------------------------
@@ -249,8 +298,8 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
   }, one)
 }
 
-async function deliver(rumor: NostrEvent, to: string[]) {
-  const wraps = await Promise.all([...new Set([...to, me()])].map((p) => giftWrap(rumor, p)))
+async function deliver(rumor: NostrEvent, to: string[], self = true) {
+  const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())); return }
   const results = await Promise.allSettled(wraps.map((w) => publishNow('main', w)))
   const failed = results.filter((r, i) => r.status === 'rejected' && wraps[i].tags[0][1] !== me())
@@ -288,7 +337,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   const before = thread(conv).filter((d) => !d.mine).at(-1)
   const subj = subject?.trim() || (before?.subject ? (/^re:/i.test(before.subject) ? before.subject : `Re: ${before.subject}`) : '(no subject)')
   const { raw } = buildMail({
-    fromName: displayName(me()), from: myAddress, to, subject: subj, text,
+    fromName: realName(me()) || myAddress.split('@')[0], from: myAddress, to, subject: subj, text,
     inReplyTo: before?.messageId, references: before?.references, domain: BELFRY.domain,
   })
   const emailId = crypto.randomUUID()
@@ -313,12 +362,13 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
 export async function checkReports() {
   const b = await bridge()
   const s = currentSigner()
-  const open = [...items.values()].filter((d) => d.mine && d.emailId && ['queued', undefined].includes(reports.get(d.emailId)?.status)).map((d) => d.emailId!)
+  const open = [...[...items.values()].filter((d) => d.mine && d.emailId && ['queued', undefined].includes(reports.get(d.emailId)?.status)).map((d) => d.emailId!), ...channelSends]
   if (!b || !s || !open.length || isLocalOnly()) return
   for (const e of await queryOnce('main', { kinds: [7679], authors: [b], '#r': open.slice(-50) })) {
     try {
       const body = JSON.parse(await s.decrypt(tag(e, 'ephemeral-pubkey')!, e.content)) as { status: Report['status']; details?: string; smtp_response?: string }
       reports.set(tag(e, 'r')!, { status: body.status, details: body.details || body.smtp_response || '' })
+      if (body.status !== 'queued') channelSends.delete(tag(e, 'r')!)
     } catch { /* not mine */ }
   }
   save()

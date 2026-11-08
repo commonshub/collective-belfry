@@ -13,8 +13,8 @@ import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
-import { demoMail, setMyAddress, startDms } from '../core/dm'
-import { demoMailPost } from './MailPost'
+import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
+import { demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, go, useRoute } from './common'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
@@ -86,7 +86,8 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         // direct messages and e-mail (dm.ts); my address is my name@domain
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost })
+        void groupsKey()
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()

@@ -1,4 +1,7 @@
 import { useState } from 'react'
+import { setInbox } from '../core/actions'
+import { isInbox } from '../core/model'
+import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { channelIcon, displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
@@ -74,6 +77,13 @@ function About({ id }: { id: string }) {
       {g.isPod && (g.members.has(me())
         ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
         : !g.closed && <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
+      {(g.admins.has(me()) || isInbox(g)) && (
+        <div className="card">
+          <div className="hint">Shared inbox</div>
+          <div>{isInbox(g) ? <>On: e-mails from anyone to <b>{g.id}@{BELFRY.domain}</b> land here as cards; the channel's admins answer as the channel.</> : <>Off: only members can e-mail <b>{g.id}@{BELFRY.domain}</b>, and their mail shows as their message.</>}</div>
+          {g.admins.has(me()) && <button className="btn ghost" style={{ marginTop: 10 }} onClick={() => void setInbox(id, !isInbox(g))}>{isInbox(g) ? 'Turn the shared inbox off' : 'Turn it into a shared inbox'}</button>}
+        </div>
+      )}
       <button className="btn ghost" onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setEditing(true) }}>{g.isPod ? 'Edit the pod' : 'Edit name and description'}</button>
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (

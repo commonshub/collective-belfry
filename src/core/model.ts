@@ -44,6 +44,12 @@ export function profiles(): Map<string, Profile> {
   return out
 }
 
+/** The name other people know someone by (never "You"): for e-mail From lines and signatures. */
+export function realName(pubkey: string, ps = profiles()) {
+  const p = ps.get(pubkey)
+  return p?.name || p?.nip05?.split('@')[0] || ''
+}
+
 export function displayName(pubkey: string, ps = profiles()) {
   if (pubkey === me()) return 'You'
   const p = ps.get(pubkey)
@@ -271,6 +277,45 @@ export function threadsOf(groupId: string): Map<string, ThreadInfo> {
     t.last = Math.max(t.last, e.created_at)
     if (!t.who.includes(e.pubkey)) t.who.push(e.pubkey)
     out.set(root, t)
+  }
+  return out
+}
+
+// ---- shared inboxes: mail from anyone to <channel>@<domain> lands as e-mail cards ---------
+// The setting is the group admins' latest NIP-78 event (d = belfry:inbox); a card's state and
+// who has it are NIP-32 labels (namespace belfry/inbox) on the card, latest wins.
+
+export const INBOX_D = 'belfry:inbox'
+export const INBOX_NS = 'belfry/inbox'
+
+export function isInbox(g: Group | undefined): boolean {
+  if (!g) return false
+  const own = all(me()).filter((e) => e.kind === 30078 && tag(e, 'd') === INBOX_D && tag(e, 'h') === g.id && g.admins.has(e.pubkey)).sort(byTime)
+  try { return !!own.length && !!JSON.parse(own.at(-1)!.content || '{}').on } catch { return false }
+}
+
+export type CardStatus = 'open' | 'waiting' | 'closed'
+export interface CardState { status: CardStatus; assignee?: string; answered: number }
+
+/** Per e-mail card in GROUP: open / waiting (answered) / closed, and who has it. SENDER = the key
+ *  that posts cards and answers (only its "sent" events count as answers). */
+export function inboxStates(groupId: string, sender?: string): Map<string, CardState> {
+  const list = all(me())
+  const del = deleted(list)
+  const out = new Map<string, CardState>()
+  const get = (id: string) => out.get(id) ?? out.set(id, { status: 'open', answered: 0 }).get(id)!
+  for (const e of list.filter((x) => tag(x, 'h') === groupId && !del.has(x.id)).sort(byTime)) {
+    const card = e.tags.find((t) => t[0] === 'e')?.[1]
+    if (!card) continue
+    if (e.kind === 1985 && e.tags.some((t) => t[0] === 'L' && t[1] === INBOX_NS)) {
+      const l = e.tags.find((t) => t[0] === 'l' && t[2] === INBOX_NS)?.[1]
+      if (l === 'open' || l === 'closed') get(card).status = l
+      if (l === 'assigned') get(card).assignee = e.tags.find((t) => t[0] === 'p')?.[1] || undefined
+    } else if (e.kind === 9 && sender && e.pubkey === sender && e.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-mail-out')) {
+      const c = get(card)
+      c.answered++
+      if (c.status === 'open') c.status = 'waiting'
+    }
   }
   return out
 }
