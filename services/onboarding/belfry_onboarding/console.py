@@ -481,30 +481,132 @@ details summary{cursor:pointer}
 )
 
 
+HOME_STYLE = """<style>
+main{max-width:1040px} header.site{display:none}
+.bar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 20px}
+.bar .brand{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:var(--fg);font:700 1.15rem/1 var(--font-title)}
+.bar .brand img{height:28px;width:auto;display:block}
+.bar .right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.who{display:inline-flex;align-items:center;gap:8px;color:var(--fg-muted);font-size:.92rem}
+.av{width:32px;height:32px;border-radius:99px;background:var(--surface-deep);border:1px solid var(--border);
+display:inline-grid;place-items:center;font-weight:600;color:var(--fg)}
+.btn2{display:inline-block;padding:9px 14px;border-radius:10px;border:1px solid var(--border-strong,var(--border));
+background:var(--surface);color:var(--fg);text-decoration:none;font-weight:600;font-size:.92rem}
+.manage{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 24px;border-bottom:1px solid var(--border)}
+.manage a{padding:8px 12px;text-decoration:none;color:var(--fg-muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.manage a.on{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
+.panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px}
+.eyebrow{margin:0;font-size:.8rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-faint)}
+.hero{display:flex;flex-direction:column;gap:14px;max-width:640px;padding:40px 0 32px}
+.hero h1{font-size:3rem;line-height:1.05;margin:0}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.apps{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin:0 0 28px}
+.app{display:flex;align-items:center;gap:14px;padding:16px;background:var(--surface);border:1px solid var(--border);
+border-radius:14px;text-decoration:none;color:var(--fg)} .app:hover{border-color:var(--fg-faint)}
+.app .ic{width:44px;height:44px;border-radius:12px;background:var(--surface-deep);display:grid;place-items:center;flex:none;overflow:hidden}
+.app .ic img{width:44px;height:44px} .app b{display:block} .app small{color:var(--fg-faint);font-size:.85rem}
+.strip{background:var(--surface);border:1px solid var(--border);border-radius:16px;overflow:hidden;margin:0 0 28px}
+.strip .head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+.strip h2{margin:0;font-size:1rem}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.stat{padding:16px 20px;text-decoration:none;color:var(--fg);border-right:1px solid var(--border);display:flex;flex-direction:column;gap:2px}
+.stat:last-child{border-right:0} .stat:hover{background:var(--surface-deep)}
+.stat .k{font-size:.8rem;color:var(--fg-faint)} .stat b{font-size:1.4rem} .stat .s{font-size:.82rem;color:var(--fg-muted)}
+.steps{padding:14px 20px;border-top:1px solid var(--border);background:var(--surface-deep);display:flex;flex-direction:column;gap:10px}
+.steps h3{margin:0;font-size:.85rem} .step{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.dot{display:inline-block;width:8px;height:8px;border-radius:99px;background:var(--ok)} .dot.bad{background:var(--accent-2)}
+.cols{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.cols > *{flex:1 1 300px}
+.foot{margin-top:32px;padding-top:16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:.85rem;color:var(--fg-faint)}
+.foot a{color:var(--fg-muted)}
+.chip{display:inline-block;padding:5px 10px;border-radius:99px;background:var(--surface-deep);font-size:.85rem}
+</style>"""
+
+ADMIN_TABS = [
+    ("/status", "Status"),
+    ("/members", "Members"),
+    ("/website", "Website"),
+    ("/monitor", "Monitor"),
+    ("/apps", "Apps"),
+    ("/setup", "Setup"),
+]
+MEMBER_TABS = [("/members", "Members"), ("/monitor", "Monitor")]
+
+
+def initial(name: str) -> str:
+    return (name.strip()[:1] or "?").upper()
+
+
+def topbar(who: dict[str, Any] | None) -> str:
+    from . import theme
+
+    t = theme.current()
+    brand = (
+        f'<img src="{E(t.logo)}" alt="{E(t.name)}">'
+        if t.logo_is_wordmark
+        else f'<img src="{E(t.logo)}" alt=""><span>{E(t.name)}</span>'
+    )
+    if who:
+        manage = '<a class="btn2" href="/status">Manage</a>' if who["admin"] else ""
+        right = (
+            f'{manage}<span class="who">{E(who["name"])}{" · admin" if who["admin"] else ""}'
+            f'<span class="av" aria-hidden="true">{E(initial(who["name"]))}</span></span>'
+            '<a href="/logout" class="who">Sign out</a>'
+        )
+    else:
+        right = '<a class="btn" href="/login">Sign in</a>'
+    return f'<div class="bar"><a class="brand" href="/">{brand}</a><span class="right">{right}</span></div>'
+
+
 def nav(current: str, who: dict[str, Any] | None) -> str:
-    links = [
-        ("/", "Overview"),
-        ("/status", "Status"),
-        ("/members", "Members"),
-        ("/website", "Website"),
-        ("/monitor", "Monitor"),
-        ("/apps", "Apps"),
-        ("/setup", "Setup"),
-    ]
-    parts = "".join(
-        f'<a href="{h}" class="{"on" if h == current else ""}">{t}</a>' for h, t in links
+    """The bar, and under it the pages to manage the belfry (none on the home page)."""
+    tabs = ADMIN_TABS if who and who["admin"] else MEMBER_TABS
+    links = "".join(
+        f'<a href="{h}" class="{"on" if h == current else ""}">{t}</a>' for h, t in tabs
     )
-    me = (
-        f'<span class="meta">{E(who["name"])}{" · admin" if who["admin"] else ""} · '
-        f'<a href="/logout">sign out</a></span>'
-        if who
-        else '<a href="/login">Sign in</a>'
+    sub = (
+        f'<nav class="manage" aria-label="Manage"><a href="/">← Home</a>{links}</nav>'
+        if current != "/"
+        else ""
     )
-    return f'<nav class="tabs" style="justify-content:space-between"><span class="row" style="gap:14px">{parts}</span>{me}</nav>'
+    return topbar(who) + sub
 
 
 def frame(title: str, current: str, who: dict[str, Any] | None, body: str) -> str:
-    return page(title, STYLE + f'<div class="card">{nav(current, who)}{body}</div>')
+    inner = body if current == "/" else f'<div class="panel">{body}</div>'
+    return page(title, STYLE + HOME_STYLE + nav(current, who) + inner, wide=True)
+
+
+def mail_state(s: Any) -> tuple[str, str]:
+    host = (getattr(s, "smtp_host", "") or "").lower()
+    name = {"smtp.lettermint.co": "Lettermint", "smtp.resend.com": "Resend"}.get(host)
+    if not host or host == "mailpit":
+        return "", "Not set up: nobody can sign in"
+    sender = getattr(s, "mail_from", "") or f"belfry@{s.nip05_domain}"
+    return (name or host), sender
+
+
+def app_tiles(svc: Services) -> str:
+    from . import appshome
+
+    apps_url = (svc.settings.apps_public_url or "").rstrip("/")
+    tiles = ""
+    for a in appshome.installed(svc.settings.apps_dir):
+        icon = (
+            f'<img src="{E(apps_url + a["icon"])}" alt="">'
+            if a["icon"] and apps_url
+            else f"<b>{E(a['title'][:1])}</b>"
+        )
+        tiles += (
+            f'<a class="app" href="{E(apps_url)}/{E(a["name"])}/"><span class="ic">{icon}</span>'
+            f"<span><b>{E(a['title'])}</b><small>{E(a['about'])}</small></span></a>"
+        )
+    pass_url = svc.settings.public_url.rstrip("/")
+    tiles += (
+        f'<a class="app" href="{E(pass_url)}/me"><span class="ic"><b>✓</b></span>'
+        "<span><b>Your pass</b><small>Your membership, invites and devices</small></span></a>"
+    )
+    return f'<section class="apps" aria-label="Apps">{tiles}</section>'
 
 
 def overview_html(
@@ -514,47 +616,98 @@ def overview_html(
     counts: dict[str, int],
     site: dict[str, Any],
     who: dict[str, Any] | None,
+    code: dict[str, Any] | None = None,
 ) -> str:
     s = svc.settings
-    last = status.get("last_change") or {}
-
-    def n(k: int, word: str) -> str:
-        return f"{k} {word}" + ("" if k == 1 else "s")
-
-    member_line = f"{n(counts['members'], 'member')} · {n(counts['admins'], 'admin')}"
-    names = ""
-    if mem is not None:
-        names = ", ".join(E(m["name"]) for m in mem[:8]) + ("…" if len(mem) > 8 else "")
-    current = site.get("current")
-    website = (
-        f"Published {community.when(current['at'])} ({current['files']} files)"
-        if current
-        else (
-            "Placeholder: nothing published yet"
-            if site["mode"] == "nsite"
-            else f"Mode: {site['mode']}"
+    name = s.community_name or "This community"
+    healthy = status["up"] == status["total"]
+    foot = (
+        f'<div class="foot"><span><span class="dot{"" if healthy else " bad"}"></span> '
+        + (
+            "All services working"
+            if healthy
+            else f"{status['up']} of {status['total']} services answering"
         )
+        + ' · <a href="/status">status</a></span></div>'
     )
-    pending = len(site.get("proposals") or [])
-    return frame(
-        f"{s.community_name}: the belfry",
-        "/",
-        who,
-        f"""<h1>{E(s.community_name)}</h1>
-<p class="muted">The belfry of {E(s.community_name)}: its sign-in, members, relays, files and website, on its own server.</p>
-<div class="grid">
-<a class="tile" href="/status"><div class="meta">Status</div>
-<div class="big {"up" if status["up"] == status["total"] else "down"}">{status["up"]}/{status["total"]}</div>
-<div class="meta">services answering · code <code>{E(status["version"] or "?")}</code></div>
-<div class="meta">last change: {E(last.get("summary", "—"))}</div></a>
-<a class="tile" href="/members"><div class="meta">Members</div><div class="big">{counts["members"]}</div>
-<div class="meta">{member_line}</div><div class="meta">{names}</div></a>
-<a class="tile" href="/website"><div class="meta">Website</div><div class="big">{"Live" if current else "Placeholder"}</div>
-<div class="meta">{E(website)}</div><div class="meta">{pending} proposed version(s)</div></a>
-</div>
-<p class="meta" style="margin-top:16px">Join, the pass and the apps: <a href="{E(s.public_url)}">{E(s.public_url)}</a> ·
-<a href="{E(s.public_url)}/proposals">Proposals</a> · <a href="{E(s.public_url)}/changelog">Changelog</a></p>""",
-    )
+    if who is None:
+        from . import appshome
+
+        chips = "".join(
+            f'<span class="chip">{E(a["title"])}</span>' for a in appshome.installed(s.apps_dir)
+        )
+        body = f"""<section class="hero"><p class="eyebrow">A community on its own server</p>
+<h1>{E(name)}</h1>
+<div class="row"><a class="btn" href="/login">Sign in with your e-mail</a></div>
+<p class="muted" style="margin:0;font-size:.9rem">No password: we send you a 6-digit code.</p></section>
+<div class="cols"><div class="panel"><h2 style="margin:0 0 8px;font-size:1rem">Inside, for members</h2>
+<p class="muted" style="margin:0 0 12px">Everything is kept on {E(name)}'s own server, and your account is yours to take with you.</p>
+<div class="row">{chips or '<span class="chip">Chat</span>'}<span class="chip">Your pass</span></div></div>
+<div class="panel"><h2 style="margin:0 0 8px;font-size:1rem">How to join</h2>
+<p class="muted" style="margin:0">Members invite new members: ask someone you know in {E(name)} for an invite link.</p></div></div>
+{foot}"""
+        return frame(name, "/", None, body)
+
+    first = who["name"].split()[0] if who["name"].strip() else ""
+    admin = ""
+    if who["admin"]:
+        prov, sender = mail_state(s)
+        current = site.get("current")
+        v = (code or {}).get("version") or {}
+        behind = int(v.get("behind") or 0)
+        ver = (
+            f"{behind} update{'s' if behind > 1 else ''}"
+            if behind
+            else ("Up to date" if v else "Unknown")
+        )
+        steps = []
+        if not prov:
+            steps.append(("Set up e-mail: nobody can sign in until it works.", "/setup", "Set up"))
+        if counts["members"] <= 1:
+            steps.append(
+                (f"Invite your first members: {E(name)} has only you.", "/members", "Invite people")
+            )
+        if not current and site.get("mode") == "nsite":
+            steps.append(
+                ("Publish a website: the homepage is a placeholder.", "/website", "Website")
+            )
+        if behind:
+            steps.append(
+                (f"A newer version of Belfry is out ({behind} changes).", "/status", "Update")
+            )
+        steps_html = (
+            '<div class="steps"><h3>Next steps</h3>'
+            + "".join(
+                f'<div class="step"><span>{t}</span><a class="btn" href="{h}">{E(label)}</a></div>'
+                for t, h, label in steps
+            )
+            + "</div>"
+            if steps
+            else ""
+        )
+        n = counts["members"]
+        admin = f"""<section class="strip" aria-label="Your belfry"><div class="head"><h2>Your belfry</h2>
+<span><span class="dot{"" if healthy else " bad"}"></span> {"All" if healthy else status["up"]} of {status["total"]} services working</span></div>
+<div class="stats">
+<a class="stat" href="/members"><span class="k">Members</span><b>{n}</b><span class="s">{counts["admins"]} admin{"" if counts["admins"] == 1 else "s"}</span></a>
+<a class="stat" href="/setup#mail"><span class="k">E-mail</span><b>{"Working" if prov else "Not set"}</b><span class="s">{E(prov + " · " + sender if prov else sender)}</span></a>
+<a class="stat" href="/website"><span class="k">Website</span><b>{"Live" if current else "Placeholder"}</b><span class="s">{E("Published " + community.when(current["at"]) if current else "Nothing published yet")}</span></a>
+<a class="stat" href="/status"><span class="k">Version</span><b>{E(ver)}</b><span class="s">{E(v.get("short", status.get("version") or "?"))}{E(" · " + (v.get("date") or "")[:10]) if v.get("date") else ""}</span></a>
+</div>{steps_html}</section>"""
+    me = next((m for m in mem or [] if m["partner"] == who["partner"]), None)
+    since = f"Member since {me['since']}" if me and me.get("since") else "Member"
+    num = f" · number {me['number']}" if me and me.get("number") else ""
+    you = f"""<div class="panel"><h2 style="margin:0 0 8px;font-size:1rem">You</h2>
+<p class="muted" style="margin:0 0 10px;font-size:.92rem">{E(since + num)} · {E(who["email"])}</p>
+<div class="row" style="gap:16px"><a href="{E(s.public_url)}/me">Invite someone</a><a href="{E(s.public_url)}/me">Your pass and devices</a></div></div>"""
+    others = ""
+    if mem is not None and len(mem) > 1:
+        names = ", ".join(E(m["name"]) for m in mem[:12]) + ("…" if len(mem) > 12 else "")
+        others = f"""<div class="panel"><h2 style="margin:0 0 8px;font-size:1rem">{len(mem)} members</h2>
+<p class="muted" style="margin:0 0 10px;font-size:.92rem">{names}</p><a href="/members">Everyone</a></div>"""
+    body = f"""<h1 style="font-size:1.9rem;margin:8px 0 24px">Welcome{", " + E(first) if first else ""}</h1>
+{admin}{app_tiles(svc)}<div class="cols">{you}{others}</div>{foot}"""
+    return frame(name, "/", who, body)
 
 
 def status_html(status: dict[str, Any], who: dict[str, Any] | None, code: str = "") -> str:
@@ -799,8 +952,9 @@ def register(app: FastAPI) -> None:
         mem = await run_in_threadpool(members, services)
         site = await run_in_threadpool(website_data, services)
         counts = {"members": len(mem), "admins": sum(1 for m in mem if m["admin"])}
+        info = await run_in_threadpool(code_info, services.settings) if me and me["admin"] else {}
         return HTMLResponse(
-            overview_html(services, status, mem if me else None, counts, site, me),
+            overview_html(services, status, mem if me else None, counts, site, me, info),
             headers={"Cache-Control": "no-store"},
         )
 
@@ -829,12 +983,7 @@ def register(app: FastAPI) -> None:
         else:
             body = community.monitor_body()
         return HTMLResponse(
-            page(
-                "Monitor",
-                STYLE
-                + "<style>main{max-width:1100px}</style>"
-                + f'<div class="card">{nav("/monitor", me)}{body}</div>',
-            ),
+            frame("Monitor", "/monitor", me, body),
             headers={"Cache-Control": "no-store"},
         )
 

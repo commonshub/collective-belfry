@@ -94,9 +94,26 @@ def test_overview_summarises_status_members_and_website(web, belfry, odoo):
     member(odoo, "Bob")
     r = web.get("/", headers=CONSOLE)
     assert r.status_code == 200
-    assert "Example Commons" in r.text and "1/2" in r.text and "2 members" in r.text
-    assert 'href="/status"' in r.text and 'href="/members"' in r.text and "Placeholder" in r.text
-    assert "Alice" not in r.text  # names only for members
+    assert "Example Commons" in r.text and 'href="/login"' in r.text
+    assert "1 of 2 services answering" in r.text  # the fake checks: one down
+    assert "Alice" not in r.text and "Your belfry" not in r.text  # names only for members
+
+
+def test_home_for_a_member_and_for_an_admin(web, belfry, odoo, authentik):
+    alice = member(odoo, "Alice")
+    member(odoo, "Bob")
+    sign_in(web, belfry, alice)
+    r = web.get("/", headers=CONSOLE)
+    assert "Welcome, Alice" in r.text and "Your pass" in r.text and "Bob" in r.text
+    assert "Your belfry" not in r.text and 'href="/status">Manage' not in r.text
+    make_admin(authentik, "alice@example.org")
+    r = web.get("/", headers=CONSOLE)
+    assert "Your belfry" in r.text and 'href="/status">Manage' in r.text
+    assert "1 of 2 services working" in r.text and "Placeholder" in r.text
+    assert "Set up e-mail" in r.text  # no mail provider in the tests
+    assert "Invite your first members" not in r.text  # two members already
+    sub = web.get("/members", headers=CONSOLE).text
+    assert 'class="manage"' in sub and 'href="/setup"' in sub
 
 
 def test_console_paths_move_to_the_console_host(web):

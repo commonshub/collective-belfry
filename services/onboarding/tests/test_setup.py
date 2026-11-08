@@ -99,12 +99,13 @@ def test_a_wrong_or_expired_code_is_refused(web, folder):
 def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
     web.post("/setup/code", data={"code": CODE.lower()})  # case and dashes don't matter
     page = web.get("/setup").text
-    assert '<details id="resend">' in page and '<details id="resend" open>' not in page
-    assert "Changes are recorded in" in page and "<strong>Ana</strong>" in page
+    assert '<details id="mail" class="mail">' in page and "partly set" not in page
+    assert "are recorded in the" in page and "<strong>Ana</strong>" in page
     assert 'name="by"' not in page
     assert 'type="password" name="BELFRY_RESEND_API_KEY"' in page
-    assert 'value="Example Commons"' in page and "not set" in page
-    assert '<details id="stripe" open>' in web.get("/setup?open=stripe").text
+    assert 'type="password" name="BELFRY_LETTERMINT_API_KEY"' in page
+    assert 'value="Example Commons"' in page and "What every belfry needs" in page
+    assert '<details id="payments" open>' in web.get("/setup?open=stripe").text
     r = web.post(
         "/setup",
         data={
@@ -130,6 +131,44 @@ def test_providers_are_folded_and_secrets_stay_write_only(web, folder):
     page = web.get("/setup").text
     assert "re_secret" not in page and "Applying the changes" in page
     assert 'http-equiv="refresh"' in page
+
+
+def test_the_mail_row_takes_one_service_and_tries_its_key(web, folder, monkeypatch):
+    tried = []
+
+    def fake_check(key, domain):
+        tried.append(key)
+        if key == "bad-token-xxxxxxxxxx":
+            raise ValueError("Lettermint did not accept this token.")
+        return f"belfry@{domain}"
+
+    monkeypatch.setattr(setup, "check_lettermint", fake_check)
+    web.post("/setup/code", data={"code": CODE})
+    page = web.get("/setup").text
+    form = {
+        "csrf": csrf_of(page),
+        "provider": "mail",
+        "mail_provider": "lettermint",
+        "BELFRY_RESEND_API_KEY": "re_typed_but_not_chosen",
+    }
+    r = web.post(
+        "/setup",
+        data={**form, "BELFRY_LETTERMINT_API_KEY": "bad-token-xxxxxxxxxx"},
+        follow_redirects=False,
+    )
+    assert "did not accept" in flash_of(r) and not (folder / "pending.env").exists()
+    r = web.post(
+        "/setup",
+        data={**form, "BELFRY_LETTERMINT_API_KEY": "good-token-xxxxxxxxx"},
+        follow_redirects=False,
+    )
+    assert flash_of(r) == "E-mail saved."
+    pending = (folder / "pending.env").read_text()
+    assert "BELFRY_LETTERMINT_API_KEY=" in pending and "re_typed" not in pending
+    assert "BELFRY_MAIL_FROM=" in pending and tried == [
+        "bad-token-xxxxxxxxxx",
+        "good-token-xxxxxxxxx",
+    ]
 
 
 def test_a_code_without_a_name_asks_for_one(web, folder):
@@ -306,7 +345,7 @@ def test_first_run_admin_mail_code(fresh, folder, odoo, authentik, keycast, monk
     assert json.loads((folder / "first-admin.json").read_text())["verified"] is True
     # done: the settings page, no wizard
     page = fresh.get("/setup").text
-    assert 'id="wiz"' not in page and '<details id="resend">' in page
+    assert 'id="wiz"' not in page and '<details id="mail" class="mail">' in page
 
 
 def test_check_resend(monkeypatch):

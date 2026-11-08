@@ -888,6 +888,65 @@ def code_form(err: str = "") -> str:
 </section></div>"""
 
 
+NEEDS = ["name", "mail", "theme", "homepage"]
+ADDONS = [
+    (
+        "payments",
+        "Paid memberships",
+        "Stripe or Mollie. Membership is free until you add one.",
+        ["stripe", "mollie"],
+    ),
+    ("odoo", "Accounting in Odoo", "Book paid passes in your organisation's own Odoo.", ["odoo"]),
+    ("git", "Code page", "Show a repository at /git.", ["git"]),
+]
+ROW_TEXT = {
+    "name": ("Name", "On every page and in the mails."),
+    "mail": (
+        "E-mail",
+        "Sign-in codes, invites and the shared inbox's replies. Nobody can sign in until it works.",
+    ),
+    "theme": (
+        "Look",
+        "The pages' base look: belfry or osv. Your colours and logo: belfry theme set.",
+    ),
+    "homepage": ("Homepage", "What your domain shows."),
+}
+SETUP_STYLE = """<style>
+.progress{display:flex;align-items:center;gap:12px;margin:10px 0 6px}
+.progress .track{flex:1;height:8px;border-radius:99px;background:var(--surface-deep);overflow:hidden}
+.progress .track i{display:block;height:100%;background:var(--ok)}
+.group{margin:28px 0 0} .group > h2{margin:0 0 10px;font-size:.8rem;font-weight:600;letter-spacing:.06em;
+text-transform:uppercase;color:var(--fg-faint)}
+.list{border:1px solid var(--border);border-radius:14px;overflow:hidden;background:var(--surface)}
+.list details{border-top:1px solid var(--border)} .list details:first-child{border-top:0}
+.list summary{list-style:none;cursor:pointer;display:flex;gap:14px;align-items:center;padding:16px 18px}
+.list summary::-webkit-details-marker{display:none}
+.list .what{flex:1;min-width:0} .list .what strong{display:block} .list .what .meta{font-size:.9rem}
+.tick{width:24px;height:24px;border-radius:99px;flex:none;display:grid;place-items:center;box-sizing:border-box;
+border:2px solid var(--border-strong,var(--border));font-size:.8rem;font-weight:700}
+.tick.done{border:0;background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.list .act{font-size:.9rem;padding:7px 12px;border-radius:10px;border:1px solid var(--border-strong,var(--border));white-space:nowrap}
+.list details[open] .act{visibility:hidden}
+.list form{padding:0 18px 18px 56px} .list label{display:block;margin:10px 0 4px;font-weight:500;font-size:.92rem}
+.list input[type=text],.list input[type=password]{width:100%;box-sizing:border-box;font:inherit;padding:9px 11px;
+border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inherit}
+.seg{display:inline-flex;gap:4px;padding:4px;background:var(--surface-deep);border-radius:12px;margin:6px 0 4px}
+.seg label{margin:0;padding:7px 14px;border-radius:9px;cursor:pointer;font-weight:500}
+.seg input{position:absolute;opacity:0;pointer-events:none}
+.seg label:has(input:checked){background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:600}
+.mail:has(#mp-resend:checked) .only-lettermint,.mail:has(#mp-lettermint:checked) .only-resend{display:none}
+.addons{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.addons details{background:var(--surface);border:1px solid var(--border);border-radius:14px}
+.addons summary{list-style:none;cursor:pointer;padding:16px;display:flex;flex-direction:column;gap:4px}
+.addons summary::-webkit-details-marker{display:none}
+.addons summary .meta{font-size:.9rem} .addons summary .act{font-size:.9rem;color:var(--accent);text-decoration:underline}
+.addons form{padding:0 16px 16px}
+.addons label{display:block;margin:10px 0 4px;font-weight:500;font-size:.92rem}
+.addons input{width:100%;box-sizing:border-box;font:inherit;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inherit}
+.note{padding:10px 12px;border-radius:10px;background:var(--surface-deep);margin:0 0 14px}
+</style>"""
+
+
 def provider_state(st: dict[str, Any], fields: list[tuple[str, str, bool, str]]) -> str:
     done = [bool(st["set"].get(k)) for k, *_ in fields]
     if all(done):
@@ -895,8 +954,85 @@ def provider_state(st: dict[str, Any], fields: list[tuple[str, str, bool, str]])
     return "partly" if any(done) else "missing"
 
 
+def _inputs(st: dict[str, Any], fields: list[tuple[str, str, bool, str]], cls: str = "") -> str:
+    out = ""
+    for key, label, secret, help_ in fields:
+        is_set = bool(st["set"].get(key))
+        wrap = f'<div class="{cls}">' if cls else "<div>"
+        if secret:
+            hint = "saved: leave empty to keep it" if is_set else help_
+            out += (
+                f'{wrap}<label for="f-{key}">{E(label)}</label><input id="f-{key}" type="password" '
+                f'name="{key}" autocomplete="off" placeholder="{E(hint)}"></div>'
+            )
+        else:
+            current = str(st["values"].get(key, ""))
+            out += (
+                f'{wrap}<label for="f-{key}">{E(label)}</label><input id="f-{key}" type="text" '
+                f'name="{key}" value="{E(current)}" placeholder="{E(help_)}"></div>'
+            )
+    return out
+
+
+def _form(csrf: str, pid: str, body: str, button: str) -> str:
+    return (
+        f'<form method="post" action="/setup"><input type="hidden" name="csrf" value="{E(csrf)}">'
+        f'<input type="hidden" name="provider" value="{pid}">{body}'
+        f'<p><button class="btn" type="submit">{E(button)}</button></p></form>'
+    )
+
+
+def mail_row(st: dict[str, Any], csrf: str, open_: str) -> tuple[bool, str]:
+    by = {pid: fields for pid, _, _, fields in PROVIDERS}
+    lm = bool(st["set"].get("BELFRY_LETTERMINT_API_KEY"))
+    rs = bool(st["set"].get("BELFRY_RESEND_API_KEY"))
+    done = lm or rs
+    current = "Lettermint" if lm else "Resend" if rs else ""
+    sender = str(st["values"].get("BELFRY_MAIL_FROM", ""))
+    summary = (
+        f"{current}{' · sends as ' + sender if sender else ''}" if done else ROW_TEXT["mail"][1]
+    )
+    pick = "resend" if rs and not lm else "lettermint"
+    seg = (
+        '<div class="seg" role="radiogroup" aria-label="Mail service">'
+        f'<label><input type="radio" name="mail_provider" value="lettermint" id="mp-lettermint"'
+        f"{' checked' if pick == 'lettermint' else ''}>Lettermint (EU)</label>"
+        f'<label><input type="radio" name="mail_provider" value="resend" id="mp-resend"'
+        f"{' checked' if pick == 'resend' else ''}>Resend</label></div>"
+    )
+    sender_field = [f for f in by["resend"] if f[0] == "BELFRY_MAIL_FROM"]
+    body = (
+        seg
+        + _inputs(st, by["lettermint"], "only-lettermint")
+        + _inputs(st, [f for f in by["resend"] if f[0] != "BELFRY_MAIL_FROM"], "only-resend")
+        + _inputs(
+            st,
+            [
+                (k, "Sender address", s_, "belfry@<your domain>, on a domain verified there")
+                for k, _, s_, _ in sender_field
+            ],
+        )
+    )
+    row = (
+        f'<details id="mail" class="mail"{" open" if open_ in ("mail", "resend", "lettermint") else ""}>'
+        f'<summary><span class="tick{" done" if done else ""}">{"✓" if done else ""}</span>'
+        f'<span class="what"><strong>E-mail</strong><span class="meta">{E(summary)}</span></span>'
+        f'<span class="act">{"Change" if done else "Set up"}</span></summary>'
+        + _form(csrf, "mail", body, "Save and check")
+        + "</details>"
+    )
+    return done, row
+
+
 def settings_form(
-    st: dict[str, Any], csrf: str, who: str, msg: str, err: str, open_: str = ""
+    st: dict[str, Any],
+    csrf: str,
+    who: str,
+    msg: str,
+    err: str,
+    open_: str = "",
+    members: int | None = None,
+    name: str = "",
 ) -> str:
     notes = ""
     if err:
@@ -915,42 +1051,65 @@ def settings_form(
             f"({E(', '.join(last.get('keys') or []) or 'settings')}). "
             f"<span class='meta'>{E(str(last.get('message', '')))}</span></p>"
         )
-    rows = ""
-    for pid, name, about, fields in PROVIDERS:
-        state_ = provider_state(st, fields)
-        badge = {
-            "set": '<span class="set">✓ set</span>',
-            "partly": '<span class="missing">partly set</span>',
-            "missing": '<span class="missing">not set</span>',
-        }[state_]
-        inputs = ""
-        for key, label, secret, help_ in fields:
-            is_set = bool(st["set"].get(key))
-            if secret:
-                hint = "set: leave empty to keep it" if is_set else help_
-                inputs += (
-                    f'<label>{E(label)}</label><input type="password" name="{key}" '
-                    f'autocomplete="off" placeholder="{E(hint)}">'
-                )
-            else:
-                current = str(st["values"].get(key, ""))
-                inputs += (
-                    f'<label>{E(label)}</label><input type="text" name="{key}" '
-                    f'value="{E(current)}" placeholder="{E(help_)}">'
-                )
-        act = "Change" if state_ == "set" else "Set up"
+    by = {pid: (title, fields) for pid, title, _, fields in PROVIDERS}
+    rows, done_n = "", 0
+    for pid in NEEDS:
+        if pid == "mail":
+            done, row = mail_row(st, csrf, open_)
+        else:
+            _, fields = by[pid]
+            title, about = ROW_TEXT[pid]
+            done = provider_state(st, fields) == "set"
+            vals = [str(st["values"].get(k, "")) for k, *_ in fields]
+            summary = " · ".join(v for v in vals if v) if done else about
+            row = (
+                f'<details id="{pid}"{" open" if pid == open_ else ""}><summary>'
+                f'<span class="tick{" done" if done else ""}">{"✓" if done else ""}</span>'
+                f'<span class="what"><strong>{E(title)}</strong><span class="meta">{E(summary)}</span></span>'
+                f'<span class="act">{"Change" if done else "Set up"}</span></summary>'
+                + _form(csrf, pid, _inputs(st, fields), f"Save {title.lower()}")
+                + "</details>"
+            )
+        done_n += done
+        rows += row
+    total = len(NEEDS)
+    if members is not None:
+        total += 1
+        has = members > 1
+        done_n += has
         rows += (
-            f'<details id="{pid}"{" open" if pid == open_ else ""}><summary>'
-            f'<span class="what"><strong>{E(name)}</strong><span class="meta">{E(about)}</span></span>'
-            f'{badge}<span class="act">{act}</span></summary>'
-            f'<form method="post" action="/setup"><input type="hidden" name="csrf" value="{E(csrf)}">'
-            f'<input type="hidden" name="provider" value="{pid}">{inputs}'
-            f'<p><button class="btn" type="submit">Save {E(name)}</button></p></form></details>'
+            '<details id="members"><summary>'
+            f'<span class="tick{" done" if has else ""}">{"✓" if has else ""}</span>'
+            '<span class="what"><strong>Your first members</strong><span class="meta">'
+            f"{E(f'{members} members' if has else 'Invite people by e-mail from the Members page')}"
+            '</span></span><a class="act" href="/members" style="visibility:visible">Invite</a>'
+            "</summary></details>"
         )
-    return f"""{notes}<h1>Settings</h1>
-<p class="muted">Secrets are stored on the server and never shown again. Changes are recorded in
-the <a href="/changelog">changelog</a> as made by <strong>{E(who)}</strong>.</p>
-<div class="providers">{rows}</div>"""
+    addons = ""
+    for aid, title, about, pids in ADDONS:
+        on = any(provider_state(st, by[p][1]) == "set" for p in pids)
+        forms = "".join(
+            (
+                f"<h3 style='margin:12px 0 0;font-size:.95rem'>{E(by[p][0])}</h3>"
+                if len(pids) > 1
+                else ""
+            )
+            + _form(csrf, p, _inputs(st, by[p][1]), f"Save {by[p][0]}")
+            for p in pids
+        )
+        addons += (
+            f'<details id="{aid}"{" open" if open_ in pids or open_ == aid else ""}><summary>'
+            f'<strong>{E(title)}{" ✓" if on else ""}</strong><span class="meta">{E(about)}</span>'
+            f'<span class="act">{"Change" if on else "Set up"}</span></summary>{forms}</details>'
+        )
+    pct = int(100 * done_n / total) if total else 100
+    title = f"Set up {name}" if name else "Set up"
+    return f"""{SETUP_STYLE}{notes}<h1>{E(title)}</h1>
+<div class="progress"><span class="track"><i style="width:{pct}%"></i></span><span class="meta">{done_n} of {total} done</span></div>
+<p class="meta" style="margin:0">Secrets stay on the server and are never shown again. Changes apply in a minute or two
+and are recorded in the <a href="/changelog">changelog</a> as made by <strong>{E(who)}</strong>.</p>
+<section class="group"><h2>What every belfry needs</h2><div class="list">{rows}</div></section>
+<section class="group"><h2>Add-ons, when you need them</h2><div class="addons">{addons}</div></section>"""
 
 
 def register(app: FastAPI) -> None:
@@ -990,11 +1149,14 @@ def register(app: FastAPI) -> None:
 
     NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
-    def page_(request: Request, body: str, refresh: bool = False) -> HTMLResponse:
+    async def page_(request: Request, body: str, refresh: bool = False) -> HTMLResponse:
         head = '<meta http-equiv="refresh" content="10">' if refresh else ""
+        services = svc(request)
+        sess = console.read_session(services, request.cookies.get(console.COOKIE))
+        me = await run_in_threadpool(console.viewer, services, sess) if sess else None
         return flash.clear(
             HTMLResponse(
-                console.frame("Setup", "/setup", None, STYLE + head + body), headers=NO_STORE
+                console.frame("Setup", "/setup", me, STYLE + head + body), headers=NO_STORE
             ),
             request,
         )
@@ -1037,7 +1199,7 @@ def register(app: FastAPI) -> None:
         services = svc(request)
         st = state(services.settings)
         if not st["available"]:
-            return page_(
+            return await page_(
                 request,
                 "<h1>Setup</h1><p>This belfry has no setup folder. Use <code>belfry config</code> on "
                 "the server.</p>",
@@ -1056,7 +1218,7 @@ def register(app: FastAPI) -> None:
             return (
                 bare(request, "Set up your belfry", code_form(err))
                 if fresh
-                else page_(request, f'<div class="wiz">{code_form(err)}</div>')
+                else await page_(request, f'<div class="wiz">{code_form(err)}</div>')
             )
         csrf, who = ok
         if fresh:
@@ -1064,7 +1226,11 @@ def register(app: FastAPI) -> None:
             start = {"admin": "name", "mail_error": "resend"}.get(info["state"], info["state"])
             return bare(request, "Set up your belfry", wizard(start, csrf, services.settings, info))
         fa = first_admin(services.settings)
-        return page_(
+        try:
+            n_members: int | None = len(await run_in_threadpool(console.members, services))
+        except Exception:  # the register not answering: the page still works
+            n_members = None
+        return await page_(
             request,
             settings_form(
                 st,
@@ -1073,6 +1239,8 @@ def register(app: FastAPI) -> None:
                 msg,
                 err,
                 request.query_params.get("open", ""),
+                n_members,
+                services.settings.community_name or "",
             ),
             refresh=st["pending"] or st["applying"],
         )
@@ -1308,6 +1476,30 @@ def register(app: FastAPI) -> None:
             if not secret and not raw:
                 continue  # clearing a value is done with belfry config
             values[key] = raw
+        if provider == "mail":
+            # one service at a time: the radio says which key counts; a new key is tried first
+            pick = str(form.get("mail_provider", ""))
+            drop = "BELFRY_RESEND_API_KEY" if pick == "lettermint" else "BELFRY_LETTERMINT_API_KEY"
+            values.pop(drop, None)
+            key_name = next(
+                (k for k in ("BELFRY_LETTERMINT_API_KEY", "BELFRY_RESEND_API_KEY") if k in values),
+                "",
+            )
+            if key_name:
+                check = (
+                    check_lettermint if key_name == "BELFRY_LETTERMINT_API_KEY" else check_resend
+                )
+                try:
+                    sender = await run_in_threadpool(
+                        check, values[key_name], services.settings.nip05_domain
+                    )
+                except ValueError as exc:
+                    return flash.redirect(services, "/setup?open=mail", err=str(exc))
+                if (
+                    not str(st["values"].get("BELFRY_MAIL_FROM", ""))
+                    and "BELFRY_MAIL_FROM" not in values
+                ):
+                    values["BELFRY_MAIL_FROM"] = sender
         if not values:
             return flash.redirect(services, "/setup", msg="Nothing changed.")
         try:
@@ -1315,5 +1507,9 @@ def register(app: FastAPI) -> None:
         except ValueError as exc:
             return flash.redirect(services, "/setup", err=str(exc))
         log.info("setup: %s queued %s", who, ", ".join(keys))
-        name = next((n for pid, n, _, _ in PROVIDERS if pid == provider), "Settings")
+        name = (
+            "E-mail"
+            if provider == "mail"
+            else next((n for pid, n, _, _ in PROVIDERS if pid == provider), "Settings")
+        )
         return flash.redirect(services, "/setup", msg=f"{name} saved.")
