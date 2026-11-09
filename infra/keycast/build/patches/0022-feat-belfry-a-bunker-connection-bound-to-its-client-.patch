@@ -1,0 +1,310 @@
+From 0a077fa25fdabe22bcab90dde27e80933a0b1cdb Mon Sep 17 00:00:00 2001
+From: Xavier Damman <xdamman@gmail.com>
+Date: Mon, 9 Nov 2026 22:15:58 +0100
+Subject: [PATCH] feat(belfry): a bunker connection bound to its client key at
+ creation
+
+POST /api/user/bunker/create takes an optional client_pubkey (hex): the
+connection is stored already bound to that NIP-46 client, as a
+connection approved through nostr-login is. No other key can connect
+with the secret from the bunker URL, so the URL is not a bearer
+credential; the named client connects as usual (connect with the
+secret answers ack) or just starts sending requests.
+
+One client key, one identity: when the key is declared for or bound to
+an authorization of another user in the tenant (revoked and expired
+ones count), the call answers 409 with code client_key_taken and
+creates nothing. The same user may get further connections for the
+same client key. The check and the insert run under an advisory lock
+on the client key. The response echoes client_pubkey when the binding
+was made, so a caller can tell this from an older build that ignores
+the field. No schema change.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VBwxbHakpn87bGAgr3M5Ak
+---
+ api/src/api/http/auth.rs                      |  77 ++++++++---
+ .../authorization_management_token_test.rs    |   1 +
+ core/src/repositories/oauth_authorization.rs  | 125 ++++++++++++++++++
+ 3 files changed, 185 insertions(+), 18 deletions(-)
+
+diff --git a/api/src/api/http/auth.rs b/api/src/api/http/auth.rs
+index 0cfc362..338ec05 100644
+--- a/api/src/api/http/auth.rs
++++ b/api/src/api/http/auth.rs
+@@ -1730,6 +1730,11 @@ pub struct CreateBunkerRequest {
+     pub app_name: String,            // Required: friendly display name
+     pub origin: Option<String>, // Optional: the app's origin URL (HTTPS, or http://localhost / *.localhost / 127.0.0.1 / [::1] for local dev)
+     pub policy_slug: Option<String>, // Optional: null = full access
++    /// Belfry: the NIP-46 client key (hex) this connection is for. The connection is
++    /// created bound to it: no other key can connect, with or without the secret.
++    /// Refused with 409 `client_key_taken` when the key is linked to another account.
++    #[serde(default)]
++    pub client_pubkey: Option<String>,
+ }
+ 
+ #[derive(Debug, Serialize)]
+@@ -1739,8 +1744,14 @@ pub struct CreateBunkerResponse {
+     pub app_name: String,
+     pub bunker_pubkey: String,
+     pub created_at: String,
++    /// Belfry: the client key the connection is bound to, when the request named one.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub client_pubkey: Option<String>,
+ }
+ 
++/// Belfry: the `code` of the 409 that refuses a client key linked to another account.
++pub const CLIENT_KEY_TAKEN_CODE: &str = "client_key_taken";
++
+ /// Validate origin is a valid URL (HTTPS required, except localhost for development)
+ fn validate_origin(origin: &str) -> Result<(), AuthError> {
+     let url = nostr::Url::parse(origin)
+@@ -1775,11 +1786,22 @@ pub async fn create_bunker(
+     State(auth_state): State<super::routes::AuthState>,
+     headers: HeaderMap,
+     Json(req): Json<CreateBunkerRequest>,
+-) -> Result<Json<CreateBunkerResponse>, AuthError> {
++) -> Result<Response, AuthError> {
+     let tenant_id = tenant.0.id;
+     let user_pubkey = extract_user_for_authorization_management(&headers, tenant_id).await?;
+     let pool = &auth_state.state.db;
+ 
++    // Belfry: the client key to bind, as the lowercase hex the signer compares against.
++    let client_pubkey = req
++        .client_pubkey
++        .as_deref()
++        .map(|raw| {
++            nostr_sdk::PublicKey::from_hex(raw)
++                .map(|pubkey| pubkey.to_hex())
++                .map_err(|_| AuthError::BadRequest("Invalid client public key".to_string()))
++        })
++        .transpose()?;
++
+     // Validate origin if provided (HTTPS, or http:// for localhost variants)
+     if let Some(ref origin) = req.origin {
+         validate_origin(origin)?;
+@@ -1850,22 +1872,39 @@ pub async fn create_bunker(
+     let created_at = Utc::now();
+     let handle_expires_at = created_at + chrono::Duration::days(30);
+     let oauth_auth_repo = OAuthAuthorizationRepository::new(pool.clone());
+-    let auth_id = oauth_auth_repo
+-        .create(CreateOAuthAuthorizationParams {
+-            tenant_id,
+-            user_pubkey: user_pubkey.clone(),
+-            redirect_origin: redirect_origin.clone(),
+-            client_id: display_name.to_string(),
+-            bunker_public_key: bunker_public_key.to_hex(),
+-            secret_hash,
+-            relays: relays_json.clone(),
+-            policy_id,
+-            is_first_party: false,
+-            client_pubkey: None,
+-            authorization_handle: None,
+-            handle_expires_at,
+-        })
+-        .await?;
++    let params = CreateOAuthAuthorizationParams {
++        tenant_id,
++        user_pubkey: user_pubkey.clone(),
++        redirect_origin: redirect_origin.clone(),
++        client_id: display_name.to_string(),
++        bunker_public_key: bunker_public_key.to_hex(),
++        secret_hash,
++        relays: relays_json.clone(),
++        policy_id,
++        is_first_party: false,
++        client_pubkey: client_pubkey.clone(),
++        authorization_handle: None,
++        handle_expires_at,
++    };
++    let auth_id = if client_pubkey.is_some() {
++        // Bound to the named client from the start; a key linked to another account is refused.
++        match oauth_auth_repo.create_bound_to_client(params).await? {
++            Some(id) => id,
++            None => {
++                tracing::warn!(
++                    "Refused a bunker for user {}: the client key is linked to another account",
++                    user_pubkey
++                );
++                return Ok(coded_error_response(
++                    StatusCode::CONFLICT,
++                    "This client key is already linked to another account.",
++                    CLIENT_KEY_TAKEN_CODE,
++                ));
++            }
++        }
++    } else {
++        oauth_auth_repo.create(params).await?
++    };
+ 
+     tracing::info!(
+         "Created new OAuth authorization {} for user {} app {}",
+@@ -1917,7 +1956,9 @@ pub async fn create_bunker(
+         app_name: req.app_name,
+         bunker_pubkey: user_pubkey.clone(),
+         created_at: created_at.to_rfc3339(),
+-    }))
++        client_pubkey,
++    })
++    .into_response())
+ }
+ 
+ /// Get bunker URL for the authenticated user
+diff --git a/api/tests/authorization_management_token_test.rs b/api/tests/authorization_management_token_test.rs
+index dc32dc6..dab12b8 100644
+--- a/api/tests/authorization_management_token_test.rs
++++ b/api/tests/authorization_management_token_test.rs
+@@ -171,6 +171,7 @@ impl Harness {
+                 app_name: "Manual".to_string(),
+                 origin: None,
+                 policy_slug: None,
++                client_pubkey: None,
+             }),
+         )
+         .await
+diff --git a/core/src/repositories/oauth_authorization.rs b/core/src/repositories/oauth_authorization.rs
+index eb47a2d..8e91f02 100644
+--- a/core/src/repositories/oauth_authorization.rs
++++ b/core/src/repositories/oauth_authorization.rs
+@@ -179,6 +179,66 @@ impl OAuthAuthorizationRepository {
+         .map_err(Into::into)
+     }
+ 
++    /// Belfry: create an authorization bound from the start to the NIP-46 client
++    /// `params.client_pubkey` (lowercase hex), unless that client key is linked to
++    /// another user: declared for, or bound by a connect to, any of that user's
++    /// authorizations in this tenant, revoked and expired ones included. Returns
++    /// `None` then, and nothing is created: one client key, one identity.
++    ///
++    /// The check and the insert run under a transaction-scoped advisory lock on
++    /// the client key, so two concurrent calls for different users cannot both
++    /// pass the check.
++    pub async fn create_bound_to_client(
++        &self,
++        params: CreateOAuthAuthorizationParams,
++    ) -> Result<Option<i32>, RepositoryError> {
++        let Some(client_pubkey) = params.client_pubkey.clone() else {
++            return Err(RepositoryError::Integrity(
++                "create_bound_to_client needs a client_pubkey".to_string(),
++            ));
++        };
++        let mut tx = self.pool.begin().await?;
++        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
++            .bind(&client_pubkey)
++            .execute(&mut *tx)
++            .await?;
++        let now = Utc::now();
++        let id = sqlx::query_scalar::<_, i32>(
++            "INSERT INTO oauth_authorizations
++                 (tenant_id, user_pubkey, redirect_origin, client_id, bunker_public_key,
++                  secret_hash, relays, policy_id, is_first_party, client_pubkey,
++                  connected_client_pubkey, verified_client_pubkey, authorization_handle,
++                  handle_expires_at, created_at, updated_at)
++             SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, $10, $11, $12, $13, $13
++             WHERE NOT EXISTS (
++                 SELECT 1 FROM oauth_authorizations other
++                 WHERE other.tenant_id = $1
++                   AND other.user_pubkey::text <> $2::text
++                   AND (lower(other.client_pubkey::text) = $10::text
++                        OR (other.connected_client_pubkey = $10::text
++                            AND other.verified_client_pubkey = $10::text))
++             )
++             RETURNING id",
++        )
++        .bind(params.tenant_id)
++        .bind(&params.user_pubkey)
++        .bind(&params.redirect_origin)
++        .bind(&params.client_id)
++        .bind(&params.bunker_public_key)
++        .bind(&params.secret_hash)
++        .bind(&params.relays)
++        .bind(params.policy_id)
++        .bind(params.is_first_party)
++        .bind(&client_pubkey)
++        .bind(&params.authorization_handle)
++        .bind(params.handle_expires_at)
++        .bind(now)
++        .fetch_optional(&mut *tx)
++        .await?;
++        tx.commit().await?;
++        Ok(id)
++    }
++
+     /// Create an authorization only while its exact redeemed exchange-code claim is live.
+     ///
+     /// This locks only the exchange row and never the pending registration row. Callers that also
+@@ -1091,6 +1151,71 @@ mod tests {
+         }
+     }
+ 
++    #[tokio::test]
++    async fn test_create_bound_to_client_refuses_a_client_of_another_user() {
++        use nostr_sdk::Keys;
++        use uuid::Uuid;
++
++        let pool = setup_pool().await;
++        let repo = OAuthAuthorizationRepository::new(pool.clone());
++
++        let users = [
++            Keys::generate().public_key().to_hex(),
++            Keys::generate().public_key().to_hex(),
++        ];
++        for user in &users {
++            sqlx::query("INSERT INTO users (pubkey, tenant_id, created_at, updated_at) VALUES ($1, 1, NOW(), NOW()) ON CONFLICT (pubkey) DO NOTHING")
++                .bind(user)
++                .execute(&pool)
++                .await
++                .unwrap();
++        }
++
++        let client = Keys::generate().public_key().to_hex();
++        let params = |user: &str| CreateOAuthAuthorizationParams {
++            tenant_id: 1,
++            user_pubkey: user.to_string(),
++            redirect_origin: format!("https://bound-client-{}.example.com", Uuid::new_v4()),
++            client_id: "Bound Client".to_string(),
++            bunker_public_key: Keys::generate().public_key().to_hex(),
++            secret_hash: "$2b$10$test_hash".to_string(),
++            relays: "[]".to_string(),
++            policy_id: None,
++            is_first_party: false,
++            client_pubkey: Some(client.clone()),
++            authorization_handle: None,
++            handle_expires_at: Utc::now() + chrono::Duration::days(30),
++        };
++
++        let first = repo
++            .create_bound_to_client(params(&users[0]))
++            .await
++            .unwrap()
++            .expect("a new client key is bound");
++        let bound = repo.find(1, first).await.unwrap();
++        assert_eq!(bound.connected_client_pubkey, Some(client.clone()));
++
++        assert!(
++            repo.create_bound_to_client(params(&users[0]))
++                .await
++                .unwrap()
++                .is_some(),
++            "the same user may get another connection for the same client"
++        );
++        assert_eq!(
++            repo.create_bound_to_client(params(&users[1])).await.unwrap(),
++            None,
++            "a client key linked to one user is refused for another"
++        );
++
++        // Revoking does not free the client key for another user.
++        repo.revoke(first).await.unwrap();
++        assert_eq!(
++            repo.create_bound_to_client(params(&users[1])).await.unwrap(),
++            None
++        );
++    }
++
+     #[tokio::test]
+     async fn test_find_by_bunker_pubkey_for_tenant_isolates_tenants() {
+         use nostr_sdk::Keys;
+-- 
+2.43.0
+
