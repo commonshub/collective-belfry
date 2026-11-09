@@ -181,7 +181,7 @@ def agent_instructions(svc: Services, inv: dict[str, Any], token: str) -> str:
     who = inv.get("inviter_name") or "A member"
     relay = svc.settings.groups_relay_public_url
     accept = api_base(svc) + accept_path(token).removeprefix("/api")
-    page = f"{svc.settings.public_url.rstrip('/')}/invite/{token}"
+    page = f"{(svc.settings.console_url or svc.settings.public_url).rstrip('/')}/invite/{token}"
     return f"""# You are invited to #{channel} on {community}
 
 {who} invited you as a guest of #{channel} for {days} days. A guest reads and writes in

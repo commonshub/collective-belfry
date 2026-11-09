@@ -75,6 +75,27 @@ def base(settings: Any) -> str:
     return f"https://{d}" if d and "." in d else ""
 
 
+# apps with a host of their own (<name>.<domain>, the Caddyfile): the chat, apart from the
+# website on the apex so the website's scripts never share its origin
+OWN_HOST = ("chat",)
+
+
+def app_url(settings: Any, name: str) -> str:
+    """Where an installed app opens: https://chat.<domain>/ for the chat, else
+    https://<domain>/<name>/."""
+    d = getattr(settings, "nip05_domain", "") or ""
+    if not d or "." not in d:
+        return ""
+    return f"https://{name}.{d}/" if name in OWN_HOST else f"https://{d}/{name}/"
+
+
+def icon_url(settings: Any, a: dict[str, Any]) -> str:
+    """The app's icon (installed() gives it as /<name>/<path>)."""
+    if not a.get("icon"):
+        return ""
+    return app_url(settings, a["name"]) + a["icon"].removeprefix(f"/{a['name']}/")
+
+
 def installed(apps_dir: str) -> list[dict[str, Any]]:
     root = Path(apps_dir)
     if not root.is_dir():
@@ -137,10 +158,17 @@ def page(
     domain: str = "",
     extras_on: list[str] | None = None,
     site: str = "",
+    settings: Any = None,
 ) -> str:
     extras_on = extras_on or []
+    urls = (lambda n: app_url(settings, n)) if settings is not None else (lambda n: f"{site}/{n}/")
+    icons = (
+        (lambda a: icon_url(settings, a))
+        if settings is not None
+        else (lambda a: site + a["icon"] if a.get("icon") else "")
+    )
     mine = "".join(
-        f'<a class="app" href="{E(site)}/{E(a["name"])}/">{_icon(a, site)}'
+        f'<a class="app" href="{E(urls(a["name"]))}">{_icon({**a, "icon": icons(a)})}'
         f"<div><b>{E(a['title'])}</b><span>{E(a['about'])}</span></div></a>"
         for a in apps
     ) + "".join(
@@ -196,6 +224,7 @@ def register(app: FastAPI) -> None:
                 s.nip05_domain,
                 added(s),
                 base(s),
+                s,
             ),
             headers={"Cache-Control": "no-cache"},
         )

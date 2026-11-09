@@ -84,7 +84,7 @@ def test_a_daily_digest_of_mentions(world):
     text = msg.get_body(preferencelist=("plain",)).get_content()
     assert msg["To"] == "bob@example.org" and "1 mention on" in msg["Subject"]
     assert "Ana in #garden: Can you water the plants, @Bob?" in text
-    assert "https://belfry.test/chat/#/c/garden/m/e1" in text
+    assert "https://chat.belfry.test/#/c/garden/m/e1" in text
     assert "Weekly instead: https://pass.belfry.test/mentions/" in text
     # once a day only
     assert mentions.morning(svc, morning + dt.timedelta(hours=2)) is None

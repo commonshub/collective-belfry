@@ -231,7 +231,10 @@ def allowed_origin(settings: Any, origin: str | None, svc: Services | None = Non
     allowed = [o.strip().rstrip("/") for o in settings.api_cors_origins.split(",") if o.strip()]
     domain = getattr(settings, "nip05_domain", "") or ""
     if "." in domain:
+        from .appshome import OWN_HOST
+
         allowed.append(f"https://{domain}")
+        allowed += [f"https://{name}.{domain}" for name in OWN_HOST]  # chat.<domain>
     if "*" in allowed:
         return "*"
     if origin.rstrip("/") in allowed:

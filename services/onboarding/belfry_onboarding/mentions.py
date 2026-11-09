@@ -178,7 +178,7 @@ def _names(svc: Services, keys: set[str]) -> dict[str, str]:
 def link(svc: Services, e: dict[str, Any]) -> str:
     channel = _tag(e, "h")
     root = _tag(e, "E") if e.get("kind") == 1111 else ""
-    base = f"https://{svc.settings.nip05_domain}/chat/#/c/{channel}"
+    base = f"https://chat.{svc.settings.nip05_domain}/#/c/{channel}"
     return f"{base}/thread/{root}" if root else f"{base}/m/{e['id']}"
 
 
@@ -203,7 +203,7 @@ def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
         if p["name"]:
             names.setdefault(p["pubkey"], p["name"])
     community = theme.current().name
-    public = svc.settings.public_url.rstrip("/")
+    public = (svc.settings.console_url or svc.settings.public_url).rstrip("/")
     sent = 0
     for p in due:
         evs = [e for e in found.get(p["pubkey"], []) if e["created_at"] > p["since"]]
@@ -233,7 +233,7 @@ def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
                 f"You were mentioned {n} {'time' if n == 1 else 'times'}:",
                 *lines,
             ],
-            (f"https://{svc.settings.nip05_domain}/chat/", "Open the chat"),
+            (f"https://chat.{svc.settings.nip05_domain}/", "Open the chat"),
             footer,
             {"List-Unsubscribe": f"<{public}/mentions/{tok}?f=off>"},
         )

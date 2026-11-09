@@ -149,7 +149,8 @@ def register(app: FastAPI) -> None:
         await run_in_threadpool(
             reg.write, "belfry.pass", [made["pass_id"]], {"confirm_token": secret}
         )
-        link = f"{services.settings.public_url.rstrip('/')}/invite/{token}/confirm/{secret}"
+        base = (services.settings.console_url or services.settings.public_url).rstrip("/")
+        link = f"{base}/invite/{token}/confirm/{secret}"
         community = theme.current().name
         await run_in_threadpool(
             reg.mailer.send,
@@ -202,7 +203,7 @@ def register(app: FastAPI) -> None:
         if not row or row.get("state") != "active":
             return _page("Invite", "<h1>Not yet</h1><p>Your membership is not open yet.</p>", 409)
         if inv.get("guest_channel"):
-            chat = f"https://{services.settings.nip05_domain}/chat/#/c/{E(inv['guest_channel'])}"
+            chat = f"https://chat.{services.settings.nip05_domain}/#/c/{E(inv['guest_channel'])}"
             return _page(
                 f"Welcome to #{inv['guest_channel']}",
                 f"<h1>Welcome to #{E(inv['guest_channel'])}</h1><p>You are a guest of this channel "

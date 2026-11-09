@@ -281,10 +281,11 @@ def test_an_app_the_belfry_installed_needs_no_approval(web, tmp_path):
     (apps_dir / "chat" / "index.html").write_text("<p>chat</p>")
     (apps_dir / "_routes" / "chat.caddy").write_text("")
     services.settings.apps_dir, services.settings.nip05_domain = str(apps_dir), "belfry.test"
-    assert apps.is_approved(services, "https://belfry.test/chat/")
+    assert apps.is_approved(services, "https://chat.belfry.test/")  # the chat's own host
+    assert not apps.is_approved(services, "https://belfry.test/chat/")
     assert not apps.is_approved(services, "https://belfry.test/notes/")
     assert not apps.is_approved(services, "https://evil.example/chat/")
     assert not apps.is_approved(services, "http://belfry.test/chat/")
-    page = authorize(web, redirect_uri="https://belfry.test/chat/").text
+    page = authorize(web, redirect_uri="https://chat.belfry.test/").text
     chip = page.split('<div class="chip">')[1].split("</h1>")[0]
     assert "Sign in to /chat" in chip and "Not approved" not in chip

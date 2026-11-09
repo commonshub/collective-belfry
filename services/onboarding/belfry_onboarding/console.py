@@ -589,16 +589,12 @@ def mail_state(s: Any) -> tuple[str, str]:
 def app_tiles(svc: Services) -> str:
     from . import appshome
 
-    apps_url = appshome.base(svc.settings)
     tiles = ""
     for a in appshome.installed(svc.settings.apps_dir):
-        icon = (
-            f'<img src="{E(apps_url + a["icon"])}" alt="">'
-            if a["icon"] and apps_url
-            else f"<b>{E(a['title'][:1])}</b>"
-        )
+        src = appshome.icon_url(svc.settings, a)
+        icon = f'<img src="{E(src)}" alt="">' if src else f"<b>{E(a['title'][:1])}</b>"
         tiles += (
-            f'<a class="app" href="{E(apps_url)}/{E(a["name"])}/"><span class="ic">{icon}</span>'
+            f'<a class="app" href="{E(appshome.app_url(svc.settings, a["name"]))}"><span class="ic">{icon}</span>'
             f"<span><b>{E(a['title'])}</b><small>{E(a['about'])}</small></span></a>"
         )
     pass_url = svc.settings.public_url.rstrip("/")
@@ -1149,7 +1145,10 @@ def map_host(request: Request) -> Response | None:
             request.scope["path"] = "/api/" + path.removeprefix(API_V1 + "/")
             request.scope["raw_path"] = request.scope["path"].encode()
             return None
-        if not path.startswith(("/console", "/brand/", "/me/", "/theme/", "/static/")):
+        # invites and the mention-mail page are links people get: they live here, not on pass.
+        if not path.startswith(
+            ("/console", "/brand/", "/me/", "/theme/", "/static/", "/invite/", "/mentions/")
+        ):
             request.scope["path"] = "/console" + (path if path != "/" else "")
         return None
     if path.startswith("/console"):

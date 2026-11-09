@@ -525,7 +525,9 @@ class Register(OdooApi):
 
     # ── invites ──────────────────────────────────────────────────────────────────────────────
     def _invite_url(self, rec: dict[str, Any]) -> str:
-        return f"{self.settings.public_url.rstrip('/')}/invite/{rec.get('token', '')}"
+        # on belfry.<domain> (links people get); pass.<domain>/invite/… keeps answering
+        base = (getattr(self.settings, "console_url", "") or self.settings.public_url).rstrip("/")
+        return f"{base}/invite/{rec.get('token', '')}"
 
     def _usable(self, inv: dict[str, Any]) -> dict[str, Any]:
         if inv.get("state") == "open" and (inv.get("expires_at") or "9") < stamp():

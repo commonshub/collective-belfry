@@ -199,15 +199,15 @@ def display_name(svc: Services, uri: str) -> str:
 
 
 def own_app(svc: Services, uri: str) -> bool:
-    """An app this belfry serves itself at https://<domain>/<name>/ (`belfry app install`, the
-    chat it ships): approved by being installed, no admin decision needed."""
-    from .appshome import installed
+    """An app this belfry serves itself (`belfry app install`): https://<domain>/<name>/, or
+    https://chat.<domain>/ for the chat it ships: approved by being installed."""
+    from .appshome import app_url, installed
 
     u = urllib.parse.urlsplit(uri)
-    if u.scheme != "https" or u.netloc != svc.settings.nip05_domain or u.query or u.fragment:
+    if u.scheme != "https" or u.query or u.fragment:
         return False
     names = {a["name"] for a in installed(getattr(svc.settings, "apps_dir", "") or "")}
-    return any(u.path == f"/{n}/" for n in names)
+    return any(uri == app_url(svc.settings, n) for n in names)
 
 
 def is_approved(svc: Services, uri: str) -> bool:

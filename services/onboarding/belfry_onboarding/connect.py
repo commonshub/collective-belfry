@@ -317,6 +317,8 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
     u = urllib.parse.urlsplit(f["uri"])
     if u.netloc in (domain, f"apps.{domain}") and u.path.rstrip("/"):
         addr = u.path.rstrip("/")
+    elif u.netloc.endswith("." + domain) and u.path in ("", "/") and apps.own_app(svc, f["uri"]):
+        addr = "/" + u.netloc.removesuffix("." + domain)  # chat.<domain> → /chat
     if name == apps.address(f["uri"]):  # approved without a name of its own
         name = ""
     label = apps.app_name(name, "") or addr

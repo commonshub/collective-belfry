@@ -146,13 +146,12 @@ def listed_apps(settings: Any) -> list[tuple[str, str, str]]:
     (OSV_APPS=1), otherwise the apps installed at <domain>/<name>/ (appshome.py)."""
     if getattr(settings, "osv_apps", False):
         return community_apps(os.environ.get("COMMUNITY_APPS", ""))
-    from .appshome import base, installed
+    from .appshome import app_url, base, installed
 
-    site = base(settings)
-    if not site:
+    if not base(settings):
         return []
     return [
-        (a["title"], f"{site}/{a['name']}/", a["about"])
+        (a["title"], app_url(settings, a["name"]), a["about"])
         for a in installed(getattr(settings, "apps_dir", "") or "")
     ]
 

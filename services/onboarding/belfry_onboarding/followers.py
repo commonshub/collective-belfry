@@ -143,11 +143,11 @@ _names: dict[str, tuple[float, str]] = {}
 
 
 def chat_link(svc: Services, channel: str) -> str:
-    """Where a channel opens in the community's chat (<domain>/chat, ``#/c/<id>``)."""
+    """Where a channel opens in the community's chat (chat.<domain>, ``#/c/<id>``)."""
     if svc.settings.osv_apps:  # Open Source Village's chat (Coracle) on chat.<domain>
         return svc.settings.chat_public_url or ""
     host = svc.settings.nip05_domain or domain(svc)
-    return f"https://{host}/chat/#/c/{urllib.parse.quote(channel, safe='')}"
+    return f"https://chat.{host}/#/c/{urllib.parse.quote(channel, safe='')}"
 
 
 def channel_label(svc: Services, channel: str) -> str:

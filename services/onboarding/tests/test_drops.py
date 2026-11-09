@@ -125,7 +125,7 @@ def test_anonymous_upload_then_a_name_then_a_member(web, relay, services, monkey
     link(relay)
     page = web.get(f"/drop/{TOKEN}").text
     assert "Upload as a guest" in page and 'type="email"' in page and 'type="file"' not in page
-    assert 'href="https://belfry.test/chat/#/c/garden"' in page
+    assert 'href="https://chat.belfry.test/#/c/garden"' in page
     page = web.get(f"/drop/{TOKEN}", params={"as": "guest"}).text
     assert "Send files to" in page and 'type="file"' in page
     assert web.get(f"/drop/{TOKEN}/qr.svg").headers["content-type"].startswith("image/svg")

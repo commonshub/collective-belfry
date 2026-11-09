@@ -58,7 +58,7 @@ def test_a_guest_of_one_channel_end_to_end(rsvc, published):
         link = re.search(r"https?://\S+/confirm/\S+", text).group(0)
         done = c.get("/" + link.split("://", 1)[1].split("/", 1)[1])
         assert done.status_code == 200 and "Welcome to #garden" in done.text
-        assert "/chat/#/c/garden" in done.text
+        assert f"https://chat.{rsvc.settings.nip05_domain}/#/c/garden" in done.text
     inv = reg.invite_by_token(token)
     p = reg.read_one(
         "belfry.pass", inv["pass_id"], ["state", "tier", "date_end", "keycast_pubkey", "partner_id"]

@@ -314,11 +314,27 @@ blossom.{$BELFRY_DOMAIN} {
 # blossom. directly (infra/apps/chat/README.md).
 chat.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app https://{$BELFRY_DOMAIN}/chat/ coracle
-	# Coracle's own <meta> policy applies as well (both must allow). Participants may add other
-	# relays and look up NIP-05 names elsewhere, so connections stay open to any https/wss host.
-	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
-	reverse_proxy chat:80
+	# Open Source Village's Coracle (OSV_APPS=1), else the belfry's own chat (infra/shipped-apps/
+	# chat, installed in infra/data/apps/chat): its own origin, apart from the website on the apex
+	@coracle expression `{$OSV_APPS:1} == 1`
+	handle @coracle {
+		# Coracle's own <meta> policy applies as well (both must allow). Participants may add other
+		# relays and look up NIP-05 names elsewhere, so connections stay open to any https/wss host.
+		import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
+		reverse_proxy chat:80
+	}
+	# the community's look (theme folder) for the chat too
+	handle /theme/* {
+		reverse_proxy onboarding:8100
+	}
+	handle {
+		import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https://*.{$BELFRY_DOMAIN} wss://*.{$BELFRY_DOMAIN} https://{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+		@fresh path / /index.html /sw.js
+		header @fresh Cache-Control "no-cache"
+		root * /srv/apps/chat
+		try_files {path} /index.html
+		file_server
+	}
 }
 
 # Village token mint (Cashu, no monetary value): wallets swap, read keys and check states; only

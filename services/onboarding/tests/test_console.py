@@ -439,8 +439,8 @@ def test_apps_home_lists_the_installed_apps(web, belfry, tmp_path):
     r = web.get("/apps-home", headers={"Host": "apps.belfry.test"})
     assert r.status_code == 200
     # served from the community's domain: one origin for all its apps
-    assert 'href="https://belfry.test/chat/"' in r.text
-    assert 'src="https://belfry.test/chat/icons/icon-192.png"' in r.text
+    assert 'href="https://chat.belfry.test/"' in r.text
+    assert 'src="https://chat.belfry.test/icons/icon-192.png"' in r.text
     assert "Chat" in r.text and "&lt;b&gt;Notes" in r.text and "https://x.org" not in r.text
     assert "/gone/" not in r.text and "Open Source Village" not in r.text
 

@@ -705,6 +705,22 @@ reload_proxy() {
 }
 app_route() {
   local name=$1
+  if [[ "$name" == chat ]]; then  # the chat has its own host, chat.<domain> (Caddyfile)
+    local kill="self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil((async()=>{for(const k of await caches.keys())await caches.delete(k);await self.registration.unregister();for(const c of await self.clients.matchAll({type:'window'}))c.navigate(c.url)})()));"
+    printf '%s\n' \
+      "# <domain>/chat: the chat lives at chat.<domain>; written by 'belfry app install chat'." \
+      "redir /chat https://chat.{\$BELFRY_DOMAIN}/ 302" \
+      "# the copy a phone kept of <domain>/chat/ empties itself and unregisters (then the redirect)" \
+      "handle /chat/sw.js {" \
+      "	header Content-Type \"text/javascript; charset=utf-8\"" \
+      "	header Cache-Control \"no-store\"" \
+      "	respond \`$kill\` 200" \
+      "}" \
+      "handle_path /chat/* {" \
+      "	redir https://chat.{\$BELFRY_DOMAIN}{uri} 302" \
+      "}"
+    return
+  fi
   local csp="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https://*.{\$BELFRY_DOMAIN} wss://*.{\$BELFRY_DOMAIN} https://{\$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
   printf '%s\n' \
     "# <domain>/$name/: written by 'belfry app install $name'; do not edit." \
