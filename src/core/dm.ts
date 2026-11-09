@@ -130,6 +130,12 @@ async function load() {
   // mail stored before threads: one conversation per address → one per subject
   const waiting = new Set(outboxItems().map((o) => o.dm).filter(Boolean))
   for (const d of items.values()) if (d.pending && !waiting.has(d.rid)) d.pending = false
+  // sent by an older version, which kept no copy: stuck at "Sending…" with nothing left to send
+  for (const d of items.values()) {
+    const r = d.emailId ? reports.get(d.emailId) : undefined
+    if (d.mine && d.kind === 1301 && r?.status === 'queued' && r.details === 'Sending…' && !waiting.has(d.rid))
+      reports.set(d.emailId!, { status: 'failed', details: 'it never left this device (an older version of the app). Send it again.' })
+  }
   for (const d of items.values()) {
     if (!isNewMail(d.conv)) continue
     const conv = mailThreadOf(mailAddress(d.conv), d.subject)
