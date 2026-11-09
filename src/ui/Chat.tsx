@@ -309,6 +309,33 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const rx = reactions(id)
   const th = threadsOf(id)
   const joins = topic ? [] : guestJoins(id)
+  // threads unfold in place (no screen of their own): keyed by root id, or "act:<root>" for a
+  // thread that resurfaced lower in the feed because someone replied to an older message
+  const [openThreads, setOpenThreads] = useState<Set<string>>(new Set())
+  const [replyTo, setReplyTo] = useState<string | null>(null)
+  useEffect(() => { setOpenThreads(new Set()); setReplyTo(null) }, [id])
+  const toggle = (key: string, open?: boolean) => setOpenThreads((s) => {
+    const n = new Set(s)
+    const on = open ?? !n.has(key)
+    if (on) n.add(key); else n.delete(key)
+    return n
+  })
+  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number }
+  const items: Item[] = []
+  for (const m of list) items.push({ t: 'msg', m, at: m.ev.created_at })
+  for (const j of joins) items.push({ t: 'join', j, at: j.at })
+  if (!topic) {
+    // an old thread resurfaces where its latest reply came, once other messages followed it
+    for (const [rootId, info] of th) {
+      const root = list.find((m) => m.ev.id === rootId)
+      if (!root) continue
+      const later = list.some((m) => m.ev.created_at > root.ev.created_at && m.ev.created_at < info.last)
+      if (!later) continue
+      const last = threadReplies(id, rootId).at(-1)
+      if (last) items.push({ t: 'act', root, last, at: info.last })
+    }
+  }
+  items.sort((a, b) => a.at - b.at || (a.t === 'msg' ? -1 : 1))
   const gkey = knownGroupsKey()
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
@@ -348,15 +375,26 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
                 <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
               </div>)}
           {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
-          {list.length === 0 && joins.map((j) => <JoinLine key={j.id} j={j} />)}
-          {list.map((m, i) => <Fragment key={m.ev.id}>
-            {joins.filter((j) => j.at < m.ev.created_at && j.at >= (list[i - 1]?.ev.created_at ?? -1)).map((j) => <JoinLine key={j.id} j={j} />)}
-            <Row m={m} prev={joins.some((j) => j.at < m.ev.created_at && j.at >= (list[i - 1]?.ev.created_at ?? -1)) ? undefined : list[i - 1]} groupId={id}
-            name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
-            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-            thread={th.get(m.ev.id)} onThread={() => openThread(m)} inbox={inbox} />
-          </Fragment>)}
-          {list.length > 0 && joins.filter((j) => j.at >= list[list.length - 1].ev.created_at).map((j) => <JoinLine key={j.id} j={j} />)}
+          {items.map((it, i) => {
+            if (it.t === 'join') return <JoinLine key={'j' + it.j.id} j={it.j} />
+            if (it.t === 'act') {
+              const key = 'act:' + it.root.ev.id
+              return <Fragment key={key}>
+                <ThreadActivity root={it.root} last={it.last} onOpen={() => toggle(key)} open={openThreads.has(key)} />
+                {openThreads.has(key) && <InlineThread groupId={id} root={it.root} focus={replyTo === key} onHide={() => toggle(key)} />}
+              </Fragment>
+            }
+            const m = it.m
+            const prevItem = items[i - 1]
+            const key = m.ev.id
+            return <Fragment key={key}>
+              <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
+                name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
+                reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
+                thread={th.get(m.ev.id)} onThread={() => toggle(key)} threadOpen={openThreads.has(key)} inbox={inbox} />
+              {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} />}
+            </Fragment>
+          })}
         </div>
       </div>
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
@@ -365,7 +403,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
-        thread={th.get(acting.ev.id)} onThread={() => openThread(acting)} />}
+        thread={th.get(acting.ev.id)} onReply={() => { toggle(acting.ev.id, true); setReplyTo(acting.ev.id) }} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
   )
@@ -409,7 +447,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, threadOpen = false, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -464,9 +502,9 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
             </div>
           )}
           {thread && thread.count > 0 && onThread && (
-            <button className="thread-chip" onClick={onThread}>
+            <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
               <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
-              {thread.count} {thread.count === 1 ? 'reply' : 'replies'}<time>{fmtTime(thread.last)}</time>
+              {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}<time>{fmtTime(thread.last)}</time>
             </button>
           )}
           {p && p.status === 'failed' && (
@@ -487,7 +525,7 @@ const MORE_EMOJIS = [
   '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
 ]
 
-function MessageActions({ m, groupId, mine, onClose, thread, onThread }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void }) {
+function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void }) {
   const [more, setMore] = useState(false)
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
@@ -505,6 +543,11 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread }: { m: Me
           {MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
         </div>
       )}
+      {onReply && (
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); onReply() }}>
+          {thread?.count ? `Reply in the thread (${thread.count} ${thread.count === 1 ? 'reply' : 'replies'})` : 'Reply (starts a thread)'}
+        </button>
+      )}
       {onThread && (
         <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); onThread() }}>
           {thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'}
@@ -519,7 +562,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread }: { m: Me
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message', canAnnounce = false, announcing = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -527,6 +570,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
   const [files, setFiles] = useState<File[]>([])
   const ta = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
+  useEffect(() => { if (autoFocus) ta.current?.focus({ preventScroll: false }) }, [autoFocus])
   const previews = useMemo(() => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : '')), [files])
   useEffect(() => () => previews.forEach((u) => u && URL.revokeObjectURL(u)), [previews])
 
@@ -577,7 +621,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
   }
 
   return (
-    <div className="composer">
+    <div className={'composer' + (compact ? ' compact' : '')}>
       {canAnnounce && ann && (
         <div className="announce-mode">
           <span>📣 Announcement: sent to the channel and e-mailed to its followers</span>
@@ -640,5 +684,47 @@ function JoinLine({ j }: { j: GuestJoin }) {
       <span><b>{displayName(j.pubkey)}</b> joined as a guest{j.by ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
       <time>{fmtTime(j.at)}</time>
     </div>
+  )
+}
+
+/** A thread unfolded under its message: the latest replies, earlier ones on demand, a reply box. */
+function InlineThread({ groupId, root, focus, onHide }: { groupId: string; root: Message; focus: boolean; onHide: () => void }) {
+  useVersion()
+  const replies = threadReplies(groupId, root.ev.id)
+  const [all, setAll] = useState(false)
+  const shown = all ? replies : replies.slice(-3)
+  const hidden = replies.length - shown.length
+  return (
+    <div className="inline-thread" role="region" aria-label="Thread">
+      {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
+      {shown.map((r) => (
+        <div key={r.ev.id} className={'thread-reply' + (r.ev.pending ? ' pending' : '')}>
+          <Avatar pubkey={r.ev.pubkey} size={24} />
+          <div className="body">
+            <div className="who">{displayName(r.ev.pubkey)}<time>{fmtTime(r.ev.created_at)}</time></div>
+            {r.text && <RichText text={r.text} groupId={groupId} />}
+            <MediaGrid media={r.media} />
+          </div>
+        </div>
+      ))}
+      <Composer placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
+        onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
+      <button className="link thread-hide" onClick={onHide}>Hide</button>
+    </div>
+  )
+}
+
+/** An older thread, back in the feed where its latest reply came. */
+function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Message; open: boolean; onOpen: () => void }) {
+  const snip = (root.text || (root.media.length ? 'a photo' : '')).replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 80)
+  return (
+    <button className={'thread-activity' + (open ? ' open' : '')} onClick={onOpen} aria-expanded={open}>
+      <span className="curve" aria-hidden="true" />
+      <span className="t">
+        <small>{displayName(last.ev.pubkey)} replied to {displayName(root.ev.pubkey)}: “{snip}{root.text.length > 80 ? '…' : ''}”</small>
+        <span className="reply">{(last.text || 'a photo').replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 140)}</span>
+      </span>
+      <time>{fmtTime(last.ev.created_at)}</time>
+    </button>
   )
 }

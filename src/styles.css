@@ -602,3 +602,26 @@ a.chip { text-decoration: none; color: inherit; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
 .btn.small { width: auto; padding: 8px 16px; font-size: 14px; }
+
+/* ---- threads unfold in place; an older thread resurfaces where its latest reply came ---- */
+.thread-chip.open { background: var(--surface); }
+.inline-thread { margin: 0 12px 10px 58px; padding: 6px 0 6px 12px; border-left: 2px solid var(--line); }
+.thread-reply { display: flex; gap: 8px; padding: 6px 0; }
+.thread-reply.pending { opacity: 0.6; }
+.thread-reply .body { flex: 1; min-width: 0; }
+.thread-reply .who { font-size: 13px; font-weight: 600; display: flex; gap: 6px; align-items: baseline; }
+.thread-reply .who time { font-weight: 400; font-size: 11px; color: var(--faint); }
+.thread-reply .text { font-size: 15px; }
+.thread-more, .thread-hide { font-size: 13px; color: var(--muted); background: none; border: 0; padding: 4px 0; }
+.thread-hide { margin-top: 2px; }
+.composer.compact { position: static; border: 0; padding: 6px 0 0; background: none; }
+.composer.compact .bar { gap: 6px; }
+.composer.compact textarea { font-size: 15px; }
+.thread-activity { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 4px 12px; padding: 8px 10px 8px 46px;
+  position: relative; text-align: left; background: none; border: 0; border-radius: 10px; color: var(--text); }
+.thread-activity:hover, .thread-activity.open { background: var(--surface); }
+.thread-activity .curve { position: absolute; left: 22px; top: 2px; width: 16px; height: 14px; border-left: 2px solid var(--line); border-top: 2px solid var(--line); border-top-left-radius: 8px; }
+.thread-activity .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.thread-activity small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-activity .reply { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-activity time { font-size: 11px; color: var(--faint); white-space: nowrap; }
