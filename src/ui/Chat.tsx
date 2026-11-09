@@ -1,9 +1,9 @@
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, channelIcon, group, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
@@ -305,6 +305,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const ps = profiles()
   const rx = reactions(id)
   const th = threadsOf(id)
+  const joins = topic ? [] : guestJoins(id)
   const gkey = knownGroupsKey()
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
@@ -336,10 +337,15 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
           {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi.'}</div>}
-          {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} groupId={id}
+          {list.length === 0 && joins.map((j) => <JoinLine key={j.id} j={j} />)}
+          {list.map((m, i) => <Fragment key={m.ev.id}>
+            {joins.filter((j) => j.at < m.ev.created_at && j.at >= (list[i - 1]?.ev.created_at ?? -1)).map((j) => <JoinLine key={j.id} j={j} />)}
+            <Row m={m} prev={joins.some((j) => j.at < m.ev.created_at && j.at >= (list[i - 1]?.ev.created_at ?? -1)) ? undefined : list[i - 1]} groupId={id}
             name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
             reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-            thread={th.get(m.ev.id)} onThread={() => openThread(m)} inbox={inbox} />)}
+            thread={th.get(m.ev.id)} onThread={() => openThread(m)} inbox={inbox} />
+          </Fragment>)}
+          {list.length > 0 && joins.filter((j) => j.at >= list[list.length - 1].ev.created_at).map((j) => <JoinLine key={j.id} j={j} />)}
         </div>
       </div>
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
@@ -571,6 +577,17 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
           {onPod && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onPod() }}>⬡ A pod (working group)</button></>}
         </Sheet>
       )}
+    </div>
+  )
+}
+
+/** "<name> joined as a guest, invited by <inviter>" (guests.py), a line in the feed. */
+function JoinLine({ j }: { j: GuestJoin }) {
+  return (
+    <div className="join-line" role="note">
+      <span className="arrow" aria-hidden="true">→</span>
+      <span><b>{displayName(j.pubkey)}</b> joined as a guest{j.by ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
+      <time>{fmtTime(j.at)}</time>
     </div>
   )
 }

@@ -6,6 +6,7 @@ import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, 
 import { ACTIVE_DAYS, channelIcon, displayName, groups, memberLabels, messages, recentlyActive, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
+import { InviteSheet } from './Invite'
 import { me } from '../core/sync'
 import { Avatar, back, fmtTime, go, MediaGrid, Sheet } from './common'
 import { AccessFields } from './Chat'
@@ -58,6 +59,8 @@ function About({ id }: { id: string }) {
   const [name, setName] = useState(g?.name ?? '')
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
+  const [openMail, setOpenMail] = useState(false)
+  const [inviting, setInviting] = useState(false)
   if (!g) return null
   return (
     <div className="pad">
@@ -88,21 +91,32 @@ function About({ id }: { id: string }) {
       {g.isPod && (g.members.has(me())
         ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
         : !g.closed && <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
-      {(g.admins.has(me()) || isInbox(g)) && (
-        <div className="card">
-          <div className="hint">Shared inbox</div>
-          <div>{isInbox(g) ? <>On: e-mails from anyone to <b>{g.id}@{BELFRY.domain}</b> land here as cards; the channel's admins answer as the channel.</> : <>Off: only members can e-mail <b>{g.id}@{BELFRY.domain}</b>, and their mail shows as their message.</>}</div>
-          {g.admins.has(me()) && <button className="btn ghost" style={{ marginTop: 10 }} onClick={() => void setInbox(id, !isInbox(g))}>{isInbox(g) ? 'Turn the shared inbox off' : 'Turn it into a shared inbox'}</button>}
-        </div>
-      )}
-      <button className="btn ghost" onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setEditing(true) }}>{g.isPod ? 'Edit the pod' : 'Edit name and description'}</button>
+      <div className="card">
+        <div className="hint">E-mail</div>
+        <div>{isInbox(g) ? <>Anyone can e-mail <b>{g.id}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{g.id}@{BELFRY.domain}</b>: their mail shows as their message.</>}</div>
+      </div>
+      <div className="row" style={{ gap: 8 }}>
+        <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
+        {g.admins.has(me()) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setEditing(true) }}>Settings</button>}
+      </div>
+      {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
-        <Sheet title="Edit channel" onClose={() => setEditing(false)}>
-          <form onSubmit={async (e) => { e.preventDefault(); await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim())); setEditing(false) }}>
+        <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={() => setEditing(false)}>
+          <form onSubmit={async (e) => {
+            e.preventDefault()
+            if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
+              await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
+            if (openMail !== isInbox(g)) await setInbox(id, openMail)
+            setEditing(false)
+          }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
             {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
+            <label className="switch-row">
+              <span><b>E-mails from anyone</b><small>Mail to {g.id}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
+              <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
+            </label>
             <button className="btn" disabled={!name.trim()}>Save</button>
           </form>
         </Sheet>

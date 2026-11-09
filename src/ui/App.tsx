@@ -7,7 +7,7 @@ import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, ma
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
-import { loadAll, outboxItems, status, useVersion } from '../core/store'
+import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
@@ -90,7 +90,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -235,4 +235,11 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
       </div>
     </div>
   )
+}
+
+/** Demo only: someone joins CHANNEL as a guest invited by you (what Belfry publishes, guests.py). */
+function demoGuestJoin(channel: string, name: string) {
+  const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
+    tags: [['h', channel], ['p', hex(32), 'member'], ['invited-by', me()], ['name', name], ['guest', '']] }])
 }

@@ -32,7 +32,10 @@ export interface Profile { name?: string; picture?: string; nip05?: string }
 
 export function profiles(): Map<string, Profile> {
   const out = new Map<string, Profile & { at: number }>()
+  const guests: [string, string][] = []
   for (const e of all(me())) {
+    // a guest's name, from the event that put them in a channel (guests.py), until a profile
+    if (e.kind === 9000 && tag(e, 'name')) { const p = tag(e, 'p'); if (p) guests.push([p, tag(e, 'name')!.slice(0, 100)]) }
     if (e.kind !== 0) continue
     const prev = out.get(e.pubkey)
     if (prev && prev.at >= e.created_at) continue
@@ -41,6 +44,7 @@ export function profiles(): Map<string, Profile> {
       out.set(e.pubkey, { name: p.display_name || p.name, picture: p.picture, nip05: p.nip05, at: e.created_at })
     } catch { /* bad profile json */ }
   }
+  for (const [pk, name] of guests) if (!out.get(pk)?.name) out.set(pk, { ...out.get(pk), name, at: out.get(pk)?.at ?? 0 })
   return out
 }
 
@@ -598,4 +602,16 @@ export function mySeen(groupId: string): number {
   let at = 0
   for (const e of all(me())) if (e.kind === 30078 && e.pubkey === me() && tag(e, 'd') === seenD(groupId) && tag(e, 'h') === groupId) at = Math.max(at, e.created_at)
   return at
+}
+
+/** Who joined a channel as its guest (kind 9000 from Belfry with `invited-by`, guests.py). */
+export interface GuestJoin { id: string; pubkey: string; by?: string; at: number }
+export function guestJoins(groupId: string): GuestJoin[] {
+  const out: GuestJoin[] = []
+  for (const e of all(me())) {
+    if (e.kind !== 9000 || tag(e, 'h') !== groupId || !e.tags.some((t) => t[0] === 'invited-by' || t[0] === 'guest')) continue
+    const p = tag(e, 'p')
+    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at })
+  }
+  return out.sort((a, b) => a.at - b.at)
 }

@@ -10,7 +10,7 @@ import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, se
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
 
-export const KINDS_GROUPS = [39000, 39001, 39002, 9, 1111, 7, 9007, 9002, 9008, 9000, 9001, 9005, 9021, 9022, 1068, 1018, 5, 1985, 30078, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
+export const KINDS_GROUPS = [0, 39000, 39001, 39002, 9, 1111, 7, 9007, 9002, 9008, 9000, 9001, 9005, 9021, 9022, 1068, 1018, 5, 1985, 30078, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
 export const KINDS_MAIN = [0, 31922, 31923, 31925, 30023, 5]
 
 const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.mainRelay }
@@ -303,7 +303,9 @@ function resubscribe(target: Target) {
     },
     onclose: (reason) => {
       if (reason.startsWith('auth-required')) return // _onauth resubscribes
-      noteRefusal(reason)
+      // only the groups relay decides whether you're in: a channel's guest is in there, while
+      // the community relay (members only) turns them away
+      if (target === 'groups') noteRefusal(reason)
     },
   })
 }
