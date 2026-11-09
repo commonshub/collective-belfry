@@ -103,8 +103,10 @@ def _npub(pubkey: str) -> str:
     return hex_to_npub(pubkey)
 
 
-GUEST_MAX = 50  # people per guest link
-GUEST_LINK_DAYS = 7  # how long a guest link works
+GUEST_MAX = 50  # the most people a guest link can be made for
+GUEST_LINK_DAYS = 30  # the longest a guest link can work
+GUEST_MAX_DEFAULT = 1  # a link is for one person…
+GUEST_LINK_DAYS_DEFAULT = 1  # …and works for a day, unless its maker asks for more
 
 
 class Register(OdooApi):
@@ -612,10 +614,19 @@ class Register(OdooApi):
         return self._invite_row(self._get("belfry.invite", inv_id))
 
     def create_guest_invite(
-        self, partner_id: int, inviter_pubkey: str, channel: str, days: int
+        self,
+        partner_id: int,
+        inviter_pubkey: str,
+        channel: str,
+        days: int,
+        people: int = GUEST_MAX_DEFAULT,
+        link_days: int = GUEST_LINK_DAYS_DEFAULT,
     ) -> dict[str, Any]:
-        """A link that makes its user a guest of CHANNEL for DAYS days (guests.py)."""
+        """A link that makes its user a guest of CHANNEL for DAYS days (guests.py). It is for
+        PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked)."""
         partner = self._member(partner_id, "Only members can invite guests.")
+        people = max(1, min(GUEST_MAX, int(people)))
+        link_days = max(1, min(GUEST_LINK_DAYS, int(link_days)))
         inv_id = self._create(
             "belfry.invite",
             {
@@ -625,10 +636,9 @@ class Register(OdooApi):
                 "guest_channel": channel,
                 "guest_days": int(days),
                 "guest_inviter": inviter_pubkey,
-                # a QR shown to a room: up to GUEST_MAX people, for GUEST_LINK_DAYS days
-                "guest_max": GUEST_MAX,
+                "guest_max": people,
                 "guest_uses": 0,
-                "expires_at": stamp(now() + dt.timedelta(days=GUEST_LINK_DAYS)),
+                "expires_at": stamp(now() + dt.timedelta(days=link_days)),
             },
         )
         return self._invite_row(self._get("belfry.invite", inv_id))
@@ -832,6 +842,80 @@ class Register(OdooApi):
                 "channel": inv["guest_channel"],
                 "days": days,
             }
+
+    def join_existing(self, token: str, pubkey: str) -> dict[str, Any]:
+        """Someone who has an account (an active pass of PUBKEY) uses a guest invite: no second
+        account. A member needs nothing here (guests.py puts them in the channel); a guest gets
+        one more guest pass, for this channel, on their own contact. Returns ``{"kind":
+        "member" | "guest" | "already", "channel", "partner_id", "pass_id"?}``; None when the key
+        holds no active pass."""
+        with self._lock:
+            mine = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+            ]
+            if not mine:
+                return None
+            inv = next((i for i in self._all("belfry.invite") if i.get("token") == token), None)
+            if inv is None or not inv.get("guest_channel"):
+                raise _user_error("This is not a guest invite.")
+            channel = inv["guest_channel"]
+            pid = mine[0].get("partner_id")
+            member = any(p.get("tier") != "guest" for p in mine)
+            if not member and any(p.get("guest_channel") == channel for p in mine):
+                return {"kind": "already", "channel": channel, "partner_id": pid}
+            inv = self._usable(inv)
+            if inv["state"] != "open":
+                # a member may be in the channel already (guests.py looks): say why only then
+                return {
+                    "kind": "closed",
+                    "channel": channel,
+                    "partner_id": pid,
+                    "state": inv["state"],
+                }
+            if member:
+                return {
+                    "kind": "member",
+                    "channel": channel,
+                    "partner_id": pid,
+                    "invite_id": inv["id"],
+                }
+            days = int(inv.get("guest_days") or 30)
+            today = now().date()
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "partner_id": pid,
+                    "tier": "guest",
+                    "invite_id": inv["id"],
+                    "guest_channel": channel,
+                    "guest_days": days,
+                    "guest_inviter": inv.get("guest_inviter") or "",
+                    "guest_agent": bool(mine[0].get("guest_agent")),
+                    "keycast_pubkey": pubkey,
+                    "own_pubkey": mine[0].get("own_pubkey") or False,
+                    "date_start": today.isoformat(),
+                    "date_end": (today + dt.timedelta(days=days)).isoformat(),
+                },
+            )
+            self._write("belfry.pass", [pass_id], {"state": "active"})  # counts the use
+            return {"kind": "guest", "channel": channel, "partner_id": pid, "pass_id": pass_id}
+
+    def _count_guest_use(self, invite_id: int) -> None:
+        inv = self._get("belfry.invite", invite_id)
+        if not inv:
+            return
+        uses = int(inv.get("guest_uses") or 0) + 1
+        vals: dict[str, Any] = {"guest_uses": uses}
+        if uses >= int(inv.get("guest_max") or 1):
+            vals["state"] = "used"
+        self._write("belfry.invite", [inv["id"]], vals)
+
+    def count_guest_use(self, invite_id: int) -> None:
+        """A member used a guest invite to join its channel (no pass is made for that)."""
+        with self._lock:
+            self._count_guest_use(int(invite_id))
 
     def save_guest_email(self, pubkey: str, email: str, code: str) -> dict[str, Any]:
         """The guest proves EMAIL with the code mailed to it (belfry_key_code_send for their key)

@@ -3,9 +3,15 @@
 - A member asks for a link in the chat
   (``POST /api/channel-invites``, NIP-98: ``{"channel"}``). It is an invite of the belfry's own
   register (register.py) that carries the channel, the number of days and the inviter's key.
-- The invite page (invite.py) says what it is; the guest gives a name and an e-mail address and
-  confirms it. The pass that opens is of tier ``guest`` and ends after the days (core.py), so
-  sign-in (connect.py) works as for members, and the usual expiry closes it.
+  It is for one person and works for a day unless the member asks for more (``"people"`` up to
+  50, ``"link_days"`` up to 30). The link is ``https://chat.<domain>/join/<token>``.
+- The chat (or the phone app) opens the link, shows what it is
+  (``GET /api/channel-invites/<token>``) and joins with ONE signed request
+  (``POST /api/channel-invites/<token>/join``, NIP-98), whoever is asking:
+  the key of an account (member or guest) → that account gets the channel, no second account;
+  a key nobody knows, with a name → a new guest: a contact, a guest pass, an account in the
+  signer and its session, handed back in the answer. No e-mail, no code.
+  The pass is of tier ``guest`` and ends after the days (core.py); the usual expiry closes it.
 - ``admitted``: the groups key puts the guest in the channel (kind 9000, ``invited-by`` the
   inviter, the guest's ``name``); the chat shows "<name> joined as a guest, invited by <inviter>".
   The groups relay (zooid patch 0002, ``[groups] guests = true``) lets a key that is in a group
@@ -115,6 +121,21 @@ def may_invite(svc: Services, pubkey: str, channel: str, steward: bool) -> bool:
     return True
 
 
+def join_url(svc: Services, token: str) -> str:
+    """Where a guest link leads: the chat's own host, so the browser (or the phone app, as a
+    universal link) that will hold the session is the one that asks to join."""
+    return f"https://chat.{svc.settings.nip05_domain}/join/{token}"
+
+
+def _option(data: Any, key: str, default: int, allowed: tuple[int, ...]) -> int:
+    from .holder_invites import ApiError
+
+    value = data.get(key, default) if isinstance(data, dict) else default
+    if isinstance(value, bool) or not isinstance(value, int) or value not in allowed:
+        raise ApiError(422, "invalid", f"{key}: one of {', '.join(map(str, allowed))}")
+    return value
+
+
 def register(app: FastAPI) -> None:
     register_agent_routes(app)
     register_join_routes(app)
@@ -154,14 +175,33 @@ def register(app: FastAPI) -> None:
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
             raise ApiError(403, "not_allowed", "You can't invite guests here.")
+        people, link_days = (
+            _option(data, "people", 1, (1, 50)),
+            _option(data, "link_days", 1, (1, 7, 30)),
+        )
         try:
             row = await run_in_threadpool(
-                s.odoo.create_guest_invite, who["partner_id"], pubkey, channel, DAYS
+                s.odoo.create_guest_invite,
+                who["partner_id"],
+                pubkey,
+                channel,
+                DAYS,
+                people,
+                link_days,
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
+        token = str(row["url"]).rsplit("/", 1)[-1]
         return JSONResponse(
-            {"url": row["url"], "days": DAYS, "expires_at": row.get("expires_at") or None},
+            {
+                "url": join_url(s, token),
+                # what an agent reads: how to join with its own key
+                "agent_url": row["url"] + ".md",
+                "days": DAYS,
+                "people": people,
+                "link_days": link_days,
+                "expires_at": row.get("expires_at") or None,
+            },
             headers={"Cache-Control": "no-store"},
         )
 
@@ -186,13 +226,13 @@ def agent_instructions(svc: Services, inv: dict[str, Any], token: str) -> str:
     who = inv.get("inviter_name") or "A member"
     relay = svc.settings.groups_relay_public_url
     accept = api_base(svc) + accept_path(token).removeprefix("/api")
-    page = f"{(svc.settings.console_url or svc.settings.public_url).rstrip('/')}/invite/{token}"
+    page = join_url(svc, token)
     return f"""# You are invited to #{channel} on {community}
 
 {who} invited you as a guest of #{channel} for {days} days. A guest reads and writes in
 #{channel} only. Everyone there sees that {who} invited you.
 
-- **A person?** Open {page} in a browser: name, e-mail, one click in the mail.
+- **A person?** Open {page} in a browser: your name, and you are in.
 - **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed.
 
 ## 1. Your key
@@ -290,21 +330,31 @@ def register_agent_routes(app: FastAPI) -> None:
         )
 
 
-# ── a person joins with a name only: an account at once, an e-mail later ────────────────────
-# The invite page asks a name; the belfry makes the guest's contact, a guest pass, an account in
-# the signer (a derived key, like every member's, recoverable) and a session for the chat. The
-# chat gets that session through a one-time code (chat.<domain>/#/welcome/<code>) and binds it to
-# its own client key the first time it connects (NIP-46), so only that browser can use it. Saving
-# the account later (an e-mail and the code mailed to it) is signed with the guest's identity
-# through that session: nobody else can claim the account.
-HANDOFF_SECONDS = 120
-_handoffs: dict[str, tuple[float, dict[str, Any]]] = {}
+# ── joining with a guest link: one signed request, whoever asks ─────────────────────────────
+# A new person: the chat makes its session key, signs the request with it and sends a name. The
+# belfry makes the guest's contact, a guest pass, an account in the signer (a derived key, like
+# every member's, recoverable) and a session, and answers with that session; the chat binds it to
+# its key the moment it connects (NIP-46). Saving the account later (an e-mail and the code mailed
+# to it) is signed with the guest's identity through that session: nobody else can claim it.
+# Someone with an account signs with that account instead and gets the channel on it.
 
 
-def join(svc: Services, token: str, name: str) -> str:
-    """Make the guest and their session; returns the one-time code for the chat."""
-    import secrets as _secrets
+def _in_channel(svc: Services, channel: str, pubkey: str) -> bool:
+    from . import followers
 
+    got = followers._relay(svc)
+    if got is None:
+        return False
+    relay, sign = got
+    try:
+        found = relay.query([{"kinds": [39002], "#d": [channel], "limit": 1}], sign)
+    except Exception:  # noqa: BLE001 — unknown: joining again does no harm
+        return False
+    return any(t[:2] == ["p", pubkey] for e in found[:1] for t in e.get("tags", []))
+
+
+def join_new(svc: Services, token: str, name: str) -> dict[str, Any]:
+    """Make the guest and their session: ``{"bunker_url", "pubkey", "channel", "guest"}``."""
     from . import core
 
     made = svc.odoo.join_guest(token, name)
@@ -317,27 +367,77 @@ def join(svc: Services, token: str, name: str) -> str:
     if not bunker.get("bunker_url"):
         raise RuntimeError("the signer gave no session")
     admitted(svc, made["pass_id"])
-    now = time.monotonic()
-    for k in [k for k, (at, _) in _handoffs.items() if now - at > HANDOFF_SECONDS]:
-        _handoffs.pop(k, None)
-    code = _secrets.token_urlsafe(24)
-    _handoffs[code] = (
-        now,
-        {
-            "bunker_url": bunker["bunker_url"],
-            "pubkey": pubkey,
-            "channel": made["channel"],
-            "guest": True,
-        },
-    )
-    return code
+    return {
+        "bunker_url": bunker["bunker_url"],
+        "pubkey": pubkey,
+        "channel": made["channel"],
+        "guest": True,
+        "new": True,
+    }
 
 
-def take_handoff(code: str) -> dict[str, Any] | None:
-    got = _handoffs.pop(code, None)
-    if got is None or time.monotonic() - got[0] > HANDOFF_SECONDS:
+def join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | None:
+    """The account behind PUBKEY takes the invite; None when the key has no account."""
+    from .holder_invites import ApiError
+
+    got = svc.odoo.join_existing(token, pubkey)
+    if got is None:
         return None
-    return got[1]
+    channel = got["channel"]
+    out = {"channel": channel, "pubkey": pubkey, "new": False, "guest": got["kind"] != "member"}
+    if got["kind"] == "already":
+        return {**out, "already": True}
+    if got["kind"] == "guest":
+        admitted(svc, got["pass_id"])
+        return out
+    # a member: in the channel already → it just opens, and the link isn't used up
+    if _in_channel(svc, channel, pubkey):
+        return {**out, "guest": False, "already": True}
+    if got["kind"] == "closed":
+        raise ApiError(410, "closed", f"This invite is {got.get('state') or 'closed'}.")
+    inv = svc.odoo.invite_by_token(token) or {}
+    partner = svc.odoo.read_one("res.partner", got["partner_id"], ["name"]) or {}
+    tags = [["h", channel], ["p", pubkey, "member"]]
+    if inv.get("guest_inviter"):
+        tags.append(["invited-by", inv["guest_inviter"]])
+    if partner.get("name"):
+        tags.append(["name", str(partner["name"])[:100]])
+    if not _channel_event(svc, 9000, tags):
+        raise ApiError(503, "relay", "The channel could not be reached just now. Try again.")
+    svc.odoo.count_guest_use(got["invite_id"])
+    return {**out, "guest": False}
+
+
+def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
+    """What the join screen shows before anyone signs anything."""
+    from . import followers, theme
+
+    inv = svc.odoo.invite_by_token(token)
+    if inv is None or not inv.get("guest_channel"):
+        return None
+    channel = inv["guest_channel"]
+    title, about = channel, ""
+    got = followers._relay(svc)
+    if got is not None:
+        relay, sign = got
+        try:
+            found = relay.query([{"kinds": [39000], "#d": [channel], "limit": 1}], sign)
+        except Exception:  # noqa: BLE001 — the id is a fine name
+            found = []
+        for t in found[0].get("tags", []) if found else []:
+            if t[:1] == ["name"] and len(t) > 1 and t[1]:
+                title = str(t[1])[:80]
+            if t[:1] == ["about"] and len(t) > 1:
+                about = str(t[1])[:300]
+    return {
+        "community": theme.current().name,
+        "channel": channel,
+        "channel_name": title,
+        "about": about,
+        "inviter": (inv.get("inviter_name") or "")[:100],
+        "state": inv["state"] if inv["state"] in ("open", "used", "expired", "revoked") else "used",
+        "days": int(inv.get("guest_days") or DAYS),
+    }
 
 
 def saved_label(svc: Services, pubkey: str, channel: str) -> None:
@@ -354,27 +454,58 @@ def _channel_event_kind(svc: Services, kind: int, tags: list[list[str]]) -> bool
 
 
 def register_join_routes(app: FastAPI) -> None:
-    from .discovery import allowed_origin, cors_headers
-
-    def cors(request: Request, resp: JSONResponse) -> JSONResponse:
-        origin = allowed_origin(request.app.state.services.settings, request.headers.get("origin"))
-        if origin:
-            resp.headers.update(cors_headers(origin))
-        return resp
-
-    @app.post("/api/guest-sessions/{code}")
-    async def guest_session(request: Request, code: str) -> JSONResponse:
-        """The chat swaps the one-time code for its session (once, within two minutes)."""
-        got = take_handoff(code)
-        if got is None:
-            return cors(
-                request,
-                JSONResponse(
-                    {"error": "expired", "message": "This link was used or has expired."},
-                    status_code=410,
-                ),
+    @app.get("/api/channel-invites/{token}")
+    async def channel_invite_info(request: Request, token: str) -> JSONResponse:
+        """The invite, for the join screen: community, channel, who invites, whether it's open."""
+        info = await run_in_threadpool(invite_info, request.app.state.services, token)
+        if info is None:
+            return JSONResponse(
+                {"error": "not_found", "message": "No such invite."}, status_code=404
             )
-        return cors(request, JSONResponse(got, headers={"Cache-Control": "no-store"}))
+        return JSONResponse(info, headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/channel-invites/{token}/join")
+    async def channel_invite_join(request: Request, token: str) -> JSONResponse:
+        """Join with a guest link (NIP-98). Signed by an account's key: that account gets the
+        channel → ``{"channel", "new": false}``. Signed by a key nobody knows, with
+        ``{"name"}``: a new guest → ``{"channel", "new": true, "bunker_url", "pubkey"}``; the
+        signing key is the one that will hold the session."""
+        from . import invite
+        from .holder_invites import ApiError, authenticate
+
+        s = request.app.state.services
+        body = await request.body()
+        pubkey = authenticate(
+            s,
+            request.app.state.api_seen,
+            request.headers.get("authorization"),
+            "POST",
+            f"/api/channel-invites/{token}/join",
+            body,
+        )
+        if not invite.own(s):
+            raise ApiError(409, "unsupported", "Guests need the belfry's own register.")
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_json", "Send a JSON object.")
+        try:
+            out = await run_in_threadpool(join_account, s, token, pubkey)
+            if out is None:
+                name = " ".join(str(data.get("name") or "").split())[:100]
+                if not name:
+                    raise ApiError(422, "name_needed", "Tell us your name.")
+                out = await run_in_threadpool(join_new, s, token, name)
+        except OdooError as exc:
+            raise ApiError(410, "closed", str(exc.message or "This invite is closed.")) from exc
+        except ApiError:
+            raise
+        except Exception as exc:
+            log.exception("guest link %s: joining failed", token[:8])
+            raise ApiError(503, "failed", "Joining did not work just now. Try again.") from exc
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     async def guest_of(
         request: Request, path: str, body: bytes

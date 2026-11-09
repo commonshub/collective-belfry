@@ -337,6 +337,10 @@ chat.{$BELFRY_DOMAIN} {
 	}
 	handle {
 		import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https://*.{$BELFRY_DOMAIN} wss://*.{$BELFRY_DOMAIN} https://{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+		# a guest link (chat.<domain>/join/<token>, also the phone app's universal link): the chat
+		# routes on the fragment, and the token never reaches a log that way
+		@join path_regexp join ^/join/([A-Za-z0-9_-]{20,})$
+		redir @join /#/join/{re.join.1} 302
 		@fresh path / /index.html /sw.js
 		header @fresh Cache-Control "no-cache"
 		root * /srv/apps/chat
