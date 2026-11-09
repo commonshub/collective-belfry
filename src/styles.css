@@ -298,12 +298,12 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 .reactions button { font-size: 13px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
 .reactions button span { font-size: 15px; }
 .reactions button.on { border-color: var(--accent); color: var(--text); font-weight: 600; }
-/* add a reaction: where the reactions sit, just under the message. With reactions it is one more
-   pill in their row; without, a pill that floats in that place on hover (nothing moves). */
+/* add a reaction: where the reactions sit, just under the message, shown while the pointer is
+   anywhere on the message (its reactions row included). */
 .reactions .react-add { display: inline-grid; place-items: center; padding: 2px 8px; height: 26px; color: var(--muted); }
 .reactions .react-add:hover { color: var(--text); border-color: var(--muted); }
-.reactions.none { height: 0; margin: 0; position: relative; }
-.reactions.none .react-add { position: absolute; left: 0; top: 2px; z-index: 2; background: var(--bg); }
+/* no reactions yet: the row keeps its place (laptops), so the button never covers the next message */
+.reactions.none { min-height: 26px; }
 @media (hover: hover) and (pointer: fine) {
   .reactions .react-add { visibility: hidden; }
   .msg:hover .reactions .react-add, .reactions .react-add:focus-visible { visibility: visible; }
@@ -701,3 +701,6 @@ button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 .summary .chead-people { display: flex; align-items: center; gap: 2px; border: 0; background: none; padding: 2px 0 2px 6px; cursor: pointer; }
 .summary-task { font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 .chead-more { display: block; margin: 2px 16px 26px; font-size: 13px; }
+
+.sign-out { display: block; margin: 20px auto 8px; padding: 10px 16px; background: none; border: 0; color: var(--muted); font-size: 15px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.sign-out:hover { color: var(--text); }

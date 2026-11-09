@@ -222,7 +222,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>
-        <button className="btn ghost" onClick={onSignOut}>Sign out</button>
+        <button className="link sign-out" onClick={onSignOut}>Sign out</button>
       </div>
     </div>
   )
