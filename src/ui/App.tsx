@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { closeDrawer, useDrawer } from './drawer'
 import { nip19 } from 'nostr-tools'
 import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
@@ -100,6 +101,8 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
 
   const route = useRoute()
   const wide = useWide()
+  const drawer = useDrawer()
+  useEffect(() => { if (wide) closeDrawer() }, [wide])
   useVersion()
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   if (error)
@@ -130,10 +133,21 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
     view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} />
   }
-  // phone: no tab bar: channels behind ☰, Me behind your avatar (top right), events under each
+  // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
-  if (!wide) return <div className="screen">{view}</div>
   const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : undefined
+  if (!wide)
+    return (
+      <div className="screen">
+        {view}
+        {drawer && (
+          <>
+            <div className="drawer-shade" onClick={closeDrawer} aria-hidden="true" />
+            <aside className="drawer" aria-label="Channels"><ChannelList side drawer current={current} section={section} /></aside>
+          </>
+        )}
+      </div>
+    )
   return (
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>

@@ -466,3 +466,22 @@ a.chip { text-decoration: none; color: inherit; }
 .side-user .t b { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-user .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout.wide .main .scroll.pad > * { max-width: 720px; margin-left: auto; margin-right: auto; }
+
+/* ---- the channel drawer on a phone (☰): from the left, over a shade; ☰ in the same spot closes ---- */
+.ico { display: block; }
+.icon-btn .ico { margin: auto; }
+.drawer-shade { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 40; animation: fade 0.18s ease-out; }
+.drawer { position: fixed; top: 0; bottom: 0; left: 0; width: min(86vw, 340px); z-index: 41; background: var(--bg);
+  display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18); animation: drawer-in 0.2s ease-out; }
+.drawer > .screen { height: 100%; }
+.drawer .topbar { padding-left: 4px; }
+@keyframes drawer-in { from { transform: translateX(-100%); } to { transform: none; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .drawer, .drawer-shade { animation: none; } }
+.follow-btn, .follow-btn:not(.on) { filter: none; opacity: 1; font-size: inherit; color: var(--muted); }
+.follow-btn.on { color: var(--text); }
+.chan .hash .ico { width: 20px; height: 20px; }
+.side-user .hint { color: var(--muted); display: grid; }
+.me-btn .count { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
+  border-radius: 99px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px;
+  text-align: center; border: 2px solid var(--bg); }

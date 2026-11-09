@@ -13,6 +13,8 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
+import { BellIcon, CalendarIcon, GearIcon, MailIcon, MenuIcon } from './icons'
+import { closeDrawer, toggleDrawer } from './drawer'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -39,12 +41,12 @@ function SideUser() {
     <button className="side-user" onClick={() => go('me')} aria-label="Me: your profile and settings">
       <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
       <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address() ?? p?.nip05 ?? ''}</small></span>
-      <span className="hint" aria-hidden="true">⚙</span>
+      <span className="hint"><GearIcon /></span>
     </button>
   )
 }
 
-export function ChannelList({ current, side = false, section }: { current?: string; side?: boolean; section?: string }) {
+export function ChannelList({ current, side = false, section, drawer = false }: { current?: string; side?: boolean; section?: string; drawer?: boolean }) {
   useVersion()
   const title = useCommunityName(side ? NAME : 'Channels')
   const [creating, setCreating] = useState(false)
@@ -55,11 +57,11 @@ export function ChannelList({ current, side = false, section }: { current?: stri
   const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
     const m = messages(id).at(-1)
-    return m ? `${displayName(m.ev.pubkey)}: ${m.text || (m.media.length ? '📷 photo' : '')}` : undefined
+    return m ? `${displayName(m.ev.pubkey)}: ${m.text || (m.media.length ? 'Photo' : '')}` : undefined
   }
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
     <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
-      onClick={() => go('c/' + encodeURIComponent(g.id))}>
+      onClick={() => { closeDrawer(); go('c/' + encodeURIComponent(g.id)) }}>
       <span className="hash">{channelIcon(g)}</span>
       <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
     </button>
@@ -76,18 +78,19 @@ export function ChannelList({ current, side = false, section }: { current?: stri
   return (
     <div className="screen">
       <div className="topbar">
-        <h1 style={{ paddingLeft: 8 }}>{side ? title : 'Channels'}</h1>
+        {drawer && <button className="icon-btn menu-btn" aria-label="Close the channels" aria-expanded="true" onClick={closeDrawer}><MenuIcon /></button>}
+        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side ? title : 'Channels'}</h1>
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
         {!side && <MeButton />}
       </div>
       <div className="scroll">
-        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => go('dm')}>
-          <span className="hash">✉</span>
+        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => { closeDrawer(); go('dm') }}>
+          <span className="hash"><MailIcon unread={unreadTotal() > 0} /></span>
           <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
           {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
         </button>
-        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => go('cal')}>
-          <span className="hash">📅</span>
+        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => { closeDrawer(); go('cal') }}>
+          <span className="hash"><CalendarIcon /></span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
         </button>
         <div className="section-title">Channels <span>{chans.length + pods.length}</span></div>
@@ -142,13 +145,12 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn menu-btn" aria-label="Channels" onClick={() => go('channels')}>☰</button>
+        <button className="icon-btn menu-btn" aria-label="Channels" aria-expanded="false" onClick={toggleDrawer}><MenuIcon /></button>
         <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
           {channelIcon(g)} {g?.name ?? id}
           {sub && <small>{sub}</small>}
         </h1>
         <FollowButton channel={id} />
-        <MessagesButton />
         <MeButton />
       </div>
       <EventsBar channel={id} />
@@ -289,21 +291,14 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   )
 }
 
-/** Top right: your avatar, which opens Me. */
-export function MessagesButton() {
+/** Top right: your avatar (opens Me), with the number of unread messages on it. */
+export function MeButton() {
   const n = unreadTotal()
   return (
-    <button className="icon-btn msg-btn" aria-label={n ? `Messages, ${n} unread` : 'Messages'} onClick={() => go('dm')}>
-      ✉{n > 0 && <span className="dot" aria-hidden="true" />}
-    </button>
-  )
-}
-
-export function MeButton() {
-  return (
-    <button className="icon-btn me-btn" aria-label="Me" onClick={() => go('me')}>
+    <button className="icon-btn me-btn" aria-label={n ? `Me · ${n} unread messages` : 'Me'} onClick={() => go('me')}>
       <Avatar pubkey={me()} size={30} />
       <SyncDot />
+      {n > 0 && <span className="count" aria-hidden="true">{n > 99 ? '99+' : n}</span>}
     </button>
   )
 }
@@ -336,7 +331,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       <div className="scroll" ref={scroller}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
-          {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi 👋'}</div>}
+          {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi.'}</div>}
           {list.map((m, i) => <Row key={m.ev.id} m={m} prev={list[i - 1]} groupId={id}
             name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
             reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}

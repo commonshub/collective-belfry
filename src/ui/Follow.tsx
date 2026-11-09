@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { BellIcon } from './icons'
 import { BELFRY, NAME } from '../config'
 import { isLocalOnly, signedFetch } from '../core/sync'
 import { channelIcon, group } from '../core/model'
@@ -77,7 +78,7 @@ export function FollowButton({ channel }: { channel: string }) {
   return (
     <>
       <button className={'icon-btn follow-btn' + (on ? ' on' : '')} aria-label={on ? 'Following its announcements' : 'Follow its announcements'}
-        aria-pressed={on} onClick={() => setOpen(true)}>🔔</button>
+        aria-pressed={on} onClick={() => setOpen(true)}><BellIcon on={on} /></button>
       {open && <FollowSheet channel={channel} onClose={() => setOpen(false)} />}
     </>
   )
