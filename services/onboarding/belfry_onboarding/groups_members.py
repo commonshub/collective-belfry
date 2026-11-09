@@ -177,7 +177,12 @@ class GroupsMembers:
         for pk in sorted(wanted - current):
             nip86(self.key, url, "assignmethod", [pk, GROUP_ADMIN_METHOD], self.http)
         for pk in sorted(current - wanted):
-            nip86(self.key, url, "unassignmethod", [pk, GROUP_ADMIN_METHOD], self.http)
+            try:
+                nip86(self.key, url, "unassignmethod", [pk, GROUP_ADMIN_METHOD], self.http)
+            except GroupsMembersError as exc:
+                # the relay's own key holds every method by construction: nothing to take
+                if "always have every" not in str(exc):
+                    raise
         if wanted ^ current:
             log.info("groups relay admins: %d now", len(wanted))
         return {"admins": sorted(wanted)}
