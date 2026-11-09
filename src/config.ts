@@ -4,10 +4,13 @@
 const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env
 
 // The belfry this app belongs to: VITE_BELFRY_DOMAIN at build time, else the host it is served
-// from when that is apps.<domain>/<app> (a belfry's own apps), else Open Source Village.
+// from: <domain>/<app> (a belfry's own apps, the Belfry look) or apps.<domain>/<app> (before
+// they moved to the community's domain), else Open Source Village.
 const host = typeof location === 'undefined' ? '' : location.hostname
+const servedByBelfry = env.VITE_THEME === 'belfry' && host.includes('.') && !/^[\d.]+$/.test(host) && host !== 'localhost'
 const DOMAIN =
-  env.VITE_BELFRY_DOMAIN || (host.startsWith('apps.') ? host.slice(5) : 'belfry.opensourcevillage.org')
+  env.VITE_BELFRY_DOMAIN ||
+  (host.startsWith('apps.') ? host.slice(5) : servedByBelfry ? host : 'belfry.opensourcevillage.org')
 
 // "osv" (the village look, default) or "belfry" (the Belfry look: Clean, the arms mark).
 export const THEME: 'osv' | 'belfry' = env.VITE_THEME === 'belfry' ? 'belfry' : 'osv'

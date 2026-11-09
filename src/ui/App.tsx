@@ -8,7 +8,7 @@ import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, setAvatar, start, stop } from '../core/sync'
-import { BELFRY, NAME, getBackend } from '../config'
+import { BELFRY, NAME, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
@@ -199,6 +199,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
             {avatarError && <div className="error" style={{ margin: '4px 0 0' }}>{avatarError}</div>}
           </div>
         </div>
+        {THEME !== 'belfry' && (
         <div className="card">
           <div className="row" style={{ justifyContent: 'space-between' }}>
             <div>
@@ -211,6 +212,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           {!g && <a className="btn ghost" style={{ marginTop: 12, textDecoration: 'none' }} href={`${BELFRY.pass}/me`} target="_blank" rel="noreferrer">Show my pass at the door</a>}
         </div>
+        )}
         {isAdmin() && (
           <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('admin')}>
             <div>
