@@ -178,6 +178,14 @@ belfry.{$BELFRY_DOMAIN} {
 	reverse_proxy onboarding:8100
 }
 
+# Previews of proposed website versions (website.py): /p/<npub>[@<name>] picks a site (a
+# cookie), every other path is that site's. A host of its own: never the website's or the chat's.
+preview.{$BELFRY_DOMAIN} {
+	import security
+	import limit preview 300 1m /*
+	reverse_proxy onboarding:8100
+}
+
 # Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
 login.{$BELFRY_DOMAIN} {
 	import security

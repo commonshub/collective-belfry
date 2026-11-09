@@ -464,6 +464,13 @@ def approve_website(svc: Services, proposal_id: str, approver: str) -> dict[str,
         }
     )
     svc.relay.publish(reply, sign)
+    from .website import changelog
+
+    changelog(
+        svc,
+        f"**Website updated**: proposed by {names.get(pubkey, pubkey[:8])}, approved by {approver} "
+        f"({len(paths)} files): https://{svc.settings.nip05_domain}",
+    )
     return {"files": len(paths), "manifest": root["id"]}
 
 

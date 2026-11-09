@@ -200,6 +200,8 @@ class Homepage:
     _blobs: OrderedDict[str, tuple[bytes, str]] = field(default_factory=OrderedDict)
     _blob_bytes: int = 0
     _client: httpx.AsyncClient | None = None
+    # previews (website.py) also read manifests from public relays, where anyone publishes
+    extra_relays: list[str] = field(default_factory=list)
 
     @property
     def enabled(self) -> bool:
@@ -216,7 +218,7 @@ class Homepage:
     def relays(self) -> list[str]:
         extra = (getattr(self.settings, "homepage_relays", "") or "").replace(",", " ").split()
         own = getattr(self.settings, "relay_url", "") or ""
-        return [r for r in dict.fromkeys([own, *extra]) if r]
+        return [r for r in dict.fromkeys([own, *extra, *self.extra_relays]) if r]
 
     def signer(self):
         key = belfry_key(self.settings)
@@ -311,7 +313,7 @@ class Homepage:
             return await self.proxy(request)
         return await self.nsite(request)
 
-    async def nsite(self, request: Request) -> Response:
+    async def nsite(self, request: Request, path: str | None = None) -> Response:
         if request.method not in ("GET", "HEAD"):
             return Response("Method not allowed", status_code=405, headers={"Allow": "GET, HEAD"})
         try:
@@ -331,7 +333,8 @@ class Homepage:
                 "This site is not published yet.", status_code=503, media_type="text/plain"
             )
         status = 200
-        path = next((p for p in candidate_paths(request.url.path) if p in site.paths), None)
+        wanted = request.url.path if path is None else path
+        path = next((p for p in candidate_paths(wanted) if p in site.paths), None)
         if path is None:
             status, path = 404, "/404.html"
             if path not in site.paths:
@@ -463,7 +466,7 @@ def blossom_auth(secret: bytes, verb: str, sha: str) -> str:
 
 
 def publish(
-    settings: Any, files: dict[str, bytes], title: str = "", by: str = ""
+    settings: Any, files: dict[str, bytes], title: str = "", by: str = "", note: str = ""
 ) -> dict[str, Any]:
     """Upload every file to the community's Blossom server (through its gate, as the belfry's key)
     and publish the root site manifest (kind 15128) on the community relay."""
@@ -515,7 +518,7 @@ def publish(
         {
             "kind": 5128,
             "created_at": event["created_at"],
-            "content": f"Website published from the server by {by or 'an admin'}.",
+            "content": note or f"Website published from the server by {by or 'an admin'}.",
             "tags": [
                 *[t for t in tags if t[0] in ("path", "x")],
                 ["a", f"{ROOT_KIND}:{event['pubkey']}:"],

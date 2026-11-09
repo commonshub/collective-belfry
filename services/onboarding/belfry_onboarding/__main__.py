@@ -146,6 +146,18 @@ def homepage_cli(args: argparse.Namespace) -> int:
             files = homepage.files_from_tar(sys.stdin.buffer.read())
             result = homepage.publish(settings, files, args.title, args.by)
             result["serving"] = settings.homepage == "nsite"
+            try:  # a line in #website: who updated the website (website.py)
+                from .app import build_services
+                from .website import changelog
+
+                svc = build_services(settings)
+                changelog(
+                    svc,
+                    f"**Website updated** by {args.by or 'an admin'} from the server "
+                    f"({len(files)} files): https://{settings.nip05_domain}",
+                )
+            except Exception as exc:  # noqa: BLE001 — the site is published either way
+                print(f"(changelog not posted: {exc})", file=sys.stderr)
         else:
             config = homepage.parse_config(settings)
             result = {

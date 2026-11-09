@@ -62,6 +62,7 @@ from . import (
     theme,
     volunteer,
     wallet_tokens,
+    website,
 )
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
@@ -222,6 +223,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
+    website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
@@ -303,6 +305,14 @@ def create_app(services: Services | None = None) -> FastAPI:
         if site is not None and not on_apex:
             return RedirectResponse(str(site), status_code=302)
         return HTMLResponse(claim.home_page(settings))
+
+    @app.middleware("http")
+    async def preview_host(request: Request, call_next):
+        """preview.<domain>: a proposed version of the website (website.py)."""
+        settings = svc(request).settings
+        if request.headers.get("host", "").lower() == f"preview.{settings.nip05_domain}":
+            return await website.preview(request, svc(request))
+        return await call_next(request)
 
     @app.middleware("http")
     async def console_host(request: Request, call_next):
