@@ -38,6 +38,20 @@ def own(svc: Services) -> bool:
     return isinstance(svc.odoo, Register)
 
 
+INVITE_STYLE = """<style>
+.invite-form{display:flex;flex-direction:column;gap:14px;margin:20px 0 8px}
+.invite-form label{display:flex;flex-direction:column;gap:6px;font-weight:500}
+.invite-form input{font:inherit;font-size:16px;padding:12px 14px;border-radius:10px;
+border:1px solid var(--border);background:var(--surface,var(--bg));color:var(--fg);width:100%;
+box-sizing:border-box}
+.invite-form input:focus{outline:2px solid var(--accent);outline-offset:1px}
+.invite-form .btn{width:100%;padding:13px 18px;font-size:16px;cursor:pointer;margin-top:4px}
+.invite-again{margin-top:18px}
+.invite-again summary{cursor:pointer;color:var(--accent);font-weight:500}
+.error{color:var(--accent-2);font-weight:500}
+</style>"""
+
+
 def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
     return HTMLResponse(theme.frame(title, body), status_code=status)
 
@@ -85,9 +99,9 @@ def register(app: FastAPI) -> None:
                 "<h1>Check your mail</h1>"
                 f"<p>{E(msg or 'We sent you a link to confirm your address.')}</p>"
                 "<p>Open it on this device to finish joining. Nothing arrived? Look in the spam "
-                "folder, or send the form again below.</p>"
+                "folder, or send it again below.</p>"
             )
-            body += _form(token, inv)
+            body += _form(token, inv, again=True)
             return flash.clear(_page(f"Join {name}", body), request)
         if inv["state"] not in ("open", "reserved"):
             return _closed(inv["state"])
@@ -115,17 +129,22 @@ def register(app: FastAPI) -> None:
             )
         return flash.clear(_page(f"Join {name}", body), request)
 
-    def _form(token: str, inv: dict) -> str:
+    def _form(token: str, inv: dict, again: bool = False) -> str:
         email = E(inv.get("invitee_email") or "")
         name = E(inv.get("invitee_name") or "")
-        return (
-            f'<form method="post" action="/invite/{E(token)}" class="stack">'
-            f'<label>Your name <input name="name" required maxlength="100" value="{name}" '
+        label = "Send it again" if again else "Send me the link"
+        form = (
+            f'{INVITE_STYLE}<form method="post" action="/invite/{E(token)}" class="invite-form">'
+            f'<label>Your name<input name="name" required maxlength="100" value="{name}" '
             'autocomplete="name"></label>'
-            f'<label>Your e-mail address <input type="email" name="email" required maxlength="254" '
-            f'value="{email}" autocomplete="email"></label>'
-            '<button type="submit">Send me the link</button></form>'
+            '<label>Your e-mail address<input type="email" name="email" required maxlength="254" '
+            f'value="{email}" autocomplete="email" inputmode="email"></label>'
+            f'<button class="btn" type="submit">{label}</button>'
+            "</form>"
         )
+        if again:  # after a send: the form folds away, there if the mail never came
+            return f'<details class="invite-again"><summary>Send it again</summary>{form}</details>'
+        return form
 
     @app.post("/invite/{token}")
     async def invite_post(
