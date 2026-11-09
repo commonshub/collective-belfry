@@ -136,5 +136,7 @@ export function fmtDay(d: Date) {
   y.setDate(today.getDate() - 1)
   if (d.toDateString() === today.toDateString()) return 'Today'
   if (d.toDateString() === y.toDateString()) return 'Yesterday'
-  return d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
+  return d.toLocaleDateString([], d.getFullYear() === today.getFullYear()
+    ? { weekday: 'long', day: 'numeric', month: 'long' }
+    : { day: 'numeric', month: 'long', year: 'numeric' })
 }

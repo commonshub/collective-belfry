@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
+import { SearchView } from './Search'
 import { nip19 } from 'nostr-tools'
 import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
@@ -130,9 +131,10 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
+  else if (section === 'search') view = <SearchView channel={a} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
-    view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} />
+    view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).

@@ -13,7 +13,7 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { CalendarIcon, GearIcon, MailIcon, MenuIcon } from './icons'
+import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 
@@ -82,7 +82,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the channels" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
         <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side ? title : 'Channels'}</h1>
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
-        {!side && <MeButton />}
+
       </div>
       <div className="scroll">
         <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => closeDrawer('dm')}>
@@ -133,7 +133,7 @@ function NewChannel({ onClose }: { onClose: () => void }) {
 
 // ---- a channel's messages ------------------------------------------------------
 
-export function ChannelView({ id, topic }: { id: string; topic?: string }) {
+export function ChannelView({ id, topic, focus }: { id: string; topic?: string; focus?: string }) {
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const all = groups()
@@ -143,8 +143,8 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   return (
     <div className="screen">
       <ChannelHeader id={id}
-        left={<button className="icon-btn menu-btn" aria-label="Channels" aria-expanded="false" onClick={toggleDrawer}><MenuIcon /></button>}
-        right={<><FollowButton channel={id} /><MeButton /></>} />
+        left={<MenuButton />}
+        right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} /></>} />
       <EventsBar channel={id} />
       <PodsBar channel={id} />
       {g?.isProposal && <ProposalHeader groupId={id} />}
@@ -157,7 +157,7 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
       {g?.isPod && <Tabs tab={podTab} setTab={setPodTab} tabs={[['chat', 'Chat'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']]} />}
       {podTab === 'chat' && <>
         <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
-        <Conversation id={id} events topic={topic} onTopic={openTopic} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
+        <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       </>}
       {podTab !== 'chat' && (
         <div className="scroll">
@@ -283,19 +283,18 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   )
 }
 
-/** Top right: your avatar (opens Me), with the number of unread messages on it. */
-export function MeButton() {
+/** ☰: the channels drawer; the number of unread messages on it (like Discord's). */
+export function MenuButton() {
   const n = unreadTotal()
   return (
-    <button className="icon-btn me-btn" aria-label={n ? `Me · ${n} unread messages` : 'Me'} onClick={() => go('me')}>
-      <Avatar pubkey={me()} size={30} />
-      <SyncDot />
+    <button className="icon-btn menu-btn" aria-label={n ? `Channels · ${n} unread messages` : 'Channels'} aria-expanded="false" onClick={toggleDrawer}>
+      <MenuIcon />
       {n > 0 && <span className="count" aria-hidden="true">{n > 99 ? '99+' : n}</span>}
     </button>
   )
 }
 
-export function Conversation({ id, events = false, readOnly = false, topic, onTopic }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void }) {
+export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
@@ -311,10 +310,23 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
   const scroller = useRef<HTMLDivElement>(null)
-  const stick = useRef(true)
+  const stick = useRef(!focus)
+  const focused = useRef('')
 
   useLayoutEffect(() => {
     const el = scroller.current
+    // opened on one message (a search result): bring it to the middle and flash it, once
+    if (el && focus && focused.current !== focus) {
+      const m = el.querySelector<HTMLElement>(`[id="m-${CSS.escape(focus)}"]`)
+      if (m) {
+        focused.current = focus
+        stick.current = false
+        m.scrollIntoView({ block: 'center' })
+        m.classList.add('flash')
+        setTimeout(() => m.classList.remove('flash'), 2200)
+        return
+      }
+    }
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
 
@@ -363,7 +375,6 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
       <div className="topbar">
         <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>
         <h1>Thread<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
-        <MeButton />
       </div>
       {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
@@ -398,8 +409,8 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
   if (card || sent) return (
     <>
-      {newDay && <div className="day">{fmtDay(d)}</div>}
-      <div className="msg first card-row">
+      {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
+      <div className="msg first card-row" id={'m-' + m.ev.id}>
         {card ? <InboxCardView m={m} card={card} groupId={groupId} channelName={inbox!.name} state={inbox!.states.get(m.ev.id)} canSend={inbox!.canSend}
           thread={thread} onThread={onThread ?? (() => {})} />
           : <SentCardView m={m} sent={sent!} groupId={groupId} />}
@@ -408,8 +419,8 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   )
   return (
     <>
-      {newDay && <div className="day">{fmtDay(d)}</div>}
-      <div className={'msg' + (first || announce || mail ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
+      {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
+      <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
         onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
         onPointerDown={(e) => {
           if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
