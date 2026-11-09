@@ -5,7 +5,8 @@
 - With a user's UCAN (``preload_user`` returns one): ``POST /api/user/profile`` sets the username
   (the NIP-05 name in Keycast's ``/.well-known/nostr.json``) and ``POST /api/user/bunker/create``
   makes a NIP-46 connection (a ``bunker://`` URL whose secret binds the first client that
-  connects with it).
+  connects with it; with ``client_pubkey`` and Keycast patch 0022, bound to that client key
+  from the start).
 """
 
 from __future__ import annotations
@@ -18,6 +19,10 @@ import httpx
 log = logging.getLogger(__name__)
 
 USER_STATUSES = ("active", "suspended", "banned")
+
+
+class ClientKeyTaken(Exception):
+    """The client key is linked to another account in the signer (409 ``client_key_taken``)."""
 
 
 class KeycastClient:
@@ -113,16 +118,38 @@ class KeycastClient:
             raise ValueError(f"the name {username} is taken")
         r.raise_for_status()
 
-    def create_bunker(self, token: str, app_name: str) -> dict[str, Any]:
+    def create_bunker(
+        self, token: str, app_name: str, client_pubkey: str | None = None
+    ) -> dict[str, Any]:
         """A new NIP-46 connection for the token's user: ``{"bunker_url", "bunker_pubkey", …}``.
-        The URL's secret binds the client key that first sends ``connect`` with it."""
+        The URL's secret binds the client key that first sends ``connect`` with it.
+
+        With ``client_pubkey`` (hex; Keycast patch 0022) the connection is bound to that client
+        key when it is made: no other key can connect, with or without the secret. A key linked
+        to another account raises :class:`ClientKeyTaken`. ``"bound"`` in the answer says
+        whether the signer did it: one built without the patch ignores the field, and the
+        connection is then bound by the first ``connect`` as before."""
+        body: dict[str, Any] = {"app_name": app_name[:60] or "App"}
+        if client_pubkey:
+            body["client_pubkey"] = client_pubkey
         r = self._client.post(
             f"{self.url}/api/user/bunker/create",
-            json={"app_name": app_name[:60] or "App"},
+            json=body,
             headers={"Authorization": f"Bearer {token}", **self._common},
         )
+        if r.status_code == 409 and client_pubkey:
+            try:
+                code = (r.json() or {}).get("code")
+            except ValueError:
+                code = None
+            if code == "client_key_taken":
+                raise ClientKeyTaken(client_pubkey)
         r.raise_for_status()
-        return r.json()
+        data = r.json()
+        data["bound"] = bool(client_pubkey) and (
+            str(data.get("client_pubkey") or "").lower() == str(client_pubkey).lower()
+        )
+        return data
 
     def get_profile(self, token: str) -> dict[str, Any]:
         """The token's user: ``{"username", "nip05"}`` (either may be null)."""

@@ -844,7 +844,7 @@ main{{max-width:640px;margin:0 auto;padding:56px 20px}} h1{{font-size:2rem;margi
 .muted{{color:var(--muted)}} a{{color:var(--accent)}}
 blockquote{{margin:20px 0;padding:14px 16px;border-left:3px solid var(--accent);background:color-mix(in srgb,var(--line) 35%,transparent);border-radius:0 8px 8px 0}}
 footer{{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);font-size:.92rem}}
-</style></head><body><main>
+</style><script src="/static/busy.js" defer></script></head><body><main>
 <h1>{E(name)}</h1>
 <p class="muted">The website of {E(name)} will be here.</p>
 <p>To publish it, ask your agent:</p>

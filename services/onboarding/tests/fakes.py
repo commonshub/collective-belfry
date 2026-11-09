@@ -852,6 +852,7 @@ class FakeKeycast:
         ).mock(side_effect=self._set_status)
         # the user API with the last preloaded user's UCAN (the fake hands out one token)
         self.last_pubkey = ""
+        self.binds = True  # Keycast patch 0022 (a session bound to its client key)
         self.bunkers: list[
             dict[str, Any]
         ] = []  # {"pubkey", "app_name", "bunker_url", "secret", "bunker_secret"}
@@ -909,7 +910,7 @@ class FakeKeycast:
                 "application_name": b["app_name"],
                 "redirect_origin": "",
                 "bunker_pubkey": PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex(),
-                "client_pubkey": None,
+                "client_pubkey": b.get("client_pubkey"),
                 "created_at": "2026-11-05T00:00:00Z",
                 "last_activity": None,
                 "activity_count": 0,
@@ -930,6 +931,20 @@ class FakeKeycast:
         from coincurve import PrivateKey
 
         body = json.loads(request.content)
+        # Keycast patch 0022: a connection bound to a client key; one key, one account.
+        # ``binds = False`` stands for a signer built without it (the field is ignored).
+        client = (body.get("client_pubkey") or "").lower() if self.binds else ""
+        if client and any(
+            b.get("client_pubkey") == client and b["pubkey"] != self.last_pubkey
+            for b in self.bunkers
+        ):
+            return httpx.Response(
+                409,
+                json={
+                    "error": "This client key is already linked to another account.",
+                    "code": "client_key_taken",
+                },
+            )
         key = PrivateKey()
         bunker_pk = key.public_key_xonly.format().hex()
         secret = f"secret-{len(self.bunkers) + 1}"
@@ -941,6 +956,7 @@ class FakeKeycast:
                 "bunker_url": url,
                 "secret": secret,
                 "bunker_secret": key.secret,
+                "client_pubkey": client or None,
             }
         )
         return httpx.Response(
@@ -951,6 +967,7 @@ class FakeKeycast:
                 "app_name": body["app_name"],
                 "origin": None,
                 "created_at": "2026-11-05T00:00:00Z",
+                **({"client_pubkey": client} if client else {}),
             },
         )
 

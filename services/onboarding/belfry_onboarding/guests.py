@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import threading
 import time
 from typing import Any
@@ -334,8 +335,11 @@ def register_agent_routes(app: FastAPI) -> None:
 # ── joining with a guest link: one signed request, whoever asks ─────────────────────────────
 # A new person: the chat makes its session key, signs the request with it and sends a name. The
 # belfry makes the guest's contact, a guest pass, an account in the signer (a derived key, like
-# every member's, recoverable) and a session, and answers with that session; the chat binds it to
-# its key the moment it connects (NIP-46). Saving the account later (an e-mail and the code mailed
+# every member's, recoverable) and a session made for the key that signed the request: the signer
+# binds the session to that key when it makes it (Keycast patch 0022), so nobody else can take it
+# with the link, and refuses a key that is linked to another account: one session key, one
+# identity. (A signer built without the patch binds the first key that connects, as before.)
+# Saving the account later (an e-mail and the code mailed
 # to it) is signed with the guest's identity through that session: nobody else can claim it.
 # Someone with an account signs with that account instead and gets the channel on it.
 
@@ -360,8 +364,13 @@ _join_lock = threading.Lock()  # one new guest at a time: a second tap waits, th
 def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str, Any]:
     """Make the guest and their session: ``{"bunker_url", "pubkey", "channel", "guest"}``.
     CLIENT (the key that signed the request) makes it safe to ask twice: the same device gets the
-    same account again, with a new session, and is announced in the channel once."""
+    same account again, with a new session, and is announced in the channel once. The session is
+    made for CLIENT alone; a CLIENT the signer knows as another account's is refused (409)."""
     from . import core
+    from .clients.keycast import ClientKeyTaken
+    from .holder_invites import ApiError
+
+    bind = client.lower() if re.fullmatch(r"[0-9a-fA-F]{64}", client or "") else None
 
     with _join_lock:
         made = svc.odoo.join_guest(token, name, client)
@@ -369,7 +378,19 @@ def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str
         row = svc.odoo.read_one("res.partner", pid, ["name"]) or {}
         partner = {"id": pid, "name": row.get("name") or name}
         pubkey, npub, ucan = core._ensure_keycast_user(svc, partner, f"guest-{pid}")
-        bunker = svc.keycast.create_bunker(ucan, "Chat (guest)") if ucan else {}
+        try:
+            bunker = svc.keycast.create_bunker(ucan, "Chat (guest)", bind) if ucan else {}
+        except ClientKeyTaken as exc:
+            if not made.get("again"):  # the pass just made stays unused
+                svc.odoo.write("belfry.pass", [made["pass_id"]], {"state": "revoked"})
+            log.warning("guest link %s: the session key belongs to another account", token[:8])
+            raise ApiError(
+                409,
+                "session_taken",
+                "This session belongs to another account. Open the invite link again.",
+            ) from exc
+        if bind and not bunker.get("bound"):
+            log.info("the signer does not bind sessions at creation yet (Keycast patch 0022)")
         if not bunker.get("bunker_url"):
             raise RuntimeError("the signer gave no session")
         if not made.get("again"):

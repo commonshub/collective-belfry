@@ -202,7 +202,7 @@ def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: boo
 <link rel="icon" href="{E(t.favicon)}">
 {css}
 <title>{E(title)}</title>
-<style>{FRAME_STYLE}</style>{width}</head><body>{strip}<main>
+<style>{FRAME_STYLE}</style>{width}<script src="/static/busy.js" defer></script></head><body>{strip}<main>
 <header class="site"><a href="{E(t.url)}">{brand}</a></header>
 {body}
 {"" if bare else f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"}

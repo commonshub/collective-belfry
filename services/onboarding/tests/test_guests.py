@@ -4,6 +4,7 @@ puts them in that channel only, out again when it closes."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 import time
 
@@ -238,6 +239,9 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
         got = join(c, session, b'{"name": "Gus"}')
         assert got.status_code == 200 and got.json()["bunker_url"].startswith("bunker://")
         assert got.json()["channel"] == "garden" and got.json()["new"] is True
+        # the session is made for the key that signed, in the signer itself (Keycast 0022)
+        session_pk = session.public_key_xonly.format().hex()
+        assert keycast.bunkers[-1]["client_pubkey"] == session_pk
         # the same device asks again (a second tap, a retry): the same account, announced once
         people, lines = len(rsvc.odoo.search_read("res.partner", [], ["id"])), len(published)
         time.sleep(1.1)
@@ -307,6 +311,77 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
             headers={**host, "Authorization": nip98(me, vurl, "POST", take)},
         )
         assert r.status_code == 409
+
+
+def _guest_link(rsvc, monkeypatch, channel="garden"):
+    from .test_holder_invites import nip98
+
+    rsvc.settings.public_url = BASE
+    rsvc.settings.console_url = "https://belfry.belfry.test"
+    rsvc.settings.nip05_domain = "belfry.test"
+    monkeypatch.setattr(guests, "_in_channel", lambda *a: False)
+    key, ada = admin_with_key(rsvc)
+
+    def link(channel=channel):
+        row = rsvc.odoo.create_guest_invite(
+            ada, key.public_key_xonly.format().hex(), channel, 30, people=50
+        )
+        return row["url"].rsplit("/", 1)[1]
+
+    def join(c, token, k, name):
+        body = json.dumps({"name": name}).encode()
+        url = f"https://belfry.belfry.test/api/v1/channel-invites/{token}/join"
+        return c.post(
+            f"/api/v1/channel-invites/{token}/join",
+            content=body,
+            headers={
+                "Host": "belfry.belfry.test",
+                "Content-Type": "application/json",
+                "Authorization": nip98(k, url, "POST", body),
+            },
+        )
+
+    return link, join
+
+
+def test_a_session_key_gets_one_identity(rsvc, published, keycast, monkeypatch):
+    """The signer binds the new session to the key that signed the request, and refuses a key
+    it knows as another account's: a second invite can't turn one session key into a second
+    identity."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    first, second = link("garden"), link("kitchen")
+    session = PrivateKey()
+    with TestClient(create_app(rsvc)) as c:
+        got = join(c, first, session, "Gus")
+        assert got.status_code == 200, got.text
+        people, sessions = (
+            len(rsvc.odoo.search_read("res.partner", [], ["id"])),
+            len(keycast.bunkers),
+        )
+        time.sleep(1.1)
+        # the key is not an account's key (it only holds a session): a new guest is tried
+        r = join(c, second, session, "Gus again")
+        assert r.status_code == 409 and r.json()["error"] == "session_taken"
+        assert len(keycast.bunkers) == sessions
+        passes = rsvc.odoo.search_read(
+            "belfry.pass", [["guest_channel", "=", "kitchen"]], ["state"]
+        )
+        assert [p["state"] for p in passes] == ["revoked"]
+        assert len(rsvc.odoo.search_read("res.partner", [], ["id"])) == people + 1
+        # another device's key joins the second link as usual
+        other = join(c, second, PrivateKey(), "Hal")
+        assert other.status_code == 200 and other.json()["pubkey"] != got.json()["pubkey"]
+
+
+def test_a_signer_without_the_binding_still_lets_guests_in(rsvc, published, keycast, monkeypatch):
+    """A Keycast image built before patch 0022 ignores ``client_pubkey``: the session is bound
+    by the first connect, as it was."""
+    keycast.binds = False
+    link, join = _guest_link(rsvc, monkeypatch)
+    with TestClient(create_app(rsvc)) as c:
+        got = join(c, link(), PrivateKey(), "Gus")
+        assert got.status_code == 200 and got.json()["bunker_url"].startswith("bunker://")
+        assert keycast.bunkers[-1]["client_pubkey"] is None
 
 
 def test_a_link_is_for_one_person_and_one_day_unless_asked(rsvc, published, monkeypatch):
