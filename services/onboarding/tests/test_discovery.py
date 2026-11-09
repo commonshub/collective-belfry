@@ -135,3 +135,14 @@ def test_cors_of_the_api_for_configured_origins(services, odoo, client):
     services.settings.api_cors_origins = "*"
     r = client.get("/api/me", headers={"Origin": "https://anywhere.test"})
     assert r.headers["access-control-allow-origin"] == "*"
+
+
+def test_the_community_s_own_domain_may_call_the_api(settings):
+    """The installed apps (the chat) live at https://<domain>/<name>/: their calls to pass.<domain>
+    (guest links, follows, sessions) must pass CORS."""
+    from belfry_onboarding.discovery import allowed_origin
+
+    settings.nip05_domain = "belfry.test"
+    assert allowed_origin(settings, "https://belfry.test") == "https://belfry.test"
+    assert allowed_origin(settings, "https://evil.test") is None
+    assert allowed_origin(settings, "http://belfry.test") is None

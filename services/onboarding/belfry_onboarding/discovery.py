@@ -212,10 +212,14 @@ def member_nip05(
 
 
 def allowed_origin(settings: Any, origin: str | None, svc: Services | None = None) -> str | None:
-    """API_CORS_ORIGINS, plus the origin of every app an admin approved (apps.py)."""
+    """API_CORS_ORIGINS, the community's own domain (the apps the belfry installs live at
+    https://<domain>/<name>/), plus the origin of every app an admin approved (apps.py)."""
     if not origin:
         return None
     allowed = [o.strip().rstrip("/") for o in settings.api_cors_origins.split(",") if o.strip()]
+    domain = getattr(settings, "nip05_domain", "") or ""
+    if "." in domain:
+        allowed.append(f"https://{domain}")
     if "*" in allowed:
         return "*"
     if origin.rstrip("/") in allowed:
