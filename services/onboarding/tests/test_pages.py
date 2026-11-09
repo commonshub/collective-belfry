@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import re
-
 import pytest
 
 from belfry_onboarding import pages
@@ -52,7 +50,6 @@ def test_every_page_renders_with_its_title(name, services, client, monkeypatch):
     assert r.headers["content-type"].startswith("text/html")
     assert f"<title>{pages.PAGES[name]}</title>" in r.text
     assert "{{" not in r.text  # every placeholder was filled
-    assert re.search(r'<nav><a href="/help">Help</a>', r.text)  # the footer links the pages
 
 
 def test_help_lists_the_apps_and_links_the_pass(services, client, monkeypatch):

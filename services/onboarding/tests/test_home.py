@@ -12,7 +12,7 @@ def test_home_page_links_the_apps(services, client):
     assert r.headers["content-type"].startswith("text/html")
     assert "How to join" in r.text and "Get an invite" in r.text
     assert 'href="https://apps.belfry.test"' in r.text
-    assert 'href="/me"' in r.text and 'href="/feedback"' in r.text
+    assert 'href="/me"' in r.text
 
 
 def test_start_page_lives_on_the_site_url(services, client):

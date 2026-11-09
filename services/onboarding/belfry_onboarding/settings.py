@@ -108,6 +108,10 @@ class Settings(BaseSettings):
     setup_dir: str = Field(default="/belfry-setup", alias="SETUP_DIR")
     # the installed static apps (infra/data/apps, read-only), listed at apps.<domain>/ (appshome.py)
     apps_dir: str = Field(default="/belfry-apps", alias="APPS_DIR")
+    # Open Source Village's app suite on chat., calendar., vote., … (compose profile osv-apps)
+    osv_apps: bool = Field(default=False, alias="OSV_APPS")
+    # the pass pages' sign-in: belfry (own e-mail + code page, passlogin.py) or authentik
+    pass_signin: str = Field(default="belfry", alias="PASS_SIGNIN")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
     changelog_path: str = Field(default="/belfry-changelog/changelog.json", alias="CHANGELOG_PATH")
     # Where nsite manifests are looked up besides the community relay (space or comma separated).
@@ -143,7 +147,7 @@ class Settings(BaseSettings):
     calendar_public_url: str = Field(default="", alias="CALENDAR_PUBLIC_URL")
     # The community's name and the other public addresses, for /.well-known/belfry.json
     # (discovery.py): what an app needs to connect to this Belfry. Empty ones are left out.
-    community_name: str = Field(default="Open Source Village", alias="COMMUNITY_NAME")
+    community_name: str = Field(default="", alias="COMMUNITY_NAME")
     odoo_public_url: str = Field(default="", alias="ODOO_PUBLIC_URL")
     groups_relay_public_url: str = Field(default="", alias="GROUPS_RELAY_URL")
     bunker_relays: str = Field(default="", alias="BUNKER_PUBLIC_RELAYS")

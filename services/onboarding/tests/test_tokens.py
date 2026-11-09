@@ -241,7 +241,7 @@ def test_tokens_page(mint_services, odoo, mint, client):
 
     r = client.get(f"/tokens/{p['claim_token']}")
     assert r.status_code == 200
-    assert "Your 50 village tokens" in r.text
+    assert "Your 50 community tokens" in r.text
     assert f'href="https://wallet.belfry.test/#token={p["cashu_token"]}"' in r.text
     assert r.headers["referrer-policy"] == "no-referrer"
 

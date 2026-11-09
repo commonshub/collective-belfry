@@ -141,10 +141,26 @@ def community_apps(raw: str) -> list[tuple[str, str, str]]:
     return out
 
 
+def listed_apps(settings: Any) -> list[tuple[str, str, str]]:
+    """The community's apps: Open Source Village's suite (COMMUNITY_APPS) when it runs
+    (OSV_APPS=1), otherwise the apps installed on apps.<domain> (appshome.py)."""
+    if getattr(settings, "osv_apps", False):
+        return community_apps(os.environ.get("COMMUNITY_APPS", ""))
+    from .appshome import installed
+
+    base = (getattr(settings, "apps_public_url", "") or "").rstrip("/")
+    if not base.startswith("http"):
+        return []
+    return [
+        (a["title"], f"{base}/{a['name']}/", a["about"])
+        for a in installed(getattr(settings, "apps_dir", "") or "")
+    ]
+
+
 def _values(settings: Any) -> dict[str, str]:
     public = (getattr(settings, "public_url", "") or "").rstrip("/")
     # the list includes this help page itself (for the app bar); leave it out here
-    listed = community_apps(os.environ.get("COMMUNITY_APPS", ""))
+    listed = listed_apps(settings)
     apps = [a for a in listed if not a[1].endswith("/help")]
     app_list = "".join(
         f'<li><a href="{html.escape(url)}"><strong>{html.escape(name)}</strong></a>'

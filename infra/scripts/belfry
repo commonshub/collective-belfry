@@ -26,7 +26,7 @@
 #
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
 #   BELFRY_NAME                      community name (start page, belfry.json, mails)
-#   BELFRY_THEME                     belfry | osv: the pages' base look (own files: belfry theme)
+#   BELFRY_THEME                     belfry (the only base look; own files: belfry theme)
 #   BELFRY_REGISTER                  belfry | odoo: who is who lives in the belfry's own register
 #                                    (no Odoo) or in Odoo (the add-on: billing, shifts, CRM)
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
@@ -87,9 +87,15 @@ use_images() { [[ -f infra/.images ]] && ! local_changes; }
 # REGISTER=belfry: no Odoo (the belfry's own register; docker-compose.noodoo.yml)
 no_odoo() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get REGISTER)" == belfry ]]; }
 
+# Open Source Village's app suite (chat., calendar., vote., wallet., people., market., photos.,
+# programme., groups.): compose profile osv-apps, only with OSV_APPS=1 in .env.
+OSV_SERVICES=(chat calendar groups village vote wallet)
+osv_apps() { [[ "$(env_get OSV_APPS)" == 1 ]]; }
+
 compose() {
   local files=("${COMPOSE_FILES[@]}")
   if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
+  if osv_apps; then files+=(--profile osv-apps); fi
   if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "$@"
   else docker compose "${files[@]}" "$@"; fi
 }
@@ -168,7 +174,7 @@ cmd_config() {
   if [[ -n "${BELFRY_NAME:-}" ]]; then pairs+=(COMMUNITY_NAME "$BELFRY_NAME" COMPANY_NAME "$BELFRY_NAME"); fi
   if [[ -n "${BELFRY_MAIL_FROM:-}" ]]; then pairs+=(MAIL_FROM "$BELFRY_MAIL_FROM"); fi
   if [[ -n "${BELFRY_THEME:-}" ]]; then
-    [[ "$BELFRY_THEME" =~ ^(belfry|osv)$ ]] || die "BELFRY_THEME is belfry or osv"
+    [[ "$BELFRY_THEME" == belfry ]] || die "BELFRY_THEME is belfry: any other look is a theme folder (belfry theme set DIR)"
     pairs+=(THEME "$BELFRY_THEME")
   fi
   if [[ -n "${BELFRY_REGISTER:-}" ]]; then
@@ -278,8 +284,20 @@ for name, s in json.load(sys.stdin)["services"].items():
 ' "$ROOT")
 }
 
+# Settings that used to follow the look (THEME): a belfry in Belfry's look runs without the Open
+# Source Village apps and signs in on its own page; any other keeps both as they were.
+legacy_settings() {
+  local belfry=0; [[ "$(env_get THEME)" == belfry ]] && belfry=1
+  if [[ -z "$(env_get OSV_APPS)" ]]; then env_set OSV_APPS "$([[ $belfry == 1 ]] && echo 0 || echo 1)"; fi
+  if [[ -z "$(env_get PASS_SIGNIN)" ]]; then env_set PASS_SIGNIN "$([[ $belfry == 1 ]] && echo belfry || echo authentik)"; fi
+  if ! osv_apps; then
+    compose --profile osv-apps rm -sf "${OSV_SERVICES[@]}" >/dev/null 2>&1 || true
+  fi
+}
+
 cmd_apply() {
   bootstrap_env
+  legacy_settings
   mkdir -p infra/data/changelog infra/data/theme "$SETUP_DIR"
   if [[ "${BELFRY_BUILD_LOCAL:-}" == 1 ]] || local_changes; then
     rm -f infra/.images
@@ -647,7 +665,7 @@ cmd_theme() {
       say "Back to the base theme ($(env_get THEME)); the files are in $THEME_DIR.old"
       ;;
     show)
-      say "Base theme: $(env_get THEME || true) (THEME; belfry or osv)"
+      say "Base theme: belfry"
       say "Community name: $(env_get COMMUNITY_NAME)"
       if [[ -d "$THEME_DIR" ]] && [[ -n "$(ls -A "$THEME_DIR")" ]]; then ls -l "$THEME_DIR"; else say "No own files in $THEME_DIR"; fi
       ;;
@@ -685,18 +703,23 @@ app_route() {
 # updates the ones it installed itself when the shipped build changes; an app an admin removed
 # (infra/data/apps/_removed/<name>) or replaced with their own build stays as it is.
 SHIPPED_APPS="$INFRA/shipped-apps"
-app_brand() {  # the shipped builds carry the village's name: give them the community's
-  local dir=$1 name; name=$(env_get COMMUNITY_NAME); [[ -n "$name" ]] || return 0
-  BELFRY_NAME="$name" python3 - "$dir" <<'PY' || true
+app_brand() {  # the community's name instead of the village's, and its own stylesheet
+  local dir=$1
+  BELFRY_NAME="$(env_get COMMUNITY_NAME)" python3 - "$dir" <<'PY' || true
 import html, json, os, pathlib, sys
-d, name = pathlib.Path(sys.argv[1]), os.environ["BELFRY_NAME"]
+d, name = pathlib.Path(sys.argv[1]), os.environ.get("BELFRY_NAME", "")
 idx = d / "index.html"
 if idx.is_file():
     t = idx.read_text(encoding="utf-8")
-    t = t.replace("Open Source Village", html.escape(name)).replace('content="Village"', 'content="' + html.escape(name, quote=True) + '"')
+    if name:
+        t = t.replace("Open Source Village", html.escape(name)).replace('content="Village"', 'content="' + html.escape(name, quote=True) + '"')
+    # the theme folder's custom.css (empty without one), last so it wins: skills/belfry-theme
+    link = '<link rel="stylesheet" href="/theme/custom/own.css">'
+    if link not in t and "</head>" in t:
+        t = t.replace("</head>", link + "</head>", 1)
     idx.write_text(t, encoding="utf-8")
 man = d / "manifest.webmanifest"
-if man.is_file():
+if name and man.is_file():
     m = json.loads(man.read_text(encoding="utf-8"))
     if m.get("name") == "Open Source Village":
         m["name"], m["short_name"] = name, name[:12]

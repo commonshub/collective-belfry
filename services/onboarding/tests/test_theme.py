@@ -1,4 +1,4 @@
-"""The page frame's theme (theme.py): base themes, the community's own files, /theme/*."""
+"""The page frame's theme (theme.py): Belfry's look, the community's own files, /theme/*."""
 
 from __future__ import annotations
 
@@ -10,9 +10,36 @@ from belfry_onboarding import theme
 from belfry_onboarding.app import create_app
 
 
-def test_without_theme_the_pages_keep_the_osv_look(client):
-    page = client.get("/").text
-    assert "/brand/tokens.css" in page and "Open Source Village, run by Belfry" in page
+def test_no_community_look_is_built_in(services, tmp_path):
+    """Belfry's look is the only one in the code: THEME=osv (an old setting) changes nothing."""
+    s = services.settings
+    s.theme, s.community_name, s.theme_dir = "osv", "Open Source Village", str(tmp_path / "none")
+    t = theme.load(s)
+    assert t.base == "belfry" and t.css == ["/theme/belfry/theme.css", "/theme/compat.css"]
+    assert not (theme.BUILTIN / "osv").exists()
+    with TestClient(create_app(services)) as c:
+        assert "/brand/tokens.css" not in c.get("/").text
+
+
+def test_own_css_for_the_apps(services, tmp_path):
+    folder = tmp_path / "theme"
+    folder.mkdir()
+    services.settings.theme_dir = str(tmp_path / "none")
+    with TestClient(create_app(services)) as c:
+        r = c.get("/theme/custom/own.css")
+        assert (
+            r.status_code == 200
+            and r.text == ""
+            and r.headers["content-type"].startswith("text/css")
+        )
+    (folder / "custom.css").write_text(":root, :root[data-theme] { --accent: #2a6f97; }")
+    (folder / "theme.json").write_text(json.dumps({"scheme": "dark", "wordmark": True}))
+    (folder / "logo.svg").write_text("<svg xmlns='http://www.w3.org/2000/svg'/>")
+    services.settings.theme_dir = str(folder)
+    with TestClient(create_app(services)) as c:
+        assert "--accent: #2a6f97" in c.get("/theme/custom/own.css").text
+    t = theme.load(services.settings)
+    assert t.scheme == "dark" and t.logo_is_wordmark
 
 
 def test_belfry_theme_with_the_community_name(services, tmp_path):
@@ -66,7 +93,7 @@ def test_a_broken_theme_json_is_skipped(settings, tmp_path):
 def test_the_base_stylesheets_are_not_swallowed_by_a_comment():
     from belfry_onboarding import theme as t
 
-    for base in ("belfry", "osv"):
+    for base in ("belfry",):
         import re
 
         css = (t.BUILTIN / base / "theme.css").read_text()

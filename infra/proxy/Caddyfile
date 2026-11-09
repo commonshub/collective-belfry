@@ -253,6 +253,14 @@ relay.{$BELFRY_DOMAIN} {
 	reverse_proxy relay:8080
 }
 
+# The Open Source Village apps (Coracle chat, calendar, vote, wallet, directory, market, photos,
+# programme, Flotilla groups): docker compose profile osv-apps, only with OSV_APPS=1. A belfry
+# without them sends their hosts to its own apps at apps.<domain> (the chat at apps.<domain>/chat/).
+(osv-app) {
+	@osv_off expression "{$OSV_APPS:1} != 1"
+	redir @osv_off https://apps.{$BELFRY_DOMAIN}{args[0]} 302
+}
+
 # Blossom file server through its gate (writes need an active pass; reads are public).
 blossom.{$BELFRY_DOMAIN} {
 	import security
@@ -268,6 +276,7 @@ blossom.{$BELFRY_DOMAIN} {
 # blossom. directly (infra/apps/chat/README.md).
 chat.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /chat/
 	# Coracle's own <meta> policy applies as well (both must allow). Participants may add other
 	# relays and look up NIP-05 names elsewhere, so connections stay open to any https/wss host.
 	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
@@ -286,6 +295,7 @@ mint.{$BELFRY_DOMAIN} {
 # Village token wallet (cashu.me, static); it talks to mint., apps. (Keycast) and relay. itself.
 wallet.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	# one inline script (brand.mjs: the dark background before the app loads)
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy wallet:80
@@ -355,6 +365,7 @@ verifier.{$BELFRY_DOMAIN} {
 # Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
 calendar.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN} https://programme.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy calendar:80
 }
@@ -362,6 +373,7 @@ calendar.{$BELFRY_DOMAIN} {
 # Community app: anonymous polls (services/vote: API and web app in one process).
 vote.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	# the Semaphore prover runs WebAssembly
 	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy vote:8080
@@ -371,24 +383,28 @@ vote.{$BELFRY_DOMAIN} {
 # one process, four ports).
 people.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8080
 }
 
 market.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8081
 }
 
 photos.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8082
 }
 
 programme.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://vote.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8083
 }
@@ -398,6 +414,7 @@ programme.{$BELFRY_DOMAIN} {
 # look up NIP-05 names anywhere, so connections stay open to any https/wss host.
 groups.{$BELFRY_DOMAIN} {
 	import security
+	import osv-app /
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src 'none'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy groups:80
 }

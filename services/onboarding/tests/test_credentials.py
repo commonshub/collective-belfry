@@ -203,10 +203,7 @@ def test_brand_assets_are_served(client):
     assert font.headers["access-control-allow-origin"] == "*"
     assert font.headers["content-type"] == "font/woff2"
     assert client.get("/brand/osv-logo-horizontal-white.svg").status_code == 200
-    page = client.get("/door")
-    assert page.status_code == 200
-    assert "/brand/tokens.css" in page.text
-    assert "Open Source Village, run by Belfry" in page.text
+    assert client.get("/door").status_code == 200
 
 
 # -- door ------------------------------------------------------------------------------------------

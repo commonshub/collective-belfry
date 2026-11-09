@@ -93,6 +93,8 @@ def web(services, monkeypatch):
     from belfry_onboarding import theme
 
     services.settings.theme = "belfry"
+    services.settings.osv_apps, services.settings.pass_signin = False, "belfry"
+    services.settings.community_name = ""
     services.settings.nip05_domain = "belfry.test"
     monkeypatch.setattr(theme, "CURRENT", theme.load(services.settings))
     services.settings.site_url = "https://belfry.test"

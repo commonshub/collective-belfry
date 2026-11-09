@@ -82,12 +82,6 @@ PROVIDERS: list[tuple[str, str, str, list[tuple[str, str, bool, str]]]] = [
         [("BELFRY_NAME", "Name", False, "")],
     ),
     (
-        "theme",
-        "Theme",
-        "The pages' base look; your own colours and logo: belfry theme set.",
-        [("BELFRY_THEME", "Theme", False, "belfry or osv")],
-    ),
-    (
         "homepage",
         "Homepage",
         "What https://<domain> shows.",
@@ -790,7 +784,7 @@ def wizard(start: str, csrf: str, settings: Any, info: dict[str, Any]) -> str:
     the code. START is where to resume (name, sender, wait, code)."""
     domain = settings.nip05_domain
     name = info.get("name") or settings.community_name or ""
-    if name == "Open Source Village" and theme.current().base != "osv":
+    if name == "Open Source Village":
         name = ""
     boxes = "".join(
         ('<span class="sep"></span>' if i == 3 else "")
@@ -905,10 +899,7 @@ ROW_TEXT = {
         "E-mail",
         "Sign-in codes, invites and the shared inbox's replies. Nobody can sign in until it works.",
     ),
-    "theme": (
-        "Look",
-        "The pages' base look: belfry or osv. Your colours and logo: belfry theme set.",
-    ),
+    "theme": ("Look", "Belfry's look, with your community's name."),
     "homepage": ("Homepage", "What your domain shows."),
 }
 SETUP_STYLE = """<style>
@@ -927,7 +918,7 @@ border:2px solid var(--border-strong,var(--border));font-size:.8rem;font-weight:
 .tick.done{border:0;background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
 .list .act{font-size:.9rem;padding:7px 12px;border-radius:10px;border:1px solid var(--border-strong,var(--border));white-space:nowrap}
 .list details[open] .act{visibility:hidden}
-.list form{padding:0 18px 18px 56px} .list label{display:block;margin:10px 0 4px;font-weight:500;font-size:.92rem}
+.list form,.list .form{padding:0 18px 18px 56px} .list label{display:block;margin:10px 0 4px;font-weight:500;font-size:.92rem}
 .list input[type=text],.list input[type=password]{width:100%;box-sizing:border-box;font:inherit;padding:9px 11px;
 border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inherit}
 .seg{display:inline-flex;gap:4px;padding:4px;background:var(--surface-deep);border-radius:12px;margin:6px 0 4px}
@@ -945,6 +936,33 @@ border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inh
 .addons input{width:100%;box-sizing:border-box;font:inherit;padding:9px 11px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inherit}
 .note{padding:10px 12px;border-radius:10px;background:var(--surface-deep);margin:0 0 14px}
 </style>"""
+
+
+def look_row(open_: str, settings: Any = None) -> tuple[bool, str]:
+    """The look: Belfry's, plus the community's own files (infra/data/theme), which no update
+    touches. Changed with `belfry theme set DIR`, following the belfry-theme skill."""
+    folder = theme.custom_dir(settings) if settings is not None else None
+    files = sorted(p.name for p in folder.iterdir() if p.is_file()) if folder else []
+    summary = (
+        ("Your own look: " + ", ".join(files[:4]) + (" …" if len(files) > 4 else ""))
+        if files
+        else ROW_TEXT["theme"][1]
+    )
+    public = (getattr(settings, "public_url", "") or "").rstrip("/")
+    body = (
+        '<div class="form"><p class="meta">Colours, fonts and logo live in a theme folder on the '
+        "server (<code>infra/data/theme</code>), which updates never touch. Give your agent the "
+        f'<a href="{E(public)}/skills/belfry-theme.md">theme skill</a>, or run '
+        "<code>belfry theme set DIR</code> on the server; <code>belfry theme reset</code> goes "
+        "back to Belfry's look.</p></div>"
+    )
+    row = (
+        f'<details id="theme"{" open" if open_ == "theme" else ""}><summary>'
+        '<span class="tick done">✓</span>'
+        f'<span class="what"><strong>Look</strong><span class="meta">{E(summary)}</span></span>'
+        '<span class="act">How to change</span></summary>' + body + "</details>"
+    )
+    return True, row
 
 
 def provider_state(st: dict[str, Any], fields: list[tuple[str, str, bool, str]]) -> str:
@@ -1033,6 +1051,7 @@ def settings_form(
     open_: str = "",
     members: int | None = None,
     name: str = "",
+    settings: Any = None,
 ) -> str:
     notes = ""
     if err:
@@ -1056,6 +1075,8 @@ def settings_form(
     for pid in NEEDS:
         if pid == "mail":
             done, row = mail_row(st, csrf, open_)
+        elif pid == "theme":
+            done, row = look_row(open_, settings)
         else:
             _, fields = by[pid]
             title, about = ROW_TEXT[pid]
@@ -1241,6 +1262,7 @@ def register(app: FastAPI) -> None:
                 request.query_params.get("open", ""),
                 n_members,
                 services.settings.community_name or "",
+                services.settings,
             ),
             refresh=st["pending"] or st["applying"],
         )

@@ -46,6 +46,11 @@ def settings() -> Settings:
         PUBLIC_URL="https://belfry.test",
         STATUS_LIST_URL="http://onboarding:8100/status/1",
         BRIDGE_CLIENT_SECRET=BRIDGE_SECRET,
+        # the first belfry's setup: its app suite and Authentik's sign-in (tests for a belfry
+        # without them set these back)
+        OSV_APPS=True,
+        PASS_SIGNIN="authentik",
+        COMMUNITY_NAME="Open Source Village",
         _env_file=None,
     )
 

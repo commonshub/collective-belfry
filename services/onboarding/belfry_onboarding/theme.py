@@ -2,8 +2,8 @@
 
 Two layers, so a belfry can be rebranded and still updated without losing the changes:
 
-1. The base theme, shipped with the code (``themes/<THEME>/``): ``belfry`` (the default for new
-   installs) or ``osv`` (Open Source Village, used when THEME is not set, as before themes).
+1. The base theme, shipped with the code (``themes/belfry/``): Belfry's look, the only one. No
+   community's look is in the code, Open Source Village's neither.
 2. The community's own files in THEME_DIR (``infra/data/theme/`` on the server, mounted
    read-only; ``belfry theme set DIR`` fills it). They are data, never in git, so ``belfry update``
    never touches them:
@@ -12,11 +12,15 @@ Two layers, so a belfry can be rebranded and still updated without losing the ch
      ``--bg``, ``--font-title``, … see ``themes/belfry/theme.css``) or any other rule;
    - ``logo.svg`` (or ``.png``) and ``favicon.svg`` (or ``.png``/``.ico``);
    - any fonts or images ``custom.css`` points at (``url(my-font.woff2)``);
-   - ``theme.json``: ``{"name": …, "url": …, "footer": …, "links": [["/help", "Help"], …]}``.
+   - ``theme.json``: ``{"name": …, "url": …, "footer": …, "links": [["/help", "Help"], …],
+     "wordmark": true, "scheme": "dark"}``.
+
+   ``/theme/custom/own.css`` serves ``custom.css`` (or nothing) to the apps on apps.<domain>, so one
+   folder restyles the pages and the apps (skills/belfry-theme).
 
 The community's name is COMMUNITY_NAME (``belfry config``: BELFRY_NAME), its website SITE_URL.
 Pages use only the variables, so a theme restyles them without a fork. Files are served at
-``/theme/<base>/…`` and ``/theme/custom/…`` on every host.
+``/theme/belfry/…`` and ``/theme/custom/…`` on every host.
 """
 
 from __future__ import annotations
@@ -30,24 +34,16 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 log = logging.getLogger(__name__)
 E = html.escape
 
 BUILTIN = Path(__file__).parent / "themes"
-BASES = ("belfry", "osv")
+BASES = ("belfry",)
 SERVED = {".css", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff2", ".woff", ".gif"}
 LOGOS = ("logo.svg", "logo.png", "logo.webp")
 FAVICONS = ("favicon.svg", "favicon.png", "favicon.ico")
-OSV_LINKS = [
-    ("/help", "Help"),
-    ("/feedback", "Feedback"),
-    ("/rules", "Community rules"),
-    ("/privacy", "Privacy"),
-    ("/terms", "Terms"),
-    ("/refunds", "Refunds"),
-]
 
 
 @dataclass
@@ -81,45 +77,29 @@ def _version(p: Path) -> str:
 
 def load(settings: Any) -> Theme:
     """The theme for these settings; never fails (a broken theme.json is logged and skipped)."""
-    base = (getattr(settings, "theme", "") or "osv").strip().lower()
-    if base not in BASES:
-        log.warning("theme: unknown THEME %r, using belfry", base)
-        base = "belfry"
+    # One base look, Belfry's. Any other look (Open Source Village's too) is a theme folder
+    # (infra/data/theme, `belfry theme set DIR`): data that no update overwrites.
     name = getattr(settings, "community_name", "") or ""
     site = (getattr(settings, "site_url", "") or "").rstrip("/")
     console = (getattr(settings, "console_url", "") or "").rstrip("/")
     public = (getattr(settings, "public_url", "") or "").rstrip("/")
-    if base == "osv":
-        theme = Theme(
-            base="osv",
-            name=name or "Open Source Village",
-            url="https://opensourcevillage.org",
-            logo="/brand/osv-logo-horizontal-white.svg",
-            logo_is_wordmark=True,
-            favicon="/brand/favicon.svg",
-            css=["/brand/fonts.css", "/brand/tokens.css", "/theme/osv/theme.css"],
-            footer=f"{name or 'Open Source Village'}, run by Belfry",
-            links=list(OSV_LINKS),
-            scheme="dark",
-        )
-    else:
-        name = "Belfry" if not name or name == "Open Source Village" else name
-        links = [(f"{public}/proposals", "Proposals"), (f"{public}/changelog", "Changelog")]
-        if getattr(settings, "git_repo", ""):
-            links.append(((site or public) + "/git", "Code"))
-        if console:
-            links.append((console + "/", "This belfry"))
-        theme = Theme(
-            base="belfry",
-            name=name,
-            url=site or "/",
-            logo="/theme/belfry/logo.svg",
-            logo_is_wordmark=False,
-            favicon="/theme/belfry/favicon.svg",
-            css=["/theme/belfry/theme.css", "/theme/compat.css"],
-            footer="Run by Belfry" if name == "Belfry" else f"{name}, run by Belfry",
-            links=links,
-        )
+    name = name or "Belfry"
+    links = [(f"{public}/proposals", "Proposals"), (f"{public}/changelog", "Changelog")]
+    if getattr(settings, "git_repo", ""):
+        links.append(((site or public) + "/git", "Code"))
+    if console:
+        links.append((console + "/", "This belfry"))
+    theme = Theme(
+        base="belfry",
+        name=name,
+        url=site or "/",
+        logo="/theme/belfry/logo.svg",
+        logo_is_wordmark=False,
+        favicon="/theme/belfry/favicon.svg",
+        css=["/theme/belfry/theme.css", "/theme/compat.css"],
+        footer="Run by Belfry" if name == "Belfry" else f"{name}, run by Belfry",
+        links=links,
+    )
     folder = custom_dir(settings)
     if folder is None:
         return theme
@@ -144,6 +124,8 @@ def load(settings: Any) -> Theme:
                 theme.links = [(str(h), str(t)) for h, t in data["links"]]
             if data.get("wordmark") is True:
                 theme.logo_is_wordmark = True
+            if data.get("scheme") in ("light", "dark", "light dark"):
+                theme.scheme = str(data["scheme"])
         except (ValueError, TypeError) as exc:
             log.warning("theme: %s is not usable: %s", meta, exc)
     return theme
@@ -204,8 +186,7 @@ def renamed(text: str, name: str) -> str:
 def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: bool = False) -> str:
     """The page: logo, BODY, footer. BARE leaves out the footer (the first-run setup wizard)."""
     t = current()
-    if t.base != "osv":
-        title, body = renamed(title, t.name), renamed(body, t.name)
+    title, body = renamed(title, t.name), renamed(body, t.name)
     css = "".join(f'<link rel="stylesheet" href="{E(h)}">' for h in t.css)
     strip = f'<div class="test-notice" role="note">{E(notice)}</div>' if notice else ""
     brand = (
@@ -244,6 +225,23 @@ def register(app: FastAPI) -> None:
             target,
             headers={
                 "Cache-Control": f"public, max-age={max_age}",
+                "Access-Control-Allow-Origin": "*",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/theme/custom/own.css", include_in_schema=False)
+    async def own_css():
+        """The community's custom.css for the apps (empty without one), so they can always link it;
+        next to the folder's files, so its relative url()s work."""
+        folder = custom_dir(app.state.services.settings)
+        css = folder / "custom.css" if folder else None
+        body = css.read_bytes() if css and css.is_file() else b""
+        return Response(
+            body,
+            media_type="text/css",
+            headers={
+                "Cache-Control": "public, max-age=300",
                 "Access-Control-Allow-Origin": "*",
                 "X-Content-Type-Options": "nosniff",
             },

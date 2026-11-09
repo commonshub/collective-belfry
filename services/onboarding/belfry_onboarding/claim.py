@@ -72,19 +72,10 @@ def home_page(settings: Any) -> str:
     from . import theme
 
     look = theme.current()
-    if look.base == "osv":
-        hero = """<h1>Open Source Village</h1>
-<p class="lead">A gathering of people who make and use open source: to work, learn and live
-together for a few days. <a href="https://opensourcevillage.org">About the village</a></p>
-<p class="muted">Belfry runs the village's passes, sign-in and community apps: everything here is
-open source too.</p>"""
-    else:
-        about = (
-            f' <a href="{html.escape(look.url)}">About us</a>'
-            if look.url.startswith("http")
-            else ""
-        )
-        hero = f"""<h1>{html.escape(look.name)}</h1>
+    about = (
+        f' <a href="{html.escape(look.url)}">About us</a>' if look.url.startswith("http") else ""
+    )
+    hero = f"""<h1>{html.escape(look.name)}</h1>
 <p class="lead">Members of {html.escape(look.name)} sign in, chat, share photos and files and
 hold their pass here, on a server the community runs.{about}</p>
 <p class="muted">It runs on <a href="https://belfry.sh">Belfry</a>, which is open source.</p>"""

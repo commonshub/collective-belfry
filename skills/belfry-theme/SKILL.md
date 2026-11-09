@@ -1,38 +1,56 @@
 ---
 name: belfry-theme
-description: Rebrand a belfry's own pages (sign-in, pass, proposals, changelog, status, members, setup, /git) with the community's name, colours, fonts and logo, without forking the code, so updates keep the changes. Also how to choose the code shown at /git.
+description: Give a belfry the community's own look (name, colours, fonts, logo, favicon) across its pages (sign-in, pass, console, setup, members, proposals, /git) and its apps on apps.<domain> (the chat), without forking the code, so every update keeps the look. Also how to choose the code shown at /git.
 ---
 
-# Rebrand a belfry
+# Theme a belfry
 
-A belfry serves two kinds of pages:
+The code ships **one look, Belfry's**. No community's look is in the code, Open Source Village's
+neither. A community's look is a **theme folder**: data on the server, in
+`infra/data/theme/`. No update ever touches it (`belfry update` replaces the code, never
+`infra/data/`), and it goes into the backups with the rest of `infra/data/`.
 
-- **the homepage** on the apex (`https://<domain>`): the community's own website, published as an
-  nsite. See the `belfry-homepage` skill; it is entirely yours.
-- **the belfry's pages**: `pass.<domain>` (sign-in, pass, `/proposals`, `/changelog`,
-  `/monitor`), `belfry.<domain>` (status, members, setup) and `/git`. The code ships them; this
-  skill changes how they look.
+What a theme folder changes:
 
-## Two layers
+- **the belfry's pages**: `pass.<domain>` (sign-in, pass, `/proposals`, `/changelog`, drop box),
+  `belfry.<domain>` (home, status, members, setup, monitor) and `/git`;
+- **the apps on `apps.<domain>`** (the apps list, the chat, and every app installed with
+  `belfry app install`): each one loads `/theme/custom/own.css`, which is the folder's
+  `custom.css` (or empty).
 
-1. **Base theme**, in the code: `THEME=belfry` (default for new installs: limestone, ink, bronze,
-   light and dark) or `THEME=osv`. Set it with `BELFRY_THEME=belfry` in `belfry config`, or on
-   `https://belfry.<domain>/setup`.
-2. **The community's own files**, in `infra/data/theme/` on the server. That is data, never in git,
-   so `belfry update` never overwrites it (it is in the backups like the rest of `infra/data/`):
+The **homepage** on the apex (`https://<domain>`) is the community's own website, published as an
+nsite: see the `belfry-homepage` skill. A theme folder does not change it.
+
+## Never do this
+
+- Don't edit files in the code: `services/onboarding/belfry_onboarding/themes/`, the shipped
+  apps in `infra/shipped-apps/`, `infra/proxy/`. The next update overwrites them.
+- Don't add a base theme to the code for one community. Everything a community needs fits in
+  the folder; if it doesn't, propose a new variable or `theme.json` key upstream instead.
+
+## The folder
 
 | File | What it does |
 | --- | --- |
-| `custom.css` | loaded after the base theme; set the variables below, or any other rule |
-| `logo.svg` / `logo.png` | the logo in the page header (shown next to the community name) |
-| `favicon.svg` / `.png` / `.ico` | the browser tab icon |
-| `theme.json` | `{"name": "…", "url": "https://…", "footer": "…", "links": [["/help", "Help"]], "wordmark": false}` |
-| `*.woff2`, images | anything `custom.css` refers to with `url(file.woff2)` |
+| `custom.css` | loaded after Belfry's stylesheet on every page, and by every app; set the variables below, or any other rule |
+| `logo.svg` / `logo.png` / `logo.webp` | the logo in the page header, next to the community name |
+| `favicon.svg` / `.png` / `.ico` | the browser tab icon of the pages |
+| `theme.json` | `{"name": "…", "url": "https://…", "footer": "…", "links": [["/help", "Help"]], "wordmark": false, "scheme": "light dark"}` |
+| `*.woff2`, `*.woff`, images | anything `custom.css` refers to, by its bare name: `url(MyFont.woff2)` |
 
-The community name comes from `COMMUNITY_NAME` (`BELFRY_NAME`); `theme.json` can override it for
-the pages only. `"wordmark": true` shows the logo alone (a logo that already spells the name).
+Flat: no subfolders. `belfry theme set` keeps only css, svg, png, jpg, webp, ico, woff2, woff,
+gif and json files.
 
-## The variables
+`theme.json` keys, all optional:
+
+- `name`: the name on the pages (default: `COMMUNITY_NAME`, set on the setup page);
+- `url`: where the logo links (default: the homepage);
+- `footer`: the footer line (default: "<name>, run by Belfry");
+- `links`: the footer links, `[["href", "text"], …]` (default: Proposals, Changelog, Code, This belfry);
+- `wordmark`: `true` when the logo already spells the name (then the name isn't repeated);
+- `scheme`: `"light"`, `"dark"` or `"light dark"` (the default: follows the device).
+
+## The pages' variables
 
 ```css
 :root {
@@ -49,26 +67,53 @@ the pages only. `"wordmark": true` shows the logo alone (a logo that already spe
 @media (prefers-color-scheme: dark) { :root { --bg: #171614; /* … */ } }
 ```
 
-Keep text readable: `--fg` on `--bg` and `--on-accent` on `--accent` need a contrast of at least
-4.5:1. Set the dark-mode values too, or pin one scheme with `:root { color-scheme: light }`.
+## The apps' variables
+
+The chat (and the other apps built for Belfry) use their own names, set on
+`:root[data-theme]`. Write the selector as `:root, :root[data-theme]` so one rule reaches both
+the pages and the apps:
+
+```css
+:root, :root[data-theme] {
+  --bg: #ffffff; --surface: #f4f4f5; --surface-2: #e4e4e7; --line: #e4e4e7;
+  --text: #09090b; --muted: #71717a; --faint: #a1a1aa;
+  --accent: #2a6f97; --on-accent: #ffffff; --danger: #dc2626;
+  --radius: 10px; --font: 'MyFont', system-ui, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root, :root[data-theme] { --bg: #0b0f12; --text: #f5f5f5; /* … */ }
+}
+```
+
+`--bg`, `--surface`, `--accent`, `--on-accent` and `--radius` mean the same thing on the pages
+and in the apps; set them once.
+
+Keep text readable: text on the background and on the accent needs a contrast of at least 4.5:1,
+in light and dark mode. To have one scheme only, set `"scheme"` in `theme.json` and
+`color-scheme: light` (or `dark`) in `custom.css`, and give only that scheme's values.
 
 ## Steps (an agent with SSH to the server)
 
-1. Make a folder with the files, e.g. `theme/custom.css`, `theme/logo.svg`, `theme/theme.json`.
+1. Make the folder, e.g. `theme/custom.css`, `theme/logo.svg`, `theme/favicon.svg`,
+   `theme/theme.json`, and the font files. Keep it in the community's own repository if it has
+   one: that is the source, the server holds a copy.
 2. Copy it over and apply it:
    ```sh
    scp -r theme root@<server>:/tmp/theme
    ssh root@<server> belfry theme set /tmp/theme
    ```
-   `belfry theme set` keeps only theme files (css, svg, png, jpg, webp, ico, woff2, woff, gif,
-   json), checks `theme.json`, keeps the previous files in `infra/data/theme.old`, records the
-   change in the changelog and restarts the pages. `belfry theme show` lists what is there;
-   `belfry theme reset` goes back to the base theme.
-3. Open `https://pass.<domain>/proposals` and `https://belfry.<domain>/` and look at both light and
-   dark mode.
+   `belfry theme set` checks `theme.json`, keeps the previous files in `infra/data/theme.old`,
+   records the change in the changelog and restarts the pages. The apps pick up `own.css`
+   within five minutes (cache), or right away after a reload without cache.
+   `belfry theme show` lists the files; `belfry theme reset` goes back to Belfry's look.
+3. Look at the result in light and dark mode, on a phone and a laptop:
+   `https://belfry.<domain>/`, `https://pass.<domain>/proposals`, `https://apps.<domain>/` and
+   `https://apps.<domain>/chat/`.
+4. After an update (`belfry update`), check the same pages: the folder is untouched, but a new
+   page may use a variable the theme doesn't set yet; it then shows Belfry's value.
 
-Without SSH, ask an admin of the belfry to run step 2; members can propose a theme as a
-`/proposals` note with the files attached (Blossom links).
+Without SSH, ask an admin of the belfry to run step 2. Members can propose a theme as a
+`/proposals` note with the files attached.
 
 ## /git: the code a belfry shows
 

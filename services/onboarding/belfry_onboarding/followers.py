@@ -144,9 +144,7 @@ _names: dict[str, tuple[float, str]] = {}
 
 def chat_link(svc: Services, channel: str) -> str:
     """Where a channel opens in the community's chat (apps.<domain>/chat, ``#/c/<id>``)."""
-    from . import theme
-
-    if theme.current().base == "osv":
+    if svc.settings.osv_apps:  # Open Source Village's chat (Coracle) on chat.<domain>
         return svc.settings.chat_public_url or ""
     host = svc.settings.nip05_domain or domain(svc)
     return f"https://apps.{host}/chat/#/c/{urllib.parse.quote(channel, safe='')}"

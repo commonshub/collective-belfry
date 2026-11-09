@@ -42,8 +42,8 @@ FLOWS: dict[str, dict[str, Any]] = {}
 
 
 def own(svc: Services) -> bool:
-    """This belfry signs in with its own page (every look but Open Source Village's)."""
-    return theme.current().base != "osv"
+    """This belfry signs in with its own page (PASS_SIGNIN=belfry), not Authentik's."""
+    return (svc.settings.pass_signin or "belfry").strip().lower() != "authentik"
 
 
 def target(request: Request) -> str:

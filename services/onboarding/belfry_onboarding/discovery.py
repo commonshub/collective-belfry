@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from typing import Any
 
@@ -126,7 +125,7 @@ def document(settings: Any) -> dict[str, Any]:
         else None,
         "apps": [
             {"name": name, "url": url, "description": text}
-            for name, url, text in pages.community_apps(os.environ.get("COMMUNITY_APPS", ""))
+            for name, url, text in pages.listed_apps(settings)
         ],
         "skills": {role: f"{public}/skills/{name}.md" for role, name in SKILLS.items()},
     }

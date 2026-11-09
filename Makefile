@@ -15,8 +15,8 @@ up: infra/.env ## start postgres, odoo, authentik, keycast, relay (not the onboa
 
 up-app: infra/.env ## start everything including the onboarding service (needs services/onboarding)
 	mkdir -p odoo/addons
-	$(COMPOSE) --profile app build onboarding
-	$(COMPOSE) --profile app up -d
+	$(COMPOSE) --profile app --profile osv-apps build onboarding
+	$(COMPOSE) --profile app --profile osv-apps up -d
 
 build-keycast: ## build belfry-keycast:local from infra/keycast/build/Dockerfile (about 15 minutes cold)
 	$(COMPOSE) build keycast
@@ -28,10 +28,10 @@ smoke: ## invite -> pay -> accounts created once (needs up-app and bootstrap)
 	infra/scripts/smoke.sh
 
 down: ## stop the stack, keep volumes
-	$(COMPOSE) --profile app down
+	$(COMPOSE) --profile app --profile osv-apps down
 
 logs:
-	$(COMPOSE) --profile app logs -f --tail=100
+	$(COMPOSE) --profile app --profile osv-apps logs -f --tail=100
 
 test-odoo: ## run the belfry_pass tests in a throwaway Odoo container against the stack's postgres
 	$(COMPOSE) exec -T postgres psql -U postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'test_belfry'" -c 'DROP DATABASE IF EXISTS test_belfry'

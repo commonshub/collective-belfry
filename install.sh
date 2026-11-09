@@ -400,8 +400,9 @@ EOF
   # A new belfry's apex shows its own website (an nsite), and a placeholder that explains how to
   # publish it until then; HOMEPAGE in belfry.env (BELFRY_ENV_HOMEPAGE) chooses otherwise.
   if [[ $fresh -eq 1 ]]; then export BELFRY_ENV_HOMEPAGE=${BELFRY_ENV_HOMEPAGE:-nsite}; fi
-  # New belfries wear Belfry's own look and the community's name (THEME; own colours and logo
-  # later with `belfry theme set DIR`); without THEME the pages keep Open Source Village's.
+  # New belfries wear Belfry's look and the community's name, and run without Open Source
+  # Village's apps (OSV_APPS=0, written by `belfry apply`); the community's own colours, fonts
+  # and logo: a theme folder, `belfry theme set DIR` (skills/belfry-theme).
   if [[ $fresh -eq 1 ]]; then export BELFRY_THEME=${BELFRY_THEME:-belfry}; fi
   # New belfries keep their own register (people, passes, invites) and run no Odoo; --odoo
   # keeps Odoo as the add-on (BELFRY_REGISTER=odoo).
