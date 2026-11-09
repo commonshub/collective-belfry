@@ -188,3 +188,35 @@ def test_whitelist_sync_imports_the_members_profiles(services, monkeypatch):
     monkeypatch.setattr(core, "active_pubkeys", lambda svc: [B])
     core.sync_relay_whitelist(services)
     assert [e["id"] for e in zooid.imported] == ["b"]
+
+
+def test_the_community_s_admins_administer_every_group():
+    """zooid patch 0003: moderategroups for the admins, taken from former admins (NIP-86)."""
+    import hashlib
+
+    key = PrivateKey()
+    old, new = "b" * 64, "c" * 64
+    calls: list[tuple[str, list]] = []
+    held = {old}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        auth = json.loads(base64.b64decode(request.headers["authorization"].split(" ", 1)[1]))
+        tags = {t[0]: t[1] for t in auth["tags"]}
+        assert tags["u"] == "https://groups-relay.belfry.test"
+        assert tags["payload"] == hashlib.sha256(request.content).hexdigest()
+        assert request.headers["content-type"] == "application/nostr+json+rpc"
+        calls.append((body["method"], body["params"]))
+        if body["method"] == "listmethodassignees":
+            return httpx.Response(
+                200, json={"result": [{"pubkey": pk, "methods": ["moderategroups"]} for pk in held]}
+            )
+        return httpx.Response(200, json={"result": True})
+
+    gm = GroupsMembers(
+        "http://groups-relay:3334", key, httpx.Client(transport=httpx.MockTransport(handler))
+    )
+    out = gm.set_admins("wss://groups-relay.belfry.test", [new])
+    assert out["admins"] == [new]
+    assert ("assignmethod", [new, "moderategroups"]) in calls
+    assert ("unassignmethod", [old, "moderategroups"]) in calls

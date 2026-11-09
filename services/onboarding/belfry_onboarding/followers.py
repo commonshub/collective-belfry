@@ -271,11 +271,35 @@ def headers(svc: Services, token: str) -> dict[str, str]:
     }
 
 
+MD_INLINE = (
+    (
+        re.compile(r"`([^`\n]+)`"),
+        r'<code style="background:#f4f4f5;padding:1px 4px;border-radius:4px">\1</code>',
+    ),
+    (re.compile(r"\*\*([^*\n]+)\*\*|__([^_\n]+)__"), None),
+    (re.compile(r"~~([^~\n]+)~~"), r"<s>\1</s>"),
+    (re.compile(r"(^|[\s(])\*([^*\s][^*\n]*)\*"), r"\1<em>\2</em>"),
+    (re.compile(r"(^|[\s(])_([^_\s][^_\n]*)_"), r"\1<em>\2</em>"),
+)
+
+
+def md_inline(escaped: str) -> str:
+    """Basic Markdown on text that is HTML-escaped already: `code`, **bold**, ~~strike~~,
+    *italic* (the chat's subset; links are made by text_html)."""
+    for pat, rep in MD_INLINE:
+        if rep is None:
+            escaped = pat.sub(lambda m: f"<strong>{m.group(1) or m.group(2)}</strong>", escaped)
+        else:
+            escaped = pat.sub(rep, escaped)
+    return escaped
+
+
 def text_html(text: str) -> str:
-    """A message as HTML: escaped, links clickable, image links shown, line breaks kept."""
+    """A message as HTML: escaped, basic Markdown, links clickable, image links shown, line
+    breaks kept."""
     out, last = [], 0
     for m in URL.finditer(text):
-        out.append(E(text[last : m.start()]))
+        out.append(md_inline(E(text[last : m.start()])))
         url = m.group(0).rstrip(".,;:!?)")
         rest = m.group(0)[len(url) :]
         if IMAGE.search(url):
@@ -284,9 +308,9 @@ def text_html(text: str) -> str:
             )
         else:
             out.append(f'<a href="{E(url)}" style="color:#a4532b">{E(url)}</a>')
-        out.append(E(rest))
+        out.append(md_inline(E(rest)))
         last = m.end()
-    out.append(E(text[last:]))
+    out.append(md_inline(E(text[last:])))
     return "".join(out).strip().replace("\n", "<br>")
 
 

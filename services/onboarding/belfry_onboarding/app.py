@@ -49,6 +49,7 @@ from . import (
     homepage,
     invite,
     mail,
+    mentions,
     mypass,
     pages,
     passlogin,
@@ -202,6 +203,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         async with (
             sessions.running(app),  # name@domain sign-in by DM (sessions.py)
             followers.running(app),  # the announcements channel and its digests (followers.py)
+            mentions.running(app),  # @mentions by e-mail, daily or weekly (mentions.py)
             mail.running(app),  # members' outgoing mail, gift-wrapped to the belfry (mail.py)
         ):
             yield
@@ -219,6 +221,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
+    mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)

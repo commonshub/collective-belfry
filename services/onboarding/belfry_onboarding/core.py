@@ -632,6 +632,13 @@ def sync_relay_whitelist(svc: Services, include: list[str] = (), strict: bool = 
             svc.groups.sync(pubkeys)
             if svc.relay is not None:
                 svc.groups.import_profiles(svc.relay, pubkeys)
+            # the community's admins administer every channel (zooid patch 0003)
+            if svc.settings.groups_relay_public_url:
+                from . import apps
+
+                svc.groups.set_admins(
+                    svc.settings.groups_relay_public_url, sorted(apps.admin_pubkeys(svc))
+                )
     except Exception as exc:
         if strict:
             raise

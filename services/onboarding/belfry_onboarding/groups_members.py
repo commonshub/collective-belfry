@@ -81,6 +81,35 @@ def nip98_header(key: PrivateKey, url: str, method: str, now: int | None = None)
     return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()
 
 
+GROUP_ADMIN_METHOD = "moderategroups"  # zooid patch 0003: administers every group
+
+
+def nip86(key: PrivateKey, url: str, method: str, params: list[Any], http: httpx.Client) -> Any:
+    """A NIP-86 relay management call (JSON-RPC over HTTP, NIP-98 auth with the payload hash)."""
+    import hashlib
+
+    body = json.dumps({"method": method, "params": params}).encode()
+    event = signed(
+        key,
+        {
+            "created_at": int(time.time()),
+            "kind": HTTP_AUTH_KIND,
+            "tags": [["u", url], ["method", "POST"], ["payload", hashlib.sha256(body).hexdigest()]],
+            "content": "",
+        },
+    )
+    auth = "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()
+    r = http.post(
+        url,
+        content=body,
+        headers={"Authorization": auth, "Content-Type": "application/nostr+json+rpc"},
+    )
+    data = r.json() if r.content else {}
+    if r.status_code != 200 or data.get("error"):
+        raise GroupsMembersError(f"{method}: {r.status_code} {data.get('error') or r.text[:200]}")
+    return data.get("result")
+
+
 class GroupsMembers:
     def __init__(self, api_url: str, key: PrivateKey, http: httpx.Client | None = None):
         self.api_url = api_url.rstrip("/")
@@ -133,6 +162,25 @@ class GroupsMembers:
         if failed:
             raise GroupsMembersError(f"groups relay: {len(failed)} member changes failed")
         return {"added": added, "removed": removed, "members": len(wanted)}
+
+    def set_admins(self, relay_url: str, pubkeys: list[str]) -> dict[str, Any]:
+        """The community's admins administer every group (zooid patch 0003): give them the
+        moderategroups method on the relay, and take it from whoever is no admin any more."""
+        url = relay_url.replace("wss://", "https://").replace("ws://", "http://").rstrip("/")
+        wanted = set(normalize_pubkeys(pubkeys)) - {self.own}
+        items = nip86(self.key, url, "listmethodassignees", [], self.http) or []
+        current = {
+            str(i.get("pubkey"))
+            for i in items
+            if isinstance(i, dict) and GROUP_ADMIN_METHOD in (i.get("methods") or [])
+        } - {self.own}
+        for pk in sorted(wanted - current):
+            nip86(self.key, url, "assignmethod", [pk, GROUP_ADMIN_METHOD], self.http)
+        for pk in sorted(current - wanted):
+            nip86(self.key, url, "unassignmethod", [pk, GROUP_ADMIN_METHOD], self.http)
+        if wanted ^ current:
+            log.info("groups relay admins: %d now", len(wanted))
+        return {"admins": sorted(wanted)}
 
     def import_profiles(self, relay: Any, pubkeys: list[str], chunk: int = 100) -> int:
         """Copy the newest kind-0 profile of each of ``pubkeys`` from ``relay`` (a

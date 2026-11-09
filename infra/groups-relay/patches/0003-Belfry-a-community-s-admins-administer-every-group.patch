@@ -1,0 +1,123 @@
+From 3ee0d22315e6db4d666ac4261a2f10400b417e11 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 9 Nov 2026 14:00:42 +0100
+Subject: [PATCH] Belfry: a community's admins administer every group
+
+A key holding the management method moderategroups (assigned with NIP-86
+assignmethod, by the relay owner) may publish every group's moderation events,
+without being the group's member or creator, and is listed with those roles in
+its kind 39001. It may still join a group like anyone.
+---
+ zooid/admins_test.go | 43 +++++++++++++++++++++++++++++++++++++++++++
+ zooid/groups.go      |  8 +++++---
+ zooid/management.go  | 10 ++++++++++
+ 3 files changed, 58 insertions(+), 3 deletions(-)
+ create mode 100644 zooid/admins_test.go
+
+diff --git a/zooid/admins_test.go b/zooid/admins_test.go
+new file mode 100644
+index 0000000..39430ec
+--- /dev/null
++++ b/zooid/admins_test.go
+@@ -0,0 +1,43 @@
++package zooid
++
++import (
++	"testing"
++
++	"fiatjaf.com/nostr"
++)
++
++// Belfry: a key holding moderategroups moderates every group, without being
++// its member or creator, and may still join it.
++func TestRelayAdminsModerateEveryGroup(t *testing.T) {
++	instance := createTestInstance()
++	instance.Config.Groups.Enabled = true
++	createGroup(t, instance, "garden")
++
++	admin := nostr.Generate().Public()
++	if instance.Groups.CanModerate("garden", admin) {
++		t.Fatal("not an admin yet")
++	}
++	if err := instance.Management.AssignMethod(admin, GROUP_ADMIN_METHOD); err != nil {
++		t.Fatal(err)
++	}
++	if !instance.Management.IsAdmin(admin) || !instance.Groups.CanModerate("garden", admin) {
++		t.Fatal("a relay admin moderates every group")
++	}
++	if instance.Groups.IsMember("garden", admin) {
++		t.Fatal("being an admin does not make you a member of the group")
++	}
++	put := nostr.Event{Kind: nostr.KindSimpleGroupPutUser, PubKey: admin, Tags: nostr.Tags{{"h", "garden"}, {"p", nostr.Generate().Public().Hex()}}}
++	if msg := instance.Groups.CheckWrite(put); msg != "" {
++		t.Fatalf("the admin's moderation is refused: %s", msg)
++	}
++	join := nostr.Event{Kind: nostr.KindSimpleGroupJoinRequest, PubKey: admin, Tags: nostr.Tags{{"h", "garden"}}}
++	if msg := instance.Groups.CheckWrite(join); msg != "" {
++		t.Fatalf("the admin may join: %s", msg)
++	}
++	if err := instance.Management.UnassignMethod(admin, GROUP_ADMIN_METHOD); err != nil {
++		t.Fatal(err)
++	}
++	if instance.Groups.CanModerate("garden", admin) {
++		t.Fatal("no method left: no admin")
++	}
++}
+diff --git a/zooid/groups.go b/zooid/groups.go
+index 1de985b..f7debc8 100644
+--- a/zooid/groups.go
++++ b/zooid/groups.go
+@@ -227,9 +227,11 @@ func creatorRoles() []string {
+ }
+ 
+ // CanModerate reports whether a pubkey may send moderation events for one group: the relay's
+-// managers always, and the group's creator when members may create groups.
++// managers always, its group admins (keys holding the moderategroups method: a community's
++// admins, Belfry patch 0003) in every group, and the group's creator when members may create
++// groups.
+ func (g *GroupStore) CanModerate(h string, pubkey nostr.PubKey) bool {
+-	if g.Management.CanManage(pubkey) {
++	if g.Management.CanManage(pubkey) || g.Management.IsAdmin(pubkey) {
+ 		return true
+ 	}
+ 
+@@ -250,7 +252,7 @@ func (g *GroupStore) UpdateAdminsList(h string) error {
+ 		tag := nostr.Tag{"p", pubkey.Hex()}
+ 
+ 		// Clients read an admin's roles as the moderation kinds they may publish.
+-		if hasCreator && pubkey == creator {
++		if (hasCreator && pubkey == creator) || g.Management.IsAdmin(pubkey) {
+ 			tag = append(tag, creatorRoles()...)
+ 		}
+ 
+diff --git a/zooid/management.go b/zooid/management.go
+index c68cd5c..5c0cc37 100644
+--- a/zooid/management.go
++++ b/zooid/management.go
+@@ -264,6 +264,7 @@ var managedMethods = []string{
+ 	"unassignrole",
+ 	"assignmethod",
+ 	"unassignmethod",
++	GROUP_ADMIN_METHOD,
+ 	"listmethodassignees",
+ 	"listclaims",
+ 	"createclaim",
+@@ -1020,6 +1021,15 @@ func (m *ManagementStore) ValidateJoinRequest(event nostr.Event) (reject bool, e
+ 	return true, "restricted: failed to validate invite code"
+ }
+ 
++// GROUP_ADMIN_METHOD (Belfry patch 0003): a key holding it administers every group, like a
++// community's admins do, without being listed as a member.
++const GROUP_ADMIN_METHOD = "moderategroups"
++
++// IsAdmin reports whether a pubkey holds GROUP_ADMIN_METHOD.
++func (m *ManagementStore) IsAdmin(pubkey nostr.PubKey) bool {
++	return slices.Contains(m.loadAssignedMethods()[pubkey.Hex()], GROUP_ADMIN_METHOD)
++}
++
+ // CanManage reports whether a pubkey has coarse admin privileges
+ func (m *ManagementStore) CanManage(pubkey nostr.PubKey) bool {
+ 	return m.Config.IsOwner(pubkey) || m.Config.IsSelf(pubkey)
+-- 
+2.43.0
+

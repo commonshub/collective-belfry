@@ -275,7 +275,17 @@ def register(app: FastAPI) -> None:
 
     @app.get(WELL_KNOWN)
     async def well_known(request: Request) -> JSONResponse:
-        doc = document(request.app.state.services.settings)
+        services = request.app.state.services
+        doc = document(services.settings)
+        # the community's admins (keys): they administer every channel too (zooid patch 0003)
+        try:
+            from . import apps
+
+            admins = sorted(await run_in_threadpool(apps.admin_pubkeys, services))
+            if admins:
+                doc["admins"] = admins
+        except Exception as exc:  # noqa: BLE001 — the document must answer anyway
+            log.warning("belfry.json: admins unknown: %s", exc)
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
 
     async def session_owner(
