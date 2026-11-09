@@ -714,3 +714,10 @@ button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 /* the face sits at the top of its message, whatever the message's height */
 .msg .face { align-self: flex-start; }
 .created-line { color: var(--muted); font-size: 14px; margin-bottom: 4px; }
+
+/* guest link options: how many people, how long the link works */
+.invite-opts { display: grid; gap: 10px; margin: 4px 0 12px; }
+.invite-opts > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.invite-opts > div > span { font-size: 14px; color: var(--muted); }
+.invite-opts .seg { margin: 0; }
+.invite-opts .seg button { flex: none; padding: 6px 12px; }

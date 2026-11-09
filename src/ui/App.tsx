@@ -3,12 +3,12 @@ import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
 import { nip19 } from 'nostr-tools'
-import { belfrySignOut, clearSession, demoSession, finishGuestWelcome, finishSignIn, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
+import { belfrySignOut, clearSession, demoSession, finishSignIn, pendingInvite, setPendingInvite, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
-import { me, setAvatar, start, stop } from '../core/sync'
+import { joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
@@ -20,19 +20,21 @@ import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
 import { demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, go, useRoute, useWide } from './common'
 import { openProfile, ProfileView } from './Profile'
-import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
+import { dropCode, JoinScreen, MembershipScreen, WelcomeScreen } from './Login'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
 export function App() {
   const [phase, setPhase] = useState<Phase>({ p: 'loading' })
   const backend = getBackend()
+  const [signInFirst, setSignInFirst] = useState(false)
 
   useEffect(() => {
     void (async () => {
-      // back from the village sign-in page, or a guest straight from an invite (#/welcome/<code>)?
+      takeInviteFromUrl() // a guest link (#/join/<token>): kept until it is used
+      // back from the village sign-in page?
       try {
-        const fresh = (await finishGuestWelcome()) ?? (await finishSignIn())
+        const fresh = await finishSignIn()
         if (fresh) {
           await wipe() // a new account: don't show the previous one's cache
           await saveSession(fresh)
@@ -71,7 +73,11 @@ export function App() {
   }
 
   if (phase.p === 'loading') return null
-  if (phase.p === 'out') return <WelcomeScreen backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
+  if (phase.p === 'out' && pendingInvite() && !signInFirst && !phase.error)
+    return <JoinScreen token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
+      onJoined={async (s) => { await wipe(); await enter(s) }}
+      onDemo={(name) => { setPendingInvite(''); void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`)) }} />
+  if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
   return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} />
 }
 
@@ -109,6 +115,21 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   useEffect(() => { if (wide) closeDrawer() }, [wide])
   useVersion()
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
+  // a guest link opened while signed in (or kept while signing in): this account gets the channel
+  const [joined, setJoined] = useState('')
+  useEffect(() => {
+    if (!ready) return
+    const token = takeInviteFromUrl() || pendingInvite()
+    if (!token) return
+    setPendingInvite('')
+    if (session.backend === 'demo') { setJoined('You joined # general'); go('c/general'); return }
+    joinWithAccount(token).then(
+      ({ channel, already }) => { go('c/' + encodeURIComponent(channel)); setJoined(already ? '' : `You joined # ${groups().find((x) => x.id === channel)?.name ?? channel}`) },
+      (e) => setJoined(e instanceof Error ? e.message : String(e)),
+    )
+  }, [ready, route.join('/')])
+  useEffect(() => { if (!joined) return; const t = setTimeout(() => setJoined(''), 6000); return () => clearTimeout(t) }, [joined])
+  const toast = joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null
   if (error)
     return (
       <div className="screen login">
@@ -142,11 +163,12 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
   const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : undefined
-  if (!wide) return <Phone current={current} section={section} open={drawer}>{view}</Phone>
+  if (!wide) return <><Phone current={current} section={section} open={drawer}>{view}</Phone>{toast}</>
   return (
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>
       <main className="main screen">{view}</main>
+      {toast}
     </div>
   )
 }

@@ -218,6 +218,14 @@ export async function signedFetch(url: string, method = 'GET', body?: unknown): 
   })
 }
 
+/** Someone signed in uses a guest link: their account gets the channel (no second account). */
+export async function joinWithAccount(token: string): Promise<{ channel: string; already: boolean }> {
+  const res = await signedFetch(`${BELFRY.api}/channel-invites/${token}/join`, 'POST', {})
+  const body = (await res.json().catch(() => ({}))) as { channel?: string; already?: boolean; message?: string; error?: string }
+  if (!res.ok || !body.channel) throw new Error(body.error === 'name_needed' ? 'This account can\u2019t use invites.' : body.message || 'The invite could not be used just now.')
+  return { channel: body.channel, already: !!body.already }
+}
+
 async function upload(blob: Blob, a: Attachment): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer())
   const x = bytesToHex(sha256(buf))

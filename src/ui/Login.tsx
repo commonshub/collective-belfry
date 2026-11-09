@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { startSignIn, type Session } from '../core/auth'
+import { INVITE_CLOSED, inviteInfo, joinAsNew, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
 import { BELFRY, NAME, THEME, type Backend } from '../config'
@@ -36,7 +36,59 @@ export function savedCode() {
 const saveCode = (code: string) => { try { localStorage.setItem(CODE_KEY, normalizeCode(code)) } catch { /* private mode */ } }
 export const dropCode = () => { try { localStorage.removeItem(CODE_KEY) } catch { /* private mode */ } }
 
-export function WelcomeScreen({ backend, error, onDemo }: { backend: Backend; error?: string; onDemo: (email: string) => void }) {
+/** Opened from a guest link, not signed in: who invites to what, a name, and you're in. */
+export function JoinScreen({ token, backend, onJoined, onSignIn, onDemo }: { token: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void; onDemo: (name: string) => void }) {
+  const [info, setInfo] = useState<InviteInfo | null>(null)
+  const [error, setError] = useState('')
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    if (backend === 'demo') return setInfo({ community: NAME, channel: 'general', channel_name: 'general', about: 'Where everyone talks.', inviter: 'Ana', state: 'open', days: 30 })
+    inviteInfo(token).then(setInfo, (e) => setError(e instanceof Error ? e.message : String(e)))
+  }, [token])
+  const forget = () => { setPendingInvite(''); location.reload() }
+  const closed = info && info.state !== 'open' ? INVITE_CLOSED[info.state] ?? INVITE_CLOSED.used : ''
+  const join = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const n = name.trim().replace(/\s+/g, ' ')
+    if (!n || busy) return
+    if (backend === 'demo') return onDemo(n)
+    setBusy(true); setError('')
+    try { onJoined(await joinAsNew(token, n)) } catch (x) {
+      const m = x instanceof Error ? x.message : String(x)
+      setError(/fetch|network|load/i.test(m) ? 'No connection to the belfry. Try again.' : m)
+      setBusy(false)
+    }
+  }
+  if (!info || closed)
+    return (
+      <div className="screen login">
+        <Logo />
+        {closed || error ? <><h2>This invite can’t be used</h2><p role="alert">{closed || error}</p></> : <p role="status">Opening the invite…</p>}
+        {(closed || error) && <>
+          <button className="btn" onClick={() => { if (closed) setPendingInvite(''); onSignIn() }}>I have an account: sign in</button>
+          <div style={{ height: 12 }} />
+          <button className="link" style={{ alignSelf: 'center' }} onClick={forget}>Close</button>
+        </>}
+      </div>
+    )
+  return (
+    <form className="screen login" onSubmit={join}>
+      <Logo />
+      <h2>{info.inviter || 'A member'} invited you to # {info.channel_name}</h2>
+      {info.about && <p style={{ marginBottom: 12 }}>{info.about}</p>}
+      {error && <div className="error" role="alert">{error}</div>}
+      <label className="field"><span>Your name</span>
+        <input className="input" value={name} maxLength={100} autoComplete="name" autoFocus onChange={(e) => setName(e.target.value)} /></label>
+      <button className="btn" disabled={busy || !name.trim()}>{busy ? 'Joining…' : `Join # ${info.channel_name}`}</button>
+      <p className="hint" style={{ fontSize: 13, margin: '12px 0 0' }}>You’ll be a guest of {info.community} for {info.days} days: you see and post in this channel only. No e-mail needed now.</p>
+      <div style={{ height: 28 }} />
+      <button type="button" className="link" style={{ alignSelf: 'center' }} onClick={onSignIn}>Already have an account? Sign in</button>
+    </form>
+  )
+}
+
+export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Backend; error?: string; onDemo: (email: string) => void; invited?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState(!!savedCode())
   const [code, setCode] = useState(savedCode())
@@ -67,6 +119,7 @@ export function WelcomeScreen({ backend, error, onDemo }: { backend: Backend; er
           <p>Sign in with your e-mail address. We'll mail you a 6-digit code. No password, ever.</p>
         </>
       )}
+      {invited && <div className="card" role="status" style={{ marginBottom: 16 }}>After signing in, your invite opens its channel.</div>}
       {error && <div className="error">{error}</div>}
       {invite ? (
         <form onSubmit={(e) => { e.preventDefault(); saveCode(code); signIn() }}>
