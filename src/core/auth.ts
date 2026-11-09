@@ -101,6 +101,7 @@ export async function finishSignIn(): Promise<Session | null> {
 //                      belfry makes the account and answers with its session (joinAsNew)
 const GUEST_KEY = 'belfry-guest'
 const INVITE_KEY = 'belfry-invite'
+const JOIN_KEY = 'belfry-join-key'
 export interface GuestInfo { channel: string; saved: boolean }
 export interface InviteInfo { community: string; channel: string; channel_name: string; about: string; inviter: string; state: string; days: number }
 
@@ -133,7 +134,14 @@ export const INVITE_CLOSED: Record<string, string> = {
 
 /** A new guest: this device's new session key signs the request; the answer is the session. */
 export async function joinAsNew(token: string, name: string): Promise<Session> {
-  const sk = generateSecretKey()
+  // one key per invite on this device, kept until the join succeeds: a second tap, a retry or a
+  // reload signs with the same key, and the belfry answers with the same account (never a second)
+  let sk: Uint8Array | undefined
+  try { const kept = JSON.parse(localStorage.getItem(JOIN_KEY) ?? 'null'); if (kept?.token === token && /^[0-9a-f]{64}$/.test(kept.sk)) sk = hexToBytes(kept.sk) } catch { /* none */ }
+  if (!sk) {
+    sk = generateSecretKey()
+    try { localStorage.setItem(JOIN_KEY, JSON.stringify({ token, sk: bytesToHex(sk) })) } catch { /* private mode */ }
+  }
   const url = `${BELFRY.api}/channel-invites/${token}/join`
   const text = JSON.stringify({ name })
   const auth = finalizeEvent({
@@ -143,6 +151,7 @@ export async function joinAsNew(token: string, name: string): Promise<Session> {
   const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
   const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string }
   if (!res.ok || !body.bunker_url) throw new Error(body.message || 'Joining did not work just now. Try again.')
+  try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   setPendingInvite('')
   setGuestInfo({ channel: body.channel ?? 'general', saved: false })
   if (body.channel) history.replaceState(null, '', `${location.pathname}${location.search}#/c/${encodeURIComponent(body.channel)}`)
