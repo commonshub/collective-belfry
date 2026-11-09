@@ -628,3 +628,13 @@ a.chip { text-decoration: none; color: inherit; }
 
 .invited-by { font-size: 13px; display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
 .invited-by .chip { font-size: 11px; padding: 1px 7px; }
+
+/* a guest who joined with a name only: save the account (a slim line above the composer) */
+.save-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px; font-size: 14px;
+  background: color-mix(in srgb, var(--orange) 14%, var(--bg)); border-top: 1px solid var(--line); }
+.save-bar > span { flex: 1; min-width: 180px; }
+.save-bar form { display: flex; gap: 8px; flex: 1; }
+.save-bar .input { flex: 1; min-width: 0; padding: 8px 10px; font-size: 16px; }
+.save-bar .close { font-size: 14px; color: var(--muted); background: none; border: 0; padding: 4px; }
+.save-bar .error { width: 100%; margin: 0; font-size: 13px; }
+.save-bar.done { justify-content: space-between; background: color-mix(in srgb, var(--ok, #16a34a) 12%, var(--bg)); }

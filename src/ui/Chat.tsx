@@ -5,7 +5,7 @@ import { address, unreadTotal } from '../core/dm'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
-import { useVersion } from '../core/store'
+import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
@@ -18,6 +18,7 @@ import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
+import { guestInfo, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -397,6 +398,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           })}
         </div>
       </div>
+      <SaveAccountBar />
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce) }}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
@@ -750,4 +752,50 @@ async function makeWebsite(m: Message) {
   } catch (e) {
     alert(e instanceof Error ? e.message : String(e))
   }
+}
+
+/** A guest who joined with a name only, once they did something (a message, a reply, a
+ *  reaction): a slim line above the composer to save the account with an e-mail and its code. */
+function SaveAccountBar() {
+  useVersion()
+  const [g, setG] = useState(guestInfo())
+  const [step, setStep] = useState<'line' | 'email' | 'code' | 'done'>('line')
+  const [email, setEmail] = useState('')
+  const [code, setCode] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [hidden, setHidden] = useState(() => { try { return sessionStorage.getItem('belfry-save-hidden') === '1' } catch { return false } })
+  const acted = all(me()).some((e) => e.pubkey === me() && (e.kind === 9 || e.kind === 1111 || e.kind === 7)) || outboxItems().some((o) => [9, 1111, 7].includes(o.kind))
+  if (!g || (g.saved && step !== 'done') || !acted || hidden) return null
+  const post = async (path: string, body: unknown) => {
+    setBusy(true); setError('')
+    try {
+      const r = await signedFetch(`${BELFRY.api}${path}`, 'POST', body)
+      const d = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(d.message || 'That did not work. Try again.')
+      return true
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false } finally { setBusy(false) }
+  }
+  if (step === 'done') return <div className="save-bar done" role="status">Saved. Sign in with {email} on any device.<button className="link" onClick={() => setG(null)}>OK</button></div>
+  return (
+    <div className="save-bar" role="region" aria-label="Save your account">
+      {step === 'line' && <>
+        <span>Save your account: add your e-mail to come back from any device.</span>
+        <button className="btn small" onClick={() => setStep('email')}>Save</button>
+        <button className="link close" aria-label="Not now" onClick={() => { setHidden(true); try { sessionStorage.setItem('belfry-save-hidden', '1') } catch { /* private mode */ } }}>✕</button>
+      </>}
+      {step === 'email' && <form onSubmit={async (e) => { e.preventDefault(); if (await post('/guest/save', { email: email.trim() })) setStep('code') }}>
+        <input className="input" type="email" inputMode="email" autoComplete="email" autoFocus placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} />
+        <button className="btn small" disabled={busy || !email.includes('@')}>{busy ? '…' : 'Send code'}</button>
+      </form>}
+      {step === 'code' && <form onSubmit={async (e) => {
+        e.preventDefault()
+        if (await post('/guest/save/verify', { email: email.trim(), code: code.trim() })) { setGuestInfo({ ...g, saved: true }); setStep('done') }
+      }}>
+        <input className="input" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="6-digit code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
+        <button className="btn small" disabled={busy || code.length !== 6}>{busy ? '…' : 'Confirm'}</button>
+      </form>}
+      {error && <div className="error">{error}</div>}
+    </div>
+  )
 }

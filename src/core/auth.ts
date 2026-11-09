@@ -93,6 +93,32 @@ export async function finishSignIn(): Promise<Session | null> {
   }
 }
 
+// ---- a guest who joined with a name only (Belfry guests.py) -----------------------------------
+// The invite page made the guest's account and a session, and sent the browser here with a
+// one-time code: #/welcome/<code>. The code gives the session's bunker URL once; this device's own
+// client key (clientSecret) binds it at the first connect, so only this browser can use it.
+const GUEST_KEY = 'belfry-guest'
+export interface GuestInfo { channel: string; saved: boolean }
+export const guestInfo = (): GuestInfo | null => {
+  try { return JSON.parse(localStorage.getItem(GUEST_KEY) ?? 'null') } catch { return null }
+}
+export const setGuestInfo = (g: GuestInfo | null) => {
+  try { if (g) localStorage.setItem(GUEST_KEY, JSON.stringify(g)); else localStorage.removeItem(GUEST_KEY) } catch { /* private mode */ }
+}
+
+export async function finishGuestWelcome(): Promise<Session | null> {
+  const m = /^#\/welcome\/([A-Za-z0-9_-]{16,})$/.exec(location.hash)
+  if (!m) return null
+  history.replaceState(null, '', location.pathname)
+  const res = await fetch(`${BELFRY.api}/guest-sessions/${m[1]}`, { method: 'POST' })
+  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string }
+  if (!res.ok || !body.bunker_url) throw new Error(body.message || 'This invite link was used or has expired. Ask for a new one.')
+  setGuestInfo({ channel: body.channel ?? 'general', saved: false })
+  if (body.channel) history.replaceState(null, '', `${location.pathname}#/c/${encodeURIComponent(body.channel)}`)
+  await kvDel('pubkey')
+  return { backend: 'belfry', bunkerUrl: body.bunker_url, clientSecret: bytesToHex(generateSecretKey()), membership: { status: 'unknown' } }
+}
+
 /** Ends this app's authorization and the sign-in for every village app, then comes back. */
 export async function belfrySignOut(s: Session) {
   if (s.refreshToken) {

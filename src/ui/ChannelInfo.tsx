@@ -216,7 +216,7 @@ export function Members({ groupId }: { groupId: string }) {
             <div style={{ fontWeight: 600 }}>{displayName(p)}</div>
             {invited.get(p) && (
               <div className="hint invited-by">
-                <span className="chip">{invited.get(p)!.agent ? 'agent' : 'guest'}</span>
+                <span className="chip">{invited.get(p)!.agent ? 'agent' : invited.get(p)!.unsaved ? 'guest · not saved' : 'guest'}</span>
                 {invited.get(p)!.by ? <>invited by <b>{displayName(invited.get(p)!.by!)}</b></> : null}
               </div>
             )}

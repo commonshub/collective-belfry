@@ -3,7 +3,7 @@ import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
 import { nip19 } from 'nostr-tools'
-import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
+import { belfrySignOut, clearSession, demoSession, finishGuestWelcome, finishSignIn, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
@@ -29,9 +29,9 @@ export function App() {
 
   useEffect(() => {
     void (async () => {
-      // back from the village sign-in page?
+      // back from the village sign-in page, or a guest straight from an invite (#/welcome/<code>)?
       try {
-        const fresh = await finishSignIn()
+        const fresh = (await finishGuestWelcome()) ?? (await finishSignIn())
         if (fresh) {
           await wipe() // a new account: don't show the previous one's cache
           await saveSession(fresh)
@@ -59,6 +59,7 @@ export function App() {
 
   const signOut = async () => {
     if (outboxItems().length && !confirm(`${outboxItems().length} messages are not sent yet and will be lost. Sign out anyway?`)) return
+    setGuestInfo(null)
     const s = phase.p === 'in' ? phase.s : undefined
     stop()
     await clearSession()

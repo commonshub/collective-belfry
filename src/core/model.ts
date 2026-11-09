@@ -605,13 +605,17 @@ export function mySeen(groupId: string): number {
 }
 
 /** Who joined a channel as its guest (kind 9000 from Belfry with `invited-by`, guests.py). */
-export interface GuestJoin { id: string; pubkey: string; by?: string; at: number; agent: boolean }
+export interface GuestJoin { id: string; pubkey: string; by?: string; at: number; agent: boolean; unsaved: boolean }
 export function guestJoins(groupId: string): GuestJoin[] {
   const out: GuestJoin[] = []
-  for (const e of all(me())) {
+  const list = all(me())
+  // Belfry labels a guest "saved" (kind 1985, belfry/guest) once they proved an e-mail
+  const saved = new Set(list.filter((e) => e.kind === 1985 && tag(e, 'h') === groupId && tag(e, 'L') === 'belfry/guest'
+    && e.tags.some((t) => t[0] === 'l' && t[1] === 'saved')).map((e) => tag(e, 'p')))
+  for (const e of list) {
     if (e.kind !== 9000 || tag(e, 'h') !== groupId || !tag(e, 'invited-by')) continue
     const p = tag(e, 'p')
-    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1' })
+    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) })
   }
   return out.sort((a, b) => a.at - b.at)
 }
