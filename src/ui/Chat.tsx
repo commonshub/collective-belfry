@@ -464,6 +464,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const sent = inbox && !card ? sentOf(m.ev, inbox.key) : null
   const mail = card || sent ? null : mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
+  const isCard = !!(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
   // press and hold (phones) or right-click: react, or delete your own
   const hold = useRef<ReturnType<typeof setTimeout> | null>(null)
   const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
@@ -480,17 +481,18 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
-      <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
+      <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail || isCard ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
         onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
         onPointerDown={(e) => {
           if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
           hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
         }}
         onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
-        {first || announce || mail ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
+        {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
+          {(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {eventCoordOf(m.ev) ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
           {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
           {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
