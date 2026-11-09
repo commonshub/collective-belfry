@@ -46,9 +46,19 @@ CACHE_SECONDS = 20
 MAX_NAME = 60
 
 
+# Belfry's own native apps: their sign-in return addresses (custom URL schemes), approved by
+# default on every belfry and shown with these fixed names (never a name from the request).
+NATIVE_APPS = {
+    "sh.belfry.app://connect": "Belfry for iPhone",
+}
+
+
 def app_uri(raw: str) -> str:
     """The app's identity: its return address without query or fragment. https only (http for
-    localhost, to develop an app). Raises ValueError."""
+    localhost, to develop an app), or one of Belfry's own native apps. Raises ValueError."""
+    bare = (raw or "").strip().split("?", 1)[0].split("#", 1)[0]
+    if bare in NATIVE_APPS:
+        return bare
     u = urllib.parse.urlsplit((raw or "").strip())
     local = u.hostname in ("localhost", "127.0.0.1")
     if u.scheme != "https" and not (u.scheme == "http" and local):
@@ -62,6 +72,8 @@ def app_uri(raw: str) -> str:
 def address(uri: str) -> str:
     """How an app is shown: host and path (``apps.belfry.sh/chat``). Never a name the app gives
     itself in the sign-in URL: anyone can write any name there."""
+    if uri in NATIVE_APPS:
+        return NATIVE_APPS[uri]
     u = urllib.parse.urlsplit(uri)
     return ((u.netloc or "") + (u.path or "")).rstrip("/") or uri
 
@@ -202,6 +214,9 @@ def own_app(svc: Services, uri: str) -> bool:
     """An app this belfry serves itself (`belfry app install`): https://<domain>/<name>/, or
     https://chat.<domain>/ for the chat it ships: approved by being installed."""
     from .appshome import app_url, installed
+
+    if uri in NATIVE_APPS:
+        return True
 
     u = urllib.parse.urlsplit(uri)
     if u.scheme != "https" or u.query or u.fragment:

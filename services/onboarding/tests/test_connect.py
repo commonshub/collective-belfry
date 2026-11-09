@@ -289,3 +289,17 @@ def test_an_app_the_belfry_installed_needs_no_approval(web, tmp_path):
     page = authorize(web, redirect_uri="https://chat.belfry.test/").text
     chip = page.split('<div class="chip">')[1].split("</h1>")[0]
     assert "Sign in to /chat" in chip and "Not approved" not in chip
+
+
+def test_belfry_s_own_native_apps_are_approved_by_their_fixed_address(web):
+    """sh.belfry.app://connect (the iPhone app) signs in like an installed app, shown by a fixed
+    name; any other custom scheme is refused."""
+    services = web.app.state.services
+    assert apps.app_uri("sh.belfry.app://connect?x=1") == "sh.belfry.app://connect"
+    assert apps.is_approved(services, "sh.belfry.app://connect")
+    with pytest.raises(ValueError):
+        apps.app_uri("evil.app://connect")
+    page = authorize(web, redirect_uri="sh.belfry.app://connect").text
+    chip = page.split('<div class="chip">')[1].split("</h1>")[0]
+    assert "Sign in to Belfry for iPhone" in chip and "Not approved" not in chip
+    assert authorize(web, redirect_uri="evil.app://connect").status_code >= 400
