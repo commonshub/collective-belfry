@@ -1,6 +1,9 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { setTopics } from '../core/actions'
-import { ANNOUNCE, group, HASHTAG, isAnnouncement, messages, normTopic, topics } from '../core/model'
+import { nip19 } from 'nostr-tools'
+import { ANNOUNCE, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
+import { me } from '../core/sync'
+import { Markdown } from './markdown'
 import { useVersion } from '../core/store'
 import { Sheet } from './common'
 
@@ -56,17 +59,36 @@ function Tag({ name, groupId, onOpen }: { name: string; groupId: string; onOpen?
 }
 
 /** Message text with its #hashtags tappable (open) and holdable (pin). */
+/** A message: basic Markdown (markdown.tsx), #topics that open, @mentions (nostr:npub…) as names. */
 export function RichText({ text, groupId, onOpen }: { text: string; groupId: string; onOpen?: (t: string) => void }) {
-  const out: ReactNode[] = []
-  let last = 0
-  for (const m of text.matchAll(HASHTAG)) {
-    const at = m.index! + m[1].length
-    if (at > last) out.push(text.slice(last, at))
-    out.push(<Tag key={at} name={m[2]} groupId={groupId} onOpen={onOpen} />)
-    last = at + 1 + m[2].length
+  const plain = (t: string, key: string): ReactNode[] => {
+    const out: ReactNode[] = []
+    const re = /nostr:(npub1[02-9ac-hj-np-z]{58})|(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu
+    let last = 0
+    let n = 0
+    for (const m of t.matchAll(re)) {
+      if (m[1]) {
+        if (m.index! > last) out.push(t.slice(last, m.index))
+        out.push(<Mention key={`${key}-m${n++}`} npub={m[1]} />)
+        last = m.index! + m[0].length
+      } else {
+        const at = m.index! + m[2].length
+        if (at > last) out.push(t.slice(last, at))
+        out.push(<Tag key={`${key}-h${n++}`} name={m[3]} groupId={groupId} onOpen={onOpen} />)
+        last = at + 1 + m[3].length
+      }
+    }
+    if (last < t.length) out.push(t.slice(last))
+    return out
   }
-  if (last < text.length) out.push(text.slice(last))
-  return <div className="text">{out}</div>
+  return <Markdown text={text} className="text" plain={plain} />
+}
+
+function Mention({ npub }: { npub: string }) {
+  let pk = ''
+  try { const d = nip19.decode(npub); if (d.type === 'npub') pk = d.data } catch { /* shown as is */ }
+  if (!pk) return <>{'nostr:' + npub}</>
+  return <span className={'mention' + (pk === me() ? ' me' : '')}>@{realName(pk) || displayName(pk)}</span>
 }
 
 /** The pinned topics, a scrolling line; the open one highlighted (shown even if not pinned). */

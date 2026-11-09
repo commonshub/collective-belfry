@@ -7,6 +7,7 @@ import { ACTIVE_DAYS, channelIcon, displayName, groups, memberLabels, messages, 
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
+import { canAdmin } from '../core/access'
 import { me } from '../core/sync'
 import { Avatar, back, fmtTime, go, MediaGrid, Sheet } from './common'
 import { AccessFields } from './Chat'
@@ -97,7 +98,7 @@ function About({ id }: { id: string }) {
       </div>
       <div className="row" style={{ gap: 8 }}>
         <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
-        {g.admins.has(me()) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setEditing(true) }}>Settings</button>}
+        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setEditing(true) }}>Settings</button>}
       </div>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
@@ -190,7 +191,7 @@ export function Members({ groupId }: { groupId: string }) {
   const [editing, setEditing] = useState<string | null>(null)
   const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   const vocab = [...new Set([...labels.values()].flat())].sort()
-  const reviewing = g?.isPod && g.admins.has(me()) ? g.applications : []
+  const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}

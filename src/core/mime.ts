@@ -147,7 +147,50 @@ function b64utf8(s: string) {
   return btoa(bin)
 }
 
-/** A plain-text e-mail (UTF-8, base64 body), ready for the bridge. */
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+/** Basic Markdown as e-mail HTML (the same subset the chat shows): escaped first, so the text
+ *  can never inject markup; links only http(s) and mailto. */
+export function markdownHtml(md: string): string {
+  const inline = (t: string) => esc(t)
+    .replace(/`([^`]+)`/g, '<code style="background:#f4f4f5;padding:1px 4px;border-radius:4px">$1</code>')
+    .replace(/\*\*([^*]+)\*\*|__([^_]+)__/g, (_, a, b) => `<strong>${a ?? b}</strong>`)
+    .replace(/~~([^~]+)~~/g, '<s>$1</s>')
+    .replace(/\[([^\]]+)\]\(((?:https?:\/\/|mailto:)[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/(^|[^"=>])(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"])/g, '$1<a href="$2">$2</a>')
+    .replace(/(^|[\s(])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>')
+    .replace(/(^|[\s(])_([^_\s][^_]*)_/g, '$1<em>$2</em>')
+  const lines = md.replace(/\r\n?/g, '\n').split('\n')
+  const out: string[] = []
+  for (let i = 0; i < lines.length;) {
+    const l = lines[i]
+    if (!l.trim()) { i++; continue }
+    if (/^```/.test(l)) {
+      const code: string[] = []
+      for (i++; i < lines.length && !/^```/.test(lines[i]); i++) code.push(lines[i])
+      i++
+      out.push(`<pre style="background:#f4f4f5;padding:8px;border-radius:6px">${esc(code.join('\n'))}</pre>`)
+    } else if (/^#{1,3}\s+/.test(l)) {
+      out.push(`<p><strong>${inline(l.replace(/^#{1,3}\s+/, ''))}</strong></p>`); i++
+    } else if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d+[.)]\s+/.test(l)
+      const items: string[] = []
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, ''))}</li>`)
+      out.push(ordered ? `<ol>${items.join('')}</ol>` : `<ul>${items.join('')}</ul>`)
+    } else if (/^>\s?/.test(l)) {
+      const q: string[] = []
+      while (i < lines.length && /^>\s?/.test(lines[i])) q.push(inline(lines[i++].replace(/^>\s?/, '')))
+      out.push(`<blockquote style="border-left:3px solid #d4d4d8;margin:0;padding-left:10px;color:#52525b">${q.join('<br>')}</blockquote>`)
+    } else {
+      const p: string[] = []
+      while (i < lines.length && lines[i].trim() && !/^(```|#{1,3}\s|>\s?|\s*([-*+]|\d+[.)])\s+)/.test(lines[i])) p.push(inline(lines[i++]))
+      out.push(`<p>${p.join('<br>')}</p>`)
+    }
+  }
+  return `<div style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;font-size:15px;line-height:1.5">${out.join('\n')}</div>`
+}
+
+/** An e-mail (UTF-8): the text as written (plain) and as Markdown rendered (HTML), ready for the bridge. */
 export function buildMail(m: { fromName: string; from: string; to: string; subject: string; text: string; inReplyTo?: string; references?: string; domain: string }): { raw: string; messageId: string } {
   const messageId = `<${crypto.randomUUID()}@${m.domain}>`
   const name = m.fromName.replace(/["\\\r\n]/g, '')
@@ -159,8 +202,11 @@ export function buildMail(m: { fromName: string; from: string; to: string; subje
     `Message-ID: ${messageId}`,
     ...(m.inReplyTo ? [`In-Reply-To: ${m.inReplyTo}`, `References: ${[m.references, m.inReplyTo].filter(Boolean).join(' ')}`] : []),
     'MIME-Version: 1.0',
-    'Content-Type: text/plain; charset=utf-8',
-    'Content-Transfer-Encoding: base64',
   ]
-  return { raw: h.join('\r\n') + '\r\n\r\n' + wrap76(b64utf8(m.text)) + '\r\n', messageId }
+  const boundary = 'b' + crypto.randomUUID().replace(/-/g, '')
+  const part = (type: string, body: string) =>
+    `--${boundary}\r\nContent-Type: ${type}; charset=utf-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrap76(b64utf8(body))}\r\n`
+  h.push(`Content-Type: multipart/alternative; boundary="${boundary}"`)
+  const body = part('text/plain', m.text) + part('text/html', `<!doctype html><html><body>${markdownHtml(m.text)}</body></html>`) + `--${boundary}--\r\n`
+  return { raw: h.join('\r\n') + '\r\n\r\n' + body, messageId }
 }

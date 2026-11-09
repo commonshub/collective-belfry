@@ -1,3 +1,4 @@
+import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
@@ -54,10 +55,19 @@ export const editChannel = (id: string, name: string, about: string) =>
 /** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a
  *  `t` tag too, without being written in the text, and so is `announcement` for an admin's
  *  announcement (mailed to the channel's followers). */
+/** The people a text mentions (NIP-27 nostr:npub…), as p tags: they get the mention by e-mail. */
+export function mentionTags(text: string, skip: string[] = []): string[][] {
+  const keys = new Set<string>()
+  for (const m of text.matchAll(/nostr:(npub1[02-9ac-hj-np-z]{58})/g)) {
+    try { const d = nip19.decode(m[1]); if (d.type === 'npub' && !skip.includes(d.data)) keys.add(d.data) } catch { /* not an npub */ }
+  }
+  return [...keys].map((k) => ['p', k])
+}
+
 export const postMessage = (groupId: string, text: string, files: File[], topic?: string, announce = false) =>
   enqueue('groups', {
     kind: 9, content: text,
-    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t])],
+    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t]), ...mentionTags(text)],
   }, files)
 
 /** A reply in the thread of message ROOT (NIP-22 comment, kept in the group by its `h` tag). */
@@ -65,7 +75,7 @@ export const postThreadReply = (groupId: string, root: { id: string; pubkey: str
   enqueue('groups', {
     kind: 1111, content: text,
     tags: [['h', groupId], ['E', root.id, '', root.pubkey], ['K', String(root.kind)], ['P', root.pubkey],
-      ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t])],
+      ['e', root.id, '', root.pubkey], ['k', String(root.kind)], ['p', root.pubkey], ...hashtags(text).map((t) => ['t', t]), ...mentionTags(text, [root.pubkey])],
   }, files)
 
 /** Turn a channel's shared inbox on or off (admins: the bridge ignores anyone else's setting). */

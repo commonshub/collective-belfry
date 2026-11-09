@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MailIcon } from './icons'
+import { Markdown } from './markdown'
 import { address, attachmentsOf, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -133,7 +134,7 @@ function Bubble({ d }: { d: Dm }) {
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
       {d.kind === 1301 && d.subject && <div className="dm-subject">{d.subject}</div>}
-      <div className="dm-text">{d.text || (d.attachments?.length ? '' : '(empty)')}</div>
+      {d.text ? <Markdown text={d.text} className="dm-text" /> : <div className="dm-text">{d.attachments?.length ? '' : '(empty)'}</div>}
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>

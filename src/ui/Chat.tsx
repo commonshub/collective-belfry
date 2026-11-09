@@ -1,3 +1,4 @@
+import { nip19 } from 'nostr-tools'
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
@@ -16,6 +17,7 @@ import { BELFRY, NAME, THEME } from '../config'
 import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
+import { canAdmin } from '../core/access'
 import { InviteSheet } from './Invite'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -149,7 +151,7 @@ export function ChannelView({ id, topic, focus }: { id: string; topic?: string; 
       <EventsBar channel={id} />
       <PodsBar channel={id} />
       {g?.isProposal && <ProposalHeader groupId={id} />}
-      {g?.isPod && g.admins.has(me()) && g.applications.length > 0 && (
+      {g?.isPod && canAdmin(g) && g.applications.length > 0 && (
         <button className="join-bar" style={{ borderTop: 0, borderBottom: '1px solid var(--line)', width: '100%' }} onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
           <span>{g.applications.length} {g.applications.length === 1 ? 'person asks' : 'people ask'} to join</span>
           <span className="badge orange">Review</span>
@@ -301,7 +303,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newProp, setNewProp] = useState(false)
   useVersion()
   const g = group(id)
-  const admin = !!g?.admins.has(me())
+  const admin = canAdmin(g)
   const list = messages(id).filter((m) => !topic || (topic === ANNOUNCE ? isAnnouncement(m, g) : m.topics.includes(topic)))
   const ps = profiles()
   const rx = reactions(id)
@@ -383,7 +385,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => go(`c/${encodeURIComponent(groupId)}`)
   const gkey = knownGroupsKey()
-  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: !!g?.admins.has(me()), name: g?.name ?? groupId }
+  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: canAdmin(g), name: g?.name ?? groupId }
   const card = root ? cardOf(root.ev, gkey) : null
   return (
     <div className="screen">
@@ -535,9 +537,37 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
     el.style.height = Math.min(el.scrollHeight, 140) + 'px'
   }, [text])
 
+  // @mentions: "@" and a few letters suggest people; a pick writes "@Name", sent as nostr:npub…
+  const picked = useRef(new Map<string, string>()) // name → pubkey
+  const [caret, setCaret] = useState(0)
+  const query = /(^|\s)@([\p{L}\p{N}_.-]{0,30})$/u.exec(text.slice(0, caret))
+  const people = useMemo(() => {
+    if (!query) return []
+    const q = query[2].toLowerCase()
+    return [...profiles().entries()]
+      .filter(([pk, p]) => pk !== me() && p.name && p.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)))
+      .slice(0, 6).map(([pubkey, p]) => ({ pubkey, name: p.name! }))
+  }, [query?.[2]]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pick = (who: { pubkey: string; name: string }) => {
+    const start = caret - query![2].length - 1
+    const next = text.slice(0, start) + '@' + who.name + ' ' + text.slice(caret)
+    picked.current.set(who.name, who.pubkey)
+    setText(next)
+    const at = start + who.name.length + 2
+    setCaret(at)
+    requestAnimationFrame(() => { ta.current?.focus(); ta.current?.setSelectionRange(at, at) })
+  }
+  const withMentions = (t: string) => {
+    let out = t
+    for (const [name, pk] of [...picked.current].sort((a, b) => b[0].length - a[0].length))
+      out = out.split('@' + name).join('nostr:' + nip19.npubEncode(pk))
+    picked.current.clear()
+    return out
+  }
+
   const send = async () => {
     if (!text.trim() && !files.length) return
-    const t = text.trim()
+    const t = withMentions(text.trim())
     const f = files
     const a = canAnnounce && ann
     setText('')
@@ -569,8 +599,20 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
           onClick={() => (onEvent || canAnnounce ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
-        <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text} onChange={(e) => setText(e.target.value)}
+        {people.length > 0 && (
+          <div className="mention-pop" role="listbox" aria-label="Mention someone">
+            {people.map((p) => (
+              <button key={p.pubkey} role="option" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(p)}>
+                <Avatar pubkey={p.pubkey} size={24} /><span>{p.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text}
+          onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
+          onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
+            if (people.length && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pick(people[0]); return }
             // Enter sends on a keyboard; on phones the return key adds a line
             if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() }
           }} />

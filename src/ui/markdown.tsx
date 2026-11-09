@@ -6,35 +6,39 @@ import type { ReactNode } from 'react'
 
 const SAFE_URL = /^(https?:\/\/|mailto:)/i
 
-function inline(text: string, key: string): ReactNode[] {
+/** How plain text inside the Markdown is shown: as is, or with #topics and @mentions. */
+type Plain = (text: string, key: string) => ReactNode[]
+const asIs: Plain = (t) => [t]
+
+function inline(text: string, key: string, plain: Plain = asIs): ReactNode[] {
   const out: ReactNode[] = []
   const re = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)\)|\*([^*\s][^*]*)\*|_([^_\s][^_]*)_|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]))/g
   let last = 0
   let m: RegExpExecArray | null
   let i = 0
   while ((m = re.exec(text))) {
-    if (m.index > last) out.push(text.slice(last, m.index))
+    if (m.index > last) out.push(...plain(text.slice(last, m.index), `${key}-t${i}`))
     const k = `${key}-${i++}`
-    if (m[2] ?? m[3]) out.push(<strong key={k}>{inline(m[2] ?? m[3], k)}</strong>)
+    if (m[2] ?? m[3]) out.push(<strong key={k}>{inline(m[2] ?? m[3], k, plain)}</strong>)
     else if (m[4]) out.push(<code key={k}>{m[4]}</code>)
-    else if (m[5]) out.push(<s key={k}>{inline(m[5], k)}</s>)
+    else if (m[5]) out.push(<s key={k}>{inline(m[5], k, plain)}</s>)
     else if (m[6] && m[7]) {
       out.push(SAFE_URL.test(m[7])
         ? <a key={k} href={m[7]} target="_blank" rel="noreferrer noopener">{inline(m[6], k)}</a>
         : m[0])
-    } else if (m[8] ?? m[9]) out.push(<em key={k}>{inline(m[8] ?? m[9], k)}</em>)
+    } else if (m[8] ?? m[9]) out.push(<em key={k}>{inline(m[8] ?? m[9], k, plain)}</em>)
     else if (m[10]) out.push(<a key={k} href={m[10]} target="_blank" rel="noreferrer noopener">{m[10]}</a>)
     last = m.index + m[0].length
   }
-  if (last < text.length) out.push(text.slice(last))
+  if (last < text.length) out.push(...plain(text.slice(last), `${key}-tz`))
   return out
 }
 
-function lines(block: string[], key: string): ReactNode[] {
-  return block.flatMap((l, i) => (i ? [<br key={`${key}-br${i}`} />, ...inline(l, `${key}-${i}`)] : inline(l, `${key}-${i}`)))
+function lines(block: string[], key: string, plain: Plain = asIs): ReactNode[] {
+  return block.flatMap((l, i) => (i ? [<br key={`${key}-br${i}`} />, ...inline(l, `${key}-${i}`, plain)] : inline(l, `${key}-${i}`, plain)))
 }
 
-export function Markdown({ text, className, style }: { text: string; className?: string; style?: React.CSSProperties }) {
+export function Markdown({ text, className, style, plain = asIs }: { text: string; className?: string; style?: React.CSSProperties; plain?: Plain }) {
   const blocks: ReactNode[] = []
   const src = text.replace(/\r\n?/g, '\n').split('\n')
   let i = 0
@@ -43,9 +47,17 @@ export function Markdown({ text, className, style }: { text: string; className?:
     const line = src[i]
     const key = `b${n++}`
     if (!line.trim()) { i++; continue }
+    if (/^```/.test(line)) {
+      const code: string[] = []
+      i++
+      while (i < src.length && !/^```/.test(src[i])) code.push(src[i++])
+      i++
+      blocks.push(<pre key={key}><code>{code.join('\n')}</code></pre>)
+      continue
+    }
     const h = /^(#{1,3})\s+(.*)$/.exec(line)
     if (h) {
-      blocks.push(<div key={key} className={'md-h md-h' + h[1].length}>{inline(h[2], key)}</div>)
+      blocks.push(<div key={key} className={'md-h md-h' + h[1].length}>{inline(h[2], key, plain)}</div>)
       i++
       continue
     }
@@ -53,19 +65,19 @@ export function Markdown({ text, className, style }: { text: string; className?:
       const ordered = /^\s*\d+[.)]\s+/.test(line)
       const items: string[] = []
       while (i < src.length && /^\s*([-*+]|\d+[.)])\s+/.test(src[i])) items.push(src[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, ''))
-      const lis = items.map((t, j) => <li key={`${key}-${j}`}>{inline(t, `${key}-${j}`)}</li>)
+      const lis = items.map((t, j) => <li key={`${key}-${j}`}>{inline(t, `${key}-${j}`, plain)}</li>)
       blocks.push(ordered ? <ol key={key}>{lis}</ol> : <ul key={key}>{lis}</ul>)
       continue
     }
     if (/^>\s?/.test(line)) {
       const q: string[] = []
       while (i < src.length && /^>\s?/.test(src[i])) q.push(src[i++].replace(/^>\s?/, ''))
-      blocks.push(<blockquote key={key}>{lines(q, key)}</blockquote>)
+      blocks.push(<blockquote key={key}>{lines(q, key, plain)}</blockquote>)
       continue
     }
     const p: string[] = []
     while (i < src.length && src[i].trim() && !/^(#{1,3}\s|>\s?|\s*([-*+]|\d+[.)])\s+)/.test(src[i])) p.push(src[i++])
-    blocks.push(<p key={key}>{lines(p, key)}</p>)
+    blocks.push(<p key={key}>{lines(p, key, plain)}</p>)
   }
   return <div className={'md' + (className ? ' ' + className : '')} style={style}>{blocks}</div>
 }

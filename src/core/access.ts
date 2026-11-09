@@ -31,19 +31,29 @@ export function onAccessInfo(l: () => void) {
 /** The read-only state; cached for offline use. */
 export async function loadAccessInfo(): Promise<AccessInfo | null> {
   info ??= (await kvGet<AccessInfo>('access-info')) ?? null
+  if (!belfryAdmins.length) belfryAdmins = (await kvGet<string[]>('belfry-admins')) ?? []
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
-    const doc = (await res.json()) as { access?: AccessInfo }
+    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[] }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
+    }
+    if (Array.isArray(doc.admins)) {
+      belfryAdmins = doc.admins.filter((k) => /^[0-9a-f]{64}$/.test(k))
+      await kvSet('belfry-admins', belfryAdmins)
     }
   } catch { /* offline: the cached state */ }
   listeners.forEach((l) => l())
   return info
 }
 
-export const isAdmin = () => !!info?.admins.includes(me())
+// The community's admins (belfry.json "admins"): admins of every channel too, without being
+// listed as its members (zooid patch 0003 lets the relay take their moderation).
+let belfryAdmins: string[] = []
+export const isAdmin = () => !!info?.admins.includes(me()) || belfryAdmins.includes(me())
+/** May I administer this channel: its own admins, and the community's. */
+export const canAdmin = (g?: { admins: Set<string> }) => !!g && (g.admins.has(me()) || isAdmin())
 
 // ---- asking to get in -----------------------------------------------------------------
 
