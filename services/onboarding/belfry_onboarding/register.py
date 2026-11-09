@@ -810,13 +810,30 @@ class Register(OdooApi):
                 "days": days,
             }
 
-    def join_guest(self, token: str, name: str) -> dict[str, Any]:
+    def join_guest(self, token: str, name: str, client: str = "") -> dict[str, Any]:
         """A person joins a guest invite with a name only (guests.py): their contact and a
-        pending guest pass; the account and the session come next. Returns pass and contact."""
+        pending guest pass; the account and the session come next. Returns pass and contact.
+        CLIENT is the key that signed the request (the device's session key): the same device
+        asking again (a second tap, a retry) gets the same contact and pass (``"again"``), never
+        a second account."""
         with self._lock:
             inv = next((i for i in self._all("belfry.invite") if i.get("token") == token), None)
             if inv is None or not inv.get("guest_channel"):
                 raise _user_error("This is not a guest invite.")
+            if client:
+                for p in self._all("belfry.pass"):
+                    if (
+                        p.get("invite_id") == inv["id"]
+                        and p.get("guest_client") == client
+                        and p.get("state") in ("pending", "active")
+                    ):
+                        return {
+                            "pass_id": p["id"],
+                            "partner_id": p["partner_id"],
+                            "channel": inv["guest_channel"],
+                            "days": int(p.get("guest_days") or 30),
+                            "again": p.get("state") == "active",
+                        }
             inv = self._usable(inv)
             if inv["state"] != "open":
                 raise _user_error(f"This invite is {inv['state']}.")
@@ -832,6 +849,7 @@ class Register(OdooApi):
                     "guest_channel": inv["guest_channel"],
                     "guest_days": days,
                     "guest_inviter": inv.get("guest_inviter") or "",
+                    "guest_client": client or False,
                     "date_start": today.isoformat(),
                     "date_end": (today + dt.timedelta(days=days)).isoformat(),
                 },
@@ -841,6 +859,7 @@ class Register(OdooApi):
                 "partner_id": pid,
                 "channel": inv["guest_channel"],
                 "days": days,
+                "again": False,
             }
 
     def join_existing(self, token: str, pubkey: str) -> dict[str, Any]:

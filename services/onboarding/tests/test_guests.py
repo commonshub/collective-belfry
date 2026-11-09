@@ -238,6 +238,13 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
         got = join(c, session, b'{"name": "Gus"}')
         assert got.status_code == 200 and got.json()["bunker_url"].startswith("bunker://")
         assert got.json()["channel"] == "garden" and got.json()["new"] is True
+        # the same device asks again (a second tap, a retry): the same account, announced once
+        people, lines = len(rsvc.odoo.search_read("res.partner", [], ["id"])), len(published)
+        time.sleep(1.1)
+        again = join(c, session, b'{"name": "Gus"}')
+        assert again.status_code == 200 and again.json()["pubkey"] == got.json()["pubkey"]
+        assert len(rsvc.odoo.search_read("res.partner", [], ["id"])) == people
+        assert len(published) == lines
         guest_pk = got.json()["pubkey"]
         kind, tags = published[-1]
         assert kind == 9000 and ["p", guest_pk, "member"] in tags and ["unsaved", "1"] in tags

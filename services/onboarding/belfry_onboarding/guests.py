@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from typing import Any
 
@@ -353,20 +354,30 @@ def _in_channel(svc: Services, channel: str, pubkey: str) -> bool:
     return any(t[:2] == ["p", pubkey] for e in found[:1] for t in e.get("tags", []))
 
 
-def join_new(svc: Services, token: str, name: str) -> dict[str, Any]:
-    """Make the guest and their session: ``{"bunker_url", "pubkey", "channel", "guest"}``."""
+_join_lock = threading.Lock()  # one new guest at a time: a second tap waits, then finds the first
+
+
+def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str, Any]:
+    """Make the guest and their session: ``{"bunker_url", "pubkey", "channel", "guest"}``.
+    CLIENT (the key that signed the request) makes it safe to ask twice: the same device gets the
+    same account again, with a new session, and is announced in the channel once."""
     from . import core
 
-    made = svc.odoo.join_guest(token, name)
-    pid = made["partner_id"]
-    partner = {"id": pid, "name": name}
-    pubkey, npub, ucan = core._ensure_keycast_user(svc, partner, f"guest-{pid}")
-    svc.odoo.write("res.partner", [pid], {"belfry_npub": npub})
-    svc.odoo.write("belfry.pass", [made["pass_id"]], {"keycast_pubkey": pubkey, "state": "active"})
-    bunker = svc.keycast.create_bunker(ucan, "Chat (guest)") if ucan else {}
-    if not bunker.get("bunker_url"):
-        raise RuntimeError("the signer gave no session")
-    admitted(svc, made["pass_id"])
+    with _join_lock:
+        made = svc.odoo.join_guest(token, name, client)
+        pid = made["partner_id"]
+        row = svc.odoo.read_one("res.partner", pid, ["name"]) or {}
+        partner = {"id": pid, "name": row.get("name") or name}
+        pubkey, npub, ucan = core._ensure_keycast_user(svc, partner, f"guest-{pid}")
+        bunker = svc.keycast.create_bunker(ucan, "Chat (guest)") if ucan else {}
+        if not bunker.get("bunker_url"):
+            raise RuntimeError("the signer gave no session")
+        if not made.get("again"):
+            svc.odoo.write("res.partner", [pid], {"belfry_npub": npub})
+            svc.odoo.write(
+                "belfry.pass", [made["pass_id"]], {"keycast_pubkey": pubkey, "state": "active"}
+            )
+            admitted(svc, made["pass_id"])
     return {
         "bunker_url": bunker["bunker_url"],
         "pubkey": pubkey,
@@ -497,7 +508,7 @@ def register_join_routes(app: FastAPI) -> None:
                 name = " ".join(str(data.get("name") or "").split())[:100]
                 if not name:
                     raise ApiError(422, "name_needed", "Tell us your name.")
-                out = await run_in_threadpool(join_new, s, token, name)
+                out = await run_in_threadpool(join_new, s, token, name, pubkey)
         except OdooError as exc:
             raise ApiError(410, "closed", str(exc.message or "This invite is closed.")) from exc
         except ApiError:
