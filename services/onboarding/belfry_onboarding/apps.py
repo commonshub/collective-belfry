@@ -27,8 +27,8 @@ import time
 import urllib.parse
 from typing import Any
 
-from fastapi import Form, Request
-from fastapi.responses import HTMLResponse
+from fastapi import Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import community, console, flash, mypass
@@ -407,6 +407,120 @@ def register(app: Any) -> None:
             return flash.redirect(services, "/apps", err=str(exc))
         return flash.redirect(
             services, "/apps", msg=f"{address(uri)} {verb}. The event is on the relay."
+        )
+
+    # -- apps.<domain>'s catalog: who may add, and adding (appshome.EXTRAS) --------------------
+
+    @app.get("/console/apps/role", include_in_schema=False)
+    async def role(request: Request):
+        """For apps.<domain>/ (same site, so the console's lax cookie comes along): may this
+        browser add apps? Only a yes or no, and only to the apps host."""
+        services = svc(request)
+        who = await viewer(request)
+        apps_origin = mypass._origin(services.settings.apps_public_url or "")
+        return JSONResponse(
+            {"admin": bool(who and who["admin"])},
+            headers={
+                "Cache-Control": "no-store",
+                "Access-Control-Allow-Origin": apps_origin or "null",
+                "Access-Control-Allow-Credentials": "true",
+                "Vary": "Origin, Cookie",
+            },
+        )
+
+    def extra_page(
+        services: Services, who: dict[str, Any] | None, key: str, body: str
+    ) -> HTMLResponse:
+        return HTMLResponse(
+            console.frame("Add an app", "/apps", who, body), headers={"Cache-Control": "no-store"}
+        )
+
+    @app.get("/console/apps/add", response_class=HTMLResponse)
+    async def add_page(request: Request, app_: str = Query("", alias="app")):
+        from . import appshome
+
+        services = svc(request)
+        who = await viewer(request)
+        x = appshome.EXTRAS.get(app_)
+        if who is None:
+            return extra_page(
+                services,
+                None,
+                "",
+                '<h1>Add an app</h1><p class="muted">Only admins add apps.</p>'
+                f'<a class="btn" href="/login?to={_e(urllib.parse.quote("/apps/add?app=" + (app_ if x else "")))}">Sign in</a>',
+            )
+        if not who["admin"] or x is None:
+            return extra_page(
+                services,
+                who,
+                "",
+                '<h1>Add an app</h1><p class="bad">Only admins add apps, from the list on the apps page.</p>',
+            )
+        domain = services.settings.nip05_domain
+        on = appshome.added(services.settings)
+        hosts = ", ".join(f"https://{h}.{domain}" for h in x["hosts"])
+        if app_ in on:
+            return extra_page(
+                services, who, app_, f"<h1>{_e(x['title'])}</h1><p>Already added: {_e(hosts)}.</p>"
+            )
+        look = (
+            "<p class=\"note\">It still wears Open Source Village's look: it hasn't been restyled to "
+            "Belfry's yet, and your theme doesn't reach it.</p>"
+            if x["osv_look"]
+            else ""
+        )
+        return extra_page(
+            services,
+            who,
+            app_,
+            f"<h1>Add {_e(x['title'])}?</h1><p>{_e(x['about'])}</p>"
+            f"<p>Every member will find it on the apps page, at {_e(hosts)}. The server builds and "
+            "starts it: that takes a few minutes.</p>"
+            + look
+            + f'<form method="post" action="/apps/add"><input type="hidden" name="csrf" value="{_e(who["csrf"])}">'
+            f'<input type="hidden" name="app" value="{_e(app_)}">'
+            f'<button class="btn" type="submit">Add {_e(x["title"])}</button></form>',
+        )
+
+    @app.post("/console/apps/add", response_class=HTMLResponse)
+    async def add(request: Request, csrf: str = Form(""), app_: str = Form("", alias="app")):
+        from . import appshome, setup
+
+        services = svc(request)
+        who = await viewer(request)
+        origin = request.headers.get("origin")
+        x = appshome.EXTRAS.get(app_)
+        if (
+            who is None
+            or not who["admin"]
+            or x is None
+            or not secrets.compare_digest(csrf or "", who["csrf"] or "x")
+            or (origin and origin != mypass._origin(console.console_url(services.settings)))
+        ):
+            return flash.redirect(services, "/apps", err="Only admins add apps.")
+        on = appshome.added(services.settings)
+        want = " ".join(k for k in appshome.EXTRAS if k in on or k == app_)
+        try:
+            await run_in_threadpool(
+                setup.write_pending,
+                services.settings,
+                {"BELFRY_EXTRA_APPS": want},
+                who.get("name") or who.get("email") or "an admin",
+            )
+        except (ValueError, OSError) as exc:
+            log.warning("apps: adding %s failed: %s", app_, exc)
+            return flash.redirect(
+                services, "/apps", err="This belfry can't add apps from here yet."
+            )
+        apps_url = (services.settings.apps_public_url or "").rstrip("/")
+        return extra_page(
+            services,
+            who,
+            app_,
+            f"<h1>Adding {_e(x['title'])}</h1><p>The server is building and starting it; that "
+            "takes a few minutes. It then shows under Your apps on "
+            f'<a href="{_e(apps_url)}/">the apps page</a>.</p>',
         )
 
     @app.post("/console/apps/approve")

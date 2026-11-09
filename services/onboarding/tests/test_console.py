@@ -440,3 +440,49 @@ def test_apps_home_lists_the_installed_apps(web, belfry, tmp_path):
     assert 'href="/chat/"' in r.text and 'src="/chat/icons/icon-192.png"' in r.text
     assert "Chat" in r.text and "&lt;b&gt;Notes" in r.text and "https://x.org" not in r.text
     assert "/gone/" not in r.text and "Open Source Village" not in r.text
+
+
+def test_apps_home_shows_what_can_be_added_to_admins_only(web, belfry, odoo, authentik, tmp_path):
+    """apps.<domain>/: your apps for everyone; the apps that can be added in a hidden part that
+    the page opens for admins (the console's /apps/role); adding asks, then queues EXTRA_APPS."""
+    s = belfry.settings
+    s.osv_apps, s.extra_apps, s.nip05_domain = False, "vote", "belfry.test"
+    s.apps_public_url, s.setup_dir = "https://apps.belfry.test", str(tmp_path)
+    page = web.get("/apps-home", headers={"Host": "apps.belfry.test"}).text
+    assert 'href="https://vote.belfry.test/"' in page  # added: under your apps
+    more = page[page.index('<section id="more" hidden>') :]
+    assert "/apps/add?app=calendar" in more and "/apps/add?app=vote" not in more
+    assert "https://belfry.belfry.test/apps/role" in more
+
+    r = web.get("/apps/role", headers=CONSOLE)
+    assert r.json() == {"admin": False}
+    assert r.headers["access-control-allow-origin"] == "https://apps.belfry.test"
+    assert r.headers["access-control-allow-credentials"] == "true"
+    alice = member(odoo, "Alice")
+    csrf = sign_in(web, belfry, alice)
+    assert web.get("/apps/role", headers=CONSOLE).json() == {"admin": False}
+    assert "Only admins" in web.get("/apps/add?app=calendar", headers=CONSOLE).text
+    r = web.post(
+        "/apps/add", data={"csrf": csrf, "app": "calendar"}, headers=CONSOLE, follow_redirects=False
+    )
+    assert r.status_code in (302, 303) and not (tmp_path / "pending.env").exists()
+
+    make_admin(authentik, "alice@example.org")
+    assert web.get("/apps/role", headers=CONSOLE).json() == {"admin": True}
+    ask = web.get("/apps/add?app=calendar", headers=CONSOLE).text
+    assert "Add Calendar?" in ask and "https://calendar.belfry.test" in ask
+    assert "Only admins" in web.get("/apps/add?app=<script>", headers=CONSOLE).text
+    r = web.post(
+        "/apps/add",
+        data={"csrf": "wrong", "app": "calendar"},
+        headers=CONSOLE,
+        follow_redirects=False,
+    )
+    assert not (tmp_path / "pending.env").exists()
+    r = web.post("/apps/add", data={"csrf": csrf, "app": "calendar"}, headers=CONSOLE)
+    assert "Adding Calendar" in r.text
+    pending = (tmp_path / "pending.env").read_text()
+    assert (
+        "BELFRY_EXTRA_APPS='calendar vote'" in pending
+        or 'BELFRY_EXTRA_APPS="calendar vote"' in pending
+    )

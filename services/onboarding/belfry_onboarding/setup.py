@@ -135,6 +135,8 @@ PROVIDERS: list[tuple[str, str, str, list[tuple[str, str, bool, str]]]] = [
     ),
 ]
 FIELDS = {k: (label, secret) for _, _, _, fields in PROVIDERS for k, label, secret, _ in fields}
+# set from apps.<domain>'s catalog (appshome.py), not a field of this page
+FIELDS["BELFRY_EXTRA_APPS"] = ("Added apps", False)
 MAX_NAME = 120
 MAX_VALUE = 1000
 

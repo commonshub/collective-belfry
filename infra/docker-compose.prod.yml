@@ -41,6 +41,8 @@ services:
       RATE_LIMIT_EXEMPT: ${RATE_LIMIT_EXEMPT:-192.0.2.1/32}
       # 1: the Open Source Village apps answer on their hosts (Caddyfile, snippet osv-app)
       OSV_APPS: ${OSV_APPS:-1}
+      # …or only these of them (added on apps.<domain>; snippet osv-app)
+      EXTRA_APPS: ${EXTRA_APPS:-}
     volumes:
       # the directory, not the file: a git update replaces the Caddyfile (new inode), which a
       # single-file mount would never show; `caddy reload` then picks up the new one

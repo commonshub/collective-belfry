@@ -27,6 +27,7 @@
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
 #   BELFRY_NAME                      community name (start page, belfry.json, mails)
 #   BELFRY_THEME                     belfry (the only base look; own files: belfry theme)
+#   BELFRY_EXTRA_APPS                apps added on apps.<domain>: calendar vote wallet groups village
 #   BELFRY_REGISTER                  belfry | odoo: who is who lives in the belfry's own register
 #                                    (no Odoo) or in Odoo (the add-on: billing, shifts, CRM)
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
@@ -91,11 +92,15 @@ no_odoo() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get REGISTER)" == belfry ]]; }
 # programme., groups.): compose profile osv-apps, only with OSV_APPS=1 in .env.
 OSV_SERVICES=(chat calendar groups village vote wallet)
 osv_apps() { [[ "$(env_get OSV_APPS)" == 1 ]]; }
+# …or only the ones an admin added on apps.<domain> (EXTRA_APPS; compose profiles app-<name>)
+EXTRA_KEYS=(calendar vote wallet groups village)
+extra_apps() { local a; for a in $(env_get EXTRA_APPS); do [[ " ${EXTRA_KEYS[*]} " == *" $a "* ]] && echo "$a"; done; }
 
 compose() {
   local files=("${COMPOSE_FILES[@]}")
   if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
-  if osv_apps; then files+=(--profile osv-apps); fi
+  if osv_apps; then files+=(--profile osv-apps)
+  else local a; for a in $(extra_apps); do files+=(--profile "app-$a"); done; fi
   if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "$@"
   else docker compose "${files[@]}" "$@"; fi
 }
@@ -180,6 +185,13 @@ cmd_config() {
   if [[ -n "${BELFRY_REGISTER:-}" ]]; then
     [[ "$BELFRY_REGISTER" =~ ^(belfry|odoo)$ ]] || die "BELFRY_REGISTER is belfry or odoo"
     pairs+=(REGISTER "$BELFRY_REGISTER")
+  fi
+  if [[ -n "${BELFRY_EXTRA_APPS+set}" ]]; then  # may be empty: none added
+    local a
+    for a in $BELFRY_EXTRA_APPS; do
+      [[ " ${EXTRA_KEYS[*]} " == *" $a "* ]] || die "BELFRY_EXTRA_APPS: $a is not one of ${EXTRA_KEYS[*]}"
+    done
+    pairs+=(EXTRA_APPS "$(echo $BELFRY_EXTRA_APPS)")
   fi
   if [[ -n "${BELFRY_GIT_REPO:-}" ]]; then
     [[ "$BELFRY_GIT_REPO" =~ ^(nostr|https):// ]] || die "BELFRY_GIT_REPO is a nostr:// (ngit) or https:// URL"
@@ -291,7 +303,11 @@ legacy_settings() {
   if [[ -z "$(env_get OSV_APPS)" ]]; then env_set OSV_APPS "$([[ $belfry == 1 ]] && echo 0 || echo 1)"; fi
   if [[ -z "$(env_get PASS_SIGNIN)" ]]; then env_set PASS_SIGNIN "$([[ $belfry == 1 ]] && echo belfry || echo authentik)"; fi
   if ! osv_apps; then
-    compose --profile osv-apps rm -sf "${OSV_SERVICES[@]}" >/dev/null 2>&1 || true
+    local svc off=()
+    for svc in "${OSV_SERVICES[@]}"; do
+      [[ " $(extra_apps | tr '\n' ' ') " == *" $svc "* ]] || off+=("$svc")
+    done
+    [[ ${#off[@]} -eq 0 ]] || compose --profile osv-apps rm -sf "${off[@]}" >/dev/null 2>&1 || true
   fi
 }
 
@@ -472,7 +488,7 @@ SETUP_DIR="$INFRA/data/setup"
 SETUP_KEYS=(BELFRY_RESEND_API_KEY BELFRY_LETTERMINT_API_KEY BELFRY_MAIL_FROM BELFRY_NAME BELFRY_THEME BELFRY_ENV_HOMEPAGE
   BELFRY_GIT_REPO BELFRY_STRIPE_PUBLISHABLE_KEY BELFRY_STRIPE_SECRET_KEY BELFRY_MOLLIE_API_KEY
   BELFRY_ACCOUNTING_ODOO_URL BELFRY_ACCOUNTING_ODOO_DB BELFRY_ACCOUNTING_ODOO_ISSUER
-  BELFRY_ACCOUNTING_ODOO_API_KEY)
+  BELFRY_ACCOUNTING_ODOO_API_KEY BELFRY_EXTRA_APPS)
 
 setup_folder() {
   mkdir -p "$SETUP_DIR"
@@ -499,7 +515,7 @@ def secret(n):
     p = os.path.join(secrets_dir, n)
     return os.path.isfile(p) and os.path.getsize(p) > 0
 names = {"BELFRY_NAME": "COMMUNITY_NAME", "BELFRY_MAIL_FROM": "MAIL_FROM", "BELFRY_THEME": "THEME",
-         "BELFRY_ENV_HOMEPAGE": "HOMEPAGE", "BELFRY_GIT_REPO": "GIT_REPO",
+         "BELFRY_ENV_HOMEPAGE": "HOMEPAGE", "BELFRY_GIT_REPO": "GIT_REPO", "BELFRY_EXTRA_APPS": "EXTRA_APPS",
          "BELFRY_STRIPE_PUBLISHABLE_KEY": "STRIPE_PUBLISHABLE_KEY",
          "BELFRY_ACCOUNTING_ODOO_URL": "ACCOUNTING_ODOO_URL",
          "BELFRY_ACCOUNTING_ODOO_DB": "ACCOUNTING_ODOO_DB",

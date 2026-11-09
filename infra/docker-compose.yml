@@ -753,6 +753,8 @@ services:
       # Open Source Village's app suite (profile osv-apps) and its sign-in through Authentik;
       # `belfry apply` writes both into .env (0 and belfry on a belfry with its own look).
       OSV_APPS: ${OSV_APPS:-1}
+      # the ones an admin added on apps.<domain> (calendar vote wallet groups village)
+      EXTRA_APPS: ${EXTRA_APPS:-}
       PASS_SIGNIN: ${PASS_SIGNIN:-authentik}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8100/health')\""]
@@ -788,7 +790,7 @@ services:
   # (infra/apps/calendar). The relay and brand URLs are baked in at build time: rebuild the image
   # after changing COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS or ONBOARDING_PUBLIC_URL.
   calendar:
-    profiles: ["osv-apps"]
+    profiles: ["osv-apps", "app-calendar"]
     image: belfry-calendar:local
     build:
       context: ..
@@ -814,7 +816,7 @@ services:
   # Village" (keys derived from the participant's Nostr key, Keycast patch 0011) and nutzaps over
   # the community relay. infra/apps/wallet/README.md.
   wallet:
-    profiles: ["osv-apps"]
+    profiles: ["osv-apps", "app-wallet"]
     image: belfry-wallet:local
     build:
       context: ..
@@ -838,7 +840,7 @@ services:
   # API and web app in one Node process at vote.<domain>; the electorate comes from the
   # onboarding service. services/vote/README.md.
   vote:
-    profiles: ["osv-apps"]
+    profiles: ["osv-apps", "app-vote"]
     image: belfry-vote:local
     read_only: true
     tmpfs: ["/tmp"]
@@ -874,7 +876,7 @@ services:
   # comments): browser apps on the community relay, one Node process serving all four on four
   # ports. services/village/README.md.
   village:
-    profiles: ["osv-apps"]
+    profiles: ["osv-apps", "app-village"]
     image: belfry-village:local
     read_only: true
     tmpfs: ["/tmp"]
@@ -957,7 +959,7 @@ services:
         # "No pass yet? Ask for an invite" links here (the start page)
         SITE_URL: ${SITE_URL:-${ONBOARDING_PUBLIC_URL:-http://localhost:8100}}
         COMMUNITY_APPS: *community-apps
-    profiles: ["osv-apps"]
+    profiles: ["osv-apps", "app-groups"]
     # nginx as its own unprivileged user, like the chat. Browser-only: no backend access.
     user: "100:101"
     security_opt: ["no-new-privileges:true"]

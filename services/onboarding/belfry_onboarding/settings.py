@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     apps_dir: str = Field(default="/belfry-apps", alias="APPS_DIR")
     # Open Source Village's app suite on chat., calendar., vote., … (compose profile osv-apps)
     osv_apps: bool = Field(default=False, alias="OSV_APPS")
+    # the ones of that suite an admin added (appshome.EXTRAS keys, space-separated)
+    extra_apps: str = Field(default="", alias="EXTRA_APPS")
     # the pass pages' sign-in: belfry (own e-mail + code page, passlogin.py) or authentik
     pass_signin: str = Field(default="belfry", alias="PASS_SIGNIN")
     # /changelog (community.py): written by infra/scripts/changelog.sh on the host, mounted here
