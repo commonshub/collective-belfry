@@ -312,13 +312,15 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
     a = apps.state(svc).get(f["uri"]) or {}
     approved = bool(a.get("approved"))
     name = apps.tag(a["decided"], "client") if approved and a.get("decided") else ""
-    label = apps.app_name(name, f["uri"])
     addr = apps.address(f["uri"])
-    badge = (
-        '<span class="badge ok">Approved</span>'
-        if approved
-        else '<span class="badge wait">Not approved yet</span>'
-    )
+    # an app of this belfry's own (apps.<domain>/chat) is shown by its path: /chat
+    u = urllib.parse.urlsplit(f["uri"])
+    if u.netloc == f"apps.{domain}" and u.path.rstrip("/"):
+        addr = u.path.rstrip("/")
+    if name == apps.address(f["uri"]):  # approved without a name of its own
+        name = ""
+    label = apps.app_name(name, "") or addr
+    badge = "" if approved else '<span class="badge wait">Not approved yet</span>'
     chip = (
         f'<div class="chip"><span class="ic">{APP_ICON}</span><span style="min-width:0">'
         f"<b>{E(label)}</b>{f'<small>{E(addr)}</small>' if label != addr else ''}</span>{badge}</div>"

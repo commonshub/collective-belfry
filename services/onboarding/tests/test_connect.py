@@ -143,7 +143,7 @@ def test_members_go_straight_in_once_approved(web, odoo):
     services = web.app.state.services
     apps.decide(services, web.people["Ana"], APP, "Chat", True)
     page = authorize(web).text
-    assert "Sign in to Chat" in page and "Approved" in page
+    assert "Sign in to Chat" in page and 'class="badge ok"' not in page  # no badge once approved
     f, r = sign_in(web, odoo, "bob@example.org")
     assert r.json()["next"] == "in"
     # a known browser: one tap, and silent sign-in works
@@ -258,3 +258,14 @@ def test_a_member_lists_and_ends_their_sessions(services, odoo, keycast, client)
         ).status_code
         == 403
     )
+
+
+def test_an_app_of_this_belfry_is_shown_by_its_path(web):
+    services = web.app.state.services
+    services.settings.nip05_domain = "belfry.test"
+    own = "https://apps.belfry.test/chat/"
+    apps.decide(services, web.people["Ana"], own, "", True)
+    page = authorize(web, redirect_uri=own).text
+    chip = page.split('<div class="chip">')[1].split("</h1>")[0]
+    assert "<b>/chat</b>" in chip and "Sign in to /chat" in chip
+    assert "apps.belfry.test" not in chip and 'class="badge' not in chip
