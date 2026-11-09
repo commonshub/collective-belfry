@@ -8,7 +8,7 @@ import { assignCard, setCardStatus } from '../core/actions'
 import { displayName, realName, type CardState, type Message, type ThreadInfo } from '../core/model'
 import { BELFRY } from '../config'
 import { parseMail, type Mail } from '../core/mime'
-import { fmtTime, MediaGrid, Sheet } from './common'
+import { fmtTime, MediaGrid, Sheet, Btn } from './common'
 
 // A channel message a member sent by e-mail (posted by the belfry's mail bridge as them):
 // it shows as their message, with a "via e-mail" tag; the whole e-mail stays one tap away.
@@ -162,7 +162,7 @@ export function InboxCardView({ m, card, groupId, channelName, state, canSend, t
       </div>
       <div className="mc-acts">
         {canSend && <button className="mc-reply" onClick={() => setWriting(true)}>Reply by e-mail</button>}
-        <button className="btn ghost mc-sec" onClick={() => void setCardStatus(groupId, m.ev.id, status === 'closed' ? 'open' : 'closed')}>{status === 'closed' ? 'Reopen' : 'Close'}</button>
+        <Btn className="btn ghost mc-sec" onClick={() => setCardStatus(groupId, m.ev.id, status === 'closed' ? 'open' : 'closed')}>{status === 'closed' ? 'Reopen' : 'Close'}</Btn>
       </div>
       {full && <FullMail mail={card.post} onClose={() => setFull(false)} />}
       {writing && (

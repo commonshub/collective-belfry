@@ -7,7 +7,7 @@ import qrcode from 'qrcode-generator'
 import { BELFRY } from '../config'
 import { channelIcon, group } from '../core/model'
 import { signedFetch } from '../core/sync'
-import { Sheet } from './common'
+import { Sheet, Btn } from './common'
 
 export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const g = group(id)
@@ -85,14 +85,14 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
           <span className="qr-over error" role="alert">
             <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5" /><path d="M12 7.5v5.5M12 16.5v.01" /></svg>
             <span className="qr-err">{error}</span>
-            <button className="btn small" onClick={() => void fetchGuest()}>Retry</button>
+            <Btn className="btn small" onClick={() => fetchGuest()}>Retry</Btn>
           </span>
         )}
       </div>
       <div className="drop-url"><code>{pending ? (busy ? 'Making the guest link…' : '—') : url}</code></div>
       <div className="row" style={{ gap: 8, marginTop: 10 }}>
-        <button className="btn" style={{ flex: 1 }} disabled={pending} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy link'}</button>
-        {'share' in navigator && <button className="btn ghost" style={{ flex: 1 }} disabled={pending} onClick={() => void navigator.share({ title: label, url }).catch(() => {})}>Share…</button>}
+        <Btn className="btn" style={{ flex: 1 }} disabled={pending} onClick={() => copy()}>{copied ? 'Copied' : 'Copy link'}</Btn>
+        {'share' in navigator && <Btn className="btn ghost" style={{ flex: 1 }} disabled={pending} onClick={() => navigator.share({ title: label, url }).catch(() => {})}>Share…</Btn>}
       </div>
           <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>
             {guest

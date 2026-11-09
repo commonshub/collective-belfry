@@ -721,3 +721,18 @@ button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 .invite-opts > div > span { font-size: 14px; color: var(--muted); }
 .invite-opts .seg { margin: 0; }
 .invite-opts .seg button { flex: none; padding: 6px 12px; }
+
+/* every button answers a tap at once, and shows when its work is running */
+button { transition: transform 0.08s ease, opacity 0.12s ease; }
+button:active:not(:disabled) { transform: scale(0.97); opacity: 0.8; }
+button[data-tapped] { opacity: 0.7; }
+form[aria-busy='true'] button.btn, form[aria-busy='true'] button.send, button[aria-busy='true'] { opacity: 0.6; pointer-events: none; }
+form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, button.btn[aria-busy='true']::before {
+  content: ''; display: inline-block; width: 14px; height: 14px; margin-right: 8px; vertical-align: -2px; border-radius: 99px;
+  border: 2px solid currentColor; border-top-color: transparent; animation: spin 0.8s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) { button { transition: none; } button:active:not(:disabled) { transform: none; } }
+
+/* the composer's Add menu: a list, like the message menu */
+.act .ico { color: var(--muted); flex: none; }
+.act small { display: block; font-size: 13px; color: var(--muted); }

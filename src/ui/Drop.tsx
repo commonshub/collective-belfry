@@ -4,7 +4,7 @@ import { createDropLink, dropUrl, endDropLink } from '../core/actions'
 import { dropLinks, group, type DropLink } from '../core/model'
 import { me } from '../core/sync'
 import { useVersion } from '../core/store'
-import { Sheet } from './common'
+import { Sheet, Btn } from './common'
 
 // Drop box links (Files tab): anyone with the link or its QR code uploads photos and files to
 // this channel, without an account; they may add their name, or sign in to post as themselves.
@@ -63,7 +63,7 @@ function NewDropSheet({ groupId, onClose, onMade }: { groupId: string; onClose: 
         <button type="button" className={!login ? 'on' : ''} onClick={() => setLogin(false)}><b>Anyone</b><small>No account needed</small></button>
         <button type="button" className={login ? 'on' : ''} onClick={() => setLogin(true)}><b>Members</b><small>Must sign in to upload</small></button>
       </div>
-      <button className="btn" disabled={busy} onClick={async () => { setBusy(true); try { onMade(await createDropLink(groupId, days, login)) } finally { setBusy(false) } }}>Create link</button>
+      <Btn className="btn" disabled={busy} onClick={async () => { setBusy(true); try { onMade(await createDropLink(groupId, days, login)) } finally { setBusy(false) } }}>Create link</Btn>
     </Sheet>
   )
 }
@@ -90,8 +90,8 @@ function ShareSheet({ groupId, token, onClose }: { groupId: string; token: strin
       <img className="drop-qr" src={qr} alt="QR code of the drop link" />
       <div className="drop-url"><code>{url}</code></div>
       <div className="row" style={{ gap: 8, marginTop: 10 }}>
-        <button className="btn" style={{ flex: 1 }} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy link'}</button>
-        {'share' in navigator && <button className="btn ghost" style={{ flex: 1 }} onClick={() => void navigator.share({ title: 'Drop box', url }).catch(() => {})}>Share…</button>}
+        <Btn className="btn" style={{ flex: 1 }} onClick={() => copy()}>{copied ? 'Copied' : 'Copy link'}</Btn>
+        {'share' in navigator && <Btn className="btn ghost" style={{ flex: 1 }} onClick={() => navigator.share({ title: 'Drop box', url }).catch(() => {})}>Share…</Btn>}
       </div>
       {l && <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>Works until {until(l.expires)} · {l.login ? 'signed-in members only' : 'anyone with the link'}. End it any time from the Files tab.</p>}
     </Sheet>

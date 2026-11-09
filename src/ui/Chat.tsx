@@ -7,14 +7,14 @@ import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, pos
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
 import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { AtIcon, CalendarIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
@@ -120,7 +120,7 @@ function NewChannel({ onClose }: { onClose: () => void }) {
   const [about, setAbout] = useState('')
   return (
     <Sheet title="New channel" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         const id = await createChannel(name.trim(), about.trim())
         onClose()
@@ -131,7 +131,7 @@ function NewChannel({ onClose }: { onClose: () => void }) {
         <label className="field"><span>Description</span>
           <textarea className="input" rows={3} placeholder="What is this channel about?" value={about} onChange={(e) => setAbout(e.target.value)} /></label>
         <button className="btn" disabled={!name.trim()}>Create channel</button>
-      </form>
+      </Form>
     </Sheet>
   )
 }
@@ -185,7 +185,7 @@ function JoinBar({ g }: { g: Group }) {
     return (
       <div className="join-bar">
         <span>You're not in this pod yet.</span>
-        <button className="btn small" onClick={() => void joinGroup(g.id)}>Join</button>
+        <Btn className="btn small" onClick={() => joinGroup(g.id)}>Join</Btn>
       </div>
     )
   return (
@@ -196,13 +196,13 @@ function JoinBar({ g }: { g: Group }) {
       </div>
       {asking && (
         <Sheet title={`Apply to ${g.name}`} onClose={() => setAsking(false)}>
-          <form onSubmit={async (e) => { e.preventDefault(); await joinGroup(g.id, answer.trim()); setAsking(false) }}>
+          <Form onSubmit={async (e) => { e.preventDefault(); await joinGroup(g.id, answer.trim()); setAsking(false) }}>
             <p className="apply-q">{g.prompt || DEFAULT_PROMPT}</p>
             <textarea className="input" rows={4} autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} />
             <div style={{ height: 12 }} />
             <button className="btn" disabled={!answer.trim()}>Send my application</button>
             <p className="hint" style={{ marginTop: 10 }}>The pod’s admins see your answer and admit you, or not.</p>
-          </form>
+          </Form>
         </Sheet>
       )}
     </>
@@ -270,7 +270,7 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   const where = groups().find((g) => g.id === parent)
   return (
     <Sheet title="New pod" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         const id = await createPod(name.trim(), about.trim(), parent, access)
         onClose()
@@ -283,7 +283,7 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
         <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />
         <button className="btn" disabled={!name.trim()}>Create pod</button>
         <p className="hint" style={{ marginTop: 10 }}>A working group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, tasks and pods.</p>
-      </form>
+      </Form>
     </Sheet>
   )
 }
@@ -692,13 +692,16 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
         <button className="send" aria-label="Send" disabled={!text.trim() && !files.length} onClick={() => void send()}>↑</button>
       </div>
       {menu && (onEvent || canAnnounce) && (
-        <Sheet title="Add" onClose={() => setMenu(false)}>
-          <button className="btn ghost" onClick={() => { setMenu(false); picker.current?.click() }}>📷 Photos or files</button>
-          <div style={{ height: 8 }} />
-          {canAnnounce && <><button className="btn ghost" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}>📣 An announcement</button><div style={{ height: 8 }} /></>}
-          {onEvent && <button className="btn ghost" onClick={() => { setMenu(false); onEvent() }}>📅 An event</button>}
-          {onProposal && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onProposal() }}>📝 A proposal</button></>}
-          {onPod && <><div style={{ height: 8 }} /><button className="btn ghost" onClick={() => { setMenu(false); onPod() }}>⬡ A pod (working group)</button></>}
+        <Sheet title="Add to the conversation" hideTitle onClose={() => setMenu(false)}>
+          <div className="act-group">
+            <button className="act" onClick={() => { setMenu(false); picker.current?.click() }}><ImageIcon /><span>Photos or files</span></button>
+          </div>
+          <div className="act-group">
+            {canAnnounce && <button className="act" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}><MegaphoneIcon /><span>Announcement<small>Stands out; followers get it by e-mail</small></span></button>}
+            {onEvent && <button className="act" onClick={() => { setMenu(false); onEvent() }}><CalendarIcon /><span>Event</span></button>}
+            {onProposal && <button className="act" onClick={() => { setMenu(false); onProposal() }}><DocIcon /><span>Proposal<small>A text to discuss and vote on</small></span></button>}
+            {onPod && <button className="act" onClick={() => { setMenu(false); onPod() }}><HexIcon /><span>Pod<small>A working group with its own channel</small></span></button>}
+          </div>
         </Sheet>
       )}
     </div>
@@ -808,17 +811,17 @@ function SaveAccountBar() {
         <button className="btn small" onClick={() => setStep('email')}>Save</button>
         <button className="link close" aria-label="Not now" onClick={() => { setHidden(true); try { sessionStorage.setItem('belfry-save-hidden', '1') } catch { /* private mode */ } }}>✕</button>
       </>}
-      {step === 'email' && <form onSubmit={async (e) => { e.preventDefault(); if (await post('/guest/save', { email: email.trim() })) setStep('code') }}>
+      {step === 'email' && <Form onSubmit={async (e) => { e.preventDefault(); if (await post('/guest/save', { email: email.trim() })) setStep('code') }}>
         <input className="input" type="email" inputMode="email" autoComplete="email" autoFocus placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} />
         <button className="btn small" disabled={busy || !email.includes('@')}>{busy ? '…' : 'Send code'}</button>
-      </form>}
-      {step === 'code' && <form onSubmit={async (e) => {
+      </Form>}
+      {step === 'code' && <Form onSubmit={async (e) => {
         e.preventDefault()
         if (await post('/guest/save/verify', { email: email.trim(), code: code.trim() })) { setGuestInfo({ ...g, saved: true }); setStep('done') }
       }}>
         <input className="input" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="6-digit code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
         <button className="btn small" disabled={busy || code.length !== 6}>{busy ? '…' : 'Confirm'}</button>
-      </form>}
+      </Form>}
       {error && <div className="error">{error}</div>}
     </div>
   )

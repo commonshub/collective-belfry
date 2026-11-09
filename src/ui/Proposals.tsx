@@ -3,7 +3,7 @@ import { createProposal, reviseProposal, setProposalStatus, vote, type NewPropos
 import { canDecide, displayName, groups, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { go, Sheet } from './common'
+import { go, Sheet, Form } from './common'
 import { Markdown } from './markdown'
 
 // A proposal is a channel template: its chat is where feedback goes; above it, the text (with its
@@ -106,7 +106,7 @@ export function NewProposalSheet({ parent, onClose }: { parent: string; onClose:
   const where = groups().find((g) => g.id === parent)
   return (
     <Sheet title="New proposal" onClose={onClose}>
-      <form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); onClose(); go('c/' + encodeURIComponent(id)) }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); onClose(); go('c/' + encodeURIComponent(id)) }}>
         <Fields n={n} set={set} />
         <div className="choice">
           <button type="button" className={n.status === 'draft' ? 'on' : ''} onClick={() => set({ status: 'draft' })}><b>Draft</b><small>Still writing it</small></button>
@@ -114,7 +114,7 @@ export function NewProposalSheet({ parent, onClose }: { parent: string; onClose:
         </div>
         <button className="btn" disabled={!n.title.trim()}>Post proposal</button>
         <p className="hint" style={{ marginTop: 10 }}>Posted in {where?.name ?? parent}. It gets its own chat for feedback; you can publish new versions.</p>
-      </form>
+      </Form>
     </Sheet>
   )
 }
@@ -124,13 +124,13 @@ function ReviseSheet({ p, onClose }: { p: Proposal; onClose: () => void }) {
   const [note, setNote] = useState('')
   return (
     <Sheet title={`Version ${p.version + 1}`} onClose={onClose}>
-      <form onSubmit={async (e) => { e.preventDefault(); await reviseProposal(p, n, note); onClose() }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); await reviseProposal(p, n, note); onClose() }}>
         <Fields n={n} set={(patch) => setN({ ...n, ...patch })} />
         <label className="field"><span>What changed</span>
           <input className="input" placeholder="e.g. Budget lowered after feedback" value={note} onChange={(e) => setNote(e.target.value)} /></label>
         <button className="btn" disabled={!n.title.trim()}>Publish version {p.version + 1}</button>
         {p.status === 'voting' && <p className="hint" style={{ marginTop: 10 }}>The vote restarts on the new version.</p>}
-      </form>
+      </Form>
     </Sheet>
   )
 }

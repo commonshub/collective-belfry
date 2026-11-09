@@ -5,7 +5,7 @@ import { displayName } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { ACCESS, NAME } from '../config'
-import { Avatar, back, go, Sheet } from './common'
+import { Avatar, back, go, Sheet, Btn, Form } from './common'
 import { Tabs } from './ChannelInfo'
 
 type Tab = 'requests' | 'members' | 'invites'
@@ -130,7 +130,7 @@ function AddMember({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState('')
   return (
     <Sheet title="Let someone in" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         try {
           const d = nip19.decode(npub.trim())
@@ -144,7 +144,7 @@ function AddMember({ onClose }: { onClose: () => void }) {
         <RoleDays role={role} setRole={setRole} days={days} setDays={setDays} />
         {error && <div className="error">{error}</div>}
         <button className="btn" disabled={!npub.trim()}>Let them in</button>
-      </form>
+      </Form>
     </Sheet>
   )
 }
@@ -212,12 +212,12 @@ function NewInvite({ onClose }: { onClose: () => void }) {
       <Sheet title="Invite code" onClose={onClose}>
         <div className="card" style={{ textAlign: 'center', fontFamily: 'ui-monospace, monospace', fontSize: 24, letterSpacing: '0.05em' }}>{code}</div>
         <p className="hint">Only a fingerprint of the code is published. Pass the code on yourself: whoever has it gets in as {role}.</p>
-        <button className="btn" onClick={() => void share(code)}>Share</button>
+        <Btn className="btn" onClick={() => share(code)}>Share</Btn>
       </Sheet>
     )
   return (
     <Sheet title="New invite code" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         try { setCode(await createInvite(role, Number(days) || undefined, Number(max) || undefined)) } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
       }}>
@@ -226,7 +226,7 @@ function NewInvite({ onClose }: { onClose: () => void }) {
           <input className="input" type="number" min={1} inputMode="numeric" value={max} onChange={(e) => setMax(e.target.value)} /></label>
         {error && <div className="error">{error}</div>}
         <button className="btn">Make the code</button>
-      </form>
+      </Form>
     </Sheet>
   )
 }

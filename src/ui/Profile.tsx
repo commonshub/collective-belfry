@@ -9,7 +9,7 @@ import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin,
 import { isAdmin } from '../core/access'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
-import { Avatar, back, go, Sheet } from './common'
+import { Avatar, back, go, Sheet, Form } from './common'
 import { Markdown } from './markdown'
 import { PinIcon } from './icons'
 
@@ -100,7 +100,7 @@ function EditProfile({ onClose }: { onClose: () => void }) {
   const [pic, setPic] = useState('')
   return (
     <Sheet title="Edit your profile" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         setSaving(true); setError('')
         try {
@@ -127,7 +127,7 @@ function EditProfile({ onClose }: { onClose: () => void }) {
         <PlaceField share={share} setShare={setShare} place={place} setPlace={setPlace} />
         {error && <div className="error">{error}</div>}
         <button className="btn" disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
-      </form>
+      </Form>
     </Sheet>
   )
 }

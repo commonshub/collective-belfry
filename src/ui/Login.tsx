@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Form } from './common'
 import { INVITE_CLOSED, inviteInfo, joinAsNew, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
@@ -73,7 +74,7 @@ export function JoinScreen({ token, backend, onJoined, onSignIn, onDemo }: { tok
       </div>
     )
   return (
-    <form className="screen login" onSubmit={join}>
+    <Form className="screen login" onSubmit={join}>
       <Logo />
       <h2>{info.inviter || 'A member'} invited you to # {info.channel_name}</h2>
       {info.about && <p style={{ marginBottom: 12 }}>{info.about}</p>}
@@ -84,7 +85,7 @@ export function JoinScreen({ token, backend, onJoined, onSignIn, onDemo }: { tok
       <p className="hint" style={{ fontSize: 13, margin: '12px 0 0' }}>You’ll be a guest of {info.community} for {info.days} days: you see and post in this channel only. No e-mail needed now.</p>
       <div style={{ height: 28 }} />
       <button type="button" className="link" style={{ alignSelf: 'center' }} onClick={onSignIn}>Already have an account? Sign in</button>
-    </form>
+    </Form>
   )
 }
 
@@ -95,14 +96,14 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
   const [email, setEmail] = useState('')
   if (backend === 'demo')
     return (
-      <form className="screen login" onSubmit={(e) => { e.preventDefault(); if (email.includes('@')) onDemo(email.trim()) }}>
+      <Form className="screen login" onSubmit={(e) => { e.preventDefault(); if (email.includes('@')) onDemo(email.trim()) }}>
         <Logo />
         <h2>Demo mode</h2>
         <p>Everything stays on this device. <a href="?backend=belfry">Use the real village</a>.</p>
         <label className="field"><span>E-mail</span>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
         <button className="btn">Enter</button>
-      </form>
+      </Form>
     )
   const signIn = () => { setBusy(true); void startSignIn() }
   return (
@@ -122,14 +123,14 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
       {invited && <div className="card" role="status" style={{ marginBottom: 16 }}>After signing in, your invite opens its channel.</div>}
       {error && <div className="error">{error}</div>}
       {invite ? (
-        <form onSubmit={(e) => { e.preventDefault(); saveCode(code); signIn() }}>
+        <Form onSubmit={(e) => { e.preventDefault(); saveCode(code); signIn() }}>
           <label className="field">
             <span>Invite code</span>
             <input className="input" autoCapitalize="characters" autoComplete="off" spellCheck={false}
               placeholder="OSV-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} />
           </label>
           <button className="btn" disabled={busy || normalizeCode(code).length < 6}>{busy ? 'Opening…' : 'Sign in and use my code'}</button>
-        </form>
+        </Form>
       ) : (
         <>
           <button className="btn" disabled={busy} onClick={signIn}>{busy ? 'Opening…' : THEME === 'belfry' ? <><Arms /> Sign in with {BELFRY.domain}</> : 'Sign in with e-mail'}</button>
@@ -244,20 +245,20 @@ export function MembershipScreen({ session, reason, onSignOut }: {
           <p>You're signed in{who}, but this key isn't a member of the village yet.</p>
           {reason && <p className="hint" style={{ fontSize: 13 }}>The village said: {reason}</p>}
           {error && <div className="error">{error}</div>}
-          <form onSubmit={(e) => { e.preventDefault(); void send('code', { claim: code }) }}>
+          <Form onSubmit={() => send('code', { claim: code })}>
             <label className="field"><span>Invite code</span>
               <input className="input" autoCapitalize="characters" autoComplete="off" spellCheck={false}
                 placeholder="OSV-XXXX-XXXX" value={code} onChange={(e) => setCode(e.target.value)} /></label>
             <button className="btn" disabled={busy || normalizeCode(code).length < 6}>Use my code</button>
-          </form>
+          </Form>
           <div className="section-title" style={{ margin: '24px 0 10px' }}>Or ask to join</div>
-          <form onSubmit={(e) => { e.preventDefault(); void send('request', { note, name }) }}>
+          <Form onSubmit={() => send('request', { note, name })}>
             <label className="field"><span>Your name</span>
               <input className="input" autoComplete="name" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>A note for the admins</span>
               <textarea className="input" rows={3} placeholder="Who you are, why you'd like to join" value={note} onChange={(e) => setNote(e.target.value)} /></label>
             <button className="btn ghost" disabled={busy || !note.trim()}>{busy ? 'Sending…' : 'Request access'}</button>
-          </form>
+          </Form>
         </>
       )}
       <div className="row" style={{ justifyContent: 'flex-end', marginTop: 18 }}>

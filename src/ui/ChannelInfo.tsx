@@ -14,7 +14,7 @@ import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
 import { canAdmin } from '../core/access'
 import { me } from '../core/sync'
-import { Avatar, back, fmtTime, go, MediaGrid, Sheet } from './common'
+import { Avatar, back, fmtTime, go, MediaGrid, Sheet, Btn, Form } from './common'
 import { AccessFields } from './Chat'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files'
@@ -93,7 +93,7 @@ function About({ id }: { id: string }) {
       )}
       {g.isPod && (g.members.has(me())
         ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
-        : !g.closed && <button className="btn" style={{ marginBottom: 10 }} onClick={() => void joinGroup(id)}>Join pod</button>)}
+        : !g.closed && <Btn className="btn" style={{ marginBottom: 10 }} onClick={() => joinGroup(id)}>Join pod</Btn>)}
       <div className="card">
         <div className="hint">E-mail</div>
         <div>{isInbox(g) ? <>Anyone can e-mail <b>{g.id}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{g.id}@{BELFRY.domain}</b>: their mail shows as their message.</>}</div>
@@ -106,7 +106,7 @@ function About({ id }: { id: string }) {
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
         <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={() => setEditing(false)}>
-          <form onSubmit={async (e) => {
+          <Form onSubmit={async (e) => {
             e.preventDefault()
             if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
               await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
@@ -121,7 +121,7 @@ function About({ id }: { id: string }) {
               <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
             </label>
             <button className="btn" disabled={!name.trim()}>Save</button>
-          </form>
+          </Form>
         </Sheet>
       )}
     </div>
@@ -139,10 +139,10 @@ export function Tasks({ groupId }: { groupId: string }) {
   const done = tasks.filter((t) => t.done)
   return (
     <div>
-      <form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
+      <Form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
         <input className="input" placeholder="Add a task…" value={title} onChange={(e) => setTitle(e.target.value)} />
         <button className="btn small" disabled={!title.trim()}>Add</button>
-      </form>
+      </Form>
       {tasks.length === 0 && <div className="empty">No tasks yet.</div>}
       {[...todo, ...done].map((t) => (
         <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
@@ -173,10 +173,10 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
               </button>
               {t.author === me() && <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, 'delete')}>Delete</button>}
             </div>
-            <form className="row" onSubmit={async (e) => { e.preventDefault(); if (comment.trim()) { await commentTask(groupId, t.id, comment.trim()); setComment('') } }}>
+            <Form className="row" onSubmit={async (e) => { e.preventDefault(); if (comment.trim()) { await commentTask(groupId, t.id, comment.trim()); setComment('') } }}>
               <input className="input" placeholder="Comment…" value={comment} onChange={(e) => setComment(e.target.value)} />
               <button className="btn small" disabled={!comment.trim()}>Send</button>
-            </form>
+            </Form>
           </div>
         )}
       </div>
@@ -208,7 +208,7 @@ export function Members({ groupId }: { groupId: string }) {
           {g?.prompt && <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>{g.prompt}</div>}
           <blockquote>{a.answer || '(no answer)'}</blockquote>
           <div className="row">
-            <button className="btn small" onClick={() => void admit(groupId, a.pubkey)}>Admit</button>
+            <Btn className="btn small" onClick={() => admit(groupId, a.pubkey)}>Admit</Btn>
             <button className="btn small ghost" onClick={() => { if (confirm(`Decline ${displayName(a.pubkey)}?`)) void decline(groupId, a.pubkey) }}>Decline</button>
           </div>
         </div>
@@ -256,7 +256,7 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
       <div style={{ marginBottom: 14 }}>
         {options.map((l) => <button key={l} className={'chip' + (sel.includes(l) ? ' on' : '')} onClick={() => flip(l)}>{l}</button>)}
       </div>
-      <form className="row" style={{ marginBottom: 14 }} onSubmit={(e) => {
+      <Form className="row" style={{ marginBottom: 14 }} onSubmit={(e) => {
         e.preventDefault()
         const l = extra.trim().toLowerCase().slice(0, 32)
         if (l && !sel.includes(l)) setSel([...sel, l])
@@ -264,8 +264,8 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
       }}>
         <input className="input" placeholder="New label" value={extra} onChange={(e) => setExtra(e.target.value)} />
         <button className="btn small ghost">Add</button>
-      </form>
-      <button className="btn" onClick={async () => { await setMemberLabels(groupId, pubkey, sel); onClose() }}>Save labels</button>
+      </Form>
+      <Btn className="btn" onClick={async () => { await setMemberLabels(groupId, pubkey, sel); onClose() }}>Save labels</Btn>
     </Sheet>
   )
 }

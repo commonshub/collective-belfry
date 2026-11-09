@@ -1,5 +1,5 @@
 import { Drawer } from 'vaul'
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { CloseIcon } from './icons'
 import { db } from '../core/db'
@@ -184,4 +184,46 @@ export function fmtDay(d: Date) {
   return d.toLocaleDateString([], d.getFullYear() === today.getFullYear()
     ? { weekday: 'long', day: 'numeric', month: 'long' }
     : { day: 'numeric', month: 'long', year: 'numeric' })
+}
+
+
+// ---- buttons that lock while their work runs -------------------------------------------------
+// A tap is answered at once (the button dims and shows a spinner) and can't be sent twice: Form
+// and Btn stay busy until the promise their handler returns settles. main.tsx also swallows a
+// second tap on the same button within 600 ms, for the handlers that return nothing.
+
+export function useBusy(): [boolean, (fn: () => unknown) => Promise<void>] {
+  const [busy, setBusy] = useState(false)
+  const lock = useRef(false)
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  const run = async (fn: () => unknown) => {
+    if (lock.current) return
+    lock.current = true
+    let done = false
+    // only show it when the work isn't instant (no flicker on local actions)
+    const t = setTimeout(() => { if (!done && alive.current) setBusy(true) }, 0)
+    try { await fn() } finally {
+      done = true; clearTimeout(t); lock.current = false
+      if (alive.current) setBusy(false)
+    }
+  }
+  return [busy, run]
+}
+
+type FormProps = Omit<FormHTMLAttributes<HTMLFormElement>, 'onSubmit'> & { onSubmit?: (e: FormEvent<HTMLFormElement>) => unknown }
+export function Form({ onSubmit, children, ...rest }: FormProps) {
+  const [busy, run] = useBusy()
+  return (
+    <form {...rest} aria-busy={busy || undefined} {...(busy ? { inert: '' } : {})}
+      onSubmit={(e) => { e.preventDefault(); void run(() => onSubmit?.(e)) }}>
+      {children}
+    </form>
+  )
+}
+
+type BtnProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onClick'> & { onClick?: (e: MouseEvent<HTMLButtonElement>) => unknown }
+export function Btn({ onClick, disabled, children, ...rest }: BtnProps) {
+  const [busy, run] = useBusy()
+  return <button type="button" {...rest} disabled={disabled || busy} aria-busy={busy || undefined} onClick={(e) => void run(() => onClick?.(e))}>{children}</button>
 }

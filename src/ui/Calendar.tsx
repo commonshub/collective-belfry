@@ -5,7 +5,7 @@ import { createEvent, deleteEvent, jitsiLink, meetingLabel, openEventChat, rsvp,
 import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, fmtDay, go, Sheet } from './common'
+import { Avatar, back, fmtDay, go, Sheet, Btn, Form } from './common'
 import { Conversation } from './Chat'
 import { TopicsBar } from './Topics'
 import { Files, Tabs, Tasks } from './ChannelInfo'
@@ -149,7 +149,7 @@ export function NewEventSheet({ channel, onClose }: { channel?: string; onClose:
   ].filter((l): l is string => !!l?.trim()))].slice(0, 8)
   return (
     <Sheet title="Post an event" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         const coord = await createEvent(n, channel ?? 'general')
         onClose()
@@ -180,7 +180,7 @@ export function NewEventSheet({ channel, onClose }: { channel?: string; onClose:
           <textarea className="input" rows={3} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
         <button className="btn" disabled={!n.title.trim() || !n.start || (!!n.online?.trim() && !/^https:\/\//.test(n.online.trim()))}>Post event</button>
         <p className="hint" style={{ marginTop: 10 }}>Posted in #{groups().find((g) => g.id === (channel ?? 'general'))?.name ?? 'general'}. The event gets its own chat, task list and files.</p>
-      </form>
+      </Form>
     </Sheet>
   )
 }
@@ -265,7 +265,7 @@ function People({ e }: { e: CalEvent }) {
       ))}
       {e.ev.pubkey === me() && (
         <div className="pad">
-          <button className="btn ghost" onClick={async () => { if (confirm('Delete this event?')) { await deleteEvent(e); go('c/' + encodeURIComponent(e.channel)) } }}>Delete event</button>
+          <Btn className="btn ghost" onClick={async () => { if (confirm('Delete this event?')) { await deleteEvent(e); go('c/' + encodeURIComponent(e.channel)) } }}>Delete event</Btn>
         </div>
       )}
     </div>

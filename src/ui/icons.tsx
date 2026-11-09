@@ -65,3 +65,7 @@ export const CopyIcon = () => <Svg><rect x="9" y="9" width="12" height="12" rx="
 export const LinkIcon = () => <Svg><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7" /></Svg>
 export const GlobeIcon = () => <Svg><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></Svg>
 export const TrashIcon = () => <Svg><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></Svg>
+export const ImageIcon = () => <Svg><rect x="3" y="4" width="18" height="16" rx="2.5" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="m4 18 5-5 4 4 2.5-2.5L20 19" /></Svg>
+export const MegaphoneIcon = () => <Svg><path d="M4 10v4h3l8 4V6l-8 4H4zM18 9.5a3.5 3.5 0 0 1 0 5M8 14.5l1 4.5h2.5l-1-3.5" /></Svg>
+export const DocIcon = () => <Svg><path d="M7 3h7l4 4v14H7zM14 3v4h4M10 12h5M10 16h5" /></Svg>
+export const HexIcon = () => <Svg><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z" /></Svg>

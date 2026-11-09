@@ -6,7 +6,7 @@ import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { BELFRY } from '../config'
-import { Avatar, back, fmtDay, fmtTime, go, Sheet } from './common'
+import { Avatar, back, fmtDay, fmtTime, go, Sheet, Form } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -68,7 +68,7 @@ function NewMessage({ onClose }: { onClose: () => void }) {
   const open = (c: Conv) => { onClose(); go('dm/' + enc(c)) }
   return (
     <Sheet title="New message" onClose={onClose}>
-      <form onSubmit={async (e) => {
+      <Form onSubmit={async (e) => {
         e.preventDefault()
         const c = await convFor(to, people)
         if (c) open(c)
@@ -87,7 +87,7 @@ function NewMessage({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <button className="btn" disabled={!q}>{/@/.test(q) && !q.endsWith('@' + BELFRY.domain) ? 'Write an e-mail' : 'Write'}</button>
-      </form>
+      </Form>
     </Sheet>
   )
 }
