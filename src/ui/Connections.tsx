@@ -44,7 +44,7 @@ export function Connections({ session }: { session: Session }) {
   const [rows, setRows] = useState<Conn[] | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
-  const url = `${BELFRY.pass}/api/me/sessions`
+  const url = `${BELFRY.api}/me/sessions`
 
   const load = async () => {
     setError('')

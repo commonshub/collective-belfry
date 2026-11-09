@@ -13,13 +13,16 @@ const DOMAIN =
   (host.startsWith('apps.') ? host.slice(5) : servedByBelfry ? host : 'belfry.opensourcevillage.org')
 
 // "osv" (the village look, default) or "belfry" (the Belfry look: Clean, the arms mark).
-export const THEME: 'osv' | 'belfry' = env.VITE_THEME === 'belfry' ? 'belfry' : 'osv'
+const THEME_IS_BELFRY = env.VITE_THEME === 'belfry'
+export const THEME: 'osv' | 'belfry' = THEME_IS_BELFRY ? 'belfry' : 'osv'
 export const NAME = THEME === 'belfry' ? DOMAIN : 'Open Source Village'
 
 export const BELFRY = {
   domain: DOMAIN,
   apps: `https://apps.${DOMAIN}`, // Keycast: sign-in, bunker
   pass: `https://pass.${DOMAIN}`, // the pass at the door (/me)
+  // the belfry's API (NIP-98): belfry.<domain>/api/v1; the village look's belfry has pass.<domain>/api
+  api: THEME_IS_BELFRY ? `https://belfry.${DOMAIN}/api/v1` : `https://pass.${DOMAIN}/api`,
   shop: `https://shop.${DOMAIN}`, // invite pages and payment
   groupsRelay: env.VITE_GROUPS_RELAY || `wss://groups-relay.${DOMAIN}`, // NIP-29 (zooid)
   mainRelay: env.VITE_MAIN_RELAY || `wss://relay.${DOMAIN}`, // profiles, calendar (rnostr)

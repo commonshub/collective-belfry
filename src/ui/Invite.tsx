@@ -32,7 +32,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
   const fetchGuest = async () => {
     setBusy(true); setError('')
     try {
-      const r = await signedFetch(`${BELFRY.pass}/api/channel-invites`, 'POST', { channel: id })
+      const r = await signedFetch(`${BELFRY.api}/channel-invites`, 'POST', { channel: id })
       const d = await r.json().catch(() => ({}))
       if (!r.ok) throw new Error(d.message || 'The guest link could not be made.')
       setGuestUrl(String(d.url))

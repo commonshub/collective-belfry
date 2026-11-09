@@ -18,7 +18,7 @@ let loading: Promise<void> | null = null
 let failed = ''
 const subs = new Set<() => void>()
 const changed = () => subs.forEach((f) => f())
-const url = () => `${BELFRY.pass}/api/me/follows`
+const url = () => `${BELFRY.api}/me/follows`
 
 async function load() {
   failed = ''
