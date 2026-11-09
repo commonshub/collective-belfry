@@ -19,26 +19,32 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const memberUrl = `${location.origin}${location.pathname}#/c/${encodeURIComponent(id)}`
-  const url = guest ? guestUrl : memberUrl
+  // guest on and its link not here yet (loading, or failed): the last QR stays, faded, so the
+  // sheet keeps its height; a spinner, or an error mark with Retry, sits on top of it
+  const pending = guest && !guestUrl
+  const url = guest && guestUrl ? guestUrl : memberUrl
   const qr = useMemo(() => {
-    if (!url) return ''
     const q = qrcode(0, 'M')
     q.addData(url)
     q.make()
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }))
   }, [url])
-  const pickGuest = async (on: boolean) => {
-    setGuest(on); setError(''); setCopied(false)
-    if (!on || guestUrl) return
-    setBusy(true)
+  const fetchGuest = async () => {
+    setBusy(true); setError('')
     try {
       const r = await signedFetch(`${BELFRY.pass}/api/channel-invites`, 'POST', { channel: id })
       const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.message || 'No guest link: try again.')
+      if (!r.ok) throw new Error(d.message || 'The guest link could not be made.')
       setGuestUrl(String(d.url))
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e)); setGuest(false)
+      const m = e instanceof Error ? e.message : String(e)
+      setError(/fetch|network|load/i.test(m) ? 'No connection to the belfry.' : m)
     } finally { setBusy(false) }
+  }
+  const pickGuest = (on: boolean) => {
+    setGuest(on); setCopied(false)
+    if (on && !guestUrl && !busy) void fetchGuest()
+    if (!on) setError('')
   }
   const copy = async () => {
     try { await navigator.clipboard.writeText(url) } catch {
@@ -52,26 +58,30 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
       {admin && (
         <label className="switch-row">
           <span><b>Guest access for 30 days</b><small>For someone who isn't a member: this channel only, nothing else.</small></span>
-          <input type="checkbox" role="switch" checked={guest} disabled={busy} onChange={(e) => void pickGuest(e.target.checked)} />
+          <input type="checkbox" role="switch" checked={guest} onChange={(e) => pickGuest(e.target.checked)} />
         </label>
       )}
-      {busy && <p className="hint">Making a guest link…</p>}
-      {error && <p className="error">{error}</p>}
-      {url && !busy && (
-        <>
-          <img className="drop-qr" src={qr} alt={`QR code of the ${guest ? 'guest' : 'channel'} link`} />
-          <div className="drop-url"><code>{url}</code></div>
-          <div className="row" style={{ gap: 8, marginTop: 10 }}>
-            <button className="btn" style={{ flex: 1 }} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy link'}</button>
-            {'share' in navigator && <button className="btn ghost" style={{ flex: 1 }} onClick={() => void navigator.share({ title: label, url }).catch(() => {})}>Share…</button>}
-          </div>
+      <div className={'qr-box' + (pending ? ' waiting' : '')}>
+        <img className="drop-qr" src={qr} alt={pending ? '' : `QR code of the ${guest ? 'guest' : 'channel'} link`} />
+        {pending && busy && <span className="qr-over" role="status" aria-label="Making the guest link"><span className="spinner" /></span>}
+        {pending && !busy && error && (
+          <span className="qr-over error" role="alert">
+            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5" /><path d="M12 7.5v5.5M12 16.5v.01" /></svg>
+            <span className="qr-err">{error}</span>
+            <button className="btn small" onClick={() => void fetchGuest()}>Retry</button>
+          </span>
+        )}
+      </div>
+      <div className="drop-url"><code>{pending ? (busy ? 'Making the guest link…' : '—') : url}</code></div>
+      <div className="row" style={{ gap: 8, marginTop: 10 }}>
+        <button className="btn" style={{ flex: 1 }} disabled={pending} onClick={() => void copy()}>{copied ? 'Copied' : 'Copy link'}</button>
+        {'share' in navigator && <button className="btn ghost" style={{ flex: 1 }} disabled={pending} onClick={() => void navigator.share({ title: label, url }).catch(() => {})}>Share…</button>}
+      </div>
           <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>
             {guest
               ? 'One person uses this link: they give their name and e-mail, and join for 30 days. Everyone here sees who invited them.'
               : `Members open ${label} with this link. For someone who isn't a member yet, turn on guest access above.`}
           </p>
-        </>
-      )}
     </Sheet>
   )
 }
