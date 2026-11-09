@@ -269,3 +269,22 @@ def test_an_app_of_this_belfry_is_shown_by_its_path(web):
     chip = page.split('<div class="chip">')[1].split("</h1>")[0]
     assert "<b>/chat</b>" in chip and "Sign in to /chat" in chip
     assert "apps.belfry.test" not in chip and 'class="badge' not in chip
+
+
+def test_an_app_the_belfry_installed_needs_no_approval(web, tmp_path):
+    """<domain>/<name>/ with the app installed there (the chat it ships): approved by being
+    installed; the same path on another host, or an app that isn't installed, is not."""
+    services = web.app.state.services
+    apps_dir = tmp_path / "apps"
+    (apps_dir / "_routes").mkdir(parents=True)
+    (apps_dir / "chat").mkdir()
+    (apps_dir / "chat" / "index.html").write_text("<p>chat</p>")
+    (apps_dir / "_routes" / "chat.caddy").write_text("")
+    services.settings.apps_dir, services.settings.nip05_domain = str(apps_dir), "belfry.test"
+    assert apps.is_approved(services, "https://belfry.test/chat/")
+    assert not apps.is_approved(services, "https://belfry.test/notes/")
+    assert not apps.is_approved(services, "https://evil.example/chat/")
+    assert not apps.is_approved(services, "http://belfry.test/chat/")
+    page = authorize(web, redirect_uri="https://belfry.test/chat/").text
+    chip = page.split('<div class="chip">')[1].split("</h1>")[0]
+    assert "Sign in to /chat" in chip and "Not approved" not in chip

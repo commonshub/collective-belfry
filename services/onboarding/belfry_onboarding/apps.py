@@ -198,8 +198,20 @@ def display_name(svc: Services, uri: str) -> str:
     return app_name(tag(a["decided"], "client") if a.get("approved") else "", uri)
 
 
+def own_app(svc: Services, uri: str) -> bool:
+    """An app this belfry serves itself at https://<domain>/<name>/ (`belfry app install`, the
+    chat it ships): approved by being installed, no admin decision needed."""
+    from .appshome import installed
+
+    u = urllib.parse.urlsplit(uri)
+    if u.scheme != "https" or u.netloc != svc.settings.nip05_domain or u.query or u.fragment:
+        return False
+    names = {a["name"] for a in installed(getattr(svc.settings, "apps_dir", "") or "")}
+    return any(u.path == f"/{n}/" for n in names)
+
+
 def is_approved(svc: Services, uri: str) -> bool:
-    return bool(state(svc).get(uri, {}).get("approved"))
+    return own_app(svc, uri) or bool(state(svc).get(uri, {}).get("approved"))
 
 
 def publish(

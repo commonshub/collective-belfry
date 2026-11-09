@@ -589,7 +589,7 @@ def mail_state(s: Any) -> tuple[str, str]:
 def app_tiles(svc: Services) -> str:
     from . import appshome
 
-    apps_url = (svc.settings.apps_public_url or "").rstrip("/")
+    apps_url = appshome.base(svc.settings)
     tiles = ""
     for a in appshome.installed(svc.settings.apps_dir):
         icon = (

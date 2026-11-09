@@ -694,7 +694,11 @@ cmd_theme() {
 # in infra/data/apps/_routes/, which the proxy imports into the apps.<domain> site. The apps share
 # their origin with the signer (Keycast) on apps.<domain>: install only apps the admins trust.
 APPS_DIR="$INFRA/data/apps"
-APP_RESERVED=" api admin auth login logout register dashboard settings keys oauth static assets health well-known _routes "
+# names an app can't take: the signer's paths on apps.<domain>, and the community domain's own
+# (the pages served there, and its shortcuts to the other apps)
+APP_RESERVED=" api admin auth login logout register dashboard settings keys oauth static assets health well-known _routes 
+ me git drop follow help proposals changelog monitor invite theme brand skills status apply feedback rules privacy terms refunds 
+ connect door claim pass groups calendar programme vote people market photos wallet apps shop "
 reload_proxy() {
   compose exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
     || compose restart proxy >/dev/null
@@ -703,7 +707,7 @@ app_route() {
   local name=$1
   local csp="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https://*.{\$BELFRY_DOMAIN} wss://*.{\$BELFRY_DOMAIN} https://{\$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
   printf '%s\n' \
-    "# apps.<domain>/$name/: written by 'belfry app install $name'; do not edit." \
+    "# <domain>/$name/: written by 'belfry app install $name'; do not edit." \
     "redir /$name /$name/ 308" \
     "handle /$name/* {" \
     "	import csp \"$csp\"" \

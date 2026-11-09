@@ -14,7 +14,7 @@ What a theme folder changes:
 
 - **the belfry's pages**: `pass.<domain>` (sign-in, pass, `/proposals`, `/changelog`, drop box),
   `belfry.<domain>` (home, status, members, setup, monitor) and `/git`;
-- **the apps on `apps.<domain>`** (the apps list, the chat, and every app installed with
+- **the apps at `<domain>/<name>/`** (the chat, every app installed with
   `belfry app install`): each one loads `/theme/custom/own.css`, which is the folder's
   `custom.css` (or empty).
 
@@ -108,7 +108,7 @@ in light and dark mode. To have one scheme only, set `"scheme"` in `theme.json` 
    `belfry theme show` lists the files; `belfry theme reset` goes back to Belfry's look.
 3. Look at the result in light and dark mode, on a phone and a laptop:
    `https://belfry.<domain>/`, `https://pass.<domain>/proposals`, `https://apps.<domain>/` and
-   `https://apps.<domain>/chat/`.
+   `https://<domain>/chat/`.
 4. After an update (`belfry update`), check the same pages: the folder is untouched, but a new
    page may use a variable the theme doesn't set yet; it then shows Belfry's value.
 

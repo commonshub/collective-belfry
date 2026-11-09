@@ -195,9 +195,29 @@ apps.{$BELFRY_DOMAIN} {
 	error @admin 404
 	import admin_only /admin /admin/*
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data:; connect-src 'self' https://login.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://belfry.{$BELFRY_DOMAIN}; form-action 'self' https://login.{$BELFRY_DOMAIN}"
-	# The belfry's own static apps at apps.<domain>/<name>/ (`belfry app install` writes one route
-	# file per app into infra/data/apps/_routes/). None installed: the glob matches nothing.
-	import /srv/apps/_routes/*.caddy
+	# The belfry's own apps moved to the community's domain (<domain>/<name>/: one origin, one
+	# sign-in): their old addresses here lead there, the rest of the path and the #… included.
+	# …and their offline copies here (each app's own service worker, cache first) empty and
+	# unregister themselves, or a phone would keep opening the old address from its cache
+	@app_old_sw {
+		path_regexp ^/[a-z][a-z0-9-]{1,30}/sw\.js$
+		file {
+			root /srv/apps
+			try_files {path}
+		}
+	}
+	header @app_old_sw Content-Type "text/javascript; charset=utf-8"
+	header @app_old_sw Cache-Control "no-store"
+	respond @app_old_sw `self.addEventListener('install',()=>self.skipWaiting());self.addEventListener('activate',e=>e.waitUntil((async()=>{for(const k of await caches.keys())await caches.delete(k);await self.registration.unregister();for(const c of await self.clients.matchAll({type:'window'}))c.navigate(c.url)})()));` 200
+	@app_moved {
+		not path /
+		not path_regexp ^/[a-z][a-z0-9-]{1,30}/sw\.js$
+		file {
+			root /srv/apps
+			try_files {path} {path}/index.html {path}index.html
+		}
+	}
+	redir @app_moved https://{$BELFRY_DOMAIN}{uri} 302
 	# apps.<domain>/ itself lists the installed apps in the belfry's look (appshome.py)
 	@home path / /brand/* /theme/*
 	handle @home {
@@ -229,7 +249,9 @@ apps.{$BELFRY_DOMAIN} {
 	}
 	# Short names for the participant apps (<domain>/chat, …). None may collide with a page of
 	# the onboarding service, which answers everything else on the apex.
-	import vanity chat chat
+	# The belfry's own static apps at <domain>/<name>/ (`belfry app install` writes one route file
+	# per app into infra/data/apps/_routes/; the chat ships with every belfry). None: no match.
+	import /srv/apps/_routes/*.caddy
 	import vanity groups groups
 	import vanity calendar calendar
 	import vanity programme programme
@@ -256,8 +278,8 @@ relay.{$BELFRY_DOMAIN} {
 # The Open Source Village apps (Coracle chat, calendar, vote, wallet, directory, market, photos,
 # programme, Flotilla groups): all of them with OSV_APPS=1 (compose profile osv-apps), or the ones
 # an admin added on apps.<domain> (EXTRA_APPS, profiles app-<name>; args[1] is the app's name).
-# Otherwise their hosts lead to the belfry's own apps at apps.<domain> (args[0]: the chat's for
-# chat.), and their service-worker paths answer with a worker that empties the phone's copy of the
+# Otherwise their hosts lead to args[0]: the apps list at apps.<domain>, or for chat. the chat at
+# <domain>/chat/, and their service-worker paths answer with a worker that empties the phone's copy of the
 # old app and unregisters itself: an installed app would otherwise keep opening from its cache.
 (osv-app) {
 	@osv_sw {
@@ -272,7 +294,7 @@ relay.{$BELFRY_DOMAIN} {
 		expression `{$OSV_APPS:1} != 1 && !'{$EXTRA_APPS} '.contains('{args[1]} ')`
 		not path /sw.js /service-worker.js
 	}
-	redir @osv_off https://apps.{$BELFRY_DOMAIN}{args[0]} 302
+	redir @osv_off {args[0]} 302
 }
 
 # Blossom file server through its gate (writes need an active pass; reads are public).
@@ -290,7 +312,7 @@ blossom.{$BELFRY_DOMAIN} {
 # blossom. directly (infra/apps/chat/README.md).
 chat.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app /chat/ coracle
+	import osv-app https://{$BELFRY_DOMAIN}/chat/ coracle
 	# Coracle's own <meta> policy applies as well (both must allow). Participants may add other
 	# relays and look up NIP-05 names elsewhere, so connections stay open to any https/wss host.
 	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
@@ -309,7 +331,7 @@ mint.{$BELFRY_DOMAIN} {
 # Village token wallet (cashu.me, static); it talks to mint., apps. (Keycast) and relay. itself.
 wallet.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / wallet
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ wallet
 	# one inline script (brand.mjs: the dark background before the app loads)
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy wallet:80
@@ -379,7 +401,7 @@ verifier.{$BELFRY_DOMAIN} {
 # Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
 calendar.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / calendar
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ calendar
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN} https://programme.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy calendar:80
 }
@@ -387,7 +409,7 @@ calendar.{$BELFRY_DOMAIN} {
 # Community app: anonymous polls (services/vote: API and web app in one process).
 vote.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / vote
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ vote
 	# the Semaphore prover runs WebAssembly
 	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy vote:8080
@@ -397,28 +419,28 @@ vote.{$BELFRY_DOMAIN} {
 # one process, four ports).
 people.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / village
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ village
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8080
 }
 
 market.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / village
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ village
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8081
 }
 
 photos.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / village
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ village
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8082
 }
 
 programme.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / village
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ village
 	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://vote.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8083
 }
@@ -428,7 +450,7 @@ programme.{$BELFRY_DOMAIN} {
 # look up NIP-05 names anywhere, so connections stay open to any https/wss host.
 groups.{$BELFRY_DOMAIN} {
 	import security
-	import osv-app / groups
+	import osv-app https://apps.{$BELFRY_DOMAIN}/ groups
 	import csp "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src 'none'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy groups:80
 }

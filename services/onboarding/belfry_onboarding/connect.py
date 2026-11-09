@@ -310,12 +310,12 @@ JS = """<script>
 def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
     domain = svc.settings.nip05_domain
     a = apps.state(svc).get(f["uri"]) or {}
-    approved = bool(a.get("approved"))
+    approved = bool(a.get("approved")) or apps.own_app(svc, f["uri"])
     name = apps.tag(a["decided"], "client") if approved and a.get("decided") else ""
     addr = apps.address(f["uri"])
-    # an app of this belfry's own (apps.<domain>/chat) is shown by its path: /chat
+    # an app of this belfry's own (<domain>/chat) is shown by its path: /chat
     u = urllib.parse.urlsplit(f["uri"])
-    if u.netloc == f"apps.{domain}" and u.path.rstrip("/"):
+    if u.netloc in (domain, f"apps.{domain}") and u.path.rstrip("/"):
         addr = u.path.rstrip("/")
     if name == apps.address(f["uri"]):  # approved without a name of its own
         name = ""

@@ -68,6 +68,13 @@ def added(settings: Any) -> list[str]:
     return [k for k in EXTRAS if k in raw]
 
 
+def base(settings: Any) -> str:
+    """Where installed apps live: the community's own domain, https://<domain>/<name>/, so they
+    share one origin (one sign-in) and the address members know."""
+    d = getattr(settings, "nip05_domain", "") or ""
+    return f"https://{d}" if d and "." in d else ""
+
+
 def installed(apps_dir: str) -> list[dict[str, Any]]:
     root = Path(apps_dir)
     if not root.is_dir():
@@ -116,9 +123,9 @@ color:var(--fg-faint);margin:8px 0 0}
 </style>"""
 
 
-def _icon(a: dict[str, Any]) -> str:
+def _icon(a: dict[str, Any], site: str = "") -> str:
     if a.get("icon"):
-        return f'<img src="{E(a["icon"])}" alt="">'
+        return f'<img src="{E(site + a["icon"])}" alt="">'
     return f'<div class="ph">{E(a["title"][:1])}</div>'
 
 
@@ -129,10 +136,11 @@ def page(
     console_url: str,
     domain: str = "",
     extras_on: list[str] | None = None,
+    site: str = "",
 ) -> str:
     extras_on = extras_on or []
     mine = "".join(
-        f'<a class="app" href="/{E(a["name"])}/">{_icon(a)}'
+        f'<a class="app" href="{E(site)}/{E(a["name"])}/">{_icon(a, site)}'
         f"<div><b>{E(a['title'])}</b><span>{E(a['about'])}</span></div></a>"
         for a in apps
     ) + "".join(
@@ -187,6 +195,7 @@ def register(app: FastAPI) -> None:
                 (getattr(s, "console_url", "") or "").rstrip("/"),
                 s.nip05_domain,
                 added(s),
+                base(s),
             ),
             headers={"Cache-Control": "no-cache"},
         )

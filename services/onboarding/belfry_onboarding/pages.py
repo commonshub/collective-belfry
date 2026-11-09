@@ -143,16 +143,16 @@ def community_apps(raw: str) -> list[tuple[str, str, str]]:
 
 def listed_apps(settings: Any) -> list[tuple[str, str, str]]:
     """The community's apps: Open Source Village's suite (COMMUNITY_APPS) when it runs
-    (OSV_APPS=1), otherwise the apps installed on apps.<domain> (appshome.py)."""
+    (OSV_APPS=1), otherwise the apps installed at <domain>/<name>/ (appshome.py)."""
     if getattr(settings, "osv_apps", False):
         return community_apps(os.environ.get("COMMUNITY_APPS", ""))
-    from .appshome import installed
+    from .appshome import base, installed
 
-    base = (getattr(settings, "apps_public_url", "") or "").rstrip("/")
-    if not base.startswith("http"):
+    site = base(settings)
+    if not site:
         return []
     return [
-        (a["title"], f"{base}/{a['name']}/", a["about"])
+        (a["title"], f"{site}/{a['name']}/", a["about"])
         for a in installed(getattr(settings, "apps_dir", "") or "")
     ]
 

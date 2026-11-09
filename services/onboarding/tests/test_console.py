@@ -435,9 +435,12 @@ def test_apps_home_lists_the_installed_apps(web, belfry, tmp_path):
     (apps / "_routes" / "chat.caddy").write_text("")
     (apps / "_routes" / "notes.caddy").write_text("")
     belfry.settings.apps_dir = str(apps)
+    belfry.settings.nip05_domain = "belfry.test"
     r = web.get("/apps-home", headers={"Host": "apps.belfry.test"})
     assert r.status_code == 200
-    assert 'href="/chat/"' in r.text and 'src="/chat/icons/icon-192.png"' in r.text
+    # served from the community's domain: one origin for all its apps
+    assert 'href="https://belfry.test/chat/"' in r.text
+    assert 'src="https://belfry.test/chat/icons/icon-192.png"' in r.text
     assert "Chat" in r.text and "&lt;b&gt;Notes" in r.text and "https://x.org" not in r.text
     assert "/gone/" not in r.text and "Open Source Village" not in r.text
 
