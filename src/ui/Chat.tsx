@@ -6,7 +6,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { useVersion } from '../core/store'
-import { me, retry } from '../core/sync'
+import { me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
@@ -17,7 +17,7 @@ import { BELFRY, NAME, THEME } from '../config'
 import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
-import { canAdmin } from '../core/access'
+import { canAdmin, isAdmin } from '../core/access'
 import { InviteSheet } from './Invite'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -553,6 +553,9 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply }
           {thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'}
         </button>
       )}
+      {isAdmin() && nsiteRef(m.text) && (
+        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); void makeWebsite(m) }}>Make this the website</button>
+      )}
       {m.ev.pubkey === me() && (
         <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }}>Delete message</button>
       )}
@@ -727,4 +730,24 @@ function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Mes
       <time>{fmtTime(last.ev.created_at)}</time>
     </button>
   )
+}
+
+/** The nsite a message shares (nsite:<npub>[/<name>], a preview or gateway link), as text. */
+export function nsiteRef(text: string): string | null {
+  const m = /nsite:npub1[02-9ac-hj-np-z]{58}(?:\/[a-z0-9-]{1,13})?|https:\/\/preview\.[^/\s]+\/p\/npub1[02-9ac-hj-np-z]{58}(?:@[a-z0-9-]{1,13})?|https:\/\/npub1[02-9ac-hj-np-z]{58}\.[a-z0-9.-]+/.exec(text || '')
+  return m ? m[0] : null
+}
+
+/** An admin makes the version a message shares the website (Belfry copies it, website.py). */
+async function makeWebsite(m: Message) {
+  const ref = nsiteRef(m.text)
+  if (!ref || !confirm(`Publish this version as ${BELFRY.domain}? The belfry copies it; the author's preview stays theirs.`)) return
+  try {
+    const r = await signedFetch(`${BELFRY.api}/website/publish`, 'POST', { ref, message: m.ev.id })
+    const d = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(d.message || 'Not published.')
+    alert(`Published: ${d.files} files are now https://${BELFRY.domain}. A note went to #website.`)
+  } catch (e) {
+    alert(e instanceof Error ? e.message : String(e))
+  }
 }

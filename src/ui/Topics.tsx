@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools'
 import { ANNOUNCE, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
 import { me } from '../core/sync'
 import { Markdown } from './markdown'
+import { BELFRY } from '../config'
 import { useVersion } from '../core/store'
 import { Sheet } from './common'
 
@@ -63,19 +64,24 @@ function Tag({ name, groupId, onOpen }: { name: string; groupId: string; onOpen?
 export function RichText({ text, groupId, onOpen }: { text: string; groupId: string; onOpen?: (t: string) => void }) {
   const plain = (t: string, key: string): ReactNode[] => {
     const out: ReactNode[] = []
-    const re = /nostr:(npub1[02-9ac-hj-np-z]{58})|(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu
+    const re = /nsite:(npub1[02-9ac-hj-np-z]{58})(?:\/([a-z0-9-]{1,13}))?|nostr:(npub1[02-9ac-hj-np-z]{58})|(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu
     let last = 0
     let n = 0
     for (const m of t.matchAll(re)) {
-      if (m[1]) {
+      if (m[1]) { // an nsite: a link to its preview on this belfry
         if (m.index! > last) out.push(t.slice(last, m.index))
-        out.push(<Mention key={`${key}-m${n++}`} npub={m[1]} />)
+        const href = `https://preview.${BELFRY.domain}/p/${m[1]}${m[2] ? '@' + m[2] : ''}`
+        out.push(<a key={`${key}-n${n++}`} href={href} target="_blank" rel="noreferrer noopener">{m[0]}</a>)
+        last = m.index! + m[0].length
+      } else if (m[3]) {
+        if (m.index! > last) out.push(t.slice(last, m.index))
+        out.push(<Mention key={`${key}-m${n++}`} npub={m[3]} />)
         last = m.index! + m[0].length
       } else {
-        const at = m.index! + m[2].length
+        const at = m.index! + m[4].length
         if (at > last) out.push(t.slice(last, at))
-        out.push(<Tag key={`${key}-h${n++}`} name={m[3]} groupId={groupId} onOpen={onOpen} />)
-        last = at + 1 + m[3].length
+        out.push(<Tag key={`${key}-h${n++}`} name={m[5]} groupId={groupId} onOpen={onOpen} />)
+        last = at + 1 + m[5].length
       }
     }
     if (last < t.length) out.push(t.slice(last))
