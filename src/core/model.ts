@@ -609,7 +609,7 @@ export interface GuestJoin { id: string; pubkey: string; by?: string; at: number
 export function guestJoins(groupId: string): GuestJoin[] {
   const out: GuestJoin[] = []
   for (const e of all(me())) {
-    if (e.kind !== 9000 || tag(e, 'h') !== groupId || !e.tags.some((t) => t[0] === 'invited-by' || t[0] === 'guest')) continue
+    if (e.kind !== 9000 || tag(e, 'h') !== groupId || !tag(e, 'invited-by')) continue
     const p = tag(e, 'p')
     if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at })
   }
