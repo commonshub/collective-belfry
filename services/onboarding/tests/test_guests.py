@@ -81,16 +81,13 @@ def test_a_guest_of_one_channel_end_to_end(rsvc, published):
     assert kind == 9001 and ["h", "garden"] in tags and ["p", p["keycast_pubkey"]] in tags
 
 
-def test_only_a_channel_s_admins_get_a_guest_link(rsvc, published, monkeypatch):
+def test_a_member_gets_a_guest_link_for_a_channel(rsvc, published, monkeypatch):
     rsvc.settings.public_url = BASE
     key, _ = admin_with_key(rsvc)
     monkeypatch.setattr(mail, "channel_exists", lambda svc, ch: ch == "garden")
     admins: set[str] = set()
     monkeypatch.setattr(mail, "group_admins", lambda svc, ch: admins)
     with TestClient(create_app(rsvc)) as c:
-        r = post(c, key, guests.API, {"channel": "garden"})
-        assert r.status_code == 403  # not this channel's admin (and no steward in the fakes)
-        admins.add(key.public_key_xonly.format().hex())
         assert post(c, key, guests.API, {"channel": "nowhere"}).status_code == 404
         assert post(c, key, guests.API, {"channel": "../x"}).status_code == 422
         time.sleep(1.1)  # the same signed request twice in a second is a replay

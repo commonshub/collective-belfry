@@ -579,8 +579,9 @@ background:var(--bg);color:inherit}
 .wiz .quiet{background:none;border:0;padding:0;color:var(--fg-muted);font:inherit;font-size:.95rem;cursor:pointer}
 .wiz .quiet:hover{color:var(--fg)}
 .wiz .err{color:var(--accent-2);margin:12px 0 0;font-size:.95rem} .wiz .err:empty{display:none}
-.wiz .option{display:flex;gap:14px;align-items:center;padding:16px;border:2px solid var(--accent);border-radius:12px;
+.wiz .option{display:flex;gap:14px;align-items:center;padding:16px;border:2px solid var(--border);border-radius:12px;
 background:var(--bg);cursor:pointer;font-weight:400;margin:0}
+.wiz .option + .option{margin-top:12px} .wiz .option:has(input:checked){border-color:var(--accent)}
 .wiz .option input{accent-color:var(--accent);width:18px;height:18px;margin:0}
 .wiz .option strong{display:block} .wiz .option small{color:var(--fg-muted)}
 .wiz .otp{display:flex;gap:8px}
@@ -923,8 +924,8 @@ border:2px solid var(--border-strong,var(--border));font-size:.8rem;font-weight:
 .list form,.list .form{padding:0 18px 18px 56px} .list label{display:block;margin:10px 0 4px;font-weight:500;font-size:.92rem}
 .list input[type=text],.list input[type=password]{width:100%;box-sizing:border-box;font:inherit;padding:9px 11px;
 border-radius:10px;border:1px solid var(--border);background:var(--bg);color:inherit}
-.seg{display:inline-flex;gap:4px;padding:4px;background:var(--surface-deep);border-radius:12px;margin:6px 0 4px}
-.seg label{margin:0;padding:7px 14px;border-radius:9px;cursor:pointer;font-weight:500}
+.seg{display:inline-flex;gap:8px;padding:4px;background:var(--surface-deep);border-radius:12px;margin:6px 0 4px}
+.seg label{margin:0;padding:8px 18px;border-radius:9px;cursor:pointer;font-weight:500}
 .seg input{position:absolute;opacity:0;pointer-events:none}
 .seg label:has(input:checked){background:var(--surface);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:600}
 .mail:has(#mp-resend:checked) .only-lettermint,.mail:has(#mp-lettermint:checked) .only-resend{display:none}

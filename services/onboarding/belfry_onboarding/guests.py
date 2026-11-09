@@ -1,6 +1,6 @@
 """A channel's guests: someone without a membership, in one channel, for 30 days.
 
-- A channel's admin (or an admin of the belfry) asks for a link in the chat
+- A member asks for a link in the chat
   (``POST /api/channel-invites``, NIP-98: ``{"channel"}``). It is an invite of the belfry's own
   register (register.py) that carries the channel, the number of days and the inviter's key.
 - The invite page (invite.py) says what it is; the guest gives a name and an e-mail address and
@@ -96,10 +96,9 @@ def left(svc: Services, pass_id: int) -> bool:
 
 
 def may_invite(svc: Services, pubkey: str, channel: str, steward: bool) -> bool:
-    """A channel's admins, and the belfry's admins."""
-    from . import mail
-
-    return steward or pubkey in mail.group_admins(svc, channel)
+    """Any member may bring a guest into a channel (the guest sees that channel only, and the
+    channel sees who invited them). Guests themselves can't (checked before)."""
+    return True
 
 
 def register(app: FastAPI) -> None:
@@ -137,7 +136,7 @@ def register(app: FastAPI) -> None:
         if not await run_in_threadpool(mail.channel_exists, s, channel):
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
-            raise ApiError(403, "not_admin", "Only the channel's admins invite guests.")
+            raise ApiError(403, "not_allowed", "You can't invite guests here.")
         try:
             row = await run_in_threadpool(
                 s.odoo.create_guest_invite, who["partner_id"], pubkey, channel, DAYS
