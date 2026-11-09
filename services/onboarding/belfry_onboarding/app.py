@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
     accounting,
+    admins,
     apply,
     apps,
     appshome,
@@ -53,6 +54,7 @@ from . import (
     mypass,
     pages,
     passlogin,
+    places,
     programme,
     reports,
     sessions,
@@ -223,6 +225,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
+    places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
+    admins.register(app)  # /api/admins: admins give the admin role from the chat (admins.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)

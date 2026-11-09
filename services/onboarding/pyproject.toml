@@ -42,7 +42,7 @@ build-backend = "setuptools.build_meta"
 include = ["belfry_onboarding*"]
 
 [tool.setuptools.package-data]
-belfry_onboarding = ["themes/**/*", "static/*"]
+belfry_onboarding = ["themes/**/*", "static/*", "data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
