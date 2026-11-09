@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
+import { Phone } from './Phone'
 import { nip19 } from 'nostr-tools'
 import { belfrySignOut, clearSession, demoSession, finishSignIn, loadSession, makeSigner, saveSession, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
@@ -136,18 +137,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
   const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : undefined
-  if (!wide)
-    return (
-      <div className="screen">
-        {view}
-        {drawer && (
-          <>
-            <div className="drawer-shade" onClick={closeDrawer} aria-hidden="true" />
-            <aside className="drawer" aria-label="Channels"><ChannelList side drawer current={current} section={section} /></aside>
-          </>
-        )}
-      </div>
-    )
+  if (!wide) return <Phone current={current} section={section} open={drawer}>{view}</Phone>
   return (
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>

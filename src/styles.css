@@ -462,22 +462,33 @@ a.chip { text-decoration: none; color: inherit; }
 .side-user { display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 14px calc(var(--bottom, 0px) + 10px); border-top: 1px solid var(--line); text-align: left; background: var(--bg); }
 .side-user:hover { background: var(--surface); }
 .side-user .me-btn { position: relative; display: grid; flex: none; }
+.side-user .sync-dot { left: -1px; bottom: -1px; }
 .side-user .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .side-user .t b { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-user .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout.wide .main .scroll.pad > * { max-width: 720px; margin-left: auto; margin-right: auto; }
 
-/* ---- the channel drawer on a phone (☰): from the left, over a shade; ☰ in the same spot closes ---- */
+/* ---- the channel drawer on a phone (Phone.tsx): the page slides right over it, full height ---- */
 .ico { display: block; }
 .icon-btn .ico { margin: auto; }
-.drawer-shade { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.32); z-index: 40; animation: fade 0.18s ease-out; }
-.drawer { position: fixed; top: 0; bottom: 0; left: 0; width: min(86vw, 340px); z-index: 41; background: var(--bg);
-  display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18); animation: drawer-in 0.2s ease-out; }
+.phone { --dw: min(85vw, 340px); --drag: 0px; position: relative; height: 100%; overflow: hidden; background: var(--bg); }
+.drawer { position: absolute; top: 0; bottom: 0; left: 0; width: var(--dw); background: var(--bg);
+  display: flex; flex-direction: column; transform: translateX(-30%); visibility: hidden;
+  transition: transform 200ms cubic-bezier(0.4, 0, 1, 1), visibility 0s linear 200ms; }
 .drawer > .screen { height: 100%; }
-.drawer .topbar { padding-left: 4px; }
-@keyframes drawer-in { from { transform: translateX(-100%); } to { transform: none; } }
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .drawer, .drawer-shade { animation: none; } }
+.phone-main { position: relative; z-index: 1; height: 100%; background: var(--bg); transform: none;
+  transition: transform 200ms cubic-bezier(0.4, 0, 1, 1), box-shadow 200ms; }
+.phone-main > .screen { height: 100%; }
+.drawer-shade { position: absolute; top: 0; bottom: 0; right: 0; left: 0; z-index: 2; transform: none; background: rgba(0, 0, 0, 0.18); opacity: 0; pointer-events: none;
+  transition: opacity 200ms cubic-bezier(0.4, 0, 1, 1), transform 200ms cubic-bezier(0.4, 0, 1, 1); }
+.drawer-open .drawer { transform: translateX(calc(var(--drag) * 0.3)); visibility: visible;
+  transition: transform 250ms cubic-bezier(0, 0, 0.2, 1), visibility 0s; }
+.drawer-open .phone-main { transform: translateX(calc(var(--dw) + var(--drag))); box-shadow: -1px 0 0 var(--line), -12px 0 32px rgba(0, 0, 0, 0.12);
+  transition: transform 250ms cubic-bezier(0, 0, 0.2, 1), box-shadow 250ms; }
+.drawer-open .drawer-shade { opacity: 1; pointer-events: auto; transform: translateX(calc(var(--dw) + var(--drag)));
+  transition: opacity 250ms cubic-bezier(0, 0, 0.2, 1), transform 250ms cubic-bezier(0, 0, 0.2, 1); }
+.phone.dragging .drawer, .phone.dragging .phone-main, .phone.dragging .drawer-shade { transition: none; }
+@media (prefers-reduced-motion: reduce) { .drawer, .phone-main, .drawer-shade, .drawer-open .drawer, .drawer-open .phone-main { transition: none; } }
 .follow-btn, .follow-btn:not(.on) { filter: none; opacity: 1; font-size: inherit; color: var(--muted); }
 .follow-btn.on { color: var(--text); }
 .chan .hash .ico { width: 20px; height: 20px; }

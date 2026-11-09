@@ -38,7 +38,7 @@ function SideUser() {
   useVersion()
   const p = profiles().get(me())
   return (
-    <button className="side-user" onClick={() => go('me')} aria-label="Me: your profile and settings">
+    <button className="side-user" onClick={() => closeDrawer('me')} aria-label="Me: your profile and settings">
       <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
       <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address() ?? p?.nip05 ?? ''}</small></span>
       <span className="hint"><GearIcon /></span>
@@ -61,7 +61,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   }
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
     <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
-      onClick={() => { closeDrawer(); go('c/' + encodeURIComponent(g.id)) }}>
+      onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
       <span className="hash">{channelIcon(g)}</span>
       <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
     </button>
@@ -78,18 +78,18 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   return (
     <div className="screen">
       <div className="topbar">
-        {drawer && <button className="icon-btn menu-btn" aria-label="Close the channels" aria-expanded="true" onClick={closeDrawer}><MenuIcon /></button>}
+        {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the channels" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
         <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side ? title : 'Channels'}</h1>
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
         {!side && <MeButton />}
       </div>
       <div className="scroll">
-        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => { closeDrawer(); go('dm') }}>
+        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => closeDrawer('dm')}>
           <span className="hash"><MailIcon unread={unreadTotal() > 0} /></span>
           <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
           {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
         </button>
-        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => { closeDrawer(); go('cal') }}>
+        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => closeDrawer('cal')}>
           <span className="hash"><CalendarIcon /></span>
           <span className="t"><b>All events</b><small>Every channel's events</small></span>
         </button>
