@@ -3,7 +3,7 @@ import { setInbox } from '../core/actions'
 import { isInbox } from '../core/model'
 import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { channelIcon, displayName, groups, memberLabels, messages, tasklist, type Task } from '../core/model'
+import { ACTIVE_DAYS, channelIcon, displayName, groups, memberLabels, messages, recentlyActive, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { me } from '../core/sync'
@@ -22,6 +22,15 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + id)}>‹</button>
         <h1>{channelIcon(g)} {g?.name ?? id}</h1>
       </div>
+      <ChannelInfoBody id={id} tab={tab} setTab={setTab} />
+    </div>
+  )
+}
+
+/** The tabs and their content (also the pulled-down channel header's full view). */
+export function ChannelInfoBody({ id, tab, setTab }: { id: string; tab: Tab; setTab: (t: Tab) => void }) {
+  return (
+    <>
       <Tabs tab={tab} setTab={setTab} />
       <div className="scroll">
         {tab === 'about' && <About id={id} />}
@@ -29,9 +38,10 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
         {tab === 'members' && <Members groupId={id} />}
         {tab === 'files' && <Files groupId={id} />}
       </div>
-    </div>
+    </>
   )
 }
+export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
   const list = tabs ?? ([['about', 'About'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']] as [T, string][])
@@ -63,6 +73,7 @@ function About({ id }: { id: string }) {
           </button>
         </div>
       )}
+      <ActiveCard id={id} />
       <div className="card">
         <div className="hint">Members</div>
         <div>{g.members.size}</div>
@@ -233,6 +244,29 @@ export function Files({ groupId }: { groupId: string }) {
     <div className="pad">
       <DropBox groupId={groupId} />
       {media.length ? <MediaGrid media={media} /> : <div className="empty">Photos and files posted in this channel show up here.</div>}
+    </div>
+  )
+}
+
+/** Who opened or wrote in this channel in the last 30 days: how many people a message reaches. */
+function ActiveCard({ id }: { id: string }) {
+  const active = recentlyActive(id)
+  const ago = (at: number) => {
+    const d = Math.floor((Date.now() / 1000 - at) / 86400)
+    return d < 1 ? 'today' : d === 1 ? 'yesterday' : `${d} days ago`
+  }
+  return (
+    <div className="card">
+      <div className="hint" style={{ marginBottom: 6 }}>Active in the last {ACTIVE_DAYS} days · {active.length}</div>
+      {active.length === 0 && <div className="hint">Nobody opened this channel yet.</div>}
+      {active.map((a) => (
+        <div key={a.pubkey} className="row" style={{ gap: 10, padding: '6px 0' }}>
+          <Avatar pubkey={a.pubkey} size={28} />
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName(a.pubkey)}</span>
+          <span className="hint" style={{ fontSize: 13 }}>{ago(a.at)}</span>
+        </div>
+      ))}
+      <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>Opening a channel tells its members you saw it (at most every few hours).</div>
     </div>
   )
 }

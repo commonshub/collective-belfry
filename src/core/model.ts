@@ -570,3 +570,32 @@ export function canDecide(p: Proposal) {
   const k = me()
   return k === p.author || !!g?.admins.has(k) || !!parent?.admins.has(k)
 }
+
+// ---- who sees a channel (NIP-78 kind 30078, `d` seen:<channel>, in the group) ----------------
+// Opening a channel publishes (at most every few hours) one replaceable event per member and
+// channel; with the people who wrote there, it says how many people a message will reach.
+export const ACTIVE_DAYS = 30
+export const seenD = (groupId: string) => `seen:${groupId}`
+
+/** The people who opened or wrote in this channel in the last 30 days, the most recent first. */
+export function recentlyActive(groupId: string): { pubkey: string; at: number }[] {
+  const since = Date.now() / 1000 - ACTIVE_DAYS * 86400
+  const g = group(groupId)
+  const last = new Map<string, number>()
+  for (const e of all(me())) {
+    if (e.created_at < since || tag(e, 'h') !== groupId) continue
+    const seen = e.kind === 30078 && tag(e, 'd') === seenD(groupId)
+    if (!seen && e.kind !== 9 && e.kind !== 1111 && e.kind !== 7) continue
+    if ((last.get(e.pubkey) ?? 0) < e.created_at) last.set(e.pubkey, e.created_at)
+  }
+  // a channel with a member list: only its members (not the keys that post e-mail or drop-box cards)
+  const known = g && g.members.size ? new Set([...g.members, ...g.admins]) : undefined
+  return [...last].filter(([pk]) => !known || known.has(pk)).map(([pubkey, at]) => ({ pubkey, at })).sort((a, b) => b.at - a.at)
+}
+
+/** When I last told this channel I opened it (0: never, or more than 30 days ago). */
+export function mySeen(groupId: string): number {
+  let at = 0
+  for (const e of all(me())) if (e.kind === 30078 && e.pubkey === me() && tag(e, 'd') === seenD(groupId) && tag(e, 'h') === groupId) at = Math.max(at, e.created_at)
+  return at
+}

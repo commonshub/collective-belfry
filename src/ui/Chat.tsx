@@ -13,8 +13,9 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { BellIcon, CalendarIcon, GearIcon, MailIcon, MenuIcon } from './icons'
+import { CalendarIcon, GearIcon, MailIcon, MenuIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
+import { ChannelHeader } from './ChannelHeader'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -137,22 +138,13 @@ export function ChannelView({ id, topic }: { id: string; topic?: string }) {
   useVersion()
   const all = groups()
   const g = all.find((x) => x.id === id)
-  const parent = g?.isPod || g?.isProposal ? all.find((x) => x.id === g.parent) : undefined
-  const where = `${g?.isProposal ? 'Proposal' : 'Pod'} in ${channelIcon(parent)}${parent?.isPod ? ' ' : ''}${parent?.name ?? g?.parent}`
-  const sub = g?.isPod || g?.isProposal ? (g.about ? `${where} · ${g.about}` : where) : g?.about
   const [podTab, setPodTab] = useState<'chat' | 'tasks' | 'members' | 'files'>('chat')
   useEffect(() => setPodTab('chat'), [id])
   return (
     <div className="screen">
-      <div className="topbar">
-        <button className="icon-btn menu-btn" aria-label="Channels" aria-expanded="false" onClick={toggleDrawer}><MenuIcon /></button>
-        <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/info`)}>
-          {channelIcon(g)} {g?.name ?? id}
-          {sub && <small>{sub}</small>}
-        </h1>
-        <FollowButton channel={id} />
-        <MeButton />
-      </div>
+      <ChannelHeader id={id}
+        left={<button className="icon-btn menu-btn" aria-label="Channels" aria-expanded="false" onClick={toggleDrawer}><MenuIcon /></button>}
+        right={<><FollowButton channel={id} /><MeButton /></>} />
       <EventsBar channel={id} />
       <PodsBar channel={id} />
       {g?.isProposal && <ProposalHeader groupId={id} />}

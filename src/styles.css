@@ -496,3 +496,32 @@ a.chip { text-decoration: none; color: inherit; }
 .me-btn .count { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box;
   border-radius: 99px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px;
   text-align: center; border: 2px solid var(--bg); }
+
+/* ---- a channel's header, pulled down like a sheet (ChannelHeader.tsx) ---- */
+.chead { position: relative; z-index: 5; flex: none; }
+.chead-bar { touch-action: none; user-select: none; -webkit-user-select: none; }
+.chead-panel { position: absolute; left: 0; right: 0; top: 100%; overflow: hidden; background: var(--bg);
+  transition: height 260ms cubic-bezier(0.2, 0, 0, 1); }
+.chead.dragging .chead-panel { transition: none; }
+.chead.lvl0:not(.dragging) .chead-panel { visibility: hidden; transition: height 200ms cubic-bezier(0.4, 0, 1, 1), visibility 0s 200ms; }
+.chead.lvl1 .chead-panel, .chead.lvl2 .chead-panel, .chead.dragging .chead-panel { border-bottom: 1px solid var(--line); box-shadow: 0 10px 24px rgba(0, 0, 0, 0.08); }
+.chead-peek { padding: 8px 0 30px; touch-action: pan-x; }
+.chead-full { display: flex; flex-direction: column; padding-bottom: 28px; box-sizing: border-box; }
+.chead-full > .scroll { flex: 1; min-height: 0; }
+.pad-x { padding: 0 16px; }
+.chead-parent { display: block; margin: 4px 0; font-size: 13px; }
+.chead-about { margin: 4px 0 12px; white-space: pre-wrap; color: var(--text); font-size: 15px; line-height: 1.45; }
+.chead-people { display: flex; align-items: center; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 2px 0 2px 4px; margin: 0 0 12px; width: 100%; background: none; border: 0; }
+.chead-people .avatar { margin-left: -6px; border: 2px solid var(--bg); flex: none; border-radius: 99px; }
+.chead-people .more { margin-left: 8px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+.chead-media { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; align-items: center; margin: 0 -16px; padding: 0 16px 4px; }
+.chead-media .thumb { flex: none; width: 64px; height: 64px; border-radius: 10px; overflow: hidden; padding: 0; border: 1px solid var(--line); background: var(--surface); }
+.chead-media .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.chead-media .chip { flex: none; height: 32px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 13px; white-space: nowrap; }
+/* the handle: a pill under the header (closed) or under the panel (open), always there */
+.chead-handle { position: absolute; left: 50%; transform: translateX(-50%); width: 64px; height: 20px; padding: 0; border: 0; background: none;
+  display: grid; place-items: center; touch-action: none; cursor: grab; z-index: 6; transition: top 260ms cubic-bezier(0.2, 0, 0, 1); }
+.chead-handle span { width: 36px; height: 4px; border-radius: 99px; background: var(--line); }
+.chead-handle:hover span, .chead-handle:focus-visible span { background: var(--muted); }
+.chead.dragging .chead-handle { transition: none; }
+@media (prefers-reduced-motion: reduce) { .chead-panel, .chead-handle { transition: none; } }
