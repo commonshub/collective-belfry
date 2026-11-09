@@ -16,6 +16,7 @@ import { BELFRY, NAME, THEME } from '../config'
 import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
+import { InviteSheet } from './Invite'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -310,6 +311,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
+  const [inviting, setInviting] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(!focus)
   const focused = useRef('')
@@ -336,7 +338,14 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       <div className="scroll" ref={scroller}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
         <div className="messages">
-          {list.length === 0 && <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : topic ? `Nothing in #${topic} yet. What you send here carries it.` : 'No messages yet. Say hi.'}</div>}
+          {list.length === 0 && (topic
+            ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
+            : <div className="empty-start">
+                <b>{g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : id} is new</b>
+                <p>No messages yet. Bring the people who belong here, then say hi.</p>
+                <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
+              </div>)}
+          {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
           {list.length === 0 && joins.map((j) => <JoinLine key={j.id} j={j} />)}
           {list.map((m, i) => <Fragment key={m.ev.id}>
             {joins.filter((j) => j.at < m.ev.created_at && j.at >= (list[i - 1]?.ev.created_at ?? -1)).map((j) => <JoinLine key={j.id} j={j} />)}
