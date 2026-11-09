@@ -49,6 +49,7 @@ def test_a_guest_of_one_channel_end_to_end(rsvc, published):
     key, ada = admin_with_key(rsvc)
     row = reg.create_guest_invite(ada, key.public_key_xonly.format().hex(), "garden", 30)
     token = row["url"].rsplit("/", 1)[1]
+    reg.write("belfry.invite", [row["id"]], {"guest_max": False})  # an older one-person link
     with TestClient(create_app(rsvc)) as c:
         page = c.get(f"/invite/{token}").text
         assert "invites you to #garden" in page and "as a guest for 30 days" in page
@@ -181,8 +182,8 @@ def test_an_agent_accepts_a_guest_invite_with_its_own_key(rsvc, published, monke
                 "Content-Type": "application/json",
             },
         )
-        assert again.status_code == 409  # one guest per link
-        assert c.get(f"/invite/{token}.md").status_code == 410
+        assert again.status_code == 200  # a guest link works for many (a QR shown to a room)
+        assert rsvc.odoo.invite_by_token(token)["guest_uses"] == 2
     p = rsvc.odoo.search_read(
         "belfry.pass", [["keycast_pubkey", "=", agent_pk]], ["id", "tier", "state"]
     )[0]
@@ -193,3 +194,90 @@ def test_an_agent_accepts_a_guest_invite_with_its_own_key(rsvc, published, monke
     )
     core.revoke_pass(rsvc, p["id"], "test")  # no signer account to suspend: no error
     assert published[-1][0] == 9001
+
+
+def test_a_person_joins_with_a_name_and_saves_the_account_later(rsvc, published, keycast):
+    """Scan, name, in: an account in the signer and a session for the chat at once (a one-time
+    code); "not saved" until the guest proves an e-mail, signed with their own identity."""
+    from .test_holder_invites import nip98
+
+    rsvc.settings.public_url = BASE
+    rsvc.settings.console_url = "https://belfry.belfry.test"
+    rsvc.settings.nip05_domain = "belfry.test"
+    key, ada = admin_with_key(rsvc)
+    row = rsvc.odoo.create_guest_invite(ada, key.public_key_xonly.format().hex(), "garden", 30)
+    token = row["url"].rsplit("/", 1)[1]
+    with TestClient(create_app(rsvc)) as c:
+        page = c.get(f"/invite/{token}").text
+        assert 'action="/invite/' in page and "/join" in page and 'type="email"' not in page
+        r = c.post(f"/invite/{token}/join", data={"name": "Gus"}, follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"].startswith(
+            "https://chat.belfry.test/#/welcome/"
+        )
+        code = r.headers["location"].rsplit("/", 1)[1]
+        got = c.post(f"/api/guest-sessions/{code}")
+        assert got.status_code == 200 and got.json()["bunker_url"].startswith("bunker://")
+        assert got.json()["channel"] == "garden" and got.json()["guest"] is True
+        assert c.post(f"/api/guest-sessions/{code}").status_code == 410  # once
+        guest_pk = got.json()["pubkey"]
+        kind, tags = published[-1]
+        assert kind == 9000 and ["p", guest_pk, "member"] in tags and ["unsaved", "1"] in tags
+        assert ["name", "Gus"] in tags
+        inv = rsvc.odoo.invite_by_token(token)
+        assert inv["state"] == "open" and inv["guest_uses"] == 1  # a QR for a room: still open
+        # saving: our own key stands in for the guest's (the signer holds the real one)
+        me = PrivateKey()
+        me_pk = me.public_key_xonly.format().hex()
+        p = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", guest_pk]], ["id", "partner_id"]
+        )[0]
+        rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+        url = "https://belfry.belfry.test/api/v1/guest/save"
+        body = b'{"email": "gus@example.org"}'
+        host = {"Host": "belfry.belfry.test", "Content-Type": "application/json"}
+        r = c.post(
+            "/api/v1/guest/save",
+            content=body,
+            headers={**host, "Authorization": nip98(me, url, "POST", body)},
+        )
+        assert r.status_code == 202
+        text = mailer.SENT[-1].get_body(preferencelist=("plain",)).get_content()
+        sent_code = re.search(r"\b(\d{6})\b", text).group(1)
+        vurl = url + "/verify"
+        wrong = b'{"email": "gus@example.org", "code": "000000"}'
+        r = c.post(
+            "/api/v1/guest/save/verify",
+            content=wrong,
+            headers={**host, "Authorization": nip98(me, vurl, "POST", wrong)},
+        )
+        assert r.status_code == 422 or sent_code == "000000"
+        ok = f'{{"email": "gus@example.org", "code": "{sent_code}"}}'.encode()
+        time.sleep(1.1)
+        r = c.post(
+            "/api/v1/guest/save/verify",
+            content=ok,
+            headers={**host, "Authorization": nip98(me, vurl, "POST", ok)},
+        )
+        assert r.status_code == 200, r.text
+        partner = rsvc.odoo.read_one("res.partner", core.m2o_id(p["partner_id"]), ["email"])
+        assert partner["email"] == "gus@example.org"
+        kind, tags = published[-1]
+        assert kind == 1985 and ["l", "saved", "belfry/guest"] in tags and ["p", me_pk] in tags
+        # someone else's address can't be taken over
+        time.sleep(1.1)
+        body2 = b'{"email": "admin@belfry.test"}'
+        c.post(
+            "/api/v1/guest/save",
+            content=body2,
+            headers={**host, "Authorization": nip98(me, url, "POST", body2)},
+        )
+        code2 = re.search(
+            r"\b(\d{6})\b", mailer.SENT[-1].get_body(preferencelist=("plain",)).get_content()
+        ).group(1)
+        take = f'{{"email": "admin@belfry.test", "code": "{code2}"}}'.encode()
+        r = c.post(
+            "/api/v1/guest/save/verify",
+            content=take,
+            headers={**host, "Authorization": nip98(me, vurl, "POST", take)},
+        )
+        assert r.status_code == 409

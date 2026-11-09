@@ -70,8 +70,10 @@ def _guest(svc: Services, pass_id: int) -> dict[str, Any] | None:
         return None
     if not row.get("keycast_pubkey"):
         return None
-    partner = svc.odoo.read_one("res.partner", m2o_id(row["partner_id"]) or 0, ["name"]) or {}
-    return {**row, "name": (partner.get("name") or "")[:100]}
+    partner = (
+        svc.odoo.read_one("res.partner", m2o_id(row["partner_id"]) or 0, ["name", "email"]) or {}
+    )
+    return {**row, "name": (partner.get("name") or "")[:100], "email": partner.get("email") or ""}
 
 
 def admitted(svc: Services, pass_id: int) -> bool:
@@ -90,6 +92,8 @@ def admitted(svc: Services, pass_id: int) -> bool:
         tags.append(["name", g["name"]])
     if g.get("guest_agent"):  # an agent with its own key, not a person (the chat says so)
         tags.append(["agent", "1"])
+    elif not g.get("email"):  # joined with a name only: "not saved" until they add an e-mail
+        tags.append(["unsaved", "1"])
     ok = _channel_event(svc, 9000, tags)
     log.info("guests: pass %s into #%s: %s", pass_id, g["guest_channel"], ok)
     return ok
@@ -113,6 +117,7 @@ def may_invite(svc: Services, pubkey: str, channel: str, steward: bool) -> bool:
 
 def register(app: FastAPI) -> None:
     register_agent_routes(app)
+    register_join_routes(app)
 
     @app.post(API)
     async def channel_invite(request: Request) -> JSONResponse:
@@ -283,3 +288,164 @@ def register_agent_routes(app: FastAPI) -> None:
             },
             headers={"Cache-Control": "no-store"},
         )
+
+
+# ── a person joins with a name only: an account at once, an e-mail later ────────────────────
+# The invite page asks a name; the belfry makes the guest's contact, a guest pass, an account in
+# the signer (a derived key, like every member's, recoverable) and a session for the chat. The
+# chat gets that session through a one-time code (chat.<domain>/#/welcome/<code>) and binds it to
+# its own client key the first time it connects (NIP-46), so only that browser can use it. Saving
+# the account later (an e-mail and the code mailed to it) is signed with the guest's identity
+# through that session: nobody else can claim the account.
+HANDOFF_SECONDS = 120
+_handoffs: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def join(svc: Services, token: str, name: str) -> str:
+    """Make the guest and their session; returns the one-time code for the chat."""
+    import secrets as _secrets
+
+    from . import core
+
+    made = svc.odoo.join_guest(token, name)
+    pid = made["partner_id"]
+    partner = {"id": pid, "name": name}
+    pubkey, npub, ucan = core._ensure_keycast_user(svc, partner, f"guest-{pid}")
+    svc.odoo.write("res.partner", [pid], {"belfry_npub": npub})
+    svc.odoo.write("belfry.pass", [made["pass_id"]], {"keycast_pubkey": pubkey, "state": "active"})
+    bunker = svc.keycast.create_bunker(ucan, "Chat (guest)") if ucan else {}
+    if not bunker.get("bunker_url"):
+        raise RuntimeError("the signer gave no session")
+    admitted(svc, made["pass_id"])
+    now = time.monotonic()
+    for k in [k for k, (at, _) in _handoffs.items() if now - at > HANDOFF_SECONDS]:
+        _handoffs.pop(k, None)
+    code = _secrets.token_urlsafe(24)
+    _handoffs[code] = (
+        now,
+        {
+            "bunker_url": bunker["bunker_url"],
+            "pubkey": pubkey,
+            "channel": made["channel"],
+            "guest": True,
+        },
+    )
+    return code
+
+
+def take_handoff(code: str) -> dict[str, Any] | None:
+    got = _handoffs.pop(code, None)
+    if got is None or time.monotonic() - got[0] > HANDOFF_SECONDS:
+        return None
+    return got[1]
+
+
+def saved_label(svc: Services, pubkey: str, channel: str) -> None:
+    """The channel learns the guest saved their account (the chat drops "not saved")."""
+    _channel_event_kind(
+        svc,
+        1985,
+        [["h", channel], ["L", "belfry/guest"], ["l", "saved", "belfry/guest"], ["p", pubkey]],
+    )
+
+
+def _channel_event_kind(svc: Services, kind: int, tags: list[list[str]]) -> bool:
+    return _channel_event(svc, kind, tags)
+
+
+def register_join_routes(app: FastAPI) -> None:
+    from .discovery import allowed_origin, cors_headers
+
+    def cors(request: Request, resp: JSONResponse) -> JSONResponse:
+        origin = allowed_origin(request.app.state.services.settings, request.headers.get("origin"))
+        if origin:
+            resp.headers.update(cors_headers(origin))
+        return resp
+
+    @app.post("/api/guest-sessions/{code}")
+    async def guest_session(request: Request, code: str) -> JSONResponse:
+        """The chat swaps the one-time code for its session (once, within two minutes)."""
+        got = take_handoff(code)
+        if got is None:
+            return cors(
+                request,
+                JSONResponse(
+                    {"error": "expired", "message": "This link was used or has expired."},
+                    status_code=410,
+                ),
+            )
+        return cors(request, JSONResponse(got, headers={"Cache-Control": "no-store"}))
+
+    async def guest_of(
+        request: Request, path: str, body: bytes
+    ) -> tuple[Services, str, dict[str, Any]]:
+        from .holder_invites import ApiError, authenticate
+
+        s = request.app.state.services
+        pubkey = authenticate(
+            s, request.app.state.api_seen, request.headers.get("authorization"), "POST", path, body
+        )
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_json", "Send a JSON object.")
+        return s, pubkey, data
+
+    @app.post("/api/guest/save")
+    async def guest_save(request: Request) -> JSONResponse:
+        """``{"email"}``: a 6-digit code to that address, for the signed-in guest's key."""
+        from .holder_invites import ApiError
+
+        s, pubkey, data = await guest_of(request, "/api/guest/save", await request.body())
+        email = str(data.get("email") or "").strip()
+        if "@" not in email or len(email) > 254:
+            raise ApiError(422, "invalid", "That is not an e-mail address.")
+        row = await run_in_threadpool(
+            s.odoo.call,
+            "belfry.key.code",
+            "belfry_key_code_send",
+            [email, pubkey, "Save your guest account"],
+        )
+        if row.get("state") == "too_many":
+            raise ApiError(429, "too_many", "Too many codes for now. Try again in half an hour.")
+        return JSONResponse({"sent": True}, status_code=202)
+
+    @app.post("/api/guest/save/verify")
+    async def guest_save_verify(request: Request) -> JSONResponse:
+        """``{"email", "code"}``: the address goes on the guest's own contact."""
+        from .holder_invites import ApiError
+
+        s, pubkey, data = await guest_of(request, "/api/guest/save/verify", await request.body())
+        out = await run_in_threadpool(
+            s.odoo.save_guest_email,
+            pubkey,
+            str(data.get("email") or ""),
+            str(data.get("code") or ""),
+        )
+        state = out.get("state")
+        if state == "wrong_code":
+            raise ApiError(
+                422,
+                "wrong_code",
+                f"That code is not right ({out.get('tries_left', 0)} tries left).",
+            )
+        if state == "expired":
+            raise ApiError(410, "expired", "That code expired. Send a new one.")
+        if state == "taken":
+            raise ApiError(
+                409, "taken", "This address belongs to a member already: sign in with it instead."
+            )
+        if state != "saved":
+            raise ApiError(409, "not_guest", "This key holds no guest pass.")
+        rows = await run_in_threadpool(
+            s.odoo.search_read,
+            "belfry.pass",
+            [["keycast_pubkey", "=", pubkey], ["state", "=", "active"]],
+            ["guest_channel"],
+        )
+        for r in rows:
+            if r.get("guest_channel"):
+                await run_in_threadpool(saved_label, s, pubkey, r["guest_channel"])
+        return JSONResponse({"saved": True})

@@ -103,6 +103,10 @@ def _npub(pubkey: str) -> str:
     return hex_to_npub(pubkey)
 
 
+GUEST_MAX = 50  # people per guest link
+GUEST_LINK_DAYS = 7  # how long a guest link works
+
+
 class Register(OdooApi):
     def __init__(self, path: str | Path, settings: Any, mailer: Mailer | None = None):
         self.path = str(path)
@@ -377,7 +381,13 @@ class Register(OdooApi):
         if vals.get("state") == "active" and before.get("state") != "active":
             if rec.get("invite_id"):
                 inv = self._get("belfry.invite", rec["invite_id"])
-                if inv and inv.get("state") in ("open", "reserved"):
+                if inv and inv.get("guest_max"):  # many guests: count, closed at the maximum
+                    uses = int(inv.get("guest_uses") or 0) + 1
+                    vals: dict[str, Any] = {"guest_uses": uses}
+                    if uses >= int(inv["guest_max"]):
+                        vals["state"] = "used"
+                    self._write("belfry.invite", [inv["id"]], vals)
+                elif inv and inv.get("state") in ("open", "reserved"):
                     self._write(
                         "belfry.invite",
                         [inv["id"]],
@@ -615,6 +625,10 @@ class Register(OdooApi):
                 "guest_channel": channel,
                 "guest_days": int(days),
                 "guest_inviter": inviter_pubkey,
+                # a QR shown to a room: up to GUEST_MAX people, for GUEST_LINK_DAYS days
+                "guest_max": GUEST_MAX,
+                "guest_uses": 0,
+                "expires_at": stamp(now() + dt.timedelta(days=GUEST_LINK_DAYS)),
             },
         )
         return self._invite_row(self._get("belfry.invite", inv_id))
@@ -786,6 +800,79 @@ class Register(OdooApi):
                 "days": days,
             }
 
+    def join_guest(self, token: str, name: str) -> dict[str, Any]:
+        """A person joins a guest invite with a name only (guests.py): their contact and a
+        pending guest pass; the account and the session come next. Returns pass and contact."""
+        with self._lock:
+            inv = next((i for i in self._all("belfry.invite") if i.get("token") == token), None)
+            if inv is None or not inv.get("guest_channel"):
+                raise _user_error("This is not a guest invite.")
+            inv = self._usable(inv)
+            if inv["state"] != "open":
+                raise _user_error(f"This invite is {inv['state']}.")
+            pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Guest"})
+            days = int(inv.get("guest_days") or 30)
+            today = now().date()
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "partner_id": pid,
+                    "tier": "guest",
+                    "invite_id": inv["id"],
+                    "guest_channel": inv["guest_channel"],
+                    "guest_days": days,
+                    "guest_inviter": inv.get("guest_inviter") or "",
+                    "date_start": today.isoformat(),
+                    "date_end": (today + dt.timedelta(days=days)).isoformat(),
+                },
+            )
+            return {
+                "pass_id": pass_id,
+                "partner_id": pid,
+                "channel": inv["guest_channel"],
+                "days": days,
+            }
+
+    def save_guest_email(self, pubkey: str, email: str, code: str) -> dict[str, Any]:
+        """The guest proves EMAIL with the code mailed to it (belfry_key_code_send for their key)
+        and it goes on their own contact, so they can sign in from any device."""
+        email, pubkey = self._clean(email, pubkey)
+        with self._lock:
+            live = [
+                c
+                for c in self._all("belfry.key.code")
+                if c["email"].lower() == email.lower()
+                and c["pubkey"] == pubkey
+                and not c.get("used_at")
+            ]
+            rec = live[-1] if live else None
+            if rec is None or rec["expires_at"] <= stamp() or rec.get("tries", 0) >= CODE_TRIES:
+                return {"state": "expired"}
+            tries = rec.get("tries", 0) + 1
+            self._write("belfry.key.code", [rec["id"]], {"tries": tries})
+            if not hmac.compare_digest(
+                rec["code_hash"], self._hash(rec["id"], re.sub(r"\s", "", str(code or "")))
+            ):
+                return {"state": "wrong_code", "tries_left": CODE_TRIES - tries}
+            self._write("belfry.key.code", [rec["id"]], {"used_at": stamp()})
+            row = next(
+                (
+                    p
+                    for p in self._all("belfry.pass")
+                    if p.get("keycast_pubkey") == pubkey
+                    and p.get("state") == "active"
+                    and p.get("tier") == "guest"
+                ),
+                None,
+            )
+            if row is None:
+                return {"state": "not_guest"}
+            other = self._partner_by_email(email)
+            if other and other["id"] != row["partner_id"]:
+                return {"state": "taken"}
+            self._write("res.partner", [row["partner_id"]], {"email": email})
+            return {"state": "saved", "partner_id": row["partner_id"]}
+
     def accept_invite(self, token: str, name: str, email: str) -> dict[str, Any]:
         """The invitee confirmed their address: their person and a pending pass, the invite
         reserved for it. Returns {"pass_id", "partner_id"} or raises OdooError."""
@@ -809,6 +896,8 @@ class Register(OdooApi):
             return {"pass_id": inv["pass_id"], "partner_id": p.get("partner_id")}
         if inv["state"] != "open":
             raise _user_error(f"This invite is {inv['state']}.")
+        if inv.get("guest_max"):  # a link for many guests: a name is enough (join_guest)
+            raise _user_error("This invite only needs your name: use the form on its page.")
         person = self._partner_by_email(email)
         if person and self._active_pass(person["id"]):
             raise _user_error("This address belongs to a member already: sign in instead.")

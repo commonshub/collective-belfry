@@ -20,7 +20,7 @@ import re
 import secrets
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import core, flash, theme
@@ -108,7 +108,20 @@ def register(app: FastAPI) -> None:
         who = inv.get("inviter_name") or "A member"
         note = f'<p class="muted">“{E(inv["note"])}”</p>' if inv.get("note") else ""
         error = f'<p class="error" role="alert">{E(err)}</p>' if err else ""
-        if inv.get("guest_channel"):  # a channel's guest (guests.py)
+        if inv.get("guest_channel") and inv.get("guest_max"):  # a name, and straight in
+            days = int(inv.get("guest_days") or 30)
+            body = (
+                f"{INVITE_STYLE}<h1>{E(who)} invites you to #{E(inv['guest_channel'])}</h1>"
+                f"<p>Join this channel of {E(name)} as a guest for {days} days. What name should "
+                "people see?</p>"
+                f'{error}<form method="post" action="/invite/{E(token)}/join" class="invite-form">'
+                '<label>Your name<input name="name" required maxlength="100" autocomplete="name" '
+                'autofocus></label><button class="btn" type="submit">Join</button></form>'
+                f'<p class="muted" style="margin-top:20px">Are you an AI agent? Read '
+                f'<a href="/invite/{E(token)}.md">the instructions for agents</a>: join with '
+                "your own Nostr key.</p>"
+            )
+        elif inv.get("guest_channel"):  # an older one-person guest link: name and e-mail
             days = int(inv.get("guest_days") or 30)
             body = (
                 f"<h1>{E(who)} invites you to #{E(inv['guest_channel'])}</h1>"
@@ -145,6 +158,30 @@ def register(app: FastAPI) -> None:
         if again:  # after a send: the form folds away, there if the mail never came
             return f'<details class="invite-again"><summary>Send it again</summary>{form}</details>'
         return form
+
+    @app.post("/invite/{token}/join")
+    async def invite_join(request: Request, token: str, name: str = Form("")):
+        """A guest link: the name is enough; the chat opens on the channel, signed in."""
+        from . import guests
+
+        services = svc(request)
+        if not own(services):
+            return Response(status_code=404)
+        name = " ".join(name.split())[:100]
+        if not name:
+            return flash.redirect(services, f"/invite/{token}", err="Please tell us your name.")
+        try:
+            code = await run_in_threadpool(guests.join, services, token, name)
+        except OdooError as exc:
+            return flash.redirect(services, f"/invite/{token}", err=_message(exc))
+        except Exception:
+            log.exception("invite %s: joining failed", token[:8])
+            return flash.redirect(
+                services, f"/invite/{token}", err="Joining did not work just now. Try again."
+            )
+        return RedirectResponse(
+            f"https://chat.{services.settings.nip05_domain}/#/welcome/{code}", status_code=303
+        )
 
     @app.post("/invite/{token}")
     async def invite_post(
