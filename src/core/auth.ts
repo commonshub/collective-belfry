@@ -150,6 +150,8 @@ export async function joinAsNew(token: string, name: string): Promise<Session> {
   }, sk)
   const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
   const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string }
+  // this device's key is another account's in the signer: a fresh key next time
+  if (res.status === 409) try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   if (!res.ok || !body.bunker_url) throw new Error(body.message || 'Joining did not work just now. Try again.')
   try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   setPendingInvite('')

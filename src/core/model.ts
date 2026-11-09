@@ -617,5 +617,14 @@ export function guestJoins(groupId: string): GuestJoin[] {
     const p = tag(e, 'p')
     if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) })
   }
-  return out.sort((a, b) => a.at - b.at)
+  // someone who was taken out again without ever writing here (a double sign-up that was
+  // cleaned up, an invite never used) leaves no line
+  const gone = new Map<string, number>()
+  const wrote = new Set<string>()
+  for (const e of list) {
+    if (tag(e, 'h') !== groupId) continue
+    if (e.kind === 9001) { const p = tag(e, 'p'); if (p) gone.set(p, Math.max(gone.get(p) ?? 0, e.created_at)) }
+    else if (e.kind === 9 || e.kind === 1111) wrote.add(e.pubkey)
+  }
+  return out.filter((j) => wrote.has(j.pubkey) || (gone.get(j.pubkey) ?? 0) < j.at).sort((a, b) => a.at - b.at)
 }
