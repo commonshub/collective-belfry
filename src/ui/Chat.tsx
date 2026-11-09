@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools'
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
@@ -14,7 +14,7 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon, SmilePlusIcon } from './icons'
+import { AtIcon, CalendarIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
@@ -342,6 +342,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
+  const [picking, setPicking] = useState(false)
   const [inviting, setInviting] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   const stick = useRef(!focus)
@@ -392,7 +393,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             return <Fragment key={key}>
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
-                reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
+                reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
                 thread={th.get(m.ev.id)} onThread={() => toggle(key)} threadOpen={openThreads.has(key)} inbox={inbox} />
               {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} />}
             </Fragment>
@@ -405,7 +406,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
-      {acting && <MessageActions m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
+      {acting && <MessageActions emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
         thread={th.get(acting.ev.id)} onReply={() => { toggle(acting.ev.id, true); setReplyTo(acting.ev.id) }} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
@@ -421,6 +422,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   const root = messages(groupId).find((m) => m.ev.id === rootId)
   const replies = threadReplies(groupId, rootId)
   const [acting, setActing] = useState<Message | null>(null)
+  const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
@@ -437,20 +439,20 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
       {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={() => setActing(root)} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
+          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
           {replies.map((m, i) => <Row key={m.ev.id} m={m} prev={replies[i - 1]} head={i === 0} name={nameOf(m)} groupId={groupId}
-            reactions={rx.get(m.ev.id) ?? []} onAct={() => setActing(m)} announce={false} />)}
+            reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} announce={false} />)}
         </div>
       </div>
       {root && <Composer placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
-      {acting && <MessageActions m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
+      {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
     </div>
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, threadOpen = false, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: () => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, threadOpen = false, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -494,15 +496,15 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
-          {(rx.length > 0 || !p) && (
-            <div className={'reactions' + (rx.length ? '' : ' none')}>
+          {rx.length > 0 && (
+            <div className="reactions">
               {rx.map((r) => (
                 <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
                   onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
                   <span>{r.emoji}</span> {r.who.size}
                 </button>
               ))}
-              {!p && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={onAct}><SmilePlusIcon /></button>}
+              {!p && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>}
             </div>
           )}
           {thread && thread.count > 0 && onThread && (
@@ -516,6 +518,12 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           )}
           {p && p.status === 'queued' && <div className="state">{p.tries ? 'Waiting for connection…' : 'Sending…'}</div>}
         </div>
+        {!p && (
+          <div className="msg-tools" role="toolbar" aria-label="Message actions">
+            <button aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>
+            <button aria-label="More" title="More" onClick={() => onAct()}><MoreIcon /></button>
+          </div>
+        )}
       </div>
     </>
   )
@@ -528,39 +536,52 @@ const MORE_EMOJIS = [
   '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
 ]
 
-function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void }) {
-  const [more, setMore] = useState(false)
+function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; emojiOnly?: boolean }) {
+  // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
+  // The add-reaction button opens the emojis alone.
+  const [more, setMore] = useState(emojiOnly)
+  const [copied, setCopied] = useState('')
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
     onClose()
   }
   const isOn = (emoji: string) => mine.some((r) => r.emoji === emoji && r.mine)
+  const copy = async (what: string, text: string) => {
+    try { await navigator.clipboard.writeText(text); setCopied(what); setTimeout(onClose, 600) } catch { setCopied('') }
+  }
+  const link = `${location.origin}${location.pathname}#/c/${encodeURIComponent(groupId)}/m/${m.ev.id}`
+  const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
+    <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
+  )
   return (
-    <Sheet title="Message" onClose={onClose}>
+    <Sheet title={emojiOnly ? 'Add a reaction' : 'Message'} hideTitle={!emojiOnly} onClose={onClose}>
       <div className="emoji-row">
-        {topEmojis(6).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
-        <button aria-label="More emojis" className={more ? 'on' : ''} onClick={() => setMore(!more)}>＋</button>
+        {topEmojis(5).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} aria-label={`React with ${e}`} onClick={() => pick(e)}>{e}</button>)}
+        <button aria-label="More emojis" aria-expanded={more} className={'more' + (more ? ' on' : '')} onClick={() => setMore(!more)}><SmilePlusIcon /></button>
       </div>
       {more && (
         <div className="emoji-grid">
-          {MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} onClick={() => pick(e)}>{e}</button>)}
+          {MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} aria-label={`React with ${e}`} onClick={() => pick(e)}>{e}</button>)}
         </div>
       )}
-      {onReply && (
-        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); onReply() }}>
-          {thread?.count ? `Reply in the thread (${thread.count} ${thread.count === 1 ? 'reply' : 'replies'})` : 'Reply (starts a thread)'}
-        </button>
-      )}
-      {onThread && (
-        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); onThread() }}>
-          {thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'}
-        </button>
-      )}
-      {isAdmin() && nsiteRef(m.text) && (
-        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); void makeWebsite(m) }}>Make this the website</button>
-      )}
-      {m.ev.pubkey === me() && (
-        <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }}>Delete message</button>
+      {!emojiOnly && (
+        <>
+          <div className="act-group">
+            {onReply && <Item icon={<ReplyIcon />} label={thread?.count ? `Reply in the thread (${thread.count})` : 'Reply'} onClick={() => { onClose(); onReply() }} />}
+            {onThread && <Item icon={<ThreadIcon />} label={thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'} onClick={() => { onClose(); onThread() }} />}
+            {m.ev.pubkey !== me() && <Item icon={<AtIcon />} label={`Message ${displayName(m.ev.pubkey)}`} onClick={() => { onClose(); go('dm/' + encodeURIComponent('n:' + m.ev.pubkey)) }} />}
+          </div>
+          <div className="act-group">
+            {m.text && <Item icon={<CopyIcon />} label={copied === 'text' ? 'Copied' : 'Copy text'} onClick={() => void copy('text', m.text)} />}
+            <Item icon={<LinkIcon />} label={copied === 'link' ? 'Copied' : 'Copy link'} onClick={() => void copy('link', link)} />
+            {isAdmin() && nsiteRef(m.text) && <Item icon={<GlobeIcon />} label="Make this the website" onClick={() => { onClose(); void makeWebsite(m) }} />}
+          </div>
+          {m.ev.pubkey === me() && (
+            <div className="act-group">
+              <Item danger icon={<TrashIcon />} label="Delete message" onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }} />
+            </div>
+          )}
+        </>
       )}
     </Sheet>
   )

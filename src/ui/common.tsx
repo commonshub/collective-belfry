@@ -95,16 +95,16 @@ export function MediaGrid({ media }: { media: Media[] }) {
 
 /** A bottom drawer (Vaul, what shadcn/ui's Drawer is built on): slide it down, tap outside or
  *  press Escape to close it. */
-export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+export function Sheet({ title, onClose, children, hideTitle = false }: { title: string; onClose: () => void; children: ReactNode; hideTitle?: boolean }) {
   const wide = useWide()
-  if (wide) return <Modal title={title} onClose={onClose}>{children}</Modal>
+  if (wide) return <Modal title={title} hideTitle={hideTitle} onClose={onClose}>{children}</Modal>
   return (
     <Drawer.Root open onOpenChange={(open) => { if (!open) onClose() }}>
       <Drawer.Portal>
         <Drawer.Overlay className="sheet-bg" />
         <Drawer.Content className="sheet" aria-describedby={undefined}>
           <Drawer.Handle className="grab" />
-          <Drawer.Title asChild><h3>{title}</h3></Drawer.Title>
+          <Drawer.Title asChild><h3 className={hideTitle ? 'sr-only' : undefined}>{title}</h3></Drawer.Title>
           {children}
         </Drawer.Content>
       </Drawer.Portal>
@@ -114,7 +114,7 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
 
 /** On a laptop the same content opens as a dialog in the middle (native <dialog>: focus kept
  *  inside, Escape closes, the page behind is inert); a click on the backdrop closes it too. */
-function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+function Modal({ title, onClose, children, hideTitle = false }: { title: string; onClose: () => void; children: ReactNode; hideTitle?: boolean }) {
   const ref = useRef<HTMLDialogElement>(null)
   const closeRef = useRef(onClose)
   closeRef.current = onClose
@@ -131,7 +131,7 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
     <dialog ref={ref} className="modal" aria-labelledby={titleId}
       onMouseDown={(e) => { if (e.target === ref.current) closeRef.current() }}>
       <div className="modal-head">
-        <h3 id={titleId}>{title}</h3>
+        <h3 id={titleId} className={hideTitle ? 'sr-only' : undefined}>{title}</h3>
         <button type="button" className="modal-close" aria-label="Close" onClick={() => closeRef.current()}><CloseIcon /></button>
       </div>
       {children}
