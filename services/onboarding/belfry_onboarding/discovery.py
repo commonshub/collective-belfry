@@ -70,10 +70,17 @@ def document(settings: Any) -> dict[str, Any]:
         "groups": _url(settings.groups_relay_public_url),
         "signer": [_url(r) for r in settings.bunker_relays.split(",") if r.strip()],
     }
+    # the belfry's API lives on belfry.<domain>/api/v1 (pass.<domain>/api still answers)
+    console = _url(getattr(settings, "console_url", ""))
+    base = (console + "/api/v1") if console else (public + "/api" if public else "")
     api = {
-        "me": public + ME,
-        "invites": public + "/api/invites",
-        "email_code": public + "/api/email-code",
+        "base": base,
+        "me": base + ME.removeprefix("/api"),
+        "invites": base + "/invites",
+        "email_code": base + "/email-code",
+        "session": base + "/session",
+        "channel_invites": base + "/channel-invites",
+        "follows": base + "/me/follows",
         "apply": site + "/apply",
         "invite_offer": shop + "/belfry/api/invites/{token}" if shop else "",
         "wallet_pass_tokens": public + "/wallet/pass-tokens",
@@ -114,7 +121,12 @@ def document(settings: Any) -> dict[str, Any]:
             "sessions": {
                 **_belfry_key(settings),
                 "relays": [_url(r) for r in settings.bunker_relays.split(",") if r.strip()],
-                "api": public + "/api/session",
+                "api": (
+                    (_url(getattr(settings, "console_url", "")) + "/api/v1")
+                    if getattr(settings, "console_url", "")
+                    else public + "/api"
+                )
+                + "/session",
                 "skill": f"{public}/skills/belfry-app.md",
             }
             if _belfry_key(settings)

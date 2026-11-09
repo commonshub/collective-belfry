@@ -170,6 +170,8 @@ belfry.{$BELFRY_DOMAIN} {
 	import security
 	import limit console-forms 60 1m /members/* /website/*
 	import limit setup-code 10 1m /setup/code
+	# the belfry's API (/api/v1/…, the same endpoints pass.<domain>/api/… had), rate-limited alike
+	import limit console-api 60 1m /api/*
 	# the mail-in service's hand-over (mail.py) stays on the Compose network
 	error /internal/* 404
 	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'"

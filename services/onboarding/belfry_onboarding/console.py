@@ -1133,6 +1133,9 @@ def register(app: FastAPI) -> None:
         )
 
 
+API_V1 = "/api/v1"  # the belfry's API, on belfry.<domain> (pass.<domain>/api/… still answers)
+
+
 def map_host(request: Request) -> Response | None:
     """On the console host, its paths live under /console; elsewhere /console/* moves there."""
     settings = request.app.state.services.settings
@@ -1141,6 +1144,11 @@ def map_host(request: Request) -> Response | None:
         return None
     path = request.scope["path"]
     if request.headers.get("host", "").lower() == host:
+        # the belfry's API: belfry.<domain>/api/v1/<name> is the endpoint /api/<name>
+        if path.startswith(API_V1 + "/"):
+            request.scope["path"] = "/api/" + path.removeprefix(API_V1 + "/")
+            request.scope["raw_path"] = request.scope["path"].encode()
+            return None
         if not path.startswith(("/console", "/brand/", "/me/", "/theme/", "/static/")):
             request.scope["path"] = "/console" + (path if path != "/" else "")
         return None

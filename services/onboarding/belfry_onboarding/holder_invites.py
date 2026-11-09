@@ -75,6 +75,10 @@ def authenticate(
     # the URL the client signed: the public one (pass.<domain>, or the start page's host, which
     # serves the same site), never the internal address the proxy forwards to
     urls = [u.rstrip("/") + path for u in (svc.settings.public_url, svc.settings.site_url) if u]
+    # …or the same endpoint as the belfry's API: belfry.<domain>/api/v1/<name>
+    console = (getattr(svc.settings, "console_url", "") or "").rstrip("/")
+    if console and path.startswith("/api/"):
+        urls.append(console + "/api/v1/" + path.removeprefix("/api/"))
     try:
         event = parse_authorization(authorization)
         pubkey = check_nip98(event, method, urls)

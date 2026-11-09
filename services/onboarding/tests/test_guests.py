@@ -94,3 +94,31 @@ def test_a_member_gets_a_guest_link_for_a_channel(rsvc, published, monkeypatch):
         r = post(c, key, guests.API, {"channel": "garden"})
         assert r.status_code == 200, r.text
         assert r.json()["days"] == 30 and "/invite/" in r.json()["url"]
+
+
+def test_the_api_also_answers_on_the_belfry_host(rsvc, published, monkeypatch):
+    """belfry.<domain>/api/v1/<name> is pass.<domain>/api/<name>, signed with its own URL."""
+    from belfry_onboarding import mail
+
+    from .test_holder_invites import nip98
+
+    rsvc.settings.public_url = BASE
+    rsvc.settings.console_url = "https://belfry.belfry.test"
+    key, _ = admin_with_key(rsvc)
+    monkeypatch.setattr(mail, "channel_exists", lambda svc, ch: True)
+    url = "https://belfry.belfry.test/api/v1/channel-invites"
+    body = b'{"channel": "garden"}'
+    with TestClient(create_app(rsvc)) as c:
+        r = c.post(
+            "/api/v1/channel-invites",
+            content=body,
+            headers={
+                "Host": "belfry.belfry.test",
+                "Authorization": nip98(key, url, "POST", body),
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 200, r.text
+        doc = c.get("/.well-known/belfry.json").json()
+        assert doc["api"]["base"] == "https://belfry.belfry.test/api/v1"
+        assert doc["api"]["channel_invites"] == url
