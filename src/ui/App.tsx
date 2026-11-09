@@ -9,7 +9,7 @@ import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { me, setAvatar, start, stop } from '../core/sync'
-import { BELFRY, NAME, THEME, getBackend } from '../config'
+import { BELFRY, NAME, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
@@ -85,7 +85,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         await loadAll()
         const signer = await makeSigner(session)
         if (cancelled) return
-        await start(signer, { localOnly: session.backend === 'demo' })
+        await start(signer, { localOnly: session.backend === 'demo' && !TEST_RELAYS })
         // direct messages and e-mail (dm.ts); my address is my name@domain
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()

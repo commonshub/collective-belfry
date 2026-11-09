@@ -83,32 +83,63 @@ async function dims(f: File): Promise<{ width?: number; height?: number }> {
 
 let flushing = false
 let again = false // something was queued while a flush ran: run once more right after
+// Everything you send is saved on this device first (the outbox, IndexedDB), then published
+// when a relay answers, retried on every wake-up (online, back in the foreground, the 15 s
+// watchdog) until the relay says yes or refuses for good. Order is kept per relay: a message
+// waiting for one relay never holds back another relay's.
+const sentListeners = new Set<(item: OutboxItem, ev: NostrEvent) => void>()
+const failListeners = new Set<(item: OutboxItem) => void>()
+/** Called when an outbox item is out (accepted by its relay), or refused for good. */
+export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, failed: (item: OutboxItem) => void) {
+  sentListeners.add(sent)
+  failListeners.add(failed)
+}
+
 export async function flush() {
   if (!signer) return
   if (flushing) { again = true; return }
   flushing = true
   again = false
-  let stalled = false
+  const stalled = new Set<Target>()
   try {
     for (const item of outboxItems()) {
-      if (item.status === 'failed') continue
+      if (item.status === 'failed' || stalled.has(item.target)) continue
       if (!localOnly && !navigator.onLine) break
       try {
         const ev = await send(item)
-        addEvents([ev])
+        if (!item.signed) addEvents([ev])
         await dropOutbox(item.localId)
+        sentListeners.forEach((f) => f(item, ev))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
-        if (msg.startsWith('restricted')) noteRefusal(msg)
-        await putOutbox({ ...item, tries: item.tries + 1, status: permanent ? 'failed' : 'queued', error: msg })
-        if (!permanent) { stalled = true; break } // keep the order: retry this one before later items
+        if (msg.startsWith('restricted') && item.target === 'groups') noteRefusal(msg)
+        if (/^duplicate:/.test(msg)) { // the relay has it already: out
+          await dropOutbox(item.localId)
+          sentListeners.forEach((f) => f(item, item.signed ?? ({} as NostrEvent)))
+          continue
+        }
+        const next = { ...item, tries: item.tries + 1, status: permanent ? 'failed' as const : 'queued' as const, error: msg }
+        await putOutbox(next)
+        if (permanent) failListeners.forEach((f) => f(next))
+        else stalled.add(item.target) // keep this relay's order: retry this one before its later items
       }
     }
   } finally {
     flushing = false
   }
-  if (again && !stalled) void flush()
+  if (again && !stalled.size) void flush()
+}
+
+/** Save an event that is signed already (gift wraps) and publish it when the relay answers. */
+export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
+  const item: OutboxItem = {
+    localId: 'local-' + newId(), target, kind: ev.kind, content: ev.content, tags: ev.tags, created_at: ev.created_at,
+    attachments: [], status: 'queued', tries: 0, signed: ev, dm,
+  }
+  await putOutbox(item)
+  void flush()
+  return item.localId
 }
 
 export async function retry(localId: string) {
@@ -118,6 +149,11 @@ export async function retry(localId: string) {
 }
 
 async function send(item: OutboxItem): Promise<NostrEvent> {
+  if (item.signed) {
+    if (localOnly) return item.signed
+    await publish(item.target, item.signed)
+    return item.signed
+  }
   const d = await db()
   let content = item.content
   const tags = [...item.tags]
@@ -233,15 +269,24 @@ function backoff(t: Target) {
   return Math.min(30_000, 800 * 2 ** attempts[t])
 }
 
+/** PROMISE, or "timeout: …" after MS: a connection that drops mid-way never answers, and the
+ *  outbox must then retry rather than wait forever. */
+function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout>
+  promise.catch(() => {}) // after a timeout it may still fail: nobody waits for it any more
+  return Promise.race([promise, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms) })])
+    .finally(() => clearTimeout(t))
+}
+
 async function publish(target: Target, ev: NostrEvent) {
-  const r = await relay(target)
+  const r = await within(relay(target), 15000, 'no connection to the relay')
   try {
-    await r.publish(ev)
+    await within(r.publish(ev), 15000, 'the relay did not answer')
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     if (!msg.startsWith('auth-required')) throw e
-    await r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-    await r.publish(ev)
+    await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
+    await within(r.publish(ev), 15000, 'the relay did not answer')
   }
 }
 

@@ -96,6 +96,7 @@ export function all(me?: string): Ev[] {
   if (cache.v === version) return cache.list
   const list: Ev[] = [...events.values()]
   for (const o of outbox.values()) {
+    if (o.signed) continue // a gift wrap on its way: its message shows from dm.ts, not as an event
     list.push({
       id: o.localId,
       pubkey: me ?? '',

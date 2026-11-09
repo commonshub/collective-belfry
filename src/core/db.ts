@@ -26,6 +26,10 @@ export interface OutboxItem {
   status: 'queued' | 'failed'
   error?: string
   tries: number
+  /** An event signed already (a gift wrap, by its one-time key): published as is. */
+  signed?: NostrEvent
+  /** The direct message or e-mail it carries (dm.ts), told when it is out. */
+  dm?: string
 }
 
 type Schema = {

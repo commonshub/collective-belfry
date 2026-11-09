@@ -1,12 +1,12 @@
 import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip44, verifyEvent, type NostrEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
-import { BELFRY } from '../config'
+import { BELFRY, TEST_RELAYS } from '../config'
 import { kvGet, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, realName } from './model'
-import { addEvents, all, subscribe, touch } from './store'
-import { currentSigner, isLocalOnly, me, publishNow, queryOnce } from './sync'
+import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
+import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, publishNow, queryOnce } from './sync'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
 // e-mail as Nostr Mail (kind 1301 in gift wraps, nogringo/nostr-mail). The belfry is the e-mail
@@ -36,7 +36,10 @@ export interface Dm {
   attachments?: { name: string; type: string; size: number }[]
   raw?: string // e-mail MIME when it fitted in the wrap (attachments are read from it)
   large?: { url: string; key: string; nonce: string }
+  /** Saved here, its gift wraps in the outbox (sync.ts) until the relay takes them. */
   pending?: boolean
+  /** The relay refused it for good: why (Retry puts it back in the outbox). */
+  failed?: string
 }
 
 export interface Report { status: 'delivered' | 'failed' | 'delayed' | 'queued'; details: string }
@@ -55,7 +58,7 @@ export function setMyAddress(a?: string) { if (a) myAddress = a.toLowerCase() }
 export const address = () => myAddress
 
 export async function bridge(): Promise<string | undefined> {
-  if (isLocalOnly()) return getPublicKey(hexToBytes(DEMO_BRIDGE))
+  if (isLocalOnly() || TEST_RELAYS) return getPublicKey(hexToBytes(DEMO_BRIDGE))
   if (bridgeKey) return bridgeKey
   bridgeKey = await kvGet<string>('dm-bridge')
   try {
@@ -125,6 +128,8 @@ async function load() {
   for (const [k, v] of Object.entries((await kvGet<Record<string, Report>>('dm-reports')) ?? {})) reports.set(k, v)
   read = (await kvGet<Record<string, number>>('dm-read')) ?? {}
   // mail stored before threads: one conversation per address → one per subject
+  const waiting = new Set(outboxItems().map((o) => o.dm).filter(Boolean))
+  for (const d of items.values()) if (d.pending && !waiting.has(d.rid)) d.pending = false
   for (const d of items.values()) {
     if (!isNewMail(d.conv)) continue
     const conv = mailThreadOf(mailAddress(d.conv), d.subject)
@@ -138,7 +143,7 @@ function save() {
   touch()
   saveTimer ??= setTimeout(() => {
     saveTimer = null
-    void kvSet('dm-items', [...items.values()].filter((d) => !d.pending))
+    void kvSet('dm-items', [...items.values()]) // unsent ones too: their wraps wait in the outbox
     void kvSet('dm-seen', [...seen])
     void kvSet('dm-reports', Object.fromEntries(reports))
   }, 300)
@@ -272,6 +277,7 @@ let started = false
 export function startDms() {
   if (started) return
   started = true
+  watchOutbox()
   let t: ReturnType<typeof setTimeout> | null = null
   subscribe(() => { t ??= setTimeout(() => { t = null; void process() }, 200) })
   void load().then(process)
@@ -330,12 +336,63 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
   }, one)
 }
 
+/** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
+ *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
 async function deliver(rumor: NostrEvent, to: string[], self = true) {
   const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
-  if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())); return }
-  const results = await Promise.allSettled(wraps.map((w) => publishNow('main', w)))
-  const failed = results.filter((r, i) => r.status === 'rejected' && wraps[i].tags[0][1] !== me())
-  if (failed.length) throw new Error((failed[0] as PromiseRejectedResult).reason?.message ?? 'The relay refused the message.')
+  if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
+  for (const w of wraps) await enqueueSigned('main', w, rumor.id)
+}
+
+/** Where a message stands in the outbox: waiting (and why, after a failed try). */
+export function queueState(d: Dm): { waiting: boolean; error?: string } {
+  const mine = outboxItems().filter((o) => o.dm === d.rid)
+  const err = mine.find((o) => o.error)?.error
+  return { waiting: mine.length > 0, error: err }
+}
+
+/** Put a refused message back in the outbox. */
+export async function retryDm(d: Dm) {
+  const queued = outboxItems().filter((x) => x.dm === d.rid)
+  if (!queued.length) return
+  for (const o of queued) await putOutbox({ ...o, status: 'queued', error: undefined })
+  const it = items.get(d.rid)
+  if (it) { it.failed = undefined; it.pending = true }
+  if (d.emailId) reports.set(d.emailId, { status: 'queued', details: 'Waiting for the connection…' })
+  save()
+  void flush()
+}
+
+let watching = false
+function watchOutbox() {
+  if (watching) return
+  watching = true
+  onOutbox(
+    (item) => {
+      if (!item.dm) return
+      const d = items.get(item.dm)
+      if (!d) return
+      // out once no wrap for someone else waits any more (my own copy may follow later)
+      const left = outboxItems().filter((o) => o.dm === item.dm && o.tags.some((t) => t[0] === 'p' && t[1] !== me()))
+      if (left.length) return
+      d.pending = false
+      d.failed = undefined
+      if (d.emailId && d.kind === 1301) {
+        reports.set(d.emailId, { status: 'queued', details: 'Sent: waiting for the delivery report…' })
+        if (!isLocalOnly()) for (const wait of [3000, 10000, 30000, 90000]) setTimeout(() => void checkReports(), wait)
+        else reports.set(d.emailId, { status: 'failed', details: 'Demo mode sends no e-mail.' })
+      }
+      save()
+    },
+    (item) => {
+      if (!item.dm) return
+      const d = items.get(item.dm)
+      if (!d || !item.tags.some((t) => t[0] === 'p' && t[1] !== me())) return
+      d.failed = item.error || 'The relay refused it.'
+      if (d.emailId) reports.set(d.emailId, { status: 'failed', details: d.failed })
+      save()
+    },
+  )
 }
 
 function rumorOf(kind: number, tags: string[][], content: string): NostrEvent {
@@ -353,13 +410,14 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
     items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text, pending: true })
     save()
     try {
-      await deliver(rumor, to)
-      const d = items.get(rumor.id)
-      if (d) d.pending = false
+      await deliver(rumor, to) // saved; the outbox sends it when it can
     } catch (e) {
       items.delete(rumor.id) // the composer gets the text back
+      save()
       throw /curve|hex/i.test(String(e)) ? new Error('This is not a valid Nostr key.') : e
-    } finally { save() }
+    }
+    if (isLocalOnly()) { const d = items.get(rumor.id); if (d) d.pending = false }
+    save()
     return
   }
   const b = await bridge()
@@ -379,19 +437,21 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   const emailId = crypto.randomUUID()
   const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', myAddress], ['rcpt-to', to], ['subject', subj]], raw)
   items.set(rumor.id, { rid: rumor.id, conv: target, from: me(), mine: true, at: rumor.created_at, kind: 1301, text, subject: subj, emailId, raw, messageId, references: before ? [before.references, before.messageId].filter(Boolean).join(' ') : undefined, pending: true })
-  reports.set(emailId, { status: 'queued', details: 'Sending…' })
+  reports.set(emailId, { status: 'queued', details: 'Waiting for the connection…' })
   save()
   try {
-    await deliver(rumor, [b])
-    if (isLocalOnly()) reports.set(emailId, { status: 'failed', details: 'Demo mode sends no e-mail.' })
+    await deliver(rumor, [b]) // saved; the outbox sends it when it can, the report follows
   } catch (e) {
     reports.set(emailId, { status: 'failed', details: e instanceof Error ? e.message : String(e) })
-  } finally {
+    const d = items.get(rumor.id)
+    if (d) { d.pending = false; d.failed = String(e) }
+  }
+  if (isLocalOnly()) {
+    reports.set(emailId, { status: 'failed', details: 'Demo mode sends no e-mail.' })
     const d = items.get(rumor.id)
     if (d) d.pending = false
-    save()
   }
-  if (!isLocalOnly()) for (const wait of [3000, 10000, 30000]) setTimeout(() => void checkReports(), wait)
+  save()
   return target
 }
 

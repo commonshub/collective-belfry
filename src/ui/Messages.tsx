@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MailIcon } from './icons'
-import { address, attachmentsOf, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, report, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { address, attachmentsOf, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -138,12 +138,21 @@ function Bubble({ d }: { d: Dm }) {
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>
         {d.kind === 1301 && !d.mine && !d.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
-        {d.kind === 1301 && d.mine && <span className={'dm-state ' + (r?.status ?? 'queued')}>{
-          r?.status === 'delivered' ? 'Delivered' : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, retrying' : 'Sending…'}</span>}
-        {d.kind !== 1301 && d.pending && <span className="dm-state">Sending…</span>}
+        {d.mine && <DmState d={d} r={r} />}
       </div>
     </div>
   )
+}
+
+/** Where my message stands: saved here and waiting for the connection, out, delivered, refused. */
+function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
+  const q = queueState(d)
+  if (d.failed) return <span className="dm-state failed">Not sent: {d.failed} · <button className="link" onClick={() => void retryDm(d)}>Retry</button></span>
+  if (d.pending || q.waiting)
+    return <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine ? 'Saved · waiting for the connection' : 'Sending…'}</span>
+  if (d.kind !== 1301) return null
+  const label = r?.status === 'delivered' ? 'Delivered' : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, retrying' : r?.details || 'Sent'
+  return <span className={'dm-state ' + (r?.status ?? 'queued')}>{label}</span>
 }
 
 function Attachments({ d }: { d: Dm }) {

@@ -71,3 +71,8 @@ export const DISCOVERY = env.VITE_DISCOVERY || `https://${BELFRY.domain}/.well-k
 export const CLIENT_TAG = ['client', 'osv-village']
 export const LABEL_NS = 'osv/member-label'
 export const TZ = 'Europe/Brussels'
+
+// Tests only: a build with VITE_TEST_RELAYS=1 lets the demo key talk to the relays given at build
+// time (VITE_MAIN_RELAY, VITE_GROUPS_RELAY), e.g. a local strfry, to test sending with a flaky
+// connection. Never set in a real build: demo mode then stays on this device.
+export const TEST_RELAYS = env.VITE_TEST_RELAYS === '1'
