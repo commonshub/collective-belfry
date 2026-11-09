@@ -122,3 +122,74 @@ def test_the_api_also_answers_on_the_belfry_host(rsvc, published, monkeypatch):
         doc = c.get("/.well-known/belfry.json").json()
         assert doc["api"]["base"] == "https://belfry.belfry.test/api/v1"
         assert doc["api"]["channel_invites"] == url
+
+
+def test_an_agent_accepts_a_guest_invite_with_its_own_key(rsvc, published, monkeypatch):
+    """/invite/<token>.md tells an agent what to do; it accepts with its own key (NIP-98), no
+    e-mail; it is put in the channel with its name and who invited it, and leaves at the end."""
+    from .test_holder_invites import nip98
+
+    rsvc.settings.public_url = BASE
+    rsvc.settings.console_url = "https://belfry.belfry.test"
+    rsvc.settings.groups_relay_public_url = "wss://groups-relay.belfry.test"
+    key, ada = admin_with_key(rsvc)
+    row = rsvc.odoo.create_guest_invite(ada, key.public_key_xonly.format().hex(), "garden", 30)
+    token = row["url"].rsplit("/", 1)[1]
+    agent = PrivateKey()
+    agent_pk = agent.public_key_xonly.format().hex()
+    with TestClient(create_app(rsvc)) as c:
+        assert "Are you an AI agent?" in c.get(f"/invite/{token}").text
+        md = c.get(f"/invite/{token}.md")
+        assert md.status_code == 200 and md.headers["content-type"].startswith("text/markdown")
+        url = f"https://belfry.belfry.test/api/v1/guest-invites/{token}/accept"
+        assert (
+            url in md.text
+            and "wss://groups-relay.belfry.test" in md.text
+            and '"#h": ["garden"]' in md.text
+        )
+        assert c.get(f"/invite/{token}", headers={"Accept": "text/markdown"}).text == md.text
+        body = b'{"name": "Gardening bot", "about": "Waters on schedule"}'
+        r = c.post(
+            f"/api/v1/guest-invites/{token}/accept",
+            content=body,
+            headers={
+                "Host": "belfry.belfry.test",
+                "Authorization": nip98(agent, url, "POST", body),
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert (
+            r.json()["channel"] == "garden"
+            and r.json()["relay"] == "wss://groups-relay.belfry.test"
+        )
+        kind, tags = published[-1]
+        assert (
+            kind == 9000 and ["p", agent_pk, "member"] in tags and ["name", "Gardening bot"] in tags
+        )
+        assert ["invited-by", key.public_key_xonly.format().hex()] in tags and [
+            "agent",
+            "1",
+        ] in tags
+        time.sleep(1.1)
+        again = c.post(
+            f"/api/v1/guest-invites/{token}/accept",
+            content=body,
+            headers={
+                "Host": "belfry.belfry.test",
+                "Authorization": nip98(PrivateKey(), url, "POST", body),
+                "Content-Type": "application/json",
+            },
+        )
+        assert again.status_code == 409  # one guest per link
+        assert c.get(f"/invite/{token}.md").status_code == 410
+    p = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", agent_pk]], ["id", "tier", "state"]
+    )[0]
+    assert (
+        p["tier"] == "guest"
+        and p["state"] == "active"
+        and agent_pk not in core.active_pubkeys(rsvc)
+    )
+    core.revoke_pass(rsvc, p["id"], "test")  # no signer account to suspend: no error
+    assert published[-1][0] == 9001

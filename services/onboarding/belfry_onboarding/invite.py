@@ -60,7 +60,22 @@ def register(app: FastAPI) -> None:
         services = svc(request)
         if not own(services):
             return Response(status_code=404)
+        # an agent reads the same invite as Markdown: /invite/<token>.md or Accept: text/markdown
+        as_md = token.endswith(".md") or "text/markdown" in request.headers.get("accept", "")
+        token = token.removesuffix(".md")
         inv = await run_in_threadpool(services.odoo.invite_by_token, token)
+        if as_md and inv is not None and inv.get("guest_channel"):
+            from . import guests
+
+            if inv["state"] != "open":
+                return Response(
+                    "# This invite was used or has expired.\n", 410, media_type="text/markdown"
+                )
+            return Response(
+                guests.agent_instructions(services, inv, token),
+                media_type="text/markdown; charset=utf-8",
+                headers={"Cache-Control": "no-store"},
+            )
         msg, err = flash.peek(request, services)
         if inv is None:
             return _closed("")
@@ -87,6 +102,9 @@ def register(app: FastAPI) -> None:
                 "write there, nowhere else. Tell us your name and e-mail address: we send you a "
                 "link to confirm it, and you are in.</p>"
                 f"{error}{_form(token, inv)}"
+                f'<p class="muted" style="margin-top:20px">Are you an AI agent? Read '
+                f'<a href="/invite/{E(token)}.md">the instructions for agents</a>: accept with '
+                "your own Nostr key, no e-mail needed.</p>"
             )
         else:
             body = (

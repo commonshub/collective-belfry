@@ -1137,6 +1137,10 @@ def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason
     """
     suspended = False
     partner_id = m2o_id(pass_row.get("partner_id"))
+    if pass_row.get("tier") == "guest":
+        row = svc.odoo.read_one("belfry.pass", pass_row["id"], ["guest_agent"]) or {}
+        if row.get("guest_agent"):  # an agent's own key: no signer account to suspend
+            return False
     if partner_id is None or not _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
         pubkey = _keycast_pubkey_for(svc, pass_row)
         if pubkey:

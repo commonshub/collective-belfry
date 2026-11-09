@@ -153,11 +153,15 @@ class Register(OdooApi):
         return value
 
     def param(self, key: str, default: str = "") -> str:
-        row = self._db.execute("SELECT value FROM params WHERE key = ?", (key,)).fetchone()
+        with self._lock:  # one connection, used from several threads (background jobs, requests)
+            row = self._db.execute("SELECT value FROM params WHERE key = ?", (key,)).fetchone()
         return row[0] if row else default
 
     def set_param(self, key: str, value: str) -> None:
-        self._db.execute("INSERT OR REPLACE INTO params (key, value) VALUES (?, ?)", (key, value))
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO params (key, value) VALUES (?, ?)", (key, value)
+            )
 
     def _create(self, model: str, vals: dict[str, Any]) -> int:
         vals = dict(vals)
@@ -728,6 +732,57 @@ class Register(OdooApi):
                 None,
             )
             return self._usable(inv) if inv else None
+
+    def accept_agent_guest(self, token: str, pubkey: str, name: str) -> dict[str, Any]:
+        """An agent takes a guest invite with its own key (guests.py): no e-mail, no signer
+        account; the guest pass opens at once, for the invite's days. Returns {"pass_id"}."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                inv = next((i for i in self._all("belfry.invite") if i.get("token") == token), None)
+                if inv is None or not inv.get("guest_channel"):
+                    raise _user_error("This is not a guest invite.")
+                inv = self._usable(inv)
+                if inv["state"] != "open":
+                    raise _user_error(f"This invite is {inv['state']}.")
+                taken = [
+                    p
+                    for p in self._all("belfry.pass")
+                    if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+                ]
+                if taken:
+                    raise _user_error("This key is in already.")
+                pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Agent"})
+                days = int(inv.get("guest_days") or 30)
+                today = now().date()
+                pass_id = self._create(
+                    "belfry.pass",
+                    {
+                        "partner_id": pid,
+                        "tier": "guest",
+                        "invite_id": inv["id"],
+                        "guest_channel": inv["guest_channel"],
+                        "guest_days": days,
+                        "guest_inviter": inv.get("guest_inviter") or "",
+                        "guest_agent": True,
+                        "keycast_pubkey": pubkey,
+                        "own_pubkey": pubkey,
+                        "date_start": today.isoformat(),
+                        "date_end": (today + dt.timedelta(days=days)).isoformat(),
+                    },
+                )
+                self._write("belfry.pass", [pass_id], {"state": "active"})
+                self._write("belfry.invite", [inv["id"]], {"pass_id": pass_id})
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+            return {
+                "pass_id": pass_id,
+                "partner_id": pid,
+                "channel": inv["guest_channel"],
+                "days": days,
+            }
 
     def accept_invite(self, token: str, name: str, email: str) -> dict[str, Any]:
         """The invitee confirmed their address: their person and a pending pass, the invite

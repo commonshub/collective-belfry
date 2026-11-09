@@ -44,22 +44,23 @@ def own(svc: Services) -> bool:
     return isinstance(svc.odoo, Register)
 
 
-def _key(partner: int) -> str:
-    return f"belfry.mentions.{int(partner)}"
+def _key(partner: int, part: str) -> str:
+    return f"belfry.mentions.{int(partner)}.{part}"
 
 
 def prefs(svc: Services, partner: int) -> dict[str, Any]:
-    try:
-        p = json.loads(svc.odoo.param(_key(partner), "{}") or "{}")
-    except ValueError:
-        p = {}
-    f = p.get("f") if p.get("f") in CHOICES else "daily"
-    return {"f": f, "last": int(p.get("last") or 0)}
+    """The member's choice and their last digest, kept apart: the morning job writes only
+    ``last``, the footer page only ``f``, so neither overwrites the other."""
+    f = svc.odoo.param(_key(partner, "f"), "")
+    last = svc.odoo.param(_key(partner, "last"), "0")
+    return {"f": f if f in CHOICES else "daily", "last": int(last or 0) if last.isdigit() else 0}
 
 
 def save(svc: Services, partner: int, **change: Any) -> None:
-    p = {**prefs(svc, partner), **change}
-    svc.odoo.set_param(_key(partner), json.dumps({"f": p["f"], "last": int(p["last"])}))
+    if "f" in change:
+        svc.odoo.set_param(_key(partner, "f"), str(change["f"]))
+    if "last" in change:
+        svc.odoo.set_param(_key(partner, "last"), str(int(change["last"])))
 
 
 def token(svc: Services, partner: int) -> str:
