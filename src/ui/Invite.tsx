@@ -57,7 +57,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
     <Sheet title={`Invite to ${label}`} onClose={onClose}>
       {admin && (
         <label className="switch-row">
-          <span><b>Guest access for 30 days</b><small>For someone who isn't a member: this channel only, nothing else.</small></span>
+          <span><b>Guest access for 30 days</b><small>For a person or an AI agent who isn't a member: this channel only, nothing else.</small></span>
           <input type="checkbox" role="switch" checked={guest} onChange={(e) => pickGuest(e.target.checked)} />
         </label>
       )}
@@ -79,7 +79,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
       </div>
           <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>
             {guest
-              ? 'One person uses this link: they give their name and e-mail, and join for 30 days. Everyone here sees who invited them.'
+              ? 'For one guest. A person opens it and gives a name and e-mail. An agent reads its instructions at the same link with .md at the end (or Accept: text/markdown) and joins with its own Nostr key. Everyone here sees who invited them.'
               : `Members open ${label} with this link. For someone who isn't a member yet, turn on guest access above.`}
           </p>
     </Sheet>

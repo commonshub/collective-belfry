@@ -3,7 +3,7 @@ import { setInbox } from '../core/actions'
 import { isInbox } from '../core/model'
 import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { ACTIVE_DAYS, channelIcon, displayName, groups, memberLabels, messages, recentlyActive, tasklist, type Task } from '../core/model'
+import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
@@ -192,6 +192,8 @@ export function Members({ groupId }: { groupId: string }) {
   const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   const vocab = [...new Set([...labels.values()].flat())].sort()
   const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
+  // guests (people or agents) and who brought them in: whose agent it is
+  const invited = new Map(guestJoins(groupId).map((j) => [j.pubkey, j]))
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
@@ -212,6 +214,12 @@ export function Members({ groupId }: { groupId: string }) {
           <Avatar pubkey={p} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 600 }}>{displayName(p)}</div>
+            {invited.get(p) && (
+              <div className="hint invited-by">
+                <span className="chip">{invited.get(p)!.agent ? 'agent' : 'guest'}</span>
+                {invited.get(p)!.by ? <>invited by <b>{displayName(invited.get(p)!.by!)}</b></> : null}
+              </div>
+            )}
             <div>{(labels.get(p) ?? []).map((l) => <span key={l} className="chip on">{l}</span>)}
               {!(labels.get(p) ?? []).length && <span className="hint" style={{ fontSize: 13 }}>Add a label</span>}</div>
           </div>

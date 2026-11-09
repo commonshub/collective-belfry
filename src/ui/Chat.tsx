@@ -681,7 +681,7 @@ function JoinLine({ j }: { j: GuestJoin }) {
   return (
     <div className="join-line" role="note">
       <span className="arrow" aria-hidden="true">→</span>
-      <span><b>{displayName(j.pubkey)}</b> joined as a guest{j.by ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
+      <span><b>{displayName(j.pubkey)}</b> joined as {j.agent ? 'an agent' : 'a guest'}{j.by ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
       <time>{fmtTime(j.at)}</time>
     </div>
   )

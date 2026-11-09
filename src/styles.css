@@ -625,3 +625,6 @@ a.chip { text-decoration: none; color: inherit; }
 .thread-activity small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-activity .reply { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .thread-activity time { font-size: 11px; color: var(--faint); white-space: nowrap; }
+
+.invited-by { font-size: 13px; display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
+.invited-by .chip { font-size: 11px; padding: 1px 7px; }
