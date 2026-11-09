@@ -44,6 +44,7 @@ from . import (
     followers,
     gitview,
     groups_members,
+    guests,
     holder_invites,
     homepage,
     invite,
@@ -217,6 +218,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     passlogin.register(app)  # pass.<domain>/me/login: e-mail + code (passlogin.py)
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
+    guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)

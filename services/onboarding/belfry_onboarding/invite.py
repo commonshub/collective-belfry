@@ -79,12 +79,22 @@ def register(app: FastAPI) -> None:
         who = inv.get("inviter_name") or "A member"
         note = f'<p class="muted">“{E(inv["note"])}”</p>' if inv.get("note") else ""
         error = f'<p class="error" role="alert">{E(err)}</p>' if err else ""
-        body = (
-            f"<h1>{E(who)} invites you to {E(name)}</h1>{note}"
-            "<p>Membership is free. Tell us your name and e-mail address: we send you a link to "
-            "confirm it, and you are in.</p>"
-            f"{error}{_form(token, inv)}"
-        )
+        if inv.get("guest_channel"):  # a channel's guest (guests.py)
+            days = int(inv.get("guest_days") or 30)
+            body = (
+                f"<h1>{E(who)} invites you to #{E(inv['guest_channel'])}</h1>"
+                f"<p>You join this channel of {E(name)} as a guest for {days} days: you read and "
+                "write there, nowhere else. Tell us your name and e-mail address: we send you a "
+                "link to confirm it, and you are in.</p>"
+                f"{error}{_form(token, inv)}"
+            )
+        else:
+            body = (
+                f"<h1>{E(who)} invites you to {E(name)}</h1>{note}"
+                "<p>Membership is free. Tell us your name and e-mail address: we send you a link "
+                "to confirm it, and you are in.</p>"
+                f"{error}{_form(token, inv)}"
+            )
         return flash.clear(_page(f"Join {name}", body), request)
 
     def _form(token: str, inv: dict) -> str:
@@ -127,7 +137,12 @@ def register(app: FastAPI) -> None:
             reg.mailer.send,
             email,
             f"Confirm your address to join {community}",
-            [f"Hello {name},", f"One click and you are a member of {community}."],
+            [
+                f"Hello {name},",
+                f"One click and you are a guest of #{inv['guest_channel']} on {community}."
+                if (inv := reg.invite_by_token(token) or {}).get("guest_channel")
+                else f"One click and you are a member of {community}.",
+            ],
             (link, "Confirm and join"),
             "If you did not ask to join, ignore this mail: nothing happens without the click.",
         )
@@ -168,6 +183,15 @@ def register(app: FastAPI) -> None:
         name = theme.current().name
         if not row or row.get("state") != "active":
             return _page("Invite", "<h1>Not yet</h1><p>Your membership is not open yet.</p>", 409)
+        if inv.get("guest_channel"):
+            chat = f"https://{services.settings.nip05_domain}/chat/#/c/{E(inv['guest_channel'])}"
+            return _page(
+                f"Welcome to #{inv['guest_channel']}",
+                f"<h1>Welcome to #{E(inv['guest_channel'])}</h1><p>You are a guest of this channel "
+                f"of {E(name)} for {int(inv.get('guest_days') or 30)} days. Open it and sign in "
+                "with your e-mail address: we send you a code.</p>"
+                f'<p><a class="button" href="{chat}">Open #{E(inv["guest_channel"])}</a></p>',
+            )
         url = row.get("login_setup_url") or "/me/login"
         return _page(
             f"Welcome to {name}",

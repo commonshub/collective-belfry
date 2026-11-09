@@ -517,13 +517,17 @@ def active_passes(svc: Services) -> list[dict[str, Any]]:
 
 
 def active_pubkeys(svc: Services) -> list[str]:
-    """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo."""
+    """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo. A channel's
+    guests (tier guest, guests.py) are not on it: the groups relay lets them into their
+    channel only."""
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey"],
+        ["keycast_pubkey", "tier"],
     )
-    return [r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")]
+    return [
+        r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey") and r.get("tier") != "guest"
+    ]
 
 
 def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -> str:
@@ -1021,6 +1025,7 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "own_pubkey",
                 "own_pubkey_proof",
                 "invoice_id",
+                "guest_days",
             ],
         )
         if row is None:
@@ -1047,9 +1052,16 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "belfry_key_custody",
             ],
         )[0]
-        return _finish_activation(
-            svc, row, partner, row.get("tier") or "member", None, today(), MEMBERSHIP_END, {}
-        )
+        tier = row.get("tier") or "member"
+        end = MEMBERSHIP_END
+        if tier == "guest":
+            end = today() + dt.timedelta(days=int(row.get("guest_days") or 30))
+        result = _finish_activation(svc, row, partner, tier, None, today(), end, {})
+        if tier == "guest":
+            from . import guests
+
+            guests.admitted(svc, pass_id)
+        return result
 
 
 # -- revocation, expiry, reactivation -----------------------------------------------------------
@@ -1149,6 +1161,10 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
     # Relay access first (derived from the state just written), then the signer: a Keycast
     # failure must not leave the pubkey on the relay whitelist.
     sync_relay_whitelist(svc)
+    if pass_row.get("tier") == "guest":  # a channel's guest leaves the channel too (guests.py)
+        from . import guests
+
+        guests.left(svc, pass_row["id"])
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
     return result

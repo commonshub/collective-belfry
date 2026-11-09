@@ -91,8 +91,8 @@ def viewer(svc: Services, sess: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     pid = sess["partner"]
     row = mypass.partner_pass(svc, pid)
-    if not row or row.get("state") != "active":
-        return None
+    if not row or row.get("state") != "active" or row.get("tier") == "guest":
+        return None  # a channel's guest (guests.py) is no member of the belfry
     partner = (svc.odoo.read("res.partner", [pid], ["name", "email"]) or [{}])[0]
     email = (partner.get("email") or "").lower()
     return {

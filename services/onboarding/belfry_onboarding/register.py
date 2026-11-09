@@ -595,6 +595,24 @@ class Register(OdooApi):
         )
         return self._invite_row(self._get("belfry.invite", inv_id))
 
+    def create_guest_invite(
+        self, partner_id: int, inviter_pubkey: str, channel: str, days: int
+    ) -> dict[str, Any]:
+        """A link that makes its user a guest of CHANNEL for DAYS days (guests.py)."""
+        partner = self._member(partner_id, "Only members can invite guests.")
+        inv_id = self._create(
+            "belfry.invite",
+            {
+                "inviter_partner_id": partner["id"],
+                "inviter_name": partner.get("name"),
+                "note": f"Guest of #{channel}",
+                "guest_channel": channel,
+                "guest_days": int(days),
+                "guest_inviter": inviter_pubkey,
+            },
+        )
+        return self._invite_row(self._get("belfry.invite", inv_id))
+
     def _m_belfry_participant_revoke(self, model, partner_id, invite_id, *_a, **_k):
         inv = self._get("belfry.invite", int(invite_id))
         if not inv or inv.get("inviter_partner_id") != int(partner_id):
@@ -744,9 +762,15 @@ class Register(OdooApi):
         )
         if person and name.strip() and person.get("name") in (None, "", email):
             self._write("res.partner", [pid], {"name": name.strip()[:100]})
-        pass_id = self._create(
-            "belfry.pass", {"partner_id": pid, "tier": "member", "invite_id": inv["id"]}
-        )
+        vals: dict[str, Any] = {"partner_id": pid, "tier": "member", "invite_id": inv["id"]}
+        if inv.get("guest_channel"):  # a channel's guest (guests.py): that channel, for N days
+            vals.update(
+                tier="guest",
+                guest_channel=inv["guest_channel"],
+                guest_days=int(inv.get("guest_days") or 30),
+                guest_inviter=inv.get("guest_inviter") or "",
+            )
+        pass_id = self._create("belfry.pass", vals)
         self._write(
             "belfry.invite",
             [inv["id"]],

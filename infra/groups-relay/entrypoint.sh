@@ -34,6 +34,8 @@ public_read = false
 [groups]
 enabled = true
 member_create = true
+# patch 0002: a channel's guests (put in it by Belfry, no pass) read and write there only
+guests = true
 
 [management]
 enabled = true

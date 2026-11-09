@@ -1,0 +1,264 @@
+From e62ee6bacae0c2252445956dbdfffd164eea3b76 Mon Sep 17 00:00:00 2001
+From: Belfry <belfry@localhost>
+Date: Mon, 9 Nov 2026 12:05:33 +0100
+Subject: [PATCH] Belfry: guests, a key put in a group without relay membership
+ reads and writes there only
+
+With [groups] guests = true, a key that isn't a relay member but whose latest
+kind 9000/9001 in a group is a 9000 may connect. It receives only its groups'
+events (their state events included) and profiles, and writes only in its
+groups (never moderation or creation) and its own profile. Anonymous readers
+and other non-members keep the existing rules.
+---
+ zooid/config.go      |  3 ++
+ zooid/groups.go      | 69 +++++++++++++++++++++++++++++++++++++++++
+ zooid/guests_test.go | 74 ++++++++++++++++++++++++++++++++++++++++++++
+ zooid/instance.go    | 15 +++++++--
+ 4 files changed, 159 insertions(+), 2 deletions(-)
+ create mode 100644 zooid/guests_test.go
+
+diff --git a/zooid/config.go b/zooid/config.go
+index 9ac7cd1..8266395 100644
+--- a/zooid/config.go
++++ b/zooid/config.go
+@@ -61,6 +61,9 @@ type Config struct {
+ 		Enabled bool `toml:"enabled" json:"enabled"`
+ 		// MemberCreate lets every relay member create groups; the creator administers the group.
+ 		MemberCreate bool `toml:"member_create" json:"member_create"`
++		// Guests lets a key that isn't a relay member but was put in a group (kind 9000) connect,
++		// and read and write in its groups only.
++		Guests bool `toml:"guests" json:"guests"`
+ 	} `toml:"groups" json:"groups"`
+ 
+ 	Push struct {
+diff --git a/zooid/groups.go b/zooid/groups.go
+index ddb3b67..1de985b 100644
+--- a/zooid/groups.go
++++ b/zooid/groups.go
+@@ -44,6 +44,7 @@ type GroupStore struct {
+ 	// Read for every group event a client queries or is broadcast
+ 	metadataCache   cache[string, groupMetadata]
+ 	membershipCache cache[groupMember, bool]
++	guestCache      cache[nostr.PubKey, []string]
+ }
+ 
+ type groupMetadata struct {
+@@ -282,6 +283,7 @@ func (g *GroupStore) AddMember(h string, pubkey nostr.PubKey) error {
+ 	}
+ 
+ 	defer g.membershipCache.invalidate()
++	defer g.guestCache.invalidate()
+ 
+ 	return g.Events.SignAndStoreEvent(&event, true)
+ }
+@@ -301,6 +303,7 @@ func (g *GroupStore) RemoveMember(h string, pubkey nostr.PubKey) error {
+ 	}
+ 
+ 	defer g.membershipCache.invalidate()
++	defer g.guestCache.invalidate()
+ 
+ 	return g.Events.SignAndStoreEvent(&event, true)
+ }
+@@ -516,6 +519,72 @@ func (g *GroupStore) CheckWrite(event nostr.Event) string {
+ func (g *GroupStore) InvalidateCaches() {
+ 	g.metadataCache.invalidate()
+ 	g.membershipCache.invalidate()
++	g.guestCache.invalidate()
++}
++
++// Guests
++
++// GuestGroups returns the groups a key was put in (its latest 9000/9001 per group is a 9000),
++// when guests are enabled. The relay lets such a key in even when it isn't a relay member,
++// and keeps it to these groups.
++func (g *GroupStore) GuestGroups(pubkey nostr.PubKey) []string {
++	if !g.Config.Groups.Enabled || !g.Config.Groups.Guests {
++		return nil
++	}
++
++	return g.guestCache.get(pubkey, func() []string {
++		filter := nostr.Filter{
++			Kinds: []nostr.Kind{nostr.KindSimpleGroupPutUser, nostr.KindSimpleGroupRemoveUser},
++			Tags:  nostr.TagMap{"p": []string{pubkey.Hex()}},
++		}
++
++		latest := map[string]nostr.Event{}
++
++		for event := range g.Events.QueryEvents(filter, 0) {
++			h := GetGroupIDFromEvent(event)
++			if prev, ok := latest[h]; !ok || event.CreatedAt > prev.CreatedAt {
++				latest[h] = event
++			}
++		}
++
++		groups := []string{}
++
++		for h, event := range latest {
++			if event.Kind == nostr.KindSimpleGroupPutUser {
++				groups = append(groups, h)
++			}
++		}
++
++		return groups
++	})
++}
++
++// GuestCanReceive: a guest gets the events of its groups (their state events included), and
++// profiles; nothing else on the relay.
++func (g *GroupStore) GuestCanReceive(pubkey nostr.PubKey, event nostr.Event) bool {
++	if event.PubKey == pubkey || event.Kind == nostr.KindProfileMetadata {
++		return true
++	}
++
++	h := GetGroupIDFromEvent(event)
++
++	return h != "" && slices.Contains(g.GuestGroups(pubkey), h)
++}
++
++// GuestCanWrite: a guest writes in its groups (never their moderation or creation), and its
++// own profile.
++func (g *GroupStore) GuestCanWrite(event nostr.Event) bool {
++	if event.Kind == nostr.KindProfileMetadata {
++		return true
++	}
++
++	if event.Kind == nostr.KindSimpleGroupCreateGroup || slices.Contains(ModerationEventKinds, event.Kind) {
++		return false
++	}
++
++	h := GetGroupIDFromEvent(event)
++
++	return h != "" && slices.Contains(g.GuestGroups(event.PubKey), h)
+ }
+ 
+ // Middleware
+diff --git a/zooid/guests_test.go b/zooid/guests_test.go
+new file mode 100644
+index 0000000..4698b84
+--- /dev/null
++++ b/zooid/guests_test.go
+@@ -0,0 +1,74 @@
++package zooid
++
++import (
++	"testing"
++
++	"fiatjaf.com/nostr"
++)
++
++// Belfry: a key put in one group, without relay membership, reads and writes there only.
++func TestGuests_OneGroupOnly(t *testing.T) {
++	instance := createTestInstance()
++	instance.Config.Groups.Enabled = true
++	instance.Config.Groups.Guests = true
++	createGroup(t, instance, "garden")
++	createGroup(t, instance, "council")
++
++	guest := nostr.Generate().Public()
++	member := nostr.Generate().Public()
++
++	if len(instance.Groups.GuestGroups(guest)) != 0 {
++		t.Fatal("a stranger is nobody's guest")
++	}
++	if err := instance.Groups.AddMember("garden", guest); err != nil {
++		t.Fatal(err)
++	}
++	if got := instance.Groups.GuestGroups(guest); len(got) != 1 || got[0] != "garden" {
++		t.Fatalf("GuestGroups = %v, want [garden]", got)
++	}
++
++	inGarden := nostr.Event{Kind: 9, PubKey: member, Tags: nostr.Tags{{"h", "garden"}}}
++	inCouncil := nostr.Event{Kind: 9, PubKey: member, Tags: nostr.Tags{{"h", "council"}}}
++	note := nostr.Event{Kind: 1, PubKey: member}
++	profile := nostr.Event{Kind: 0, PubKey: member}
++
++	if !instance.CanReceive(guest, inGarden) {
++		t.Error("the guest should read its group")
++	}
++	if instance.CanReceive(guest, inCouncil) {
++		t.Error("the guest must not read another group")
++	}
++	if instance.CanReceive(guest, note) {
++		t.Error("the guest must not read the relay's other events")
++	}
++	if !instance.CanReceive(guest, profile) {
++		t.Error("the guest should see profiles")
++	}
++
++	write := func(kind nostr.Kind, h string) bool {
++		e := nostr.Event{Kind: kind, PubKey: guest}
++		if h != "" {
++			e.Tags = nostr.Tags{{"h", h}}
++		}
++		return instance.Groups.GuestCanWrite(e)
++	}
++	if !write(9, "garden") || write(9, "council") || write(1, "") || write(nostr.KindSimpleGroupPutUser, "garden") {
++		t.Error("the guest writes in its group only, and never moderates")
++	}
++	if !write(0, "") {
++		t.Error("the guest may write its own profile")
++	}
++
++	if err := instance.Groups.RemoveMember("garden", guest); err != nil {
++		t.Fatal(err)
++	}
++	if len(instance.Groups.GuestGroups(guest)) != 0 {
++		t.Error("removed: no guest any more (OnRequest then turns the key away like any non-member)")
++	}
++
++	instance.Config.Groups.Guests = false
++	_ = instance.Groups.AddMember("garden", guest)
++	if len(instance.Groups.GuestGroups(guest)) != 0 {
++		t.Error("guests off: a group member without relay membership stays out")
++	}
++}
+diff --git a/zooid/instance.go b/zooid/instance.go
+index 6ba3382..e270fb9 100644
+--- a/zooid/instance.go
++++ b/zooid/instance.go
+@@ -259,6 +259,14 @@ func (instance *Instance) CanReceive(pubkey nostr.PubKey, event nostr.Event) boo
+ 		return true
+ 	}
+ 
++	// a guest (signed in, not a relay member, put in groups): its groups only. Anonymous
++	// readers (policy.anonymous_read) keep the rules below.
++	// (Other non-members never get a subscription: OnRequest turns them away.)
++	if pubkey != nostr.ZeroPK && !instance.Config.Policy.PublicRead && !instance.Management.HasAccess(pubkey) &&
++		len(instance.Groups.GuestGroups(pubkey)) > 0 && !instance.Groups.GuestCanReceive(pubkey, event) {
++		return false
++	}
++
+ 	if instance.Groups.IsGroupEvent(event) && !instance.Groups.CanRead(pubkey, event) {
+ 		return false
+ 	}
+@@ -343,6 +351,7 @@ func (instance *Instance) invalidateCachesFor(kind nostr.Kind) {
+ 	switch kind {
+ 	case nostr.KindSimpleGroupPutUser, nostr.KindSimpleGroupRemoveUser:
+ 		instance.Groups.membershipCache.invalidate()
++		instance.Groups.guestCache.invalidate()
+ 	case nostr.KindSimpleGroupMetadata:
+ 		instance.Groups.metadataCache.invalidate()
+ 	case RELAY_MEMBERS:
+@@ -371,7 +380,7 @@ func (instance *Instance) OnRequest(ctx context.Context, filter nostr.Filter) (r
+ 		return true, "auth-required: authentication is required for access"
+ 	}
+ 
+-	if !instance.Config.Policy.PublicRead && !instance.Management.HasAccess(pubkey) {
++	if !instance.Config.Policy.PublicRead && !instance.Management.HasAccess(pubkey) && len(instance.Groups.GuestGroups(pubkey)) == 0 {
+ 		return true, "restricted: you are not a member of this relay"
+ 	}
+ 
+@@ -462,7 +471,9 @@ func (instance *Instance) onEvent(ctx context.Context, event nostr.Event) (rejec
+ 	}
+ 
+ 	if !instance.Config.Policy.PublicWrite && !instance.Management.HasAccess(pubkey) {
+-		return true, "restricted: you are not a member of this relay"
++		if len(instance.Groups.GuestGroups(pubkey)) == 0 || !instance.Groups.GuestCanWrite(event) {
++			return true, "restricted: you are not a member of this relay"
++		}
+ 	}
+ 
+ 	if instance.Groups.IsGroupEvent(event) {
+-- 
+2.43.0
+
