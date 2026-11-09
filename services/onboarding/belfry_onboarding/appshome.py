@@ -104,7 +104,7 @@ a.app:hover{border-color:var(--accent)}
 .app img,.app .ph{width:48px;height:48px;border-radius:12px;flex:none}
 .app .ph{display:grid;place-items:center;background:var(--surface-deep);font-weight:600}
 .app b{display:block}.app span{color:var(--fg-muted);font-size:.9rem}
-.app .tag{display:inline-block;margin-top:6px;font-size:.78rem;color:var(--fg-faint)}
+.app .tag{display:block;margin-top:6px;font-size:.78rem;color:var(--fg-faint)}
 .app.more{border-style:dashed;align-items:flex-start}
 .app .add{margin-left:auto;align-self:center;font-size:.9rem;font-weight:600;padding:7px 12px;
 border-radius:10px;
@@ -144,7 +144,7 @@ def page(
     )
     more = "".join(
         f'<div class="app more">{_icon(x)}<div><b>{E(x["title"])}</b><span>{E(x["about"])}</span>'
-        + ('<span class="tag">Still in Open Source Village\'s look</span>' if x["osv_look"] else "")
+        + ('<span class="tag">Not restyled for Belfry yet</span>' if x["osv_look"] else "")
         + f'</div><a class="add" href="{E(console_url)}/apps/add?app={E(k)}">Add</a></div>'
         for k, x in EXTRAS.items()
         if k not in extras_on

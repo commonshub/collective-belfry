@@ -465,8 +465,8 @@ def register(app: Any) -> None:
                 services, who, app_, f"<h1>{_e(x['title'])}</h1><p>Already added: {_e(hosts)}.</p>"
             )
         look = (
-            "<p class=\"note\">It still wears Open Source Village's look: it hasn't been restyled to "
-            "Belfry's yet, and your theme doesn't reach it.</p>"
+            '<p class="note">It hasn\'t been restyled for Belfry yet: it keeps the colours and '
+            "top bar of the community it was first built for, and your theme doesn't reach it.</p>"
             if x["osv_look"]
             else ""
         )
