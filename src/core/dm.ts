@@ -124,6 +124,13 @@ async function load() {
   for (const id of (await kvGet<string[]>('dm-seen')) ?? []) seen.add(id)
   for (const [k, v] of Object.entries((await kvGet<Record<string, Report>>('dm-reports')) ?? {})) reports.set(k, v)
   read = (await kvGet<Record<string, number>>('dm-read')) ?? {}
+  // mail stored before threads: one conversation per address → one per subject
+  for (const d of items.values()) {
+    if (!isNewMail(d.conv)) continue
+    const conv = mailThreadOf(mailAddress(d.conv), d.subject)
+    if (read[d.conv] && !read[conv]) read[conv] = read[d.conv]
+    d.conv = conv
+  }
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -139,6 +146,27 @@ function save() {
 
 const tag = (e: { tags: string[][] }, n: string) => e.tags.find((t) => t[0] === n)?.[1]
 const tagsOf = (e: { tags: string[][] }, n: string) => e.tags.filter((t) => t[0] === n).map((t) => t[1])
+
+// ---- e-mail threads ---------------------------------------------------------------
+// Every e-mail thread is a conversation of its own, named after its subject (like a thread in a
+// channel): "m:<address>|<subject key>". "m:<address>" alone is a new e-mail to that address,
+// which becomes a thread once sent. A mail arriving joins the thread its In-Reply-To or
+// References name, else the one with the same subject (Re:, Fwd: … aside), else starts one.
+const PREFIX = /^\s*((re|fwd?|aw|sv|tr|wg|antw|rif|r)\s*(\[\d+\])?\s*:\s*)+/i
+export const baseSubject = (s?: string) => (s ?? '').replace(PREFIX, '').trim()
+const subjectKey = (s?: string) => encodeURIComponent(baseSubject(s).toLowerCase().replace(/\s+/g, ' ')) || '-'
+export const mailAddress = (conv: Conv) => conv.slice(2).split('|')[0]
+export const mailThreadOf = (address: string, subject?: string): Conv => `m:${address.toLowerCase()}|${subjectKey(subject)}`
+export const isNewMail = (conv: Conv) => conv.startsWith('m:') && !conv.includes('|')
+const msgIds = (v?: string) => (v ?? '').match(/<[^<>\s]+>/g) ?? []
+
+/** The thread an e-mail belongs to: the one its In-Reply-To/References point at, else its subject's. */
+function mailConv(address: string, subject: string | undefined, refs: string[]): Conv {
+  for (const id of refs.reverse()) {
+    for (const d of items.values()) if (d.messageId === id && d.conv.startsWith('m:') && mailAddress(d.conv) === address) return d.conv
+  }
+  return mailThreadOf(address, subject)
+}
 
 function convOf(rumor: NostrEvent, bridgePk?: string): Conv {
   const self = me()
@@ -178,7 +206,8 @@ async function fromRumor(rumor: NostrEvent): Promise<Dm | null> {
     d.messageId = m.headers.get('message-id')
     d.references = m.headers.get('references')
     d.attachments = m.attachments.map((a) => ({ name: a.name, type: a.type, size: a.data.length }))
-  }
+    if (d.conv.startsWith('m:')) d.conv = mailConv(mailAddress(d.conv), d.subject, [...msgIds(d.references), ...msgIds(m.headers.get('in-reply-to'))])
+  } else if (d.conv.startsWith('m:')) d.conv = mailThreadOf(mailAddress(d.conv), d.subject)
   return d
 }
 
@@ -266,12 +295,15 @@ export const unreadTotal = () => threads().reduce((n, t) => n + (t.unread ? 1 : 
 export const thread = (conv: Conv) => [...items.values()].filter((d) => d.conv === conv).sort((a, b) => a.at - b.at)
 export const report = (emailId?: string) => (emailId ? reports.get(emailId) : undefined)
 export const isMail = (conv: Conv) => conv.startsWith('m:')
+/** A mail thread's name: its subject (without Re:/Fwd:). */
+export const threadName = (conv: Conv) => baseSubject(thread(conv).find((d) => d.subject)?.subject) || '(no subject)'
 export const peers = (conv: Conv) => (conv.startsWith('n:') ? conv.slice(2).split(',') : [])
 
 export function convName(conv: Conv): string {
   if (isMail(conv)) {
-    const named = thread(conv).find((d) => !d.mine && d.fromName)?.fromName
-    return named ? `${named}` : conv.slice(2)
+    const a = mailAddress(conv)
+    const named = [...items.values()].find((d) => !d.mine && d.fromName && d.conv.startsWith('m:') && mailAddress(d.conv) === a)?.fromName
+    return named ? `${named}` : a
   }
   return peers(conv).map((p) => displayName(p)).join(', ')
 }
@@ -333,16 +365,20 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
   if (!myAddress) throw new Error('You have no address here yet (name@domain).')
-  const to = conv.slice(2)
-  const before = thread(conv).filter((d) => !d.mine).at(-1)
-  const subj = subject?.trim() || (before?.subject ? (/^re:/i.test(before.subject) ? before.subject : `Re: ${before.subject}`) : '(no subject)')
-  const { raw } = buildMail({
+  const to = mailAddress(conv)
+  const fresh = isNewMail(conv)
+  // in a thread: answer its last mail (theirs or mine), Re: its subject; new: a thread of its own
+  const before = fresh ? undefined : thread(conv).filter((d) => d.kind === 1301).at(-1)
+  const base = fresh ? (subject?.trim() || '(no subject)') : baseSubject(before?.subject) || '(no subject)'
+  const subj = fresh || !before ? base : `Re: ${base}`
+  const { raw, messageId } = buildMail({
     fromName: realName(me()) || myAddress.split('@')[0], from: myAddress, to, subject: subj, text,
     inReplyTo: before?.messageId, references: before?.references, domain: BELFRY.domain,
   })
+  const target = fresh ? mailThreadOf(to, subj) : conv
   const emailId = crypto.randomUUID()
   const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', myAddress], ['rcpt-to', to], ['subject', subj]], raw)
-  items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 1301, text, subject: subj, emailId, raw, pending: true })
+  items.set(rumor.id, { rid: rumor.id, conv: target, from: me(), mine: true, at: rumor.created_at, kind: 1301, text, subject: subj, emailId, raw, messageId, references: before ? [before.references, before.messageId].filter(Boolean).join(' ') : undefined, pending: true })
   reports.set(emailId, { status: 'queued', details: 'Sending…' })
   save()
   try {
@@ -356,6 +392,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
     save()
   }
   if (!isLocalOnly()) for (const wait of [3000, 10000, 30000]) setTimeout(() => void checkReports(), wait)
+  return target
 }
 
 /** The bridge's delivery reports (kind 7679) for my e-mails that have none yet. */

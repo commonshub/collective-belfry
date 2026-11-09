@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { address, attachmentsOf, checkReports, convFor, convName, isMail, markRead, peers, report, sendDm, thread, threads, type Conv, type Dm } from '../core/dm'
+import { MailIcon } from './icons'
+import { address, attachmentsOf, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, report, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -13,7 +14,7 @@ const enc = (c: Conv) => encodeURIComponent(c)
 
 function Who({ conv, size = 40 }: { conv: Conv; size?: number }) {
   if (!isMail(conv)) return <Avatar pubkey={peers(conv)[0]} size={size} />
-  return <span className="mail-avatar" style={{ width: size, height: size }} aria-hidden="true">✉</span>
+  return <span className="mail-avatar" style={{ width: size, height: size }} aria-hidden="true"><MailIcon /></span>
 }
 
 export function MessagesList() {
@@ -38,8 +39,8 @@ export function MessagesList() {
           <button key={t.conv} className="chan dm-row" onClick={() => go('dm/' + enc(t.conv))}>
             <Who conv={t.conv} size={36} />
             <span className="t">
-              <b>{convName(t.conv)}</b>
-              <small>{t.last.mine ? 'You: ' : ''}{t.last.kind === 1301 && t.last.subject ? `${t.last.subject} · ` : ''}{t.last.text.split('\n')[0]}</small>
+              <b>{isMail(t.conv) ? threadName(t.conv) : convName(t.conv)}</b>
+              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{t.last.text.split('\n')[0]}</small>
             </span>
             <span className="dm-meta">
               <time>{fmtTime(t.last.at)}</time>
@@ -98,18 +99,22 @@ export function MessageThread({ conv }: { conv: Conv }) {
   useEffect(() => { markRead(conv) }, [conv, list.length])
   useEffect(() => { if (mail) void checkReports() }, [conv])
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [list.length])
-  const sub = mail ? `E-mail · ${conv.slice(2)}` : peers(conv).map((p) => profiles().get(p)?.nip05).filter(Boolean).join(', ')
+  const addr = mail ? mailAddress(conv) : ''
+  const who = mail ? convName(conv) : ''
+  const sub = mail ? (who !== addr ? `${who} · ${addr}` : `E-mail · ${addr}`) : peers(conv).map((p) => profiles().get(p)?.nip05).filter(Boolean).join(', ')
+  const title = mail ? (isNewMail(conv) ? `New e-mail to ${who}` : threadName(conv)) : convName(conv)
   let day = ''
   return (
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Messages" onClick={() => go('dm')}>‹</button>
         <Who conv={conv} size={30} />
-        <h1>{convName(conv)}{sub && <small>{sub}</small>}</h1>
+        <h1>{title}{sub && <small>{sub}</small>}</h1>
+        {mail && !isNewMail(conv) && <button className="icon-btn" aria-label={`New e-mail to ${who}`} title="New e-mail (a new thread)" onClick={() => go('dm/' + enc('m:' + addr))}>＋</button>}
       </div>
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
-          {list.length === 0 && <div className="empty">{mail ? `Write an e-mail to ${conv.slice(2)}. It goes out from ${address() || 'your address here'}; answers land here.` : 'No messages yet. Only you two can read them.'}</div>}
+          {list.length === 0 && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
           {list.map((d) => {
             const dd = fmtDay(new Date(d.at * 1000))
             const sep = dd !== day ? (day = dd) : ''
@@ -117,7 +122,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
           })}
         </div>
       </div>
-      <DmComposer conv={conv} needsSubject={mail && !list.some((d) => d.subject)} />
+      <DmComposer conv={conv} needsSubject={isNewMail(conv)} />
     </div>
   )
 }
@@ -180,7 +185,12 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     const t = text.trim()
     if (!t) return
     setText(''); setError('')
-    try { await sendDm(conv, t, needsSubject ? subject : undefined); setSubject('') } catch (e) {
+    if (needsSubject && !subject.trim()) { setText(t); setError('Give it a subject: it names the thread.'); return }
+    try {
+      const target = await sendDm(conv, t, needsSubject ? subject : undefined)
+      setSubject('')
+      if (target && target !== conv) go('dm/' + enc(target)) // a new e-mail: its thread
+    } catch (e) {
       setText(t); setError(e instanceof Error ? e.message : String(e))
     }
   }

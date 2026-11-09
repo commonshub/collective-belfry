@@ -1,17 +1,18 @@
-// Invite people to a channel: its link (members open it directly) and QR code; a channel's admin
-// can make it a guest link instead: whoever uses it joins this channel only, for 30 days, without
+// Invite people to a channel: its link (members open it directly) and QR code; any member can
+// make it a guest link instead: whoever uses it joins this channel only, for 30 days, without
 // a membership (Belfry's /api/channel-invites, guests.py). The chat then shows
 // "<name> joined as a guest, invited by <you>".
 import { useMemo, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY } from '../config'
 import { channelIcon, group } from '../core/model'
-import { me, signedFetch } from '../core/sync'
+import { signedFetch } from '../core/sync'
 import { Sheet } from './common'
 
 export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const g = group(id)
-  const admin = !!g?.admins.has(me())
+  // every member may bring a guest (Belfry checks they hold a membership, not a guest pass)
+  const admin = true
   const [guest, setGuest] = useState(false)
   const [guestUrl, setGuestUrl] = useState('')
   const [busy, setBusy] = useState(false)
@@ -67,7 +68,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
           <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>
             {guest
               ? 'One person uses this link: they give their name and e-mail, and join for 30 days. Everyone here sees who invited them.'
-              : `Members open ${label} with this link. Someone who isn't a member yet needs ${admin ? 'a guest link (above) or ' : ''}an invite to ${BELFRY.domain}.`}
+              : `Members open ${label} with this link. For someone who isn't a member yet, turn on guest access above.`}
           </p>
         </>
       )}
