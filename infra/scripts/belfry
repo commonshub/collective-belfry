@@ -748,7 +748,8 @@ shipped_apps() {
     [[ -e "$APPS_DIR/_removed/$name" ]] && continue
     if [[ -d "$APPS_DIR/$name" ]]; then
       have=$(cat "$APPS_DIR/$name/.build" 2>/dev/null || true)
-      [[ -n "$have" && "$have" != "$(cat "$src/.build" 2>/dev/null)" ]] || continue  # own build, or current
+      [[ -n "$have" ]] || continue  # an admin's own build
+      if [[ "$have" == "$(cat "$src/.build" 2>/dev/null)" ]] && grep -q /theme/custom/own.css "$APPS_DIR/$name/index.html"; then continue; fi
       say "Updating the shipped app $name"
     else
       say "Installing the shipped app $name at apps.$(env_get BELFRY_DOMAIN)/$name/"
