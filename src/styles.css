@@ -298,8 +298,17 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 .reactions button { font-size: 13px; padding: 2px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
 .reactions button span { font-size: 15px; }
 .reactions button.on { border-color: var(--accent); color: var(--text); font-weight: 600; }
-.react-btn { display: none; position: absolute; right: 10px; top: 2px; width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 16px; }
-@media (hover: hover) and (pointer: fine) { .msg:hover .react-btn { display: grid; place-items: center; } }
+/* add a reaction: where the reactions sit, just under the message. With reactions it is one more
+   pill in their row; without, a pill that floats in that place on hover (nothing moves). */
+.reactions .react-add { display: inline-grid; place-items: center; padding: 2px 8px; height: 26px; color: var(--muted); }
+.reactions .react-add:hover { color: var(--text); border-color: var(--muted); }
+.reactions.none { height: 0; margin: 0; position: relative; }
+.reactions.none .react-add { position: absolute; left: 0; top: 2px; z-index: 2; background: var(--bg); }
+@media (hover: hover) and (pointer: fine) {
+  .reactions .react-add { visibility: hidden; }
+  .msg:hover .reactions .react-add, .reactions .react-add:focus-visible { visibility: visible; }
+}
+@media not ((hover: hover) and (pointer: fine)) { .reactions.none { display: none; } }
 .emoji-row { display: flex; justify-content: space-between; gap: 4px; }
 .emoji-row button, .emoji-grid button { font-size: 26px; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; }
 .emoji-row button.on, .emoji-grid button.on { background: var(--surface-2, var(--surface)); outline: 1px solid var(--accent); }
@@ -638,3 +647,57 @@ a.chip { text-decoration: none; color: inherit; }
 .save-bar .close { font-size: 14px; color: var(--muted); background: none; border: 0; padding: 4px; }
 .save-bar .error { width: 100%; margin: 0; font-size: 13px; }
 .save-bar.done { justify-content: space-between; background: color-mix(in srgb, var(--ok, #16a34a) 12%, var(--bg)); }
+
+/* ---- laptop: dialogs in the middle, not sheets from the bottom ---- */
+dialog.modal { border: 1px solid var(--line); border-radius: 16px; padding: 18px 20px 20px; width: min(520px, calc(100vw - 48px)); max-height: min(85vh, 860px); overflow-y: auto; background: var(--bg); color: var(--text); box-shadow: 0 24px 64px rgba(0, 0, 0, .22); }
+dialog.modal::backdrop { background: rgba(9, 9, 11, 0.4); }
+dialog.modal[open] { animation: modal-in .16s ease-out; }
+@keyframes modal-in { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { dialog.modal[open] { animation: none; } }
+dialog.modal .modal-head { display: flex; align-items: center; gap: 8px; margin: 0 0 14px; }
+dialog.modal .modal-head h3 { flex: 1; margin: 0; font-size: 18px; }
+dialog.modal .modal-close { width: 32px; height: 32px; border-radius: 8px; border: 0; background: transparent; color: var(--muted); display: grid; place-items: center; }
+dialog.modal .modal-close:hover { background: var(--surface); color: var(--text); }
+
+/* ---- people: tap a face or a name for their page ---- */
+.msg .face, .member .member-open, .chead-people .face { border: 0; padding: 0; background: none; border-radius: 99px; cursor: pointer; flex: none; }
+.msg .who-name, .member .member-name { border: 0; padding: 0; background: none; font: inherit; font-weight: inherit; color: inherit; cursor: pointer; text-align: left; }
+.msg .who-name:hover, .member .member-name:hover { text-decoration: underline; }
+.member .member-name { font-weight: 600; display: block; }
+.member .member-labels { border: 0; padding: 0; background: none; text-align: left; cursor: pointer; display: block; margin-top: 2px; }
+.member .member-place { font-size: 13px; }
+button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
+.profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
+.profile-name { font-size: 22px; font-weight: 700; line-height: 1.2; }
+.profile-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.profile-place { display: flex; gap: 6px; align-items: center; color: var(--muted); margin-bottom: 8px; }
+.profile-about { margin: 8px 0; }
+.profile-tags { display: flex; flex-wrap: wrap; margin: 8px 0; }
+.profile-chan { display: block; padding: 4px 0; text-align: left; }
+.tag-box { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-height: 44px; }
+.tag-box:focus-within { border-color: var(--text); }
+.tag-box .chip button { border: 0; background: none; color: inherit; padding: 0 0 0 4px; font-size: 14px; cursor: pointer; }
+.tag-input { flex: 1; min-width: 120px; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; padding: 6px 4px; }
+.suggest { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-top: 4px; background: var(--bg); }
+.suggest:empty { display: none; }
+.suggest button { display: flex; justify-content: space-between; gap: 12px; border: 0; border-bottom: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; text-align: left; padding: 10px 12px; cursor: pointer; }
+.suggest button:last-child { border-bottom: 0; }
+.suggest button small { color: var(--muted); }
+.suggest button.on, .suggest button:hover { background: var(--surface); }
+.suggest .add-place { color: var(--text); font-weight: 600; }
+.place-field { border: 0; padding: 0; margin: 0 0 14px; min-width: 0; }
+.place-field legend { font-size: 13px; color: var(--muted); padding: 0; margin-bottom: 6px; }
+.new-place { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; }
+.members-map { height: 240px; margin: 8px 16px 12px; border-radius: 12px; overflow: hidden; border: 1px solid var(--line); background: var(--surface); z-index: 0; }
+.map-dot { display: grid !important; place-items: center; border-radius: 99px; background: var(--accent, #18181b); color: var(--on-accent, #fff); font: 700 13px/1 Inter, system-ui, sans-serif; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.3); }
+.map-pop { display: flex; flex-direction: column; gap: 4px; min-width: 120px; }
+.map-pop .link { text-align: left; }
+
+/* ---- the channel blind: same tabs and first lines short and full ---- */
+.summary { padding-top: 10px; padding-bottom: 6px; }
+.summary .chead-about { margin: 0 0 10px; }
+.summary.short .chead-about { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.summary.short .chead-about > * { margin: 0; }
+.summary .chead-people { display: flex; align-items: center; gap: 2px; border: 0; background: none; padding: 2px 0 2px 6px; cursor: pointer; }
+.summary-task { font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--line); }
+.chead-more { display: block; margin: 2px 16px 26px; font-size: 13px; }

@@ -41,3 +41,18 @@ export const GearIcon = () => (
 )
 
 export const SearchIcon = () => <Svg><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></Svg>
+
+/** Add a reaction: a smile with a small plus. */
+export const SmilePlusIcon = () => (
+  <Svg size={18}>
+    <path d="M21 11.5V12a9 9 0 1 1-9-9h.5" />
+    <path d="M8.5 14.5s1.3 1.5 3.5 1.5 3.5-1.5 3.5-1.5M9 9.5h.01M15 9.5h.01" />
+    <path d="M19 2v6M16 5h6" />
+  </Svg>
+)
+
+export const PinIcon = () => (
+  <Svg size={16}><path d="M12 21s-7-6.1-7-11.5a7 7 0 0 1 14 0C19 14.9 12 21 12 21Z" /><circle cx="12" cy="9.5" r="2.5" /></Svg>
+)
+
+export const CloseIcon = () => <Svg size={18}><path d="M18 6 6 18M6 6l12 12" /></Svg>

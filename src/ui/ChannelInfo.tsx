@@ -1,4 +1,9 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
+import { extras, placeLabel } from '../core/people'
+import { Markdown } from './markdown'
+import { openProfile } from './Profile'
+
+const MembersMap = lazy(() => import('./MembersMap'))
 import { setInbox } from '../core/actions'
 import { isInbox } from '../core/model'
 import { BELFRY } from '../config'
@@ -35,6 +40,7 @@ export function ChannelInfoBody({ id, tab, setTab }: { id: string; tab: Tab; set
     <>
       <Tabs tab={tab} setTab={setTab} />
       <div className="scroll">
+        <Summary id={id} tab={tab} open={setTab} />
         {tab === 'about' && <About id={id} />}
         {tab === 'tasks' && <Tasks groupId={id} />}
         {tab === 'members' && <Members groupId={id} />}
@@ -65,10 +71,6 @@ function About({ id }: { id: string }) {
   if (!g) return null
   return (
     <div className="pad">
-      <div className="card">
-        <div className="hint" style={{ marginBottom: 4 }}>Description</div>
-        <div style={{ whiteSpace: 'pre-wrap' }}>{g.about || <span className="hint">No description yet.</span>}</div>
-      </div>
       {g.isPod && (
         <div className="card">
           <div className="hint">Pod in</div>
@@ -112,7 +114,7 @@ function About({ id }: { id: string }) {
             setEditing(false)
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
-            <label className="field"><span>Description</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+            <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
             {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
             <label className="switch-row">
               <span><b>E-mails from anyone</b><small>Mail to {g.id}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
@@ -194,6 +196,9 @@ export function Members({ groupId }: { groupId: string }) {
   const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
   // guests (people or agents) and who brought them in: whose agent it is
   const invited = new Map(guestJoins(groupId).map((j) => [j.pubkey, j]))
+  const ex = extras()
+  const mapped = members.filter((p) => ex.get(p)?.place?.lat !== undefined)
+  const isMember = !groups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me())
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
@@ -209,21 +214,28 @@ export function Members({ groupId }: { groupId: string }) {
         </div>
       ))}
       {reviewing.length > 0 && <div className="section-title">Members <span>{g?.members.size}</span></div>}
+      <Suspense fallback={<div className="members-map" />}>
+        {mapped.length > 0
+          ? <MembersMap pubkeys={members} onOpen={openProfile} />
+          : <p className="hint pad-x">Nobody here shares their city yet. {isMember ? <button className="link" onClick={() => openProfile(me())}>Add yours</button> : null}</p>}
+      </Suspense>
       {members.map((p) => (
-        <button key={p} className="member" onClick={() => setEditing(p)}>
-          <Avatar pubkey={p} />
+        <div key={p} className="member">
+          <button className="member-open" onClick={() => openProfile(p)} aria-label={`${displayName(p)}: profile`}><Avatar pubkey={p} /></button>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 600 }}>{displayName(p)}</div>
+            <button className="member-name" onClick={() => openProfile(p)}>{displayName(p)}</button>
+            {ex.get(p)?.place && <div className="hint member-place">{placeLabel(ex.get(p)!.place)}</div>}
             {invited.get(p) && (
               <div className="hint invited-by">
                 <span className="chip">{invited.get(p)!.agent ? 'agent' : invited.get(p)!.unsaved ? 'guest · not saved' : 'guest'}</span>
                 {invited.get(p)!.by ? <>invited by <b>{displayName(invited.get(p)!.by!)}</b></> : null}
               </div>
             )}
-            <div>{(labels.get(p) ?? []).map((l) => <span key={l} className="chip on">{l}</span>)}
-              {!(labels.get(p) ?? []).length && <span className="hint" style={{ fontSize: 13 }}>Add a label</span>}</div>
+            <button className="member-labels" onClick={() => setEditing(p)} aria-label={`Labels for ${displayName(p)} in this channel`}>
+              {(labels.get(p) ?? []).map((l) => <span key={l} className="chip on">{l}</span>)}
+              {!(labels.get(p) ?? []).length && <span className="hint" style={{ fontSize: 13 }}>Add a label</span>}</button>
           </div>
-        </button>
+        </div>
       ))}
       {editing && <LabelEditor groupId={groupId} pubkey={editing} current={labels.get(editing) ?? []} vocab={vocab} onClose={() => setEditing(null)} />}
     </div>
@@ -290,6 +302,62 @@ function ActiveCard({ id }: { id: string }) {
         </div>
       ))}
       <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>Opening a channel tells its members you saw it (at most every few hours).</div>
+    </div>
+  )
+}
+
+// ---- the top of each tab: the same few lines in the pulled-down header (short) and here (full),
+// so pulling further only reveals more under them, like a blind ---------------------------------
+
+export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab; open: (t: Tab) => void; short?: boolean }) {
+  useVersion()
+  const g = groups().find((x) => x.id === id)
+  if (!g) return null
+  const media = messages(id).flatMap((m) => m.media).reverse()
+  const photos = media.filter((m) => m.mime.startsWith('image/'))
+  const files = media.length - photos.length
+  const active = recentlyActive(id)
+  const n = short ? 8 : 14
+  if (tab === 'about') return (
+    <div className={'summary pad-x' + (short ? ' short' : '')}>
+      {g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint chead-about">No description yet.</p>}
+      {active.length > 0 && (
+        <button className="chead-people" onClick={() => open('members')} aria-label={`${active.length} active this month: see the members`}>
+          {active.slice(0, n).map((a) => <Avatar key={a.pubkey} pubkey={a.pubkey} size={28} />)}
+          {active.length > n && <span className="more">+{active.length - n}</span>}
+          <span className="hint" style={{ fontSize: 13, marginLeft: 8 }}>{active.length} active this month</span>
+        </button>
+      )}
+    </div>
+  )
+  if (tab === 'members') {
+    const all = [...g.members]
+    return (
+      <div className={'summary pad-x' + (short ? ' short' : '')}>
+        <div className="chead-people">
+          {all.slice(0, n).map((p) => <button key={p} className="face" onClick={() => openProfile(p)} aria-label={displayName(p)}><Avatar pubkey={p} size={28} /></button>)}
+          {all.length > n && <span className="more">+{all.length - n}</span>}
+          <span className="hint" style={{ fontSize: 13, marginLeft: 8 }}>{all.length} {all.length === 1 ? 'member' : 'members'}</span>
+        </div>
+      </div>
+    )
+  }
+  if (tab === 'files') return (
+    <div className={'summary pad-x' + (short ? ' short' : '')}>
+      {media.length === 0 ? <p className="hint">No photos or files yet.</p> : (
+        <div className="chead-media">
+          {photos.slice(0, short ? 6 : 12).map((m) => <span key={m.url} className="thumb"><img src={m.url} alt={m.name || 'Photo'} loading="lazy" /></span>)}
+          <span className="chip">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}{files ? ` · ${files} ${files === 1 ? 'file' : 'files'}` : ''}</span>
+        </div>
+      )}
+    </div>
+  )
+  const { tasks } = tasklist(id)
+  const todo = tasks.filter((t) => !t.done)
+  return (
+    <div className={'summary pad-x' + (short ? ' short' : '')}>
+      <p className="hint" style={{ margin: 0 }}>{todo.length} open · {tasks.length - todo.length} done</p>
+      {short && todo.slice(0, 2).map((t) => <div key={t.id} className="summary-task">{t.title}</div>)}
     </div>
   )
 }

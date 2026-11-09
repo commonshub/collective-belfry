@@ -14,12 +14,13 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon } from './icons'
+import { CalendarIcon, GearIcon, MailIcon, MenuIcon, SearchIcon, SmilePlusIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
 import { guestInfo, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
+import { openProfile } from './Profile'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
@@ -484,23 +485,24 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
         }}
         onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
-        {first || announce || mail ? <Avatar pubkey={m.ev.pubkey} /> : <div className="gutter" />}
+        {first || announce || mail ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail) && <div className="who">{name}<time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
           {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
-          {rx.length > 0 && (
-            <div className="reactions">
+          {(rx.length > 0 || !p) && (
+            <div className={'reactions' + (rx.length ? '' : ' none')}>
               {rx.map((r) => (
                 <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
                   onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
                   <span>{r.emoji}</span> {r.who.size}
                 </button>
               ))}
+              {!p && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={onAct}><SmilePlusIcon /></button>}
             </div>
           )}
           {thread && thread.count > 0 && onThread && (
@@ -514,7 +516,6 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           )}
           {p && p.status === 'queued' && <div className="state">{p.tries ? 'Waiting for connection…' : 'Sending…'}</div>}
         </div>
-        {!p && <button className="react-btn" aria-label="React" onClick={onAct}>☺</button>}
       </div>
     </>
   )

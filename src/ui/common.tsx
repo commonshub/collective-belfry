@@ -1,5 +1,7 @@
 import { Drawer } from 'vaul'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { CloseIcon } from './icons'
 import { db } from '../core/db'
 import { displayName, profiles, type Media } from '../core/model'
 import { outboxItems, status, useVersion } from '../core/store'
@@ -94,6 +96,8 @@ export function MediaGrid({ media }: { media: Media[] }) {
 /** A bottom drawer (Vaul, what shadcn/ui's Drawer is built on): slide it down, tap outside or
  *  press Escape to close it. */
 export function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const wide = useWide()
+  if (wide) return <Modal title={title} onClose={onClose}>{children}</Modal>
   return (
     <Drawer.Root open onOpenChange={(open) => { if (!open) onClose() }}>
       <Drawer.Portal>
@@ -106,6 +110,47 @@ export function Sheet({ title, onClose, children }: { title: string; onClose: ()
       </Drawer.Portal>
     </Drawer.Root>
   )
+}
+
+/** On a laptop the same content opens as a dialog in the middle (native <dialog>: focus kept
+ *  inside, Escape closes, the page behind is inert); a click on the backdrop closes it too. */
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const d = ref.current
+    if (!d) return
+    if (!d.open) d.showModal()
+    const onCancel = (e: Event) => { e.preventDefault(); closeRef.current() }
+    d.addEventListener('cancel', onCancel)
+    return () => { d.removeEventListener('cancel', onCancel); if (d.open) d.close() }
+  }, [])
+  const titleId = useId()
+  return createPortal(
+    <dialog ref={ref} className="modal" aria-labelledby={titleId}
+      onMouseDown={(e) => { if (e.target === ref.current) closeRef.current() }}>
+      <div className="modal-head">
+        <h3 id={titleId}>{title}</h3>
+        <button type="button" className="modal-close" aria-label="Close" onClick={() => closeRef.current()}><CloseIcon /></button>
+      </div>
+      {children}
+    </dialog>,
+    document.body,
+  )
+}
+
+/** True on a laptop-wide window: the channel list stays beside the conversation, sheets are dialogs. */
+export function useWide() {
+  const q = '(min-width: 900px)'
+  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(q).matches)
+  useEffect(() => {
+    const m = matchMedia(q)
+    const on = () => setWide(m.matches)
+    m.addEventListener('change', on)
+    return () => m.removeEventListener('change', on)
+  }, [])
+  return wide
 }
 
 // ---- sync status -----------------------------------------------------------------

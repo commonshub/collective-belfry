@@ -327,8 +327,11 @@ function filters(target: Target): Filter[] {
   const p = signer.pubkey
   const wrapsSince = Math.max(0, latestCreatedAt((e) => e.kind === 1059) - 3 * 86400)
   const oldSince = Math.max(0, latestCreatedAt((e) => e.kind === 4) - 3600)
+  // members' tags and places (people.ts): one replaceable event each, members-only relay
+  const extrasSince = Math.max(0, latestCreatedAt((e) => e.kind === 30078 && e.tags.some((t) => t[0] === 'd' && t[1] === 'belfry:profile')) - 3600)
   return [
     { kinds, since, limit: 2000 },
+    { kinds: [30078], '#d': ['belfry:profile'], since: extrasSince, limit: 2000 },
     { kinds: [1059], '#p': [p], since: wrapsSince, limit: 1000 },
     { kinds: [4], '#p': [p], since: oldSince, limit: 500 },
     { kinds: [4], authors: [p], since: oldSince, limit: 500 },

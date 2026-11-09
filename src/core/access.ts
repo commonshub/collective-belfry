@@ -51,6 +51,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
 // The community's admins (belfry.json "admins"): admins of every channel too, without being
 // listed as its members (zooid patch 0003 lets the relay take their moderation).
 let belfryAdmins: string[] = []
+export const belfryAdminKeys = () => belfryAdmins
 export const isAdmin = () => !!info?.admins.includes(me()) || belfryAdmins.includes(me())
 /** May I administer this channel: its own admins, and the community's. */
 export const canAdmin = (g?: { admins: Set<string> }) => !!g && (g.admins.has(me()) || isAdmin())

@@ -18,7 +18,8 @@ import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
 import { demoInboxMail, demoMailPost } from './MailPost'
-import { Avatar, back, go, useRoute } from './common'
+import { Avatar, back, go, useRoute, useWide } from './common'
+import { openProfile, ProfileView } from './Profile'
 import { dropCode, MembershipScreen, WelcomeScreen } from './Login'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
@@ -91,7 +92,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoPeople })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -133,6 +134,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
+  else if (section === 'u') view = <ProfileView id={a} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
     view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
@@ -147,19 +149,6 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
       <main className="main screen">{view}</main>
     </div>
   )
-}
-
-/** True on a laptop-wide window: the channel list stays open beside the conversation. */
-function useWide() {
-  const q = '(min-width: 900px)'
-  const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(q).matches)
-  useEffect(() => {
-    const m = matchMedia(q)
-    const on = () => setWide(m.matches)
-    m.addEventListener('change', on)
-    return () => m.removeEventListener('change', on)
-  }, [])
-  return wide
 }
 
 function lastChannel() {
@@ -196,11 +185,12 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
               try { await setAvatar(f) } catch (x) { setAvatarError(x instanceof Error ? x.message : String(x)) } finally { setAvatarBusy(false) }
             }} />
           </label>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontWeight: 650 }}>{p?.name ?? session.email ?? 'Villager'}</div>
             <div className="hint" style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{m.nip05 ?? p?.nip05 ?? ''}</div>
             {avatarError && <div className="error" style={{ margin: '4px 0 0' }}>{avatarError}</div>}
           </div>
+          <button className="btn small ghost" onClick={() => openProfile(me())}>Your profile</button>
         </div>
         {THEME !== 'belfry' && (
         <div className="card">
@@ -243,4 +233,25 @@ function demoGuestJoin(channel: string, name: string) {
   const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
   addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
     tags: [['h', channel], ['p', hex(32), 'member'], ['invited-by', me()], ['name', name], ['guest', '']] }])
+}
+
+/** Demo only: three members of CHANNEL with a profile, tags and a city (people.ts). */
+function demoPeople(channel = 'general') {
+  const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const now = Math.floor(Date.now() / 1000)
+  const people = [
+    { name: 'Ana', tags: ['facilitation', 'retreats'], place: { id: 'gn:2800866', name: 'Brussels', country: 'BE', lat: 50.85, lon: 4.35 } },
+    { name: 'Ben', tags: ['finance', 'facilitation'], place: { id: 'gn:2800866', name: 'Brussels', country: 'BE', lat: 50.85, lon: 4.35 } },
+    { name: 'Rua', tags: ['software'], place: { id: 'gn:2179537', name: 'Wellington', country: 'NZ', lat: -41.29, lon: 174.78 } },
+  ]
+  const evs = people.flatMap((p) => {
+    const pk = hex(32)
+    return [
+      { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now, tags: [], content: JSON.stringify({ name: p.name, about: `Hi, I'm ${p.name}.` }) },
+      { id: hex(32), pubkey: pk, sig: hex(64), kind: 30078, created_at: now, tags: [['d', 'belfry:profile']], content: JSON.stringify({ tags: p.tags, share: 'city', place: p.place }) },
+      { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, created_at: now, content: '', tags: [['h', channel], ['p', pk, 'member']] },
+      { id: hex(32), pubkey: pk, sig: hex(64), kind: 9, created_at: now, content: `Hello from ${p.place.name}`, tags: [['h', channel]] },
+    ]
+  })
+  addEvents(evs)
 }

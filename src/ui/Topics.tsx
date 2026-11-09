@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react'
+import { openProfile } from './Profile'
 import { setTopics } from '../core/actions'
 import { nip19 } from 'nostr-tools'
 import { ANNOUNCE, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
@@ -94,7 +95,7 @@ function Mention({ npub }: { npub: string }) {
   let pk = ''
   try { const d = nip19.decode(npub); if (d.type === 'npub') pk = d.data } catch { /* shown as is */ }
   if (!pk) return <>{'nostr:' + npub}</>
-  return <span className={'mention' + (pk === me() ? ' me' : '')}>@{realName(pk) || displayName(pk)}</span>
+  return <button type="button" className={'mention' + (pk === me() ? ' me' : '')} onClick={() => openProfile(pk)}>@{realName(pk) || displayName(pk)}</button>
 }
 
 /** The pinned topics, a scrolling line; the open one highlighted (shown even if not pinned). */
