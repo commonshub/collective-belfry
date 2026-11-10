@@ -72,7 +72,7 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
     let pill: ReactNode = null
     if (e.status === 'cancelled') text = <><b>Cancelled</b>{e.statusReason ? ' · ' + e.statusReason : ''}</>
     else if (stillGoing(e)) {
-      text = <><b>The date or place changed</b> · still going?</>
+      text = <span title="The date or the place changed"><b>Changed</b> · still going?</span>
       pill = <span className="line-pills"><Btn className="line-pill ask" onClick={() => rsvp(e, 'accepted', p.holders.get(me()))}>Yes</Btn><Btn className="line-pill" onClick={() => rsvp(e, 'declined', p.holders.get(me()))}>No</Btn></span>
     } else if (asking) {
       text = <><b>{asking} {asking === 1 ? 'person asks' : 'people ask'} to come</b> · {goingList(e, p).length} going</>
