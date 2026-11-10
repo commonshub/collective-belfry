@@ -11,7 +11,7 @@
 import { useState, type ReactNode } from 'react'
 import { taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, group, groups, pinned, proposalFor, recentlyActive, tasklist, type Group, type Message, type Proposal } from '../core/model'
+import { ANNOUNCE, displayName, group, groups, pinned, proposalFor, recentlyActive, tasklist, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { fmtDay, go } from './common'
@@ -28,7 +28,7 @@ const hidePin = (id: string) => { try { localStorage.setItem(HIDDEN, JSON.string
 /** Who may pin in GROUP: its admins and the community's. */
 export const mayPin = (g?: Group) => (pubkey: string) => !!g && (g.admins.has(pubkey) || belfryAdminKeys().includes(pubkey) || !!accessInfo()?.admins.includes(pubkey))
 
-const OPEN_STATUS = ['draft', 'review', 'voting']
+const OPEN_STATUS: ProposalStatus[] = ['draft', 'feedback', 'voting']
 const plain = (m: Message) => (m.text || (m.media.length ? 'A photo or file' : '')).replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').replace(/[*_`#>]/g, '').split('\n')[0]
 const at = (e: { allDay: boolean; start: Date }) => (e.allDay ? '' : ' ' + e.start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
 const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Today' : fmtDay(d))
