@@ -1,39 +1,45 @@
-# The app on Belfry
+# What the chat asks of a belfry
 
-Sign-in follows the Belfry skill (`commonshub/collective-belfry`, `skills/open-source-village/SKILL.md`):
+Hosts are derived from the domain (`src/config.ts`). With the Belfry look:
 
-- **Section 9, "Sign in with Open Source Village"**: OAuth code + PKCE against Keycast
-  (`https://apps.belfry.opensourcevillage.org`), client id `osv-village-app`, redirect back to
-  the app's own page. Belfry's sign-in page asks for the e-mail address and the mailed 6-digit
-  code; the token response's `bunker_url` signs (and NIP-44 encrypts) for the person's key.
-  Sign-out revokes the token and ends the Keycast session.
-- **Access, section 11** (Belfry PR #2): no API calls and no CORS. The only HTTP read is
-  `https://belfry.opensourcevillage.org/.well-known/belfry.json` (`access`: the service key,
-  `admins`, `needs_admin`). Whether a key is in is what the relays say (a member's REQ is
-  answered, anyone else's is `CLOSED restricted:`).
-  - Not in yet: become the first admin (only while `needs_admin`), use an invite code or ask with
-    a note. All three are a kind 8537 rumor, gift-wrapped (NIP-59) to the service key on the
-    groups relay. An invite code typed before signing in (or `?invite=<code>`) is kept and sent
-    after sign-in. The app asks the relays again every few seconds until the key is in.
-  - Admins (`#/admin`): requests (Belfry's 8538 receipts; the notes come from the DMs Belfry sent
-    the admin, unwrapped with the bunker), members (8534 grants, newest grant or revoke per key)
-    and invite codes (8536 with the code's SHA-256; the code itself stays on the device that
-    made it). Grants, declines and withdrawals are signed by the admin. `#/admin/requests/<id>`
-    is the link in Belfry's DM (`ACCESS_APP_URL`).
-- **Sessions** (section 7): kind 31923 `d=session-<x>` on the community relay with
-  `["h", "ws-<x>", <groups relay>]`, a NIP-29 group `ws-<x>`, a first message in it with the
-  session's `a` tag. RSVP `d` = first 30 hex of SHA-256 of `<me>:<author>:<d>`.
+| What | Where |
+|---|---|
+| Sign-in (OAuth code + PKCE, client id `osv-village-app`; the token answer carries a `bunker_url`) | `belfry.<domain>/connect/{authorize,token,revoke,logout}` |
+| Signing (NIP-46) | `wss://bunker.<domain>` |
+| Channels (NIP-29) | `wss://groups-relay.<domain>` |
+| Profiles, calendar, proposals, gift wraps | `wss://relay.<domain>` |
+| Files (BUD-02 upload, kind 24242 auth) | `blossom.<domain>/upload` |
+| Discovery: community name, admins' keys | `<domain>/.well-known/belfry.json` |
+| Bridge keys: `_smtp` (e-mail), `_groups` (e-mail cards); member lookup | `<domain>/.well-known/nostr.json?name=…` |
+| API, NIP-98 signed | `belfry.<domain>/api/v1` |
 
-## Still needed from Belfry
+API calls the chat makes (all NIP-98 except the two marked public):
 
-1. PR #2 (access as Nostr events) merged and deployed. Until then the live `belfry.json` has no
-   `access` and the app shows "Apply to join" to keys that are not in.
-2. PR #1 (the signer signs any kind) for tasks (2100–2103) and the access kinds, and the groups
-   relay accepting the task kinds with an `h` tag.
+- `GET /channel-invites/<token>` (public), `POST /channel-invites/<token>/join`,
+  `POST /channel-invites` (make a guest link)
+- `POST /guest/save`, `POST /guest/save/verify` (a guest adds an e-mail)
+- `GET /me/sessions`, `POST /me/sessions/revoke`
+- `GET|POST /me/follows` (announcements by e-mail)
+- `POST /username`, `POST /admins`
+- `GET /places?q=` (public), `POST /places`
+- `POST /website/publish`
 
-## Testing against a local relay
+The Open Source Village look keeps the earlier endpoints: sign-in on Keycast
+(`apps.<domain>/api/oauth/*`) and the API at `pass.<domain>/api`.
 
-A test build can point elsewhere: `VITE_GROUPS_RELAY`, `VITE_MAIN_RELAY`, `VITE_DISCOVERY`.
-`~/agents/osv/.shots/access-flow.cjs` drives three browsers (local keys injected as the session)
-through first admin, request + approval, and invite code, against zooid with Belfry's patch and
-Belfry's access service.
+Whether a key is in is what the groups relay says: a member's (or a channel guest's)
+subscription is answered, anyone else's is closed with `restricted:`.
+
+## Not served by a belfry today: access as Nostr events
+
+`src/core/access.ts`, `src/ui/Admin.tsx` and the "invite code" and "ask to join" parts of
+`src/ui/Login.tsx` implement access as Nostr events (kinds 8534 to 8538, a service key in
+`belfry.json` under `access`; collective-belfry PR #2, not in the code belfries run). No belfry publishes
+`access` in `belfry.json`, so the chat only reads `admins` from it; a key that is not in sees
+"Apply to join" (`https://<domain>/apply`). Membership is handled by the belfry's own register
+and invite pages instead.
+
+## Event shapes
+
+The native apps' `SPEC.md` (belfry-ios) is the written reference for the kinds and tags; it is
+derived from `src/core/model.ts` and `src/core/actions.ts`.
