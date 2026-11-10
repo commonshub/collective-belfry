@@ -280,5 +280,12 @@ function demoPeople(channel = 'general') {
       { id: hex(32), pubkey: pk, sig: hex(64), kind: 9, created_at: now, content: `Hello from ${p.place.name}`, tags: [['h', channel]] },
     ]
   })
+  // an agent I invited as a guest of this channel (its own key)
+  const bot = getPublicKey(generateSecretKey())
+  evs.push(
+    { id: hex(32), pubkey: bot, sig: hex(64), kind: 0, created_at: now, tags: [], content: JSON.stringify({ name: 'Scout', about: 'An agent that keeps notes.' }) },
+    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, created_at: now, content: '', tags: [['h', channel], ['p', bot, 'member'], ['invited-by', me()], ['name', 'Scout'], ['agent', '1']] },
+    { id: hex(32), pubkey: bot, sig: hex(64), kind: 9, created_at: now, content: 'Scout here, taking notes.', tags: [['h', channel]] },
+  )
   addEvents(evs)
 }

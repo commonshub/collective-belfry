@@ -32,9 +32,10 @@ export function onAccessInfo(l: () => void) {
 export async function loadAccessInfo(): Promise<AccessInfo | null> {
   info ??= (await kvGet<AccessInfo>('access-info')) ?? null
   if (!belfryAdmins.length) belfryAdmins = (await kvGet<string[]>('belfry-admins')) ?? []
+  if (!Object.keys(belfryAgents).length) belfryAgents = (await kvGet<Record<string, string>>('belfry-agents')) ?? {}
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
-    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[] }
+    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string> }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -43,10 +44,20 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
       belfryAdmins = doc.admins.filter((k) => /^[0-9a-f]{64}$/.test(k))
       await kvSet('belfry-admins', belfryAdmins)
     }
+    if (res.ok) { // members' own agents: agent key → its member's key (absent when there are none)
+      belfryAgents = doc.agents && typeof doc.agents === 'object' ? doc.agents : {}
+      await kvSet('belfry-agents', belfryAgents)
+    }
   } catch { /* offline: the cached state */ }
   listeners.forEach((l) => l())
   return info
 }
+
+// A member's own agent (belfry.json "agents", Belfry's agents.py): a member for as long as its
+// member is one. Not a guest.
+let belfryAgents: Record<string, string> = {}
+/** Whose agent PUBKEY is, when it is a member's own agent. */
+export const agentOwner = (pubkey: string): string | undefined => belfryAgents[pubkey]
 
 // The community's admins (belfry.json "admins"): admins of every channel too, without being
 // listed as its members (zooid patch 0003 lets the relay take their moderation).

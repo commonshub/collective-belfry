@@ -7,10 +7,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { channelIcon, displayName, groups, guestJoins, profiles } from '../core/model'
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setBelfryAdmin, setUsername, type Place, type Share } from '../core/people'
-import { isAdmin } from '../core/access'
+import { agentOwner, isAdmin } from '../core/access'
+import { isGuest, setMyAgent } from '../core/invite'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
-import { Avatar, back, go, Sheet, Form } from './common'
+import { Avatar, back, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
 import { PinIcon } from './icons'
 
@@ -29,6 +30,8 @@ export function ProfileView({ id }: { id?: string }) {
   const [editing, setEditing] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [dropping, setDropping] = useState(false)
+  const [agentError, setAgentError] = useState('')
   if (!pk) return <div className="screen"><div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Profile</h1></div><div className="empty">This link doesn't point to a person.</div></div>
   const mine = pk === me()
   const p = profiles().get(pk)
@@ -39,6 +42,11 @@ export function ProfileView({ id }: { id?: string }) {
   // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
   const noAdmin = joins.some((j) => j.agent) ? 'An agent cannot be an admin.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them an admin.' : ''
   const shared = groups().filter((g) => g.members.has(pk) && !g.isProposal)
+  // a member's own agent (a member while its member is one), or a guest agent that can become mine
+  const owner = agentOwner(pk)
+  const guestAgent = !owner && joins.some((j) => j.agent)
+  const canOwn = guestAgent && !isGuest(me()) && !agentOwner(me()) && (isAdmin() || joins.some((j) => j.by === me()))
+  const canDrop = !!owner && (owner === me() || isAdmin())
   const admin = isBelfryAdmin(pk)
   const toggleAdmin = async () => {
     const name = displayName(pk)
@@ -61,6 +69,7 @@ export function ProfileView({ id }: { id?: string }) {
             {p?.nip05 && <div className="hint" style={{ overflowWrap: 'anywhere' }}>{p.nip05}</div>}
             <div className="profile-badges">
               {admin && <span className="chip">admin</span>}
+              {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
               {guest && <span className="chip">{guest.agent ? 'agent' : guest.unsaved ? 'guest · not saved' : 'guest'}</span>}
               {guest?.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
             </div>
@@ -76,7 +85,27 @@ export function ProfileView({ id }: { id?: string }) {
             {shared.map((g) => <button key={g.id} className="link profile-chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>{channelIcon(g)} {g.name}</button>)}
           </div>
         )}
-        {isAdmin() && !mine && (
+        {(canOwn || canDrop) && (
+          <div className="card">
+            {canOwn && <>
+              <b>Make it my agent</b>
+              <p className="hint" style={{ margin: '4px 0 10px' }}>It is a guest for 30 days now. As your agent it becomes a member and stays for as long as you are one: it reads every open channel and people can message it. Everyone sees it is yours.</p>
+              <Btn className="btn" onClick={async () => { setAgentError(''); try { await setMyAgent(pk, true) } catch (e) { setAgentError(e instanceof Error ? e.message : String(e)) } }}>Make it my agent</Btn>
+            </>}
+            {canDrop && <>
+              <b>{owner === me() ? 'Your agent' : `${displayName(owner!)}'s agent`}</b>
+              <p className="hint" style={{ margin: '4px 0 10px' }}>A member for as long as {owner === me() ? 'you are' : `${displayName(owner!)} is`} one. Removing it takes it out of the belfry and every channel.</p>
+              {dropping
+                ? <div className="row" style={{ gap: 8 }}>
+                    <Btn className="btn danger" onClick={async () => { setAgentError(''); try { await setMyAgent(pk, false); setDropping(false) } catch (e) { setAgentError(e instanceof Error ? e.message : String(e)) } }}>Remove {displayName(pk)}</Btn>
+                    <button className="btn ghost" onClick={() => setDropping(false)}>Keep</button>
+                  </div>
+                : <button className="btn ghost" onClick={() => setDropping(true)}>Remove this agent…</button>}
+            </>}
+            {agentError && <div className="error" style={{ marginTop: 8 }}>{agentError}</div>}
+          </div>
+        )}
+        {isAdmin() && !mine && !owner && (
           <div className="card">
             <label className="switch-row" style={{ margin: 0 }}>
               <span><b>Admin of the belfry</b><small>{noAdmin || (guest ? 'A guest now: this makes them a member too. Manages members, every channel and the belfry\'s settings.' : 'Manages members, every channel and the belfry\'s settings.')}</small></span>

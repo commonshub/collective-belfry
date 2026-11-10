@@ -17,7 +17,7 @@ import { BELFRY, NAME, THEME } from '../config'
 import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
-import { canAdmin, isAdmin } from '../core/access'
+import { agentOwner, canAdmin, isAdmin } from '../core/access'
 import { guestInfo, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
 import { mayPin } from './ChannelLine'
@@ -706,11 +706,10 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
         <div key={pk} className="outside-note" role="status">
           <span><b>{name}</b> is not in this channel{isGuest(pk) ? ' (a guest of another one)' : ''}: they won't be told and can't read this.</span>
           {invited.has(pk) ? <span className="hint">{invited.get(pk)}</span>
-            : isGuest(pk) ? null
             : <Btn className="btn small" onClick={async () => {
-                try { const s = await inviteMember(groupId!, pk); setInvited((m) => new Map(m).set(pk, s === 'asked' ? 'Link sent · they apply' : 'Invited')) }
+                try { const s = await inviteMember(groupId!, pk); setInvited((m) => new Map(m).set(pk, s === 'asked' ? 'Link sent · they apply' : s === 'guest' ? 'Added as a guest' : 'Invited')) }
                 catch { setInvited((m) => new Map(m).set(pk, 'Could not invite. Try from the channel\'s Invite.')) }
-              }}>Invite</Btn>}
+              }}>{isGuest(pk) ? 'Add as a guest' : 'Invite'}</Btn>}
         </div>
       ))}
       <div className="bar">
@@ -776,7 +775,7 @@ function JoinLine({ j }: { j: GuestJoin }) {
   return (
     <div className="join-line" role="note">
       <span className="arrow" aria-hidden="true">→</span>
-      <span><b>{displayName(j.pubkey)}</b> joined as {j.agent ? 'an agent' : 'a guest'}{j.by ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
+      <span><b>{displayName(j.pubkey)}</b> joined as {j.agent && j.member && j.by ? <><b>{displayName(agentOwner(j.pubkey) ?? j.by)}</b>'s agent</> : j.agent ? 'an agent' : 'a guest'}{j.by && !(j.agent && j.member) ? <>, invited by <b>{displayName(j.by)}</b></> : null}</span>
       <time>{fmtTime(j.at)}</time>
     </div>
   )
