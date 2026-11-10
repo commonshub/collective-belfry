@@ -337,6 +337,18 @@ legacy_settings() {
 }
 
 cmd_apply() {
+  # one apply at a time on a box: two at once race on the same containers (compose renames one,
+  # the other finds "No such container" and the signer stays down). A second one waits.
+  if [[ -z "${BELFRY_APPLY_LOCKED:-}" ]] && command -v flock >/dev/null; then
+    local lock=/run/lock/belfry-apply.lock
+    [[ -w ${lock%/*} ]] || lock=/tmp/belfry-apply.lock
+    exec 9>>"$lock"
+    if ! flock -n 9; then
+      say "Another belfry apply is running: waiting for it to finish"
+      flock -w 3600 9 || die "the other belfry apply did not finish within an hour"
+    fi
+    export BELFRY_APPLY_LOCKED=1
+  fi
   bootstrap_env
   legacy_settings
   mkdir -p infra/data/changelog infra/data/theme "$SETUP_DIR"
