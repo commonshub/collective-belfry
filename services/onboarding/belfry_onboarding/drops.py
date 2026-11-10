@@ -8,7 +8,7 @@ member session lives); the token is the only credential, so the event stays in t
 
 **An upload.** The files go to the community's Blossom server (as the belfry's key) and arrive in
 the channel as one kind-9 message with NIP-92 ``imeta`` tags: signed by the uploader when they are
-signed in, else by the groups API key (the relay's owner, shown as "Drop box"). After the upload
+signed in, else by the groups API key (the relay's owner: the belfry itself, shown with its name). After the upload
 an anonymous uploader may add a name (the message is posted again with "From <name>" and the first
 one deleted, kind 9005), then sign in to link it to themselves (posted again, signed by their own
 key through the signer). The page proves which upload is theirs with an HMAC of its event id.
@@ -52,7 +52,6 @@ TOKEN = re.compile(r"^[A-Za-z0-9_-]{16,64}$")
 EVENT_ID = re.compile(r"^[0-9a-f]{64}$")
 MAX_FILES = 10
 MAX_BYTES = 25 * 1024 * 1024  # Blossom's limit per file
-DROP_NAME = "Drop box"
 
 
 # ── the link ────────────────────────────────────────────────────────────────────────────────
@@ -214,22 +213,33 @@ def replace(
     return new
 
 
+def server_name(svc: Services) -> str:
+    """How the belfry itself is called in the chat: the community's name, else its domain."""
+    return (svc.settings.community_name or "").strip() or followers.domain(svc)
+
+
 def ensure_profile(svc: Services) -> None:
-    """The groups API key's profile on the groups relay: anonymous drops show as "Drop box"."""
+    """The groups API key's profile on the groups relay. That key is the belfry server itself: it
+    posts website updates, anonymous drop box uploads and other notices, so it carries the belfry's
+    name (it used to be "Drop box", which looked like a member). Republished when the name changes."""
     got = followers._relay(svc)
     if got is None or svc.groups is None:
         return
     relay, sign = got
     own = svc.groups.key.public_key_xonly.format().hex()
-    if relay.query([{"kinds": [0], "authors": [own]}], sign):
-        return
     import json
 
-    content = json.dumps(
-        {"name": DROP_NAME, "about": f"Uploads through drop box links on {followers.domain(svc)}"}
-    )
+    name = server_name(svc)
+    want = {"name": name, "about": f"The belfry of {followers.domain(svc)}: it posts its own updates here (website versions, drop box uploads, notices).", "bot": True}
+    have = sorted(relay.query([{"kinds": [0], "authors": [own]}], sign) or [], key=lambda e: e.get("created_at", 0))
+    if have:
+        try:
+            if json.loads(have[-1].get("content") or "{}").get("name") == name:
+                return
+        except ValueError:
+            pass
     relay.publish(
-        sign({"kind": 0, "created_at": int(time.time()), "tags": [], "content": content}), sign
+        sign({"kind": 0, "created_at": int(time.time()), "tags": [], "content": json.dumps(want)}), sign
     )
 
 

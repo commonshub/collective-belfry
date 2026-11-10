@@ -236,3 +236,25 @@ def test_the_upload_proof_has_no_fixed_key(services):
     forged = hmac.new(b"drop", f"drop:{eid}".encode(), hashlib.sha256).hexdigest()[:32]
     assert not drops.owns(services, eid, forged)
     assert drops.owns(services, eid, drops.proof(services, eid))
+
+
+def _svc(name):
+    from types import SimpleNamespace as NS
+
+    key = NS(public_key_xonly=NS(format=lambda: bytes.fromhex(API)))
+    return NS(settings=NS(community_name=name), groups=NS(key=key))
+
+
+def test_server_profile_is_the_belfry_not_drop_box(relay, monkeypatch):
+    import json
+
+    monkeypatch.setattr(followers, "domain", lambda svc: "belfry.test")
+    relay.add(kind=0, pubkey=API, tags=[], content=json.dumps({"name": "Drop box"}), created_at=1)
+    drops.ensure_profile(_svc("Belfry"))
+    mine = [e for e in relay.events if e["kind"] == 0 and e["pubkey"] == API]
+    assert json.loads(mine[-1]["content"])["name"] == "Belfry"
+    n = len(relay.events)
+    drops.ensure_profile(_svc("Belfry"))  # already right: nothing new
+    assert len(relay.events) == n
+    drops.ensure_profile(_svc(""))  # no community name: the domain
+    assert json.loads(relay.events[-1]["content"])["name"] == "belfry.test"
