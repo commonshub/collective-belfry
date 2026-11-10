@@ -93,12 +93,16 @@ def check_event(
         raise BlossomAuthError(401, "event id does not match")
     if not verify_signature(event):
         raise BlossomAuthError(401, "bad signature")
-    created = int(event["created_at"])
+    if not isinstance(event["created_at"], int) or isinstance(event["created_at"], bool):
+        raise BlossomAuthError(401, "created_at is not a number")
+    created = event["created_at"]
     if created > now + MAX_FUTURE_SKEW:
         raise BlossomAuthError(401, "event created in the future")
     expirations = tag_values(event, "expiration")
     if not expirations:
         raise BlossomAuthError(401, "no expiration tag")
+    if not str(expirations[0]).isdigit():
+        raise BlossomAuthError(401, "expiration is not a number")
     expiration = int(expirations[0])
     if expiration <= now:
         raise BlossomAuthError(401, "authorization expired")

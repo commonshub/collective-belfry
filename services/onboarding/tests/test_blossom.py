@@ -106,3 +106,12 @@ def test_gate_endpoint_requires_an_active_pass(client, services, odoo, keycast, 
     assert r.status_code == 403
     assert client.get("/blossom/auth").status_code == 401
     assert client.get("/blossom/auth", headers={"Authorization": "Nostr !!!"}).status_code == 401
+
+
+def test_a_malformed_time_is_refused_not_an_error():
+    """created_at or expiration that is no number raised ValueError (a 500 at the gate)."""
+    key = PrivateKey()
+    for ev in (signed_event(key, created_at="soon"), signed_event(key, expiration="never")):
+        with pytest.raises(blossom.BlossomAuthError) as exc:
+            blossom.check_event(ev, "PUT", [], now=NOW)
+        assert exc.value.status == 401
