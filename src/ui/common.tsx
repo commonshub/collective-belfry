@@ -21,7 +21,41 @@ export function useRoute(): string[] {
 }
 
 export const go = (path: string) => { location.hash = '#/' + path }
-export const back = (fallback: string) => (history.length > 1 ? history.back() : go(fallback))
+
+// Where we are in this tab's history, and which screen each entry of our own holds. "Back"
+// buttons use it: a screen's ‹ goes one step back when that step is the screen it came from,
+// and otherwise replaces itself with its parent. Never a push: pushing a parent and then going
+// "back" from it would bounce between the two screens for ever.
+let cur = typeof history.state?.i === 'number' ? (history.state.i as number) : 0
+const trail: (string | undefined)[] = []
+let replacing = false
+const mark = () => {
+  const i = history.state?.i
+  if (typeof i === 'number') cur = i // back or forward to an entry we numbered
+  else {
+    if (!replacing) cur += 1 // a new entry right after the one we were on
+    trail.length = cur // what was ahead is gone
+    try { history.replaceState({ ...(history.state ?? {}), i: cur }, '') } catch { /* sandboxed */ }
+  }
+  replacing = false
+  trail[cur] = location.hash
+}
+if (typeof addEventListener === 'function') { mark(); addEventListener('hashchange', mark) }
+const first = (h: string | undefined) => (h ?? '').replace(/^#\//, '').split('/')[0]
+const replaceWith = (path: string) => { replacing = true; location.replace('#/' + path); }
+
+/** ‹ on a screen with no fixed parent (a profile, Me, an event): back to where you were, or
+ *  FALLBACK when this is where the tab started. */
+export const back = (fallback: string) => (cur > 0 && trail[cur - 1] !== undefined ? history.back() : replaceWith(fallback))
+
+/** ‹ on a screen under PARENT (a conversation under Messages, a thread under its channel): one
+ *  step back when that is the parent, else the parent takes this screen's place. A one-word
+ *  parent ("c", "dm") matches any screen of that section. */
+export function up(parent: string) {
+  const prev = trail[cur - 1]
+  const same = prev !== undefined && cur > 0 && (parent.includes('/') ? prev === '#/' + parent : first(prev) === parent && (parent !== 'dm' || prev === '#/dm'))
+  if (same) history.back(); else replaceWith(parent)
+}
 
 // ---- avatars -----------------------------------------------------------------
 

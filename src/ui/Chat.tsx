@@ -8,7 +8,7 @@ import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, j
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
 import { EventCard, EventsBar, NewEventSheet } from './Calendar'
 import { RichText, TopicsBar } from './Topics'
 import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
@@ -433,7 +433,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   const scroller = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
-  const back = () => go(`c/${encodeURIComponent(groupId)}`)
+  const back = () => up(`c/${encodeURIComponent(groupId)}`)
   const gkey = knownGroupsKey()
   const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: canAdmin(g), name: g?.name ?? groupId }
   const card = root ? cardOf(root.ev, gkey) : null

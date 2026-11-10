@@ -6,7 +6,7 @@ import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { BELFRY } from '../config'
-import { Avatar, back, fmtDay, fmtTime, go, Sheet, Form } from './common'
+import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -25,7 +25,7 @@ export function MessagesList() {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back('channels')}>‹</button>
+        <button className="icon-btn" aria-label="Back" onClick={() => up('c')}>‹</button>
         <h1>Messages{address() && <small>Your address: {address()}</small>}</h1>
         <button className="icon-btn" aria-label="New message" onClick={() => setCreating(true)}>＋</button>
       </div>
@@ -108,7 +108,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Messages" onClick={() => go('dm')}>‹</button>
+        <button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button>
         <Who conv={conv} size={30} />
         <h1>{title}{sub && <small>{sub}</small>}</h1>
         {mail && !isNewMail(conv) && <button className="icon-btn" aria-label={`New e-mail to ${who}`} title="New e-mail (a new thread)" onClick={() => go('dm/' + enc('m:' + addr))}>＋</button>}
