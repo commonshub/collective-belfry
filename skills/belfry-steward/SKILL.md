@@ -50,9 +50,9 @@ You then have the steward's rights, nothing more. The steward can end your acces
 
 ## What you can do through the API
 
-### Check someone's membership: `GET https://pass.<domain>/api/me`
+### Check someone's membership: `GET https://belfry.<domain>/api/v1/me`
 
-NIP-98 signed (kind 27235, tags `["u", "https://pass.<domain>/api/me"]`, `["method", "GET"]`,
+NIP-98 signed (kind 27235, tags `["u", "https://belfry.<domain>/api/v1/me"]`, `["method", "GET"]`,
 sent as `Authorization: Nostr <base64 of the event>`). It answers for **the signing key**, so it
 tells an app where its own key stands, not someone else's:
 
@@ -69,7 +69,7 @@ tells an app where its own key stands, not someone else's:
 - To see whether *someone else* joined, use your invites (below): an invite shows the
   invitee's npub once their pass is active.
 
-### Invite people by e-mail: `https://pass.<domain>/api/invites`
+### Invite people by e-mail: `https://belfry.<domain>/api/v1/invites`
 
 As in the participant skill (section 6, "Invites by e-mail or as a code"). For a steward:
 - `GET /api/invites` says `"steward": true`, and creating invites is not limited.
@@ -85,9 +85,9 @@ As in the participant skill (section 6, "Invites by e-mail or as a code"). For a
 
 NIP-29 on `wss://groups-relay.<domain>`, exactly as in the participant skill (section 6,
 "Groups"): create (kind 9007), name and access (9002, `private`/`closed`/`hidden`), add (9000)
-and remove (9001) members, messages (kind 9). The creator administers a group. Stewards are
-**not** automatically admins of groups others opened: ask the group's admin, or report the
-content (below).
+and remove (9001) members, messages (kind 9). The creator administers a group, and so do the
+belfry's admins (the stewards group): the groups relay lets them moderate every group, also ones
+others opened, without being listed as its members.
 
 Only people with an active pass can be members. To add someone, you need their pubkey: from
 their invite (`npub`, decoded to hex) or from their profile.
@@ -132,5 +132,4 @@ Groups → `belfry-stewards`).
 
 These are planned, not available, so don't promise them:
 - a steward API over NIP-98 for what the steward pages do (mark paid, revoke, applications);
-- issuing extra village tokens;
-- stewards as moderators of every group.
+- issuing extra village tokens.
