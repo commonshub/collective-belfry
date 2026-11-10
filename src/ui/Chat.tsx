@@ -4,7 +4,7 @@ import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
@@ -14,7 +14,7 @@ import { NewProposalSheet, ProposalCard } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -140,7 +140,7 @@ function NewChannel({ onClose }: { onClose: () => void }) {
 
 // ---- a channel's messages ------------------------------------------------------
 
-export function ChannelView({ id, topic, focus }: { id: string; topic?: string; focus?: string }) {
+export function ChannelView({ id, topic, focus, activeThread }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string }) {
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const all = groups()
@@ -150,7 +150,7 @@ export function ChannelView({ id, topic, focus }: { id: string; topic?: string; 
       <ChannelHeader id={id} topic={topic} onTopic={openTopic}
         left={<MenuButton />}
         right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} /></>} />
-      <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
+      <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
   )
@@ -260,7 +260,7 @@ export function MenuButton() {
   )
 }
 
-export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string }) {
+export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus, activeThread }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string; activeThread?: string }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
@@ -304,7 +304,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   items.sort((a, b) => a.at - b.at || (a.t === 'msg' ? -1 : 1))
   const gkey = knownGroupsKey()
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
-  const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
+  // with a thread already in the third column, another one replaces it (no history entry per thread)
+  const openThread = (m: Message) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}`; if (activeThread) location.replace('#/' + to); else go(to) }
   const [acting, setActing] = useState<Message | null>(null)
   const [actingReply, setActingReply] = useState<Message | null>(null) // a reply in an unfolded thread
   const [editing, setEditing] = useState<Message | null>(null)
@@ -360,7 +361,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} todo={todoOf.get(m.ev.id)} />
+                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
               {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(m)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
             </Fragment>
           })}
@@ -384,7 +385,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
 }
 
 /** A thread: the message it hangs off, then the replies (#/c/<id>/thread/<message id>). */
-export function ThreadView({ groupId, rootId }: { groupId: string; rootId: string }) {
+export function ThreadView({ groupId, rootId, pane = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean }) {
   useVersion()
   const g = group(groupId)
   const ps = profiles()
@@ -404,8 +405,9 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>
+        {!pane && <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>}
         <h1>Thread<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
+        {pane && <button className="icon-btn" aria-label="Close the thread" onClick={back}><CloseIcon /></button>}
       </div>
       {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
@@ -444,7 +446,7 @@ function useHold(open: () => void, off = false) {
   }
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, todo }: { todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, todo, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -472,7 +474,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
-      <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail || isCard ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
+      <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail || isCard ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '') + (active ? ' thread-active' : '')}
         {...hold}>
         {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
@@ -508,7 +510,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
                 <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
                 {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}<time>{fmtTime(thread.last)}</time>
               </button>
-              {onOpenThread && <button className="thread-chip open-thread" onClick={onOpenThread}><ThreadIcon />Open thread</button>}
+              {onOpenThread && <button className={'thread-chip open-thread' + (active ? ' open' : '')} onClick={onOpenThread} aria-current={active || undefined}><ThreadIcon />Open thread<span className="caret"><ChevronRightIcon /></span></button>}
             </div>
           )}
           {p && p.status === 'failed' && (
@@ -544,7 +546,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const g = group(groupId)
   const isPinned = canAdmin(g) && pinned(groupId, mayPin(g)).some((x) => x.ev.id === m.ev.id)
   const isTodo = tasklist(groupId).tasks.some((t) => t.source === m.ev.id)
-  const todoTitle = m.text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  const todoTitle = plainRefs(m.text, '').replace(/\s+/g, ' ').trim().slice(0, 300)
   const [copied, setCopied] = useState('')
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
@@ -562,7 +564,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
     <Sheet title="Delete this message?" onClose={onClose}>
       <blockquote className="delete-preview">
         <b>{displayName(m.ev.pubkey)}</b>
-        <span>{(m.text || (m.media.length ? (m.media.length === 1 ? 'A photo or file' : `${m.media.length} photos or files`) : '')).replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 240)}</span>
+        <span>{plainRefs(m.text || (m.media.length ? (m.media.length === 1 ? 'A photo or file' : `${m.media.length} photos or files`) : '')).slice(0, 240)}</span>
       </blockquote>
       <p className="hint">It disappears for everyone, with its reactions. This can't be undone.</p>
       <div className="row-btns">
@@ -641,6 +643,30 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
       .filter(([pk, p]) => pk !== me() && p.name && p.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(q)))
       .slice(0, 6).map(([pubkey, p]) => ({ pubkey, name: p.name! }))
   }, [query?.[2]]) // eslint-disable-line react-hooks/exhaustive-deps
+  // #channels: "#" and a few letters suggest channels; a pick writes "#Name", sent as nostr:naddr…
+  // (a "#word" typed without picking stays a topic)
+  const pickedChans = useRef(new Map<string, string>()) // "#Name" → nostr:naddr…
+  const chanQuery = query ? null : /(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_-]{0,30})$/u.exec(text.slice(0, caret))
+  const chans = useMemo(() => {
+    if (!chanQuery) return []
+    const q = chanQuery[2].toLowerCase()
+    return groups()
+      .filter((g) => !g.isEvent && (g.id.toLowerCase().startsWith(q) || g.name.toLowerCase().split(/[\s_-]+/).some((w) => w.startsWith(q))))
+      .map((g) => ({ g, ref: channelRef(g.id) }))
+      .filter((x): x is { g: Group; ref: string } => !!x.ref)
+      .sort((a, b) => b.g.lastActivity - a.g.lastActivity)
+      .slice(0, 6)
+  }, [chanQuery?.[2]]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pickChannel = ({ g, ref }: { g: Group; ref: string }) => {
+    const start = caret - chanQuery![2].length - 1
+    const label = '#' + g.name
+    const next = text.slice(0, start) + label + ' ' + text.slice(caret)
+    pickedChans.current.set(label, ref)
+    setText(next)
+    const at = start + label.length + 1
+    setCaret(at)
+    requestAnimationFrame(() => { ta.current?.focus(); ta.current?.setSelectionRange(at, at) })
+  }
   const pick = (who: { pubkey: string; name: string }) => {
     const start = caret - query![2].length - 1
     const next = text.slice(0, start) + '@' + who.name + ' ' + text.slice(caret)
@@ -659,13 +685,17 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
     let out = t
     for (const [name, pk] of [...picked.current].sort((a, b) => b[0].length - a[0].length))
       out = out.split('@' + name).join('nostr:' + nip19.npubEncode(pk))
+    for (const [label, ref] of [...pickedChans.current].sort((a, b) => b[0].length - a[0].length))
+      out = out.split(label).join(ref)
     picked.current.clear()
+    pickedChans.current.clear()
     return out
   }
 
   const send = async () => {
     if (!text.trim() && !files.length) return
     const mentioned = new Map(picked.current)
+    const chansPicked = new Map(pickedChans.current)
     const t = withMentions(text.trim())
     const f = files
     const a = canAnnounce && ann
@@ -677,6 +707,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
       // not saved on this device (storage full or refused): the text and files come back
       setText((now) => now || text)
       for (const [name, pk] of mentioned) picked.current.set(name, pk)
+      for (const [label, ref] of chansPicked) pickedChans.current.set(label, ref)
       setFiles((now) => (now.length ? now : f))
       if (a) setAnn(true)
       setError(`Not saved: ${(e instanceof Error ? e.message : String(e)).replace(/\.$/, "")}. Try again.`)
@@ -727,11 +758,21 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
             ))}
           </div>
         )}
+        {chans.length > 0 && (
+          <div className="mention-pop" role="listbox" aria-label="Link a channel">
+            {chans.map((c) => (
+              <button key={c.g.id} role="option" onMouseDown={(e) => e.preventDefault()} onClick={() => pickChannel(c)}>
+                <span className="chan-glyph" aria-hidden="true">{channelIcon(c.g)}</span><span>{c.g.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text}
           onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
             if (people.length && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pick(people[0]); return }
+            if (chans.length && (e.key === 'Enter' || e.key === 'Tab')) { e.preventDefault(); pickChannel(chans[0]); return }
             // Enter sends on a keyboard; on phones the return key adds a line
             if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() }
           }} />
@@ -796,7 +837,7 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
         onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>
-        <button className="link thread-hide" onClick={onOpen}>Open thread</button>
+        <button className="link thread-hide thread-open" onClick={onOpen}>Open thread<ChevronRightIcon /></button>
       </div>
     </div>
   )
@@ -823,6 +864,7 @@ function EditSheet({ m, groupId, onClose }: { m: Message; groupId: string; onClo
     for (const x of m.text.matchAll(/nostr:(npub1[02-9ac-hj-np-z]{58})/g)) {
       try { const d = nip19.decode(x[1]); if (d.type === 'npub') out.set('@' + displayName(d.data), x[0]) } catch { /* not a key */ }
     }
+    for (const x of m.text.matchAll(NADDR)) { const label = plainRefs(x[0]); if (label !== x[0]) out.set(label, x[0]) }
     return out
   }, [m.text])
   const shown = useMemo(() => { let t = m.text; for (const [name, ref] of names) t = t.split(ref).join(name); return t }, [m.text, names])
@@ -851,13 +893,13 @@ function EditSheet({ m, groupId, onClose }: { m: Message; groupId: string; onClo
 
 /** An older thread, back in the feed where its latest reply came. */
 function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Message; open: boolean; onOpen: () => void }) {
-  const snip = (root.text || (root.media.length ? 'a photo' : '')).replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 80)
+  const snip = plainRefs(root.text || (root.media.length ? 'a photo' : '')).slice(0, 80)
   return (
     <button className={'thread-activity' + (open ? ' open' : '')} onClick={onOpen} aria-expanded={open}>
       <span className="curve" aria-hidden="true" />
       <span className="t">
         <small>{displayName(last.ev.pubkey)} replied to {displayName(root.ev.pubkey)}: “{snip}{root.text.length > 80 ? '…' : ''}”</small>
-        <span className="reply">{(last.text || 'a photo').replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 140)}</span>
+        <span className="reply">{plainRefs(last.text || 'a photo').slice(0, 140)}</span>
       </span>
       <time>{fmtTime(last.ev.created_at)}</time>
     </button>

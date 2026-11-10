@@ -18,7 +18,7 @@ import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
 import { demoInboxMail, demoMailPost } from './MailPost'
-import { Avatar, back, go, useRoute, useWide } from './common'
+import { Avatar, back, go, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, JoinScreen, MembershipScreen, WelcomeScreen } from './Login'
 
@@ -116,6 +116,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
 
   const route = useRoute()
   const wide = useWide()
+  const three = useWide(WIDE3)
   const drawer = useDrawer()
   useEffect(() => { if (wide) closeDrawer() }, [wide])
   useVersion()
@@ -151,6 +152,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
 
   const [section = 'c', a, b, c] = route
   let view
+  let pane // a large screen: an open thread in a third column, its channel stays in the middle
   if (section === 'channels' && !wide) view = <ChannelList />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
@@ -163,7 +165,10 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'u') view = <ProfileView id={a} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
-    view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+    if (wide && three && b === 'thread' && c) {
+      view = <ChannelView id={id} activeThread={c} />
+      pane = <ThreadView key={c} groupId={id} rootId={c} pane />
+    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
@@ -173,6 +178,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>
       <main className="main screen">{view}</main>
+      {pane && <aside className="thread-pane" aria-label="Thread">{pane}</aside>}
       {toast}
     </div>
   )

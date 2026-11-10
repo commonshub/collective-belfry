@@ -175,8 +175,9 @@ function Modal({ title, onClose, children, hideTitle = false }: { title: string;
 }
 
 /** True on a laptop-wide window: the channel list stays beside the conversation, sheets are dialogs. */
-export function useWide() {
-  const q = '(min-width: 900px)'
+/** ≥ 900 px: channels stay on the left. useWide(WIDE3): ≥ 1200 px, an open thread gets a third column. */
+export const WIDE3 = '(min-width: 1200px)'
+export function useWide(q = '(min-width: 900px)') {
   const [wide, setWide] = useState(() => typeof matchMedia === 'function' && matchMedia(q).matches)
   useEffect(() => {
     const m = matchMedia(q)

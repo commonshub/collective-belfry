@@ -804,3 +804,16 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .mention-pop .not-here { margin-left: auto; font-size: 12px; color: var(--muted); }
 .outside-note { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; background: var(--surface); }
 .outside-note > span:first-child { flex: 1; min-width: 0; }
+
+/* ---- a large screen (≥ 1200 px): an open thread is a third column beside its channel (App.tsx) ---- */
+.layout.wide .thread-pane { flex: 0 0 400px; max-width: 34vw; min-width: 0; height: 100%; border-left: 1px solid var(--line); background: var(--bg); display: flex; flex-direction: column; }
+.layout.wide .thread-pane > .screen { height: 100%; }
+.layout.wide .thread-pane .topbar { padding-left: 16px; }
+.layout.wide .thread-pane .topbar h1 { flex: 1; min-width: 0; }
+.msg.thread-active { background: color-mix(in srgb, var(--accent) 8%, transparent); box-shadow: inset 3px 0 0 var(--accent); }
+.thread-chip.open-thread .caret { display: inline-flex; margin: 0 -4px 0 -2px; }
+.thread-chip.open-thread .caret .ico { width: 14px; height: 14px; }
+.thread-open { display: inline-flex; align-items: center; gap: 2px; }
+.thread-open .ico { width: 13px; height: 13px; }
+.mention.channel-ref { color: var(--accent); }
+.mention-pop .chan-glyph { width: 24px; text-align: center; color: var(--muted); font-weight: 600; }

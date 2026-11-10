@@ -2,7 +2,8 @@ import { useRef, useState, type ReactNode } from 'react'
 import { openProfile } from './Profile'
 import { setTopics } from '../core/actions'
 import { nip19 } from 'nostr-tools'
-import { ANNOUNCE, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
+import { ANNOUNCE, channelIcon, channelOfNaddr, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
+import { go } from './common'
 import { me } from '../core/sync'
 import { Markdown } from './markdown'
 import { BELFRY } from '../config'
@@ -65,7 +66,7 @@ function Tag({ name, groupId, onOpen }: { name: string; groupId: string; onOpen?
 export function RichText({ text, groupId, onOpen }: { text: string; groupId: string; onOpen?: (t: string) => void }) {
   const plain = (t: string, key: string): ReactNode[] => {
     const out: ReactNode[] = []
-    const re = /nsite:(npub1[02-9ac-hj-np-z]{58})(?:\/([a-z0-9-]{1,13}))?|nostr:(npub1[02-9ac-hj-np-z]{58})|(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})/gu
+    const re = /nsite:(npub1[02-9ac-hj-np-z]{58})(?:\/([a-z0-9-]{1,13}))?|nostr:(npub1[02-9ac-hj-np-z]{58})|(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_][\p{L}\p{N}_-]{0,48})|nostr:(naddr1[02-9ac-hj-np-z]{20,400})/gu
     let last = 0
     let n = 0
     for (const m of t.matchAll(re)) {
@@ -78,6 +79,10 @@ export function RichText({ text, groupId, onOpen }: { text: string; groupId: str
         if (m.index! > last) out.push(t.slice(last, m.index))
         out.push(<Mention key={`${key}-m${n++}`} npub={m[3]} />)
         last = m.index! + m[0].length
+      } else if (m[6]) { // a channel picked after "#": a chip that opens it
+        if (m.index! > last) out.push(t.slice(last, m.index))
+        out.push(<ChannelRef key={`${key}-c${n++}`} naddr={m[6]} />)
+        last = m.index! + m[0].length
       } else {
         const at = m.index! + m[4].length
         if (at > last) out.push(t.slice(last, at))
@@ -89,6 +94,13 @@ export function RichText({ text, groupId, onOpen }: { text: string; groupId: str
     return out
   }
   return <Markdown text={text} className="text" plain={plain} />
+}
+
+function ChannelRef({ naddr }: { naddr: string }) {
+  const id = channelOfNaddr(naddr)
+  if (!id) return <>{'nostr:' + naddr}</>
+  const g = group(id)
+  return <button type="button" className="mention channel-ref" onClick={(e) => { e.stopPropagation(); go('c/' + encodeURIComponent(id)) }}>{channelIcon(g)}{g?.name ?? id}</button>
 }
 
 function Mention({ npub }: { npub: string }) {

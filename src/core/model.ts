@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
-import { LABEL_NS } from '../config'
+import { BELFRY, LABEL_NS } from '../config'
 import { all, type Ev } from './store'
 import { me } from './sync'
 
@@ -109,6 +109,32 @@ export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g
 export const podSides = (members: number) => Math.max(3, Math.min(members, 12))
 const POD_GLYPH: Record<number, string> = { 3: '△', 4: '□', 5: '⬠', 6: '⬡' }
 export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? (POD_GLYPH[podSides(g.members.size)] ?? '○') : g?.isProposal ? '📝' : '#')
+// ---- channel references: a channel picked after "#" in the composer is written as
+// nostr:naddr1… (NIP-19/27: kind 39000, the group's metadata, by the relay's key, d = group id),
+// shown as a "#name" chip that opens the channel. A "#word" typed by hand stays a topic.
+export const NADDR = /nostr:(naddr1[02-9ac-hj-np-z]{20,400})/g
+const metaAuthors: () => Map<string, string> = perLog((list) => {
+  const out = new Map<string, string>()
+  for (const e of list) if (e.kind === 39000) { const d = e.tags.find((t) => t[0] === 'd')?.[1]; if (d) out.set(d, e.pubkey) }
+  return out
+})
+/** "nostr:naddr1…" for a channel, or undefined when its metadata hasn't been seen. */
+export function channelRef(id: string): string | undefined {
+  const pubkey = metaAuthors().get(id)
+  if (!pubkey) return undefined
+  return 'nostr:' + nip19.naddrEncode({ kind: 39000, pubkey, identifier: id, relays: [BELFRY.groupsRelay] })
+}
+/** The group id an naddr points to, if it is a NIP-29 group's metadata. */
+export function channelOfNaddr(naddr: string): string | undefined {
+  try { const d = nip19.decode(naddr); return d.type === 'naddr' && d.data.kind === 39000 ? d.data.identifier : undefined } catch { return undefined }
+}
+/** Text for one-line previews: mentions as "@…", channel references as "#name". */
+export function plainRefs(text: string, npub = '@…'): string {
+  return text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub).replace(NADDR, (all, a: string) => {
+    const id = channelOfNaddr(a)
+    return id ? '#' + (groups().find((g) => g.id === id)?.name ?? id) : all
+  })
+}
 export const isPodId = (id: string) => id.startsWith('pod-')
 export const isProposalId = (id: string) => id.startsWith('prop-')
 /** The pod a chat post announces (its `pod` tag), if any. */
