@@ -128,14 +128,20 @@ def test_an_admin_gives_and_takes_the_admin_role(rsvc, admin_set):
     apps.forget()
 
 
-def test_guests_and_unknown_keys_can_not_be_admins(rsvc, admin_set):
+def test_unsaved_guests_and_unknown_keys_can_not_be_admins(rsvc, admin_set):
+    """A guest needs an e-mail on their account first (then they become a member with the role:
+    test_guests.test_an_admin_makes_a_saved_guest_an_admin)."""
     emails, _ = admin_set
     ada = member(rsvc, "ada@belfry.test", "Ada")
     gus = member(rsvc, "gus@example.org", "Gus", tier="guest")
+    row = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", hexkey(gus)]], ["partner_id"]
+    )[0]
+    rsvc.odoo.write("res.partner", [core.m2o_id(row["partner_id"])], {"email": False})
     emails.add("ada@belfry.test")
     with TestClient(create_app(rsvc)) as c:
         r = post(c, ada, admins.PATH, {"pubkey": hexkey(gus), "admin": True})
-        assert r.status_code == 400 and r.json()["error"] == "not_member"
+        assert r.status_code == 400 and r.json()["error"] == "guest_not_saved"
         time.sleep(1.1)
         r = post(c, ada, admins.PATH, {"pubkey": "ab" * 32, "admin": True})
         assert r.status_code == 400 and r.json()["error"] == "not_member"

@@ -489,3 +489,61 @@ def test_someone_with_an_account_joins_with_that_account(rsvc, published, keycas
         n = len(published)
         assert join(c, t2, gus_key).json()["already"] is True and len(published) == n
         assert gus_pk not in core.active_pubkeys(rsvc)  # still a guest
+
+
+def test_an_admin_makes_a_saved_guest_an_admin(rsvc, published, keycast, monkeypatch):
+    """A guest with an e-mail on their account becomes a member with the admin role: the same
+    key, one membership instead of the guest pass, still in the channel. Without an e-mail the
+    admin is told why not; an agent never."""
+    from belfry_onboarding import admins, apps
+    from belfry_onboarding.holder_invites import ApiError
+    from belfry_onboarding.places import member_key
+
+    stewards = {"admin@belfry.test"}
+    monkeypatch.setattr(console, "admin_emails", lambda svc: set(stewards))
+
+    def set_admin(svc, email, admin):
+        if admin:
+            stewards.add(email)
+            steward.steward_pass(svc, email)
+        else:
+            stewards.discard(email)
+
+    monkeypatch.setattr(console, "set_admin", set_admin)
+    monkeypatch.setattr(guests, "_in_channel", lambda *a: False)
+    key, ada = admin_with_key(rsvc)
+    ada_pk = key.public_key_xonly.format().hex()
+    token = rsvc.odoo.create_guest_invite(ada, ada_pk, "garden", 30, people=50)["url"].rsplit(
+        "/", 1
+    )[1]
+    gus = guests.join_new(rsvc, token, "Gus", PrivateKey().public_key_xonly.format().hex())
+    gus_pk = gus["pubkey"]
+    apps.forget()
+    with pytest.raises(ApiError) as e:
+        admins.change(rsvc, ada_pk, gus_pk, True)
+    assert e.value.error == "guest_not_saved"
+    guest_pass = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", gus_pk]], ["id", "partner_id"]
+    )[0]
+    rsvc.odoo.write(
+        "res.partner", [core.m2o_id(guest_pass["partner_id"])], {"email": "gus@example.org"}
+    )
+    lines = len(published)
+    assert gus_pk in admins.change(rsvc, ada_pk, gus_pk, True)
+    assert member_key(rsvc, gus_pk)["tier"] == "member"  # the same key, now a member's
+    active = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", gus_pk], ["state", "=", "active"]], ["tier"]
+    )
+    assert [p["tier"] for p in active] == ["member"]  # the guest pass closed quietly
+    told = published[lines:]
+    assert (
+        1985,
+        [
+            ["h", "garden"],
+            ["L", "belfry/guest"],
+            ["l", "member", "belfry/guest"],
+            ["p", gus_pk],
+        ],
+    ) in told
+    assert not [k for k, _ in told if k == 9001]  # and they stay in the channel
+    assert gus_pk in core.active_pubkeys(rsvc)

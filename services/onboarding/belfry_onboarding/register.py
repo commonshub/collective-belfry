@@ -517,7 +517,12 @@ class Register(OdooApi):
             )
         )
         for p in self._all("belfry.pass"):
-            if p.get("partner_id") == pid and p.get("state") in ("pending", "active"):
+            # a channel's guest who becomes an admin gets a membership next to the guest passes
+            if (
+                p.get("partner_id") == pid
+                and p.get("state") in ("pending", "active")
+                and p.get("tier") != "guest"
+            ):
                 return {
                     "pass_id": p["id"],
                     "invoice_id": False,

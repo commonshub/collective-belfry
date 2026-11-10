@@ -112,6 +112,10 @@ def left(svc: Services, pass_id: int) -> bool:
     g = _guest(svc, pass_id)
     if g is None:
         return False
+    from .places import member_key
+
+    if member_key(svc, g["keycast_pubkey"]):  # a member since (became_member): stays
+        return False
     return _channel_event(
         svc, 9001, [["h", g["guest_channel"]], ["p", g["keycast_pubkey"]], ["guest", "ended"]]
     )
@@ -479,6 +483,33 @@ def saved_label(svc: Services, pubkey: str, channel: str) -> None:
         1985,
         [["h", channel], ["L", "belfry/guest"], ["l", "saved", "belfry/guest"], ["p", pubkey]],
     )
+
+
+def became_member(svc: Services, pubkey: str) -> int:
+    """A guest became a member (an admin gave them the admin role, admins.py; their membership is
+    active). Each channel they were a guest of learns it (label ``member``: the chat stops
+    calling them a guest), and their guest passes close, so the membership is their only pass.
+    They stay in those channels (``left`` leaves a member in). Returns how many passes closed."""
+    from . import core
+
+    rows = [
+        r
+        for r in svc.odoo.search_read(
+            "belfry.pass",
+            [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+            ["tier", "guest_channel"],
+        )
+        if r.get("tier") == "guest"
+    ]
+    for channel in sorted({r["guest_channel"] for r in rows if r.get("guest_channel")}):
+        _channel_event(
+            svc,
+            1985,
+            [["h", channel], ["L", "belfry/guest"], ["l", "member", "belfry/guest"], ["p", pubkey]],
+        )
+    for r in rows:
+        core.revoke_pass(svc, r["id"], "became a member")
+    return len(rows)
 
 
 def _channel_event_kind(svc: Services, kind: int, tags: list[list[str]]) -> bool:
