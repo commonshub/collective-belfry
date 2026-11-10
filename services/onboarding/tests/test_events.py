@@ -545,3 +545,12 @@ def test_slug_rules():
     assert events.slug_problem("ab") and events.slug_problem("2026-abcdef")
     assert events.slug_problem("mine") and events.slug_problem("Garden")
     assert events.slug_problem("a" * 41)
+
+
+def test_the_chat_may_put_a_custom_url():
+    """PUT /api/events/<d>/slug comes from chat.<domain>: the CORS answer allows PUT."""
+    from belfry_onboarding import discovery
+
+    assert (
+        "PUT" in discovery.cors_headers("https://chat.belfry.test")["Access-Control-Allow-Methods"]
+    )

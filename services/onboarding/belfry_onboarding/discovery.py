@@ -255,7 +255,7 @@ def allowed_origin(settings: Any, origin: str | None, svc: Services | None = Non
 def cors_headers(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST",
+        "Access-Control-Allow-Methods": "GET, POST, PUT",
         "Access-Control-Allow-Headers": "Authorization, Content-Type",
         "Access-Control-Max-Age": "600",
         "Vary": "Origin",
