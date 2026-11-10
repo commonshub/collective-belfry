@@ -71,6 +71,8 @@ BILLING = {
     "belfry.shift",
     "belfry.stripe.event",
 }
+# Read-only calls of the steward and shift pages: empty here, so those pages still open.
+SHIFT_LISTS = {"belfry_shift_board", "belfry_steward_volunteers", "belfry_volunteer_of_partner"}
 NEEDS_ODOO = "This needs the Odoo add-on (billing and shifts are not in the belfry's own register)."
 
 INVITE_DAYS = 14
@@ -234,6 +236,8 @@ class Register(OdooApi):
         return result
 
     def _dispatch(self, model: str, method: str, args: list[Any], kwargs: dict[str, Any]) -> Any:
+        if method in SHIFT_LISTS:  # the pages that list shifts and volunteers show none
+            return False if method == "belfry_volunteer_of_partner" else []
         if model in BILLING:
             if method in ("search_read", "read"):
                 return []
@@ -257,12 +261,6 @@ class Register(OdooApi):
             return True
         if method == "create":
             return self._create(model, dict(args[0]))
-        if method in (
-            "belfry_shift_board",
-            "belfry_steward_volunteers",
-            "belfry_volunteer_of_partner",
-        ):
-            return [] if method != "belfry_volunteer_of_partner" else False  # lists stay empty
         handler = getattr(self, "_m_" + method, None)
         if handler is None:
             raise OdooError(

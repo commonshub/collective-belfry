@@ -49,7 +49,16 @@ def test_records_persist_and_search_like_odoo(tmp_path, settings, reg):
     # billing is the Odoo add-on's: nothing found, and asking to act says so
     assert again.search_read("account.move", [], ["id"]) == []
     with pytest.raises(OdooError, match="Odoo add-on"):
-        again.call("belfry.shift", "belfry_shift_board", [])
+        again.call("belfry.shift", "belfry_shift_signup", [pid, 1])
+    # the pages that list shifts and volunteers (the steward pages, /admin/shifts) show none
+    assert again.call("belfry.shift", "belfry_shift_board", []) == []
+    assert again.call("belfry.pass", "belfry_steward_volunteers", []) == []
+    assert again.call("belfry.shift", "belfry_volunteer_of_partner", [pid]) is False
+
+
+def test_the_steward_dashboard_opens_without_odoo(rsvc):
+    data = steward.dashboard_data(rsvc)
+    assert data["shifts"] == [] and data["volunteers"] == []
 
 
 def test_member_numbers_continue_after_imported_ones(reg):
