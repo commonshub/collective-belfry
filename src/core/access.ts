@@ -1,7 +1,7 @@
 import { finalizeEvent, generateSecretKey, nip44, type NostrEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { ACCESS, DISCOVERY } from '../config'
+import { ACCESS, DISCOVERY, PLACE } from '../config'
 import { kvGet, kvSet } from './db'
 import { all, type Ev } from './store'
 import { currentSigner, enqueue, me, publishNow, queryOnce } from './sync'
@@ -68,7 +68,7 @@ export interface RequestInput { note?: string; claim?: string; admin?: boolean; 
 /** Send a request (kind 8537 rumor) to Belfry, gift-wrapped (NIP-59) so only Belfry reads it. */
 export async function requestAccess(input: RequestInput) {
   const a = info ?? (await loadAccessInfo())
-  if (!a) throw new Error("Can't reach the village. Check your connection and try again.")
+  if (!a) throw new Error(`Can't reach ${PLACE}. Check your connection and try again.`)
   const signer = currentSigner()
   const tags: string[][] = []
   if (input.claim) tags.push(['claim', normalizeCode(input.claim)])

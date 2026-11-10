@@ -4,7 +4,7 @@ import { accessInfo, accessState, createInvite, grant, inviteCode, loadAccessInf
 import { displayName } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { ACCESS, NAME } from '../config'
+import { ACCESS, NAME, PLACE } from '../config'
 import { Avatar, back, go, Sheet, Btn, Form } from './common'
 import { Tabs } from './ChannelInfo'
 
@@ -24,7 +24,7 @@ export function Admin({ sub, id }: { sub?: string; id?: string }) {
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('me')}>‹</button>
-        <h1>Admin<small>Who is in the village</small></h1>
+        <h1>Admin<small>Who is in {PLACE}</small></h1>
       </div>
       <Tabs tab={tab} setTab={(t) => go('admin/' + t)} tabs={[['requests', `Requests${pending.length ? ` (${pending.length})` : ''}`], ['members', 'Members'], ['invites', 'Invites']]} />
       <div className="scroll">

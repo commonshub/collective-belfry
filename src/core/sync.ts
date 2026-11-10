@@ -2,7 +2,7 @@ import { Relay, type Subscription } from 'nostr-tools/relay'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { ACCESS_KINDS, BELFRY, CLIENT_TAG, NAME } from '../config'
+import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE } from '../config'
 import type { Signer } from './auth'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
@@ -432,7 +432,7 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
   if (localOnly) {
     if (!latestCreatedAt((e) => e.kind === 39000)) {
       await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
-      await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', 'Everything about the village. Say hi 👋']] })
+      await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
     }
   } else {
     void connect('groups')
@@ -448,7 +448,7 @@ async function firstChannel() {
   if (firstChannelTried || latestCreatedAt((e) => e.kind === 39000)) return
   firstChannelTried = true
   await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
-  await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${NAME}. Say hi 👋`]] })
+  await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
   void flush()
 }
 

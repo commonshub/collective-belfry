@@ -8,7 +8,7 @@ import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
-import { BELFRY, NAME, TEST_RELAYS, THEME, getBackend } from '../config'
+import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { CalendarList, EventPage } from './Calendar'
 import { ChannelInfo } from './ChannelInfo'
@@ -132,14 +132,14 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   if (error)
     return (
       <div className="screen login">
-        <h2>Can't reach your village key</h2>
+        <h2>{THEME === 'belfry' ? "Can't reach your key" : "Can't reach your village key"}</h2>
         <p>{error}</p>
         <button className="btn" onClick={() => location.reload()}>Try again</button>
         <div style={{ height: 12 }} />
         <button className="btn ghost" onClick={onSignOut}>Sign out</button>
       </div>
     )
-  if (!ready) return <div className="screen login"><p>Opening the village…</p></div>
+  if (!ready) return <div className="screen login"><p>Opening {PLACE}…</p></div>
   if (status.access === 'denied')
     return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
 
@@ -207,7 +207,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
             }} />
           </label>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ fontWeight: 650 }}>{p?.name ?? session.email ?? 'Villager'}</div>
+            <div style={{ fontWeight: 650 }}>{p?.name ?? session.email ?? (THEME === 'belfry' ? 'Member' : 'Villager')}</div>
             <div className="hint" style={{ fontSize: 14, overflowWrap: 'anywhere' }}>{m.nip05 ?? p?.nip05 ?? ''}</div>
             {avatarError && <div className="error" style={{ margin: '4px 0 0' }}>{avatarError}</div>}
           </div>

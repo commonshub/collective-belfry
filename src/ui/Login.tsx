@@ -3,7 +3,7 @@ import { Form } from './common'
 import { INVITE_CLOSED, inviteInfo, joinAsNew, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
-import { BELFRY, NAME, THEME, type Backend } from '../config'
+import { BELFRY, NAME, PLACE, THEME, type Backend } from '../config'
 
 // The arms: a tower over water on a shield (the Belfry mark).
 export const Arms = ({ size = 18 }: { size?: number }) => (
@@ -99,7 +99,7 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
       <Form className="screen login" onSubmit={(e) => { e.preventDefault(); if (email.includes('@')) onDemo(email.trim()) }}>
         <Logo />
         <h2>Demo mode</h2>
-        <p>Everything stays on this device. <a href="?backend=belfry">Use the real village</a>.</p>
+        <p>Everything stays on this device. <a href="?backend=belfry">Use the real {THEME === 'belfry' ? 'belfry' : 'village'}</a>.</p>
         <label className="field"><span>E-mail</span>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
         <button className="btn">Enter</button>
@@ -212,7 +212,7 @@ export function MembershipScreen({ session, reason, onSignOut }: {
           <h2>{sent === 'admin' ? 'Setting you up as admin' : sent === 'code' ? 'Checking your code' : 'Waiting for an admin'}</h2>
           <p>
             {sent === 'request'
-              ? "The village's admins got your note. You're in as soon as one of them says yes; this page opens by itself then."
+              ? `The admins of ${PLACE} got your note. You're in as soon as one of them says yes; this page opens by itself then.`
               : 'This takes a few seconds. If nothing happens, the code may be used up: ask the person who gave it to you, or ask the admins below.'}
           </p>
           <button className="btn" onClick={() => { recheckAccess(); void loadAccessInfo() }}>Check again</button>
@@ -223,27 +223,27 @@ export function MembershipScreen({ session, reason, onSignOut }: {
         <>
           <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
           <h2>Almost in</h2>
-          <p>You're signed in{who}, but this key isn't a member of the village yet, and the village doesn't take requests from this app yet.</p>
-          {reason && <p className="hint" style={{ fontSize: 13 }}>The village said: {reason}</p>}
+          <p>You're signed in{who}, but this key isn't a member of {PLACE} yet, and {PLACE} doesn't take requests from this app yet.</p>
+          {reason && <p className="hint" style={{ fontSize: 13 }}>{THEME === 'belfry' ? 'The relay' : 'The village'} said: {reason}</p>}
           <a className="btn" style={{ textDecoration: 'none', display: 'grid', placeItems: 'center' }} href={`https://${BELFRY.domain}/apply`} target="_blank" rel="noreferrer">Apply to join</a>
           <div style={{ height: 10 }} />
           <button className="btn ghost" onClick={() => { recheckAccess(); void loadAccessInfo() }}>Check again</button>
         </>
       ) : a?.needs_admin ? (
         <>
-          <div style={{ marginBottom: 12 }}><span className="badge lime">New village</span></div>
+          <div style={{ marginBottom: 12 }}><span className="badge lime">{THEME === 'belfry' ? 'New belfry' : 'New village'}</span></div>
           <h2>No admin yet</h2>
-          <p>You're signed in{who}. This village has no admin yet: the first person to claim it becomes its admin and lets the others in.</p>
+          <p>You're signed in{who}. {THEME === 'belfry' ? PLACE : 'This village'} has no admin yet: the first person to claim it becomes its admin and lets the others in.</p>
           {error && <div className="error">{error}</div>}
-          <button className="btn" disabled={busy} onClick={() => send('admin', { admin: true, name })}>{busy ? 'Sending…' : 'Become the admin of this village'}</button>
+          <button className="btn" disabled={busy} onClick={() => send('admin', { admin: true, name })}>{busy ? 'Sending…' : `Become the admin of ${THEME === 'belfry' ? PLACE : 'this village'}`}</button>
           <p className="hint" style={{ fontSize: 13, marginTop: 10 }}>Whoever runs the server can change admins later.</p>
         </>
       ) : (
         <>
           <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
           <h2>Almost in</h2>
-          <p>You're signed in{who}, but this key isn't a member of the village yet.</p>
-          {reason && <p className="hint" style={{ fontSize: 13 }}>The village said: {reason}</p>}
+          <p>You're signed in{who}, but this key isn't a member of {PLACE} yet.</p>
+          {reason && <p className="hint" style={{ fontSize: 13 }}>{THEME === 'belfry' ? 'The relay' : 'The village'} said: {reason}</p>}
           {error && <div className="error">{error}</div>}
           <Form onSubmit={() => send('code', { claim: code })}>
             <label className="field"><span>Invite code</span>

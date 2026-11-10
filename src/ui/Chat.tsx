@@ -103,7 +103,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
         <div className="section-title">Channels <span>{chans.length + pods.length}</span></div>
         {chans.map((g) => <Tree key={g.id} g={g} />)}
         {orphans.map((g) => <Tree key={g.id} g={g} />)}
-        {chans.length === 0 && <div className="empty">No channels yet. They appear here once the village relay answers.</div>}
+        {chans.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
         {events.length > 0 && <div className="section-title">Event chats <span>{events.length}</span></div>}
         {events.map((g) => <Row key={g.id} g={g} />)}
         <div style={{ padding: 16 }}>

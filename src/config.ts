@@ -16,6 +16,8 @@ const DOMAIN =
 const THEME_IS_BELFRY = env.VITE_THEME === 'belfry'
 export const THEME: 'osv' | 'belfry' = THEME_IS_BELFRY ? 'belfry' : 'osv'
 export const NAME = THEME === 'belfry' ? DOMAIN : 'Open Source Village'
+// The community in a sentence: "the village" for Open Source Village, its domain for a belfry.
+export const PLACE = THEME === 'belfry' ? DOMAIN : 'the village'
 
 export const BELFRY = {
   domain: DOMAIN,
