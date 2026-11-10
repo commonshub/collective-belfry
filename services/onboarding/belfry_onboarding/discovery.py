@@ -17,6 +17,7 @@ authenticate the NIP-98 header, so a page can only act with a key it signs with.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -314,7 +315,14 @@ def register(app: FastAPI) -> None:
                     doc["agents"] = found
             except Exception as exc:  # noqa: BLE001
                 log.warning("belfry.json: agents unknown: %s", exc)
-        return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
+        # admins and agents change at once when someone changes them: clients revalidate every
+        # time (cheap: 304 when nothing changed) instead of keeping a copy for 5 minutes
+        body = json.dumps(doc, sort_keys=True, separators=(",", ":")).encode()
+        etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+        headers = {"Cache-Control": "no-cache", "ETag": etag}
+        if etag in (request.headers.get("if-none-match") or ""):
+            return Response(status_code=304, headers=headers)
+        return Response(body, media_type="application/json", headers=headers)
 
     async def session_owner(
         request: Request, method: str, path: str, body: bytes

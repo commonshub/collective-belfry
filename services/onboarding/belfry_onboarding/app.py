@@ -68,6 +68,7 @@ from . import (
     volunteer,
     wallet_tokens,
     website,
+    whois,
 )
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
@@ -232,6 +233,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
     admins.register(app)  # /api/admins: admins give the admin role from the chat (admins.py)
     agents.register(app)  # /api/agents: a member's own agents (agents.py)
+    whois.register(app)  # /api/whois: member, agent or guest, per key (whois.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
