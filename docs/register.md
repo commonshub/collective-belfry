@@ -21,8 +21,9 @@ Odoo add-on; the admin pages show them empty.
 A membership is free and has no invoice (`tier` `member`, no end date: 2099-12-31, no tokens).
 
 - An admin's membership: `belfry_steward_pass`, opened by `core.activate_free_pass`.
-- An invite link (`<PUBLIC_URL>/invite/<token>`, `invite.py`): name and e-mail, a confirmation link
-  by mail, then the membership opens (accounts, key, sign-in link mailed).
+- An invite link (`https://belfry.<domain>/invite/<token>`: `CONSOLE_URL`, else `PUBLIC_URL`;
+  `invite.py`): name and e-mail, a confirmation link by mail, then the membership opens
+  (accounts, key, sign-in link mailed).
 - System mails (sign-in links, codes, invites, alerts, digests) go through the mail provider
   (`SMTP_*`, `MAIL_FROM`; `mailer.py`).
 
