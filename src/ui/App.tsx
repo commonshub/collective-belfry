@@ -168,7 +168,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   if (status.access === 'denied')
     return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
 
-  const [section = 'c', a, b, c] = route
+  const [section = 'c', a, b, c, d] = route
   let view
   let pane // a large screen: an open thread in a third column, its channel stays in the middle
   if (section === 'channels' && !wide) view = <ChannelList />
@@ -187,11 +187,11 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     const evOf = eventOfGroup(id) // an event's chat opens as the event
     if (evOf && (!b || b === 'm' || (b === 'thread' && wide && three && c))) {
       view = <EventScreen key={id} coord={evOf.coord} activeThread={b === 'thread' ? c : undefined} />
-      if (b === 'thread' && c) pane = <ThreadView key={c} groupId={id} rootId={c} pane />
+      if (b === 'thread' && c) pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
     } else if (wide && three && b === 'thread' && c) {
       view = <ChannelView id={id} activeThread={c} />
-      pane = <ThreadView key={c} groupId={id} rootId={c} pane />
-    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+      pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
+    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).

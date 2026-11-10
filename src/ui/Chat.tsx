@@ -319,7 +319,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const gkey = knownGroupsKey()
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   // with a thread already in the third column, another one replaces it (no history entry per thread)
-  const openThread = (m: Message) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}`; if (activeThread) location.replace('#/' + to); else go(to) }
+  // Reply opens the thread's own view (or the third column), with its reply box focused: no second box in the channel (Xavier, #bugs 2026-11-10)
+  const openThread = (m: Message, reply = false) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}` + (reply ? '/reply' : ''); if (activeThread) location.replace('#/' + to); else go(to) }
   const [acting, setActing] = useState<Message | null>(null)
   const [actingReply, setActingReply] = useState<Message | null>(null) // a reply in an unfolded thread
   const [editing, setEditing] = useState<Message | null>(null)
@@ -389,7 +390,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
-        thread={th.get(acting.ev.id)} onReply={() => { toggle(acting.ev.id, true); setReplyTo(acting.ev.id) }}
+        thread={th.get(acting.ev.id)} onReply={() => openThread(acting, true)}
         onThread={th.get(acting.ev.id)?.count ? () => openThread(acting) : undefined} onEdit={() => setEditing(acting)} />}
       {actingReply && <MessageActions m={actingReply} groupId={id} mine={rx.get(actingReply.ev.id) ?? []} onClose={() => setActingReply(null)} onEdit={() => setEditing(actingReply)} />}
       {editing && <EditSheet m={editing} groupId={id} onClose={() => setEditing(null)} />}
@@ -399,7 +400,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
 }
 
 /** A thread: the message it hangs off, then the replies (#/c/<id>/thread/<message id>). */
-export function ThreadView({ groupId, rootId, pane = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean }) {
+export function ThreadView({ groupId, rootId, pane = false, replying = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean; /** opened from Reply: the reply box gets the focus */ replying?: boolean }) {
   useVersion()
   const g = group(groupId)
   const ps = profiles()
@@ -433,7 +434,7 @@ export function ThreadView({ groupId, rootId, pane = false }: { groupId: string;
             reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} announce={false} />)}
         </div>
       </div>
-      {root && <Composer groupId={groupId} placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {root && <Composer groupId={groupId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -656,7 +657,18 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
   const [error, setError] = useState('')
   const ta = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
-  useEffect(() => { if (autoFocus) ta.current?.focus({ preventScroll: false }) }, [autoFocus])
+  // focus now, and again once a closing menu has handed the focus back to where it was opened
+  useEffect(() => {
+    if (!autoFocus) return
+    ta.current?.focus({ preventScroll: false })
+    // a closing sheet keeps the page inert for a moment, then drops the focus on <body>: take it back
+    let n = 0
+    const t = setInterval(() => {
+      if (++n > 15) clearInterval(t)
+      else if (document.activeElement === document.body) ta.current?.focus({ preventScroll: true })
+    }, 100)
+    return () => clearInterval(t)
+  }, [autoFocus])
   useEffect(() => { if (prefill) { setText((t) => (t ? t + ' ' : '') + prefill); requestAnimationFrame(() => ta.current?.focus()) } }, [prefill])
   const previews = useMemo(() => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : '')), [files])
   useEffect(() => () => previews.forEach((u) => u && URL.revokeObjectURL(u)), [previews])
