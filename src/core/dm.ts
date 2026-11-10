@@ -251,7 +251,7 @@ async function process() {
   try {
     await load()
     const self = me()
-    const todo = all().filter((e) => !e.pending && !seen.has(e.id) && (
+    const todo = all(self).filter((e) => !e.pending && !seen.has(e.id) && (
       (e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === self)) || e.kind === 4))
       .sort((a, b) => b.created_at - a.created_at)
     for (const e of todo) {
