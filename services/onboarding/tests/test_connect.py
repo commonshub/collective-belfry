@@ -288,7 +288,7 @@ def test_an_app_the_belfry_installed_needs_no_approval(web, tmp_path):
     assert not apps.is_approved(services, "http://belfry.test/chat/")
     page = authorize(web, redirect_uri="https://chat.belfry.test/").text
     chip = page.split('<div class="chip">')[1].split("</h1>")[0]
-    assert "Sign in to /chat" in chip and "Not approved" not in chip
+    assert "Sign in to Chat" in chip and "Not approved" not in chip
 
 
 def test_belfry_s_own_native_apps_are_approved_by_their_fixed_address(web):

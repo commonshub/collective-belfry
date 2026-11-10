@@ -20,8 +20,10 @@ from .test_holder_invites import BASE, post
 
 
 @pytest.fixture
-def rsvc(services, tmp_path, settings):
+def rsvc(services, tmp_path, settings, monkeypatch):
     mailer.SENT.clear()
+    # the channels of these tests are open ones (may_invite asks the relay; none runs here)
+    monkeypatch.setattr(guests, "_closed", lambda svc, channel: False)
     services.odoo = Register(tmp_path / "register.sqlite", settings)
     return services
 
@@ -635,3 +637,28 @@ def test_passes_that_ended_are_closed_by_the_service_itself(rsvc, published, aut
     assert reg.read_one("belfry.pass", pass_id, ["state"])["state"] == "expired"
     assert (9001, [["h", "garden"], ["p", "c" * 64], ["guest", "ended"]]) in published
     assert followers.expire_passes(rsvc) is None  # not again within the hour
+
+
+def test_only_someone_who_has_the_channel_makes_a_guest_link(rsvc, monkeypatch):
+    """Any member for an open channel; a closed one only its members and admins; the community's
+    admins always; nobody but an admin when the relay can't say."""
+    from belfry_onboarding import apps
+
+    state = {"closed": True, "inside": set(), "admins": set(), "belfry_admins": set()}
+    monkeypatch.setattr(guests, "_closed", lambda svc, ch: state["closed"])
+    monkeypatch.setattr(guests, "_in_channel", lambda svc, ch, pk: pk in state["inside"])
+    monkeypatch.setattr(mail, "group_admins", lambda svc, ch: state["admins"])
+    monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: state["belfry_admins"])
+    me = "aa" * 32
+    assert guests.may_invite(rsvc, me, "pod-x", False) is False  # a closed pod I am not in
+    state["inside"] = {me}
+    assert guests.may_invite(rsvc, me, "pod-x", False) is True
+    state["inside"], state["admins"] = set(), {me}
+    assert guests.may_invite(rsvc, me, "pod-x", False) is True
+    state["admins"], state["belfry_admins"] = set(), {me}
+    assert guests.may_invite(rsvc, me, "pod-x", False) is True
+    state["belfry_admins"], state["closed"] = set(), False
+    assert guests.may_invite(rsvc, me, "garden", False) is True  # an open channel: any member
+    state["closed"] = None
+    assert guests.may_invite(rsvc, me, "garden", False) is False  # the relay can't say
+    assert guests.may_invite(rsvc, me, "garden", True) is True

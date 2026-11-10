@@ -121,10 +121,42 @@ def left(svc: Services, pass_id: int) -> bool:
     )
 
 
+def _closed(svc: Services, channel: str) -> bool | None:
+    """Whether CHANNEL takes applications only (NIP-29 `closed`); None when the relay can't say."""
+    from . import followers
+
+    got = followers._relay(svc)
+    if got is None:
+        return None
+    relay, sign = got
+    try:
+        found = relay.query([{"kinds": [39000], "#d": [channel], "limit": 1}], sign)
+    except Exception:  # noqa: BLE001
+        return None
+    if not found:
+        return None
+    return any(t[:1] == ["closed"] for t in found[0].get("tags", []))
+
+
 def may_invite(svc: Services, pubkey: str, channel: str, steward: bool) -> bool:
-    """Any member may bring a guest into a channel (the guest sees that channel only, and the
-    channel sees who invited them). Guests themselves can't (checked before)."""
-    return True
+    """Only someone who has the channel themselves may bring a guest into it (Xavier,
+    2026-11-10): any member for an open channel; for a closed one (a pod by application) its
+    members and admins. The community's admins always may. Guests can't (checked before). When
+    the relay can't be asked, nobody but an admin may: a link into a closed pod is not a thing
+    to hand out on a guess."""
+    from . import apps, mail
+
+    if steward or pubkey in apps.admin_pubkeys(svc):
+        return True
+    closed = _closed(svc, channel)
+    if closed is None:
+        return False
+    if not closed:
+        return True
+    try:
+        return _in_channel(svc, channel, pubkey) or pubkey in mail.group_admins(svc, channel)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def join_url(svc: Services, token: str) -> str:

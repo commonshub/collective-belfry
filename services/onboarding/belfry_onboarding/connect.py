@@ -321,7 +321,8 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
         addr = "/" + u.netloc.removesuffix("." + domain)  # chat.<domain> → /chat
     if name == apps.address(f["uri"]):  # approved without a name of its own
         name = ""
-    label = apps.app_name(name, "") or addr
+    # an app the belfry serves itself is called by its name ("Chat"), with its address under it
+    label = apps.app_name(name, "") or apps.own_title(svc, f["uri"]) or addr
     badge = "" if approved else '<span class="badge wait">Not approved yet</span>'
     chip = (
         f'<div class="chip"><span class="ic">{APP_ICON}</span><span style="min-width:0">'

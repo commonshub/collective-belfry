@@ -207,10 +207,22 @@ def state(svc: Services) -> dict[str, dict[str, Any]]:
     return apps
 
 
+def own_title(svc: Services, uri: str) -> str:
+    """The name of an app this belfry serves itself ("Chat" for the chat it ships), else ""."""
+    from .appshome import app_url, installed
+
+    for a in installed(getattr(svc.settings, "apps_dir", "") or ""):
+        if uri == app_url(svc.settings, a["name"]):
+            return str(a.get("title") or "")
+    return ""
+
+
 def display_name(svc: Services, uri: str) -> str:
-    """The name an admin gave the app when approving it, else its address."""
+    """The name an admin gave the app when approving it; for an app the belfry serves itself its
+    own name ("Chat"); else its address."""
     a = state(svc).get(uri) or {}
-    return app_name(tag(a["decided"], "client") if a.get("approved") else "", uri)
+    named = tag(a["decided"], "client") if a.get("approved") else ""
+    return app_name(named or own_title(svc, uri), uri)
 
 
 def own_app(svc: Services, uri: str) -> bool:
