@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -145,8 +145,13 @@ export const setMemberLabels = (groupId: string, pubkey: string, labels: string[
 // tasklist.sh events also carry the group's h tag so the NIP-29 relay accepts them
 const taskTags = (groupId: string) => [['t', listIdFor(groupId)], ['h', groupId]]
 
-export const addTask = (groupId: string, title: string) =>
-  enqueue('groups', { kind: 2100, content: title.slice(0, 300), tags: taskTags(groupId) })
+/** A to-do in the channel's list; FROM = the message it was made from (shown under it). */
+export const addTask = (groupId: string, title: string, from?: string) =>
+  enqueue('groups', { kind: 2100, content: title.slice(0, 300), tags: [...taskTags(groupId), ...(from ? [['q', from]] : [])] })
+
+/** Pin a message as the channel's notice, or unpin it (channel admins; model.pinned). */
+export const pinMessage = (groupId: string, id: string, on: boolean) =>
+  enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', PIN_NS], ['l', on ? 'pinned' : 'unpinned', PIN_NS], ['e', id]] })
 
 export const taskAction = (groupId: string, taskId: string, action: 'claim' | 'unclaim' | 'done' | 'undone' | 'delete') =>
   enqueue('groups', { kind: 2101, tags: [['e', taskId], ['action', action], ...taskTags(groupId)] })

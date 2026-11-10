@@ -7,18 +7,18 @@
 // a message will actually reach.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { markSeen } from '../core/actions'
-import { channelIcon, group, recentlyActive, type Group } from '../core/model'
+import { channelIcon, group, type Group } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { go } from './common'
-import { ChannelInfoBody, Summary, Tabs, type InfoTab } from './ChannelInfo'
+import { ChannelInfoBody, type InfoTab } from './ChannelInfo'
+import { PullDown, SummaryLine } from './ChannelLine'
+import { PodShape } from './icons'
 
 type Level = 0 | 1 | 2
 
-export function ChannelHeader({ id, left, right }: { id: string; left: ReactNode; right: ReactNode }) {
+export function ChannelHeader({ id, left, right, topic, onTopic }: { id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void }) {
   useVersion()
   const g = group(id)
-  const active = recentlyActive(id)
   const [level, setLevel] = useState<Level>(0)
   const [tab, setTab] = useState<InfoTab>('about')
   const [drag, setDrag] = useState<number | null>(null) // px moved while dragging
@@ -43,7 +43,7 @@ export function ChannelHeader({ id, left, right }: { id: string; left: ReactNode
       if (peekRef.current) setPeekH(peekRef.current.scrollHeight)
       const screen = rootRef.current?.closest('.screen') as HTMLElement | null
       const bar = rootRef.current?.querySelector('.topbar') as HTMLElement | null
-      if (screen && bar) setFullH(screen.clientHeight - bar.offsetHeight)
+      if (screen && bar && rootRef.current) setFullH(screen.clientHeight - rootRef.current.offsetHeight)
     }
     m()
     addEventListener('resize', m)
@@ -87,21 +87,21 @@ export function ChannelHeader({ id, left, right }: { id: string; left: ReactNode
   const pull = { onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onUp, onClickCapture: swallowClick }
   const cycle = () => setLevel((l) => (l === 0 ? 1 : l === 1 ? 2 : 0))
 
-  const n = active.length
   return (
     <div ref={rootRef} className={'chead lvl' + level + (drag !== null ? ' dragging' : '')}>
       <div className="topbar chead-bar" {...pull}>
         {left}
         <h1 className="tap" onClick={() => setLevel(level ? 0 : 1)} aria-expanded={level > 0}>
-          {channelIcon(g)} {g?.name ?? id}
-          <small>{n ? `${n} active ${n === 1 ? 'member' : 'members'} this month` : 'Nobody active this month yet'}</small>
+          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
+          {(g?.isPod || g?.isProposal) && <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>}
         </h1>
         {right}
       </div>
+      <SummaryLine id={id} open={level > 0} onToggle={() => setLevel(level ? 0 : 1)} topic={topic} onTopic={onTopic} pull={pull} />
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
         {(level === 2 || (drag !== null && height > peekH + 8)) && g
           ? <div className="chead-full" style={{ height: fullH }}><ChannelInfoBody id={id} tab={tab} setTab={setTab} /></div>
-          : <div ref={peekRef} className="chead-peek"><Peek g={g} id={id} tab={tab} setTab={setTab} open={(t) => { setTab(t); setLevel(2) }} /></div>}
+          : <div ref={peekRef} className="chead-peek"><PullDown id={id} topic={topic} onTopic={(t) => { setLevel(0); onTopic(t) }} more={(t) => { setTab(t); setLevel(2) }} /></div>}
       </div>
       <button className="chead-handle" {...pull} onClick={cycle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}
         aria-label={level === 0 ? 'Show the channel details' : level === 1 ? 'Show everything about the channel' : 'Close the channel details'}>
@@ -111,19 +111,4 @@ export function ChannelHeader({ id, left, right }: { id: string; left: ReactNode
   )
 }
 
-/** The short blind: the same tabs and the same first lines as the full view. */
-function Peek({ g, id, tab, setTab, open }: { g?: Group; id: string; tab: InfoTab; setTab: (t: InfoTab) => void; open: (t: InfoTab) => void }) {
-  const parent = g?.parent ? group(g.parent) : undefined
-  return (
-    <div>
-      {(g?.isPod || g?.isProposal) && parent && (
-        <button className="link chead-parent pad-x" onClick={() => go('c/' + encodeURIComponent(parent.id))}>
-          {g.isProposal ? 'Proposal' : 'Pod'} in {channelIcon(parent)} {parent.name}
-        </button>
-      )}
-      <Tabs tab={tab} setTab={setTab} />
-      <Summary id={id} tab={tab} open={open} short />
-      <button className="link chead-more" onClick={() => open(tab)}>Show everything</button>
-    </div>
-  )
-}
+const parentOf = (g: Group) => { const p = g.parent ? group(g.parent) : undefined; return p ? (p.isPod ? p.name : '# ' + p.name) : 'the community' }

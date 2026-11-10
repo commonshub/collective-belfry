@@ -70,3 +70,23 @@ export const ImageIcon = () => <Svg><rect x="3" y="4" width="18" height="16" rx=
 export const MegaphoneIcon = () => <Svg><path d="M4 10v4h3l8 4V6l-8 4H4zM18 9.5a3.5 3.5 0 0 1 0 5M8 14.5l1 4.5h2.5l-1-3.5" /></Svg>
 export const DocIcon = () => <Svg><path d="M7 3h7l4 4v14H7zM14 3v4h4M10 12h5M10 16h5" /></Svg>
 export const HexIcon = () => <Svg><path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9z" /></Svg>
+
+export const TodoIcon = () => <Svg><rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" /></Svg>
+export const PeopleIcon = () => <Svg><circle cx="9" cy="8" r="4" /><path d="M2 21a7 7 0 0 1 14 0M17 4a4 4 0 0 1 0 8M22 21a6 6 0 0 0-4-5.6" /></Svg>
+export const ChevronDownIcon = () => <Svg><path d="m6 9 6 6 6-6" /></Svg>
+export const ChevronUpIcon = () => <Svg><path d="m6 15 6-6 6 6" /></Svg>
+export const HashIcon = () => <Svg><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" /></Svg>
+
+/** A pod's mark: a regular polygon with one side per member (3 at least; from 13 on, a circle). */
+export function PodShape({ members, size = 20 }: { members: number; size?: number }) {
+  const n = Math.max(3, members)
+  const label = `${members} ${members === 1 ? 'member' : 'members'}`
+  const common = { className: 'ico pod-shape', width: size, height: size, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinejoin: 'round' as const, role: 'img', 'aria-label': label }
+  if (n > 12) return <svg {...common}><circle cx="12" cy="12" r="9" /></svg>
+  const pts = Array.from({ length: n }, (_, k) => {
+    const a = -Math.PI / 2 + (2 * Math.PI * k) / n
+    return `${(12 + 9.5 * Math.cos(a)).toFixed(2)},${((n === 3 ? 13.5 : 12) + 9.5 * Math.sin(a)).toFixed(2)}`
+  }).join(' ')
+  return <svg {...common}><polygon points={pts} /></svg>
+}
+export const PushPinIcon = () => <Svg><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z" /></Svg>

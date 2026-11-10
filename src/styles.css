@@ -761,3 +761,54 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .handle-field em { font-style: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
 /* the last row of a card needs no line under it */
 .card > .switch-row:last-child, .card > .switch-row:only-of-type { border-bottom: 0; margin-bottom: 0; padding-bottom: 4px; }
+
+/* ---- the channel's one line (ChannelLine.tsx) and what it shows when pulled down ---- */
+.chan-line { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 8px 0 16px; border-bottom: 1px solid var(--line); background: var(--bg);
+  font-size: 14px; color: var(--text); touch-action: none; -webkit-user-select: none; user-select: none; }
+.chan-line.quiet { color: var(--muted); }
+.chan-line .line-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; min-height: 44px; text-align: left; color: inherit; }
+.chan-line .line-ico { flex: none; display: grid; place-items: center; }
+.chan-line .line-ico .ico { width: 16px; height: 16px; }
+.chan-line .line-hash { font-weight: 700; width: 16px; text-align: center; }
+.chan-line .line-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chan-line .line-text b { font-weight: 600; }
+.chan-line .line-more { flex: none; display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 6px; color: var(--muted); }
+.line-count { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.line-count .ico { width: 13px; height: 13px; }
+.line-chev .ico { width: 16px; height: 16px; display: block; }
+.line-pill { flex: none; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 99px; border: 1px solid var(--faint); color: var(--text); background: none; white-space: nowrap; }
+.line-pill.ask { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.topbar h1 .pod-shape { display: inline-block; vertical-align: -3px; }
+
+.pull { padding: 6px 16px 4px; display: flex; flex-direction: column; gap: 14px; }
+.pull section { display: flex; flex-direction: column; gap: 2px; }
+.pull h3 { margin: 0 0 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+.pull h3 span { font-weight: 500; color: var(--faint); margin-left: 4px; }
+.pull-parent { font-size: 13px; align-self: flex-start; }
+.pull-row { display: flex; align-items: center; gap: 10px; min-height: 44px; width: 100%; text-align: left; color: var(--text); }
+.pull-row .when { flex: none; width: 96px; font-size: 14px; font-weight: 600; }
+.pull-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.pull-row .t small, .pull-row > small { font-size: 12px; color: var(--muted); }
+.pull-row.todo .check { margin-top: 0; }
+.pull-all { align-self: flex-start; font-size: 13px; padding: 6px 0; }
+.pull-pin { display: flex; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 6px; }
+.pull-pin > .ico { flex: none; width: 18px; height: 18px; margin-top: 2px; }
+.pull-pin > div { flex: 1; min-width: 0; }
+.pull-pin small { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); }
+.pull-pods { display: flex; flex-wrap: wrap; gap: 6px; }
+.pull-pods button { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 12px; border-radius: 99px; background: var(--surface); color: var(--text); font-size: 14px; }
+.pull-pods small { color: var(--muted); font-size: 12px; }
+.pull-topics:empty { display: none; }
+.pull .topics-bar.wrap { flex-wrap: wrap; overflow: visible; padding: 0; border: 0; }
+.pull-people { border-top: 1px solid var(--line); }
+.pull-people .ico { width: 18px; height: 18px; flex: none; }
+.pull-about { margin: 0 0 4px; font-size: 14px; color: var(--muted); }
+.pull .prop-head { padding: 0; border: 0; max-height: none; overflow: visible; }
+
+.todo-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 10px; border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; font-weight: 600; }
+.todo-chip .ico { width: 15px; height: 15px; }
+.todo-chip.done { color: var(--muted); font-weight: 500; text-decoration: line-through; }
+.pull-row .when { display: flex; flex-direction: column; width: 84px; white-space: nowrap; }
+.pull-row .when small { font-size: 12px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+.pull-people > .ico:last-child { width: 16px; height: 16px; color: var(--muted); }
+.pod-ic .pod-shape { display: block; margin: auto; }

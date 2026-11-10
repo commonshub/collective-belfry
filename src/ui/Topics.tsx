@@ -99,7 +99,7 @@ function Mention({ npub }: { npub: string }) {
 }
 
 /** The pinned topics, a scrolling line; the open one highlighted (shown even if not pinned). */
-export function TopicsBar({ groupId, active, onOpen }: { groupId: string; active?: string; onOpen: (t?: string) => void }) {
+export function TopicsBar({ groupId, active, onOpen, titled = false }: { groupId: string; active?: string; onOpen: (t?: string) => void; titled?: boolean }) {
   useVersion()
   const list = topics(groupId).filter((t) => t !== ANNOUNCE)
   const all = active && active !== ANNOUNCE && !list.includes(active) ? [active, ...list] : list
@@ -108,11 +108,12 @@ export function TopicsBar({ groupId, active, onOpen }: { groupId: string; active
   const [menu, setMenu] = useState<string | null>(null)
   if (!all.length && !announced) return null
   return (
-    <div className="topics-bar">
+    <>{titled && <h3>Topics</h3>}
+    <div className={'topics-bar' + (titled ? ' wrap' : '')}>
       {announced && <button className={active === ANNOUNCE ? 'on' : ''} onClick={() => onOpen(active === ANNOUNCE ? undefined : ANNOUNCE)}>📣 Announcements{active === ANNOUNCE && <span aria-hidden="true"> ✕</span>}</button>}
       {all.map((t) => <TopicChip key={t} t={t} on={t === active} onTap={() => onOpen(t === active ? undefined : t)} onHold={() => setMenu(t)} />)}
       {menu && <TopicMenu groupId={groupId} topic={menu} onClose={() => setMenu(null)} />}
-    </div>
+    </div></>
   )
 }
 

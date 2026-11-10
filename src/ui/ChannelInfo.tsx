@@ -52,7 +52,7 @@ export function ChannelInfoBody({ id, tab, setTab }: { id: string; tab: Tab; set
 export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
-  const list = tabs ?? ([['about', 'About'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']] as [T, string][])
+  const list = tabs ?? ([['about', 'About'], ['tasks', 'To-dos'], ['members', 'Members'], ['files', 'Files']] as [T, string][])
   return (
     <div className="seg">
       {list.map(([k, label]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>)}
@@ -140,10 +140,10 @@ export function Tasks({ groupId }: { groupId: string }) {
   return (
     <div>
       <Form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-        <input className="input" placeholder="Add a task…" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
         <button className="btn small" disabled={!title.trim()}>Add</button>
       </Form>
-      {tasks.length === 0 && <div className="empty">No tasks yet.</div>}
+      {tasks.length === 0 && <div className="empty">No to-dos yet.</div>}
       {[...todo, ...done].map((t) => (
         <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
       ))}

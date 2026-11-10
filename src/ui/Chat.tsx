@@ -4,8 +4,8 @@ import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
@@ -15,12 +15,13 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
 import { guestInfo, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
+import { mayPin } from './ChannelLine'
 import { openProfile } from './Profile'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -144,34 +145,12 @@ export function ChannelView({ id, topic, focus }: { id: string; topic?: string; 
   useVersion()
   const all = groups()
   const g = all.find((x) => x.id === id)
-  const [podTab, setPodTab] = useState<'chat' | 'tasks' | 'members' | 'files'>('chat')
-  useEffect(() => setPodTab('chat'), [id])
   return (
     <div className="screen">
-      <ChannelHeader id={id}
+      <ChannelHeader id={id} topic={topic} onTopic={openTopic}
         left={<MenuButton />}
         right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} /></>} />
-      <EventsBar channel={id} />
-      <PodsBar channel={id} />
-      {g?.isProposal && <ProposalHeader groupId={id} />}
-      {g?.isPod && canAdmin(g) && g.applications.length > 0 && (
-        <button className="join-bar" style={{ borderTop: 0, borderBottom: '1px solid var(--line)', width: '100%' }} onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
-          <span>{g.applications.length} {g.applications.length === 1 ? 'person asks' : 'people ask'} to join</span>
-          <span className="badge orange">Review</span>
-        </button>
-      )}
-      {g?.isPod && <Tabs tab={podTab} setTab={setPodTab} tabs={[['chat', 'Chat'], ['tasks', 'Tasks'], ['members', 'Members'], ['files', 'Files']]} />}
-      {podTab === 'chat' && <>
-        <TopicsBar groupId={id} active={topic} onOpen={openTopic} />
-        <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
-      </>}
-      {podTab !== 'chat' && (
-        <div className="scroll">
-          {podTab === 'tasks' && <Tasks groupId={id} />}
-          {podTab === 'members' && <Members groupId={id} />}
-          {podTab === 'files' && <Files groupId={id} />}
-        </div>
-      )}
+      <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
   )
@@ -210,25 +189,6 @@ function JoinBar({ g }: { g: Group }) {
   )
 }
 
-/** Under a channel's name (after its events): the pods inside it. Nothing when none. */
-function PodsBar({ channel }: { channel: string }) {
-  const subs = groups().filter((x) => (x.isPod || x.isProposal) && x.parent === channel)
-  const props = new Map(subs.filter((x) => x.isProposal).map((x) => [x.id, proposalFor(x.id)]))
-  // pods, then proposals still in play (passed, rejected and closed ones stay in the channel list)
-  const shown = [...subs.filter((x) => x.isPod), ...subs.filter((x) => x.isProposal && !['passed', 'rejected', 'closed'].includes(props.get(x.id)?.status ?? 'draft'))]
-  if (!shown.length) return null
-  return (
-    <div className="pods-bar">
-      {shown.map((p) => (
-        <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>
-          {channelIcon(p)} {p.name}
-          {p.isPod ? <small>{p.members.size}</small> : props.get(p.id) && <small>v{props.get(p.id)!.version}</small>}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 /** The post a pod leaves in its parent: a card to open (or join) it. */
 function PodCard({ id, fallback }: { id: string; fallback: string }) {
   const g = groups().find((x) => x.id === id)
@@ -236,7 +196,7 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
   const inIt = g.members.has(me())
   return (
     <div className="ev-card pod-card" role="button" tabIndex={0} onClick={() => go('c/' + encodeURIComponent(id))}>
-      <div className="date pod-ic">⬡</div>
+      <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
       <span className="info">
         <b>{g.name}</b>
         {g.about && <small>{g.about}</small>}
@@ -304,6 +264,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
+  const [newTodo, setNewTodo] = useState(false)
   useVersion()
   const g = group(id)
   const admin = canAdmin(g)
@@ -311,6 +272,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const ps = profiles()
   const rx = reactions(id)
   const th = threadsOf(id)
+  // a message someone turned into a to-do carries a mark (and its state)
+  const todoOf = new Map(tasklist(id).tasks.filter((t) => t.source).map((t) => [t.source!, t]))
   const joins = topic ? [] : guestJoins(id)
   // threads unfold in place (no screen of their own): keyed by root id, or "act:<root>" for a
   // thread that resurfaced lower in the feed because someone replied to an older message
@@ -397,7 +360,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} />
+                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} todo={todoOf.get(m.ev.id)} />
               {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(m)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
             </Fragment>
           })}
@@ -406,7 +369,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       <SaveAccountBar />
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce) }}
-        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} />}
+        onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
+      {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
@@ -480,7 +444,7 @@ function useHold(open: () => void, off = false) {
   }
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox }: { onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, todo }: { todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -532,6 +496,12 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
             </div>
           )}
           {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
+          {todo && (
+            <button className={'todo-chip' + (todo.done ? ' done' : '')} onClick={() => void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done')}
+              aria-label={todo.done ? 'Done. Mark as not done' : 'To do. Mark as done'}>
+              <TodoIcon />{todo.done ? 'Done' : todo.assignee ? `To do · ${displayName(todo.assignee)}` : 'To do'}
+            </button>
+          )}
           {thread && thread.count > 0 && onThread && (
             <div className="thread-chips">
               <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
@@ -571,6 +541,10 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   // The add-reaction button opens the emojis alone.
   const [more, setMore] = useState(emojiOnly)
   const [confirming, setConfirming] = useState(false) // "Delete message" asks first, in the same sheet
+  const g = group(groupId)
+  const isPinned = canAdmin(g) && pinned(groupId, mayPin(g)).some((x) => x.ev.id === m.ev.id)
+  const isTodo = tasklist(groupId).tasks.some((t) => t.source === m.ev.id)
+  const todoTitle = m.text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '').replace(/\s+/g, ' ').trim().slice(0, 300)
   const [copied, setCopied] = useState('')
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
@@ -619,6 +593,8 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
           <div className="act-group">
             {m.text && <Item icon={<CopyIcon />} label={copied === 'text' ? 'Copied' : 'Copy text'} onClick={() => void copy('text', m.text)} />}
             <Item icon={<LinkIcon />} label={copied === 'link' ? 'Copied' : 'Copy link'} onClick={() => void copy('link', link)} />
+            {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the to-dos' : 'Turn into a to-do'} onClick={() => { if (copied === 'todo') return; setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
+            {canAdmin(g) && !m.ev.pending && m.ev.kind === 9 && <Item icon={<PushPinIcon />} label={isPinned ? 'Unpin from the channel' : 'Pin to the channel'} onClick={() => { onClose(); void pinMessage(groupId, m.ev.id, !isPinned) }} />}
             {isAdmin() && nsiteRef(m.text) && <Item icon={<GlobeIcon />} label="Make this the website" onClick={() => { onClose(); void makeWebsite(m) }} />}
           </div>
           {m.ev.pubkey === me() && (
@@ -634,7 +610,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -741,6 +717,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
           </div>
           <div className="act-group">
             {canAnnounce && <button className="act" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}><MegaphoneIcon /><span>Announcement<small>Stands out; followers get it by e-mail</small></span></button>}
+            {onTodo && <button className="act" onClick={() => { setMenu(false); onTodo() }}><TodoIcon /><span>To-do<small>Something to get done, on the channel's list</small></span></button>}
             {onEvent && <button className="act" onClick={() => { setMenu(false); onEvent() }}><CalendarIcon /><span>Event</span></button>}
             {onProposal && <button className="act" onClick={() => { setMenu(false); onProposal() }}><DocIcon /><span>Proposal<small>A text to discuss and vote on</small></span></button>}
             {onPod && <button className="act" onClick={() => { setMenu(false); onPod() }}><HexIcon /><span>Pod<small>A working group with its own channel</small></span></button>}
@@ -748,6 +725,21 @@ export function Composer({ onSend, onEvent, onPod, onProposal, placeholder = 'Me
         </Sheet>
       )}
     </div>
+  )
+}
+
+/** A new to-do for the channel (the ＋ menu). */
+function NewTodoSheet({ groupId, onClose }: { groupId: string; onClose: () => void }) {
+  const [title, setTitle] = useState('')
+  return (
+    <Sheet title="New to-do" onClose={onClose}>
+      <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim()) return; await addTask(groupId, title.trim()); onClose() }}>
+        <label className="field"><span>What needs doing?</span>
+          <input className="input" autoFocus maxLength={300} placeholder="e.g. Book the room for Friday" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+        <button className="btn" disabled={!title.trim()}>Add to the list</button>
+        <p className="hint" style={{ marginTop: 10 }}>Everyone in the channel sees it under the channel's name. Anyone can take it or tick it off.</p>
+      </Form>
+    </Sheet>
   )
 }
 

@@ -91,7 +91,11 @@ export interface Application { pubkey: string; answer: string; at: number; ev: E
 
 export type ChannelType = 'channel' | 'event' | 'pod' | 'proposal'
 export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g?.isPod ? 'pod' : g?.isProposal ? 'proposal' : 'channel')
-export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? '⬡' : g?.isProposal ? '📝' : '#')
+/** A pod's shape has as many sides as it has members: a triangle up to 3, a square for 4, … the
+ *  more people, the closer to a circle (PodShape in icons.tsx draws it; this is the text form). */
+export const podSides = (members: number) => Math.max(3, Math.min(members, 12))
+const POD_GLYPH: Record<number, string> = { 3: '△', 4: '□', 5: '⬠', 6: '⬡' }
+export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? (POD_GLYPH[podSides(g.members.size)] ?? '○') : g?.isProposal ? '📝' : '#')
 export const isPodId = (id: string) => id.startsWith('pod-')
 export const isProposalId = (id: string) => id.startsWith('prop-')
 /** The pod a chat post announces (its `pod` tag), if any. */
@@ -392,6 +396,8 @@ export interface Task {
   done: boolean
   pending: boolean
   comments: { author: string; text: string; at: number }[]
+  /** The message it was made from ("Turn into a to-do"), its `q` tag. */
+  source?: string
 }
 
 export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
@@ -402,7 +408,7 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
   for (const e of evs) {
     if (e.kind === 2100) {
       const title = e.content.trim().slice(0, 300)
-      if (title) tasks.set(e.id, { id: e.id, title, author: e.pubkey, done: false, pending: !!e.pending, comments: [] })
+      if (title) tasks.set(e.id, { id: e.id, title, author: e.pubkey, done: false, pending: !!e.pending, comments: [], source: tag(e, 'q') })
     } else if (e.kind === 2102) {
       name = e.content.slice(0, 48)
     } else {
@@ -418,6 +424,26 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
     }
   }
   return { name, tasks: [...tasks.values()] }
+}
+
+// ---- pinned messages: a NIP-32 label in the group (namespace belfry/pin, `l` pinned | unpinned,
+// `e` = the message), by someone who may administer the channel (MAY says who). The latest label
+// per message wins. A pinned message is the channel's standing notice (its PSA).
+
+export const PIN_NS = 'belfry/pin'
+
+export function pinned(groupId: string, may: (pubkey: string) => boolean): Message[] {
+  const state = new Map<string, { on: boolean; at: number }>()
+  for (const e of all(me())) {
+    if (e.kind !== 1985 || tag(e, 'h') !== groupId || tag(e, 'L') !== PIN_NS || !may(e.pubkey)) continue
+    const id = tag(e, 'e')
+    const l = e.tags.find((t) => t[0] === 'l')?.[1]
+    if (!id || (l !== 'pinned' && l !== 'unpinned')) continue
+    const had = state.get(id)
+    if (!had || had.at <= e.created_at) state.set(id, { on: l === 'pinned', at: e.created_at })
+  }
+  if (!state.size) return []
+  return messages(groupId).filter((m) => state.get(m.ev.id)?.on).sort((a, b) => state.get(b.ev.id)!.at - state.get(a.ev.id)!.at)
 }
 
 // ---- calendar (NIP-52) ----------------------------------------------------------

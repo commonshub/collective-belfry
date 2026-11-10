@@ -11,13 +11,13 @@ import { TopicsBar } from './Topics'
 import { Files, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 
-const when = (e: CalEvent) => {
+export const when = (e: CalEvent) => {
   if (e.allDay) return 'All day'
   const t = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return e.end ? `${t(e.start)} – ${t(e.end)}` : t(e.start)
 }
 
-const going = (e: CalEvent) => [...e.rsvps.values()].filter((s) => s === 'accepted').length
+export const going = (e: CalEvent) => [...e.rsvps.values()].filter((s) => s === 'accepted').length
 
 type Filter = 'going' | 'maybe' | 'all'
 
@@ -81,7 +81,7 @@ function EventRow({ e }: { e: CalEvent }) {
       <div className="info">
         <b>{e.title}</b>
         <small>{when(e)}{e.location ? ' · ' + e.location : ''}{e.links.length ? ' · 🎥 online' : ''}</small>
-        <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
+        <small>{mine ? `${LABEL[mine]} · ` : ''}{going(e)} going</small>
       </div>
     </button>
   )
@@ -121,13 +121,13 @@ export function EventCard({ coord, fallback }: { coord: string; fallback: string
       <span className="info">
         <b>{e.title}</b>
         <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}</small>
-        <small>{going(e)} going{mine ? ` · you: ${LABEL[mine]}` : ''}</small>
+        <small>{mine ? `${LABEL[mine]} · ` : ''}{going(e)} going</small>
       </span>
     </button>
   )
 }
 
-const LABEL: Record<Rsvp, string> = { accepted: 'Going', tentative: 'Maybe', declined: "Can't go" }
+export const LABEL: Record<Rsvp, string> = { accepted: 'Going', tentative: 'Maybe', declined: "Can't go" }
 
 function localInput(d: Date) {
   const p = (n: number) => String(n).padStart(2, '0')
@@ -233,7 +233,7 @@ export function EventPage({ coord }: { coord: string }) {
           </div>
         )}
       </div>
-      <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'Tasks'], ['files', 'Files']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'To-dos'], ['files', 'Files']]} />
       {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <><TopicsBar groupId={e.groupId} active={topic} onOpen={setTopic} /><Conversation id={e.groupId} topic={topic} onTopic={setTopic} /></> : (
         <div className="scroll"><div className="empty">
           <p>This session has no chat yet.</p>
