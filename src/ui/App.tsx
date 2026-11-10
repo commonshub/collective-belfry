@@ -1,8 +1,9 @@
+import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
-import { belfrySignOut, clearSession, demoSession, finishSignIn, pendingInvite, setPendingInvite, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
+import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, pendingInvite, setPendingInvite, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
@@ -61,11 +62,16 @@ export function App() {
 
   const signOut = async () => {
     if (outboxItems().length && !confirm(`${outboxItems().length} messages are not sent yet and will be lost. Sign out anyway?`)) return
-    setGuestInfo(null)
     const s = phase.p === 'in' ? phase.s : undefined
+    // this device's session ends in the signer too (its key can sign nothing any more), while
+    // the session can still sign the request; then nothing of it stays on the device, and the
+    // next sign-in starts from a new key
+    if (s?.backend === 'belfry') await endSession(s)
+    setGuestInfo(null)
     stop()
     await clearSession()
     await wipe()
+    forgetDevice()
     location.hash = ''
     if (s?.backend === 'belfry') return belfrySignOut(s)
     location.reload()
@@ -266,7 +272,7 @@ function demoPeople(channel = 'general') {
     { name: 'Rua', tags: ['software'], place: { id: 'gn:2179537', name: 'Wellington', country: 'NZ', lat: -41.29, lon: 174.78 } },
   ]
   const evs = people.flatMap((p) => {
-    const pk = hex(32)
+    const pk = getPublicKey(generateSecretKey()) // a real key: a direct message to them can be encrypted
     return [
       { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now, tags: [], content: JSON.stringify({ name: p.name, about: `Hi, I'm ${p.name}.` }) },
       { id: hex(32), pubkey: pk, sig: hex(64), kind: 30078, created_at: now, tags: [['d', 'belfry:profile']], content: JSON.stringify({ tags: p.tags, share: 'city', place: p.place }) },

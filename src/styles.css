@@ -793,3 +793,13 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .pull-row .when small { font-size: 12px; font-weight: 400; color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
 .pull-people > .ico:last-child { width: 16px; height: 16px; color: var(--muted); }
 .pod-ic .pod-shape { display: block; margin: auto; }
+
+/* ---- inviting a member by name; a mention of someone who is not in the channel ---- */
+.invite-row { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+.invite-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.invite-row .t small { font-size: 12px; color: var(--muted); }
+.invite-or { display: flex; align-items: center; gap: 10px; margin: 12px 0; font-size: 12px; color: var(--muted); }
+.invite-or::before, .invite-or::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.mention-pop .not-here { margin-left: auto; font-size: 12px; color: var(--muted); }
+.outside-note { display: flex; align-items: center; gap: 10px; padding: 8px 10px; margin-bottom: 8px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; background: var(--surface); }
+.outside-note > span:first-child { flex: 1; min-width: 0; }

@@ -112,7 +112,12 @@ export async function flush() {
         sentListeners.forEach((f) => f(item, ev))
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
+        // a file the storage refuses (too big, a type it does not take, not allowed) will be refused
+        // again: fail this one message instead of holding back every later one to that relay.
+        // 401, 408 and 429 can pass on a later try.
+        const refusedUpload = /^upload failed \((4\d\d)/.exec(msg)
         const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
+          || (!!refusedUpload && !['401', '408', '429'].includes(refusedUpload[1]))
         if (msg.startsWith('restricted') && item.target === 'groups') noteRefusal(msg)
         if (/^duplicate:/.test(msg)) { // the relay has it already: out
           await dropOutbox(item.localId)

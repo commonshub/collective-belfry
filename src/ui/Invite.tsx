@@ -5,7 +5,10 @@
 import { useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY } from '../config'
-import { channelIcon, group } from '../core/model'
+import { channelIcon, displayName, group, profiles } from '../core/model'
+import { inChannel, inviteMember, isGuest } from '../core/invite'
+import { me } from '../core/sync'
+import { Avatar } from './common'
 import { signedFetch } from '../core/sync'
 import { Sheet, Btn } from './common'
 
@@ -64,6 +67,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
   const label = `${channelIcon(g)}${g?.isPod || g?.isEvent || g?.isProposal ? ' ' : ''}${g?.name ?? id}`
   return (
     <Sheet title={`Invite to ${label}`} onClose={onClose}>
+      <InviteMember id={id} />
       {admin && (
         <label className="switch-row">
           <span><b>Guest access for 30 days</b><small>For a person or an AI agent who isn't a member: this channel only, nothing else.</small></span>
@@ -100,5 +104,45 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
               : `Members open ${label} with this link. For someone who isn't a member yet, turn on guest access above.`}
           </p>
     </Sheet>
+  )
+}
+
+/** Pick a member by name: they get the channel's link as a direct message (and are let in at
+ *  once when it is a closed pod I administer). */
+function InviteMember({ id }: { id: string }) {
+  const g = group(id)
+  const [q, setQ] = useState('')
+  const [done, setDone] = useState<Map<string, string>>(new Map())
+  const [error, setError] = useState('')
+  const words = q.trim().toLowerCase()
+  const list = useMemo(() => {
+    if (!words) return []
+    return [...profiles().entries()]
+      .filter(([pk, p]) => pk !== me() && !!p.name && !isGuest(pk) && p.name.toLowerCase().split(/\s+/).some((w) => w.startsWith(words)))
+      .slice(0, 5).map(([pubkey]) => pubkey)
+  }, [words]) // eslint-disable-line react-hooks/exhaustive-deps
+  const SAID: Record<string, string> = { admitted: 'Added · link sent', asked: 'Link sent · they apply', sent: 'Link sent' }
+  return (
+    <div className="invite-member">
+      <label className="field" style={{ marginBottom: 6 }}><span>Invite a member</span>
+        <input className="input" placeholder="Type a name" value={q} autoCapitalize="none" autoCorrect="off" onChange={(e) => { setQ(e.target.value); setError('') }} /></label>
+      {list.map((pk) => {
+        const here = inChannel(g, pk)
+        return (
+          <div key={pk} className="invite-row">
+            <Avatar pubkey={pk} size={28} />
+            <span className="t">{displayName(pk)}<small>{here ? (g?.closed ? 'Already in' : 'Can already open it') : 'Not in this channel'}</small></span>
+            {done.has(pk)
+              ? <span className="hint">{done.get(pk)}</span>
+              : <Btn className="btn small" onClick={async () => {
+                  try { const s = await inviteMember(id, pk); setDone((m) => new Map(m).set(pk, SAID[s])) } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+                }}>{here ? 'Send the link' : 'Invite'}</Btn>}
+          </div>
+        )
+      })}
+      {words && list.length === 0 && <p className="hint">No member by that name. For someone who is not a member, use the guest link below.</p>}
+      {error && <div className="error">{error}</div>}
+      <div className="invite-or"><span>or share a link</span></div>
+    </div>
   )
 }

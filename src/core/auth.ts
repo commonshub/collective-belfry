@@ -168,6 +168,30 @@ export const setGuestInfo = (g: GuestInfo | null) => {
   try { if (g) localStorage.setItem(GUEST_KEY, JSON.stringify(g)); else localStorage.removeItem(GUEST_KEY) } catch { /* private mode */ }
 }
 
+/** Ask the belfry to remove this device's session from the signer (NIP-98, signed by the session
+ *  itself). Best effort: offline, or a session already gone, must not keep anyone signed in. */
+export async function endSession(s: Session) {
+  const bunker = /^bunker:\/\/([0-9a-f]{64})/i.exec(s.bunkerUrl ?? '')?.[1]?.toLowerCase()
+  if (!bunker) return
+  try {
+    const { signedFetch } = await import('./sync')
+    await Promise.race([
+      signedFetch(`${BELFRY.api}/me/sessions/revoke`, 'POST', { bunker_pubkey: bunker }),
+      new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 5000)),
+    ])
+  } catch { /* the session expires by itself; signing out goes on */ }
+}
+
+/** Everything this app kept in the browser's own storage (join key, guest note, last channel,
+ *  hidden pins, …): gone at sign-out, so the next person on this device starts clean. */
+export function forgetDevice() {
+  for (const store of [localStorage, sessionStorage]) {
+    try {
+      for (const k of Object.keys(store)) if (/^(belfry|osv)[-:]/.test(k)) store.removeItem(k)
+    } catch { /* private mode */ }
+  }
+}
+
 /** Ends this app's authorization and the sign-in for every village app, then comes back. */
 export async function belfrySignOut(s: Session) {
   if (s.refreshToken) {

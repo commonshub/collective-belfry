@@ -21,6 +21,7 @@ import { canAdmin, isAdmin } from '../core/access'
 import { guestInfo, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
 import { mayPin } from './ChannelLine'
+import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -366,7 +367,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         </div>
       </div>
       <SaveAccountBar />
-      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer groupId={id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce) }}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
@@ -416,7 +417,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
             reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} announce={false} />)}
         </div>
       </div>
-      {root && <Composer placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {root && <Composer groupId={groupId} placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -609,7 +610,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -649,6 +650,11 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
     setCaret(at)
     requestAnimationFrame(() => { ta.current?.focus(); ta.current?.setSelectionRange(at, at) })
   }
+  // people mentioned in the draft who cannot see this channel: said so before sending, with a
+  // way to bring them in (a mention alone neither notifies them nor shows them the message)
+  const here = groupId ? group(groupId) : undefined
+  const outside = here ? [...picked.current].filter(([name, pk]) => text.includes('@' + name) && !inChannel(here, pk)) : []
+  const [invited, setInvited] = useState<Map<string, string>>(new Map())
   const withMentions = (t: string) => {
     let out = t
     for (const [name, pk] of [...picked.current].sort((a, b) => b[0].length - a[0].length))
@@ -696,6 +702,17 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
           ))}
         </div>
       )}
+      {outside.map(([name, pk]) => (
+        <div key={pk} className="outside-note" role="status">
+          <span><b>{name}</b> is not in this channel{isGuest(pk) ? ' (a guest of another one)' : ''}: they won't be told and can't read this.</span>
+          {invited.has(pk) ? <span className="hint">{invited.get(pk)}</span>
+            : isGuest(pk) ? null
+            : <Btn className="btn small" onClick={async () => {
+                try { const s = await inviteMember(groupId!, pk); setInvited((m) => new Map(m).set(pk, s === 'asked' ? 'Link sent · they apply' : 'Invited')) }
+                catch { setInvited((m) => new Map(m).set(pk, 'Could not invite. Try from the channel\'s Invite.')) }
+              }}>Invite</Btn>}
+        </div>
+      ))}
       <div className="bar">
         <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a pod' : 'Add photos or files'}
           onClick={() => (onEvent || canAnnounce ? setMenu(true) : picker.current?.click())}>＋</button>
@@ -706,6 +723,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
             {people.map((p) => (
               <button key={p.pubkey} role="option" onMouseDown={(e) => e.preventDefault()} onClick={() => pick(p)}>
                 <Avatar pubkey={p.pubkey} size={24} /><span>{p.name}</span>
+                {here && !inChannel(here, p.pubkey) && <small className="not-here">not in this channel</small>}
               </button>
             ))}
           </div>
@@ -775,7 +793,7 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
     <div className="inline-thread" role="region" aria-label="Thread">
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
       {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
-      <Composer placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
+      <Composer groupId={groupId} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
         onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>
