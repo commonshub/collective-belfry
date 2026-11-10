@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import datetime as dt
 import html
-import json
 import logging
 from typing import Any
 
@@ -488,7 +487,3 @@ async function poll() {{
 poll();
 </script>"""
     return page("Door check", body)
-
-
-def json_dumps(data: Any) -> str:
-    return json.dumps(data, separators=(",", ":"))

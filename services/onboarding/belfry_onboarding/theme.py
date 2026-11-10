@@ -40,7 +40,6 @@ log = logging.getLogger(__name__)
 E = html.escape
 
 BUILTIN = Path(__file__).parent / "themes"
-BASES = ("belfry",)
 SERVED = {".css", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".woff2", ".woff", ".gif"}
 LOGOS = ("logo.svg", "logo.png", "logo.webp")
 FAVICONS = ("favicon.svg", "favicon.png", "favicon.ico")

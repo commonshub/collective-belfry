@@ -18,7 +18,6 @@ from typing import Any
 
 import jwt
 
-VCT_PATH = "/vct/village-pass/v1"
 STATUS_LIST_TTL = 300  # default seconds a verifier may cache the list (ttl claim, max-age)
 STATUS_LIST_MIN_BITS = 8 * 1024
 
@@ -186,12 +185,6 @@ def presented_credential(info: dict[str, Any]) -> dict[str, Any] | None:
             if isinstance(cred, dict) and isinstance(cred.get("credentialData"), dict):
                 return cred
     return None
-
-
-def presented_claims(info: dict[str, Any]) -> dict[str, Any] | None:
-    """The disclosed claims of the first presented village pass, or None."""
-    cred = presented_credential(info)
-    return cred["credentialData"] if cred else None
 
 
 def issuer_leaf(cred: dict[str, Any]) -> str | None:
