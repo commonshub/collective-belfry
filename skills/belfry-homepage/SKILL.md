@@ -116,6 +116,10 @@ The belfry's own pages take these paths on the apex:
 - `/chat`, `/groups`, `/calendar`, `/programme`, `/vote`, `/people`, `/market`, `/photos`,
   `/wallet`, `/apps`, `/shop` (the short names)
 - the onboarding pages: `/me`, `/apply`, `/claim/…`, `/check/…`, `/door`, `/feedback`,
-  `/help`, `/privacy`, `/terms`, `/refunds`, `/rules`, `/brand/…`, `/signin/…`, `/welcome/…`
+  `/help`, `/privacy`, `/terms`, `/refunds`, `/rules`, `/brand/…`, `/signin/…`, `/welcome/…`,
+  `/proposals`, `/changelog`, `/monitor`, `/drop/…`, `/invite/…`, `/api/…` and every other path
+  the onboarding service answers
 
-These redirect to `pass.<domain>`.
+These redirect to `pass.<domain>`. Three stay on the apex: `/follow` (the e-mail form's target),
+`/theme/…` and, when a repository is set, `/git`. Every app installed with `belfry app install`
+also takes `/<name>/` (the chat: `/chat` redirects to `chat.<domain>`).
