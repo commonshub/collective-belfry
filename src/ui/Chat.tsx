@@ -673,7 +673,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
       for (const [name, pk] of mentioned) picked.current.set(name, pk)
       setFiles((now) => (now.length ? now : f))
       if (a) setAnn(true)
-      setError(`Not saved: ${e instanceof Error ? e.message : String(e)}. Try again.`)
+      setError(`Not saved: ${(e instanceof Error ? e.message : String(e)).replace(/\.$/, "")}. Try again.`)
     }
   }
 
