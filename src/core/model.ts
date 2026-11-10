@@ -265,10 +265,11 @@ export const EDIT_KIND = 1010
 
 function edits(list: Ev[], del: Set<string>): Map<string, Ev> {
   const out = new Map<string, Ev>()
+  const authors = new Map(list.map((e) => [e.id, e.pubkey]))
   for (const e of list) {
     if (e.kind !== EDIT_KIND || del.has(e.id)) continue
     const id = tag(e, 'e')
-    if (!id) continue
+    if (!id || authors.get(id) !== e.pubkey) continue // only its author edits a message
     const had = out.get(id)
     if (!had || had.created_at < e.created_at || (had.created_at === e.created_at && had.id < e.id)) out.set(id, e)
   }
