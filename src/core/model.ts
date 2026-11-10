@@ -30,10 +30,23 @@ function deleted(list: Ev[]) {
 
 export interface Profile { name?: string; picture?: string; nip05?: string }
 
-export function profiles(): Map<string, Profile> {
+/** One result per state of the event log. Views ask for profiles() and groups() many times per
+ *  render (every avatar, every name): computed once, until the log changes (all() then returns
+ *  a new list). Callers only read the result. */
+function perLog<T>(compute: (list: Ev[]) => T): () => T {
+  let key: Ev[] | undefined
+  let val: T
+  return () => {
+    const list = all(me())
+    if (list !== key) { val = compute(list); key = list }
+    return val
+  }
+}
+
+export const profiles: () => Map<string, Profile> = perLog((list) => {
   const out = new Map<string, Profile & { at: number }>()
   const guests: [string, string][] = []
-  for (const e of all(me())) {
+  for (const e of list) {
     // a guest's name, from the event that put them in a channel (guests.py), until a profile
     if (e.kind === 9000 && tag(e, 'name')) { const p = tag(e, 'p'); if (p) guests.push([p, tag(e, 'name')!.slice(0, 100)]) }
     if (e.kind !== 0) continue
@@ -46,7 +59,7 @@ export function profiles(): Map<string, Profile> {
   }
   for (const [pk, name] of guests) if (!out.get(pk)?.name) out.set(pk, { ...out.get(pk), name, at: out.get(pk)?.at ?? 0 })
   return out
-}
+})
 
 /** The name other people know someone by (never "You"): for e-mail From lines and signatures. */
 export function realName(pubkey: string, ps = profiles()) {
@@ -109,8 +122,7 @@ export const proposalOf = (e: Ev) => {
   return v && isProposalId(v) ? v : undefined
 }
 
-export function groups(): Group[] {
-  const list = all(me())
+export const groups: () => Group[] = perLog((list) => {
   const map = new Map<string, Group & { metaAt: Record<string, number> }>()
   const applied = new Map<string, Ev>() // group id + pubkey → latest 9021
   const decided = new Map<string, number>() // group id + pubkey → latest 9000 / 9001
@@ -180,7 +192,7 @@ export function groups(): Group[] {
   return [...map.values()]
     .filter((g) => !gone.has(g.id))
     .sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.lastActivity - a.lastActivity))
-}
+})
 
 /** An announcement: a message tagged `t announcement` (NIP-24) by one of its channel's admins.
  *  Any member can tag one; only the admins' count (here and in Belfry's e-mails to followers). */
