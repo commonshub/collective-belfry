@@ -329,6 +329,13 @@ EOF
     die "Docker Compose $cv is too old (2.33 or newer); install Docker from docker.com (https://docs.docker.com/engine/install/)"
   fi
   systemctl enable --now docker >/dev/null 2>&1 || true
+  # Docker keeps every container's output for ever by default (belfry.sh: 100 MB in five days).
+  # On a server with no Docker settings and no containers yet, cap it at 3 files of 10 MB each.
+  if [[ ! -e /etc/docker/daemon.json && -z "$(docker ps -aq 2>/dev/null)" ]]; then
+    install -d /etc/docker
+    printf '{\n  "log-driver": "json-file",\n  "log-opts": {"max-size": "10m", "max-file": "3"}\n}\n' > /etc/docker/daemon.json
+    systemctl restart docker >>"$LOG" 2>&1 || { rm -f /etc/docker/daemon.json; systemctl restart docker >>"$LOG" 2>&1 || true; }
+  fi
   ok "Docker $(docker version --format '{{.Server.Version}}' 2>/dev/null), Compose $cv"
 
   if [[ $swap_mb -eq 0 && $((mem_mb)) -lt 12000 && ! -e /swapfile && $disk_gb -ge 12 ]]; then
