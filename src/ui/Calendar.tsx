@@ -91,25 +91,6 @@ const DateChip = ({ d }: { d: Date }) => (
   <div className="date"><small>{d.toLocaleDateString([], { month: 'short' })}</small><b>{d.getDate()}</b></div>
 )
 
-/** Under a channel's name: its next event, and a link to the others. Nothing when none. */
-export function EventsBar({ channel }: { channel: string }) {
-  useVersion()
-  const list = upcoming(channel)
-  if (!list.length) return null
-  const e = list[0]
-  return (
-    <div className="events-bar">
-      <button className="next" onClick={() => go('cal/' + encodeURIComponent(e.coord))}>
-        <span aria-hidden="true">📅</span>
-        <span className="t"><b>{e.title}</b><small>{fmtDay(e.start)} · {when(e)}</small></span>
-      </button>
-      <button className="more" onClick={() => go(`c/${encodeURIComponent(channel)}/events`)}>
-        {list.length > 1 ? `+${list.length - 1} more` : 'All events'}
-      </button>
-    </div>
-  )
-}
-
 /** The post an event leaves in its channel: a card that opens the event. */
 export function EventCard({ coord, fallback }: { coord: string; fallback: string }) {
   const e = calendar().find((x) => x.coord === coord)

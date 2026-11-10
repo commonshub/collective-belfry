@@ -270,13 +270,6 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 /* ---- channel header: your avatar, the events bar, event cards in the chat ---- */
 .topbar h1.tap { cursor: pointer; }
 .me-btn .avatar { border-radius: 99px; }
-.events-bar { display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 12px; border-bottom: 1px solid var(--line); background: var(--bg); }
-.events-bar .next { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; text-align: left; padding: 4px 0; }
-.events-bar .next .t { min-width: 0; }
-.events-bar .next b { display: block; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.events-bar .next small { display: block; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.events-bar .more { flex: none; font-size: 13px; color: var(--accent); padding: 6px 8px; border-radius: 8px; white-space: nowrap; }
-.events-bar .more:active, .events-bar .next:active { background: var(--surface); }
 .ev-card { display: flex; gap: 12px; align-items: center; width: 100%; max-width: 360px; text-align: left; margin-top: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
 .ev-card .date { width: 44px; flex: none; text-align: center; background: var(--bg); border-radius: 10px; padding: 5px 0; }
 .ev-card .date b { display: block; font-size: 18px; line-height: 1.1; }
