@@ -94,8 +94,9 @@ class Settings(BaseSettings):
     homepage: str = Field(default="", alias="HOMEPAGE")
     # belfry.<domain> (console.py): the belfry's own page, status and members; empty: off
     console_url: str = Field(default="", alias="CONSOLE_URL")
-    # The look of the pages (theme.py): THEME = belfry | osv (empty: osv, as before themes), and
-    # the community's own files (custom.css, logo, theme.json) in THEME_DIR (infra/data/theme).
+    # The look of the pages (theme.py): one base look, Belfry's (THEME is not read here; the
+    # host's `belfry apply` derives OSV_APPS and PASS_SIGNIN from it once), and the community's
+    # own files (custom.css, logo, theme.json) in THEME_DIR (infra/data/theme).
     theme: str = Field(default="", alias="THEME")
     theme_dir: str = Field(default="/belfry-theme", alias="THEME_DIR")
     # The code shown at /git (gitview.py): nostr://<npub>/<relay>/<identifier> (ngit) or an

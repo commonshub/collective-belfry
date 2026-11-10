@@ -177,16 +177,18 @@ OSV_WORDS = (
 )
 
 
-def renamed(text: str, name: str) -> str:
+def renamed(text: str, name: str, escape: bool = True) -> str:
+    """TEXT with the first belfry's name replaced by NAME, escaped for HTML unless the caller
+    escapes the whole text afterwards (the page title)."""
     for old, new in OSV_WORDS:
-        text = text.replace(old, new.format(name=E(name)))
+        text = text.replace(old, new.format(name=E(name) if escape else name))
     return text
 
 
 def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: bool = False) -> str:
     """The page: logo, BODY, footer. BARE leaves out the footer (the first-run setup wizard)."""
     t = current()
-    title, body = renamed(title, t.name), renamed(body, t.name)
+    title, body = renamed(title, t.name, escape=False), renamed(body, t.name)
     css = "".join(f'<link rel="stylesheet" href="{E(h)}">' for h in t.css)
     strip = f'<div class="test-notice" role="note">{E(notice)}</div>' if notice else ""
     brand = (

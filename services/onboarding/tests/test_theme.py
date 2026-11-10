@@ -100,3 +100,11 @@ def test_the_base_stylesheets_are_not_swallowed_by_a_comment():
         assert css.count("/*") == css.count("*/")
         rules = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
         assert ":root {" in rules and "--bg:" in rules
+
+
+def test_a_name_with_an_ampersand_is_escaped_once_in_the_title(services, monkeypatch):
+    services.settings.community_name = "Bread & Roses"
+    monkeypatch.setattr(theme, "CURRENT", theme.load(services.settings))
+    page = theme.frame("Welcome to Open Source Village", "<p>Open Source Village</p>")
+    assert "<title>Welcome to Bread &amp; Roses</title>" in page
+    assert "<p>Bread &amp; Roses</p>" in page
