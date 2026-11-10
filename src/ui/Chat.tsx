@@ -47,7 +47,7 @@ function SideUser() {
   return (
     <button className="side-user" onClick={() => closeDrawer('me')} aria-label="Me: your profile and settings">
       <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
-      <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address() ?? p?.nip05 ?? ''}</small></span>
+      <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address()}</small></span>
       <span className="hint"><GearIcon /></span>
     </button>
   )

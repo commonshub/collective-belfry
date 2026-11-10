@@ -4,7 +4,7 @@ import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY, TEST_RELAYS } from '../config'
 import { kvGet, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
-import { displayName, realName } from './model'
+import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
 
@@ -55,7 +55,10 @@ let loaded = false
 const DEMO_BRIDGE = bytesToHex(sha256('osv-demo-bridge')) // demo mode only: the "belfry" that mails
 
 export function setMyAddress(a?: string) { if (a) myAddress = a.toLowerCase() }
-export const address = () => myAddress
+/** My address here (name@domain): what my profile says now, so a new sign-in (profile not loaded
+ *  yet when the app starts) and a username change show without a reload; else what was known
+ *  when the app started. */
+export const address = () => profiles().get(me())?.nip05?.toLowerCase() || myAddress
 
 export async function bridge(): Promise<string | undefined> {
   if (isLocalOnly() || TEST_RELAYS) return getPublicKey(hexToBytes(DEMO_BRIDGE))
@@ -428,6 +431,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   }
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
+  const myAddress = address()
   if (!myAddress) throw new Error('You have no address here yet (name@domain).')
   const to = mailAddress(conv)
   const fresh = isNewMail(conv)
@@ -499,7 +503,7 @@ export async function convFor(input: string, candidates: { pubkey: string; name:
 export async function demoMail(sender: string, subject: string, text: string, verified = true) {
   if (!isLocalOnly()) return
   const sk = hexToBytes(DEMO_BRIDGE)
-  const raw = `From: ${sender}\r\nTo: ${myAddress || 'me@demo'}\r\nSubject: ${subject}\r\nMessage-ID: <${crypto.randomUUID()}@example.org>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}\r\n`
+  const raw = `From: ${sender}\r\nTo: ${address() || 'me@demo'}\r\nSubject: ${subject}\r\nMessage-ID: <${crypto.randomUUID()}@example.org>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${text}\r\n`
   const rumor = { kind: 1301, pubkey: getPublicKey(sk), created_at: Math.floor(Date.now() / 1000), content: raw,
     tags: [['email-id', crypto.randomUUID()], ['mail-from', addressOf(sender).address], ['p', me()], ['subject', subject], ['belfry-auth', verified ? 'pass' : 'none']] } as NostrEvent
   rumor.id = getEventHash(rumor)
