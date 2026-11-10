@@ -120,6 +120,8 @@ The belfry's own pages take these paths on the apex:
   `/proposals`, `/changelog`, `/monitor`, `/drop/…`, `/invite/…`, `/api/…` and every other path
   the onboarding service answers
 
-These redirect to `pass.<domain>`. Three stay on the apex: `/follow` (the e-mail form's target),
-`/theme/…` and, when a repository is set, `/git`. Every app installed with `belfry app install`
+These redirect to `pass.<domain>`. Four stay on the apex: `/follow` (the e-mail form's target),
+`/events` and `/events/…` (the community's events: their public pages, `events.py`), `/theme/…`
+and, when a repository is set, `/git`. A website with its own `/events` page loses it to the
+belfry's: link to `https://<domain>/events` instead. Every app installed with `belfry app install`
 also takes `/<name>/` (the chat: `/chat` redirects to `chat.<domain>`).
