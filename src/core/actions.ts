@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
+import { EDIT_KIND, hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -91,6 +91,19 @@ export const assignCard = (groupId: string, card: string, assignee: string) =>
 /** Pin / unpin a channel's topics: one NIP-32 label event with the whole list (latest wins). */
 export const setTopics = (groupId: string, list: string[]) =>
   enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', TOPIC_NS], ...[...new Set(list.map(normTopic))].map((t) => ['l', t, TOPIC_NS])] })
+
+/** Edit your own message or thread reply: a kind 1010 event in the group that names it (`e`) and
+ *  carries the new text. Photos, the topic it was sent in and an announcement mark stay. */
+export function editMessage(groupId: string, m: { ev: { id: string; kind: number; tags: string[][] }; text: string }, text: string) {
+  const typed = new Set(hashtags(m.text))
+  const kept = m.ev.tags.filter((t) => t[0] === 'imeta' || (t[0] === 't' && t[1] && !typed.has(normTopic(t[1]))))
+  const urls = kept.filter((t) => t[0] === 'imeta').map((t) => t.find((p) => p.startsWith('url '))?.slice(4)).filter(Boolean)
+  const topics = new Set([...kept.filter((t) => t[0] === 't').map((t) => normTopic(t[1])), ...hashtags(text)])
+  return enqueue('groups', {
+    kind: EDIT_KIND, content: [text, ...urls].filter(Boolean).join('\n'),
+    tags: [['h', groupId], ['e', m.ev.id], ['k', String(m.ev.kind)], ...kept.filter((t) => t[0] === 'imeta'), ...[...topics].map((t) => ['t', t]), ...mentionTags(text)],
+  })
+}
 
 export const deleteMessage = (groupId: string, id: string) =>
   enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', id]] })

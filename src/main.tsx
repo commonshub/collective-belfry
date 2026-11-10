@@ -9,6 +9,14 @@ if (THEME === 'belfry') {
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', '#ffffff')
 }
 
+// iPhones zoom the page in when a text field under 16px gets the focus, and the page then
+// scrolls sideways. Our fields are 16px; this covers any that slip through. iOS keeps pinch
+// zoom regardless of maximum-scale; other systems are left alone.
+if (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)) {
+  const v = document.querySelector('meta[name=viewport]')
+  if (v && !/maximum-scale/.test(v.getAttribute('content') ?? '')) v.setAttribute('content', v.getAttribute('content') + ', maximum-scale=1')
+}
+
 // A second tap on the same button within 600 ms never reaches the app (double sends); the first
 // one is answered at once: the button shows it was pressed (styles.css, [data-tapped]).
 const tapped = new WeakMap<Element, number>()

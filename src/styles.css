@@ -631,7 +631,8 @@ a.chip { text-decoration: none; color: inherit; }
 .thread-hide { margin-top: 2px; }
 .composer.compact { position: static; border: 0; padding: 6px 0 0; background: none; }
 .composer.compact .bar { gap: 6px; }
-.composer.compact textarea { font-size: 15px; }
+/* 16px at least: an iPhone zooms the whole page in on a smaller text field, and it then scrolls sideways */
+.composer.compact textarea { font-size: 16px; }
 .thread-activity { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 4px 12px; padding: 8px 10px 8px 46px;
   position: relative; text-align: left; background: none; border: 0; border-radius: 10px; color: var(--text); }
 .thread-activity:hover, .thread-activity.open { background: var(--surface); }
@@ -736,3 +737,18 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 /* the composer's Add menu: a list, like the message menu */
 .act .ico { color: var(--muted); flex: none; }
 .act small { display: block; font-size: 13px; color: var(--muted); }
+
+/* ---- edits, the thread chips, and holding a message on a phone ---- */
+.edited { font-size: 11px; font-weight: 400; color: var(--faint); }
+.edited.below { display: block; margin-top: 1px; }
+.thread-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.thread-chip.open-thread { color: var(--muted); font-weight: 500; }
+.thread-chip.open-thread .ico { width: 16px; height: 16px; }
+.thread-foot { display: flex; gap: 18px; }
+.edit-text { width: 100%; min-height: 96px; resize: vertical; font-size: 16px; }
+.row-btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+/* holding a message opens its menu: no text selection or callout in the way (Copy text is in the menu) */
+@media (pointer: coarse) {
+  .msg, .thread-reply { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+.msg .who .edited { margin-left: 6px; }

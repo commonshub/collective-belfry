@@ -2,8 +2,9 @@ import { nip19 } from 'nostr-tools'
 import { Files, Members, Tabs, Tasks } from './ChannelInfo'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
+import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, channelIcon, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalFor, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
@@ -14,7 +15,7 @@ import { NewProposalSheet, ProposalCard, ProposalHeader } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
-import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, CalendarIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { canAdmin, isAdmin } from '../core/access'
@@ -342,6 +343,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   const openThread = (m: Message) => go(`c/${encodeURIComponent(id)}/thread/${m.ev.id}`)
   const [acting, setActing] = useState<Message | null>(null)
+  const [actingReply, setActingReply] = useState<Message | null>(null) // a reply in an unfolded thread
+  const [editing, setEditing] = useState<Message | null>(null)
   const [picking, setPicking] = useState(false)
   const [inviting, setInviting] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
@@ -384,7 +387,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
               const key = 'act:' + it.root.ev.id
               return <Fragment key={key}>
                 <ThreadActivity root={it.root} last={it.last} onOpen={() => toggle(key)} open={openThreads.has(key)} />
-                {openThreads.has(key) && <InlineThread groupId={id} root={it.root} focus={replyTo === key} onHide={() => toggle(key)} />}
+                {openThreads.has(key) && <InlineThread groupId={id} root={it.root} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(it.root)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
               </Fragment>
             }
             const m = it.m
@@ -394,8 +397,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-                thread={th.get(m.ev.id)} onThread={() => toggle(key)} threadOpen={openThreads.has(key)} inbox={inbox} />
-              {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} />}
+                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} />
+              {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(m)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
             </Fragment>
           })}
         </div>
@@ -407,7 +410,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
-        thread={th.get(acting.ev.id)} onReply={() => { toggle(acting.ev.id, true); setReplyTo(acting.ev.id) }} />}
+        thread={th.get(acting.ev.id)} onReply={() => { toggle(acting.ev.id, true); setReplyTo(acting.ev.id) }}
+        onThread={th.get(acting.ev.id)?.count ? () => openThread(acting) : undefined} onEdit={() => setEditing(acting)} />}
+      {actingReply && <MessageActions m={actingReply} groupId={id} mine={rx.get(actingReply.ev.id) ?? []} onClose={() => setActingReply(null)} onEdit={() => setEditing(actingReply)} />}
+      {editing && <EditSheet m={editing} groupId={id} onClose={() => setEditing(null)} />}
       {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
     </>
   )
@@ -422,6 +428,7 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
   const root = messages(groupId).find((m) => m.ev.id === rootId)
   const replies = threadReplies(groupId, rootId)
   const [acting, setActing] = useState<Message | null>(null)
+  const [editing, setEditing] = useState<Message | null>(null)
   const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
@@ -447,12 +454,33 @@ export function ThreadView({ groupId, rootId }: { groupId: string; rootId: strin
         </div>
       </div>
       {root && <Composer placeholder="Reply in the thread" onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
-      {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} />}
+      {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
+      {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
   )
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, threadOpen = false, head, inbox }: { inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+/** Press and hold (phones) or right-click opens a message's menu. A finger may wobble a little;
+ *  moving further is a scroll. Not on buttons, links or videos inside the message. */
+function useHold(open: () => void, off = false) {
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const at = useRef({ x: 0, y: 0 })
+  const cancel = () => { if (t.current) clearTimeout(t.current); t.current = null }
+  useEffect(() => cancel, [])
+  return {
+    onContextMenu: (e: React.MouseEvent) => { if (off) return; e.preventDefault(); cancel(); open() },
+    onPointerDown: (e: React.PointerEvent) => {
+      if (off || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video, textarea, input')) return
+      at.current = { x: e.clientX, y: e.clientY }
+      cancel()
+      t.current = setTimeout(() => { t.current = null; navigator.vibrate?.(10); open() }, 450)
+    },
+    onPointerMove: (e: React.PointerEvent) => { if (t.current && Math.hypot(e.clientX - at.current.x, e.clientY - at.current.y) > 10) cancel() },
+    onPointerUp: cancel, onPointerCancel: cancel, onPointerLeave: cancel,
+  }
+}
+
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox }: { onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -465,9 +493,8 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const mail = card || sent ? null : mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
   const isCard = !!(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
-  // press and hold (phones) or right-click: react, or delete your own
-  const hold = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const cancel = () => { if (hold.current) clearTimeout(hold.current); hold.current = null }
+  // press and hold (phones) or right-click: react, reply, edit or delete your own
+  const hold = useHold(() => onAct(), !!p)
   if (card || sent) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
@@ -482,15 +509,10 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
       <div id={'m-' + m.ev.id} className={'msg' + (first || announce || mail || isCard ? ' first' : '') + (p ? ' pending' : '') + (announce ? ' announce' : '')}
-        onContextMenu={(e) => { if (p) return; e.preventDefault(); cancel(); onAct() }}
-        onPointerDown={(e) => {
-          if (p || e.pointerType === 'mouse' || (e.target as HTMLElement).closest('button, a, video')) return
-          hold.current = setTimeout(() => { hold.current = null; navigator.vibrate?.(10); onAct() }, 450)
-        }}
-        onPointerUp={cancel} onPointerMove={cancel} onPointerCancel={cancel}>
+        {...hold}>
         {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {eventCoordOf(m.ev) ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
           {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
@@ -509,11 +531,15 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
               {!p && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>}
             </div>
           )}
+          {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
           {thread && thread.count > 0 && onThread && (
-            <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
-              <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
-              {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}<time>{fmtTime(thread.last)}</time>
-            </button>
+            <div className="thread-chips">
+              <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
+                <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
+                {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}<time>{fmtTime(thread.last)}</time>
+              </button>
+              {onOpenThread && <button className="thread-chip open-thread" onClick={onOpenThread}><ThreadIcon />Open thread</button>}
+            </div>
           )}
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
@@ -538,7 +564,9 @@ const MORE_EMOJIS = [
   '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
 ]
 
-function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; emojiOnly?: boolean }) {
+function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, onEdit, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; onEdit?: () => void; emojiOnly?: boolean }) {
+  // your own plain message or reply can be edited (not a card, an event, a pod, a proposal or an e-mail)
+  const canEdit = !!onEdit && m.ev.pubkey === me() && !m.ev.pending && !!m.text && !eventCoordOf(m.ev) && !podOf(m.ev) && !proposalOf(m.ev) && !mailOf(m.ev) && !cardOf(m.ev, knownGroupsKey()) && !sentOf(m.ev, knownGroupsKey())
   // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
   // The add-reaction button opens the emojis alone.
   const [more, setMore] = useState(emojiOnly)
@@ -569,6 +597,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
       {!emojiOnly && (
         <>
           <div className="act-group">
+            {canEdit && <Item icon={<PencilIcon />} label="Edit message" onClick={() => { onClose(); onEdit!() }} />}
             {onReply && <Item icon={<ReplyIcon />} label={thread?.count ? `Reply in the thread (${thread.count})` : 'Reply'} onClick={() => { onClose(); onReply() }} />}
             {onThread && <Item icon={<ThreadIcon />} label={thread?.count ? `Open the thread (${thread.count})` : 'Start a thread'} onClick={() => { onClose(); onThread() }} />}
             {m.ev.pubkey !== me() && <Item icon={<AtIcon />} label={`Message ${displayName(m.ev.pubkey)}`} onClick={() => { onClose(); go('dm/' + encodeURIComponent('n:' + m.ev.pubkey)) }} />}
@@ -720,7 +749,7 @@ function JoinLine({ j }: { j: GuestJoin }) {
 }
 
 /** A thread unfolded under its message: the latest replies, earlier ones on demand, a reply box. */
-function InlineThread({ groupId, root, focus, onHide }: { groupId: string; root: Message; focus: boolean; onHide: () => void }) {
+function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId: string; root: Message; focus: boolean; onHide: () => void; onOpen: () => void; onAct: (m: Message) => void }) {
   useVersion()
   const replies = threadReplies(groupId, root.ev.id)
   const [all, setAll] = useState(false)
@@ -729,20 +758,61 @@ function InlineThread({ groupId, root, focus, onHide }: { groupId: string; root:
   return (
     <div className="inline-thread" role="region" aria-label="Thread">
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
-      {shown.map((r) => (
-        <div key={r.ev.id} className={'thread-reply' + (r.ev.pending ? ' pending' : '')}>
-          <Avatar pubkey={r.ev.pubkey} size={24} />
-          <div className="body">
-            <div className="who">{displayName(r.ev.pubkey)}<time>{fmtTime(r.ev.created_at)}</time></div>
-            {r.text && <RichText text={r.text} groupId={groupId} />}
-            <MediaGrid media={r.media} />
-          </div>
-        </div>
-      ))}
+      {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
       <Composer placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
         onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
-      <button className="link thread-hide" onClick={onHide}>Hide</button>
+      <div className="thread-foot">
+        <button className="link thread-hide" onClick={onHide}>Hide</button>
+        <button className="link thread-hide" onClick={onOpen}>Open thread</button>
+      </div>
     </div>
+  )
+}
+
+function InlineReply({ r, groupId, onAct }: { r: Message; groupId: string; onAct: () => void }) {
+  const hold = useHold(onAct, !!r.ev.pending)
+  return (
+    <div id={'m-' + r.ev.id} className={'thread-reply' + (r.ev.pending ? ' pending' : '')} {...hold}>
+      <Avatar pubkey={r.ev.pubkey} size={24} />
+      <div className="body">
+        <div className="who">{displayName(r.ev.pubkey)}<time>{fmtTime(r.ev.created_at)}</time>{r.edited && <span className="edited">edited</span>}</div>
+        {r.text && <RichText text={r.text} groupId={groupId} />}
+        <MediaGrid media={r.media} />
+      </div>
+    </div>
+  )
+}
+
+/** Edit your own message: its text, with mentions shown as @Name. Saved as an edit event. */
+function EditSheet({ m, groupId, onClose }: { m: Message; groupId: string; onClose: () => void }) {
+  const names = useMemo(() => {
+    const out = new Map<string, string>() // "@Name" → nostr:npub…
+    for (const x of m.text.matchAll(/nostr:(npub1[02-9ac-hj-np-z]{58})/g)) {
+      try { const d = nip19.decode(x[1]); if (d.type === 'npub') out.set('@' + displayName(d.data), x[0]) } catch { /* not a key */ }
+    }
+    return out
+  }, [m.text])
+  const shown = useMemo(() => { let t = m.text; for (const [name, ref] of names) t = t.split(ref).join(name); return t }, [m.text, names])
+  const [text, setText] = useState(shown)
+  const ta = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => { const el = ta.current; if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length) } }, [])
+  const save = async () => {
+    let t = text.trim()
+    for (const [name, ref] of [...names].sort((a, b) => b[0].length - a[0].length)) t = t.split(name).join(ref)
+    if (t && t !== m.text) await editMessage(groupId, m, t)
+    onClose()
+  }
+  return (
+    <Sheet title="Edit message" onClose={onClose}>
+      <Form onSubmit={async (e) => { e.preventDefault(); await save() }}>
+        <textarea ref={ta} className="input edit-text" rows={4} value={text} onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit() } }} />
+        <div className="row-btns">
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" disabled={!text.trim() || text.trim() === shown}>Save</button>
+        </div>
+      </Form>
+    </Sheet>
   )
 }
 

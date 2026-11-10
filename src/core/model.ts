@@ -207,7 +207,7 @@ export const group = (id: string) => groups().find((g) => g.id === id)
 // ---- messages -----------------------------------------------------------------
 
 export interface Media { url: string; mime: string; name?: string; w?: number; h?: number }
-export interface Message { ev: Ev; text: string; media: Media[]; topics: string[] }
+export interface Message { ev: Ev; text: string; media: Media[]; topics: string[]; /** when its author last edited it (kind 1010) */ edited?: number }
 
 // ---- topics: hashtags (NIP-24 `t` tags, lowercase) and a channel's pinned ones -------------
 
@@ -241,13 +241,35 @@ export function parseMedia(e: Ev): Message {
   return { ev: e, text: text.trim(), media, topics: [...new Set(e.tags.filter((t) => t[0] === 't' && t[1]).map((t) => normTopic(t[1])))] }
 }
 
-export function messages(groupId: string): Message[] {
-  const list = all(me())
+// ---- edits: kind 1010 in the group, `e` = the message; content and tags are the new version.
+// Only the author's own edit counts, the latest wins. The message keeps its id (reactions,
+// threads and links hang off it); other clients simply show the first version.
+
+export const EDIT_KIND = 1010
+
+function edits(list: Ev[], del: Set<string>): Map<string, Ev> {
+  const out = new Map<string, Ev>()
+  for (const e of list) {
+    if (e.kind !== EDIT_KIND || del.has(e.id)) continue
+    const id = tag(e, 'e')
+    if (!id) continue
+    const had = out.get(id)
+    if (!had || had.created_at < e.created_at || (had.created_at === e.created_at && had.id < e.id)) out.set(id, e)
+  }
+  return out
+}
+
+function parsed(list: Ev[], keep: (e: Ev) => boolean): Message[] {
   const del = deleted(list)
-  return list
-    .filter((e) => e.kind === 9 && tag(e, 'h') === groupId && !del.has(e.id))
-    .sort(byTime)
-    .map(parseMedia)
+  const ed = edits(list, del)
+  return list.filter((e) => keep(e) && !del.has(e.id)).sort(byTime).map((e) => {
+    const x = ed.get(e.id)
+    return x && x.pubkey === e.pubkey ? { ...parseMedia(x), ev: e, edited: x.created_at } : parseMedia(e)
+  })
+}
+
+export function messages(groupId: string): Message[] {
+  return parsed(all(me()), (e) => e.kind === 9 && tag(e, 'h') === groupId)
 }
 
 // ---- threads (NIP-22: kind 1111 in the group, `E` = the message it hangs off) -----------
@@ -257,12 +279,7 @@ export function messages(groupId: string): Message[] {
 export const rootOf = (e: Ev) => e.tags.find((t) => t[0] === 'E')?.[1]
 
 export function threadReplies(groupId: string, rootId: string): Message[] {
-  const list = all(me())
-  const del = deleted(list)
-  return list
-    .filter((e) => e.kind === 1111 && tag(e, 'h') === groupId && rootOf(e) === rootId && !del.has(e.id))
-    .sort(byTime)
-    .map(parseMedia)
+  return parsed(all(me()), (e) => e.kind === 1111 && tag(e, 'h') === groupId && rootOf(e) === rootId)
 }
 
 export interface ThreadInfo { count: number; last: number; who: string[] }
