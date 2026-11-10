@@ -478,7 +478,7 @@ def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
 
 def saved_label(svc: Services, pubkey: str, channel: str) -> None:
     """The channel learns the guest saved their account (the chat drops "not saved")."""
-    _channel_event_kind(
+    _channel_event(
         svc,
         1985,
         [["h", channel], ["L", "belfry/guest"], ["l", "saved", "belfry/guest"], ["p", pubkey]],
@@ -510,10 +510,6 @@ def became_member(svc: Services, pubkey: str) -> int:
     for r in rows:
         core.revoke_pass(svc, r["id"], "became a member")
     return len(rows)
-
-
-def _channel_event_kind(svc: Services, kind: int, tags: list[list[str]]) -> bool:
-    return _channel_event(svc, kind, tags)
 
 
 def register_join_routes(app: FastAPI) -> None:
