@@ -222,6 +222,22 @@ def register(app: FastAPI) -> None:
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
             raise ApiError(403, "not_allowed", "You can't invite guests here.")
+        # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>)
+        role = str(data.get("role") or "") if isinstance(data, dict) else ""
+        if role not in ("", "host"):
+            raise ApiError(422, "invalid", 'role: "host" or nothing')
+        if role == "host":
+            from . import apps
+
+            if not channel.startswith("ev-"):
+                raise ApiError(422, "invalid", "A co-host link is for an event's group.")
+            admins = await run_in_threadpool(mail.group_admins, s, channel)
+            if (
+                pubkey not in admins
+                and not who.get("steward")
+                and pubkey not in apps.admin_pubkeys(s)
+            ):
+                raise ApiError(403, "not_host", "Only the event's hosts add co-hosts.")
         people, link_days = (
             _option(data, "people", 1, (1, 50)),
             _option(data, "link_days", 1, (1, 7, 30)),
@@ -238,6 +254,7 @@ def register(app: FastAPI) -> None:
                 1 if own_agent else people,
                 link_days,
                 own_agent,
+                role,
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
@@ -251,6 +268,7 @@ def register(app: FastAPI) -> None:
                 "own_agent": own_agent,
                 "people": 1 if own_agent else people,
                 "link_days": link_days,
+                "role": role or None,
                 "expires_at": row.get("expires_at") or None,
             },
             headers={"Cache-Control": "no-store"},
@@ -548,21 +566,73 @@ def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str
     }
 
 
+def _saved_email(svc: Services, pubkey: str) -> bool:
+    """Whether the account behind PUBKEY has a proven address (a member, or a saved guest)."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        ["tier", "partner_id"],
+    )
+    if any(r.get("tier") != "guest" for r in rows):
+        return True
+    for r in rows:
+        partner = svc.odoo.read_one("res.partner", m2o_id(r.get("partner_id")) or 0, ["email"])
+        if (partner or {}).get("email"):
+            return True
+    return False
+
+
+def _make_host(svc: Services, channel: str, pubkey: str, inv: dict[str, Any]) -> bool:
+    """A co-host link used: PUBKEY becomes an admin of the event's group."""
+    from . import mail
+
+    if pubkey in mail.group_admins(svc, channel):
+        return True
+    tags = [["h", channel], ["p", pubkey, "admin"]]
+    if inv.get("guest_inviter"):
+        tags.append(["invited-by", inv["guest_inviter"]])
+    return _channel_event(svc, 9000, tags)
+
+
 def join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | None:
-    """The account behind PUBKEY takes the invite; None when the key has no account."""
+    """The account behind PUBKEY takes the invite; None when the key has no account. A co-host
+    link (role host) makes them an admin of the event's group, once they have a proven e-mail
+    (never a name-only admin)."""
     from .holder_invites import ApiError
 
+    inv0 = svc.odoo.invite_by_token(token) or {}
+    host = inv0.get("guest_role") == "host"
+    if host and svc.odoo.search_read(
+        "belfry.pass", [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]], ["id"]
+    ):
+        if not _saved_email(svc, pubkey):
+            raise ApiError(
+                409, "email_needed", "Save your e-mail first: a co-host needs one. Then try again."
+            )
     got = svc.odoo.join_existing(token, pubkey)
     if got is None:
         return None
     channel = got["channel"]
     out = {"channel": channel, "pubkey": pubkey, "new": False, "guest": got["kind"] != "member"}
+    if host:
+        out["host"] = True
     if got["kind"] == "already":
-        return {**out, "already": True}
+        if host and not _make_host(svc, channel, pubkey, inv0):
+            raise ApiError(503, "relay", "The channel could not be reached just now. Try again.")
+        return {**out, "already": not host}
     if got["kind"] == "guest":
         admitted(svc, got["pass_id"])
+        if host:
+            _make_host(svc, channel, pubkey, inv0)
         return out
     # a member: in the channel already → it just opens, and the link isn't used up
+    if host:
+        if got["kind"] == "closed":
+            raise ApiError(410, "closed", f"This invite is {got.get('state') or 'closed'}.")
+        if not _make_host(svc, channel, pubkey, inv0):
+            raise ApiError(503, "relay", "The channel could not be reached just now. Try again.")
+        svc.odoo.count_guest_use(got["invite_id"])
+        return {**out, "guest": False}
     if _in_channel(svc, channel, pubkey):
         return {**out, "guest": False, "already": True}
     if got["kind"] == "closed":
@@ -609,6 +679,7 @@ def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
         "inviter": (inv.get("inviter_name") or "")[:100],
         "state": inv["state"] if inv["state"] in ("open", "used", "expired", "revoked") else "used",
         "days": int(inv.get("guest_days") or DAYS),
+        "role": inv.get("guest_role") or None,
     }
 
 
@@ -696,6 +767,9 @@ def register_join_routes(app: FastAPI) -> None:
                 if not name:
                     raise ApiError(422, "name_needed", "Tell us your name.")
                 out = await run_in_threadpool(join_new, s, token, name, pubkey)
+                if (inv or {}).get("guest_role") == "host":
+                    # in as a guest; a co-host once they saved an e-mail and use the link again
+                    out = {**out, "email_needed": True}
         except OdooError as exc:
             raise ApiError(410, "closed", str(exc.message or "This invite is closed.")) from exc
         except ApiError:

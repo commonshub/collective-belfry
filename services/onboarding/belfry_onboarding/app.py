@@ -42,6 +42,7 @@ from . import (
     drops,
     email_code,
     eudi,
+    events,
     feedback,
     followers,
     gitview,
@@ -225,6 +226,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     passlogin.register(app)  # pass.<domain>/me/login: e-mail + code (passlogin.py)
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
+    events.register(app)  # <domain>/events/<link> and /api/events: Belfry events (events.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
     places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
@@ -340,7 +342,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         if request.headers.get("host", "").lower() != httpx.URL(settings.site_url).netloc.decode():
             return await call_next(request)
         path = request.url.path
-        if path == "/" or path.startswith(("/.well-known/", "/theme/", "/follow")):
+        if path == "/" or path.startswith(("/.well-known/", "/theme/", "/follow", "/events")):
             return await call_next(request)
         if (path == "/git" or path.startswith("/git/")) and request.app.state.gitview is not None:
             return await call_next(request)  # the website's /git is the community's code

@@ -257,6 +257,14 @@ apps.{$BELFRY_DOMAIN} {
 			header_up Host {$KEYCAST_TENANT_DOMAIN}
 		}
 	}
+	# Belfry events (events.py): <domain>/events and /events/<link> (the public page, .ics, cover)
+	# are the belfry's own, before any installed app or the homepage (an https:// HOMEPAGE proxy
+	# or an nsite would otherwise answer them).
+	@events path /events /events/*
+	handle @events {
+		import limit site-events 120 1m /events /events/*
+		import onboarding_site site
+	}
 	# Short names for the participant apps (<domain>/chat, …). None may collide with a page of
 	# the onboarding service, which answers everything else on the apex.
 	# The belfry's own static apps at <domain>/<name>/ (`belfry app install` writes one route file

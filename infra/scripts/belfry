@@ -725,7 +725,7 @@ APPS_DIR="$INFRA/data/apps"
 # (the pages served there, and its shortcuts to the other apps)
 APP_RESERVED=" api admin auth login logout register dashboard settings keys oauth static assets health well-known _routes 
  me git drop follow help proposals changelog monitor invite theme brand skills status apply feedback rules privacy terms refunds 
- connect door claim pass groups calendar programme vote people market photos wallet apps shop "
+ connect door claim pass groups calendar programme vote people market photos wallet apps shop events "
 reload_proxy() {
   compose exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
     || compose restart proxy >/dev/null

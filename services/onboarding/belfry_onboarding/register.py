@@ -627,9 +627,11 @@ class Register(OdooApi):
         people: int = GUEST_MAX_DEFAULT,
         link_days: int = GUEST_LINK_DAYS_DEFAULT,
         own_agent: bool = False,
+        role: str = "",
     ) -> dict[str, Any]:
         """A link that makes its user a guest of CHANNEL for DAYS days (guests.py). It is for
         PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked).
+        ROLE ``host``: the link makes its user a co-host (an admin) of an event's group.
         OWN_AGENT: the link is for one agent, which becomes the inviter's own agent (agents.py):
         a member for as long as the inviter is one, not a guest."""
         partner = self._member(partner_id, "Only members can invite guests.")
@@ -650,6 +652,7 @@ class Register(OdooApi):
                 "guest_max": people,
                 "guest_uses": 0,
                 "agent_owner": partner["id"] if own_agent else False,
+                "guest_role": role or False,
                 "expires_at": stamp(now() + dt.timedelta(days=link_days)),
             },
         )
@@ -1101,6 +1104,124 @@ class Register(OdooApi):
             )
             self._write("belfry.pass", [pass_id], {"state": "active"})  # counts the use
             return {"kind": "guest", "channel": channel, "partner_id": pid, "pass_id": pass_id}
+
+    # ── an event's guests (events.py): no invite, the event's own group ──────────────────────
+    def event_guest(
+        self,
+        channel: str,
+        name: str,
+        email: str,
+        client: str,
+        date_end: str,
+        state: str = "pending",
+    ) -> dict[str, Any]:
+        """Someone with no account takes or applies for a ticket of the event whose group is
+        CHANNEL (events.py): their contact and a guest pass of that group, ending DATE_END (30
+        days after the event). CLIENT is the key that signed the request (the device's session
+        key): asking again from the same device gets the same contact and pass (``"again"``).
+        EMAIL is where the event's mails go (``event_email`` on the pass: not proven, so never
+        the contact's address); a member's address is refused (they sign in instead)."""
+        with self._lock:
+            for p in self._all("belfry.pass"):
+                if (
+                    p.get("guest_channel") == channel
+                    and p.get("guest_event")
+                    and client
+                    and p.get("guest_client") == client
+                    and p.get("state") in ("pending", "active")
+                ):
+                    if email and not p.get("event_email"):
+                        self._write("belfry.pass", [p["id"]], {"event_email": email})
+                    return {
+                        "pass_id": p["id"],
+                        "partner_id": p["partner_id"],
+                        "channel": channel,
+                        "state": p.get("state"),
+                        "pubkey": p.get("keycast_pubkey") or "",
+                        "again": True,
+                    }
+            if email:
+                person = self._partner_by_email(email)
+                if person and any(
+                    p.get("partner_id") == person["id"]
+                    and p.get("state") == "active"
+                    and p.get("tier") not in ("guest",)
+                    for p in self._all("belfry.pass")
+                ):
+                    raise _user_error("member_email")
+            pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Guest"})
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "partner_id": pid,
+                    "tier": "guest",
+                    "guest_channel": channel,
+                    "guest_days": 0,
+                    "guest_inviter": "",
+                    "guest_client": client or False,
+                    "guest_event": True,
+                    "event_email": email or False,
+                    "date_start": now().date().isoformat(),
+                    "date_end": date_end,
+                    "state": "pending",
+                },
+            )
+            if state == "active":
+                self._write("belfry.pass", [pass_id], {"state": "active"})
+            return {
+                "pass_id": pass_id,
+                "partner_id": pid,
+                "channel": channel,
+                "state": state,
+                "pubkey": "",
+                "again": False,
+            }
+
+    def event_guest_pass(
+        self, pubkey: str, channel: str, date_end: str, state: str = "active"
+    ) -> dict[str, Any] | None:
+        """Someone who has an account takes a ticket (or applies) for the event of CHANNEL: a
+        guest gets a guest pass of that group on their own contact (STATE: ``active`` for a
+        ticket, ``pending`` for an application), a member needs none. ``{"kind": "member" |
+        "guest" | "already", "pass_id"?, "partner_id"}``; None when the key holds no pass."""
+        with self._lock:
+            mine = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey and p.get("state") in ("active", "pending")
+            ]
+            active = [p for p in mine if p.get("state") == "active"]
+            if any(p.get("tier") != "guest" for p in active):
+                return {"kind": "member", "partner_id": active[0].get("partner_id")}
+            here = [p for p in mine if p.get("guest_channel") == channel]
+            if here:
+                p = here[0]
+                if state == "active" and p.get("state") != "active":
+                    self._write("belfry.pass", [p["id"]], {"state": "active"})
+                return {"kind": "already", "pass_id": p["id"], "partner_id": p.get("partner_id")}
+            if not active:
+                return None
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "partner_id": active[0].get("partner_id"),
+                    "tier": "guest",
+                    "guest_channel": channel,
+                    "guest_days": 0,
+                    "guest_inviter": "",
+                    "guest_event": True,
+                    "guest_agent": bool(active[0].get("guest_agent")),
+                    "keycast_pubkey": pubkey,
+                    "own_pubkey": active[0].get("own_pubkey") or False,
+                    "event_email": active[0].get("event_email") or False,
+                    "date_start": now().date().isoformat(),
+                    "date_end": date_end,
+                    "state": "pending",
+                },
+            )
+            if state == "active":
+                self._write("belfry.pass", [pass_id], {"state": "active"})
+            return {"kind": "guest", "pass_id": pass_id, "partner_id": active[0].get("partner_id")}
 
     def _count_guest_use(self, invite_id: int) -> None:
         inv = self._get("belfry.invite", invite_id)

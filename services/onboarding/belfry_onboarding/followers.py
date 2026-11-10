@@ -424,9 +424,18 @@ def expire_passes(svc: Services) -> dict[str, Any] | None:
 
 def tick(svc: Services) -> None:
     from .drops import ensure_profile
+    from .events import watch as events_watch
     from .website import ensure_channel as ensure_website
 
-    for job in (expire_passes, ensure_channels, ensure_website, ensure_profile, soon, morning):
+    for job in (
+        expire_passes,
+        ensure_channels,
+        ensure_website,
+        ensure_profile,
+        soon,
+        morning,
+        events_watch,
+    ):
         try:
             job(svc)
         except Exception as exc:  # noqa: BLE001 — retried on the next round
