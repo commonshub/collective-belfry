@@ -356,6 +356,9 @@ chat.{$BELFRY_DOMAIN} {
 		# routes on the fragment, and the token never reaches a log that way
 		@join path_regexp join ^/join/([A-Za-z0-9_-]{20,})$
 		redir @join /#/join/{re.join.1} 302
+		# an event (chat.<domain>/events/<link>, also the phone apps' link): the chat's event page
+		@event path_regexp event ^/events/([A-Za-z0-9_-]{1,80})/?$
+		redir @event /#/events/{re.event.1} 302
 		@fresh path / /index.html /sw.js
 		header @fresh Cache-Control "no-cache"
 		root * /srv/apps/chat
