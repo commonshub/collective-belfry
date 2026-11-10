@@ -223,3 +223,16 @@ def test_sign_in_with_an_e_mail_code_from_the_drop_page(web, relay, services, mo
     r = web.post("/me/login/verify", json={"flow": fid, "csrf": csrf, "code": "123456"})
     assert r.json() == {"next": "in", "to": f"/drop/{TOKEN}"}
     assert r.cookies.get(mypass.SESSION_COOKIE)
+
+
+def test_the_upload_proof_has_no_fixed_key(services):
+    """Without a pass secret the proof's key was the word "drop": anyone could make the proof of
+    any message and have the drop box post it again and delete it."""
+    import hashlib
+    import hmac
+
+    services.settings.pass_page_secret = ""
+    eid = "e" * 64
+    forged = hmac.new(b"drop", f"drop:{eid}".encode(), hashlib.sha256).hexdigest()[:32]
+    assert not drops.owns(services, eid, forged)
+    assert drops.owns(services, eid, drops.proof(services, eid))

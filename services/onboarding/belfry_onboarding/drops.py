@@ -94,8 +94,14 @@ def find(svc: Services, token: str, fresh: bool = False) -> dict[str, Any] | Non
     return found
 
 
+_PROOF_FALLBACK = secrets.token_bytes(
+    32
+)  # no pass secret: a key of this process, never a fixed one
+
+
 def proof(svc: Services, event_id: str) -> str:
-    key = (svc.settings.pass_page_secret or "drop").encode()
+    secret = svc.settings.pass_page_secret
+    key = secret.encode() if secret else _PROOF_FALLBACK
     return hmac.new(key, f"drop:{event_id}".encode(), hashlib.sha256).hexdigest()[:32]
 
 
