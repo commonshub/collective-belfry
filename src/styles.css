@@ -471,6 +471,7 @@ a.chip { text-decoration: none; color: inherit; }
 .side-user .t b { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .side-user .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .layout.wide .main .scroll.pad > * { max-width: 720px; margin-left: auto; margin-right: auto; }
+.layout.wide .main .scroll.pad > .btn { display: flex; } /* inline-flex ignores auto margins: a button straight in the column was stuck to the left */
 
 /* ---- the channel drawer on a phone (Phone.tsx): the page slides right over it, full height ---- */
 .ico { display: block; }
