@@ -24,6 +24,12 @@ Without `make`: `infra/scripts/gen-secrets.sh`, then
 The onboarding service and the apps are in the Compose profile `app`, because they need the
 tokens bootstrap writes. Restart them after bootstrap changed a token (`make up-app`).
 
+Open Source Village's app suite (`chat` = Coracle, `calendar`, `wallet`, `vote`, `village`,
+`groups`) is in the profile `osv-apps`; `make up-app` starts it too. A belfry installed with
+`install.sh` runs it only with `OSV_APPS=1` (or one app at a time: `EXTRA_APPS`, profiles
+`app-<name>`), ships its own chat from `shipped-apps/chat` and, with `REGISTER=belfry` (the
+installer's default), adds `docker-compose.noodoo.yml` and starts no Odoo (`../docs/register.md`).
+
 Host requirements: Docker with Compose v2, `curl`, `jq`, `python3`, `openssl`; about 6 GB of RAM
 while running (Odoo 2 GB, Authentik about 1 GB, the walt.id services 1 GB each, the rest small),
 more while images build.
@@ -46,6 +52,10 @@ more while images build.
 | `wallet` | http://localhost:3400 | village token wallet (`apps/wallet/README.md`) |
 | `vote` | http://localhost:3500 | anonymous polls (`../services/vote/README.md`) |
 | `village` | http://localhost:3600, :3700, :3800, :3900 | directory, marketplace, photos, programme (`../services/village/README.md`) |
+| `groups-relay` | ws://localhost:3190 | the groups relay (zooid, NIP-29): channels, pods and events of the chat (`groups-relay/README.md`) |
+| `groups` | http://localhost:3150 | the groups app, Flotilla (`apps/groups/README.md`) |
+| `git` | http://localhost:3170 | the git server, ngit-grasp (`git/README.md`) |
+| `mail-in` | localhost:2525 (port 25 on a server) | receives mail for members and channels (`../docs/mail.md`) |
 | `mailpit` | http://localhost:8025 | catches every mail the local stack sends (not used in production) |
 | `postgres`, `redis` | internal | databases of Odoo, Authentik and Keycast; Keycast's cache. `docker compose exec postgres psql -U postgres` |
 
@@ -61,17 +71,22 @@ the proxy with the browser-facing services; `default` is everything else.
 | --- | --- |
 | `docker-compose.yml` | the stack; settings come from `.env`, secrets from `secrets/` |
 | `docker-compose.prod.yml` | the public overlay: proxy, no published ports, restart policies (`DEPLOY.md`) |
+| `docker-compose.noodoo.yml` | the overlay of a belfry without Odoo (`REGISTER=belfry`): Odoo only with `--profile odoo`, nothing waits for it |
+| `docker-compose.images.yml` | prebuilt images instead of local builds (`belfry apply` adds it when they exist for the code) |
+| `docker-compose.nginx.yml`, `nginx/` | nginx on 80/443 in front of Belfry's proxy (`install.sh --nginx`) |
 | `.env.example` | every setting with a comment (no secrets); `gen-secrets.sh` turns it into `.env` |
 | `authentik/` | blueprints (flows, providers, sources, branding) and the mail template |
 | `keycast/` | the signer's build (upstream plus Belfry's patch series) and its policy |
-| `apps/` | builds of the chat, calendar and wallet: upstream apps at a pinned commit plus Belfry's patches |
+| `apps/` | builds of the chat (Coracle), calendar, wallet and groups app: upstream apps at a pinned commit plus Belfry's patches |
+| `shipped-apps/` | built static apps every belfry gets (`chat`: the belfry's own chat, built elsewhere); `belfry apply` installs them into `data/apps/` |
+| `groups-relay/`, `git/` | builds and configuration of the groups relay (zooid plus Belfry's patches) and the git server |
 | `issuer/`, `verifier/` | walt.id configuration and the issuer's keys |
 | `relay/`, `blossom/`, `mint/` | configuration of the community relay, the file server and the mint |
 | `odoo/` | Odoo's configuration template |
 | `postgres/` | creates the databases and roles on first start |
 | `proxy/` | the public reverse proxy (Caddy with rate limiting) |
 | `hetzner/` | creating a VM on Hetzner Cloud |
-| `scripts/` | setup, bootstrap, checks, backups, the custody seed (below) |
+| `scripts/` | setup, bootstrap, checks, backups, the custody seed (below); `scripts/belfry` is the `belfry` command of an installed server (`belfry help`) |
 | `secrets/` | every password, token and key, one file each (below); gitignored |
 | `secrets-env/` | `with-secrets.sh`, the entrypoint wrapper for images that read secrets from variables only |
 
