@@ -615,6 +615,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
   useEffect(() => setAnn(announcing), [announcing])
   const [menu, setMenu] = useState(false)
   const [files, setFiles] = useState<File[]>([])
+  const [error, setError] = useState('')
   const ta = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   useEffect(() => { if (autoFocus) ta.current?.focus({ preventScroll: false }) }, [autoFocus])
@@ -658,13 +659,22 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
 
   const send = async () => {
     if (!text.trim() && !files.length) return
+    const mentioned = new Map(picked.current)
     const t = withMentions(text.trim())
     const f = files
     const a = canAnnounce && ann
     setText('')
     setFiles([])
+    setError('')
     if (!announcing) setAnn(false)
-    await onSend(t, f, a)
+    try { await onSend(t, f, a) } catch (e) {
+      // not saved on this device (storage full or refused): the text and files come back
+      setText((now) => now || text)
+      for (const [name, pk] of mentioned) picked.current.set(name, pk)
+      setFiles((now) => (now.length ? now : f))
+      if (a) setAnn(true)
+      setError(`Not saved: ${e instanceof Error ? e.message : String(e)}. Try again.`)
+    }
   }
 
   return (
@@ -675,6 +685,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, placehold
           {!announcing && <button aria-label="Not an announcement" onClick={() => setAnn(false)}>✕</button>}
         </div>
       )}
+      {error && <div className="error" role="alert" style={{ margin: '0 4px 6px' }}>{error}</div>}
       {files.length > 0 && (
         <div className="previews">
           {files.map((f, i) => (
