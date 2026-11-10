@@ -52,7 +52,9 @@ def check_nip98(event: dict[str, Any], method: str, urls: list[str], now: int | 
         raise AuthError(401, "bad pubkey")
     if event_id(event) != event["id"] or not verify_signature(event):
         raise AuthError(401, "bad signature")
-    if abs(now - int(event["created_at"])) > MAX_AGE:
+    if not isinstance(event["created_at"], int) or isinstance(event["created_at"], bool):
+        raise AuthError(401, "created_at is not a number")
+    if abs(now - event["created_at"]) > MAX_AGE:
         raise AuthError(401, "authorization too old or in the future")
     if [m.upper() for m in tag_values(event, "method")] != [method.upper()]:
         raise AuthError(401, "method tag does not match")

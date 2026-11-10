@@ -99,6 +99,9 @@ def member_by_email(svc: Services, email: str) -> dict[str, Any] | None:
         "res.partner", [["email", "=ilike", email]], ["name", "email"], limit=5
     )
     for p in partners:
+        # Odoo's =ilike reads % and _ as wildcards: only the address itself counts
+        if (p.get("email") or "").strip().lower() != email:
+            continue
         rows = svc.odoo.search_read(
             "belfry.pass",
             [["state", "=", "active"], ["partner_id", "=", p["id"]]],

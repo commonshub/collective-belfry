@@ -166,3 +166,28 @@ def test_add_steward_gives_a_free_pass_once(services, odoo, authentik):
     assert again["pass"] == {"pass_id": p["id"], "result": "already_active", "state": "active"}
     backfill = steward.steward_passes(services)
     assert backfill == {"stewards": {"sam@belfry.test": again["pass"]}}
+
+
+def test_a_malformed_authorization_time_is_401(services, odoo, client):
+    key, _ = holder(services, odoo)
+    r = client.get("/api/invites", headers={"Authorization": nip98(key, URL, created_at="now")})
+    assert r.status_code == 401
+
+
+def test_an_address_with_wildcards_finds_nobody():
+    """Odoo's =ilike reads % and _ as wildcards: "%@%" found a member, and the sign-in pages
+    answered with that member's address."""
+    from belfry_onboarding import apps
+
+    class Odoo:
+        def search_read(self, model, domain, fields, limit=None):
+            if model == "res.partner":  # what Odoo answers for [["email", "=ilike", "%@%"]]
+                return [{"id": 7, "name": "Ana", "email": "ana@example.org"}]
+            return [{"id": 1, "keycast_pubkey": "a" * 64}]
+
+    class Svc:
+        odoo = Odoo()
+
+    assert apps.member_by_email(Svc(), "%@%") is None
+    assert apps.member_by_email(Svc(), "an_@example.org") is None
+    assert apps.member_by_email(Svc(), " Ana@Example.org ")["partner"] == 7
