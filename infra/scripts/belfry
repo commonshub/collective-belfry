@@ -19,7 +19,8 @@
 #   belfry theme set DIR | show | reset   the community's own look (custom.css, logo, theme.json)
 #   belfry logs [SERVICE]            follow the logs
 #   (apply and update pull prebuilt images when GitHub has them for this code; BELFRY_BUILD_LOCAL=1
-#   builds everything here)
+#   builds everything here. After a successful apply the superseded image versions are removed,
+#   all but the newest one; BELFRY_KEEP_IMAGES=1 keeps them)
 #   belfry app install NAME DIR      serve a built web app at apps.<domain>/NAME/ (list, remove NAME;
 #                                    the shipped ones, chat, come with belfry apply)
 #   belfry compose ARGS…             docker compose with the right files and profile
@@ -296,6 +297,30 @@ for name, s in json.load(sys.stdin)["services"].items():
 ' "$ROOT")
 }
 
+# Every build and every pulled version leaves an image tagged <repo>:tree-<hash> behind, and
+# nothing removed them: a 20 GB server filled up after a dozen updates. After a successful apply,
+# per Belfry image keep the versions a container uses, the one the working tag (:local, :latest)
+# points at and the newest other one (going back a version then needs no rebuild); untag the rest
+# (Docker then drops the layers no tag holds any more). Never another project's images, never a
+# volume.
+# BELFRY_KEEP_IMAGES=1 keeps everything.
+prune_images() {
+  [[ "${BELFRY_KEEP_IMAGES:-}" == 1 ]] && return 0
+  local used working repo tag id created kept_repo='' freed=0
+  used=" $(docker ps -aq 2>/dev/null | xargs -r docker inspect --format '{{.Image}}' 2>/dev/null | tr '\n' ' ') "
+  working=" $(docker images --no-trunc --format '{{.Repository}}:{{.Tag}} {{.ID}}' 2>/dev/null \
+    | awk '$1 ~ /(^|\/)belfry-[a-z-]+:(local|latest)$/ {print $2}' | tr '\n' ' ') "
+  # newest first per repository: the first version that is not in use is the one kept for going back
+  while read -r repo tag id created; do
+    [[ -n "$repo" ]] || continue
+    if [[ "$used" == *" $id "* || "$working" == *" $id "* ]]; then continue; fi
+    if [[ "$kept_repo" != "$repo" ]]; then kept_repo=$repo; continue; fi
+    if docker rmi "$repo:$tag" >/dev/null 2>&1; then freed=$((freed+1)); fi
+  done < <(docker images --no-trunc --format '{{.Repository}} {{.Tag}} {{.ID}} {{.CreatedAt}}' 2>/dev/null \
+    | awk '$1 ~ /(^|\/)belfry-[a-z-]+$/ && $2 ~ /^tree-[0-9a-f]+$/ {print $1, $2, $3, $4 "T" $5}' | sort -k1,1 -k4,4r)
+  [[ $freed -eq 0 ]] || say "Removed $freed superseded image version(s)"
+}
+
 # Settings that used to follow the look (THEME): a belfry in Belfry's look runs without the Open
 # Source Village apps and signs in on its own page; any other keeps both as they were.
 legacy_settings() {
@@ -341,6 +366,7 @@ cmd_apply() {
   reload_proxy  # a running proxy keeps its old Caddyfile until told
   [[ -x infra/scripts/changelog.sh ]] && { infra/scripts/changelog.sh build || true; }
   write_version fetch || true
+  prune_images || true
   say "Done. belfry status shows the state."
 }
 
