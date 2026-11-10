@@ -21,8 +21,8 @@
 #   (apply and update pull prebuilt images when GitHub has them for this code; BELFRY_BUILD_LOCAL=1
 #   builds everything here. After a successful apply the superseded image versions are removed,
 #   all but the newest one; BELFRY_KEEP_IMAGES=1 keeps them)
-#   belfry app install NAME DIR      serve a built web app at apps.<domain>/NAME/ (list, remove NAME;
-#                                    the shipped ones, chat, come with belfry apply)
+#   belfry app install NAME DIR      serve a built web app at <domain>/NAME/ (list, remove NAME;
+#                                    the shipped one, the chat at chat.<domain>, comes with belfry apply)
 #   belfry compose ARGS…             docker compose with the right files and profile
 #
 # Settings `belfry config` understands (the same names install.sh takes; docs: infra/DEPLOY.md):
@@ -715,10 +715,11 @@ cmd_theme() {
   esac
 }
 
-# ── a belfry's own static apps: apps.<domain>/<name>/ (infra/data/apps/<name>/) ──
+# ── a belfry's own static apps: <domain>/<name>/ (infra/data/apps/<name>/) ──
 # Data, like the theme: `belfry update` never touches them. Each installed app gets a route file
-# in infra/data/apps/_routes/, which the proxy imports into the apps.<domain> site. The apps share
-# their origin with the signer (Keycast) on apps.<domain>: install only apps the admins trust.
+# in infra/data/apps/_routes/, which the proxy imports into the community domain's site (the chat
+# has its own host, chat.<domain>). The apps share their origin with the homepage and with each
+# other: install only apps the admins trust.
 APPS_DIR="$INFRA/data/apps"
 # names an app can't take: the signer's paths on apps.<domain>, and the community domain's own
 # (the pages served there, and its shortcuts to the other apps)
@@ -728,6 +729,9 @@ APP_RESERVED=" api admin auth login logout register dashboard settings keys oaut
 reload_proxy() {
   compose exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1 \
     || compose restart proxy >/dev/null
+}
+app_url() {  # NAME: where an installed app answers
+  if [[ "$1" == chat ]]; then echo "https://chat.$(env_get BELFRY_DOMAIN)/"; else echo "https://$(env_get BELFRY_DOMAIN)/$1/"; fi
 }
 app_route() {
   local name=$1
@@ -814,7 +818,7 @@ shipped_apps() {
       if [[ "$have" == "$(cat "$src/.build" 2>/dev/null)" ]] && grep -q /theme/custom/own.css "$APPS_DIR/$name/index.html"; then continue; fi
       say "Updating the shipped app $name"
     else
-      say "Installing the shipped app $name at apps.$(env_get BELFRY_DOMAIN)/$name/"
+      say "Installing the shipped app $name at $(app_url "$name")"
     fi
     app_put "$name" "$src"
   done
@@ -824,12 +828,12 @@ cmd_app() {
     install)
       local name=${2:?usage: belfry app install NAME DIR} src=${3:?usage: belfry app install NAME DIR}
       [[ "$name" =~ ^[a-z][a-z0-9-]{1,30}$ ]] || die "an app name is 2 to 31 lowercase letters, digits or dashes"
-      [[ "$APP_RESERVED" != *" $name "* ]] || die "$name is a path the signer uses on apps.<domain>; pick another name"
+      [[ "$APP_RESERVED" != *" $name "* ]] || die "$name is a path the belfry itself uses on <domain> or apps.<domain>; pick another name"
       [[ -f "$src/index.html" ]] || die "$src has no index.html (give the built app: its dist/ folder)"
       app_put "$name" "$src"
       reload_proxy
-      record "App $name installed at apps.$(env_get BELFRY_DOMAIN)/$name/"
-      say "https://apps.$(env_get BELFRY_DOMAIN)/$name/"
+      record "App $name installed at $(app_url "$name")"
+      app_url "$name"
       ;;
     remove)
       local name=${2:?usage: belfry app remove NAME}
@@ -847,7 +851,7 @@ cmd_app() {
       for f in "$APPS_DIR"/_routes/*.caddy; do
         [[ -f "$f" ]] || continue
         any=1; f=$(basename "$f" .caddy)
-        say "$f  https://apps.$(env_get BELFRY_DOMAIN)/$f/"
+        say "$f  $(app_url "$f")"
       done
       [[ $any = 1 ]] || say "No apps installed (belfry app install NAME DIR)"
       ;;
