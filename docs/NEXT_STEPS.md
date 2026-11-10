@@ -881,11 +881,17 @@ relays or servers is synced there by design (the skill says not to).
 
 ## 4. Next
 
+This log stops at §3zu (2026-11-04). What was built after it is not recorded here: the installer
+(`install.sh`, the `belfry` command, `infra/DEPLOY.md`), the setup page and the console on
+`belfry.<domain>`, themes, the homepage as an nsite, the belfry's own register without Odoo
+(`register.md`), e-mail as messages (`mail.md`), the belfry's own chat, guest links, the
+`/api/v1` API. The git history has them.
+
 Decided 2026-10-24: DIDs are dropped (no did:webvh, no `id.<domain>`, Phase 4 of the plan); identity is the participant's Nostr key. Next are more extras (Phase 6).
 
 
 1. The real-user happy-path test on `belfry.tofauti.net`, steps and results table in `docs/real-user-test.md` (a real e-mail address, Stripe test mode, a phone wallet against the claim page, door and pass sign-in), following `infra/DEPLOY.md` and a real wallet run: EUDI reference wallet or wwWallet against the claim page, the door and the pass sign-in (§3e open items 1–3), Odoo SMTP, Stripe test mode on the public URL.
-2. Phase 2 (continued): check the login, the key export, the pass card (§3m) and a phone NIP-46 client against `wss://bunker.<domain>` (§3n, e.g. Amethyst or Coracle with a bunker URL from "create bunker", or nostr-login via the NIP-05 discovery) live on the VM; pick the marketplace and links protocols (the other app kinds are decided, §3h); choose and deploy the actual client apps (calendar, photos, proposals, NIP-17 chat) against the relay, Blossom and the `belfry-event` scope.
+2. Phase 2 (continued): check the login, the key export, the pass card (§3m) and a phone NIP-46 client against `wss://bunker.<domain>` (§3n, e.g. Amethyst or Coracle with a bunker URL from "create bunker", or nostr-login via the NIP-05 discovery) live on the VM; pick the links protocol (the other app kinds are decided, §3h). Done since this was written: the marketplace protocol (§3u), and the client apps chosen and deployed: chat (§3o), calendar (§3p), photos (§3v), groups (§3zi); proposals are a page of the onboarding service (`community.py`, `/proposals`).
 3. Phase 3 hardening, remaining: CA publication for wallets, encrypted verifier responses and the authorization-code claim flow (HAIP), issuer key in a KMS, key rotation (see §3e and §3f).
 
 To-dos from the user (2026-10-25):
