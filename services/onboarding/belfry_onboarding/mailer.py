@@ -18,6 +18,17 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 SENT: list[EmailMessage] = []  # tests: mails are kept here when there is no SMTP host
+SENT_MAX = 200  # …and only the last ones: a belfry without a mail provider must not grow
+
+
+def _keep(msg: EmailMessage) -> None:
+    SENT.append(msg)
+    del SENT[:-SENT_MAX]
+
+
+def one_line(text: str) -> str:
+    """A header's value: a name with a line break in it would make the message unbuildable."""
+    return " ".join(str(text).split())
 
 
 class Mailer:
@@ -49,11 +60,11 @@ class Mailer:
         msg = EmailMessage()
         msg["From"] = self.sender()
         msg["To"] = ", ".join(rcpts)
-        msg["Subject"] = subject[:200]
+        msg["Subject"] = one_line(subject)[:200]
         msg["Date"] = email.utils.formatdate(localtime=False)
         msg["Message-ID"] = email.utils.make_msgid(domain=self.s.nip05_domain or "localhost")
         for k, v in (headers or {}).items():
-            msg[k] = v
+            msg[k] = one_line(v)
         text = "\n\n".join(paragraphs)
         if button:
             text += f"\n\n{button[1]}: {button[0]}"
@@ -62,7 +73,7 @@ class Mailer:
         msg.set_content(text + "\n")
         msg.add_alternative(self._html(paragraphs, button, footer), subtype="html")
         if not self.s.smtp_host:
-            SENT.append(msg)
+            _keep(msg)
             log.warning("mailer: no mail provider; mail to %s not sent (%s)", rcpts, subject)
             return False
         try:
@@ -79,16 +90,16 @@ class Mailer:
         msg = EmailMessage()
         msg["From"] = self.sender()
         msg["To"] = to
-        msg["Subject"] = subject[:200]
+        msg["Subject"] = one_line(subject)[:200]
         msg["Date"] = email.utils.formatdate(localtime=False)
         msg["Message-ID"] = email.utils.make_msgid(domain=self.s.nip05_domain or "localhost")
         for k, v in headers.items():
-            msg[str(k)] = str(v)
+            msg[str(k)] = one_line(v)
         text = re.sub(r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", body_html))
         msg.set_content(re.sub(r"\n{3,}", "\n\n", text).strip() + "\n")
         msg.add_alternative(body_html, subtype="html")
         if not self.s.smtp_host:
-            SENT.append(msg)
+            _keep(msg)
             return False
         try:
             self._smtp(msg, [to])

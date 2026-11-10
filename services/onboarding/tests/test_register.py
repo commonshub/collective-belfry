@@ -260,3 +260,23 @@ def test_importing_from_odoo_keeps_ids_and_drops_billing(tmp_path, settings, odo
     assert new == 13 and reg.call("res.partner", "belfry_ensure_member_number", [[new]]) == ["0004"]
     with pytest.raises(SystemExit):
         run(odoo, reg)
+
+
+def test_a_name_with_a_line_break_still_gets_its_mail(reg):
+    """The subject carries the name: a line break in it raised ValueError (a 500 on /apply)."""
+    reg.call(
+        "belfry.application",
+        "belfry_application_create",
+        [
+            {"name": "Ana\nBcc: x@example.org", "email": "ana@example.org", "motivation": "Hi"},
+            ["admin@belfry.test"],
+        ],
+    )
+    msg = mailer.SENT[-1]
+    assert "Ana Bcc: x@example.org asks to join" in msg["Subject"] and msg["Bcc"] is None
+
+
+def test_unsent_mails_are_not_kept_for_ever(reg):
+    for _ in range(mailer.SENT_MAX + 5):
+        reg.mailer.send("ana@example.org", "Hello", ["Hi"])
+    assert len(mailer.SENT) == mailer.SENT_MAX
