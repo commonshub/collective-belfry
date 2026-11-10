@@ -81,6 +81,8 @@ def admin_emails(svc: Services) -> set[str]:
             emails = svc.authentik.group_member_emails(svc.settings.steward_group)
             _admins.update(at=now, emails={e.lower() for e in emails if e})
         except Exception as exc:
+            # keep the last known admins and ask again after the same pause, not on every page
+            _admins["at"] = now
             log.warning("console: stewards group not readable: %s", exc)
     return _admins["emails"]
 

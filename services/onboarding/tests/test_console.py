@@ -489,3 +489,19 @@ def test_apps_home_shows_what_can_be_added_to_admins_only(web, belfry, odoo, aut
         "BELFRY_EXTRA_APPS='calendar vote'" in pending
         or 'BELFRY_EXTRA_APPS="calendar vote"' in pending
     )
+
+
+def test_admins_are_not_asked_again_at_once_when_authentik_is_down(belfry, monkeypatch):
+    """A failing Authentik was asked on every page view (30 s timeout each)."""
+    calls = []
+
+    def down(_group):
+        calls.append(1)
+        raise RuntimeError("authentik is down")
+
+    monkeypatch.setattr(belfry.authentik, "group_member_emails", down)
+    monkeypatch.setitem(console._admins, "at", 0.0)
+    monkeypatch.setitem(console._admins, "emails", {"ada@belfry.test"})
+    assert console.admin_emails(belfry) == {"ada@belfry.test"}
+    assert console.admin_emails(belfry) == {"ada@belfry.test"}
+    assert len(calls) == 1
