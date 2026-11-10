@@ -54,7 +54,7 @@ From the address's domain: `GET https://<domain>/.well-known/belfry.json`. You n
 "sessions": {
   "pubkey": "<belfry key, hex>", "npub": "npub1…",
   "relays": ["wss://bunker.<domain>"],
-  "api": "https://pass.<domain>/api/session"
+  "api": "https://belfry.<domain>/api/v1/session"
 }
 ```
 
