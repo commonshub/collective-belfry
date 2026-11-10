@@ -189,6 +189,8 @@ export const groups: () => Group[] = perLog((list) => {
     if (e.kind === 9000 || e.kind === 9001) {
       const p = tag(e, 'p')
       if (p) { if (e.kind === 9000) g.members.add(p); else g.members.delete(p); decided.set(id + p, e.created_at) }
+      // a co-host (events): put in with the admin role; the relay's 39001 says the same
+      if (p && e.kind === 9000 && e.tags.some((t) => t[0] === 'p' && t[1] === p && t[2] === 'admin')) g.admins.add(p)
     }
     if (e.kind === 9) {
       g.lastActivity = Math.max(g.lastActivity, e.created_at)
@@ -196,9 +198,10 @@ export const groups: () => Group[] = perLog((list) => {
     }
     // join / leave (NIP-29 9021 / 9022): counted here too, whether or not the relay folds them in
     if (e.kind === 9021) {
-      if (!g.closed) g.members.add(e.pubkey)
+      if (!g.closed && !e.tags.some((t) => t[0] === 'waitlist' || t[0] === 'ticket')) g.members.add(e.pubkey)
       else applied.set(id + e.pubkey, e)
     }
+    if (e.kind === 9022) applied.delete(id + e.pubkey)
     if (e.kind === 9022) g.members.delete(e.pubkey)
   }
   // a pod lives where it was announced: the first post carrying its `pod` tag
@@ -486,11 +489,18 @@ export function pinned(groupId: string, may: (pubkey: string) => boolean): Messa
 }
 
 // ---- calendar (NIP-52) ----------------------------------------------------------
+// An event (Belfry events, PROTOCOL.md): a NIP-52 event on the community relay with `d` =
+// <year>-<6 of [a-z0-9]>, its own NIP-29 group ev-<d> (its chat; the hosts are its admins), and
+// cards in any channels: messages that carry its URL (https://<domain>/events/<link>) or its
+// `a` tag. Co-hosts edit it (rule B): among the versions with that `d` signed by a host, the
+// newest wins; its coordinate stays the creator's. Events made before (session-<x> ↔ ws-<x>)
+// keep working: one author, the group named by the `h` tag.
 
 export type Rsvp = 'accepted' | 'tentative' | 'declined'
+export type Visibility = 'members' | 'link' | 'public'
 
 export interface CalEvent {
-  coord: string // kind:pubkey:d
+  coord: string // kind:creator:d
   d: string
   ev: Ev
   title: string
@@ -499,35 +509,67 @@ export interface CalEvent {
   allDay: boolean
   start: Date
   end?: Date
+  /** The time zone it was set in (NIP-52 start_tzid). */
+  tz?: string
   groupId: string
   /** Online meeting links (NIP-52 `r` tags: video calls, documents). */
   links: string[]
-  /** The channel it was posted in (a sub-channel of it): where the post linking to it is. */
-  channel: string
+  /** The channels its card was sent in (not its own chat); may be empty. */
+  channels: string[]
   rsvps: Map<string, Rsvp>
+  /** Each person's RSVP event (for "Still going?"). */
+  rsvpEvents: Map<string, Ev>
+  /** A Belfry event (ev-<d> group, public page), not an older session. */
+  isNew: boolean
+  creator: string
+  hosts: Set<string>
+  cover?: string
+  visibility: Visibility
+  slug?: string
+  status: 'scheduled' | 'cancelled'
+  statusReason?: string
+  /** Every version seen, oldest first (for "Still going?" after a change). */
+  versions: Ev[]
+  /** Read from the belfry's API (a guest: the community relay is not theirs). */
+  remote?: boolean
 }
 
 export const isEventKind = (k: number) => k === 31922 || k === 31923
+export const EVENT_D = /^\d{4}-[a-z0-9]{6}$/
+export const EVENT_STATUS_NS = 'belfry/event-status'
+export const eventLink = (e: Pick<CalEvent, 'd' | 'slug'>) => e.slug || e.d
+export const eventUrl = (e: Pick<CalEvent, 'd' | 'slug'>) => `https://${BELFRY.domain}/events/${eventLink(e)}`
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** https://<own domain>/events/<link> in a text: the links, at most three, in order. */
+export function eventLinksIn(text: string): string[] {
+  const re = new RegExp(`https://${escapeRe(BELFRY.domain)}/events/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])(?![a-z0-9-])`, 'g')
+  return [...new Set([...(text || '').matchAll(re)].map((m) => m[1]))].slice(0, 3)
+}
 
 /** The event a chat post links to (its `a` tag), if any. */
 export const eventCoordOf = (e: Ev) => {
   const a = tag(e, 'a')
   return a && isEventKind(Number(a.split(':')[0])) ? a : undefined
 }
+/** Every event coordinate a message's `a` tags name (up to three). */
+export const eventCoordsOf = (e: Ev) =>
+  [...new Set(e.tags.filter((t) => t[0] === 'a' && isEventKind(Number((t[1] ?? '').split(':')[0]))).map((t) => t[1]))].slice(0, 3)
 
-export function calendar(): CalEvent[] {
-  const list = all(me())
+export const calendar: () => CalEvent[] = perLog((list) => {
   const del = deleted(list)
-  const latest = new Map<string, Ev>()
+  const gs = new Map(groups().map((g) => [g.id, g]))
+  const creators = new Map<string, string>() // group id → its creator (first 9007)
+  for (const e of [...list].sort(byTime)) if (e.kind === 9007) { const h = tag(e, 'h'); if (h && !creators.has(h)) creators.set(h, e.pubkey) }
+  // versions: by d for Belfry events (any host may write one), by coordinate for the older ones
+  const byKey = new Map<string, Ev[]>()
   for (const e of list) {
     if (e.kind !== 31922 && e.kind !== 31923) continue
     const d = tag(e, 'd')
     if (!d) continue
-    const coord = `${e.kind}:${e.pubkey}:${d}`
-    const prev = latest.get(coord)
-    if (!prev || byTime(prev, e) < 0) latest.set(coord, e)
+    const key = EVENT_D.test(d) ? 'd:' + d : `${e.kind}:${e.pubkey}:${d}`
+    byKey.set(key, [...(byKey.get(key) ?? []), e])
   }
-  const rsvps = new Map<string, Map<string, { s: Rsvp; at: number }>>()
+  const rsvps = new Map<string, Map<string, { s: Rsvp; at: number; ev: Ev }>>()
   for (const e of list) {
     if (e.kind !== 31925) continue
     const a = tag(e, 'a')
@@ -535,39 +577,80 @@ export function calendar(): CalEvent[] {
     if (!a || !s) continue
     const m = rsvps.get(a) ?? new Map()
     const prev = m.get(e.pubkey)
-    if (!prev || prev.at <= e.created_at) m.set(e.pubkey, { s, at: e.created_at })
+    if (!prev || prev.at <= e.created_at) m.set(e.pubkey, { s, at: e.created_at, ev: e })
     rsvps.set(a, m)
   }
-  // where each event was posted: the first post linking to it outside the event's own chat
-  const posted = new Map<string, string>()
-  for (const e of [...list].sort(byTime)) {
-    if (e.kind !== 9 || del.has(e.id)) continue
-    const a = eventCoordOf(e)
-    const h = tag(e, 'h')
-    if (a && h && !h.startsWith('ws-') && !posted.has(a)) posted.set(a, h)
-  }
+  const statusLabels = new Map<string, Ev[]>()
+  for (const e of list) if (e.kind === 1985 && tag(e, 'L') === EVENT_STATUS_NS) { const h = tag(e, 'h'); if (h) statusLabels.set(h, [...(statusLabels.get(h) ?? []), e]) }
   const out: CalEvent[] = []
-  for (const [coord, e] of latest) {
-    if (del.has(coord)) continue
+  for (const [key, versions] of byKey) {
+    const sorted = [...versions].sort(byTime)
+    let e = sorted.at(-1)!
+    let creator = e.pubkey
+    let hosts = new Set([e.pubkey])
     const d = tag(e, 'd')!
+    const isNew = key.startsWith('d:')
+    const groupId = isNew ? 'ev-' + d : tag(e, 'h') || 'ws-' + d.replace(/^session-/, '')
+    if (isNew) {
+      creator = creators.get(groupId) ?? sorted[0].pubkey
+      hosts = new Set([creator, ...(gs.get(groupId)?.admins ?? [])])
+      const mine = sorted.filter((v) => hosts.has(v.pubkey))
+      if (!mine.length) continue
+      e = mine.at(-1)!
+    }
+    const kind = isNew ? (sorted.find((v) => v.pubkey === creator)?.kind ?? e.kind) : e.kind
+    const coord = `${kind}:${creator}:${d}`
+    if (del.has(coord)) continue
     const allDay = e.kind === 31922
     const parse = (v?: string) => (!v ? undefined : allDay ? new Date(v + 'T00:00:00') : new Date(Number(v) * 1000))
     const start = parse(tag(e, 'start'))
     if (!start || isNaN(+start)) continue
+    let status: CalEvent['status'] = tag(e, 'status') === 'cancelled' ? 'cancelled' : 'scheduled'
+    let statusReason: string | undefined
+    const labels = (statusLabels.get(groupId) ?? []).filter((x) => hosts.has(x.pubkey)).sort(byTime)
+    const last = labels.at(-1)
+    if (last && (last.created_at >= e.created_at || status === 'scheduled')) {
+      status = last.tags.some((t) => t[0] === 'l' && t[1] === 'cancelled') ? 'cancelled' : 'scheduled'
+    }
+    // the line to the guests: the latest cancellation label's
+    if (status === 'cancelled') statusReason = labels.filter((x) => x.tags.some((t) => t[0] === 'l' && t[1] === 'cancelled')).at(-1)?.content || undefined
+    const vis = tag(e, 'visibility')
+    const m = rsvps.get(coord) ?? new Map()
     out.push({
-      coord, d, ev: e,
+      coord, d, ev: e, versions: sorted.filter((v) => hosts.has(v.pubkey)),
       title: tag(e, 'title') || tag(e, 'name') || 'Untitled',
       description: e.content,
       location: tag(e, 'location'),
       links: e.tags.filter((t) => t[0] === 'r' && /^https:\/\//.test(t[1] ?? '')).map((t) => t[1]),
-      allDay, start, end: parse(tag(e, 'end')),
-      groupId: tag(e, 'h') || 'ws-' + d.replace(/^session-/, ''),
-      channel: posted.get(coord) ?? 'general',
-      rsvps: new Map([...(rsvps.get(coord) ?? new Map()).entries()].map(([p, v]) => [p, v.s])),
+      allDay, start, end: parse(tag(e, 'end')), tz: tag(e, 'start_tzid'),
+      groupId, channels: [], isNew, creator, hosts,
+      cover: tag(e, 'image') || undefined,
+      visibility: vis === 'public' || vis === 'link' ? vis : 'members',
+      slug: tag(e, 'slug') || undefined,
+      status, statusReason,
+      rsvps: new Map([...m.entries()].map(([p, v]) => [p, v.s])),
+      rsvpEvents: new Map([...m.entries()].map(([p, v]) => [p, v.ev])),
     })
   }
+  // the channels showing each event's card: messages with its `a` tag or its URL, not deleted
+  const byLink = new Map<string, CalEvent>()
+  for (const x of out) { byLink.set(x.d, x); if (x.slug) byLink.set(x.slug, x) }
+  const byCoord = new Map(out.map((x) => [x.coord, x]))
+  for (const e of list) {
+    if (e.kind !== 9 || del.has(e.id)) continue
+    const h = tag(e, 'h')
+    if (!h) continue
+    const found = new Set<CalEvent>()
+    for (const c of eventCoordsOf(e)) { const x = byCoord.get(c); if (x) found.add(x) }
+    for (const l of eventLinksIn(e.content)) { const x = byLink.get(l); if (x) found.add(x) }
+    for (const x of found) if (x.groupId !== h && !x.channels.includes(h)) x.channels.push(h)
+  }
   return out.sort((a, b) => +a.start - +b.start)
-}
+})
+
+export const eventByCoord = (coord: string) => calendar().find((x) => x.coord === coord)
+export const eventByLinkLocal = (link: string) => calendar().find((x) => x.d === link || x.slug === link)
+export const eventOfGroup = (groupId: string) => calendar().find((x) => x.groupId === groupId)
 
 // ---- proposals ----------------------------------------------------------------------------
 // The text: a NIP-23 long-form event (kind 30023, `t` proposal, `h` its chat, `version` N), on

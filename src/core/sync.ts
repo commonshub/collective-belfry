@@ -10,8 +10,8 @@ import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, se
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
 
-export const KINDS_GROUPS = [0, 39000, 39001, 39002, 9, 1111, 1010, 7, 9007, 9002, 9008, 9000, 9001, 9005, 9021, 9022, 1068, 1018, 5, 1985, 30078, 2100, 2101, 2102, 2103, ...ACCESS_KINDS]
-export const KINDS_MAIN = [0, 31922, 31923, 31925, 30023, 5]
+export const KINDS_GROUPS = [0, 39000, 39001, 39002, 9, 1111, 1010, 7, 9007, 9002, 9008, 9000, 9001, 9005, 9021, 9022, 1068, 1018, 5, 1985, 30078, 2100, 2101, 2102, 2103, 31925, ...ACCESS_KINDS]
+export const KINDS_MAIN = [0, 31922, 31923, 31925, 30023, 30402, 5]
 
 const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.mainRelay }
 
@@ -196,6 +196,14 @@ export async function setAvatar(file: File) {
   let content: Record<string, unknown> = {}
   try { content = mine ? JSON.parse(mine.content) : {} } catch { content = {} }
   await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, picture: url }), tags: [] })
+}
+
+/** A picture (an event's cover) on Blossom, resized on the device; a data URL in demo mode. */
+export async function uploadBlob(file: File, max = 1600): Promise<string> {
+  if (!signer) throw new Error('Not signed in.')
+  const small = file.type.startsWith('image/') ? await resize(file, localOnly ? 640 : max) : file
+  if (localOnly) return new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(small) })
+  return upload(small, { blobKey: '', name: file.name || 'cover.jpg', mime: small.type || 'image/jpeg', size: small.size })
 }
 
 async function resize(file: File, max: number): Promise<Blob> {

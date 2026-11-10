@@ -1,63 +1,85 @@
-import { useState } from 'react'
-import { Markdown } from './markdown'
-import { THEME } from '../config'
-import { createEvent, deleteEvent, jitsiLink, meetingLabel, openEventChat, rsvp, type NewEvent } from '../core/actions'
-import { calendar, displayName, groups, type CalEvent, type Rsvp } from '../core/model'
+// Events in lists and cards, and the form that makes or edits one (Belfry events,
+// work/events-design/PROTOCOL.md). The event's own screen is in Events.tsx.
+import { useEffect, useRef, useState } from 'react'
+import { BELFRY, THEME } from '../config'
+import { jitsiLink } from '../core/actions'
+import { calendar, eventByCoord, eventLink, groups, type CalEvent, type Rsvp, type Visibility } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, fmtDay, go, Sheet, Btn, Form } from './common'
-import { Conversation } from './Chat'
-import { TopicsBar } from './Topics'
-import { Files, Tabs, Tasks } from './ChannelInfo'
-import { FollowButton } from './Follow'
+import { claimSlug, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
+import { back, fmtDay, go, Sheet, Btn, Form, up } from './common'
+import { Tabs } from './ChannelInfo'
+import { CalendarIcon, ImageIcon } from './icons'
+
+/** Where an event opens in the chat: #/events/<link>; an older session by its coordinate. */
+export const eventPath = (e: CalEvent) => (e.isNew ? 'events/' + encodeURIComponent(eventLink(e)) : 'cal/' + encodeURIComponent(e.coord))
+export const openEvent = (e: CalEvent) => go(eventPath(e))
+
+const timeIn = (d: Date, tz?: string) => {
+  try { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', ...(tz ? { timeZone: tz } : {}) }) } catch { return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+}
+/** The time zone's short name when it is not the viewer's own ("CET", "GMT+1"). */
+export function tzNote(e: CalEvent): string {
+  if (e.allDay || !e.tz) return ''
+  try {
+    if (e.tz === Intl.DateTimeFormat().resolvedOptions().timeZone) return ''
+    return new Intl.DateTimeFormat([], { timeZone: e.tz, timeZoneName: 'short' }).formatToParts(e.start).find((p) => p.type === 'timeZoneName')?.value ?? e.tz
+  } catch { return e.tz }
+}
 
 export const when = (e: CalEvent) => {
   if (e.allDay) return 'All day'
-  const t = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-  return e.end ? `${t(e.start)} – ${t(e.end)}` : t(e.start)
+  const tz = tzNote(e) ? e.tz : undefined
+  const note = tzNote(e)
+  return (e.end ? `${timeIn(e.start, tz)} – ${timeIn(e.end, tz)}` : timeIn(e.start, tz)) + (note ? ' ' + note : '')
 }
 
-export const going = (e: CalEvent) => [...e.rsvps.values()].filter((s) => s === 'accepted').length
-
-type Filter = 'going' | 'maybe' | 'all'
+export const going = (e: CalEvent) => (e.isNew ? goingList(e).length : [...e.rsvps.values()].filter((s) => s === 'accepted').length)
 
 const endOf = (e: CalEvent) => +(e.end ?? e.start)
 const startOfToday = () => +new Date(new Date().toDateString())
+const isPast = (e: CalEvent) => endOf(e) < startOfToday()
 
-/** Upcoming events (today onwards), of one channel or of all. */
+/** Upcoming events (today onwards), of one channel (its cards) or of all. */
 export const upcoming = (channel?: string) =>
-  calendar().filter((e) => endOf(e) >= startOfToday() && (!channel || e.channel === channel))
+  calendar().filter((e) => !isPast(e) && (!channel || e.channels.includes(channel)))
 
-export function CalendarList({ channel }: { channel?: string }) {
+export const LABEL: Record<Rsvp, string> = { accepted: 'Going', tentative: 'Maybe', declined: "Can't go" }
+const STATE: Record<string, string> = { ticket: 'Going', maybe: 'Maybe', cant: "Can't go", applied: 'Applied', waitlist: 'Waitlist', declined: 'Not this time', host: 'Hosting' }
+export const stateLabel = (e: CalEvent) => (e.isNew ? STATE[myState(e)] : e.rsvps.get(me()) ? LABEL[e.rsvps.get(me())!] : '')
+
+type Tab = 'upcoming' | 'mine' | 'hosting' | 'past'
+
+/** #/events (every event the viewer can read) and #/c/<id>/events (the ones carded there). */
+export function EventsScreen({ channel }: { channel?: string }) {
   useVersion()
   const [creating, setCreating] = useState(false)
-  const [filter, setFilter] = useState<Filter>('all')
+  const [tab, setTab] = useState<Tab>('upcoming')
   const g = channel ? groups().find((x) => x.id === channel) : undefined
-  const mine = (e: CalEvent) => e.rsvps.get(me())
-  const soon = upcoming(channel).filter((e) =>
-    filter === 'going' ? mine(e) === 'accepted' : filter === 'maybe' ? mine(e) === 'tentative' : true)
-  const past = filter === 'all'
-    ? calendar().filter((e) => endOf(e) < startOfToday() && (!channel || e.channel === channel)).reverse()
-    : []
-  const empty = { going: "You're not going to anything yet.", maybe: 'No maybes.', all: 'Nothing planned yet. Post the first event.' }[filter]
+  const list = calendar().filter((e) => !channel || e.channels.includes(channel))
+  const mine = (e: CalEvent) => { const s = myState(e); return s !== 'none' && s !== 'declined' && s !== 'cant' }
+  const shown = tab === 'past' ? list.filter(isPast).reverse()
+    : list.filter((e) => !isPast(e) && (tab === 'upcoming' || (tab === 'mine' ? mine(e) && !e.hosts.has(me()) : e.hosts.has(me()))))
+  const empty = { upcoming: 'Nothing planned yet. Make the first event.', mine: 'You’re not going to anything yet.', hosting: 'You’re not hosting anything yet.', past: 'No past events.' }[tab]
   return (
     <div className="screen">
       <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back(channel ? 'c/' + encodeURIComponent(channel) : 'c')}>‹</button>
+        <button className="icon-btn" aria-label="Back" onClick={() => (channel ? up('c/' + encodeURIComponent(channel)) : back('c'))}>‹</button>
         <h1>Events{g && <small># {g.name}</small>}</h1>
         <button className="icon-btn" aria-label="New event" onClick={() => setCreating(true)}>＋</button>
       </div>
-      <Tabs tab={filter} setTab={setFilter} tabs={[['going', 'Going'], ['maybe', 'Maybe'], ['all', 'All']]} />
+      <Tabs tab={tab} setTab={setTab} tabs={[['upcoming', 'Upcoming'], ['mine', 'Mine'], ['hosting', 'Hosting'], ['past', 'Past']]} />
       <div className="scroll">
-        {soon.length === 0 && <div className="empty">{empty}</div>}
-        <EventRows list={soon} />
-        {past.length > 0 && <><div className="section-title">Past</div><EventRows list={past} days={false} /></>}
-        <div style={{ padding: 16 }}><button className="btn ghost" onClick={() => setCreating(true)}>＋ Post an event</button></div>
+        {shown.length === 0 && <div className="empty">{empty}</div>}
+        <EventRows list={shown} days={tab !== 'past'} />
+        <div style={{ padding: 16 }}><button className="btn ghost" onClick={() => setCreating(true)}>＋ New event</button></div>
       </div>
-      {creating && <NewEventSheet channel={channel} onClose={() => setCreating(false)} />}
+      {creating && <EventFormSheet onClose={() => setCreating(false)} onSaved={(link) => go('events/' + encodeURIComponent(link))} />}
     </div>
   )
 }
+/** The older name (other screens import it). */
+export const CalendarList = EventsScreen
 
 function EventRows({ list, days = true }: { list: CalEvent[]; days?: boolean }) {
   let lastDay = ''
@@ -74,75 +96,152 @@ function EventRows({ list, days = true }: { list: CalEvent[]; days?: boolean }) 
 }
 
 function EventRow({ e }: { e: CalEvent }) {
-  const mine = e.rsvps.get(me())
+  const s = stateLabel(e)
   return (
-    <button className="ev" onClick={() => go('cal/' + encodeURIComponent(e.coord))} style={{ opacity: e.ev.pending ? 0.6 : 1 }}>
-      <DateChip d={e.start} />
+    <button className="ev" onClick={() => openEvent(e)} style={{ opacity: e.ev.pending ? 0.6 : 1 }}>
+      {e.cover ? <img className="ev-thumb" src={e.cover} alt="" loading="lazy" /> : <DateChip d={e.start} />}
       <div className="info">
-        <b>{e.title}</b>
-        <small>{when(e)}{e.location ? ' · ' + e.location : ''}{e.links.length ? ' · 🎥 online' : ''}</small>
-        <small>{mine ? `${LABEL[mine]} · ` : ''}{going(e)} going</small>
+        <b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>} {e.title}</b>
+        <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}{e.links.length ? ' · online' : ''}</small>
+        <small>{s ? `${s} · ` : ''}{going(e)} going</small>
       </div>
     </button>
   )
 }
 
-const DateChip = ({ d }: { d: Date }) => (
+export const DateChip = ({ d }: { d: Date }) => (
   <div className="date"><small>{d.toLocaleDateString([], { month: 'short' })}</small><b>{d.getDate()}</b></div>
 )
 
-/** The post an event leaves in its channel: a card that opens the event. */
-export function EventCard({ coord, fallback }: { coord: string; fallback: string }) {
-  const e = calendar().find((x) => x.coord === coord)
-  if (!e) return <div className="text">{fallback}</div>
-  const mine = e.rsvps.get(me())
+/** An event's card in a channel: from a message's `a` tag or its URL (ours, or the belfry's
+ *  answer for a guest who can't read the community relay). Going / Maybe in one tap when the
+ *  event has the plain RSVP. */
+export function EventCard({ coord, link, fallback }: { coord?: string; link?: string; fallback: string }) {
+  useVersion()
+  const found = coord ? eventByCoord(coord) : undefined
+  const r = !found && link ? eventByLink(link) : undefined
+  const e = found ?? r?.e
+  if (!e) return fallback ? <div className="text">{fallback}</div> : null
+  const tks = e.isNew ? tickets(e, r?.api) : []
+  const plain = !e.isNew || (tks.length === 1 && tks[0].implicit && !e.remote)
+  const mine = e.isNew ? myState(e, people(e), r?.api) : undefined
+  const answered = e.isNew ? mine !== 'none' && mine !== 'host' : !!e.rsvps.get(me())
+  const open = e.status !== 'cancelled' && !isPast(e)
   return (
-    <button className="ev-card" onClick={() => go('cal/' + encodeURIComponent(e.coord))}>
-      <DateChip d={e.start} />
-      <span className="info">
-        <b>{e.title}</b>
-        <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}</small>
-        <small>{mine ? `${LABEL[mine]} · ` : ''}{going(e)} going</small>
-      </span>
-    </button>
+    <div className={'ev-card' + (e.cover ? ' has-cover' : '')} role="button" tabIndex={0} onClick={() => openEvent(e)} onKeyDown={(k) => { if (k.key === 'Enter') openEvent(e) }}>
+      {e.cover && <img className="ev-card-cover" src={e.cover} alt="" loading="lazy" />}
+      <div className="ev-card-row">
+        <DateChip d={e.start} />
+        <span className="info">
+          <b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>} {e.title}</b>
+          <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}</small>
+          <small>{answered ? `${stateLabel(e)} · ` : ''}{going(e)} going</small>
+        </span>
+      </div>
+      {open && !answered && (plain
+        ? <div className="rsvp card-rsvp" onClick={(x) => x.stopPropagation()}>
+            <Btn onClick={() => rsvp(e, 'accepted')}>Going</Btn>
+            <Btn onClick={() => rsvp(e, 'tentative')}>Maybe</Btn>
+          </div>
+        : <div className="card-rsvp"><span className="line-pill ask">RSVP</span></div>)}
+    </div>
   )
 }
 
-export const LABEL: Record<Rsvp, string> = { accepted: 'Going', tentative: 'Maybe', declined: "Can't go" }
-
+const pad = (n: number) => String(n).padStart(2, '0')
 function localInput(d: Date) {
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
+const ZONES = (() => {
+  try { return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.('timeZone') ?? [] } catch { return [] }
+})()
 
-export function NewEventSheet({ channel, onClose }: { channel?: string; onClose: () => void }) {
+const VIS: [Visibility, string, string][] = [
+  ['members', 'Members', 'Only members see it'],
+  ['link', 'Link', 'Anyone with the URL'],
+  ['public', 'Public', 'Listed on the website'],
+]
+
+/** Make an event, or edit one (EDIT): title, Markdown description, cover, when (all day or
+ *  times in a time zone), where, online link, who sees it, its custom URL. */
+export function EventFormSheet({ edit, onClose, onSaved }: { edit?: CalEvent; onClose: () => void; onSaved?: (link: string) => void }) {
   const start = new Date()
   start.setHours(start.getHours() + 1, 0, 0, 0)
   const end = new Date(+start + 3600_000)
-  const [n, setN] = useState<NewEvent>({ title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false, start: localInput(start), end: localInput(end) })
-  const set = (patch: Partial<NewEvent>) => setN({ ...n, ...patch })
-  // places already used for events in this channel (most recent first), then elsewhere
-  const where = channel ?? 'general'
-  const byRecent = [...calendar()].sort((a, b) => b.ev.created_at - a.ev.created_at)
-  const places = [...new Set([
-    ...byRecent.filter((e) => e.channel === where).map((e) => e.location),
-    ...byRecent.map((e) => e.location),
-  ].filter((l): l is string => !!l?.trim()))].slice(0, 8)
+  const [n, setN] = useState<EventForm>(() => edit ? formOf(edit) : {
+    title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false,
+    start: localInput(start), end: localInput(end), tz: localTz(), online: '', visibility: 'members', slug: '',
+  })
+  const set = (patch: Partial<EventForm>) => setN((x) => ({ ...x, ...patch }))
+  const [slugEdited, setSlugEdited] = useState(!!edit?.slug)
+  const [slugState, setSlugState] = useState<{ checking?: boolean; free?: boolean; msg?: string }>({})
+  const [coverBusy, setCoverBusy] = useState(false)
+  const [error, setError] = useState('')
+  const asked = useRef(0)
+  // the custom URL: from the title until edited; checked as it is typed
+  useEffect(() => { if (!slugEdited && !edit) set({ slug: slugOf(n.title) }) }, [n.title]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const s = n.slug
+    if (!s || (edit && s === edit.slug)) { setSlugState({}); return }
+    const p = slugProblem(s)
+    if (p) { setSlugState({ free: false, msg: p }); return }
+    const mine = ++asked.current
+    setSlugState({ checking: true })
+    const t = setTimeout(() => {
+      slugFree(s, edit?.d).then((r) => { if (mine === asked.current) setSlugState({ free: r.free, msg: r.free ? 'Free' : `Taken. Try ${r.suggestion}` }) },
+        () => { if (mine === asked.current) setSlugState({ msg: 'Could not check it now; it is checked again when you save.' }) })
+    }, 350)
+    return () => clearTimeout(t)
+  }, [n.slug]) // eslint-disable-line react-hooks/exhaustive-deps
+  const places = [...new Set(calendar().sort((a, b) => b.ev.created_at - a.ev.created_at).map((e) => e.location).filter((l): l is string => !!l?.trim()))].slice(0, 8)
+  const zones = [...new Set([n.tz, localTz(), 'UTC', ...ZONES])]
+  const badOnline = !!n.online.trim() && !/^https:\/\//.test(n.online.trim())
+  const ok = !!n.title.trim() && !!n.start && !badOnline && slugState.free !== false && !coverBusy
   return (
-    <Sheet title="Post an event" onClose={onClose}>
-      <Form onSubmit={async (e) => {
-        e.preventDefault()
-        const coord = await createEvent(n, channel ?? 'general')
-        onClose()
-        go('cal/' + encodeURIComponent(coord))
+    <Sheet title={edit ? 'Edit the event' : 'New event'} onClose={onClose}>
+      <Form onSubmit={async (x) => {
+        x.preventDefault()
+        if (!ok) return
+        setError('')
+        try {
+          const form = { ...n, slug: slugState.free === false ? '' : n.slug }
+          if (edit) {
+            if (form.slug && form.slug !== edit.slug) await claimSlug(edit.d, form.slug)
+            await editEvent(edit, form)
+            onClose()
+            onSaved?.(form.slug || edit.d)
+          } else {
+            const d = await createEvent(form)
+            onClose()
+            onSaved?.(form.slug || d)
+          }
+        } catch (err) { setError(err instanceof Error ? err.message : String(err)) }
       }}>
         <label className="field"><span>Title</span>
-          <input className="input" autoFocus placeholder="e.g. Nix workshop" value={n.title} onChange={(e) => set({ title: e.target.value })} /></label>
+          <input className="input" autoFocus={!edit} placeholder="e.g. Garden day" value={n.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} /></label>
+        <div className="field"><span>Cover</span></div>
+        <label className={'cover-pick' + (n.cover ? ' has' : '')}>
+          {n.cover ? <img src={n.cover} alt="" /> : <span><ImageIcon /> {coverBusy ? 'Uploading…' : 'Add a cover picture'}</span>}
+          <input type="file" accept="image/*" hidden disabled={coverBusy} onChange={async (e) => {
+            const f = e.target.files?.[0]
+            e.target.value = ''
+            if (!f) return
+            setCoverBusy(true); setError('')
+            try { set({ cover: await uploadCover(f) }) } catch (err) { setError(err instanceof Error ? err.message : String(err)) } finally { setCoverBusy(false) }
+          }} />
+        </label>
+        {n.cover && <button type="button" className="link" style={{ margin: '-6px 0 12px' }} onClick={() => set({ cover: undefined })}>Remove the cover</button>}
         <label className="toggle"><input type="checkbox" checked={n.allDay} onChange={(e) => set({ allDay: e.target.checked })} /> All day</label>
         <label className="field"><span>Starts</span>
           <input className="input" type={n.allDay ? 'date' : 'datetime-local'} value={n.allDay ? n.start.slice(0, 10) : n.start} onChange={(e) => set({ start: e.target.value })} /></label>
         <label className="field"><span>Ends</span>
           <input className="input" type={n.allDay ? 'date' : 'datetime-local'} value={n.allDay ? n.end.slice(0, 10) : n.end} onChange={(e) => set({ end: e.target.value })} /></label>
+        {!n.allDay && (
+          <label className="field"><span>Time zone</span>
+            <select className="input" value={n.tz} onChange={(e) => set({ tz: e.target.value })}>
+              {zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, ' ')}</option>)}
+            </select></label>
+        )}
         <label className="field"><span>Where</span>
           <input className="input" placeholder="A place, or leave empty if online only" value={n.location} onChange={(e) => set({ location: e.target.value })} /></label>
         {places.length > 0 && (
@@ -151,104 +250,33 @@ export function NewEventSheet({ channel, onClose }: { channel?: string; onClose:
           </div>
         )}
         <label className="field"><span>Online</span>
-          <input className="input" type="url" inputMode="url" placeholder="Paste a Google Meet, Zoom or other link" value={n.online ?? ''} onChange={(e) => set({ online: e.target.value })} /></label>
+          <input className="input" type="url" inputMode="url" placeholder="A Jitsi, Google Meet or Zoom link" value={n.online} onChange={(e) => set({ online: e.target.value })} /></label>
         <div className="chips" style={{ margin: '-6px 0 14px' }}>
           <button type="button" className="chip" onClick={() => set({ online: jitsiLink(n.title || 'meeting') })}>🎥 New Jitsi link</button>
-          <a className="chip" href="https://meet.google.com/new" target="_blank" rel="noreferrer">🎥 New Google Meet ↗</a>
         </div>
-        {n.online && !/^https:\/\//.test(n.online.trim()) && <p className="error" style={{ marginTop: -8 }}>The link should start with https://</p>}
+        {badOnline && <p className="error" style={{ marginTop: -8 }}>The link should start with https://</p>}
         <label className="field"><span>Description</span>
-          <textarea className="input" rows={3} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
-        <button className="btn" disabled={!n.title.trim() || !n.start || (!!n.online?.trim() && !/^https:\/\//.test(n.online.trim()))}>Post event</button>
-        <p className="hint" style={{ marginTop: 10 }}>Posted in #{groups().find((g) => g.id === (channel ?? 'general'))?.name ?? 'general'}. The event gets its own chat, task list and files.</p>
+          <textarea className="input" rows={4} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>
+        <div className="field"><span>Who sees it</span></div>
+        <div className="choice three" style={{ marginTop: -8 }}>
+          {VIS.map(([v, label, hint]) => <button type="button" key={v} className={n.visibility === v ? 'on' : ''} aria-pressed={n.visibility === v} onClick={() => set({ visibility: v })}><b>{label}</b><small>{hint}</small></button>)}
+        </div>
+        <label className="field"><span>URL</span>
+          <div className="url-field"><span className="pre">/events/</span>
+            <input className="input" value={n.slug} placeholder={edit?.d ?? 'garden-day'} maxLength={40} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              onChange={(e) => { setSlugEdited(true); set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }) }} /></div></label>
+        {slugState.msg && <p className={'hint' + (slugState.free === false ? ' error' : '')} role="status" style={{ marginTop: -8 }}>{slugState.checking ? 'Checking…' : slugState.msg}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
+        <button className="btn" disabled={!ok}>{edit ? 'Save' : 'Create the event'}</button>
+        <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone who RSVPed sees the change.' : 'It gets its own chat, photos and to-dos. Send its URL in a channel to show it there.'}</p>
       </Form>
     </Sheet>
   )
 }
 
-type EvTab = 'chat' | 'people' | 'tasks' | 'files'
-
-export function EventPage({ coord }: { coord: string }) {
-  useVersion()
-  const [tab, setTab] = useState<EvTab>('chat')
-  const [topic, setTopic] = useState<string | undefined>()
-  const [open, setOpen] = useState<boolean | null>(null) // null: details shown until you answer
-  const e = calendar().find((x) => x.coord === coord)
-  if (!e) return (
-    <div className="screen">
-      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Event</h1></div>
-      <div className="empty">This event is not here (yet). It may still be syncing.</div>
-    </div>
-  )
-  const mine = e.rsvps.get(me())
-  return (
-    <div className="screen">
-      <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + encodeURIComponent(e.channel))}>‹</button>
-        <h1>{e.title}<small>{fmtDay(e.start)} · {when(e)}</small></h1>
-        {groups().some((g) => g.id === e.groupId) && <FollowButton channel={e.groupId} />}
-      </div>
-      <div style={{ padding: '10px 12px 0' }}>
-        {mine && !(open ?? false) ? (
-          <button className="card ev-status" style={{ marginBottom: 8 }} aria-expanded={false} onClick={() => setOpen(true)}>
-            <span><b>{mine === 'accepted' ? '✓ ' : ''}{LABEL[mine]}</b> · {going(e)} going</span>
-            <span className="hint">Details ▾</span>
-          </button>
-        ) : (
-          <div className="card" style={{ marginBottom: 8 }}>
-            {mine && <button className="ev-status" aria-expanded onClick={() => setOpen(false)}>
-              <span><b>{mine === 'accepted' ? '✓ ' : ''}{LABEL[mine]}</b> · {going(e)} going</span>
-              <span className="hint">Hide ▴</span>
-            </button>}
-            {e.location && <div style={{ marginTop: mine ? 8 : 0 }}>📍 {e.location}</div>}
-            {e.links.map((l) => (
-              <a key={l} className="btn small" style={{ display: 'inline-flex', marginTop: 8, marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join on {meetingLabel(l)}</a>
-            ))}
-            {e.description && <Markdown className="hint" text={e.description} style={{ marginTop: 6, maxHeight: 160, overflowY: 'auto' }} />}
-            <div className="hint" style={{ marginTop: 6, fontSize: 13 }}>Posted by {displayName(e.ev.pubkey)}{mine ? '' : ` · ${going(e)} going`}</div>
-            <div className="rsvp" style={{ marginTop: 10 }}>
-              {(['accepted', 'tentative', 'declined'] as Rsvp[]).map((s) => (
-                <button key={s} className={mine === s ? 'on' : ''} onClick={() => { rsvp(e, s); setOpen(null) }}>{LABEL[s]}</button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-      <Tabs tab={tab} setTab={setTab} tabs={[['chat', 'Chat'], ['people', 'People'], ['tasks', 'To-dos'], ['files', 'Files']]} />
-      {tab === 'chat' && (groups().some((g) => g.id === e.groupId) ? <><TopicsBar groupId={e.groupId} active={topic} onOpen={setTopic} /><Conversation id={e.groupId} topic={topic} onTopic={setTopic} /></> : (
-        <div className="scroll"><div className="empty">
-          <p>This session has no chat yet.</p>
-          <button className="btn small" onClick={() => openEventChat(e)}>Open a chat for it</button>
-        </div></div>
-      ))}
-      {tab !== 'chat' && (
-        <div className="scroll">
-          {tab === 'people' && <People e={e} />}
-          {tab === 'tasks' && <Tasks groupId={e.groupId} />}
-          {tab === 'files' && <Files groupId={e.groupId} />}
-        </div>
-      )}
-    </div>
-  )
+/** Kept for the composer's ＋ (Chat.tsx): a new event; its URL is put in the composer after. */
+export function NewEventSheet({ onClose, onCreated }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void }) {
+  return <EventFormSheet onClose={onClose} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
 }
 
-function People({ e }: { e: CalEvent }) {
-  const rows = [...e.rsvps.entries()].sort((a, b) => (a[1] === 'accepted' ? -1 : 1) - (b[1] === 'accepted' ? -1 : 1))
-  return (
-    <div>
-      {rows.length === 0 && <div className="empty">No answers yet.</div>}
-      {rows.map(([p, s]) => (
-        <div key={p} className="member">
-          <Avatar pubkey={p} />
-          <div style={{ flex: 1 }}>{displayName(p)}</div>
-          <span className={'badge' + (s === 'accepted' ? ' lime' : '')}>{LABEL[s]}</span>
-        </div>
-      ))}
-      {e.ev.pubkey === me() && (
-        <div className="pad">
-          <Btn className="btn ghost" onClick={async () => { if (confirm('Delete this event?')) { await deleteEvent(e); go('c/' + encodeURIComponent(e.channel)) } }}>Delete event</Btn>
-        </div>
-      )}
-    </div>
-  )
-}
+export { CalendarIcon }

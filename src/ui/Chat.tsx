@@ -4,11 +4,13 @@ import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
+import { yourEvents } from './Events'
+import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
 import { NewProposalSheet, ProposalCard } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
@@ -24,12 +26,18 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 
+/** The `a` tags of the events a message's text links to (https://<domain>/events/<link>): the
+ *  ones this device knows, or the belfry told it about. Receivers resolve the rest themselves. */
+function eventTags(text: string): string[][] {
+  return eventLinksIn(text).map((l) => eventByLinkAny(l).e?.coord).filter((c): c is string => !!c).map((c) => ['a', c, BELFRY.mainRelay])
+}
+
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
 /** The community's name from the belfry (/.well-known/belfry.json), else the domain. */
 let communityName = ''
 let asked = false
-function useCommunityName(fallback: string) {
+export function useCommunityName(fallback: string) {
   const [, bump] = useState(0)
   useEffect(() => {
     if (asked || THEME !== 'belfry') return
@@ -60,7 +68,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   const [creating, setCreating] = useState(false)
   const all = groups()
   const chans = all.filter((g) => !g.isEvent && !g.isPod && !g.isProposal)
-  const events = all.filter((g) => g.isEvent)
+  const mineEvents = yourEvents()
   const pods = all.filter((g) => g.isPod || g.isProposal)
   const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
@@ -97,16 +105,21 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
           <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
           {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
         </button>
-        <button className={'chan' + (section === 'cal' ? ' on' : '')} onClick={() => closeDrawer('cal')}>
+        <button className={'chan' + (section === 'events' && !current ? ' on' : '')} onClick={() => closeDrawer('events')}>
           <span className="hash"><CalendarIcon /></span>
-          <span className="t"><b>All events</b><small>Every channel's events</small></span>
+          <span className="t"><b>All events</b><small>Upcoming, yours, the ones you host</small></span>
         </button>
         <div className="section-title">Channels <span>{chans.length + pods.length}</span></div>
         {chans.map((g) => <Tree key={g.id} g={g} />)}
         {orphans.map((g) => <Tree key={g.id} g={g} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
-        {events.length > 0 && <div className="section-title">Event chats <span>{events.length}</span></div>}
-        {events.map((g) => <Row key={g.id} g={g} />)}
+        {mineEvents.length > 0 && <div className="section-title">Your events <span>{mineEvents.length}</span></div>}
+        {mineEvents.map((e) => (
+          <button key={e.coord} className={'chan' + (e.groupId === current || (section === 'events' && current === eventLink(e)) ? ' on' : '')} onClick={() => closeDrawer('events/' + encodeURIComponent(eventLink(e)))}>
+            <span className="hash"><CalendarIcon /></span>
+            <span className="t"><b>{e.title}</b><small>{fmtDay(e.start)}{e.status === 'cancelled' ? ' · cancelled' : last(e.groupId) ? ' · ' + last(e.groupId) : ''}</small></span>
+          </button>
+        ))}
         <div style={{ padding: 16 }}>
           <button className="btn ghost" onClick={() => setCreating(true)}>＋ Create a channel</button>
         </div>
@@ -265,6 +278,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
   const [newTodo, setNewTodo] = useState(false)
+  const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   useVersion()
   const g = group(id)
   const admin = canAdmin(g)
@@ -369,7 +383,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       </div>
       <SaveAccountBar />
       {!readOnly && (topic !== ANNOUNCE || admin) && <Composer groupId={id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
-        onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce) }}
+        onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
@@ -379,7 +393,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onThread={th.get(acting.ev.id)?.count ? () => openThread(acting) : undefined} onEdit={() => setEditing(acting)} />}
       {actingReply && <MessageActions m={actingReply} groupId={id} mine={rx.get(actingReply.ev.id) ?? []} onClose={() => setActingReply(null)} onEdit={() => setEditing(actingReply)} />}
       {editing && <EditSheet m={editing} groupId={id} onClose={() => setEditing(null)} />}
-      {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} />}
+      {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} onCreated={(url) => setPrefill(url + ' ')} />}
     </>
   )
 }
@@ -458,7 +472,27 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const sent = inbox && !card ? sentOf(m.ev, inbox.key) : null
   const mail = card || sent ? null : mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
-  const isCard = !!(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
+  // events: a message carrying an event's URL (or its `a` tag) shows its card under the text, at
+  // most three; the older automatic post ("📅 …", the `a` tag only) is the card alone
+  const links = eventLinksIn(m.text)
+  const legacy = !links.length && m.text.startsWith('📅') ? eventCoordOf(m.ev) : undefined
+  const cards: { key: string; coord?: string; link?: string }[] = []
+  if (!legacy) {
+    const seen = new Set<string>()
+    for (const c of eventCoordsOf(m.ev)) {
+      const d = c.split(':')[2]
+      if (seen.has(d)) continue
+      seen.add(d)
+      cards.push(eventByCoord(c) ? { key: c, coord: c } : { key: c, link: d })
+    }
+    for (const l of links) {
+      const d = eventByLinkLocal(l)?.d ?? l
+      if (seen.has(d)) continue
+      seen.add(d)
+      cards.push({ key: l, link: l })
+    }
+  }
+  const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
   // press and hold (phones) or right-click: react, reply, edit or delete your own
   const hold = useHold(() => onAct(), !!p)
   if (card || sent) return (
@@ -480,8 +514,9 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
         <div className="body">
           {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
-          {(eventCoordOf(m.ev) || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {eventCoordOf(m.ev) ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
-          {eventCoordOf(m.ev) ? <EventCard coord={eventCoordOf(m.ev)!} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
+          {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
+          {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
+          {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
           {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
@@ -538,7 +573,7 @@ const MORE_EMOJIS = [
 
 function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, onEdit, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; onEdit?: () => void; emojiOnly?: boolean }) {
   // your own plain message or reply can be edited (not a card, an event, a pod, a proposal or an e-mail)
-  const canEdit = !!onEdit && m.ev.pubkey === me() && !m.ev.pending && !!m.text && !eventCoordOf(m.ev) && !podOf(m.ev) && !proposalOf(m.ev) && !mailOf(m.ev) && !cardOf(m.ev, knownGroupsKey()) && !sentOf(m.ev, knownGroupsKey())
+  const canEdit = !!onEdit && m.ev.pubkey === me() && !m.ev.pending && !!m.text && !(m.text.startsWith('📅') && eventCoordOf(m.ev)) && !podOf(m.ev) && !proposalOf(m.ev) && !mailOf(m.ev) && !cardOf(m.ev, knownGroupsKey()) && !sentOf(m.ev, knownGroupsKey())
   // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
   // The add-reaction button opens the emojis alone.
   const [more, setMore] = useState(emojiOnly)
@@ -612,7 +647,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false }: { onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill }: { prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -622,6 +657,7 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
   const ta = useRef<HTMLTextAreaElement>(null)
   const picker = useRef<HTMLInputElement>(null)
   useEffect(() => { if (autoFocus) ta.current?.focus({ preventScroll: false }) }, [autoFocus])
+  useEffect(() => { if (prefill) { setText((t) => (t ? t + ' ' : '') + prefill); requestAnimationFrame(() => ta.current?.focus()) } }, [prefill])
   const previews = useMemo(() => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : '')), [files])
   useEffect(() => () => previews.forEach((u) => u && URL.revokeObjectURL(u)), [previews])
 

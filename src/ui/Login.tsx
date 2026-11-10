@@ -14,7 +14,7 @@ export const Arms = ({ size = 18 }: { size?: number }) => (
   </svg>
 )
 
-const Logo = () =>
+export const Logo = () =>
   THEME === 'belfry' ? (
     <div className="logo app-logo">
       <span className="app-icon"><svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4Z" fill="currentColor" /></svg></span>

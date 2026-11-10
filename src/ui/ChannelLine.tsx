@@ -15,7 +15,7 @@ import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, r
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { fmtDay, go } from './common'
-import { going, LABEL, upcoming, when } from './Calendar'
+import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
 import { CalendarIcon, ChevronDownIcon, ChevronUpIcon, DocIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
@@ -56,7 +56,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   const hidden = hiddenPins()
   const pin = f.pins.find((m) => !hidden.includes(m.ev.id))
   const next = f.events[0]
-  const unanswered = f.events.find((e) => !e.rsvps.get(me()))
+  const unanswered = f.events.find((e) => !stateLabel(e) && e.status !== 'cancelled')
   const toVote = f.proposals.find(f.needsVote)
   const n = f.active.length
   const people = n ? `${n} ${n === 1 ? 'person' : 'people'} active this month` : 'Nobody active this month yet'
@@ -88,12 +88,12 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   } else if (toVote) {
     say(<DocIcon />, <b>{toVote.title}</b>, ask('Vote', () => go('c/' + encodeURIComponent(toVote.groupId))), 'proposal')
   } else if (unanswered && +unanswered.start - Date.now() < 7 * 86400e3) {
-    say(<CalendarIcon />, <><b>{day(unanswered.start)}{at(unanswered)}</b> · {unanswered.title}</>, ask('Going?', () => go('cal/' + encodeURIComponent(unanswered.coord))), 'event')
+    say(<CalendarIcon />, <><b>{day(unanswered.start)}{at(unanswered)}</b> · {unanswered.title}</>, ask('RSVP', () => openEvent(unanswered)), 'event')
   } else if (pin) {
     say(<PinIcon />, plain(pin), null, 'pin')
   } else if (next) {
-    const mine = next.rsvps.get(me())
-    say(<CalendarIcon />, <><b>{day(next.start)}{at(next)}</b> · {next.title}</>, mine ? mineIs(LABEL[mine]) : ask('Going?', () => go('cal/' + encodeURIComponent(next.coord))), 'event')
+    const mine = stateLabel(next)
+    say(<CalendarIcon />, <><b>{day(next.start)}{at(next)}</b> · {next.title}</>, mine ? mineIs(mine) : ask('RSVP', () => openEvent(next)), 'event')
   } else if (f.proposals[0]) {
     say(<DocIcon />, <><b>{f.proposals[0].title}</b> · {f.proposals[0].status}</>, null, 'proposal')
   } else if (g?.isPod) {
@@ -168,12 +168,12 @@ export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: str
         <section>
           <h3>Coming up</h3>
           {f.events.slice(0, 3).map((e) => {
-            const mine = e.rsvps.get(me())
+            const mine = stateLabel(e)
             return (
-              <button key={e.coord} className="pull-row" onClick={() => go('cal/' + encodeURIComponent(e.coord))}>
+              <button key={e.coord} className="pull-row" onClick={() => openEvent(e)}>
                 <b className="when">{day(e.start)}<small>{when(e)}</small></b>
-                <span className="t">{e.title}<small>{going(e)} going</small></span>
-                <span className={'line-pill' + (mine ? '' : ' ask')}>{mine ? LABEL[mine] : 'Going?'}</span>
+                <span className="t">{e.title}<small>{e.status === 'cancelled' ? 'Cancelled' : `${going(e)} going`}</small></span>
+                <span className={'line-pill' + (mine ? '' : ' ask')}>{mine || 'RSVP'}</span>
               </button>
             )
           })}

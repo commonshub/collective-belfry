@@ -16,7 +16,13 @@ import { PodShape } from './icons'
 
 type Level = 0 | 1 | 2
 
-export function ChannelHeader({ id, left, right, topic, onTopic }: { id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void }) {
+export function ChannelHeader({ id, left, right, topic, onTopic, title, line, peek }: {
+  id: string; left: ReactNode; right: ReactNode; topic?: string; onTopic: (t?: string) => void
+  /** Another header's own title, line and peek (an event's: Events.tsx); the pull works the same. */
+  title?: ReactNode
+  line?: (p: { open: boolean; onToggle: () => void; pull: object }) => ReactNode
+  peek?: (p: { close: () => void; more: (t: InfoTab) => void }) => ReactNode
+}) {
   useVersion()
   const g = group(id)
   const [level, setLevel] = useState<Level>(0)
@@ -92,16 +98,16 @@ export function ChannelHeader({ id, left, right, topic, onTopic }: { id: string;
       <div className="topbar chead-bar" {...pull}>
         {left}
         <h1 className="tap" onClick={() => setLevel(level ? 0 : 1)} aria-expanded={level > 0}>
-          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
-          {(g?.isPod || g?.isProposal) && <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>}
+          {title ?? <>{g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
+          {(g?.isPod || g?.isProposal) && <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>}</>}
         </h1>
         {right}
       </div>
-      <SummaryLine id={id} open={level > 0} onToggle={() => setLevel(level ? 0 : 1)} topic={topic} onTopic={onTopic} pull={pull} />
+      {line ? line({ open: level > 0, onToggle: () => setLevel(level ? 0 : 1), pull }) : <SummaryLine id={id} open={level > 0} onToggle={() => setLevel(level ? 0 : 1)} topic={topic} onTopic={onTopic} pull={pull} />}
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
         {(level === 2 || (drag !== null && height > peekH + 8)) && g
           ? <div className="chead-full" style={{ height: fullH }}><ChannelInfoBody id={id} tab={tab} setTab={setTab} /></div>
-          : <div ref={peekRef} className="chead-peek"><PullDown id={id} topic={topic} onTopic={(t) => { setLevel(0); onTopic(t) }} more={(t) => { setTab(t); setLevel(2) }} /></div>}
+          : <div ref={peekRef} className="chead-peek">{peek ? peek({ close: () => setLevel(0), more: (t) => { setTab(t); setLevel(2) } }) : <PullDown id={id} topic={topic} onTopic={(t) => { setLevel(0); onTopic(t) }} more={(t) => { setTab(t); setLevel(2) }} />}</div>}
       </div>
       <button className="chead-handle" {...pull} onClick={cycle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}
         aria-label={level === 0 ? 'Show the channel details' : level === 1 ? 'Show everything about the channel' : 'Close the channel details'}>

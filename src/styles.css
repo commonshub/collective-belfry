@@ -817,3 +817,52 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .thread-open .ico { width: 13px; height: 13px; }
 .mention.channel-ref { color: var(--accent); }
 .mention-pop .chan-glyph { width: 24px; text-align: center; color: var(--muted); font-weight: 600; }
+
+/* ---- Belfry events ---------------------------------------------------------------------- */
+.badge.cancel { background: #fee2e2; color: #7f1d1d; margin-right: 4px; vertical-align: 1px; }
+.ev .ev-thumb { width: 48px; height: 48px; flex: none; border-radius: 12px; object-fit: cover; background: var(--surface); }
+.ev-cards { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.ev-card { flex-direction: column; align-items: stretch; gap: 8px; cursor: pointer; overflow: hidden; }
+.ev-card.has-cover { padding-top: 0; }
+.ev-card .ev-card-cover { display: block; width: calc(100% + 20px); margin: 0 -10px; aspect-ratio: 2 / 1; object-fit: cover; background: var(--bg); }
+.ev-card .ev-card-row { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.ev-card .card-rsvp { display: flex; gap: 6px; }
+.ev-card .card-rsvp button { padding: 8px 0; }
+.cover-pick { display: grid; place-items: center; min-height: 96px; border: 1px dashed var(--line); border-radius: 12px; margin-bottom: 14px; cursor: pointer; color: var(--muted); overflow: hidden; }
+.cover-pick span { display: inline-flex; align-items: center; gap: 8px; }
+.cover-pick.has { border-style: solid; }
+.cover-pick img { width: 100%; aspect-ratio: 2 / 1; object-fit: cover; display: block; }
+.choice.three { grid-template-columns: 1fr 1fr 1fr; }
+@media (max-width: 380px) { .choice.three { grid-template-columns: 1fr; } }
+.url-field { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.url-field .pre { padding: 0 2px 0 12px; color: var(--muted); font-size: 16px; white-space: nowrap; }
+.url-field .input { border: 0; background: transparent; padding-left: 2px; min-width: 0; flex: 1; }
+.ev-pull .ev-cover, .ev-join .ev-cover { display: block; width: 100%; aspect-ratio: 2 / 1; object-fit: cover; border-radius: 12px; margin: 0 0 10px; background: var(--surface); }
+.ev-pull .ev-when { margin: 0 0 4px; }
+.ev-pull .ev-where { margin: 0 0 8px; color: var(--muted); overflow-wrap: anywhere; }
+.ev-pull .ev-about { font-size: 15px; overflow-wrap: anywhere; }
+.ev-hosts { display: flex; flex-wrap: wrap; gap: 8px; }
+.ev-host { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 4px; border-radius: 99px; background: var(--surface); font-size: 14px; }
+.ticket-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.ticket-row .t { flex: 1; min-width: 0; }
+.ticket-row .t b { display: block; }
+.ticket-row .t small { display: block; color: var(--muted); font-size: 13px; }
+.ev-url { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ev-url code, .ev-link { flex: 1 1 100%; min-width: 0; font-size: 13px; overflow-wrap: anywhere; color: var(--muted); }
+.qr-full { background: #fff; color: #111; border-radius: 12px; padding: 16px; margin: 0 0 12px; text-align: center; }
+.qr-full img { width: 100%; max-width: 420px; aspect-ratio: 1; display: block; margin: 0 auto 10px; }
+.qr-full code { font-size: 14px; overflow-wrap: anywhere; color: #111; }
+.guest-list { max-height: 60vh; overflow-y: auto; }
+.guest-row { padding: 10px 0; flex-wrap: wrap; }
+.guest-row .badge { margin-left: 6px; }
+.guest-row small { display: block; overflow-wrap: anywhere; }
+.line-pills { display: inline-flex; gap: 6px; flex: none; }
+.ev-closed { display: flex; flex-direction: column; align-items: center; }
+.ev-join { justify-content: flex-start; overflow-y: auto; }
+.ev-join .ev-when { color: var(--text, inherit); margin: 0 0 4px; }
+.ev-join .ev-tickets { margin: 8px 0 16px; }
+.ev-join .ticket-row { background: none; }
+.ev-join .ev-about { margin-top: 12px; color: var(--muted); }
+.ev-url .btn { width: auto; flex: none; display: inline-flex; margin: 0; }
+.ev-url code { font-family: inherit; font-size: 14px; }
+.ev-pull .pull-row { width: 100%; }

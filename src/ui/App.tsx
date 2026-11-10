@@ -11,7 +11,10 @@ import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/sto
 import { joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
-import { CalendarList, EventPage } from './Calendar'
+import { EventsScreen } from './Calendar'
+import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
+import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication } from '../core/events'
+import { eventOfGroup } from '../core/model'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
@@ -82,6 +85,11 @@ export function App() {
     return <JoinScreen token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
       onJoined={async (s) => { await wipe(); await enter(s) }}
       onDemo={(name) => { setPendingInvite(''); void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`)) }} />
+  // an event's URL opened in the chat by someone with no account: the event, RSVP or apply
+  if (phase.p === 'out' && eventLinkFromUrl() && !signInFirst && !phase.error)
+    return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); setSignInFirst(true) }}
+      onJoined={async (s) => { await wipe(); await enter(s) }}
+      onDemo={(name) => void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`))} />
   if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
   return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} />
 }
@@ -103,7 +111,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoPeople })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoPeople, demoApply, demoGuest })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -135,6 +143,13 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     )
   }, [ready, route.join('/')])
   useEffect(() => { if (!joined) return; const t = setTimeout(() => setJoined(''), 6000); return () => clearTimeout(t) }, [joined])
+  // signed in from an event's page: back to it; an application that got a place: done waiting
+  useEffect(() => {
+    if (!ready) return
+    const link = pendingEvent()
+    if (link) { setPendingEvent(''); go('events/' + encodeURIComponent(link)) }
+  }, [ready])
+  useEffect(() => { if (status.access === 'ok' && pendingApplication()) setPendingApplication(null) }, [status.access])
   const toast = joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null
   if (error)
     return (
@@ -147,6 +162,9 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
       </div>
     )
   if (!ready) return <div className="screen login"><p>Opening {PLACE}…</p></div>
+  // someone who applied to an event before having anything here: the relay doesn't know them yet
+  if (status.access === 'denied' && pendingApplication())
+    return <EventWaitScreen title={pendingApplication()!.title} onSignOut={onSignOut} />
   if (status.access === 'denied')
     return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
 
@@ -156,8 +174,9 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   if (section === 'channels' && !wide) view = <ChannelList />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
-  else if (section === 'cal' && a) view = <EventPage coord={a} />
-  else if (section === 'cal') view = <CalendarList />
+  else if (section === 'events' && a) view = <EventScreen key={a} link={a} />
+  else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
+  else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
@@ -165,14 +184,18 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'u') view = <ProfileView id={a} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
-    if (wide && three && b === 'thread' && c) {
+    const evOf = eventOfGroup(id) // an event's chat opens as the event
+    if (evOf && (!b || b === 'm' || (b === 'thread' && wide && three && c))) {
+      view = <EventScreen key={id} coord={evOf.coord} activeThread={b === 'thread' ? c : undefined} />
+      if (b === 'thread' && c) pane = <ThreadView key={c} groupId={id} rootId={c} pane />
+    } else if (wide && three && b === 'thread' && c) {
       view = <ChannelView id={id} activeThread={c} />
       pane = <ThreadView key={c} groupId={id} rootId={c} pane />
-    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <CalendarList channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
-  const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : undefined
+  const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : section === 'events' ? a : undefined
   if (!wide) return <><Phone current={current} section={section} open={drawer}>{view}</Phone>{toast}</>
   return (
     <div className="layout wide">
@@ -183,6 +206,10 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     </div>
   )
 }
+
+const EVENT_KEY = 'belfry-event-open'
+const pendingEvent = () => { try { return localStorage.getItem(EVENT_KEY) ?? '' } catch { return '' } }
+const setPendingEvent = (link: string) => { try { if (link) localStorage.setItem(EVENT_KEY, link); else localStorage.removeItem(EVENT_KEY) } catch { /* private mode */ } }
 
 function lastChannel() {
   const m = /#\/c\/([^/]+)/.exec(sessionStorage.getItem('osv-last-channel') ?? '')

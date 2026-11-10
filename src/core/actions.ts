@@ -64,10 +64,10 @@ export function mentionTags(text: string, skip: string[] = []): string[][] {
   return [...keys].map((k) => ['p', k])
 }
 
-export const postMessage = (groupId: string, text: string, files: File[], topic?: string, announce = false) =>
+export const postMessage = (groupId: string, text: string, files: File[], topic?: string, announce = false, extra: string[][] = []) =>
   enqueue('groups', {
     kind: 9, content: text,
-    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t]), ...mentionTags(text)],
+    tags: [['h', groupId], ...[...new Set([...(topic ? [normTopic(topic)] : []), ...(announce ? [ANNOUNCE] : []), ...hashtags(text)])].map((t) => ['t', t]), ...mentionTags(text), ...extra],
   }, files)
 
 /** A reply in the thread of message ROOT (NIP-22 comment, kept in the group by its `h` tag). */
