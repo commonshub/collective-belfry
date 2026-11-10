@@ -1,0 +1,189 @@
+From 6d9c967e740fe0bbbef37a530c9bf1c482ea79e3 Mon Sep 17 00:00:00 2001
+From: Xavier Damman <xdamman@gmail.com>
+Date: Tue, 10 Nov 2026 06:35:41 +0100
+Subject: [PATCH] feat(belfry): one client key, one identity, on every path
+
+Patch 0022 refused a client key linked to another user when a bunker
+connection is created for it. The same rule now holds wherever a client
+key gets linked to an authorization:
+
+- the signer's first connect with a secret: a key declared for or bound
+  to an authorization of another user in the tenant is refused with
+  "Client key is linked to another account", even with the right
+  secret. The check and the binding run in one transaction under the
+  advisory lock on the client key;
+- the nostr-login approval, which now creates its authorization with
+  create_bound_to_client and answers invalid_request for such a key.
+
+A first connect also records the key as the authorization's
+client_pubkey, so disconnecting the client does not free the key for
+another account (only that client can connect to it again). Revoked
+and expired authorizations keep counting. Team authorizations are not
+covered. No schema change.
+
+Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01VBwxbHakpn87bGAgr3M5Ak
+---
+ api/src/api/http/oauth.rs                    | 10 +++-
+ core/src/repositories/oauth_authorization.rs | 57 ++++++++++++++++++++
+ signer/src/signer_daemon.rs                  | 31 +++++++++--
+ 3 files changed, 93 insertions(+), 5 deletions(-)
+
+diff --git a/api/src/api/http/oauth.rs b/api/src/api/http/oauth.rs
+index 4954765..27b1421 100644
+--- a/api/src/api/http/oauth.rs
++++ b/api/src/api/http/oauth.rs
+@@ -5119,8 +5119,9 @@ pub async fn connect_post(
+     // Create new OAuth authorization - always INSERT (multi-device support)
+     // Each nostr-login creates a NEW authorization for that client
+     let oauth_auth_repo = OAuthAuthorizationRepository::new(auth_state.state.db.clone());
++    // Belfry: one client key, one identity; refused when the key is linked to another account.
+     let auth_id = oauth_auth_repo
+-        .create(CreateOAuthAuthorizationParams {
++        .create_bound_to_client(CreateOAuthAuthorizationParams {
+             tenant_id,
+             user_pubkey: user_pubkey.clone(),
+             redirect_origin: redirect_origin.clone(),
+@@ -5134,7 +5135,12 @@ pub async fn connect_post(
+             authorization_handle: Some(authorization_handle.clone()),
+             handle_expires_at,
+         })
+-        .await?;
++        .await?
++        .ok_or_else(|| {
++            OAuthError::InvalidRequest(
++                "This client key is already linked to another account.".to_string(),
++            )
++        })?;
+ 
+     tracing::info!(
+         "Created nostr-login authorization {} for user {} app {}",
+diff --git a/core/src/repositories/oauth_authorization.rs b/core/src/repositories/oauth_authorization.rs
+index 8e91f02..04fd25a 100644
+--- a/core/src/repositories/oauth_authorization.rs
++++ b/core/src/repositories/oauth_authorization.rs
+@@ -239,6 +239,41 @@ impl OAuthAuthorizationRepository {
+         Ok(id)
+     }
+ 
++    /// Belfry: take the transaction-scoped advisory lock on a NIP-46 client key and say
++    /// whether that key is linked to a user other than the owner of authorization
++    /// `authorization_id`: declared for, or bound by a connect to, any of that other
++    /// user's authorizations in the tenant, revoked and expired ones included.
++    ///
++    /// The signer calls this before it binds a client on a first `connect`, in the
++    /// transaction that writes the binding, so the rule of
++    /// [`Self::create_bound_to_client`] holds on every path: one client key, one identity.
++    pub async fn client_key_of_another_user(
++        tx: &mut sqlx::PgConnection,
++        authorization_id: i32,
++        client_pubkey: &str,
++    ) -> Result<bool, sqlx::Error> {
++        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))")
++            .bind(client_pubkey)
++            .execute(&mut *tx)
++            .await?;
++        sqlx::query_scalar::<_, bool>(
++            "SELECT EXISTS (
++                 SELECT 1 FROM oauth_authorizations mine
++                 JOIN oauth_authorizations other
++                   ON other.tenant_id = mine.tenant_id
++                  AND other.user_pubkey::text <> mine.user_pubkey::text
++                 WHERE mine.id = $1
++                   AND (lower(other.client_pubkey::text) = $2::text
++                        OR (other.connected_client_pubkey = $2::text
++                            AND other.verified_client_pubkey = $2::text))
++             )",
++        )
++        .bind(authorization_id)
++        .bind(client_pubkey)
++        .fetch_one(&mut *tx)
++        .await
++    }
++
+     /// Create an authorization only while its exact redeemed exchange-code claim is live.
+     ///
+     /// This locks only the exchange row and never the pending registration row. Callers that also
+@@ -1214,6 +1249,28 @@ mod tests {
+             repo.create_bound_to_client(params(&users[1])).await.unwrap(),
+             None
+         );
++
++        // The signer's check before a first connect: the key belongs to users[0].
++        let mut unbound = params(&users[1]);
++        unbound.client_pubkey = None;
++        let others = repo.create(unbound).await.unwrap();
++        let mut unbound = params(&users[0]);
++        unbound.client_pubkey = None;
++        let own = repo.create(unbound).await.unwrap();
++        let mut tx = pool.begin().await.unwrap();
++        assert!(
++            OAuthAuthorizationRepository::client_key_of_another_user(&mut *tx, others, &client)
++                .await
++                .unwrap(),
++            "the key cannot connect to another user's authorization"
++        );
++        assert!(
++            !OAuthAuthorizationRepository::client_key_of_another_user(&mut *tx, own, &client)
++                .await
++                .unwrap(),
++            "the key may connect to another authorization of its own user"
++        );
++        tx.rollback().await.unwrap();
+     }
+ 
+     #[tokio::test]
+diff --git a/signer/src/signer_daemon.rs b/signer/src/signer_daemon.rs
+index 3f9ac7c..a92ffea 100644
+--- a/signer/src/signer_daemon.rs
++++ b/signer/src/signer_daemon.rs
+@@ -981,9 +981,32 @@ impl Nip46Handler {
+         // binding and that the authorization is still active, so a concurrent
+         // connect from another client cannot overwrite the client that won.
+         let bound = if self.is_oauth {
+-            sqlx::query(
++            // Belfry: one client key, one identity. A key linked to another account
++            // cannot be bound here, even with the right secret. The check and the
++            // binding share a transaction under the lock on the client key.
++            let mut tx = self.pool.begin().await?;
++            if keycast_core::repositories::OAuthAuthorizationRepository::client_key_of_another_user(
++                &mut *tx,
++                self.authorization_id,
++                client_pubkey,
++            )
++            .await?
++            {
++                tracing::warn!(
++                    "Connect for auth {} refused: client {} is linked to another account",
++                    self.authorization_id,
++                    client_pubkey
++                );
++                return Err(SignerError::permission_denied(
++                    "Client key is linked to another account",
++                ));
++            }
++            // The key is also recorded as the authorization's client, so a later
++            // disconnect does not free it for another account.
++            let bound = sqlx::query(
+                 "UPDATE oauth_authorizations
+                  SET connected_client_pubkey = $1, verified_client_pubkey = $1,
++                     client_pubkey = COALESCE(client_pubkey, $1),
+                      connected_at = NOW()
+                  WHERE id = $2
+                    AND (connected_client_pubkey IS NULL
+@@ -994,8 +1017,10 @@ impl Nip46Handler {
+             )
+             .bind(client_pubkey)
+             .bind(self.authorization_id)
+-            .execute(&self.pool)
+-            .await?
++            .execute(&mut *tx)
++            .await?;
++            tx.commit().await?;
++            bound
+         } else {
+             sqlx::query(
+                 "UPDATE authorizations
+-- 
+2.43.0
+

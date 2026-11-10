@@ -76,6 +76,7 @@ patch run `make build-keycast`.
 | 0020 | the OAuth pages (sign-in, consent, account choice) keep the dark background in light mode; white text was on a white page |
 | 0021 | with OIDC-only login, an outside app's sign-in goes straight to the upstream login (as trusted apps' sign-in has since 0008) and comes back past the "Choose an account" page (`screen=consent`); outside apps still get the consent screen |
 | 0022 | `POST /api/user/bunker/create` takes an optional `client_pubkey` (hex): the connection is bound to that NIP-46 client key when it is made (no other key can connect, the secret in the URL is no bearer credential), and the answer echoes `client_pubkey`. A key linked to another account, revoked connections included, is refused: 409 with `code: client_key_taken`. Guests' sessions use it (`guests.join_new`): one session key, one identity. No schema change |
+| 0023 | one client key, one identity, on every path: the signer's first `connect` refuses a key linked to another account even with the right secret ("Client key is linked to another account"), the nostr-login approval refuses it too, and a first connect records the key as the connection's client so a disconnect does not free it. Not covered: team authorizations; a key is freed when its account's connections are deleted (the account moves to its own key). No schema change |
 
 **Changing a patch:**
 
