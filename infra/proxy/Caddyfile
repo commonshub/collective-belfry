@@ -339,6 +339,13 @@ chat.{$BELFRY_DOMAIN} {
 		import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; media-src 'self' https: blob:; connect-src 'self' https: wss:; worker-src 'self' blob:; frame-src https://open.spotify.com https://embed.tidal.com; manifest-src 'self'; form-action 'self'"
 		reverse_proxy chat:80
 	}
+	# Android App Links: guest links (chat.<domain>/join/<token>) open in Belfry for Android
+	# (sh.belfry.app, release signing certificate of opencollective/belfry-android)
+	handle /.well-known/assetlinks.json {
+		header Content-Type application/json
+		header Cache-Control "public, max-age=3600"
+		respond `[{"relation":["delegate_permission/common.handle_all_urls"],"target":{"namespace":"android_app","package_name":"sh.belfry.app","sha256_cert_fingerprints":["65:96:93:BB:CF:F6:1D:36:90:1B:21:A8:12:28:5E:7B:5E:0A:4D:41:3B:CD:C9:A0:78:6C:DA:11:95:EC:0D:5A"]}}]` 200
+	}
 	# the community's look (theme folder) for the chat too
 	handle /theme/* {
 		reverse_proxy onboarding:8100
