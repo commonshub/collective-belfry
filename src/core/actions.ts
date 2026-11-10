@@ -229,8 +229,6 @@ export const rsvp = (e: CalEvent, status: Rsvp) => {
 export const deleteEvent = (e: CalEvent) =>
   enqueue('main', { kind: 5, tags: [['a', e.coord], ['e', e.ev.id]] })
 
-export const isMine = (pubkey: string) => pubkey === me()
-
 // ---- proposals ------------------------------------------------------------------------------
 
 export interface NewProposal { title: string; summary: string; text: string; status: ProposalStatus }

@@ -475,4 +475,3 @@ function synthesizeRelayEvents(ev: NostrEvent) {
 }
 
 export const isLocalOnly = () => localOnly
-export const connectionStatus = () => status

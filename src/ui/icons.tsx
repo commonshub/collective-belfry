@@ -75,7 +75,6 @@ export const TodoIcon = () => <Svg><rect x="3" y="3" width="18" height="18" rx="
 export const PeopleIcon = () => <Svg><circle cx="9" cy="8" r="4" /><path d="M2 21a7 7 0 0 1 14 0M17 4a4 4 0 0 1 0 8M22 21a6 6 0 0 0-4-5.6" /></Svg>
 export const ChevronDownIcon = () => <Svg><path d="m6 9 6 6 6-6" /></Svg>
 export const ChevronUpIcon = () => <Svg><path d="m6 15 6-6 6 6" /></Svg>
-export const HashIcon = () => <Svg><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" /></Svg>
 
 /** A pod's mark: a regular polygon with one side per member (3 at least; from 13 on, a circle). */
 export function PodShape({ members, size = 20 }: { members: number; size?: number }) {
