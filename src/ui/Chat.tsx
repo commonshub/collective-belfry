@@ -508,7 +508,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
             <div className="thread-chips">
               <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
                 <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
-                {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}<time>{fmtTime(thread.last)}</time>
+                {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}{thread.last > 0 && <time>{fmtTime(thread.last)}</time>}
               </button>
               {onOpenThread && <button className={'thread-chip open-thread' + (active ? ' open' : '')} onClick={onOpenThread} aria-current={active || undefined}><ThreadIcon />Open thread<span className="caret"><ChevronRightIcon /></span></button>}
             </div>
