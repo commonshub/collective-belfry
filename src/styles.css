@@ -688,10 +688,7 @@ button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 /* ---- the channel blind: same tabs and first lines short and full ---- */
 .summary { padding-top: 10px; padding-bottom: 6px; }
 .summary .chead-about { margin: 0 0 10px; }
-.summary.short .chead-about { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.summary.short .chead-about > * { margin: 0; }
 .summary .chead-people { display: flex; align-items: center; gap: 2px; border: 0; background: none; padding: 2px 0 2px 6px; cursor: pointer; }
-.summary-task { font-size: 14px; padding: 4px 0; border-bottom: 1px solid var(--line); }
 
 .sign-out { display: block; margin: 20px auto 8px; padding: 10px 16px; background: none; border: 0; color: var(--muted); font-size: 15px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 .sign-out:hover { color: var(--text); }

@@ -306,10 +306,9 @@ function ActiveCard({ id }: { id: string }) {
   )
 }
 
-// ---- the top of each tab: the same few lines in the pulled-down header (short) and here (full),
-// so pulling further only reveals more under them, like a blind ---------------------------------
+// ---- the top of each tab of the channel's page: a few lines that sum it up ----------------------
 
-export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab; open: (t: Tab) => void; short?: boolean }) {
+function Summary({ id, tab, open }: { id: string; tab: Tab; open: (t: Tab) => void }) {
   useVersion()
   const g = groups().find((x) => x.id === id)
   if (!g) return null
@@ -317,9 +316,9 @@ export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab
   const photos = media.filter((m) => m.mime.startsWith('image/'))
   const files = media.length - photos.length
   const active = recentlyActive(id)
-  const n = short ? 8 : 14
+  const n = 14
   if (tab === 'about') return (
-    <div className={'summary pad-x' + (short ? ' short' : '')}>
+    <div className="summary pad-x">
       {g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint chead-about">No description yet.</p>}
       {active.length > 0 && (
         <button className="chead-people" onClick={() => open('members')} aria-label={`${active.length} active this month: see the members`}>
@@ -333,7 +332,7 @@ export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab
   if (tab === 'members') {
     const all = [...g.members]
     return (
-      <div className={'summary pad-x' + (short ? ' short' : '')}>
+      <div className="summary pad-x">
         <div className="chead-people">
           {all.slice(0, n).map((p) => <button key={p} className="face" onClick={() => openProfile(p)} aria-label={displayName(p)}><Avatar pubkey={p} size={28} /></button>)}
           {all.length > n && <span className="more">+{all.length - n}</span>}
@@ -343,10 +342,10 @@ export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab
     )
   }
   if (tab === 'files') return (
-    <div className={'summary pad-x' + (short ? ' short' : '')}>
+    <div className="summary pad-x">
       {media.length === 0 ? <p className="hint">No photos or files yet.</p> : (
         <div className="chead-media">
-          {photos.slice(0, short ? 6 : 12).map((m) => <span key={m.url} className="thumb"><img src={m.url} alt={m.name || 'Photo'} loading="lazy" /></span>)}
+          {photos.slice(0, 12).map((m) => <span key={m.url} className="thumb"><img src={m.url} alt={m.name || 'Photo'} loading="lazy" /></span>)}
           <span className="chip">{photos.length} {photos.length === 1 ? 'photo' : 'photos'}{files ? ` · ${files} ${files === 1 ? 'file' : 'files'}` : ''}</span>
         </div>
       )}
@@ -355,9 +354,8 @@ export function Summary({ id, tab, open, short = false }: { id: string; tab: Tab
   const { tasks } = tasklist(id)
   const todo = tasks.filter((t) => !t.done)
   return (
-    <div className={'summary pad-x' + (short ? ' short' : '')}>
+    <div className="summary pad-x">
       <p className="hint" style={{ margin: 0 }}>{todo.length} open · {tasks.length - todo.length} done</p>
-      {short && todo.slice(0, 2).map((t) => <div key={t.id} className="summary-task">{t.title}</div>)}
     </div>
   )
 }
