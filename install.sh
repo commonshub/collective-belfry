@@ -281,15 +281,15 @@ EOF
   if [[ ${#recipients[@]} -gt 0 ]]; then custody_desc="encrypted to ${#recipients[@]} recipient(s), in memory only on this server (unlock after each reboot)"
   else custody_desc="on this server's disk (move it under the stewards' YubiKeys later: infra/DEPLOY.md)"; fi
   cat <<EOF
-  domain         https://$BELFRY_DOMAIN  (and login., pass., apps., relay., shop., chat., …)
+  domain         https://$BELFRY_DOMAIN  (and belfry., chat., login., pass., apps., relay., …)
   community      $BELFRY_NAME
   first admin    created in the browser with the setup link (printed at the end)
   mail           $( if [[ -n "${BELFRY_RESEND_API_KEY:-}" ]]; then echo "Resend, from ${BELFRY_MAIL_FROM:-}"; elif [[ -n "${BELFRY_SMTP_HOST:-}" ]]; then echo "SMTP $BELFRY_SMTP_HOST, from ${BELFRY_MAIL_FROM:-}"; else echo "none yet: added on the setup page"; fi )
   payments       $( [[ -n "${BELFRY_STRIPE_SECRET_KEY:-}" ]] && printf 'Stripe (%s) ' "$( [[ "$BELFRY_STRIPE_SECRET_KEY" == *_live_* ]] && echo live || echo test )"; [[ -n "${BELFRY_MOLLIE_API_KEY:-}" ]] && printf 'Mollie '; [[ -z "${BELFRY_STRIPE_SECRET_KEY:-}${BELFRY_MOLLIE_API_KEY:-}" ]] && printf 'none: stewards mark payments by hand' ; echo )
-  accounting     ${BELFRY_ACCOUNTING_ODOO_URL:-the bundled Odoo only}
+  accounting     ${BELFRY_ACCOUNTING_ODOO_URL:-$( [[ "${BELFRY_REGISTER:-}" == odoo ]] && echo "the bundled Odoo only" || echo "none" )}
   custody seed   $custody_desc
   code           $REPO_URL @ $REF → $DIR
-  server         Docker, ufw (SSH, 80, 443), user belfry$( [[ $NGINX -eq 1 ]] && echo ", nginx on 80/443 → Belfry's proxy" )$( [[ $mem_mb -lt 12000 && $swap_mb -eq 0 && $disk_gb -ge 12 ]] && echo ", 4 GB swap" )
+  server         Docker, ufw (SSH, 80, 443, 25 for mail), user belfry$( [[ $NGINX -eq 1 ]] && echo ", nginx on 80/443 → Belfry's proxy" )$( [[ $mem_mb -lt 12000 && $swap_mb -eq 0 && $disk_gb -ge 12 ]] && echo ", 4 GB swap" )
 EOF
   [[ $HOST_ONLY -eq 1 ]] && printf '  %s--host-only: the stack is not started%s\n' "$yellow" "$reset"
 
@@ -477,7 +477,7 @@ EOF
   step "Your belfry is up"
   if [[ -n "${SETUP_LINK:-}" ]]; then
     printf '\n  %sOpen this link to finish (valid 24 hours):%s\n\n    %s\n\n' "$bold" "$reset" "$SETUP_LINK"
-    printf '  It makes you the first admin, then asks for a Resend API key so members can get\n  their sign-in codes by e-mail.\n\n'
+    printf '  It makes you the first admin, then asks for the key of a mail provider (Lettermint or\n  Resend) so members can get their sign-in codes by e-mail.\n\n'
   fi
   cat <<EOF
   https://belfry.$BELFRY_DOMAIN/setup     settings (belfry setup-code makes a new link)
