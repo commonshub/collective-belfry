@@ -263,8 +263,8 @@ def token_allowance(
 ) -> int:
     """Tokens a pass brings: TOKENS_PER_DAY per day of the pass (day 1, week 7, full access every
     event day from the start, both ends included)."""
-    if tier == "member":
-        return 0  # a free membership (the belfry's own register) brings no tokens
+    if tier in ("member", "guest"):
+        return 0  # a free membership or a channel's guest (the belfry's own register): no tokens
     days = duration_days if duration_days is not None else TIER_DEFAULT_DAYS.get(tier, 0)
     if tier == "full" or days <= 0:
         days = (date_end - date_start).days + 1
