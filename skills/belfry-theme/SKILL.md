@@ -1,6 +1,6 @@
 ---
 name: belfry-theme
-description: Give a belfry the community's own look (name, colours, fonts, logo, favicon) across its pages (sign-in, pass, console, setup, members, proposals, /git) and its apps on apps.<domain> (the chat), without forking the code, so every update keeps the look. Also how to choose the code shown at /git.
+description: Give a belfry the community's own look (name, colours, fonts, logo, favicon) across its pages (sign-in, pass, console, setup, members, proposals, /git) and its apps (the chat at chat.<domain>, installed apps at <domain>/<name>/), without forking the code, so every update keeps the look. Also how to choose the code shown at /git.
 ---
 
 # Theme a belfry
@@ -14,8 +14,8 @@ What a theme folder changes:
 
 - **the belfry's pages**: `pass.<domain>` (sign-in, pass, `/proposals`, `/changelog`, drop box),
   `belfry.<domain>` (home, status, members, setup, monitor) and `/git`;
-- **the apps at `<domain>/<name>/`** (the chat, every app installed with
-  `belfry app install`): each one loads `/theme/custom/own.css`, which is the folder's
+- **the apps**: the chat at `chat.<domain>` and every app installed with `belfry app install`
+  at `<domain>/<name>/`: each one loads `/theme/custom/own.css`, which is the folder's
   `custom.css` (or empty).
 
 The **homepage** on the apex (`https://<domain>`) is the community's own website, published as an
@@ -108,7 +108,7 @@ in light and dark mode. To have one scheme only, set `"scheme"` in `theme.json` 
    `belfry theme show` lists the files; `belfry theme reset` goes back to Belfry's look.
 3. Look at the result in light and dark mode, on a phone and a laptop:
    `https://belfry.<domain>/`, `https://pass.<domain>/proposals`, `https://apps.<domain>/` and
-   `https://<domain>/chat/`.
+   `https://chat.<domain>/`.
 4. After an update (`belfry update`), check the same pages: the folder is untouched, but a new
    page may use a variable the theme doesn't set yet; it then shows Belfry's value.
 
