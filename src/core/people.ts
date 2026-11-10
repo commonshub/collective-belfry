@@ -70,12 +70,27 @@ export async function saveExtras(x: { tags: string[]; share: Share; place?: Plac
 }
 
 /** Name and about in the kind-0 profile, the rest of it kept. */
-export async function saveProfile(p: { name: string; about: string }) {
+/** Change my address here (<username>@<domain>): the belfry checks the name and keeps it in the
+ *  signer (usernames.py). Returns the full address. */
+export async function setUsername(username: string): Promise<string> {
+  const res = await signedFetch(`${BELFRY.api}/username`, 'POST', { username })
+  const body = (await res.json().catch(() => ({}))) as { error?: string; nip05?: string }
+  if (!res.ok || !body.nip05) {
+    throw new Error(body.error === 'taken' ? 'That username is taken.'
+      : body.error === 'invalid' ? 'A username is 1 to 30 lowercase letters, digits, dots, dashes or underscores.'
+      : body.error === 'not_member' ? 'Only members have an address here.'
+      : body.error === 'own_key' ? 'You hold your own key: set your address in your own profile.'
+      : 'Could not change the username. Try again.')
+  }
+  return body.nip05
+}
+
+export async function saveProfile(p: { name: string; about: string; nip05?: string }) {
   const mine = all(me()).filter((e) => e.kind === 0 && e.pubkey === me()).sort((a, b) => b.created_at - a.created_at)[0]
   let content: Record<string, unknown> = {}
   try { content = mine ? JSON.parse(mine.content) : {} } catch { content = {} }
   const name = p.name.trim().slice(0, 100)
-  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, name, display_name: name, about: p.about.trim().slice(0, 2000) }), tags: [] })
+  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, name, display_name: name, about: p.about.trim().slice(0, 2000), ...(p.nip05 ? { nip05: p.nip05 } : {}) }), tags: [] })
 }
 
 /** About text from someone's kind 0. */

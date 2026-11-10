@@ -2,10 +2,11 @@
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins can make another member an admin here.
+import { BELFRY } from '../config'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { channelIcon, displayName, groups, guestJoins, profiles } from '../core/model'
-import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setBelfryAdmin, type Place, type Share } from '../core/people'
+import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setBelfryAdmin, setUsername, type Place, type Share } from '../core/people'
 import { isAdmin } from '../core/access'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
@@ -95,6 +96,11 @@ function EditProfile({ onClose }: { onClose: () => void }) {
   const x = extras().get(pk)
   const [name, setName] = useState(profiles().get(pk)?.name ?? '')
   const [about, setAbout] = useState(aboutOf(pk))
+  // my address here: <username>@<domain>; only shown when the profile carries one of this belfry
+  const nip05 = profiles().get(pk)?.nip05 ?? ''
+  const own = nip05.toLowerCase().endsWith('@' + BELFRY.domain.toLowerCase())
+  const user0 = own ? nip05.slice(0, nip05.lastIndexOf('@')).toLowerCase() : ''
+  const [user, setUser] = useState(user0)
   const [tags, setTags] = useState<string[]>(x?.tags ?? [])
   const [share, setShare] = useState<Share>(x?.share ?? 'city')
   const [place, setPlace] = useState<Place | undefined>(x?.place)
@@ -108,7 +114,9 @@ function EditProfile({ onClose }: { onClose: () => void }) {
         setSaving(true); setError('')
         try {
           const p0 = profiles().get(pk)
-          if (name.trim() !== (p0?.name ?? '') || about.trim() !== aboutOf(pk)) await saveProfile({ name, about })
+          const wanted = user.trim().toLowerCase()
+          const address = own && wanted && wanted !== user0 ? await setUsername(wanted) : undefined
+          if (address || name.trim() !== (p0?.name ?? '') || about.trim() !== aboutOf(pk)) await saveProfile({ name, about, nip05: address })
           await saveExtras({ tags, share, place })
           onClose()
         } catch (er) { setError(er instanceof Error ? er.message : String(er)) } finally { setSaving(false) }
@@ -125,6 +133,12 @@ function EditProfile({ onClose }: { onClose: () => void }) {
           </label>
         </div>
         <label className="field"><span>Name</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label>
+        {own && (
+          <label className="field"><span>Username · your address here</span>
+            <span className="handle-field"><input className="input" value={user} maxLength={30} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+              onChange={(e) => setUser(e.target.value.toLowerCase().replace(/[^a-z0-9._-]/g, ''))} /><em>@{BELFRY.domain}</em></span>
+          </label>
+        )}
         <label className="field"><span>About you · Markdown works</span><textarea className="input" rows={4} value={about} maxLength={2000} onChange={(e) => setAbout(e.target.value)} /></label>
         <TagInput tags={tags} setTags={setTags} />
         <PlaceField share={share} setShare={setShare} place={place} setPlace={setPlace} />

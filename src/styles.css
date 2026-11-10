@@ -756,3 +756,8 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .delete-preview b { font-size: 13px; }
 .delete-preview span { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .btn.danger { background: #dc2626; color: #fff; border-color: #dc2626; }
+.handle-field { display: flex; align-items: center; gap: 6px; }
+.handle-field .input { flex: 1; min-width: 0; }
+.handle-field em { font-style: normal; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 50%; }
+/* the last row of a card needs no line under it */
+.card > .switch-row:last-child, .card > .switch-row:only-of-type { border-bottom: 0; margin-bottom: 0; padding-bottom: 4px; }
