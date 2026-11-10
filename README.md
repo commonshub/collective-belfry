@@ -27,14 +27,19 @@ time.
 
 ## Install
 
-On a fresh VM with 8 GB RAM and DNS for `<domain>` and `*.<domain>` pointing at it:
+On a fresh VM (4 GB RAM at least, 8 GB for real use) with DNS for `<domain>` and `*.<domain>`
+pointing at it:
 
 ```bash
 curl -fsSL https://belfry.sh/install.sh | sudo bash
 ```
 
-It asks for the domain and the providers (mail, payments), sets up Docker, nginx and ufw and
-starts everything. `infra/DEPLOY.md` explains it, and the installation by hand.
+It asks for the domain and the community's name, sets up Docker, ufw and Belfry's own proxy
+(Caddy; nginx in front only with `--nginx`) and starts everything. It then prints a setup link
+(`https://belfry.<domain>/setup?code=…`): opening it creates the first admin and asks for the mail
+provider. By default the belfry keeps its own register and runs no Odoo; `--odoo` keeps Odoo
+(billing, paid passes, volunteer shifts; `docs/register.md`). `infra/DEPLOY.md` explains it, and
+the installation by hand.
 
 ## The parts
 
