@@ -85,7 +85,7 @@ def test_a_guest_agent_becomes_its_members_own_and_leaves_with_them(world):
         time.sleep(1.1)
         bot2 = guest_agent(c, rsvc, ada, ada_id, "kitchen")
         r = post(c, ada, "/api/agents", {"pubkey": pk(bot2), "mine": True})
-        assert r.status_code == 409 and "already" in r.json()["message"]
+        assert r.status_code == 409 and r.json()["error"] == "limit"
         # an agent can't invite, and can't have agents
         r = post(c, bot, "/api/channel-invites", {"channel": "garden"})
         assert r.status_code == 403 and r.json()["error"] == "agent"

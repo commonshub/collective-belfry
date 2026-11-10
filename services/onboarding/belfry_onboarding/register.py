@@ -97,8 +97,11 @@ def stamp(t: dt.datetime | None = None) -> str:
     return (t or now()).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _user_error(message: str) -> OdooError:
-    return OdooError(message, {"message": message, "name": "odoo.exceptions.UserError"})
+def _user_error(message: str, code: str | None = None) -> OdooError:
+    data = {"message": message, "name": "odoo.exceptions.UserError"}
+    if code:
+        data["code"] = code  # a stable reason for API clients (fixed messages per code)
+    return OdooError(message, data)
 
 
 def _npub(pubkey: str) -> str:
@@ -721,12 +724,13 @@ class Register(OdooApi):
     def _agent_room(self, owner_id: int) -> None:
         limit = self.agents_limit(owner_id)
         if limit <= 0:
-            raise _user_error("Only members can bring an agent of their own.")
+            raise _user_error("Only members can bring an agent of their own.", "not_member")
         if len(self.agents_of(owner_id)) >= limit:
             raise _user_error(
                 "You have one agent already: remove it first."
                 if limit == 1
-                else f"You have {limit} agents already: remove one first."
+                else f"You have {limit} agents already: remove one first.",
+                "limit",
             )
 
     def _agent_pass(self, partner_id: int, owner_id: int, pubkey: str, invite_id: Any) -> int:
@@ -759,15 +763,19 @@ class Register(OdooApi):
                     if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
                 ]
                 if not mine:
-                    raise _user_error("Nobody here has that key.")
+                    raise _user_error("Nobody here has that key.", "unknown")
                 if any(p.get("tier") == "agent" for p in mine):
-                    raise _user_error("This agent is a member's agent already.")
+                    raise _user_error("This agent is a member's agent already.", "taken")
                 if any(p.get("tier") != "guest" for p in mine) or not all(
                     p.get("guest_agent") for p in mine
                 ):
-                    raise _user_error("Only an agent that joined as a guest can become yours.")
+                    raise _user_error(
+                        "Only an agent that joined as a guest can become yours.", "not_guest_agent"
+                    )
                 if not admin and not any(p.get("guest_inviter") == caller for p in mine):
-                    raise _user_error("Only the member who invited this agent can make it theirs.")
+                    raise _user_error(
+                        "Only the member who invited this agent can make it theirs.", "not_inviter"
+                    )
                 self._agent_room(owner_id)
                 pid = mine[0]["partner_id"]
                 pass_id = self._agent_pass(pid, owner_id, pubkey, False)

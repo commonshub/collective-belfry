@@ -143,7 +143,8 @@ def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
         try:
             svc.odoo.make_agent(target, owner, caller, admin)
         except OdooError as exc:
-            raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
+            code = str(exc.data.get("code") or "refused")
+            raise ApiError(409, code, str(exc.message or "Refused.")) from exc
         core.sync_relay_whitelist(svc)
         guests.became_member(svc, target)  # the guest passes close; it stays in those channels
     else:
