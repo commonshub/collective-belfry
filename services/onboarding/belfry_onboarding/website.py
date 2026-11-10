@@ -256,15 +256,21 @@ async def preview(request: Request, svc: Services) -> Response:
             status_code=404,
             media_type="text/plain",
         )
-    hp = _previews.get(chosen)
-    if hp is None or time.monotonic() - hp[0] > 60:
-        hp = (time.monotonic(), site_of(svc, nostr.to_hex_pubkey(c.group(1)), c.group(2) or ""))
-        _previews[chosen] = hp
-        while len(_previews) > 50:
-            _previews.pop(next(iter(_previews)))
-    resp = await hp[1].nsite(request, path)
+    # one Homepage per previewed site, kept: it asks the relays again by itself (MANIFEST_TTL),
+    # and making a new one every minute left its HTTP client and connections open for good
+    hp = _previews.pop(chosen, None)
+    if hp is None:
+        hp = site_of(svc, nostr.to_hex_pubkey(c.group(1)), c.group(2) or "")
+    _previews[chosen] = hp  # the most recently used last
+    while len(_previews) > MAX_PREVIEWS:
+        old = _previews.pop(next(iter(_previews)))
+        client = getattr(old, "_client", None)
+        if client is not None:
+            await client.aclose()
+    resp = await hp.nsite(request, path)
     resp.headers["X-Robots-Tag"] = "noindex"
     return resp
 
 
-_previews: dict[str, tuple[float, homepage.Homepage]] = {}
+MAX_PREVIEWS = 50
+_previews: dict[str, homepage.Homepage] = {}

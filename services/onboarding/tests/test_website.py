@@ -124,3 +124,33 @@ def test_the_channel_says_how_to_propose(rsvc):  # noqa: F811
 
 async def _async(v):
     return v
+
+
+def test_a_preview_keeps_its_site_and_closes_the_ones_it_drops(rsvc, monkeypatch):  # noqa: F811
+    """Every preview made a new site (and HTTP client) each minute and never closed the old."""
+    made, closed = [], []
+
+    class FakeClient:
+        async def aclose(self):
+            closed.append(1)
+
+    class FakeSite:
+        def __init__(self):
+            self._client = FakeClient()
+
+        async def nsite(self, request, path):
+            return Response("ok", media_type="text/html")
+
+    monkeypatch.setattr(website, "site_of", lambda svc, pk, name: made.append(1) or FakeSite())
+    monkeypatch.setattr(website, "_previews", {})
+    monkeypatch.setattr(website, "MAX_PREVIEWS", 1)
+    rsvc.settings.nip05_domain = "belfry.test"
+    with TestClient(create_app(rsvc)) as c:
+        host = {"Host": "preview.belfry.test"}
+        c.cookies.set(website.PREVIEW_COOKIE, f"{NPUB}@draft")
+        assert c.get("/", headers=host).text == "ok"
+        assert c.get("/a.css", headers=host).text == "ok"
+        assert len(made) == 1 and closed == []
+        c.cookies.set(website.PREVIEW_COOKIE, NPUB)  # another site: the first is dropped
+        assert c.get("/", headers=host).text == "ok"
+        assert len(made) == 2 and closed == [1]
