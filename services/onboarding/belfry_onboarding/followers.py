@@ -402,11 +402,31 @@ def soon(svc: Services, now: float | None = None) -> dict[str, int]:
     return send_digests(svc, "asap", int((now or time.time()) - ASAP_DELAY))
 
 
+EXPIRE_SECONDS = 3600
+_expired_at = 0.0
+
+
+def expire_passes(svc: Services) -> dict[str, Any] | None:
+    """Close the passes whose last day has passed (a guest's 30 days), about once an hour. Only
+    with the belfry's own register: nothing else does it there (with Odoo, the host's cron runs
+    ``python -m belfry_onboarding expire``, docs/runbook.md)."""
+    global _expired_at
+    from . import core, invite
+
+    if not invite.own(svc) or time.monotonic() - _expired_at < EXPIRE_SECONDS:
+        return None
+    _expired_at = time.monotonic()
+    result = core.expire(svc)
+    if result["expired"]:
+        log.info("passes expired: %s", result["expired"])
+    return result
+
+
 def tick(svc: Services) -> None:
     from .drops import ensure_profile
     from .website import ensure_channel as ensure_website
 
-    for job in (ensure_channels, ensure_website, ensure_profile, soon, morning):
+    for job in (expire_passes, ensure_channels, ensure_website, ensure_profile, soon, morning):
         try:
             job(svc)
         except Exception as exc:  # noqa: BLE001 — retried on the next round

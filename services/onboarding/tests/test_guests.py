@@ -585,3 +585,53 @@ def test_a_member_starts_with_their_name_as_username_and_changes_it(rsvc, keycas
     assert e.value.error == "not_member"
     # a chosen name is never replaced by the default again
     assert usernames.give_default(rsvc, "ucan-token", "Friedger Muffke", "0002") == "fried"
+
+
+class OneMint:
+    def __init__(self):
+        self.minted = []
+
+    def mint_token(self, amount):
+        self.minted.append(amount)
+        return "cashuA-test"
+
+
+def test_a_guest_pass_brings_no_tokens(rsvc, published, authentik, keycast):
+    """A guest's 30 days counted as 31 pass days of tokens when the belfry has a mint."""
+    rsvc.mint = OneMint()
+    today = dt.date.today()
+    assert core.token_allowance(rsvc, "guest", None, today, today + dt.timedelta(days=30)) == 0
+    reg = rsvc.odoo
+    pid = reg.create("res.partner", {"name": "Gus Guest", "email": "gus@example.org"})
+    pass_id = reg.create(
+        "belfry.pass", {"partner_id": pid, "tier": "guest", "guest_channel": "garden"}
+    )
+    assert core.activate_free_pass(rsvc, pass_id) == "activated"
+    row = reg.read_one("belfry.pass", pass_id, ["state", "cashu_amount"])
+    assert row["state"] == "active" and not row["cashu_amount"] and rsvc.mint.minted == []
+
+
+def test_passes_that_ended_are_closed_by_the_service_itself(rsvc, published, authentik, keycast):
+    """With the belfry's own register no cron runs `expire`: the background round does."""
+    from belfry_onboarding import followers
+
+    reg = rsvc.odoo
+    pid = reg.create("res.partner", {"name": "Gus Guest"})
+    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    pass_id = reg.create(
+        "belfry.pass",
+        {
+            "partner_id": pid,
+            "tier": "guest",
+            "guest_channel": "garden",
+            "guest_agent": True,  # its own key: no account in the signer to suspend
+            "state": "active",
+            "keycast_pubkey": "c" * 64,
+            "date_end": yesterday,
+        },
+    )
+    followers._expired_at = 0.0
+    assert followers.expire_passes(rsvc) == {"expired": [pass_id]}
+    assert reg.read_one("belfry.pass", pass_id, ["state"])["state"] == "expired"
+    assert (9001, [["h", "garden"], ["p", "c" * 64], ["guest", "ended"]]) in published
+    assert followers.expire_passes(rsvc) is None  # not again within the hour
