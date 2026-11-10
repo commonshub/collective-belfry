@@ -195,10 +195,10 @@ export function Members({ groupId }: { groupId: string }) {
   const vocab = [...new Set([...labels.values()].flat())].sort()
   const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
   // guests (people or agents) and who brought them in: whose agent it is
-  const invited = new Map(guestJoins(groupId).map((j) => [j.pubkey, j]))
+  const invited = new Map(guestJoins(groupId).filter((j) => !j.member).map((j) => [j.pubkey, j]))
   const ex = extras()
   const mapped = members.filter((p) => ex.get(p)?.place?.lat !== undefined)
-  const isMember = !groups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me())
+  const isMember = !groups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me() && !j.member)
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}

@@ -33,12 +33,15 @@ export function ProfileView({ id }: { id?: string }) {
   const p = profiles().get(pk)
   const x = extras().get(pk)
   const about = aboutOf(pk)
-  const guest = groups().flatMap((g) => guestJoins(g.id)).find((j) => j.pubkey === pk)
+  const joins = groups().flatMap((g) => guestJoins(g.id)).filter((j) => j.pubkey === pk && !j.member)
+  const guest = joins[0]
+  // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
+  const noAdmin = joins.some((j) => j.agent) ? 'An agent cannot be an admin.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them an admin.' : ''
   const shared = groups().filter((g) => g.members.has(pk) && !g.isProposal)
   const admin = isBelfryAdmin(pk)
   const toggleAdmin = async () => {
     const name = displayName(pk)
-    if (!confirm(admin ? `Remove ${name} as an admin of the belfry?` : `Make ${name} an admin of the belfry? Admins manage members, every channel and the belfry's settings.`)) return
+    if (!confirm(admin ? `Remove ${name} as an admin of the belfry?` : guest ? `Make ${name} a member and an admin of the belfry? They are a guest now. Admins manage members, every channel and the belfry's settings.` : `Make ${name} an admin of the belfry? Admins manage members, every channel and the belfry's settings.`)) return
     setBusy(true); setError('')
     try { await setBelfryAdmin(pk, !admin) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
@@ -75,8 +78,8 @@ export function ProfileView({ id }: { id?: string }) {
         {isAdmin() && !mine && (
           <div className="card">
             <label className="switch-row" style={{ margin: 0 }}>
-              <span><b>Admin of the belfry</b><small>{guest ? 'Guests and agents cannot be admins.' : 'Manages members, every channel and the belfry\'s settings.'}</small></span>
-              <input type="checkbox" role="switch" checked={admin} disabled={busy || !!guest} onChange={() => void toggleAdmin()} />
+              <span><b>Admin of the belfry</b><small>{noAdmin || (guest ? 'A guest now: this makes them a member too. Manages members, every channel and the belfry\'s settings.' : 'Manages members, every channel and the belfry\'s settings.')}</small></span>
+              <input type="checkbox" role="switch" checked={admin} disabled={busy || (!!noAdmin && !admin)} onChange={() => void toggleAdmin()} />
             </label>
             {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
           </div>

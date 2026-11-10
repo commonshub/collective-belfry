@@ -122,7 +122,9 @@ export async function setBelfryAdmin(pubkey: string, admin: boolean) {
   const res = await signedFetch(`${BELFRY.api}/admins`, 'POST', { pubkey, admin })
   const body = (await res.json().catch(() => ({}))) as { error?: string }
   if (!res.ok) {
-    throw new Error(body.error === 'not_member' ? 'Only members can be admins (not guests or agents).'
+    throw new Error(body.error === 'not_member' ? 'Only members can be admins.'
+      : body.error === 'guest_not_saved' ? 'This guest has no e-mail yet. Once they save their account, you can make them an admin.'
+      : body.error === 'agent' ? 'An agent cannot be an admin.'
       : body.error === 'last_admin' ? 'A belfry needs at least one admin.'
       : body.error === 'not_admin' ? 'Only admins of the belfry can do this.'
       : 'Could not change it. Try again.')

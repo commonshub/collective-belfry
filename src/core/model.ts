@@ -605,17 +605,20 @@ export function mySeen(groupId: string): number {
 }
 
 /** Who joined a channel as its guest (kind 9000 from Belfry with `invited-by`, guests.py). */
-export interface GuestJoin { id: string; pubkey: string; by?: string; at: number; agent: boolean; unsaved: boolean }
+export interface GuestJoin { id: string; pubkey: string; by?: string; at: number; agent: boolean; unsaved: boolean; /** a member since (an admin made them one): no guest any more */ member: boolean }
 export function guestJoins(groupId: string): GuestJoin[] {
   const out: GuestJoin[] = []
   const list = all(me())
   // Belfry labels a guest "saved" (kind 1985, belfry/guest) once they proved an e-mail
   const saved = new Set(list.filter((e) => e.kind === 1985 && tag(e, 'h') === groupId && tag(e, 'L') === 'belfry/guest'
     && e.tags.some((t) => t[0] === 'l' && t[1] === 'saved')).map((e) => tag(e, 'p')))
+  // … and "member" once an admin made them a member (admins.py): the join line stays, the guest tag goes
+  const member = new Set(list.filter((e) => e.kind === 1985 && tag(e, 'h') === groupId && tag(e, 'L') === 'belfry/guest'
+    && e.tags.some((t) => t[0] === 'l' && t[1] === 'member')).map((e) => tag(e, 'p')))
   for (const e of list) {
     if (e.kind !== 9000 || tag(e, 'h') !== groupId || !tag(e, 'invited-by')) continue
     const p = tag(e, 'p')
-    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) })
+    if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: member.has(p) })
   }
   // someone who was taken out again without ever writing here (a double sign-up that was
   // cleaned up, an invite never used) leaves no line
