@@ -570,6 +570,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
   // The add-reaction button opens the emojis alone.
   const [more, setMore] = useState(emojiOnly)
+  const [confirming, setConfirming] = useState(false) // "Delete message" asks first, in the same sheet
   const [copied, setCopied] = useState('')
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
@@ -582,6 +583,19 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const link = `${location.origin}${location.pathname}#/c/${encodeURIComponent(groupId)}/m/${m.ev.id}`
   const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
+  )
+  if (confirming) return (
+    <Sheet title="Delete this message?" onClose={onClose}>
+      <blockquote className="delete-preview">
+        <b>{displayName(m.ev.pubkey)}</b>
+        <span>{(m.text || (m.media.length ? (m.media.length === 1 ? 'A photo or file' : `${m.media.length} photos or files`) : '')).replace(/nostr:npub1[02-9ac-hj-np-z]+/g, '@…').slice(0, 240)}</span>
+      </blockquote>
+      <p className="hint">It disappears for everyone, with its reactions. This can't be undone.</p>
+      <div className="row-btns">
+        <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+        <Btn className="btn danger" onClick={async () => { await deleteMessage(groupId, m.ev.id); onClose() }}>Delete</Btn>
+      </div>
+    </Sheet>
   )
   return (
     <Sheet title={emojiOnly ? 'Add a reaction' : 'Message'} hideTitle={!emojiOnly} onClose={onClose}>
@@ -609,7 +623,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
           </div>
           {m.ev.pubkey === me() && (
             <div className="act-group">
-              <Item danger icon={<TrashIcon />} label="Delete message" onClick={() => { onClose(); if (confirm('Delete this message?')) void deleteMessage(groupId, m.ev.id) }} />
+              <Item danger icon={<TrashIcon />} label="Delete message" onClick={() => setConfirming(true)} />
             </div>
           )}
         </>

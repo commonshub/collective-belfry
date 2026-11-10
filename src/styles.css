@@ -752,3 +752,7 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
   .msg, .thread-reply { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 }
 .msg .who .edited { margin-left: 6px; }
+.delete-preview { margin: 4px 0 10px; padding: 10px 12px; border-left: 3px solid var(--line); background: var(--surface); border-radius: 8px; display: flex; flex-direction: column; gap: 2px; overflow-wrap: anywhere; }
+.delete-preview b { font-size: 13px; }
+.delete-preview span { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.btn.danger { background: #dc2626; color: #fff; border-color: #dc2626; }
