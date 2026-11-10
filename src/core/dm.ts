@@ -6,7 +6,7 @@ import { kvGet, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
-import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, publishNow, queryOnce } from './sync'
+import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
 // e-mail as Nostr Mail (kind 1301 in gift wraps, nogringo/nostr-mail). The belfry is the e-mail
