@@ -59,7 +59,7 @@ export function EventsScreen({ channel }: { channel?: string }) {
   const list = calendar().filter((e) => !channel || e.channels.includes(channel))
   const mine = (e: CalEvent) => { const s = myState(e); return s !== 'none' && s !== 'declined' && s !== 'cant' }
   const shown = tab === 'past' ? list.filter(isPast).reverse()
-    : list.filter((e) => !isPast(e) && (tab === 'upcoming' || (tab === 'mine' ? mine(e) && !e.hosts.has(me()) : e.hosts.has(me()))))
+    : list.filter((e) => !isPast(e) && (tab === 'upcoming' || (tab === 'mine' ? mine(e) : e.hosts.has(me()))))
   const empty = { upcoming: 'Nothing planned yet. Make the first event.', mine: 'You’re not going to anything yet.', hosting: 'You’re not hosting anything yet.', past: 'No past events.' }[tab]
   return (
     <div className="screen">

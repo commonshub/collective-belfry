@@ -94,7 +94,7 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
   const e = eventByLinkLocal(link)
   if (e) return { e }
   const api = remoteEvent(link)
-  return api ? { e: fromApi(api), api } : { error: remoteError(link) }
+  return api ? { e: fromApi(api), api } : { error: remoteError(link) ?? (isLocalOnly() ? 'not_found' : undefined) }
 }
 
 // ---- tickets and the people of an event ---------------------------------------------------
