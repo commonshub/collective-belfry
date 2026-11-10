@@ -55,14 +55,14 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
 
     assert keycast.preloads == 1
     kc_user = keycast.users[f"odoo-partner-{ids['partner']}"]
-    assert kc_user["username"] == "0001"
+    assert kc_user["username"] == "alice-example"  # their name, not the number (usernames.py)
     assert p["keycast_pubkey"] == kc_user["pubkey"]
     assert p["npub"] == partner["belfry_npub"] == hex_to_npub(kc_user["pubkey"])
     assert p["npub"].startswith("npub1")
     assert keycast.status[kc_user["pubkey"]] == "active"
 
 
-def test_profile_published_with_name_and_member_number_only(services, odoo, keycast, relay):
+def test_profile_published_with_name_and_address_only(services, odoo, keycast, relay):
     ids = seed_paid_invoice(odoo, tier="day")
     assert core.activate_pass(services, ids["invoice"]) == "activated"
 
@@ -74,7 +74,7 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     assert json.loads(ev["content"]) == {
         "name": partner["name"],
         "display_name": partner["name"],
-        "nip05": "0001@belfry.local",
+        "nip05": "alice-example@belfry.local",
         "picture": f"{services.settings.public_url}/avatar/{ev['pubkey']}.png",
     }
     # empty follow list; both relay lists name the community relay (RELAY_URL without a public one)

@@ -41,6 +41,9 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("name", nargs="?", default="")
     sub.add_parser("steward-passes", help="give every member of the stewards group their free pass")
     sub.add_parser(
+        "usernames", help="members whose username is still a number get their name as a slug"
+    )
+    sub.add_parser(
         "publish-starter-events",
         help="publish the missing profile, follow and relay lists of every active pass",
     )
@@ -108,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
         result = steward.add_steward(
             services, args.email, args.name, steward.activation_via_hook(services)
         )
+    elif args.command == "usernames":
+        from . import usernames
+
+        result = usernames.backfill(services)
     elif args.command == "steward-passes":
         result = steward.steward_passes(services, steward.activation_via_hook(services))
     elif args.command == "sync-programme":

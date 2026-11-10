@@ -547,3 +547,41 @@ def test_an_admin_makes_a_saved_guest_an_admin(rsvc, published, keycast, monkeyp
     ) in told
     assert not [k for k, _ in told if k == 9001]  # and they stay in the channel
     assert gus_pk in core.active_pubkeys(rsvc)
+
+
+def test_a_member_starts_with_their_name_as_username_and_changes_it(rsvc, keycast, monkeypatch):
+    """Not the member number: "Friedger Müffke" is friedger-muffke@; a second one gets -2; the
+    member picks another name from the chat; reserved names and channels' names are refused."""
+    from belfry_onboarding import mail, usernames
+    from belfry_onboarding.holder_invites import ApiError
+
+    monkeypatch.setattr(mail, "channel_exists", lambda svc, name: name == "garden")
+    assert usernames.slug("Friedger Müffke ") == "friedger-muffke"
+    assert usernames.slug("  ¡Ana María!  ") == "ana-maria"
+    assert usernames.slug("李") == ""
+    a = steward.steward_pass(rsvc, "f1@example.org", "Friedger Müffke")
+    names = {u["pubkey"]: u["username"] for u in keycast.users.values()}
+    row = rsvc.odoo.read_one("belfry.pass", a["pass_id"], ["keycast_pubkey", "state"])
+    assert row["state"] == "active" and names[row["keycast_pubkey"]] == "friedger-muffke"
+    b = steward.steward_pass(rsvc, "f2@example.org", "Friedger Muffke")
+    row2 = rsvc.odoo.read_one("belfry.pass", b["pass_id"], ["keycast_pubkey"])
+    names = {u["pubkey"]: u["username"] for u in keycast.users.values()}
+    assert names[row2["keycast_pubkey"]] == "friedger-muffke-2"
+    # the second member changes theirs (the fake signer answers for the last account it saw)
+    pk = row2["keycast_pubkey"]
+    assert usernames.change(rsvc, pk, "Fried")["nip05"].startswith("fried@")
+    for bad, code in (
+        ("garden", "taken"),
+        ("admin", "taken"),
+        ("friedger-muffke", "taken"),
+        ("-x", "invalid"),
+        ("a b", "invalid"),
+    ):
+        with pytest.raises(ApiError) as e:
+            usernames.change(rsvc, pk, bad)
+        assert e.value.error == code, bad
+    with pytest.raises(ApiError) as e:
+        usernames.change(rsvc, "ab" * 32, "someone")
+    assert e.value.error == "not_member"
+    # a chosen name is never replaced by the default again
+    assert usernames.give_default(rsvc, "ucan-token", "Friedger Muffke", "0002") == "fried"

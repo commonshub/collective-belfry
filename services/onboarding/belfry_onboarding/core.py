@@ -965,7 +965,23 @@ def _finish_activation(
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
     if not own_custody:
-        publish_profile(svc, user_token, pubkey, partner, member_number)
+        username = member_number
+        if tier != "guest":
+            # their name as a slug, not the member number; theirs to change later (usernames.py)
+            from . import usernames
+
+            username = usernames.give_default(
+                svc, user_token, partner.get("name") or "", member_number
+            )
+        publish_profile(svc, user_token, pubkey, partner, username)
+        if tier != "guest" and username != member_number.lower():
+            # a profile that existed already (a guest who became a member) gets the address too
+            usernames.publish_nip05(
+                svc,
+                pubkey,
+                lambda u: svc.keycast.sign_event(user_token, {"pubkey": pubkey, **u}),
+                username,
+            )
 
     partner_vals: dict[str, Any] = {
         "belfry_authentik_user_id": authentik_user_id,
