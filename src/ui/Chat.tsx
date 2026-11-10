@@ -6,7 +6,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
-import { me, retry, signedFetch } from '../core/sync'
+import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { yourEvents } from './Events'
@@ -20,7 +20,7 @@ import { AtIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, Im
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
-import { guestInfo, setGuestInfo } from '../core/auth'
+import { coHostToken, guestInfo, setCoHostToken, setGuestInfo } from '../core/auth'
 import { InviteSheet } from './Invite'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
@@ -974,7 +974,8 @@ function SaveAccountBar() {
   const [error, setError] = useState('')
   const [hidden, setHidden] = useState(() => { try { return sessionStorage.getItem('belfry-save-hidden') === '1' } catch { return false } })
   const acted = all(me()).some((e) => e.pubkey === me() && (e.kind === 9 || e.kind === 1111 || e.kind === 7)) || outboxItems().some((o) => [9, 1111, 7].includes(o.kind))
-  if (!g || (g.saved && step !== 'done') || !acted || hidden) return null
+  const cohost = coHostToken()
+  if (!g || (g.saved && step !== 'done') || (!acted && !cohost) || (hidden && !cohost)) return null
   const post = async (path: string, body: unknown) => {
     setBusy(true); setError('')
     try {
@@ -988,7 +989,7 @@ function SaveAccountBar() {
   return (
     <div className="save-bar" role="region" aria-label="Save your account">
       {step === 'line' && <>
-        <span>Save your account: add your e-mail to come back from any device.</span>
+        <span>{cohost ? 'You were invited as a co-host: save your account with your e-mail to become one.' : 'Save your account: add your e-mail to come back from any device.'}</span>
         <button className="btn small" onClick={() => setStep('email')}>Save</button>
         <button className="link close" aria-label="Not now" onClick={() => { setHidden(true); try { sessionStorage.setItem('belfry-save-hidden', '1') } catch { /* private mode */ } }}>✕</button>
       </>}
@@ -998,7 +999,12 @@ function SaveAccountBar() {
       </Form>}
       {step === 'code' && <Form onSubmit={async (e) => {
         e.preventDefault()
-        if (await post('/guest/save/verify', { email: email.trim(), code: code.trim() })) { setGuestInfo({ ...g, saved: true }); setStep('done') }
+        if (await post('/guest/save/verify', { email: email.trim(), code: code.trim() })) {
+          setGuestInfo({ ...g, saved: true })
+          // the co-host link waiting for this: now it makes them a host
+          if (cohost) { try { await joinWithAccount(cohost); setCoHostToken('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }
+          setStep('done')
+        }
       }}>
         <input className="input" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="6-digit code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
         <button className="btn small" disabled={busy || code.length !== 6}>{busy ? '…' : 'Confirm'}</button>

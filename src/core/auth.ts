@@ -149,17 +149,24 @@ export async function joinAsNew(token: string, name: string): Promise<Session> {
     tags: [['u', url], ['method', 'POST'], ['payload', bytesToHex(sha256(new TextEncoder().encode(text)))]],
   }, sk)
   const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
-  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string }
+  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string; email_needed?: boolean }
   // this device's key is another account's in the signer: a fresh key next time
   if (res.status === 409) try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   if (!res.ok || !body.bunker_url) throw new Error(body.message || 'Joining did not work just now. Try again.')
   try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   setPendingInvite('')
   setGuestInfo({ channel: body.channel ?? 'general', saved: false })
+  // a co-host link (an event's): a host needs a proven e-mail; after saving it, the link again
+  setCoHostToken(body.email_needed ? token : '')
   if (body.channel) history.replaceState(null, '', `${location.pathname}${location.search}#/c/${encodeURIComponent(body.channel)}`)
   await kvDel('pubkey')
   return { backend: 'belfry', bunkerUrl: body.bunker_url, clientSecret: bytesToHex(sk), membership: { status: 'unknown' } }
 }
+
+const COHOST_KEY = 'belfry-cohost-invite'
+/** A co-host link used before saving an e-mail: used again once the e-mail is saved. */
+export const coHostToken = (): string => { try { return localStorage.getItem(COHOST_KEY) ?? '' } catch { return '' } }
+export const setCoHostToken = (t: string) => { try { if (t) localStorage.setItem(COHOST_KEY, t); else localStorage.removeItem(COHOST_KEY) } catch { /* private mode */ } }
 
 export const guestInfo = (): GuestInfo | null => {
   try { return JSON.parse(localStorage.getItem(GUEST_KEY) ?? 'null') } catch { return null }
