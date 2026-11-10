@@ -40,6 +40,19 @@ def sign_in(web, services, partner: int) -> None:
     web.cookies.set(mypass.SESSION_COOKIE, cookie)
 
 
+def test_a_channels_guest_does_not_read_the_members_relay(web, belfry, odoo):
+    """A guest who saved an e-mail address signs in on the pass page; the monitor streams the
+    members-only relay with the belfry's key, so it and the proposals stay closed to them."""
+    guest = odoo.add("res.partner", name="Gus", belfry_member_number="guest-9")
+    odoo.add("belfry.pass", partner_id=guest, tier="guest", state="active", guest_channel="garden")
+    sign_in(web, belfry, guest)
+    assert web.get("/monitor/stream").status_code == 401
+    assert web.get("/monitor/names?p=" + "a" * 64).status_code == 401
+    assert 'href="/me/login"' in web.get("/proposals").text
+    # the drop box still knows them (they post in their channel as themselves)
+    assert community.member_partner(belfry, web.cookies.get(mypass.SESSION_COOKIE)) == guest
+
+
 # ── changelog ───────────────────────────────────────────────────────────────────────────────
 def test_changelog_lists_changes_with_who_started_them(web, belfry, tmp_path):
     path = tmp_path / "changelog.json"

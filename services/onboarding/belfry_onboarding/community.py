@@ -69,15 +69,23 @@ KIND_NAMES = {
 
 
 # ── who is asking ───────────────────────────────────────────────────────────────────────────
-def member_partner(svc: Services, cookie: str | None) -> int | None:
-    """The signed-in member's partner id when they hold an active pass, else None."""
+def member_partner(svc: Services, cookie: str | None, guests: bool = True) -> int | None:
+    """The signed-in person's partner id when they hold an active pass, else None. Without
+    GUESTS, only a member's: a channel's guest (tier guest, guests.py) is on no whitelist, so the
+    pages that read the community relay for the viewer are not theirs."""
     if not mypass.enabled(svc):
         return None
     sess = mypass._verify(svc, cookie, "session")
     if not sess:
         return None
-    row = mypass.partner_pass(svc, sess["partner"])
-    return sess["partner"] if row and row.get("state") == "active" else None
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", sess["partner"]], ["state", "=", "active"]],
+        ["tier"],
+    )
+    if not guests:
+        rows = [r for r in rows if r.get("tier") != "guest"]
+    return sess["partner"] if rows else None
 
 
 def belfry_signer(svc: Services):
@@ -523,8 +531,9 @@ def register(app: FastAPI) -> None:
         return request.app.state.services
 
     async def partner(request: Request) -> int | None:
+        # the monitor and the proposals read the members' relay: not for a channel's guests
         return await run_in_threadpool(
-            member_partner, svc(request), request.cookies.get(mypass.SESSION_COOKIE)
+            member_partner, svc(request), request.cookies.get(mypass.SESSION_COOKIE), False
         )
 
     def same_origin(request: Request) -> bool:
