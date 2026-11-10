@@ -31,6 +31,16 @@ moderation events (9000–9010), is listed in its kind 39001 with those kinds as
 reads them as the admin's rights) and joins it as a member. Stewards are not yet admins of every
 group; the relay owner (the groups API key) is.
 
+**Applications (patch 0004).** `[groups] applicants = true`: any signed-in key may send a NIP-29
+join or leave request (9021 / 9022) for a group that exists, and nothing else, even without relay
+membership or a guest pass: a Belfry event's guests apply before the belfry knows them
+(`services/onboarding/belfry_onboarding/events.py`). The relay owner (the groups API key) may also
+hand in such a request signed by someone else. A request from a non-member, or one tagged
+`waitlist`, never admits by itself, even in an open group: an admin's 9000 does. At most 20 per
+key per hour (in memory). Test: `TestApplicants_*` in `zooid/applicants_test.go`
+(`TEST_DATABASE_URL=… go test ./zooid/`, e.g. against `docker run -e POSTGRES_PASSWORD=t -p
+55432:5432 postgres:16-alpine`).
+
 **Off.** Blossom (files go to Belfry's Blossom), push (NIP-9a; no push server is run), LiveKit
 calls, paid membership, invite claims.
 

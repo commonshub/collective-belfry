@@ -1,0 +1,244 @@
+From f33689fbcaa0c3c5d845edcfc6e71b37e890c3d1 Mon Sep 17 00:00:00 2001
+From: Xavier Damman <xdamman@gmail.com>
+Date: Tue, 10 Nov 2026 18:29:36 +0100
+Subject: [PATCH] Belfry: applications from keys that are not relay members
+
+With [groups] applicants = true, any signed-in key may send a join or leave
+request (9021 / 9022) for a group that exists, and nothing else; the relay
+owner may hand in such a request signed by someone else. A request from a
+non-member, or tagged waitlist, never admits by itself: an admin decides.
+At most 20 per key per hour.
+---
+ zooid/applicants.go      | 95 ++++++++++++++++++++++++++++++++++++++++
+ zooid/applicants_test.go | 70 +++++++++++++++++++++++++++++
+ zooid/config.go          |  5 +++
+ zooid/instance.go        | 11 ++++-
+ 4 files changed, 179 insertions(+), 2 deletions(-)
+ create mode 100644 zooid/applicants.go
+ create mode 100644 zooid/applicants_test.go
+
+diff --git a/zooid/applicants.go b/zooid/applicants.go
+new file mode 100644
+index 0000000..90c3cd2
+--- /dev/null
++++ b/zooid/applicants.go
+@@ -0,0 +1,95 @@
++package zooid
++
++import (
++	"sync"
++	"time"
++
++	"fiatjaf.com/nostr"
++)
++
++// Belfry: applications from people who are not relay members.
++//
++// With [groups] applicants = true, a signed-in key that is not a relay member may send a NIP-29
++// join request (9021) or leave request (9022) for a group that exists, and nothing else: an
++// event's guest applies before the belfry knows them, and withdraws the same way. The relay
++// owner (the belfry's groups key) may also hand in such a request signed by someone else, for
++// a client that can't reach the relay. A request like this never admits its author by itself,
++// even in an open group: only an admin's 9000 does. The same goes for a request tagged
++// `waitlist` (an event is full: the hosts decide). Each key may send a few per hour.
++
++const applicationsPerHour = 20
++
++type applicantLimiter struct {
++	mu   sync.Mutex
++	sent map[nostr.PubKey][]time.Time
++}
++
++var applicants = applicantLimiter{sent: map[nostr.PubKey][]time.Time{}}
++
++func (l *applicantLimiter) allow(pubkey nostr.PubKey, now time.Time) bool {
++	l.mu.Lock()
++	defer l.mu.Unlock()
++	kept := l.sent[pubkey][:0]
++	for _, t := range l.sent[pubkey] {
++		if now.Sub(t) < time.Hour {
++			kept = append(kept, t)
++		}
++	}
++	if len(kept) >= applicationsPerHour {
++		l.sent[pubkey] = kept
++		return false
++	}
++	l.sent[pubkey] = append(kept, now)
++	return true
++}
++
++func isApplication(event nostr.Event) bool {
++	return event.Kind == nostr.KindSimpleGroupJoinRequest || event.Kind == nostr.KindSimpleGroupLeaveRequest
++}
++
++// checkApplication decides on a join or leave request from someone who is not a relay member
++// (or handed in by the owner). handled = false: the usual rules apply.
++func (instance *Instance) checkApplication(authed nostr.PubKey, event nostr.Event) (handled bool, reject bool, msg string) {
++	if !instance.Config.Groups.Enabled || !instance.Config.Groups.Applicants || !isApplication(event) {
++		return false, false, ""
++	}
++
++	forwarded := authed != event.PubKey
++	if forwarded && !instance.Config.IsOwner(authed) {
++		return false, false, "" // "on behalf of others", as before
++	}
++
++	if instance.Management.HasAccess(event.PubKey) {
++		if forwarded {
++			return true, true, "restricted: members send their own requests"
++		}
++		return false, false, "" // a relay member: the usual rules
++	}
++
++	h := GetGroupIDFromEvent(event)
++	if _, found := instance.Groups.GetMetadata(h); !found {
++		return true, true, "invalid: group not found"
++	}
++
++	if event.Kind == nostr.KindSimpleGroupJoinRequest && instance.Groups.IsMember(h, event.PubKey) {
++		return true, true, "duplicate: already a member"
++	}
++
++	if !applicants.allow(event.PubKey, time.Now()) {
++		return true, true, "rate-limited: too many requests, try again later"
++	}
++
++	return true, false, ""
++}
++
++// selfAdmits: whether a saved join request lets its author in by itself (an open group). Not
++// for someone who is not a relay member, and not for a place on a waitlist.
++func (instance *Instance) selfAdmits(event nostr.Event) bool {
++	if event.Tags.Has("waitlist") {
++		return false
++	}
++	if instance.Config.Groups.Applicants && !instance.Management.HasAccess(event.PubKey) {
++		return false
++	}
++	return true
++}
+diff --git a/zooid/applicants_test.go b/zooid/applicants_test.go
+new file mode 100644
+index 0000000..56d475f
+--- /dev/null
++++ b/zooid/applicants_test.go
+@@ -0,0 +1,70 @@
++package zooid
++
++import (
++	"testing"
++	"time"
++
++	"fiatjaf.com/nostr"
++)
++
++// Belfry: someone who is no relay member applies to a group (9021), and nothing else.
++func TestApplicants_JoinRequestsOnly(t *testing.T) {
++	instance := createTestInstance()
++	instance.Config.Groups.Enabled = true
++	instance.Config.Groups.Guests = true
++	instance.Config.Groups.Applicants = true
++	createGroup(t, instance, "ev-2026-k7p2xq", "closed")
++	createGroup(t, instance, "general")
++
++	stranger := nostr.Generate().Public()
++	owner := instance.Config.GetOwner()
++
++	apply := nostr.Event{Kind: nostr.KindSimpleGroupJoinRequest, PubKey: stranger, Tags: nostr.Tags{{"h", "ev-2026-k7p2xq"}}}
++	if handled, reject, msg := instance.checkApplication(stranger, apply); !handled || reject {
++		t.Fatalf("a stranger's application should be taken: %v %v %q", handled, reject, msg)
++	}
++	if handled, reject, _ := instance.checkApplication(owner, apply); !handled || reject {
++		t.Fatal("the owner may hand in someone's signed application")
++	}
++	other := nostr.Generate().Public()
++	if handled, _, _ := instance.checkApplication(other, apply); handled {
++		t.Fatal("nobody else may hand in someone's application")
++	}
++	nowhere := nostr.Event{Kind: nostr.KindSimpleGroupJoinRequest, PubKey: stranger, Tags: nostr.Tags{{"h", "nowhere"}}}
++	if _, reject, _ := instance.checkApplication(stranger, nowhere); !reject {
++		t.Fatal("no application to a group that does not exist")
++	}
++	message := nostr.Event{Kind: 9, PubKey: stranger, Tags: nostr.Tags{{"h", "general"}}}
++	if handled, _, _ := instance.checkApplication(stranger, message); handled {
++		t.Fatal("a message is not an application: the usual rules (restricted) apply")
++	}
++	if instance.selfAdmits(apply) {
++		t.Fatal("a stranger's request never admits by itself")
++	}
++	waitlist := nostr.Event{Kind: nostr.KindSimpleGroupJoinRequest, PubKey: owner, Tags: nostr.Tags{{"h", "general"}, {"waitlist"}}}
++	if instance.selfAdmits(waitlist) {
++		t.Fatal("a waitlist request never admits by itself")
++	}
++
++	instance.Config.Groups.Applicants = false
++	if handled, _, _ := instance.checkApplication(stranger, apply); handled {
++		t.Fatal("applicants off: the usual rules")
++	}
++}
++
++func TestApplicants_RateLimited(t *testing.T) {
++	l := applicantLimiter{sent: map[nostr.PubKey][]time.Time{}}
++	k := nostr.Generate().Public()
++	now := time.Now()
++	for i := 0; i < applicationsPerHour; i++ {
++		if !l.allow(k, now) {
++			t.Fatalf("request %d refused", i)
++		}
++	}
++	if l.allow(k, now) {
++		t.Fatal("one too many in an hour")
++	}
++	if !l.allow(k, now.Add(61*time.Minute)) {
++		t.Fatal("an hour later it works again")
++	}
++}
+diff --git a/zooid/config.go b/zooid/config.go
+index 8266395..af7182e 100644
+--- a/zooid/config.go
++++ b/zooid/config.go
+@@ -64,6 +64,11 @@ type Config struct {
+ 		// Guests lets a key that isn't a relay member but was put in a group (kind 9000) connect,
+ 		// and read and write in its groups only.
+ 		Guests bool `toml:"guests" json:"guests"`
++		// Applicants lets any signed-in key send a join or leave request (9021 / 9022) for a group
++		// that exists, and nothing else, even when it is no relay member (Belfry events: people
++		// apply before they have anything here). Such a request never admits by itself: an admin
++		// decides (9000 / 9001). The relay owner may also hand in someone else's signed request.
++		Applicants bool `toml:"applicants" json:"applicants"`
+ 	} `toml:"groups" json:"groups"`
+ 
+ 	Push struct {
+diff --git a/zooid/instance.go b/zooid/instance.go
+index e270fb9..d750fce 100644
+--- a/zooid/instance.go
++++ b/zooid/instance.go
+@@ -458,7 +458,14 @@ func (instance *Instance) onEvent(ctx context.Context, event nostr.Event) (rejec
+ 
+ 	if !isAuthenticated {
+ 		return true, "auth-required: authentication is required for access"
+-	} else if pubkey != event.PubKey && !instance.Config.IsSelf(event.PubKey) {
++	}
++
++	// Belfry: applications from people who are not relay members (see applicants.go)
++	if handled, reject, msg := instance.checkApplication(pubkey, event); handled {
++		return reject, msg
++	}
++
++	if pubkey != event.PubKey && !instance.Config.IsSelf(event.PubKey) {
+ 		return true, "restricted: you cannot publish events on behalf of others"
+ 	}
+ 
+@@ -491,7 +498,7 @@ func (instance *Instance) OnEventSaved(ctx context.Context, event nostr.Event) {
+ 	if event.Kind == nostr.KindSimpleGroupJoinRequest {
+ 		meta, ok := instance.Groups.GetMetadata(h)
+ 
+-		if ok && (!meta.Tags.Has("closed") || instance.Groups.IsInvited(event)) {
++		if ok && (!meta.Tags.Has("closed") || instance.Groups.IsInvited(event)) && instance.selfAdmits(event) {
+ 			instance.Groups.AddMember(h, event.PubKey)
+ 			instance.Groups.UpdateMembersList(h)
+ 		}
+-- 
+2.43.0
+

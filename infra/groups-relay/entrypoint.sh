@@ -36,6 +36,8 @@ enabled = true
 member_create = true
 # patch 0002: a channel's guests (put in it by Belfry, no pass) read and write there only
 guests = true
+# patch 0004: applications (9021/9022) from keys that are not relay members (Belfry events)
+applicants = true
 
 [management]
 enabled = true
