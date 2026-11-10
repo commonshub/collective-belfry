@@ -13,9 +13,13 @@
 | `../services/onboarding/README.md` | the onboarding service: activation, revocation, its endpoints |
 | `../odoo/addons/belfry_pass/README.md` | the Odoo module: products, pricing, invites, webhooks |
 | `../infra/relay/README.md`, `../infra/blossom/README.md`, `../infra/mint/README.md` | community relay, file server, token mint |
+| `../infra/groups-relay/README.md`, `../infra/git/README.md` | the groups relay (channels, NIP-29) and the git server |
+| `register.md` | the belfry's own register (`REGISTER=belfry`, the installer's default) and Odoo as an add-on |
+| `mail.md` | e-mail as messages: receiving for members and channels, shared inboxes, sending from the chat |
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |
 | `../brand/README.md` | colours, fonts, logos and where copies of them live |
 | `runbook.md` | operating the server before and during the event, and what to do when something breaks |
+| `../skills/*/SKILL.md` | instructions for agents: install a belfry, its homepage, its theme, sign-in for apps, helping a steward or a visitor; served at `pass.<domain>/skills/<name>.md` |
 | `../services/onboarding/content/` | the texts of the pages on `pass.<domain>`: privacy notice, terms, refund policy, community rules, help (`/privacy`, `/terms`, `/refunds`, `/rules`, `/help`) |
 
 ## Plan
@@ -35,4 +39,5 @@ are, but describe the state at the time they were written.
 | `NEXT_STEPS.md` | the build log: every slice with its decisions, checks and open points, and the next steps |
 | `slice-1-onboarding.md` | the interface specification written for the first build slice (Odoo, onboarding service, accounts) |
 | `real-user-test.md` | the script for testing the whole path with a real person, mailbox and wallet |
+| `plan-user-test-followups.md` | the plan written after the user test of 2026-10-26 (sign-up fixes and follow-ups) |
 | `research/` | technical spikes and evaluations written before building: Keycast and other signers, Authentik, the SUNET verifier, walt.id and other issuers, Odoo and Stripe, a consistency review of the plan |
