@@ -1157,6 +1157,8 @@ def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason
         row = svc.odoo.read_one("belfry.pass", pass_row["id"], ["guest_agent"]) or {}
         if row.get("guest_agent"):  # an agent's own key: no signer account to suspend
             return False
+    if pass_row.get("tier") == "agent":  # a member's agent (agents.py): its own key too
+        return False
     if partner_id is None or not _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
         pubkey = _keycast_pubkey_for(svc, pass_row)
         if pubkey:
@@ -1192,6 +1194,13 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
         from . import guests
 
         guests.left(svc, pass_row["id"])
+    else:  # an agent leaves its channels; a member's agents leave with them (agents.py)
+        from . import agents
+
+        try:
+            agents.closed(svc, pass_row)
+        except Exception:  # noqa: BLE001 — the pass is closed; this is retried by hand
+            log.exception("pass %s: agents and channels not cleaned up", pass_row["id"])
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
     return result

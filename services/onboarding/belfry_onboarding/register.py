@@ -84,7 +84,9 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 CHANNEL = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 FREQUENCIES = ("asap", "monthly")
-TIER_NAMES = {"member": "Membership", "steward": "Membership (admin)"}
+TIER_NAMES = {"member": "Membership", "steward": "Membership (admin)", "agent": "Member's agent"}
+AGENTS_PER_MEMBER = 1  # how many agents of their own a member can bring (agents.py)
+FOREVER = "2099-12-31"
 
 
 def now() -> dt.datetime:
@@ -624,10 +626,16 @@ class Register(OdooApi):
         days: int,
         people: int = GUEST_MAX_DEFAULT,
         link_days: int = GUEST_LINK_DAYS_DEFAULT,
+        own_agent: bool = False,
     ) -> dict[str, Any]:
         """A link that makes its user a guest of CHANNEL for DAYS days (guests.py). It is for
-        PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked)."""
+        PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked).
+        OWN_AGENT: the link is for one agent, which becomes the inviter's own agent (agents.py):
+        a member for as long as the inviter is one, not a guest."""
         partner = self._member(partner_id, "Only members can invite guests.")
+        if own_agent:
+            people = 1
+            self._agent_room(partner["id"])
         people = max(1, min(GUEST_MAX, int(people)))
         link_days = max(1, min(GUEST_LINK_DAYS, int(link_days)))
         inv_id = self._create(
@@ -641,10 +649,167 @@ class Register(OdooApi):
                 "guest_inviter": inviter_pubkey,
                 "guest_max": people,
                 "guest_uses": 0,
+                "agent_owner": partner["id"] if own_agent else False,
                 "expires_at": stamp(now() + dt.timedelta(days=link_days)),
             },
         )
         return self._invite_row(self._get("belfry.invite", inv_id))
+
+    # ── a member's own agents (agents.py) ────────────────────────────────────────────────────
+    def agents_limit(self, partner_id: int) -> int:
+        """How many agents this member can bring: the belfry's number, or their tier's when one
+        is set (params ``belfry.agents_per_member``, ``belfry.agents_per_tier.<tier>``)."""
+        base = self.param("belfry.agents_per_member", str(AGENTS_PER_MEMBER))
+        tiers = {
+            p.get("tier")
+            for p in self._all("belfry.pass")
+            if p.get("partner_id") == int(partner_id)
+            and p.get("state") == "active"
+            and p.get("tier") not in ("guest", "agent")
+        }
+        if not tiers:
+            return 0
+        found = [self.param(f"belfry.agents_per_tier.{t}", "") for t in sorted(tiers) if t]
+        try:
+            return max(0, max([int(v) for v in found if v] or [int(base)]))
+        except ValueError:
+            return AGENTS_PER_MEMBER
+
+    def agents_of(self, partner_id: int) -> list[dict[str, Any]]:
+        out = []
+        for p in self._all("belfry.pass"):
+            if (
+                p.get("tier") == "agent"
+                and p.get("state") == "active"
+                and p.get("agent_owner") == int(partner_id)
+            ):
+                who = self._get("res.partner", p.get("partner_id") or 0) or {}
+                out.append(
+                    {
+                        "pass_id": p["id"],
+                        "pubkey": p.get("keycast_pubkey") or "",
+                        "name": who.get("name") or "",
+                        "since": p.get("date_start") or "",
+                    }
+                )
+        return out
+
+    def agent_owners(self) -> dict[str, str]:
+        """Every member's agent → the member's key (belfry.json says whose agent one is)."""
+        with self._lock:
+            passes = self._all("belfry.pass")
+            key = {}
+            for p in passes:
+                if (
+                    p.get("state") == "active"
+                    and p.get("tier") not in ("guest", "agent")
+                    and p.get("keycast_pubkey")
+                ):
+                    key.setdefault(p.get("partner_id"), p["keycast_pubkey"])
+            return {
+                p["keycast_pubkey"]: key[p.get("agent_owner")]
+                for p in passes
+                if p.get("tier") == "agent"
+                and p.get("state") == "active"
+                and p.get("keycast_pubkey")
+                and p.get("agent_owner") in key
+            }
+
+    def _agent_room(self, owner_id: int) -> None:
+        limit = self.agents_limit(owner_id)
+        if limit <= 0:
+            raise _user_error("Only members can bring an agent of their own.")
+        if len(self.agents_of(owner_id)) >= limit:
+            raise _user_error(
+                "You have one agent already: remove it first."
+                if limit == 1
+                else f"You have {limit} agents already: remove one first."
+            )
+
+    def _agent_pass(self, partner_id: int, owner_id: int, pubkey: str, invite_id: Any) -> int:
+        pass_id = self._create(
+            "belfry.pass",
+            {
+                "partner_id": partner_id,
+                "tier": "agent",
+                "agent_owner": int(owner_id),
+                "invite_id": invite_id or False,
+                "keycast_pubkey": pubkey,
+                "own_pubkey": pubkey,
+                "date_start": now().date().isoformat(),
+                "date_end": FOREVER,
+            },
+        )
+        self._write("belfry.pass", [pass_id], {"state": "active"})
+        return pass_id
+
+    def make_agent(self, pubkey: str, owner_id: int, caller: str, admin: bool) -> dict[str, Any]:
+        """A channel's guest agent becomes OWNER's own agent: a member's pass on the agent's
+        contact (the guest passes close after, guests.became_member). Only the member who
+        invited it, or an admin, and only while the owner has room for one more."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                mine = [
+                    p
+                    for p in self._all("belfry.pass")
+                    if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+                ]
+                if not mine:
+                    raise _user_error("Nobody here has that key.")
+                if any(p.get("tier") == "agent" for p in mine):
+                    raise _user_error("This agent is a member's agent already.")
+                if any(p.get("tier") != "guest" for p in mine) or not all(
+                    p.get("guest_agent") for p in mine
+                ):
+                    raise _user_error("Only an agent that joined as a guest can become yours.")
+                if not admin and not any(p.get("guest_inviter") == caller for p in mine):
+                    raise _user_error("Only the member who invited this agent can make it theirs.")
+                self._agent_room(owner_id)
+                pid = mine[0]["partner_id"]
+                pass_id = self._agent_pass(pid, owner_id, pubkey, False)
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+            return {"pass_id": pass_id, "partner_id": pid}
+
+    def add_guest_channel(
+        self, pubkey: str, channel: str, inviter: str, days: int
+    ) -> dict[str, Any] | None:
+        """A member brings someone who is here already into one more channel (no link). A guest
+        gets one more guest pass on their own contact; a member needs none. Returns ``{"kind":
+        "guest" | "already" | "member", "pass_id"?}``; None when the key holds no active pass."""
+        with self._lock:
+            mine = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+            ]
+            if not mine:
+                return None
+            if any(p.get("tier") != "guest" for p in mine):
+                return {"kind": "member"}
+            if any(p.get("guest_channel") == channel for p in mine):
+                return {"kind": "already"}
+            today = now().date()
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "partner_id": mine[0].get("partner_id"),
+                    "tier": "guest",
+                    "guest_channel": channel,
+                    "guest_days": int(days),
+                    "guest_inviter": inviter,
+                    "guest_agent": bool(mine[0].get("guest_agent")),
+                    "keycast_pubkey": pubkey,
+                    "own_pubkey": mine[0].get("own_pubkey") or False,
+                    "date_start": today.isoformat(),
+                    "date_end": (today + dt.timedelta(days=int(days))).isoformat(),
+                },
+            )
+            self._write("belfry.pass", [pass_id], {"state": "active"})
+            return {"kind": "guest", "pass_id": pass_id}
 
     def _m_belfry_participant_revoke(self, model, partner_id, invite_id, *_a, **_k):
         inv = self._get("belfry.invite", int(invite_id))
@@ -784,6 +949,19 @@ class Register(OdooApi):
                 pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Agent"})
                 days = int(inv.get("guest_days") or 30)
                 today = now().date()
+                if inv.get("agent_owner"):  # the inviter's own agent: a member, not a guest
+                    self._agent_room(int(inv["agent_owner"]))
+                    pass_id = self._agent_pass(pid, int(inv["agent_owner"]), pubkey, inv["id"])
+                    self._write("belfry.invite", [inv["id"]], {"pass_id": pass_id})
+                    self._db.execute("COMMIT")
+                    return {
+                        "pass_id": pass_id,
+                        "partner_id": pid,
+                        "channel": inv["guest_channel"],
+                        "days": 0,
+                        "own_agent": True,
+                        "inviter": inv.get("guest_inviter") or "",
+                    }
                 pass_id = self._create(
                     "belfry.pass",
                     {

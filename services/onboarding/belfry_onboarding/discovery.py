@@ -305,6 +305,15 @@ def register(app: FastAPI) -> None:
                 doc["admins"] = admins
         except Exception as exc:  # noqa: BLE001 — the document must answer anyway
             log.warning("belfry.json: admins unknown: %s", exc)
+        # members' own agents (agents.py): agent key → its member's key
+        owners = getattr(services.odoo, "agent_owners", None)
+        if owners is not None:
+            try:
+                found = await run_in_threadpool(owners)
+                if found:
+                    doc["agents"] = found
+            except Exception as exc:  # noqa: BLE001
+                log.warning("belfry.json: agents unknown: %s", exc)
         return JSONResponse(doc, headers={"Cache-Control": "public, max-age=300"})
 
     async def session_owner(

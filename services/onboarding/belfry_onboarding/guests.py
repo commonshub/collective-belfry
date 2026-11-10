@@ -174,8 +174,20 @@ def _option(data: Any, key: str, default: int, allowed: tuple[int, ...]) -> int:
     return value
 
 
+def _inviter(rows: list[dict[str, Any]]) -> None:
+    """Only a member brings people in: not a guest, not a member's agent."""
+    from .holder_invites import ApiError
+
+    tiers = {r.get("tier") for r in rows}
+    if tiers and not tiers - {"guest", "agent"}:
+        if "agent" in tiers:
+            raise ApiError(403, "agent", "Agents can't invite.")
+        raise ApiError(403, "guest", "Guests can't invite guests.")
+
+
 def register(app: FastAPI) -> None:
     register_agent_routes(app)
+    register_add_route(app)
     register_join_routes(app)
 
     @app.post(API)
@@ -205,10 +217,7 @@ def register(app: FastAPI) -> None:
             [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
             ["tier"],
         )
-        if any(r.get("tier") == "guest" for r in rows) and not any(
-            r.get("tier") != "guest" for r in rows
-        ):
-            raise ApiError(403, "guest", "Guests can't invite guests.")
+        _inviter(rows)
         if not await run_in_threadpool(mail.channel_exists, s, channel):
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
@@ -217,6 +226,8 @@ def register(app: FastAPI) -> None:
             _option(data, "people", 1, (1, 50)),
             _option(data, "link_days", 1, (1, 7, 30)),
         )
+        # "agent": the link is for one agent, which becomes the member's own (agents.py)
+        own_agent = isinstance(data, dict) and data.get("agent") is True
         try:
             row = await run_in_threadpool(
                 s.odoo.create_guest_invite,
@@ -224,8 +235,9 @@ def register(app: FastAPI) -> None:
                 pubkey,
                 channel,
                 DAYS,
-                people,
+                1 if own_agent else people,
                 link_days,
+                own_agent,
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
@@ -235,8 +247,9 @@ def register(app: FastAPI) -> None:
                 "url": join_url(s, token),
                 # what an agent reads: how to join with its own key
                 "agent_url": row["url"] + ".md",
-                "days": DAYS,
-                "people": people,
+                "days": 0 if own_agent else DAYS,
+                "own_agent": own_agent,
+                "people": 1 if own_agent else people,
                 "link_days": link_days,
                 "expires_at": row.get("expires_at") or None,
             },
@@ -265,19 +278,36 @@ def agent_instructions(svc: Services, inv: dict[str, Any], token: str) -> str:
     relay = svc.settings.groups_relay_public_url
     accept = api_base(svc) + accept_path(token).removeprefix("/api")
     page = join_url(svc, token)
-    return f"""# You are invited to #{channel} on {community}
+    own = bool(inv.get("agent_owner"))
+    if own:
+        intro = f"""{who} invited you as their own agent on {community}. You are a member for as
+long as {who} is one: you read and write in #{channel} and in every open channel, and people
+can write to you directly. Everyone sees that you are {who}'s agent.
 
-{who} invited you as a guest of #{channel} for {days} days. A guest reads and writes in
-#{channel} only. Everyone there sees that {who} invited you.
+This link is for an agent. Follow these steps. You use your own Nostr key; no e-mail is needed."""
+        rules = f"""You are here as {who}'s agent, for as long as {who} is a member and keeps
+you. You can't invite others or administer anything. Be brief and useful; what you do reflects
+on {who}. The channels: `{{"kinds": [39000]}}` lists them (the `d` tag is the id to put in `h`)."""
+    else:
+        intro = f"""{who} invited you as a guest of #{channel} for {days} days. A guest reads and
+writes in #{channel} only. Everyone there sees that {who} invited you.
 
 - **A person?** Open {page} in a browser: your name, and you are in.
-- **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed.
+- **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed."""
+        rules = f"""You are a guest for {days} days; then the relay stops accepting your key. You
+can only read and write in #{channel}, unless a member brings you into another channel too: you
+then get a kind 9000 event with your key in a `p` tag and that channel in `h`
+(`{{"kinds": [9000], "#p": ["<your public key, hex>"]}}`). Be brief and useful; people see who
+invited you. To leave earlier: kind 9022 with `[["h", "{channel}"]]`."""
+    return f"""# You are invited to #{channel} on {community}
+
+{intro}
 
 ## 1. Your key
 Generate a Nostr key pair (secp256k1, BIP-340 Schnorr). The public key is who you are here; keep
 the secret key private and reuse it next time.
 
-## 2. Accept the invitation (once; the link works for one guest)
+## 2. Accept the invitation (once; the link works for one of you)
     POST {accept}
     Content-Type: application/json
     Authorization: Nostr <base64 of a signed NIP-98 event>
@@ -287,7 +317,7 @@ the secret key private and reuse it next time.
 The NIP-98 event: kind 27235, `created_at` now, content "", tags
 `["u", "{accept}"]`, `["method", "POST"]`, `["payload", "<sha256 hex of the exact body>"]`.
 The answer is `{{"channel": "{channel}", "relay": "{relay}", "until": "<last day>"}}`. Your name
-shows at once in the channel: "<name> joined as a guest, invited by {who}".
+shows at once in the channel, with who invited you.
 
 ## 3. Connect to the channel's relay
 Open a WebSocket to `{relay}`. It sends `["AUTH", "<challenge>"]`; answer
@@ -318,9 +348,7 @@ pictures: kind 0 events, `{{"kinds": [0], "authors": [...]}}`.
   `[["h", "{channel}"], ["e", "<message id>"], ["p", "<its author>"]]`.
 
 ## 7. The rules
-You are a guest for {days} days; then the relay stops accepting your key. You can only read and
-write in #{channel}. Be brief and useful; people see who invited you. To leave earlier: kind
-9022 with `[["h", "{channel}"]]`.
+{rules}
 """
 
 
@@ -356,6 +384,26 @@ def register_agent_routes(app: FastAPI) -> None:
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
+        if made.get("own_agent"):  # a member's own agent: a member, in the link's channel
+            from . import agents
+
+            await run_in_threadpool(
+                agents.joined,
+                s,
+                pubkey,
+                made["channel"],
+                made.get("inviter") or "",
+                str(data["name"]).strip()[:100],
+            )
+            return JSONResponse(
+                {
+                    "channel": made["channel"],
+                    "relay": s.settings.groups_relay_public_url,
+                    "until": None,
+                    "member": True,
+                },
+                headers={"Cache-Control": "no-store"},
+            )
         await run_in_threadpool(admitted, s, made["pass_id"])
         row = await run_in_threadpool(s.odoo.read_one, "belfry.pass", made["pass_id"], ["date_end"])
         return JSONResponse(
@@ -363,6 +411,62 @@ def register_agent_routes(app: FastAPI) -> None:
                 "channel": made["channel"],
                 "relay": s.settings.groups_relay_public_url,
                 "until": (row or {}).get("date_end"),
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+
+# ── bringing someone who is here already into one more channel ─────────────────────────────
+ADD = "/api/channel-guests"
+
+
+def register_add_route(app: FastAPI) -> None:
+    @app.post(ADD)
+    async def channel_guest(request: Request) -> JSONResponse:
+        """``{"channel", "pubkey"}`` by a member who has the channel: a guest of another channel
+        (a person or an agent) becomes this one's guest too, for 30 days, without a link →
+        ``{"added": true}``; ``{"already": true}`` when they are in it; ``{"member": true}``
+        for a member, who needs no guest pass."""
+        from . import followers, invite, mail
+        from .holder_invites import ApiError, authenticate, holder
+
+        s = request.app.state.services
+        body = await request.body()
+        caller = authenticate(
+            s, request.app.state.api_seen, request.headers.get("authorization"), "POST", ADD, body
+        )
+        who = await run_in_threadpool(holder, s, caller)
+        try:
+            data = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        channel = str(data.get("channel") or "") if isinstance(data, dict) else ""
+        target = str(data.get("pubkey") or "").lower() if isinstance(data, dict) else ""
+        if not followers.CHANNEL.match(channel) or not re.fullmatch(r"[0-9a-f]{64}", target):
+            raise ApiError(422, "invalid", 'Send {"channel": "<id>", "pubkey": "<hex>"}.')
+        if not invite.own(s):
+            raise ApiError(409, "unsupported", "Guests need the belfry's own register.")
+        rows = await run_in_threadpool(
+            s.odoo.search_read,
+            "belfry.pass",
+            [["state", "=", "active"], ["keycast_pubkey", "=", caller]],
+            ["tier"],
+        )
+        _inviter(rows)
+        if not await run_in_threadpool(mail.channel_exists, s, channel):
+            raise ApiError(404, "no_channel", "No such channel.")
+        if not await run_in_threadpool(may_invite, s, caller, channel, bool(who.get("steward"))):
+            raise ApiError(403, "not_allowed", "You can't invite guests here.")
+        got = await run_in_threadpool(s.odoo.add_guest_channel, target, channel, caller, DAYS)
+        if got is None:
+            raise ApiError(404, "unknown", "Nobody here has that key.")
+        if got["kind"] == "guest":
+            await run_in_threadpool(admitted, s, got["pass_id"])
+        return JSONResponse(
+            {
+                "added": got["kind"] == "guest",
+                "already": got["kind"] == "already",
+                "member": got["kind"] == "member",
             },
             headers={"Cache-Control": "no-store"},
         )
@@ -582,6 +686,9 @@ def register_join_routes(app: FastAPI) -> None:
             data = None
         if not isinstance(data, dict):
             raise ApiError(400, "invalid_json", "Send a JSON object.")
+        inv = await run_in_threadpool(s.odoo.invite_by_token, token)
+        if inv and inv.get("agent_owner"):
+            raise ApiError(410, "for_agent", "This link is for an agent, not a person.")
         try:
             out = await run_in_threadpool(join_account, s, token, pubkey)
             if out is None:

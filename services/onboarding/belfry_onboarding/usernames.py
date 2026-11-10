@@ -155,7 +155,7 @@ def backfill(svc: Services) -> dict[str, str]:
         "belfry.pass", [["state", "=", "active"]], ["partner_id", "tier", "guest_agent"]
     ):
         partner = core.m2o_id(row.get("partner_id"))
-        if row.get("tier") == "guest" or not partner or partner in seen:
+        if row.get("tier") in ("guest", "agent") or not partner or partner in seen:
             continue
         seen.add(partner)
         try:

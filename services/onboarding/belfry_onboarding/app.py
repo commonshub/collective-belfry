@@ -26,6 +26,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import (
     accounting,
     admins,
+    agents,
     apply,
     apps,
     appshome,
@@ -228,6 +229,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
     places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
     admins.register(app)  # /api/admins: admins give the admin role from the chat (admins.py)
+    agents.register(app)  # /api/agents: a member's own agents (agents.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
