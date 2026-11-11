@@ -378,8 +378,34 @@ function resubscribe(target: Target) {
       // only the groups relay decides whether you're in: a channel's guest is in there, while
       // the community relay (members only) turns them away
       if (target === 'groups') noteRefusal(reason)
+      // the relay ended the live subscription for another reason (or we closed it to replace it):
+      // without a new one nothing arrives until a reload, so open it again while the socket lives
+      if (subs[target] === sub && relays[target] === r && r.connected && status.access !== 'denied') {
+        setTimeout(() => { if (subs[target] === sub && relays[target] === r) resubscribe(target) }, 2000)
+      }
     },
   })
+  const sub = subs[target]
+}
+
+/** Is the socket really alive? A phone that slept keeps a WebSocket that says "open" but is dead:
+ *  nothing arrives and nothing says so. Ask the relay something tiny; no answer in 6 s means dead:
+ *  drop it, and onclose reconnects and catches up (since = the latest event seen − 1 h). */
+const probing: Partial<Record<Target, boolean>> = {}
+function probe(target: Target) {
+  const r = relays[target]
+  if (!r?.connected || probing[target]) return
+  probing[target] = true
+  let answered = false
+  const end = () => { answered = true; try { s.close() } catch { /* closed */ } }
+  const s = r.subscribe([{ kinds: [39000], limit: 1 }], { oneose: end, onevent: () => {}, onclose: () => { answered = true } })
+  setTimeout(() => {
+    probing[target] = false
+    if (answered || relays[target] !== r) return
+    console.warn('relay did not answer, reconnecting', URLS[target])
+    try { r.close() } catch { /* already closed */ }
+    if (relays[target] === r) { delete relays[target]; setRelay(URLS[target], 'down'); void connect(target) }
+  }, 6000)
 }
 
 function noteRefusal(reason: string) {
@@ -410,6 +436,7 @@ function connect(target: Target): Promise<void> {
 // coming back to the foreground, and a watchdog every 15 s (the online flag can lie, and a
 // socket can die silently while a phone sleeps) all reconnect, catch up and send the outbox.
 let watching = false
+let ticks = 0
 function watchNetwork() {
   if (watching) return
   watching = true
@@ -431,11 +458,15 @@ function watchNetwork() {
       setRelay(URLS[t], 'down')
     }
   })
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') wake() })
+  // back in the foreground: the socket may have died while asleep (probe), reconnect if so
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wake(); probe('groups'); probe('main') } })
+  window.addEventListener('pageshow', () => { probe('groups'); probe('main') })
   setInterval(() => {
     if (!signer) return
     if (status.online !== navigator.onLine) setStatus({ online: navigator.onLine })
     if (!localOnly && navigator.onLine) for (const t of ['groups', 'main'] as Target[]) if (!relays[t]?.connected) void connect(t)
+    // every minute, check the open sockets still answer (a silent dead socket = no live updates)
+    if (!localOnly && navigator.onLine && document.visibilityState === 'visible' && ++ticks % 4 === 0) { probe('groups'); probe('main') }
     if (outboxItems().some((o) => o.status !== 'failed')) void flush()
   }, 15_000)
 }
