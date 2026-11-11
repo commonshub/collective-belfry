@@ -11,10 +11,10 @@
 import { useState, type ReactNode } from 'react'
 import { taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { fmtDay, go } from './common'
+import { fmtDay, go, useNow } from './common'
 import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
@@ -127,6 +127,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
 /** The line pulled down: everything it summarises, in the same order. */
 export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: string; onTopic: (t?: string) => void; more: (tab: 'about' | 'tasks' | 'members' | 'files') => void }) {
   useVersion()
+  const now = useNow()
   const [, redraw] = useState(0)
   const f = channelFacts(id)
   const g = f.g
@@ -194,12 +195,12 @@ export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: str
       {f.todos.length > 0 && (
         <section>
           <h3>To do <span>{f.todos.length}</span></h3>
-          {f.todos.slice(0, 4).map((t) => (
+          {f.todos.slice(0, 4).map((t) => { const busy = isWorking(t, now); return (
             <div key={t.id} className="pull-row todo" style={{ opacity: t.pending ? 0.6 : 1 }}>
-              <button className={'check' + (t.assignee ? ' claimed' : '')} aria-label={`Mark "${t.title}" as done`} onClick={() => void taskAction(id, t.id, 'done')} />
-              <button className="t" onClick={() => more('tasks')}>{t.title}<small>{t.assignee ? (t.assignee === me() ? 'You are on it' : `${displayName(t.assignee)} is on it`) : 'Nobody on it yet'}</small></button>
+              <button className={'check' + (t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={`Mark "${t.title}" as done`} onClick={() => void taskAction(id, t.id, 'done')} />
+              <button className="t" onClick={() => more('tasks')}>{t.title}<small>{t.assignee ? (t.assignee === me() ? (busy ? 'You are working on it now' : 'You are on it') : `${displayName(t.assignee)} is ${busy ? 'working on it now' : 'on it'}`) : 'Nobody on it yet'}</small></button>
             </div>
-          ))}
+          ) })}
           {f.todos.length > 4 && <button className="link pull-all" onClick={() => more('tasks')}>All {f.todos.length} to-dos</button>}
         </section>
       )}

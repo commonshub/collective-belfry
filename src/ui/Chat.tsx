@@ -4,10 +4,10 @@ import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
@@ -537,7 +537,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {todo && (
             <button className={'todo-chip' + (todo.done ? ' done' : '')} onClick={() => void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done')}
               aria-label={todo.done ? 'Done. Mark as not done' : 'To do. Mark as done'}>
-              <TodoIcon />{todo.done ? 'Done' : todo.assignee ? `To do · ${displayName(todo.assignee)}` : 'To do'}
+              <TodoChipBody todo={todo} />
             </button>
           )}
           {thread && thread.count > 0 && onThread && (
@@ -1024,4 +1024,10 @@ function SaveAccountBar() {
       {error && <div className="error">{error}</div>}
     </div>
   )
+}
+
+/** The chip under a message that became a to-do; its icon turns while the assignee works on it now. */
+function TodoChipBody({ todo }: { todo: Task }) {
+  const busy = isWorking(todo, useNow())
+  return <><span className={'ico-wrap' + (busy ? ' working' : '')}><TodoIcon /></span>{todo.done ? 'Done' : todo.assignee ? `${busy ? 'Working now' : 'To do'} · ${displayName(todo.assignee)}` : 'To do'}</>
 }

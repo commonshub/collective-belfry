@@ -8,13 +8,13 @@ import { setInbox } from '../core/actions'
 import { isInbox } from '../core/model'
 import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, type Task } from '../core/model'
+import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
 import { canAdmin } from '../core/access'
 import { me } from '../core/sync'
-import { Avatar, back, fmtTime, go, MediaGrid, Sheet, Btn, Form } from './common'
+import { Avatar, back, fmtTime, go, MediaGrid, Sheet, Btn, Form, useNow } from './common'
 import { AccessFields } from './Chat'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files'
@@ -154,14 +154,15 @@ export function Tasks({ groupId }: { groupId: string }) {
 function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open: boolean; toggle: () => void }) {
   const [comment, setComment] = useState('')
   const mine = t.assignee === me()
+  const busy = isWorking(t, useNow())
   return (
     <div className={'task' + (t.done ? ' done' : '')} style={{ opacity: t.pending ? 0.6 : 1 }}>
-      <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '')} aria-label={t.done ? 'Mark as not done' : 'Mark as done'}
+      <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? 'Mark as not done' : 'Mark as done'}
         onClick={() => taskAction(groupId, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : ''}</button>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="title" onClick={toggle}>{t.title}</div>
         <small onClick={toggle}>
-          {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} on it` : 'Unassigned'}
+          {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Unassigned'}
           {t.comments.length ? ` · 💬 ${t.comments.length}` : ''}
         </small>
         {open && (

@@ -2,7 +2,7 @@ import { Relay, type Subscription } from 'nostr-tools/relay'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE } from '../config'
+import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
 import type { Signer } from './auth'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
@@ -137,6 +137,9 @@ export async function flush() {
 }
 
 /** Save an event that is signed already (gift wraps) and publish it when the relay answers. */
+// browser tests only (?backend=demo, nothing leaves the device): publish raw events, e.g. a to-do heartbeat
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoEnqueue: typeof enqueue }).__demoEnqueue = (...a) => enqueue(...a)
+
 export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
   const item: OutboxItem = {
     localId: 'local-' + newId(), target, kind: ev.kind, content: ev.content, tags: ev.tags, created_at: ev.created_at,

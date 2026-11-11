@@ -1,6 +1,13 @@
 import { Drawer } from 'vaul'
 import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+
+/** The time now (unix seconds), refreshed every MS: for states that expire, like a to-do heartbeat. */
+export function useNow(ms = 30_000) {
+  const [n, setN] = useState(() => Date.now() / 1000)
+  useEffect(() => { const i = setInterval(() => setN(Date.now() / 1000), ms); return () => clearInterval(i) }, [ms])
+  return n
+}
 import { CloseIcon } from './icons'
 import { db } from '../core/db'
 import { displayName, profiles, type Media } from '../core/model'

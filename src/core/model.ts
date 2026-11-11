@@ -1,7 +1,7 @@
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
-import { BELFRY, LABEL_NS } from '../config'
+import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me } from './sync'
 
@@ -440,13 +440,23 @@ export interface Task {
   comments: { author: string; text: string; at: number }[]
   /** The message it was made from ("Turn into a to-do"), its `q` tag. */
   source?: string
+  /** When its assignee last said "working on it now" (a 2101 `working` heartbeat), unix seconds. */
+  beat?: number
 }
+
+/** A to-do is being worked on right now: its assignee's heartbeat is under 5 minutes old (agents
+ *  send one every 2 minutes while busy, `idle` when they stop). One to-do per person at a time. */
+export const BEAT_FRESH = 300
+// browser tests only (?backend=demo): read a channel's to-dos
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoTasks: typeof tasklist }).__demoTasks = (g) => tasklist(g)
+export const isWorking = (t: Task, now = Date.now() / 1000) => !t.done && !!t.beat && now - t.beat < BEAT_FRESH
 
 export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
   const listId = listIdFor(groupId)
   const evs = all(me()).filter((e) => e.kind >= 2100 && e.kind <= 2103 && tag(e, 't') === listId).sort(byTime)
   const tasks = new Map<string, Task>()
   let name: string | undefined
+  const beats = new Map<string, { task: string; at: number }>() // per person: their latest heartbeat
   for (const e of evs) {
     if (e.kind === 2100) {
       const title = e.content.trim().slice(0, 300)
@@ -463,8 +473,11 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
       if (a === 'done') t.done = true
       if (a === 'undone') t.done = false
       if (a === 'delete' && e.pubkey === t.author) tasks.delete(t.id)
+      if (a === 'working') beats.set(e.pubkey, { task: t.id, at: e.created_at })
+      if (a === 'idle' && beats.get(e.pubkey)?.task === t.id) beats.delete(e.pubkey)
     }
   }
+  for (const [p, b] of beats) { const t = tasks.get(b.task); if (t && t.assignee === p) t.beat = b.at }
   return { name, tasks: [...tasks.values()] }
 }
 

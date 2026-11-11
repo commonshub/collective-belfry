@@ -157,6 +157,13 @@ a { color: var(--accent); }
 .check { width: 24px; height: 24px; border-radius: 50%; border: 2px dashed var(--faint); flex: none; display: grid; place-items: center; font-size: 13px; color: var(--on-accent); margin-top: 1px; }
 .check.claimed { border-style: solid; border-color: var(--accent); }
 .check.done { background: var(--accent); border: 2px solid var(--accent); }
+/* being worked on right now (a fresh heartbeat): the ring turns, accent chasing orange */
+.check.working { position: relative; border-color: transparent; }
+.check.working::before { content: ''; position: absolute; inset: -2px; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--orange) 45%, transparent); border-top-color: var(--accent); border-right-color: var(--accent); animation: spin 1.1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .check.working::before { animation-duration: 4s; } }
+.todo-chip .ico-wrap { display: inline-flex; }
+.todo-chip .ico-wrap.working { animation: spin 1.1s linear infinite; color: var(--accent); }
+@media (prefers-reduced-motion: reduce) { .todo-chip .ico-wrap.working { animation-duration: 4s; } }
 .task.done .title { text-decoration: line-through; color: var(--muted); }
 .task .title { overflow-wrap: anywhere; }
 .task small { display: block; color: var(--muted); font-size: 13px; }
