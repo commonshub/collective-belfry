@@ -306,6 +306,19 @@ def register(app: FastAPI) -> None:
                 doc["admins"] = admins
         except Exception as exc:  # noqa: BLE001 — the document must answer anyway
             log.warning("belfry.json: admins unknown: %s", exc)
+        # the branding admins set (branding.py): logo, cover, colours
+        try:
+            from . import branding
+
+            brand = {
+                k: v
+                for k, v in (await run_in_threadpool(branding.current, services)).items()
+                if v and k != "name"
+            }
+            if brand:
+                doc["branding"] = brand
+        except Exception as exc:  # noqa: BLE001
+            log.warning("belfry.json: branding unknown: %s", exc)
         # members' own agents (agents.py): agent key → its member's key
         owners = getattr(services.odoo, "agent_owners", None)
         if owners is not None:

@@ -126,6 +126,9 @@ class Mailer:
             conn.send_message(msg, to_addrs=rcpts)
 
     def _html(self, paragraphs: list[str], button: tuple[str, str] | None, footer: str) -> str:
+        from . import branding
+
+        color = branding.primary()
         p = "".join(
             f'<p style="margin:0 0 14px;">{escape(x).replace(chr(10), "<br>")}</p>'
             for x in paragraphs
@@ -134,7 +137,7 @@ class Mailer:
             p += (
                 f'<p style="margin:20px 0;"><a href="{escape(button[0])}" '
                 'style="display:inline-block;'
-                "background:#18181b;color:#fafafa;font-weight:600;padding:12px 20px;"
+                f"background:{color};color:#fff;font-weight:600;padding:12px 20px;"
                 f'text-decoration:none;border-radius:10px;">{escape(button[1])}</a></p>'
             )
         foot = (
@@ -142,11 +145,10 @@ class Mailer:
             if footer
             else ""
         )
+        # no grey page and no framed card (Xavier, 2026-11-11): the belfry's logo and name, the text
         return (
-            '<div style="background:#fafafa;padding:28px 12px;'
+            '<div style="padding:16px 18px;max-width:600px;'
             "font-family:-apple-system,'Segoe UI',"
-            'Arial,sans-serif;font-size:15px;line-height:1.55;color:#09090b;">'
-            '<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid #e4e4e7;'
-            f'border-radius:12px;padding:26px;"><p style="margin:0 0 18px;font-weight:700;">'
-            f"{escape(self.name)}</p>{p}{foot}</div></div>"
+            'Helvetica,Arial,sans-serif;font-size:15px;line-height:1.55;color:#18181b;">'
+            f"{branding.mail_header(self.name)}{p}{foot}</div>"
         )

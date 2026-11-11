@@ -284,9 +284,9 @@ def digest(
     community up top (people are in several), no grey page or framed card, the mentions grouped
     per channel (its name a link) with a thin bar in the community's colour, a Reply link under
     each, links, channels and #topics clickable, no big button."""
-    from . import followers
+    from . import branding, followers
 
-    color = getattr(theme.current(), "primary", "") or "#2563eb"
+    color = branding.primary()
     chat = f"https://chat.{svc.settings.nip05_domain}/"
     n = len(evs)
     hello = f"Hello {name}".strip() if name else "Hello"
@@ -296,15 +296,7 @@ def digest(
         groups.setdefault(_tag(e, "h"), []).append(e)
     h: list[str] = []
     t: list[str] = [community, "", intro]
-    initial = E((community.strip()[:1] or "B").upper())
-    h.append(
-        f'<a href="{E(chat)}" style="display:inline-block;color:#18181b;text-decoration:none;'
-        'font-weight:600;font-size:16px;margin:0 0 18px;">'
-        f'<span style="display:inline-block;width:24px;height:24px;line-height:24px;'
-        f"border-radius:6px;background:{color};color:#fff;text-align:center;font-size:14px;"
-        f'vertical-align:middle;margin-right:8px;">{initial}</span>'
-        f'<span style="vertical-align:middle;">{E(community)}</span></a>'
-    )
+    h.append(branding.mail_header(community, chat))
     h.append(f'<p style="margin:0 0 16px;">{E(intro)}</p>')
     for channel, items in groups.items():
         label = followers.channel_label(svc, channel)
@@ -371,6 +363,9 @@ def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
         if p["name"]:
             names.setdefault(p["pubkey"], p["name"])
     community = theme.current().name
+    from . import branding
+
+    branding.current(svc)  # the logo and colours the admins set, fresh
     public = (svc.settings.console_url or svc.settings.public_url).rstrip("/")
     sent = 0
     for p in due:
