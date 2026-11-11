@@ -3,7 +3,7 @@ import { createProposal, reviseProposal, setProposalStatus, vote, type NewPropos
 import { canDecide, displayName, groups, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { go, Sheet, Form } from './common'
+import { go, Sheet, Form, useFormDraft } from './common'
 import { Markdown } from './markdown'
 
 // A proposal is a channel template: its chat is where feedback goes; above it, the text (with its
@@ -103,12 +103,12 @@ function Fields({ n, set }: { n: Omit<NewProposal, 'status'>; set: (patch: Parti
 /** FROM: a request (#requests) a member turns into a proposal: its words to start from, a link
  *  back in the text, and ONMADE to say so in the request's thread. */
 export function NewProposalSheet({ parent, onClose, from, onMade }: { parent: string; onClose: () => void; from?: { title: string; text: string; by: string; link: string }; onMade?: (id: string, title: string) => void }) {
-  const [n, setN] = useState<NewProposal>({ title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' })
-  const set = (patch: Partial<NewProposal>) => setN({ ...n, ...patch })
+  const [n, setN, clearDraft] = useFormDraft<NewProposal>(from ? null : 'proposal:' + parent, () => ({ title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' }))
+  const set = (patch: Partial<NewProposal>) => setN((x) => ({ ...x, ...patch }))
   const where = groups().find((g) => g.id === parent)
   return (
     <Sheet title="New proposal" onClose={onClose}>
-      <Form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); onMade?.(id, n.title); onClose(); go('c/' + encodeURIComponent(id)) }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); clearDraft(); onMade?.(id, n.title); onClose(); go('c/' + encodeURIComponent(id)) }}>
         <Fields n={n} set={set} />
         <div className="choice">
           <button type="button" className={n.status === 'draft' ? 'on' : ''} onClick={() => set({ status: 'draft' })}><b>Draft</b><small>Still writing it</small></button>

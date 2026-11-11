@@ -7,7 +7,7 @@ import { calendar, eventByCoord, eventLink, groups, type CalEvent, type Rsvp, ty
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { claimSlug, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
-import { back, fmtDay, go, Sheet, Btn, Form, up } from './common'
+import { back, fmtDay, go, Sheet, Btn, Form, up, useFormDraft } from './common'
 import { Tabs } from './ChannelInfo'
 import { CalendarIcon, ImageIcon } from './icons'
 
@@ -168,7 +168,8 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
   const start = new Date()
   start.setHours(start.getHours() + 1, 0, 0, 0)
   const end = new Date(+start + 3600_000)
-  const [n, setN] = useState<EventForm>(() => edit ? formOf(edit) : {
+  // a new event keeps its draft on this device until it is created (one per visibility: #events, #bookings)
+  const [n, setN, clearDraft] = useFormDraft<EventForm>(edit ? null : 'event:' + visibility, () => edit ? formOf(edit) : {
     title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false,
     start: localInput(start), end: localInput(end), tz: localTz(), online: '', visibility, slug: '',
   })
@@ -212,6 +213,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
             onSaved?.(form.slug || edit.d)
           } else {
             const d = await createEvent(form)
+            clearDraft()
             onClose()
             onSaved?.(form.slug || d)
           }

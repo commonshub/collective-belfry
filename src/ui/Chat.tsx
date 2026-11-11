@@ -8,7 +8,7 @@ import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editM
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow, WorkRing } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
@@ -150,13 +150,16 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
 }
 
 function NewChannel({ onClose }: { onClose: () => void }) {
-  const [name, setName] = useState('')
-  const [about, setAbout] = useState('')
+  const [d, setD, clearDraft] = useFormDraft('channel', () => ({ name: '', about: '' }))
+  const { name, about } = d
+  const setName = (v: string) => setD((x) => ({ ...x, name: v }))
+  const setAbout = (v: string) => setD((x) => ({ ...x, about: v }))
   return (
     <Sheet title="New channel" onClose={onClose}>
       <Form onSubmit={async (e) => {
         e.preventDefault()
         const id = await createChannel(name.trim(), about.trim())
+        clearDraft()
         onClose()
         go('c/' + id)
       }}>
@@ -892,10 +895,12 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
 
 /** A new to-do for the channel (the ＋ menu). */
 function NewTodoSheet({ groupId, onClose }: { groupId: string; onClose: () => void }) {
-  const [title, setTitle] = useState('')
+  const [d, setD, clearDraft] = useFormDraft('todo:' + groupId, () => ({ title: '' }))
+  const title = d.title
+  const setTitle = (t: string) => setD(() => ({ title: t }))
   return (
     <Sheet title="New to-do" onClose={onClose}>
-      <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim()) return; await addTask(groupId, title.trim()); onClose() }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim()) return; await addTask(groupId, title.trim()); clearDraft(); onClose() }}>
         <label className="field"><span>What needs doing?</span>
           <input className="input" autoFocus maxLength={300} placeholder="e.g. Book the room for Friday" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <button className="btn" disabled={!title.trim()}>Add to the list</button>

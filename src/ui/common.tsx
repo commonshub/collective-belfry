@@ -205,6 +205,27 @@ function LightboxImage({ m, dx }: { m: Media; dx: number }) {
 
 /** A bottom drawer (Vaul, what shadcn/ui's Drawer is built on): slide it down, tap outside or
  *  press Escape to close it. */
+/** A form's fields kept on this device while it is being written (Xavier, 2026-11-11: like a
+ *  message's draft): closing the sheet and opening it again brings them back; `clear` after
+ *  sending. KEY null: no draft (editing something that exists). Drafts older than 30 days go. */
+export function useFormDraft<T extends object>(key: string | null, initial: () => T): [T, (f: (x: T) => T) => void, () => void] {
+  const store = key ? 'osv-form:' + key : ''
+  const [v, setV] = useState<T>(() => {
+    if (store) try {
+      const d = JSON.parse(localStorage.getItem(store) || 'null') as { at: number; v: T } | null
+      if (d && Date.now() - d.at < 30 * 86400e3) return { ...initial(), ...d.v }
+    } catch { /* none */ }
+    return initial()
+  })
+  const update = (f: (x: T) => T) => setV((x) => {
+    const n = f(x)
+    if (store) try { localStorage.setItem(store, JSON.stringify({ at: Date.now(), v: n })) } catch { /* full or private */ }
+    return n
+  })
+  const clear = () => { if (store) try { localStorage.removeItem(store) } catch { /* private */ } }
+  return [v, update, clear]
+}
+
 export function Sheet({ title, onClose, children, hideTitle = false }: { title: string; onClose: () => void; children: ReactNode; hideTitle?: boolean }) {
   const wide = useWide()
   if (wide) return <Modal title={title} hideTitle={hideTitle} onClose={onClose}>{children}</Modal>
@@ -214,8 +235,11 @@ export function Sheet({ title, onClose, children, hideTitle = false }: { title: 
         <Drawer.Overlay className="sheet-bg" />
         <Drawer.Content className="sheet" aria-describedby={undefined}>
           <Drawer.Handle className="grab" />
-          <Drawer.Title asChild><h3 className={hideTitle ? 'sr-only' : undefined}>{title}</h3></Drawer.Title>
-          {children}
+          {/* the drawer itself takes drags (to close it): a long form scrolls in its own box */}
+          <div className="sheet-scroll">
+            <Drawer.Title asChild><h3 className={hideTitle ? 'sr-only' : undefined}>{title}</h3></Drawer.Title>
+            {children}
+          </div>
         </Drawer.Content>
       </Drawer.Portal>
     </Drawer.Root>
