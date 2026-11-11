@@ -632,14 +632,14 @@ a.chip { text-decoration: none; color: inherit; }
 .composer.compact .bar { gap: 6px; }
 /* 16px at least: an iPhone zooms the whole page in on a smaller text field, and it then scrolls sideways */
 .composer.compact textarea { font-size: 16px; }
-.thread-activity { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 4px 12px; padding: 8px 10px 8px 46px;
-  position: relative; text-align: left; background: none; border: 0; border-radius: 10px; color: var(--text); }
+.thread-activity { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 4px 12px; padding: 8px 10px;
+  text-align: left; background: none; border: 0; border-radius: 10px; color: var(--text); }
 .thread-activity:hover, .thread-activity.open { background: var(--surface); }
-.thread-activity .curve { position: absolute; left: 22px; top: 2px; width: 16px; height: 14px; border-left: 2px solid var(--line); border-top: 2px solid var(--line); border-top-left-radius: 8px; }
-.thread-activity .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.thread-activity small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-activity .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.thread-activity .quote { border-left: 2px solid var(--line); padding-left: 8px; margin-bottom: 2px; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-activity .who { display: flex; align-items: baseline; gap: 6px; font-size: 14px; }
+.thread-activity .who time { font-size: 11px; color: var(--faint); }
 .thread-activity .reply { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.thread-activity time { font-size: 11px; color: var(--faint); white-space: nowrap; }
 
 .invited-by { font-size: 13px; display: flex; align-items: center; gap: 6px; margin: 2px 0 4px; }
 .invited-by .chip { font-size: 11px; padding: 1px 7px; }
@@ -919,3 +919,23 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .brand-edit .preview-btn { display: inline-block; padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 14px; }
 .web-page-fields { margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
 .web-page-fields .toggle { font-size: 14px; margin: 6px 0; }
+
+/* Proposal A (2026-11-11): a to-do is a small mark before the reactions; replies are one line */
+.todo-mark { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; background: none; color: var(--faint); cursor: pointer; }
+.reactions .todo-mark { border: 0; background: none; padding: 0; }
+.todo-mark svg { width: 18px; height: 18px; }
+.todo-mark.busy, .todo-mark.done { color: #16a34a; }
+.todo-mark.busy { color: var(--accent); }
+.thread-line { display: flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 4px; padding: 3px 6px 3px 0; border: 0; background: none;
+  color: var(--link, #2563eb); font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; border-radius: 6px; }
+:root[data-theme='belfry'][data-brand] .thread-line { color: var(--brand); }
+.thread-line .faces { display: inline-flex; flex: none; }
+.thread-line .faces > * + * { margin-left: -6px; }
+.thread-line .n { flex: none; }
+.thread-line time { flex: none; font-weight: 400; color: var(--faint); font-size: 12px; }
+.thread-line .last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
+.thread-line .last b { font-weight: 600; color: var(--muted); }
+.thread-line .caret { display: inline-flex; flex: none; color: var(--faint); }
+.thread-line .caret .ico, .thread-line .caret svg { width: 14px; height: 14px; }
+.thread-line:hover .n, .thread-line.open .n { text-decoration: underline; }
+@media (prefers-color-scheme: dark) { :root:not([data-brand]) .thread-line { color: #60a5fa; } }

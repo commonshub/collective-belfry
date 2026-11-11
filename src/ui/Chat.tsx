@@ -415,10 +415,11 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
   const replies = threadReplies(groupId, rootId)
   // to-dos made from this thread's messages: each step (made, claimed, working, done…) is a line in it
   const ids = new Set([rootId, ...replies.map((m) => m.ev.id)])
-  const steps = tasklist(groupId).tasks.filter((t) => t.source && ids.has(t.source)).flatMap((t) => t.history.map((s) => ({ t, s })))
-  const flow: { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep }[] = [
-    ...replies.map((m, i) => ({ at: m.ev.created_at, m, i } as { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep })),
-    ...steps.map((x) => ({ at: x.s.at, ...x } as { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep })),
+  const steps = stepGroups(tasklist(groupId).tasks.filter((t) => t.source && ids.has(t.source)))
+  type Flow = { at: number; m?: Message; i?: number; g?: StepGroup }
+  const flow: Flow[] = [
+    ...replies.map((m, i): Flow => ({ at: m.ev.created_at, m, i })),
+    ...steps.map((g): Flow => ({ at: g.at, g })),
   ].sort((a, b) => a.at - b.at || (a.m ? -1 : 0) - (b.m ? -1 : 0))
   const [acting, setActing] = useState<Message | null>(null)
   const [editing, setEditing] = useState<Message | null>(null)
@@ -446,7 +447,7 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
           {flow.map((x) => x.m
             ? <Row key={x.m.ev.id} m={x.m} prev={replies[x.i! - 1]} head={x.i === 0} name={nameOf(x.m)} groupId={groupId}
               reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(x.m!) }} announce={false} />
-            : <TodoStepLine key={x.t!.id + x.s!.at + x.s!.what} t={x.t!} s={x.s!} />)}
+            : <TodoStepLine key={x.g!.t.id + x.g!.at + x.g!.what.join()} g={x.g!} />)}
         </div>
       </div>
       {root && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
@@ -537,32 +538,21 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
-          {rx.length > 0 && (
+          {(rx.length > 0 || todo) && (
             <div className="reactions">
+              {todo && <TodoMark todo={todo} onClick={() => { if (onOpenThread) onOpenThread(); else void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done') }} />}
               {rx.map((r) => (
                 <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
                   onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
                   <span>{r.emoji}</span> {r.who.size}
                 </button>
               ))}
-              {!p && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>}
+              {!p && rx.length > 0 && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>}
             </div>
           )}
           {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
-          {todo && (
-            <button className={'todo-chip' + (todo.done ? ' done' : '')} onClick={() => { if (onOpenThread) onOpenThread(); else void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done') }}
-              aria-label={onOpenThread ? `To-do: ${todo.title}. Open its thread` : todo.done ? 'Done. Mark as not done' : 'To do. Mark as done'}>
-              <TodoChipBody todo={todo} />
-            </button>
-          )}
-          {thread && thread.count > 0 && onThread && (
-            <div className="thread-chips">
-              <button className={'thread-chip' + (threadOpen ? ' open' : '')} onClick={onThread} aria-expanded={threadOpen}>
-                <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
-                {threadOpen ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}{thread.last > 0 && <time>{fmtTime(thread.last)}</time>}
-              </button>
-              {onOpenThread && <button className={'thread-chip open-thread' + (active ? ' open' : '')} onClick={onOpenThread} aria-current={active || undefined}><ThreadIcon />Open thread<span className="caret"><ChevronRightIcon /></span></button>}
-            </div>
+          {thread && thread.count > 0 && thread.last > 0 && (onOpenThread || onThread) && (
+            <ThreadLine groupId={groupId} rootId={m.ev.id} thread={thread} open={threadOpen} onClick={onThread ?? onOpenThread!} />
           )}
           {p && p.status === 'failed' && (
             <div className="state failed">Not sent: {p.error} · <button className="link" onClick={() => retry(p.localId)}>Retry</button></div>
@@ -965,17 +955,18 @@ function EditSheet({ m, groupId, onClose }: { m: Message; groupId: string; onClo
   )
 }
 
-/** An older thread, back in the feed where its latest reply came. */
+/** An older thread, back in the feed where its latest reply came: the message it answers as one
+ *  grey quote line, then the reply (proposal A). */
 function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Message; open: boolean; onOpen: () => void }) {
-  const snip = plainRefs(root.text || (root.media.length ? 'a photo' : '')).slice(0, 80)
+  const snip = plainRefs(root.text || (root.media.length ? 'a photo' : ''), '').replace(/\s+/g, ' ').trim().slice(0, 80)
   return (
     <button className={'thread-activity' + (open ? ' open' : '')} onClick={onOpen} aria-expanded={open}>
-      <span className="curve" aria-hidden="true" />
+      <Avatar pubkey={last.ev.pubkey} size={28} />
       <span className="t">
-        <small>{displayName(last.ev.pubkey)} replied to {displayName(root.ev.pubkey)}: “{snip}{root.text.length > 80 ? '…' : ''}”</small>
-        <span className="reply">{plainRefs(last.text || 'a photo').slice(0, 140)}</span>
+        <span className="quote">↳ {displayName(root.ev.pubkey)}: {snip}{root.text.length > 80 ? '…' : ''}</span>
+        <span className="who"><b>{displayName(last.ev.pubkey)}</b><time>{fmtTime(last.ev.created_at)}</time></span>
+        <span className="reply">{replyText(last).slice(0, 200) || 'a photo'}</span>
       </span>
-      <time>{fmtTime(last.ev.created_at)}</time>
     </button>
   )
 }
@@ -1052,26 +1043,85 @@ function SaveAccountBar() {
   )
 }
 
-/** The chip under a message that became a to-do; its icon turns while the assignee works on it now. */
-function TodoChipBody({ todo }: { todo: Task }) {
+/** A message that became a to-do: an 18 px mark before its reactions (proposal A): a circle
+ *  while open, a filling ring while its assignee works on it, a tick once done. */
+function TodoMark({ todo, onClick }: { todo: Task; onClick: () => void }) {
   const now = useNow()
-  const busy = isWorking(todo, now)
-  return <><span className="ico-wrap">{busy ? <WorkRing since={workingSince(todo) ?? now} now={now} size={16} /> : <TodoIcon />}</span>{todo.done ? 'Done' : todo.assignee ? `${busy ? 'Working now' : 'To do'} · ${displayName(todo.assignee)}` : 'To do'}</>
-}
-
-const STEP_WORDS: Record<TaskStep['what'], string> = {
-  created: 'made a to-do', claim: 'took the to-do', unclaim: 'let go of the to-do', working: 'started working on',
-  idle: 'stopped working on', done: 'marked done', undone: 'reopened', comment: 'commented on',
-}
-
-/** One step of a to-do, as a line in the thread: who, what, which to-do, when. */
-function TodoStepLine({ t, s }: { t: Task; s: TaskStep }) {
-  const d = new Date(s.at * 1000)
+  const busy = !todo.done && isWorking(todo, now)
+  const state = todo.done ? 'done' : busy ? `${displayName(todo.assignee!)} is working on it` : todo.assignee ? `${displayName(todo.assignee)} is on it` : 'open'
   return (
-    <div className={'todo-step ' + s.what}>
+    <button className={'todo-mark' + (todo.done ? ' done' : busy ? ' busy' : '')} onClick={onClick} title={`To-do: ${todo.title} (${state})`} aria-label={`To-do, ${state}: ${todo.title}`}>
+      {todo.done
+        ? <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="currentColor" /><path d="M5 9.2l2.6 2.5L13 6.5" stroke="var(--bg, #fff)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        : busy ? <WorkRing since={workingSince(todo) ?? now} now={now} size={18} />
+          : <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>}
+    </button>
+  )
+}
+
+/** Under a message with replies: one line, the repliers' faces, how many, when, and the start of
+ *  the last reply. It unfolds the replies (their "Open thread" link goes to the thread's view). */
+function ThreadLine({ groupId, rootId, thread, open, onClick }: { groupId: string; rootId: string; thread: ThreadInfo; open: boolean; onClick: () => void }) {
+  const last = threadReplies(groupId, rootId).at(-1)
+  const said = last ? replyText(last).slice(0, 120) || (last.media.length ? 'a photo' : '') : ''
+  return (
+    <button className={'thread-line' + (open ? ' open' : '')} onClick={onClick} aria-expanded={open}>
+      <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
+      <span className="n">{open ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}</span>
+      {!open && <time>{fmtTime(thread.last)}</time>}
+      {!open && last && said && <span className="last"><b>{displayName(last.ev.pubkey)}</b>: {said}</span>}
+      {!open && <span className="caret" aria-hidden="true"><ChevronRightIcon /></span>}
+    </button>
+  )
+}
+
+/** A reply's text without the "@someone" it starts with (the thread says whom it answers). */
+export function replyText(m: Message): string {
+  return plainRefs(m.text.replace(/^(\s*(nostr:npub1[02-9ac-hj-np-z]+|@\S+)[,:]?\s+)+/, ''), '').replace(/\s+/g, ' ').trim()
+}
+
+// Only a to-do's status shows in its thread (Xavier, 2026-11-11): comments are replies already,
+// and "stopped working" or "let go" is noise.
+const STEP_WORDS: Partial<Record<TaskStep['what'], string>> = {
+  created: 'made a to-do', claim: 'took it', working: 'started working on it', done: 'marked it done', undone: 'reopened it',
+}
+export interface StepGroup { t: Task; who: string; at: number; what: TaskStep['what'][] }
+
+/** The status steps of these to-dos, one line per to-do, person and moment: steps by the same
+ *  person within two minutes of each other merge ("made a to-do and took it"). A second
+ *  "started working" after the first is dropped. */
+export function stepGroups(tasks: Task[]): StepGroup[] {
+  const out: StepGroup[] = []
+  for (const t of tasks) {
+    let started = false
+    let cur: StepGroup | null = null
+    for (const s of [...t.history].sort((a, b) => a.at - b.at)) {
+      if (!STEP_WORDS[s.what]) continue
+      if (s.what === 'working') { if (started) continue; started = true }
+      if (s.what === 'done' || s.what === 'undone') started = false
+      if (cur && cur.who === s.who && s.at - cur.at <= 120 && !cur.what.includes(s.what)) { cur.what.push(s.what); continue }
+      cur = { t, who: s.who, at: s.at, what: [s.what] }
+      out.push(cur)
+    }
+  }
+  return out
+}
+
+/** "made a to-do, took it and started working on it" */
+export function stepText(what: TaskStep['what'][]): string {
+  const w = what.map((x) => STEP_WORDS[x]!)
+  return w.length > 1 ? w.slice(0, -1).join(', ') + ' and ' + w.at(-1) : w[0]
+}
+
+/** A to-do's status, as one line in the thread: who, what, which to-do, when. */
+function TodoStepLine({ g }: { g: StepGroup }) {
+  const d = new Date(g.at * 1000)
+  const last = g.what.at(-1)!
+  return (
+    <div className={'todo-step ' + last}>
       <span className="ico-wrap"><TodoIcon /></span>
-      <span className="what"><b>{displayName(s.who)}</b> {STEP_WORDS[s.what]} “{t.title}”{s.text ? <>: {s.text}</> : null}</span>
-      <time dateTime={d.toISOString()} title={d.toLocaleString()}>{d.toDateString() === new Date().toDateString() ? '' : fmtDay(d) + ' '}{fmtTime(s.at)}</time>
+      <span className="what"><b>{displayName(g.who)}</b> {stepText(g.what)}: “{g.t.title}”</span>
+      <time dateTime={d.toISOString()} title={d.toLocaleString()}>{d.toDateString() === new Date().toDateString() ? '' : fmtDay(d) + ' '}{fmtTime(g.at)}</time>
     </div>
   )
 }
