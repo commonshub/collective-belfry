@@ -108,7 +108,9 @@ export const channelType = (g?: Group): ChannelType => (g?.isEvent ? 'event' : g
  *  more people, the closer to a circle (PodShape in icons.tsx draws it; this is the text form). */
 export const podSides = (members: number) => Math.max(3, Math.min(members, 12))
 const POD_GLYPH: Record<number, string> = { 3: '△', 4: '□', 5: '⬠', 6: '⬡' }
-export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? (POD_GLYPH[podSides(g.members.size)] ?? '○') : g?.isProposal ? '📝' : '#')
+/** A public channel (its page on the web is on, visibility public) shows a globe, not a hash. */
+export const isPublicChannel = (g?: Group) => { const w = webPage(g); return !!w?.on && w.visibility === 'public' }
+export const channelIcon = (g?: Group) => (g?.isEvent ? '📅' : g?.isPod ? (POD_GLYPH[podSides(g.members.size)] ?? '○') : g?.isProposal ? '📝' : isPublicChannel(g) ? '🌐' : '#')
 // ---- channel references: a channel picked after "#" in the composer is written as
 // nostr:naddr1… (NIP-19/27: kind 39000, the group's metadata, by the relay's key, d = group id),
 // shown as a "#name" chip that opens the channel. A "#word" typed by hand stays a topic.
@@ -368,7 +370,9 @@ export function isInbox(g: Group | undefined): boolean {
 // on the page, "members" shows someone from outside only their own. Older events said "list".
 export const WEB_D = 'belfry:web:'
 export type ChannelVisibility = 'public' | 'members'
-export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility }
+// "posts": a channel that takes one type of post only (#proposals, #events: Xavier, 2026-11-11)
+export type PostType = 'proposal' | 'event'
+export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility; posts?: PostType }
 // paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
 export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
   'market me mentions people photos programme shop signin skills static steward theme tokens vote wallet welcome invite brand ' +
@@ -377,10 +381,13 @@ export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(
 
 export function webPage(g: Group | undefined): WebPage | undefined {
   if (!g) return undefined
-  const own = all(me()).filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && g.admins.has(e.pubkey)).sort(byTime)
+  const evs = all(me())
+  // the relay's own key (it signs the 39000) set up the default channels (#proposals, #events)
+  const relayKey = evs.find((e) => e.kind === 39000 && tag(e, 'd') === g.id)?.pubkey
+  const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && (g.admins.has(e.pubkey) || e.pubkey === relayKey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
-    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public' } : undefined
+    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...(c.posts === 'proposal' || c.posts === 'event' ? { posts: c.posts } : {}) } : undefined
   } catch { return undefined }
 }
 

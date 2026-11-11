@@ -939,3 +939,8 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .thread-line .caret .ico, .thread-line .caret svg { width: 14px; height: 14px; }
 .thread-line:hover .n, .thread-line.open .n { text-decoration: underline; }
 @media (prefers-color-scheme: dark) { :root:not([data-brand]) .thread-line { color: #60a5fa; } }
+
+/* a channel that takes one type of post (#proposals, #events) */
+.only-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+.only-bar .hint { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
+.only-bar .btn { width: auto; flex: none; }

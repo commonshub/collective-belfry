@@ -5,7 +5,7 @@ import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow, WorkRing } from './common'
@@ -283,6 +283,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newEvent, setNewEvent] = useState(false)
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
+  // #proposals, #events: one type of post only (their page's "posts"), no free text at the top level
+  const only = webPage(group(id))?.posts
   const [newTodo, setNewTodo] = useState(false)
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   useVersion()
@@ -389,7 +391,13 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         </div>
       </div>
       <SaveAccountBar />
-      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer groupId={id} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && only && (
+        <div className="only-bar">
+          <span className="hint">{only === 'proposal' ? 'This channel takes proposals only: discuss each in its thread.' : 'This channel takes events only: discuss each in its thread.'}</span>
+          <button className="btn" onClick={() => (only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'proposal' ? 'New proposal' : 'New event'}</button>
+        </div>
+      )}
+      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
@@ -400,7 +408,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onThread={th.get(acting.ev.id)?.count ? () => openThread(acting) : undefined} onEdit={() => setEditing(acting)} />}
       {actingReply && <MessageActions m={actingReply} groupId={id} mine={rx.get(actingReply.ev.id) ?? []} onClose={() => setActingReply(null)} onEdit={() => setEditing(actingReply)} />}
       {editing && <EditSheet m={editing} groupId={id} onClose={() => setEditing(null)} />}
-      {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} onCreated={(url) => setPrefill(url + ' ')} />}
+      {newEvent && <NewEventSheet channel={id} onClose={() => setNewEvent(false)} onCreated={(url) => { if (only === 'event') void postMessage(id, url, [], undefined, false, eventTags(url)); else setPrefill(url + ' ') }} />}
     </>
   )
 }
