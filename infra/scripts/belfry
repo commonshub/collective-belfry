@@ -43,6 +43,14 @@
 #   BELFRY_ACCOUNTING_ODOO_URL, _DB, _ISSUER, BELFRY_ACCOUNTING_ODOO_API_KEY (secret): book paid
 #                                    passes in another organisation's Odoo (the bundled Odoo needs
 #                                    nothing)
+#   BELFRY_PUSH_GATEWAY_URL          the push gateway for the phone apps (default
+#                                    https://push.belfry.sh; empty: no push notifications)
+#   BELFRY_PUSH_GATEWAY              1: this belfry runs the push gateway at push.<domain> (only
+#                                    the apps' publisher, belfry.sh; services/push-gateway/README.md)
+#   BELFRY_APNS_KEY_ID, BELFRY_APNS_TEAM_ID   the gateway's APNs key id and Apple team id
+#   BELFRY_APNS_KEY_FILE             a file: the APNs .p8 key (copied to the secret apns_key)
+#   BELFRY_FCM_SERVICE_ACCOUNT_FILE  a file: the Firebase service account JSON (secret
+#                                    fcm_service_account)
 #   BELFRY_ENV_<NAME>=<value>        any other infra/.env setting, e.g. BELFRY_ENV_ACCOUNTING_JOURNAL=7
 # Secrets are written to infra/secrets/ and never printed; status shows only whether they are set.
 # Changes are recorded in the changelog (/changelog) with who started them: BELFRY_BY names who
@@ -96,12 +104,15 @@ osv_apps() { [[ "$(env_get OSV_APPS)" == 1 ]]; }
 # …or only the ones an admin added on apps.<domain> (EXTRA_APPS; compose profiles app-<name>)
 EXTRA_KEYS=(calendar vote wallet groups village)
 extra_apps() { local a; for a in $(env_get EXTRA_APPS); do [[ " ${EXTRA_KEYS[*]} " == *" $a "* ]] && echo "$a"; done; }
+# the push gateway (services/push-gateway): compose profile push-gateway, only with PUSH_GATEWAY=1
+push_gateway() { [[ -f "$ENV_FILE" ]] && [[ "$(env_get PUSH_GATEWAY)" == 1 ]]; }
 
 compose() {
   local files=("${COMPOSE_FILES[@]}")
   if no_odoo; then files+=(-f infra/docker-compose.noodoo.yml); fi
   if osv_apps; then files+=(--profile osv-apps)
   else local a; for a in $(extra_apps); do files+=(--profile "app-$a"); done; fi
+  if push_gateway; then files+=(--profile push-gateway); fi
   if use_images; then docker compose "${files[@]}" -f infra/docker-compose.images.yml "$@"
   else docker compose "${files[@]}" "$@"; fi
 }
@@ -232,6 +243,29 @@ cmd_config() {
     fi
   done
   if [[ -n "${BELFRY_ACCOUNTING_ODOO_API_KEY:-}" ]]; then secret_set accounting_odoo_api_key "$BELFRY_ACCOUNTING_ODOO_API_KEY"; changed=1; fi
+  # push notifications (docs/push.md): the gateway this belfry sends through (empty: none) and,
+  # on the apps' publisher only, the gateway itself with Apple's and Google's credentials
+  if [[ -n "${BELFRY_PUSH_GATEWAY_URL+set}" ]]; then
+    [[ -z "$BELFRY_PUSH_GATEWAY_URL" || "$BELFRY_PUSH_GATEWAY_URL" =~ ^https://[^/]+/?$ ]] || die "BELFRY_PUSH_GATEWAY_URL is https://<host> or empty"
+    pairs+=(PUSH_GATEWAY_URL "$BELFRY_PUSH_GATEWAY_URL")
+  fi
+  if [[ -n "${BELFRY_PUSH_GATEWAY:-}" ]]; then
+    [[ "$BELFRY_PUSH_GATEWAY" =~ ^[01]$ ]] || die "BELFRY_PUSH_GATEWAY is 0 or 1"
+    pairs+=(PUSH_GATEWAY "$BELFRY_PUSH_GATEWAY")
+  fi
+  if [[ -n "${BELFRY_APNS_KEY_ID:-}" ]]; then pairs+=(APNS_KEY_ID "$BELFRY_APNS_KEY_ID"); fi
+  if [[ -n "${BELFRY_APNS_TEAM_ID:-}" ]]; then pairs+=(APNS_TEAM_ID "$BELFRY_APNS_TEAM_ID"); fi
+  if [[ -n "${BELFRY_APNS_KEY_FILE:-}" ]]; then
+    [[ -r "$BELFRY_APNS_KEY_FILE" ]] || die "cannot read $BELFRY_APNS_KEY_FILE (as $(id -un))"
+    grep -q -- "-----BEGIN PRIVATE KEY-----" "$BELFRY_APNS_KEY_FILE" || die "BELFRY_APNS_KEY_FILE is not a .p8 key (BEGIN PRIVATE KEY)"
+    secret_set apns_key "$(cat "$BELFRY_APNS_KEY_FILE")"; changed=1
+  fi
+  if [[ -n "${BELFRY_FCM_SERVICE_ACCOUNT_FILE:-}" ]]; then
+    [[ -r "$BELFRY_FCM_SERVICE_ACCOUNT_FILE" ]] || die "cannot read $BELFRY_FCM_SERVICE_ACCOUNT_FILE (as $(id -un))"
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d.get("type")=="service_account" and d.get("private_key") and d.get("project_id") else 1)' "$BELFRY_FCM_SERVICE_ACCOUNT_FILE" \
+      || die "BELFRY_FCM_SERVICE_ACCOUNT_FILE is not a Firebase service account (JSON with type service_account)"
+    secret_set fcm_service_account "$(cat "$BELFRY_FCM_SERVICE_ACCOUNT_FILE")"; changed=1
+  fi
   local name
   while IFS= read -r name; do
     pairs+=("${name#BELFRY_ENV_}" "${!name}")
@@ -363,6 +397,11 @@ cmd_apply() {
     say "No prebuilt images for this version of the code: building them here (the signer takes 15 to 30 minutes)"
   fi
   shipped_apps
+  # secrets added after this belfry was installed: an empty file, so Compose can mount it
+  local sec
+  for sec in apns_key fcm_service_account; do
+    [[ -e "$SECRETS/$sec" ]] || (umask 027; : > "$SECRETS/$sec")
+  done
   say "Starting the stack"
   if [[ "$(free_gb)" -lt 25 ]]; then
     lean_build
@@ -399,6 +438,12 @@ cmd_status() {
   printf '  mail         %s (password %s), from %s\n' "${smtp:-none}" "$(secret_state smtp_password)" "$(env_get MAIL_FROM)"
   printf '  stripe       publishable %s, secret %s\n' "$( [[ -n "$(env_get STRIPE_PUBLISHABLE_KEY)" ]] && echo set || echo 'not set')" "$(secret_state stripe_secret_key)"
   printf '  mollie       %s\n' "$(secret_state mollie_api_key)"
+  local gw=https://push.belfry.sh
+  if grep -qE '^PUSH_GATEWAY_URL=' "$ENV_FILE"; then gw=$(env_get PUSH_GATEWAY_URL); gw=${gw:-"nothing (off)"}; fi
+  printf '  push         through %s\n' "$gw"
+  if push_gateway; then
+    printf '  push gateway on: APNs key %s (id %s, team %s), FCM account %s\n' "$(secret_state apns_key)" "$(env_get APNS_KEY_ID)" "$(env_get APNS_TEAM_ID)" "$(secret_state fcm_service_account)"
+  fi
   printf '  accounting   %s (key %s)\n' "$(env_get ACCOUNTING_ODOO_URL || true)" "$(secret_state accounting_odoo_api_key)"
   local seeddir; seeddir=$(env_get CUSTODY_SEED_DIR)
   if [[ -z "$seeddir" ]]; then

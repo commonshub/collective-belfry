@@ -125,6 +125,10 @@ class Settings(BaseSettings):
     # secret belfry_nsec (hex): the belfry's own Nostr key (publishes the homepage nsite); the
     # relay whitelist and the Blossom gate let its pubkey in.
     belfry_nsec: str = Field(default="", alias="BELFRY_NSEC")
+    # Push notifications to the phone apps (push.py, docs/push.md): the push gateway that holds
+    # the publisher's APNs and FCM credentials; requests are signed with the belfry key. Empty:
+    # no push (the devices API still answers).
+    push_gateway_url: str = Field(default="https://push.belfry.sh", alias="PUSH_GATEWAY_URL")
     # E-mail as messages (mail.py): <username>@<domain> and <channel>@<domain> receive mail
     # (the mail-in service on port 25 hands it over); members answer as <username>@<domain>
     # through the same SMTP server Odoo uses. MAIL_IN=0 turns both off.

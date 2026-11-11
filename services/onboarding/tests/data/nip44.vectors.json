@@ -1,0 +1,204 @@
+{
+ "source": "https://github.com/paulmillr/nip44/blob/main/nip44.vectors.json (subset: the cases push.py relies on)",
+ "v2": {
+  "valid": {
+   "get_conversation_key": [
+    {
+     "sec1": "315e59ff51cb9209768cf7da80791ddcaae56ac9775eb25b6dee1234bc5d2268",
+     "pub2": "c2f9d9948dc8c7c38321e4b85c8558872eafa0641cd269db76848a6073e69133",
+     "conversation_key": "3dfef0ce2a4d80a25e7a328accf73448ef67096f65f79588e358d9a0eb9013f1"
+    },
+    {
+     "sec1": "a1e37752c9fdc1273be53f68c5f74be7c8905728e8de75800b94262f9497c86e",
+     "pub2": "03bb7947065dde12ba991ea045132581d0954f042c84e06d8c00066e23c1a800",
+     "conversation_key": "4d14f36e81b8452128da64fe6f1eae873baae2f444b02c950b90e43553f2178b"
+    },
+    {
+     "sec1": "98a5902fd67518a0c900f0fb62158f278f94a21d6f9d33d30cd3091195500311",
+     "pub2": "aae65c15f98e5e677b5050de82e3aba47a6fe49b3dab7863cf35d9478ba9f7d1",
+     "conversation_key": "9c00b769d5f54d02bf175b7284a1cbd28b6911b06cda6666b2243561ac96bad7"
+    },
+    {
+     "sec1": "86ae5ac8034eb2542ce23ec2f84375655dab7f836836bbd3c54cefe9fdc9c19f",
+     "pub2": "59f90272378089d73f1339710c02e2be6db584e9cdbe86eed3578f0c67c23585",
+     "conversation_key": "19f934aafd3324e8415299b64df42049afaa051c71c98d0aa10e1081f2e3e2ba"
+    },
+    {
+     "sec1": "2528c287fe822421bc0dc4c3615878eb98e8a8c31657616d08b29c00ce209e34",
+     "pub2": "f66ea16104c01a1c532e03f166c5370a22a5505753005a566366097150c6df60",
+     "conversation_key": "c833bbb292956c43366145326d53b955ffb5da4e4998a2d853611841903f5442"
+    }
+   ],
+   "encrypt_decrypt": [
+    {
+     "sec1": "0000000000000000000000000000000000000000000000000000000000000001",
+     "sec2": "0000000000000000000000000000000000000000000000000000000000000002",
+     "conversation_key": "c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d",
+     "nonce": "0000000000000000000000000000000000000000000000000000000000000001",
+     "plaintext": "a",
+     "payload": "AgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABee0G5VSK0/9YypIObAtDKfYEAjD35uVkHyB0F4DwrcNaCXlCWZKaArsGrY6M9wnuTMxWfp1RTN9Xga8no+kF5Vsb"
+    },
+    {
+     "sec1": "0000000000000000000000000000000000000000000000000000000000000002",
+     "sec2": "0000000000000000000000000000000000000000000000000000000000000001",
+     "conversation_key": "c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d",
+     "nonce": "f00000000000000000000000000000f00000000000000000000000000000000f",
+     "plaintext": "\ud83c\udf55\ud83e\udec3",
+     "payload": "AvAAAAAAAAAAAAAAAAAAAPAAAAAAAAAAAAAAAAAAAAAPSKSK6is9ngkX2+cSq85Th16oRTISAOfhStnixqZziKMDvB0QQzgFZdjLTPicCJaV8nDITO+QfaQ61+KbWQIOO2Yj"
+    },
+    {
+     "sec1": "5c0c523f52a5b6fad39ed2403092df8cebc36318b39383bca6c00808626fab3a",
+     "sec2": "4b22aa260e4acb7021e32f38a6cdf4b673c6a277755bfce287e370c924dc936d",
+     "conversation_key": "3e2b52a63be47d34fe0a80e34e73d436d6963bc8f39827f327057a9986c20a45",
+     "nonce": "b635236c42db20f021bb8d1cdff5ca75dd1a0cc72ea742ad750f33010b24f73b",
+     "plaintext": "\u8868\u30dd\u3042A\u9dd7\u0152\u00e9\uff22\u900d\u00dc\u00df\u00aa\u0105\u00f1\u4e02\u3400\ud840\udc00",
+     "payload": "ArY1I2xC2yDwIbuNHN/1ynXdGgzHLqdCrXUPMwELJPc7s7JqlCMJBAIIjfkpHReBPXeoMCyuClwgbT419jUWU1PwaNl4FEQYKCDKVJz+97Mp3K+Q2YGa77B6gpxB/lr1QgoqpDf7wDVrDmOqGoiPjWDqy8KzLueKDcm9BVP8xeTJIxs="
+    },
+    {
+     "sec1": "8f40e50a84a7462e2b8d24c28898ef1f23359fff50d8c509e6fb7ce06e142f9c",
+     "sec2": "b9b0a1e9cc20100c5faa3bbe2777303d25950616c4c6a3fa2e3e046f936ec2ba",
+     "conversation_key": "d5a2f879123145a4b291d767428870f5a8d9e5007193321795b40183d4ab8c2b",
+     "nonce": "b20989adc3ddc41cd2c435952c0d59a91315d8c5218d5040573fc3749543acaf",
+     "plaintext": "ability\ud83e\udd1d\u7684 \u023a\u023e",
+     "payload": "ArIJia3D3cQc0sQ1lSwNWakTFdjFIY1QQFc/w3SVQ6yvbG2S0x4Yu86QGwPTy7mP3961I1XqB6SFFTzqDZZavhxoWMj7mEVGMQIsh2RLWI5EYQaQDIePSnXPlzf7CIt+voTD"
+    },
+    {
+     "sec1": "875adb475056aec0b4809bd2db9aa00cff53a649e7b59d8edcbf4e6330b0995c",
+     "sec2": "9c05781112d5b0a2a7148a222e50e0bd891d6b60c5483f03456e982185944aae",
+     "conversation_key": "3b15c977e20bfe4b8482991274635edd94f366595b1a3d2993515705ca3cedb8",
+     "nonce": "8d4442713eb9d4791175cb040d98d6fc5be8864d6ec2f89cf0895a2b2b72d1b1",
+     "plaintext": "pepper\ud83d\udc40\u0457\u0436\u0430\u043a",
+     "payload": "Ao1EQnE+udR5EXXLBA2Y1vxb6IZNbsL4nPCJWisrctGxY3AduCS+jTUgAAnfvKafkmpy15+i9YMwCdccisRa8SvzW671T2JO4LFSPX31K4kYUKelSAdSPwe9NwO6LhOsnoJ+"
+    },
+    {
+     "sec1": "eba1687cab6a3101bfc68fd70f214aa4cc059e9ec1b79fdb9ad0a0a4e259829f",
+     "sec2": "dff20d262bef9dfd94666548f556393085e6ea421c8af86e9d333fa8747e94b3",
+     "conversation_key": "4f1538411098cf11c8af216836444787c462d47f97287f46cf7edb2c4915b8a5",
+     "nonce": "2180b52ae645fcf9f5080d81b1f0b5d6f2cd77ff3c986882bb549158462f3407",
+     "plaintext": "( \u0361\u00b0 \u035c\u0296 \u0361\u00b0)",
+     "payload": "AiGAtSrmRfz59QgNgbHwtdbyzXf/PJhogrtUkVhGLzQHv4qhKQwnFQ54OjVMgqCea/Vj0YqBSdhqNR777TJ4zIUk7R0fnizp6l1zwgzWv7+ee6u+0/89KIjY5q1wu6inyuiv"
+    },
+    {
+     "sec1": "d5633530f5bcfebceb5584cfbbf718a30df0751b729dd9a789b9f30c0587d74e",
+     "sec2": "b74e6a341fb134127272b795a08b59250e5fa45a82a2eb4095e4ce9ed5f5e214",
+     "conversation_key": "75fe686d21a035f0c7cd70da64ba307936e5ca0b20710496a6b6b5f573377bdd",
+     "nonce": "e4cd5f7ce4eea024bc71b17ad456a986a74ac426c2c62b0a15eb5c5c8f888b68",
+     "plaintext": "\u0645\u064f\u0646\u064e\u0627\u0642\u064e\u0634\u064e\u0629\u064f \u0633\u064f\u0628\u064f\u0644\u0650 \u0627\u0650\u0633\u0652\u062a\u0650\u062e\u0652\u062f\u064e\u0627\u0645\u0650 \u0627\u0644\u0644\u064f\u0651\u063a\u064e\u0629\u0650 \u0641\u0650\u064a \u0627\u0644\u0646\u064f\u0651\u0638\u064f\u0645\u0650 \u0627\u0644\u0652\u0642\u064e\u0627\u0626\u0650\u0645\u064e\u0629\u0650 \u0648\u064e\u0641\u0650\u064a\u0645 \u064a\u064e\u062e\u064f\u0635\u064e\u0651 \u0627\u0644\u062a\u064e\u0651\u0637\u0652\u0628\u0650\u064a\u0642\u064e\u0627\u062a\u064f \u0627\u0644\u0652\u062d\u0627\u0633\u064f\u0648\u0628\u0650\u064a\u064e\u0651\u0629\u064f\u060c",
+     "payload": "AuTNX3zk7qAkvHGxetRWqYanSsQmwsYrChXrXFyPiItoIBsWu1CB+sStla2M4VeANASHxM78i1CfHQQH1YbBy24Tng7emYW44ol6QkFD6D8Zq7QPl+8L1c47lx8RoODEQMvNCbOk5ffUV3/AhONHBXnffrI+0025c+uRGzfqpYki4lBqm9iYU+k3Tvjczq9wU0mkVDEaM34WiQi30MfkJdRbeeYaq6kNvGPunLb3xdjjs5DL720d61Flc5ZfoZm+CBhADy9D9XiVZYLKAlkijALJur9dATYKci6OBOoc2SJS2Clai5hOVzR0yVeyHRgRfH9aLSlWW5dXcUxTo7qqRjNf8W5+J4jF4gNQp5f5d0YA4vPAzjBwSP/5bGzNDslKfcAH"
+    },
+    {
+     "sec1": "d5633530f5bcfebceb5584cfbbf718a30df0751b729dd9a789b9f30c0587d74e",
+     "sec2": "b74e6a341fb134127272b795a08b59250e5fa45a82a2eb4095e4ce9ed5f5e214",
+     "conversation_key": "75fe686d21a035f0c7cd70da64ba307936e5ca0b20710496a6b6b5f573377bdd",
+     "nonce": "38d1ca0abef9e5f564e89761a86cee04574b6825d3ef2063b10ad75899e4b023",
+     "plaintext": "\u0627\u0644\u0643\u0644 \u0641\u064a \u0627\u0644\u0645\u062c\u0645\u0648 \u0639\u0629 (5)",
+     "payload": "AjjRygq++eX1ZOiXYahs7gRXS2gl0+8gY7EK11iZ5LAjbOTrlfrxak5Lki42v2jMPpLSicy8eHjsWkkMtF0i925vOaKG/ZkMHh9ccQBdfTvgEGKzztedqDCAWb5TP1YwU1PsWaiiqG3+WgVvJiO4lUdMHXL7+zKKx8bgDtowzz4QAwI="
+    },
+    {
+     "sec1": "d5633530f5bcfebceb5584cfbbf718a30df0751b729dd9a789b9f30c0587d74e",
+     "sec2": "b74e6a341fb134127272b795a08b59250e5fa45a82a2eb4095e4ce9ed5f5e214",
+     "conversation_key": "75fe686d21a035f0c7cd70da64ba307936e5ca0b20710496a6b6b5f573377bdd",
+     "nonce": "4f1a31909f3483a9e69c8549a55bbc9af25fa5bbecf7bd32d9896f83ef2e12e0",
+     "plaintext": "\ud835\udd91\ud835\udd86\ud835\udd9f\ud835\udd9e \u793e\u6703\u79d1\u5b78\u9662\u8a9e\u5b78\u7814\u7a76\u6240",
+     "payload": "Ak8aMZCfNIOp5pyFSaVbvJryX6W77Pe9MtmJb4PvLhLgh/TsxPLFSANcT67EC1t/qxjru5ZoADjKVEt2ejdx+xGvH49mcdfbc+l+L7gJtkH7GLKpE9pQNQWNHMAmj043PAXJZ++fiJObMRR2mye5VHEANzZWkZXMrXF7YjuG10S1pOU="
+    },
+    {
+     "sec1": "d5633530f5bcfebceb5584cfbbf718a30df0751b729dd9a789b9f30c0587d74e",
+     "sec2": "b74e6a341fb134127272b795a08b59250e5fa45a82a2eb4095e4ce9ed5f5e214",
+     "conversation_key": "75fe686d21a035f0c7cd70da64ba307936e5ca0b20710496a6b6b5f573377bdd",
+     "nonce": "a3e219242d85465e70adcd640b564b3feff57d2ef8745d5e7a0663b2dccceb54",
+     "plaintext": "\ud83d\ude48 \ud83d\ude49 \ud83d\ude4a 0\ufe0f\u20e3 1\ufe0f\u20e3 2\ufe0f\u20e3 3\ufe0f\u20e3 4\ufe0f\u20e3 5\ufe0f\u20e3 6\ufe0f\u20e3 7\ufe0f\u20e3 8\ufe0f\u20e3 9\ufe0f\u20e3 \ud83d\udd1f Power\u0644\u064f\u0644\u064f\u0635\u0651\u0628\u064f\u0644\u064f\u0644\u0635\u0651\u0628\u064f\u0631\u0631\u064b \u0963 \u0963h \u0963 \u0963\u5197",
+     "payload": "AqPiGSQthUZecK3NZAtWSz/v9X0u+HRdXnoGY7LczOtUf05aMF89q1FLwJvaFJYICZoMYgRJHFLwPiOHce7fuAc40kX0wXJvipyBJ9HzCOj7CgtnC1/cmPCHR3s5AIORmroBWglm1LiFMohv1FSPEbaBD51VXxJa4JyWpYhreSOEjn1wd0lMKC9b+osV2N2tpbs+rbpQem2tRen3sWflmCqjkG5VOVwRErCuXuPb5+hYwd8BoZbfCrsiAVLd7YT44dRtKNBx6rkabWfddKSLtreHLDysOhQUVOp/XkE7OzSkWl6sky0Hva6qJJ/V726hMlomvcLHjE41iKmW2CpcZfOedg=="
+    }
+   ]
+  },
+  "invalid": {
+   "decrypt": [
+    {
+     "conversation_key": "ca2527a037347b91bea0c8a30fc8d9600ffd81ec00038671e3a0f0cb0fc9f642",
+     "nonce": "daaea5ca345b268e5b62060ca72c870c48f713bc1e00ff3fc0ddb78e826f10db",
+     "plaintext": "n o b l e",
+     "payload": "#Atqupco0WyaOW2IGDKcshwxI9xO8HgD/P8Ddt46CbxDbrhdG8VmJdU0MIDf06CUvEvdnr1cp1fiMtlM/GrE92xAc1K5odTpCzUB+mjXgbaqtntBUbTToSUoT0ovrlPwzGjyp",
+     "note": "unknown encryption version"
+    },
+    {
+     "conversation_key": "36f04e558af246352dcf73b692fbd3646a2207bd8abd4b1cd26b234db84d9481",
+     "nonce": "ad408d4be8616dc84bb0bf046454a2a102edac937c35209c43cd7964c5feb781",
+     "plaintext": "\u26a0\ufe0f",
+     "payload": "AK1AjUvoYW3IS7C/BGRUoqEC7ayTfDUgnEPNeWTF/reBZFaha6EAIRueE9D1B1RuoiuFScC0Q94yjIuxZD3JStQtE8JMNacWFs9rlYP+ZydtHhRucp+lxfdvFlaGV/sQlqZz",
+     "note": "unknown encryption version 0"
+    },
+    {
+     "conversation_key": "ca2527a037347b91bea0c8a30fc8d9600ffd81ec00038671e3a0f0cb0fc9f642",
+     "nonce": "daaea5ca345b268e5b62060ca72c870c48f713bc1e00ff3fc0ddb78e826f10db",
+     "plaintext": "n o s t r",
+     "payload": "At\u0444upco0WyaOW2IGDKcshwxI9xO8HgD/P8Ddt46CbxDbrhdG8VmJZE0UICD06CUvEvdnr1cp1fiMtlM/GrE92xAc1EwsVCQEgWEu2gsHUVf4JAa3TpgkmFc3TWsax0v6n/Wq",
+     "note": "invalid base64"
+    },
+    {
+     "conversation_key": "cff7bd6a3e29a450fd27f6c125d5edeb0987c475fd1e8d97591e0d4d8a89763c",
+     "nonce": "09ff97750b084012e15ecb84614ce88180d7b8ec0d468508a86b6d70c0361a25",
+     "plaintext": "\u00af\\_(\u30c4)_/\u00af",
+     "payload": "Agn/l3ULCEAS4V7LhGFM6IGA17jsDUaFCKhrbXDANholyySBfeh+EN8wNB9gaLlg4j6wdBYh+3oK+mnxWu3NKRbSvQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+     "note": "invalid MAC"
+    },
+    {
+     "conversation_key": "cfcc9cf682dfb00b11357f65bdc45e29156b69db424d20b3596919074f5bf957",
+     "nonce": "65b14b0b949aaa7d52c417eb753b390e8ad6d84b23af4bec6d9bfa3e03a08af4",
+     "plaintext": "\ud83e\udd4e",
+     "payload": "AmWxSwuUmqp9UsQX63U7OQ6K1thLI69L7G2b+j4DoIr0oRWQ8avl4OLqWZiTJ10vIgKrNqjoaX+fNhE9RqmR5g0f6BtUg1ijFMz71MO1D4lQLQfW7+UHva8PGYgQ1QpHlKgR",
+     "note": "invalid MAC"
+    },
+    {
+     "conversation_key": "5254827d29177622d40a7b67cad014fe7137700c3c523903ebbe3e1b74d40214",
+     "nonce": "7ab65dbb8bbc2b8e35cafb5745314e1f050325a864d11d0475ef75b3660d91c1",
+     "plaintext": "elliptic-curve cryptography",
+     "payload": "Anq2XbuLvCuONcr7V0UxTh8FAyWoZNEdBHXvdbNmDZHB573MI7R7rrTYftpqmvUpahmBC2sngmI14/L0HjOZ7lWGJlzdh6luiOnGPc46cGxf08MRC4CIuxx3i2Lm0KqgJ7vA",
+     "note": "invalid padding"
+    },
+    {
+     "conversation_key": "fea39aca9aa8340c3a78ae1f0902aa7e726946e4efcd7783379df8096029c496",
+     "nonce": "7d4283e3b54c885d6afee881f48e62f0a3f5d7a9e1cb71ccab594a7882c39330",
+     "plaintext": "noble",
+     "payload": "An1Cg+O1TIhdav7ogfSOYvCj9dep4ctxzKtZSniCw5MwRrrPJFyAQYZh5VpjC2QYzny5LIQ9v9lhqmZR4WBYRNJ0ognHVNMwiFV1SHpvUFT8HHZN/m/QarflbvDHAtO6pY16",
+     "note": "invalid padding"
+    },
+    {
+     "conversation_key": "0c4cffb7a6f7e706ec94b2e879f1fc54ff8de38d8db87e11787694d5392d5b3f",
+     "nonce": "6f9fd72667c273acd23ca6653711a708434474dd9eb15c3edb01ce9a95743e9b",
+     "plaintext": "censorship-resistant and global social network",
+     "payload": "Am+f1yZnwnOs0jymZTcRpwhDRHTdnrFcPtsBzpqVdD6b2NZDaNm/TPkZGr75kbB6tCSoq7YRcbPiNfJXNch3Tf+o9+zZTMxwjgX/nm3yDKR2kHQMBhVleCB9uPuljl40AJ8kXRD0gjw+aYRJFUMK9gCETZAjjmrsCM+nGRZ1FfNsHr6Z",
+     "note": "invalid padding"
+    },
+    {
+     "conversation_key": "5cd2d13b9e355aeb2452afbd3786870dbeecb9d355b12cb0a3b6e9da5744cd35",
+     "nonce": "b60036976a1ada277b948fd4caa065304b96964742b89d26f26a25263a5060bd",
+     "plaintext": "0",
+     "payload": "",
+     "note": "invalid payload length: 0"
+    },
+    {
+     "conversation_key": "d61d3f09c7dfe1c0be91af7109b60a7d9d498920c90cbba1e137320fdd938853",
+     "nonce": "1a29d02c8b4527745a2ccb38bfa45655deb37bc338ab9289d756354cea1fd07c",
+     "plaintext": "1",
+     "payload": "Ag==",
+     "note": "invalid payload length: 4"
+    },
+    {
+     "conversation_key": "873bb0fc665eb950a8e7d5971965539f6ebd645c83c08cd6a85aafbad0f0bc47",
+     "nonce": "c826d3c38e765ab8cc42060116cd1464b2a6ce01d33deba5dedfb48615306d4a",
+     "plaintext": "2",
+     "payload": "AqxgToSh3H7iLYRJjoWAM+vSv/Y1mgNlm6OWWjOYUClrFF8=",
+     "note": "invalid payload length: 48"
+    },
+    {
+     "conversation_key": "9f2fef8f5401ac33f74641b568a7a30bb19409c76ffdc5eae2db6b39d2617fbe",
+     "nonce": "9ff6484642545221624eaac7b9ea27133a4cc2356682a6033aceeef043549861",
+     "plaintext": "3",
+     "payload": "Ap/2SEZCVFIhYk6qx7nqJxM6TMI1ZoKmAzrO7vBDVJhhuZXWiM20i/tIsbjT0KxkJs2MZjh1oXNYMO9ggfk7i47WQA==",
+     "note": "invalid payload length: 92"
+    }
+   ]
+  }
+ }
+}

@@ -68,6 +68,8 @@ Usage: install.sh [options]          (as root; curl … | sudo bash -s -- [optio
   --name NAME              the community's name
   --mail-from ADDRESS      sender of the mails (default belfry@DOMAIN)
   --config FILE            BELFRY_* settings, one KEY=VALUE per line (secrets go here)
+                           (push notifications to the phone apps go through
+                           https://push.belfry.sh; BELFRY_PUSH_GATEWAY_URL= turns them off)
   --custody-recipient R    an age or YubiKey recipient for the custody seed (repeat for each
                            steward); without one the seed stays on this server's disk
   --yes                    no questions: fail if something required is missing

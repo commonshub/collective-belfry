@@ -756,11 +756,37 @@ services:
       # the ones an admin added on apps.<domain> (calendar vote wallet groups village)
       EXTRA_APPS: ${EXTRA_APPS:-}
       PASS_SIGNIN: ${PASS_SIGNIN:-authentik}
+      # push notifications to the phone apps go through this gateway (push.py); empty: no push
+      PUSH_GATEWAY_URL: ${PUSH_GATEWAY_URL-https://push.belfry.sh}
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8100/health')\""]
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # The push gateway (services/push-gateway, docs/push.md §2): only on the belfry of the phone
+  # apps' publisher (belfry.sh), with PUSH_GATEWAY=1 (the belfry command adds the profile). It
+  # holds the APNs key and the FCM service account and passes every belfry's encrypted
+  # notifications on; push.<domain> (Caddyfile). Without the secrets it starts and answers 503.
+  push-gateway:
+    build: ../services/push-gateway
+    image: belfry-push-gateway:local
+    profiles: ["push-gateway"]
+    <<: *nonroot
+    read_only: true
+    group_add: *secret-group
+    secrets: [apns_key, fcm_service_account]
+    environment:
+      PUBLIC_URL: https://push.${BELFRY_DOMAIN:-localhost}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_TOPIC: ${APNS_TOPIC:-sh.belfry.app}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request;urllib.request.urlopen('http://localhost:8200/health')\""]
+      interval: 30s
+      timeout: 5s
+      retries: 5
 
   # Incoming mail for <username>@ and <channel>@<domain> (belfry_onboarding/mailfront.py): a thin
   # SMTP server that hands every address and message to the onboarding service (mail.py) and
@@ -1059,6 +1085,9 @@ secrets:
   stripe_webhook_secret: {file: ./secrets/stripe_webhook_secret}
   accounting_odoo_api_key: {file: ./secrets/accounting_odoo_api_key}
   git_relay_nsec: {file: ./secrets/git_relay_nsec}
+  # the push gateway's (PUSH_GATEWAY=1): Apple's .p8 key and the Firebase service account JSON
+  apns_key: {file: ./secrets/apns_key}
+  fcm_service_account: {file: ./secrets/fcm_service_account}
 
 volumes:
   git-data:

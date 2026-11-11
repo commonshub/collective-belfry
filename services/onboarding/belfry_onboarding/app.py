@@ -58,6 +58,7 @@ from . import (
     passlogin,
     places,
     programme,
+    push,
     reports,
     sessions,
     setup,
@@ -212,6 +213,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             followers.running(app),  # the announcements channel and its digests (followers.py)
             mentions.running(app),  # @mentions by e-mail, daily or weekly (mentions.py)
             mail.running(app),  # members' outgoing mail, gift-wrapped to the belfry (mail.py)
+            push.running(app),  # push notifications to the phone apps (push.py)
         ):
             yield
 
@@ -233,6 +235,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     places.register(app)  # /api/places: cities for profiles, and ones members add (places.py)
     admins.register(app)  # /api/admins: admins give the admin role from the chat (admins.py)
     agents.register(app)  # /api/agents: a member's own agents (agents.py)
+    push.register(app)  # /api/push/devices, /api/notifications: the phone apps' push (push.py)
     whois.register(app)  # /api/whois: member, agent or guest, per key (whois.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
