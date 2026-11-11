@@ -429,3 +429,32 @@ def test_an_earlier_public_proposals_channel_becomes_members_only(world, monkeyp
     )
     followers.ensure_channels(svc)
     assert "proposals" in webthreads.sites(svc, fresh=True)
+
+
+def test_old_default_descriptions_are_refreshed(world, monkeypatch):
+    svc, relay = world
+    monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
+    dom = followers.domain(svc)
+    for cid, about in (
+        ("proposals", f"Proposals for {dom}: one per thread, discussed and voted on."),
+        ("events", "Mine"),
+    ):
+        relay.events.append(
+            {
+                "id": "meta-" + cid,
+                "kind": 39000,
+                "pubkey": GK,
+                "created_at": 2,
+                "tags": [["d", cid], ["name", cid], ["about", about]],
+                "content": "",
+            }
+        )
+    followers.ensure_channels(svc)
+    edits = [e for e in relay.events if e["kind"] == 9002 and ["h", "proposals"] in e["tags"]]
+    assert (
+        edits
+        and ["about", "Proposals members discuss and vote on. Members only."] in edits[-1]["tags"]
+    )
+    assert not [
+        e for e in relay.events if e["kind"] == 9002 and ["h", "events"] in e["tags"]
+    ]  # changed by people: kept

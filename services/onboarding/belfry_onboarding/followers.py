@@ -141,6 +141,11 @@ DEFAULTS: list[dict[str, Any]] = [
         "web": {"on": False, "slug": "proposals", "visibility": "members", "posts": "proposal"},
     },
 ]
+# descriptions an earlier version wrote: replaced by today's when nobody changed them since
+_OLD_ABOUT = {
+    "proposals": "Proposals for {domain}: one per thread, discussed and voted on.",
+    "events": "What's on at {domain}: one event per thread.",
+}
 # what an earlier version set up and nobody changed since: brought to today's defaults
 _EARLIER = {
     "proposals": [{"on": True, "slug": "proposals", "visibility": "public", "posts": "proposal"}]
@@ -170,7 +175,20 @@ def ensure_channels(svc: Services) -> dict[str, Any]:
     made = []
     for ch in DEFAULTS:
         cid = ch["id"]
-        if relay.query([{"kinds": [39000], "#d": [cid]}], sign):
+        meta = relay.query([{"kinds": [39000], "#d": [cid]}], sign)
+        if meta:
+            about = next(
+                (t[1] for t in meta[0].get("tags", []) if t[0] == "about" and len(t) > 1), ""
+            )
+            if cid in _OLD_ABOUT and about == _OLD_ABOUT[cid].format(domain=domain(svc)):
+                name = next(
+                    (t[1] for t in meta[0].get("tags", []) if t[0] == "name" and len(t) > 1), cid
+                )
+                new_about = ch["about"].format(domain=domain(svc))
+                _publish(
+                    relay, sign, 9002, [["h", cid], ["name", name], ["about", new_about], ["open"]]
+                )
+                log.info("announcements: %s gets today's description", cid)
             if cid in _EARLIER:  # set up by an earlier default, untouched since: today's
                 mine = sign({"kind": 1, "created_at": 0, "tags": [], "content": ""})["pubkey"]
                 evs = relay.query([{"kinds": [30078], "#d": [f"belfry:web:{cid}"]}], sign) or []
