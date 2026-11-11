@@ -11,10 +11,10 @@
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, taskTally, messages, type Task, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Btn, Form, fmtDay, go, useNow } from './common'
+import { Btn, Form, fmtDay, go, useNow, WorkRing } from './common'
 import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
@@ -202,9 +202,9 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
           {(full ? latestTasks(f.allTasks) : f.todos.slice(0, 4)).map((t) => { const busy = isWorking(t, now); return (
             <div key={t.id} className={'pull-row todo' + (t.done ? ' done' : '')} style={{ opacity: t.pending ? 0.6 : 1 }}>
               <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? `Reopen "${t.title}"` : `Mark "${t.title}" as done`}
-                onClick={() => void taskAction(id, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : ''}</button>
+                onClick={() => void taskAction(id, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}</button>
               <button className="t" onClick={() => { const th = t.source && threadOfMessage(id, t.source); if (th) go(`c/${encodeURIComponent(id)}/thread/${th}`); else if (!full) more('tasks') }}>
-                <span className="tt">{t.title}</span><small>{t.done ? 'Done' : t.assignee ? (t.assignee === me() ? (busy ? 'You are working on it now' : 'You are on it') : `${displayName(t.assignee)} is ${busy ? 'working on it now' : 'on it'}`) : 'Nobody on it yet'}{t.source ? ' · thread' : ''}</small>
+                <span className="tt">{t.title}</span><small>{t.done ? 'Done' : t.assignee ? (t.assignee === me() ? (busy ? `You are working on it · ${mins(now - (workingSince(t) ?? now))}` : 'You are on it') : busy ? `${displayName(t.assignee)} is working on it · ${mins(now - (workingSince(t) ?? now))}` : `${displayName(t.assignee)} is on it`) : 'Nobody on it yet'}{t.source ? ' · thread' : ''}</small>
               </button>
             </div>
           ) })}
@@ -260,3 +260,6 @@ function NewTodo({ groupId }: { groupId: string }) {
     </Form>
   )
 }
+
+/** "4 min", "1 h 20" */
+const mins = (secs: number) => { const m = Math.max(1, Math.round(secs / 60)); return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ' ' + String(m % 60).padStart(2, '0') : ''}` }

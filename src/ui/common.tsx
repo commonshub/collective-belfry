@@ -2,6 +2,22 @@ import { Drawer } from 'vaul'
 import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
+/** Busy on it now: a ring that fills clockwise over the hour (one minute = 6°), "1h", "2h"… in it
+ *  once past an hour. SINCE and NOW in unix seconds. */
+export function WorkRing({ since, now, size = 24 }: { since: number; now: number; size?: number }) {
+  const min = Math.max(0, (now - since) / 60)
+  const r = size / 2 - 2, c = 2 * Math.PI * r
+  const frac = min >= 60 ? 1 : Math.max(0.04, min / 60)
+  const label = min >= 60 ? `${Math.floor(min / 60)}h` : ''
+  return (
+    <svg className="work-ring" width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label={`Working on it for ${min < 60 ? Math.round(min) + ' min' : label}`}>
+      <circle cx={size / 2} cy={size / 2} r={r} className="track" />
+      <circle cx={size / 2} cy={size / 2} r={r} className="arc" strokeDasharray={`${frac * c} ${c}`} transform={`rotate(-90 ${size / 2} ${size / 2})`} />
+      {label && <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" style={{ fontSize: size * 0.38 }}>{label}</text>}
+    </svg>
+  )
+}
+
 /** The time now (unix seconds), refreshed every MS: for states that expire, like a to-do heartbeat. */
 export function useNow(ms = 30_000) {
   const [n, setN] = useState(() => Date.now() / 1000)

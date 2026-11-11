@@ -457,6 +457,8 @@ export const BEAT_FRESH = 300
 // browser tests only (?backend=demo): read a channel's to-dos
 if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoTasks: typeof tasklist }).__demoTasks = (g) => tasklist(g)
 export const isWorking = (t: Task, now = Date.now() / 1000) => !t.done && !!t.beat && now - t.beat < BEAT_FRESH
+/** When the current working stretch began (its first heartbeat), for the ring that fills with the minutes. */
+export const workingSince = (t: Task) => [...t.history].reverse().find((h) => h.what === 'working' && h.who === t.assignee)?.at ?? t.beat
 
 export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
   const listId = listIdFor(groupId)

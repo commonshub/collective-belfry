@@ -57,7 +57,7 @@ export async function enqueue(
     kind: t.kind,
     content: t.content ?? '',
     tags: [...t.tags, CLIENT_TAG],
-    created_at: now(),
+    created_at: now() - demoShift,
     attachments,
     status: 'queued',
     tries: 0,
@@ -138,7 +138,10 @@ export async function flush() {
 
 /** Save an event that is signed already (gift wraps) and publish it when the relay answers. */
 // browser tests only (?backend=demo, nothing leaves the device): publish raw events, e.g. a to-do heartbeat
-if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoEnqueue: typeof enqueue }).__demoEnqueue = (...a) => enqueue(...a)
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoEnqueue: typeof enqueue; __demoAt: (secs: number) => void }).__demoEnqueue = (...a) => enqueue(...a)
+// and pretend the clock is earlier for the next events (to test what a long stretch looks like)
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoAt: (secs: number) => void }).__demoAt = (secs) => { demoShift = secs }
+let demoShift = 0
 
 export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
   const item: OutboxItem = {

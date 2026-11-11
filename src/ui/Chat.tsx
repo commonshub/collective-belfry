@@ -4,10 +4,10 @@ import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow } from './common'
+import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
@@ -1048,8 +1048,9 @@ function SaveAccountBar() {
 
 /** The chip under a message that became a to-do; its icon turns while the assignee works on it now. */
 function TodoChipBody({ todo }: { todo: Task }) {
-  const busy = isWorking(todo, useNow())
-  return <><span className={'ico-wrap' + (busy ? ' working' : '')}><TodoIcon /></span>{todo.done ? 'Done' : todo.assignee ? `${busy ? 'Working now' : 'To do'} · ${displayName(todo.assignee)}` : 'To do'}</>
+  const now = useNow()
+  const busy = isWorking(todo, now)
+  return <><span className="ico-wrap">{busy ? <WorkRing since={workingSince(todo) ?? now} now={now} size={16} /> : <TodoIcon />}</span>{todo.done ? 'Done' : todo.assignee ? `${busy ? 'Working now' : 'To do'} · ${displayName(todo.assignee)}` : 'To do'}</>
 }
 
 const STEP_WORDS: Record<TaskStep['what'], string> = {
