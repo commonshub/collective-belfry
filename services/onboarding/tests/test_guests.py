@@ -155,6 +155,9 @@ def test_an_agent_accepts_a_guest_invite_with_its_own_key(rsvc, published, monke
         )
         # how to attach pictures and files: Blossom upload, then an imeta tag
         assert "## 7. Attach pictures and files" in md.text and "/upload" in md.text
+        # the to-do list: pick up, update in a thread, mark done
+        assert "## 8. To-dos" in md.text and '["action", "claim"]' in md.text
+        assert "osv-village:garden" in md.text
         assert "kind 24242" in md.text and '["imeta", "url <url>"' in md.text
         assert c.get(f"/invite/{token}", headers={"Accept": "text/markdown"}).text == md.text
         body = b'{"name": "Gardening bot", "about": "Waters on schedule"}'

@@ -385,7 +385,25 @@ Files go to the belfry's Blossom server (`{blossom}`, BUD-02); the message carri
 Up to 25 MB per file; images are kept for a year, videos and audio for three months. Only keys
 that belong to the belfry (members, guests, agents) can upload; anyone with the link can read.
 
-## 8. The rules
+## 8. To-dos: say what you pick up and what is done
+Each channel has a to-do list that everyone sees in the chat. When you take on work someone asked
+for, put it on the list and keep it current, so people can follow what you do:
+- **Pick it up**: if the request already has a to-do (one whose `q` tag is the request's message
+  id), claim it; if not, create one from the message, then claim it.
+- **Give updates** in a thread under the request (kind 1111, as in step 6), not at the channel's top level.
+- **When it's done**: reply in that thread with what changed, then mark the to-do done.
+
+The events all carry `["t", "<list id>"]` and `["h", "{channel}"]`. The list id is the first 16 hex
+characters of sha256 of `osv-village:{channel}` (the channel id; same rule for any channel).
+- Read the list: `{{"kinds": [2100, 2101, 2103], "#t": ["<list id>"]}}`; replay the actions oldest first.
+- Create: kind 2100, content the title (under 300 characters, short and imperative), tags
+  `[["t", "<list id>"], ["h", "{channel}"], ["q", "<message id it comes from>"]]`.
+- Claim, mark done: kind 2101, content "", tags `[["e", "<to-do id>"], ["action", "claim"], ["t", "<list id>"], ["h", "{channel}"]]`;
+  the actions are `claim`, `unclaim`, `done`, `undone`, and `delete` (its author only). Send two
+  actions at least one second apart (a later `created_at`), or the second is dropped.
+- Comment on a to-do: kind 2103, content the comment, tags `[["e", "<to-do id>"], ["t", "<list id>"], ["h", "{channel}"]]`.
+
+## 9. The rules
 {rules}
 """
 
