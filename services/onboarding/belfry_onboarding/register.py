@@ -134,6 +134,12 @@ class Register(OdooApi):
                 PRIMARY KEY (model, id));
             CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS params (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS push_devices (
+                id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL,
+                env TEXT NOT NULL, key TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL,
+                pubkey TEXT NOT NULL, partner_id INTEGER NOT NULL, since TEXT NOT NULL,
+                seen INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS push_devices_pubkey ON push_devices (pubkey);
             """
         )
 
@@ -1825,3 +1831,77 @@ class Register(OdooApi):
                 {"sent_until": max(f.get("sent_until") or 0, int(until)), "last_sent_at": stamp()},
             )
         return f["id"] if sent else False
+
+    # ── phone devices for push notifications (push.py) ──────────────────────────────────────
+    PUSH_FIELDS = ("id", "token", "platform", "env", "key", "app", "name", "pubkey", "partner_id")
+
+    def push_add(self, device: dict[str, Any], seen: int) -> str:
+        """Register a device; the same token again replaces the old row (new key, new owner)."""
+        dev_id = secrets.token_urlsafe(12)
+        with self._lock:
+            self._db.execute("DELETE FROM push_devices WHERE token = ?", (device["token"],))
+            self._db.execute(
+                "INSERT INTO push_devices (id, token, platform, env, key, app, name, pubkey,"
+                " partner_id, since, seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    dev_id,
+                    device["token"],
+                    device["platform"],
+                    device["env"],
+                    device["key"],
+                    device["app"],
+                    device["name"],
+                    device["pubkey"],
+                    int(device["partner_id"]),
+                    stamp(),
+                    int(seen),
+                ),
+            )
+        return dev_id
+
+    def push_devices(self, pubkeys: list[str] | None = None) -> list[dict[str, Any]]:
+        """The devices of these keys (all of them with None), oldest first."""
+        sql = "SELECT id, token, platform, env, key, app, name, pubkey, partner_id, since, seen"
+        sql += " FROM push_devices"
+        args: tuple[Any, ...] = ()
+        if pubkeys is not None:
+            if not pubkeys:
+                return []
+            sql += f" WHERE pubkey IN ({','.join('?' * len(pubkeys))})"
+            args = tuple(pubkeys)
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY since, id", args).fetchall()
+        names = (*self.PUSH_FIELDS, "since", "seen")
+        return [dict(zip(names, r, strict=True)) for r in rows]
+
+    def push_remove(self, token: str, pubkey: str | None = None) -> int:
+        """Remove the device with this token (only the caller's when PUBKEY is given)."""
+        with self._lock:
+            if pubkey is None:
+                cur = self._db.execute("DELETE FROM push_devices WHERE token = ?", (token,))
+            else:
+                cur = self._db.execute(
+                    "DELETE FROM push_devices WHERE token = ? AND pubkey = ?", (token, pubkey)
+                )
+        return cur.rowcount
+
+    def push_remove_key(self, pubkey: str) -> int:
+        with self._lock:
+            cur = self._db.execute("DELETE FROM push_devices WHERE pubkey = ?", (pubkey,))
+        return cur.rowcount
+
+    def push_prune(self, before: int, keep: set[str]) -> int:
+        """Remove the devices not seen since BEFORE, and those of keys outside KEEP."""
+        n = 0
+        with self._lock:
+            n += self._db.execute(
+                "DELETE FROM push_devices WHERE seen < ?", (int(before),)
+            ).rowcount
+            for (pubkey,) in self._db.execute(
+                "SELECT DISTINCT pubkey FROM push_devices"
+            ).fetchall():
+                if pubkey not in keep:
+                    n += self._db.execute(
+                        "DELETE FROM push_devices WHERE pubkey = ?", (pubkey,)
+                    ).rowcount
+        return n

@@ -1201,6 +1201,12 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
             agents.closed(svc, pass_row)
         except Exception:  # noqa: BLE001 — the pass is closed; this is retried by hand
             log.exception("pass %s: agents and channels not cleaned up", pass_row["id"])
+    try:  # its phones stop getting notifications (push.py)
+        from . import push
+
+        push.closed(svc, pass_row)
+    except Exception:  # noqa: BLE001 — the hourly prune removes them anyway
+        log.exception("pass %s: push devices not removed", pass_row["id"])
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
     return result
