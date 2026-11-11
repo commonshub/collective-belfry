@@ -523,7 +523,7 @@ a.chip { text-decoration: none; color: inherit; }
 .chead-full { display: flex; flex-direction: column; padding-bottom: 28px; box-sizing: border-box; }
 .chead-full > .scroll { flex: 1; min-height: 0; }
 .chead-more-wrap { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; position: relative; }
-.chead-more-wrap > .chead-peek { padding-bottom: 8px; }
+.chead-more-wrap > .chead-peek { padding-bottom: 8px; touch-action: pan-x pan-y; } /* full view scrolls: pan-x above kept rows from taking a vertical swipe */
 .chead-more { padding-bottom: 36px; border-top: 1px solid var(--line); padding-top: 12px; }
 .chead-more .scroll { overflow: visible; flex: none; }
 .pad-x { padding: 0 16px; }
