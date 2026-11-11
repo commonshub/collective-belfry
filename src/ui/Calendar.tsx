@@ -158,7 +158,7 @@ const ZONES = (() => {
 
 const VIS: [Visibility, string, string][] = [
   ['members', 'Members', 'Only members see it'],
-  ['link', 'Link', 'Anyone with the URL'],
+  ['link', 'Hidden', 'Not listed: anyone with the link'],
   ['public', 'Public', 'Listed on the website'],
 ]
 
