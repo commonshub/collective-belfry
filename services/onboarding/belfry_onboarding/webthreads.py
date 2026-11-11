@@ -198,7 +198,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
                     "slug": slug,
                     "list": "own" if _members_only(conf) else "public",
                     "posts": conf.get("posts")
-                    if conf.get("posts") in ("proposal", "event")
+                    if conf.get("posts") in ("proposal", "event", "request")
                     else "",
                 },
             )
@@ -377,10 +377,12 @@ def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
     )
 
 
-def _form(slug: str, error: str = "", values: dict[str, str] | None = None) -> str:
+def _form(
+    slug: str, error: str = "", values: dict[str, str] | None = None, heading: str = "Open a thread"
+) -> str:
     v = values or {}
     err = f'<p class="error" role="alert">{E(error)}</p>' if error else ""
-    return f"""<h2 id="new">Open a thread</h2>{err}
+    return f"""<h2 id="new">{E(heading)}</h2>{err}
 <form class="wt-form" method="post" action="/{E(slug)}">
 <label for="t">Title</label><input id="t" name="title" maxlength="200" required value="{E(v.get("title", ""))}">
 <label for="x">What is it about?</label><textarea id="x" name="text" rows="6" maxlength="8000" required>{E(v.get("text", ""))}</textarea>
@@ -434,15 +436,21 @@ def list_page(
                 else "<p>No proposals yet.</p>"
             )
         else:
-            body += '<p><a class="btn" href="#new">Open a thread</a></p><h2>Threads</h2>' + (
+            ask, listed = (
+                ("Make a request", "Requests")
+                if site.get("posts") == "request"
+                else ("Open a thread", "Threads")
+            )
+            body += f'<p><a class="btn" href="#new">{ask}</a></p><h2>{listed}</h2>' + (
                 f'<ul class="wt-list">{"".join(items)}</ul>'
                 if items
                 else "<p>No threads yet: be the first.</p>"
             )
     else:
         body += '<p class="wt-note">Your thread is between you and the members: you get its link by e-mail.</p>'
-    if not site.get("posts"):
-        body += _form(slug, error, values)
+    if site.get("posts") in ("", None, "request"):
+        heading = "Make a request" if site.get("posts") == "request" else "Open a thread"
+        body += _form(slug, error, values, heading)
     return _page(site["name"], body, 400 if error else 200)
 
 
@@ -556,7 +564,7 @@ def submit(
 ) -> HTMLResponse:
     from . import mail
 
-    if site.get("posts"):  # #proposals, #events: one type of post, made in the chat
+    if site.get("posts") in ("proposal", "event"):  # one type of post, made in the chat
         return _page("Not here", "<h1>This page takes no threads</h1>", 403)
     values = {k: (form.get(k) or "").strip() for k in ("title", "text", "name", "email")}
     if form.get("website"):  # the field people don't see: a bot filled it

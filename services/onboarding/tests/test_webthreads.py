@@ -342,16 +342,16 @@ def test_an_account_for_the_author_from_the_web(world, monkeypatch):
         assert mailer.SENT[-1]["To"] == "eve@example.org"
 
 
-def test_default_channels_proposals_and_events(world, monkeypatch):
-    """Xavier, 2026-11-11: #proposals and #events by default, public, on <domain>/<id>, each
-    taking one type of post. The relay's own key sets them up."""
+def test_default_channels(world, monkeypatch):
+    """Xavier, 2026-11-11: the channel says who sees it. 🌐 #events and #requests are public
+    (pages at <domain>/events and /requests), #bookings and #proposals are for members; each
+    takes its own type of post. The relay's own key sets them up."""
     svc, relay = world
     monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
     relay.events = [e for e in relay.events if e["kind"] != 39000]
     made = followers.ensure_channels(svc)["made"]
-    assert made == ["general", "proposals", "events"]
-    # the relay would publish 39000 for them; here: as it would, by the groups key
-    for cid in ("proposals", "events"):
+    assert made == ["general", "events", "bookings", "requests", "proposals"]
+    for cid in made:  # the relay publishes 39000 for them, signed by its key
         relay.events.append(
             {
                 "id": "meta-" + cid,
@@ -363,36 +363,69 @@ def test_default_channels_proposals_and_events(world, monkeypatch):
             }
         )
     found = webthreads.sites(svc, fresh=True)
-    assert found["proposals"]["posts"] == "proposal" and found["proposals"]["list"] == "public"
-    assert "events" not in found  # <domain>/events is the events page (events.py)
-    relay.events.append(
-        {
-            "id": "p" * 64,
-            "kind": 9,
-            "pubkey": MEMBER,
-            "created_at": 50,
-            "content": "📝 Proposal: A tool library",
-            "tags": [["h", "proposals"], ["proposal", "prop-tools-x"]],
-        }
-    )
-    relay.events.append(
-        {
-            "id": "q" * 64,
-            "kind": 9,
-            "pubkey": MEMBER,
-            "created_at": 51,
-            "content": "just chatting",
-            "tags": [["h", "proposals"]],
-        }
-    )
+    assert sorted(found) == ["requests"]  # /events is the events page; the others are members'
+    assert found["requests"]["posts"] == "request" and found["requests"]["list"] == "public"
+    assert followers.ensure_channels(svc)["made"] == []  # once
     with TestClient(create_app(svc), base_url="https://belfry.test") as c:
-        page = c.get("/proposals").text
-        assert (
-            "A tool library" in page and "just chatting" not in page and "Open a thread" not in page
+        page = c.get("/requests").text
+        assert "Make a request" in page and "Requests</h2>" in page
+        r = c.post(
+            "/requests",
+            data={
+                "title": "A bench",
+                "text": "By the door",
+                "name": "Eve",
+                "email": "eve@example.org",
+            },
         )
-        assert (
-            c.post(
-                "/proposals", data={"title": "x", "text": "y", "name": "z", "email": "a@b.org"}
-            ).status_code
-            == 403
+        assert r.status_code == 200 and "Check your e-mail" in r.text
+
+
+def test_an_earlier_public_proposals_channel_becomes_members_only(world, monkeypatch):
+    svc, relay = world
+    monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
+    for cid in ("general", "events", "bookings", "requests", "proposals"):
+        relay.events.append(
+            {
+                "id": "meta-" + cid,
+                "kind": 39000,
+                "pubkey": GK,
+                "created_at": 2,
+                "tags": [["d", cid], ["name", cid]],
+                "content": "",
+            }
         )
+    relay.events.append(
+        {
+            "id": "old",
+            "kind": 30078,
+            "pubkey": GK,
+            "created_at": 3,
+            "content": json.dumps(
+                {"on": True, "slug": "proposals", "visibility": "public", "posts": "proposal"}
+            ),
+            "tags": [["d", "belfry:web:proposals"], ["h", "proposals"], ["t", "belfry-web"]],
+        }
+    )
+    assert "proposals" in webthreads.sites(svc, fresh=True)
+    followers.ensure_channels(svc)
+    assert "proposals" not in webthreads.sites(svc, fresh=True)  # members only now
+    # a community that opened a public /proposals page itself keeps it
+    setting(relay, MEMBER, slug="proposals", at=10**10)
+    relay.events[-1]["tags"] = [
+        ["d", "belfry:web:proposals"],
+        ["h", "proposals"],
+        ["t", "belfry-web"],
+    ]
+    relay.events.append(
+        {
+            "id": "m3",
+            "kind": 39001,
+            "pubkey": GK,
+            "created_at": 4,
+            "tags": [["d", "proposals"], ["p", MEMBER]],
+            "content": "",
+        }
+    )
+    followers.ensure_channels(svc)
+    assert "proposals" in webthreads.sites(svc, fresh=True)

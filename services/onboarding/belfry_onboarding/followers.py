@@ -115,17 +115,50 @@ def _publish(relay: RelayPublisher, sign: Any, kind: int, tags: list[list[str]])
     )
 
 
-# channels every belfry has (Xavier, 2026-11-11): #proposals and #events are public, have a page
-# at <domain>/<id> (#events: the events page, events.py) and take one type of post each
+# channels every belfry has (Xavier, 2026-11-11). The channel says who sees what is in it, no
+# switch per item: 🌐 #events (public, the events page) and #bookings (members, internal);
+# 🌐 #requests (anyone asks, a page at <domain>/requests) and #proposals (members discuss and vote).
 DEFAULTS: list[dict[str, Any]] = [
     {"id": GENERAL, "about": "Everything about {domain}. Say hi 👋"},
     {
-        "id": "proposals",
-        "about": "Proposals for {domain}: one per thread, discussed and voted on.",
-        "posts": "proposal",
+        "id": "events",
+        "about": "Public events at {domain}: anyone sees them, members and people from outside post them.",
+        "web": {"on": True, "slug": "events", "visibility": "public", "posts": "event"},
     },
-    {"id": "events", "about": "What's on at {domain}: one event per thread.", "posts": "event"},
+    {
+        "id": "bookings",
+        "about": "Internal bookings: rooms, slots, team meetups. Members only.",
+        "web": {"on": False, "slug": "bookings", "visibility": "members", "posts": "event"},
+    },
+    {
+        "id": "requests",
+        "about": "Ideas, asks and suggestions from anyone. Members can turn one into a proposal.",
+        "web": {"on": True, "slug": "requests", "visibility": "public", "posts": "request"},
+    },
+    {
+        "id": "proposals",
+        "about": "Proposals members discuss and vote on. Members only.",
+        "web": {"on": False, "slug": "proposals", "visibility": "members", "posts": "proposal"},
+    },
 ]
+# what an earlier version set up and nobody changed since: brought to today's defaults
+_EARLIER = {
+    "proposals": [{"on": True, "slug": "proposals", "visibility": "public", "posts": "proposal"}]
+}
+
+
+def _web_setting(relay: Any, sign: Any, cid: str, conf: dict[str, Any]) -> None:
+    relay.publish(
+        sign(
+            {
+                "kind": 30078,
+                "created_at": int(time.time()),
+                "content": json.dumps(conf),
+                "tags": [["d", f"belfry:web:{cid}"], ["h", cid], ["t", "belfry-web"]],
+            }
+        ),
+        sign,
+    )
 
 
 def ensure_channels(svc: Services) -> dict[str, Any]:
@@ -138,6 +171,17 @@ def ensure_channels(svc: Services) -> dict[str, Any]:
     for ch in DEFAULTS:
         cid = ch["id"]
         if relay.query([{"kinds": [39000], "#d": [cid]}], sign):
+            if cid in _EARLIER:  # set up by an earlier default, untouched since: today's
+                mine = sign({"kind": 1, "created_at": 0, "tags": [], "content": ""})["pubkey"]
+                evs = relay.query([{"kinds": [30078], "#d": [f"belfry:web:{cid}"]}], sign) or []
+                last = max(evs, key=lambda e: e.get("created_at", 0), default=None)
+                try:
+                    conf = json.loads(last["content"]) if last else None
+                except ValueError:
+                    conf = None
+                if last and last["pubkey"] == mine and conf in _EARLIER[cid]:
+                    _web_setting(relay, sign, cid, ch["web"])
+                    log.info("announcements: %s brought to today's defaults", cid)
             continue
         _publish(relay, sign, 9007, [["h", cid]])
         _publish(
@@ -151,19 +195,8 @@ def ensure_channels(svc: Services) -> dict[str, Any]:
                 ["open"],
             ],
         )
-        if ch.get("posts"):  # public, its page on the web, one type of post (webthreads.py)
-            conf = {"on": True, "slug": cid, "visibility": "public", "posts": ch["posts"]}
-            relay.publish(
-                sign(
-                    {
-                        "kind": 30078,
-                        "created_at": int(time.time()),
-                        "content": json.dumps(conf),
-                        "tags": [["d", f"belfry:web:{cid}"], ["h", cid], ["t", "belfry-web"]],
-                    }
-                ),
-                sign,
-            )
+        if ch.get("web"):  # who sees it, its page on the web, its type of post (webthreads.py)
+            _web_setting(relay, sign, cid, ch["web"])
         log.info("announcements: made %s", cid)
         made.append(cid)
     return {"made": made}
