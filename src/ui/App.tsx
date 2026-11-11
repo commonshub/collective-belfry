@@ -26,6 +26,7 @@ import { demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, go, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, JoinScreen, MembershipScreen, WelcomeScreen } from './Login'
+import { MentionsScreen } from './Mentions'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
@@ -176,6 +177,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   if (section === 'channels' && !wide) view = <ChannelList />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
+  else if (section === 'mentions') view = <MentionsScreen />
   else if (section === 'events' && a) view = <EventScreen key={a} link={a} />
   else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />

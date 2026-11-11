@@ -5,7 +5,7 @@ import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow, WorkRing } from './common'
@@ -13,6 +13,7 @@ import { EventCard, NewEventSheet } from './Calendar'
 import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
+import { newMentions, preview } from './Mentions'
 import { NewProposalSheet, ProposalCard } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
@@ -78,8 +79,13 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   const ids = new Set(all.map((g) => g.id))
   const last = (id: string) => {
     const m = messages(id).at(-1)
-    return m ? `${displayName(m.ev.pubkey)}: ${m.text || (m.media.length ? 'Photo' : '')}` : undefined
+    return m ? `${displayName(m.ev.pubkey)}: ${preview(m.text) || (m.media.length ? 'Photo' : '')}` : undefined
   }
+  // public channels first, then the members' (Xavier, 2026-11-11); pods and proposals stay under theirs
+  const pub = chans.filter((g) => isPublicChannel(g))
+  const members = chans.filter((g) => !isPublicChannel(g))
+  const next = calendar().filter((e) => e.status !== 'cancelled' && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
+  const fresh = newMentions()
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
     <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
       onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
@@ -106,17 +112,24 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
       </div>
       <div className="scroll">
         {side && brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
-        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => closeDrawer('dm')}>
-          <span className="hash"><MailIcon unread={unreadTotal() > 0} /></span>
-          <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>
-          {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
-        </button>
         <button className={'chan' + (section === 'events' && !current ? ' on' : '')} onClick={() => closeDrawer('events')}>
           <span className="hash"><CalendarIcon /></span>
-          <span className="t"><b>All events</b><small>Upcoming, yours, the ones you host</small></span>
+          <span className="t"><b>Upcoming events</b><small>{next ? `${fmtDay(next.start)} · ${next.title}` : 'Upcoming, yours, the ones you host'}</small></span>
         </button>
-        <div className="section-title">Channels <span>{chans.length + pods.length}</span></div>
-        {chans.map((g) => <Tree key={g.id} g={g} />)}
+        <button className={'chan' + (section === 'mentions' ? ' on' : '')} onClick={() => closeDrawer('mentions')}>
+          <span className="hash"><AtIcon /></span>
+          <span className="t"><b>@Mentions</b><small>Where people named you, in every channel</small></span>
+          {fresh > 0 && <span className="badge lime">{fresh}</span>}
+        </button>
+        <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => closeDrawer('dm')}>
+          <span className="hash"><MailIcon unread={unreadTotal() > 0} /></span>
+          <span className="t"><b>Direct messages</b><small>And e-mail{address() ? ` · ${address()}` : ''}</small></span>
+          {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
+        </button>
+        {pub.length > 0 && <div className="section-title">Public channels <span>{pub.length}</span></div>}
+        {pub.map((g) => <Tree key={g.id} g={g} />)}
+        {(members.length > 0 || orphans.length > 0) && <div className="section-title">Members only <span>{members.length + orphans.length}</span></div>}
+        {members.map((g) => <Tree key={g.id} g={g} />)}
         {orphans.map((g) => <Tree key={g.id} g={g} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
         {mineEvents.length > 0 && <div className="section-title">Your events <span>{mineEvents.length}</span></div>}
