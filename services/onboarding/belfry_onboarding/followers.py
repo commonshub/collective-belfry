@@ -115,28 +115,58 @@ def _publish(relay: RelayPublisher, sign: Any, kind: int, tags: list[list[str]])
     )
 
 
+# channels every belfry has (Xavier, 2026-11-11): #proposals and #events are public, have a page
+# at <domain>/<id> (#events: the events page, events.py) and take one type of post each
+DEFAULTS: list[dict[str, Any]] = [
+    {"id": GENERAL, "about": "Everything about {domain}. Say hi 👋"},
+    {
+        "id": "proposals",
+        "about": "Proposals for {domain}: one per thread, discussed and voted on.",
+        "posts": "proposal",
+    },
+    {"id": "events", "about": "What's on at {domain}: one event per thread.", "posts": "event"},
+]
+
+
 def ensure_channels(svc: Services) -> dict[str, Any]:
-    """Create ``general`` when missing. Best effort: logged, retried on the next round."""
+    """Create the default channels when missing. Best effort: logged, retried on the next round."""
     got = _relay(svc)
     if got is None:
         return {}
     relay, sign = got
-    if relay.query([{"kinds": [39000], "#d": [GENERAL]}], sign):
-        return {"made": []}
-    _publish(relay, sign, 9007, [["h", GENERAL]])
-    _publish(
-        relay,
-        sign,
-        9002,
-        [
-            ["h", GENERAL],
-            ["name", GENERAL],
-            ["about", f"Everything about {domain(svc)}. Say hi 👋"],
-            ["open"],
-        ],
-    )
-    log.info("announcements: made %s", GENERAL)
-    return {"made": [GENERAL]}
+    made = []
+    for ch in DEFAULTS:
+        cid = ch["id"]
+        if relay.query([{"kinds": [39000], "#d": [cid]}], sign):
+            continue
+        _publish(relay, sign, 9007, [["h", cid]])
+        _publish(
+            relay,
+            sign,
+            9002,
+            [
+                ["h", cid],
+                ["name", cid],
+                ["about", ch["about"].format(domain=domain(svc))],
+                ["open"],
+            ],
+        )
+        if ch.get("posts"):  # public, its page on the web, one type of post (webthreads.py)
+            conf = {"on": True, "slug": cid, "visibility": "public", "posts": ch["posts"]}
+            relay.publish(
+                sign(
+                    {
+                        "kind": 30078,
+                        "created_at": int(time.time()),
+                        "content": json.dumps(conf),
+                        "tags": [["d", f"belfry:web:{cid}"], ["h", cid], ["t", "belfry-web"]],
+                    }
+                ),
+                sign,
+            )
+        log.info("announcements: made %s", cid)
+        made.append(cid)
+    return {"made": made}
 
 
 _names: dict[str, tuple[float, str]] = {}

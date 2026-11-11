@@ -174,7 +174,12 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
             names[ch] = (_tag(m, "name") or ch, _tag(m, "about"))
     picked: list[tuple[int, str, dict[str, Any]]] = []
     for ch, by in latest.items():
-        ok = [e for k, e in by.items() if k in admins.get(ch, set()) or k in belfry_admins]
+        # the channel's admins, the belfry's, or the relay's own key (it made the default channels)
+        ok = [
+            e
+            for k, e in by.items()
+            if k in admins.get(ch, set()) or k in belfry_admins or k == _groups_pubkey(svc)
+        ]
         if not ok:
             continue
         e = max(ok, key=lambda x: x.get("created_at", 0))
@@ -189,7 +194,13 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
             (
                 e["created_at"],
                 ch,
-                {"slug": slug, "list": "own" if _members_only(conf) else "public"},
+                {
+                    "slug": slug,
+                    "list": "own" if _members_only(conf) else "public",
+                    "posts": conf.get("posts")
+                    if conf.get("posts") in ("proposal", "event")
+                    else "",
+                },
             )
         )
     out: dict[str, dict[str, Any]] = {}
@@ -197,7 +208,13 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
         if conf["slug"] in out:
             continue
         name, about = names.get(ch, (ch, ""))
-        out[conf["slug"]] = {"channel": ch, "list": conf["list"], "name": name, "about": about}
+        out[conf["slug"]] = {
+            "channel": ch,
+            "list": conf["list"],
+            "posts": conf["posts"],
+            "name": name,
+            "about": about,
+        }
     return out
 
 
@@ -309,6 +326,7 @@ def _title(e: dict[str, Any]) -> str:
         return subject
     text = (e.get("content") or "").strip().split("\n", 1)[0]
     text = re.sub(r"nostr:\S+", "", text).replace("**", "").strip()
+    text = re.sub(r"^📝 Proposal: ", "", text)  # a proposal's card in the chat
     return (text[:100] + "…") if len(text) > 100 else (text or "(no title)")
 
 
@@ -395,6 +413,8 @@ def list_page(
             root = _root_of(r)
             count[root] = count.get(root, 0) + 1
             last[root] = max(last.get(root, 0), r["created_at"])
+        if site.get("posts") == "proposal":
+            roots = [e for e in roots if _tag(e, "proposal")]
         roots.sort(key=lambda e: max(e["created_at"], last.get(e["id"], 0)), reverse=True)
         roots = roots[:MAX_THREADS]
         names, roles = _who(svc, roots)
@@ -407,14 +427,22 @@ def list_page(
                 f'<div class="wt-meta">{E(who)}{_role(role)} · {_ago(e["created_at"])}'
                 f"{f' · {n} {chr(0x1F4AC)}' if n else ''}</div></li>"
             )
-        body += '<p><a class="btn" href="#new">Open a thread</a></p><h2>Threads</h2>' + (
-            f'<ul class="wt-list">{"".join(items)}</ul>'
-            if items
-            else "<p>No threads yet: be the first.</p>"
-        )
+        if site.get("posts") == "proposal":  # proposals only: members make them in the chat
+            body += "<h2>Proposals</h2>" + (
+                f'<ul class="wt-list">{"".join(items)}</ul>'
+                if items
+                else "<p>No proposals yet.</p>"
+            )
+        else:
+            body += '<p><a class="btn" href="#new">Open a thread</a></p><h2>Threads</h2>' + (
+                f'<ul class="wt-list">{"".join(items)}</ul>'
+                if items
+                else "<p>No threads yet: be the first.</p>"
+            )
     else:
         body += '<p class="wt-note">Your thread is between you and the members: you get its link by e-mail.</p>'
-    body += _form(slug, error, values)
+    if not site.get("posts"):
+        body += _form(slug, error, values)
     return _page(site["name"], body, 400 if error else 200)
 
 
@@ -528,6 +556,8 @@ def submit(
 ) -> HTMLResponse:
     from . import mail
 
+    if site.get("posts"):  # #proposals, #events: one type of post, made in the chat
+        return _page("Not here", "<h1>This page takes no threads</h1>", 403)
     values = {k: (form.get(k) or "").strip() for k in ("title", "text", "name", "email")}
     if form.get("website"):  # the field people don't see: a bot filled it
         return _page("Check your e-mail", "<h1>Check your e-mail</h1>")

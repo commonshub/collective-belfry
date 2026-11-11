@@ -340,3 +340,59 @@ def test_an_account_for_the_author_from_the_web(world, monkeypatch):
         mailer.SENT.clear()
         assert webthreads.notify(svc, now=cards[1]["created_at"] + 60) == 1
         assert mailer.SENT[-1]["To"] == "eve@example.org"
+
+
+def test_default_channels_proposals_and_events(world, monkeypatch):
+    """Xavier, 2026-11-11: #proposals and #events by default, public, on <domain>/<id>, each
+    taking one type of post. The relay's own key sets them up."""
+    svc, relay = world
+    monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
+    relay.events = [e for e in relay.events if e["kind"] != 39000]
+    made = followers.ensure_channels(svc)["made"]
+    assert made == ["general", "proposals", "events"]
+    # the relay would publish 39000 for them; here: as it would, by the groups key
+    for cid in ("proposals", "events"):
+        relay.events.append(
+            {
+                "id": "meta-" + cid,
+                "kind": 39000,
+                "pubkey": GK,
+                "created_at": 2,
+                "tags": [["d", cid], ["name", cid]],
+                "content": "",
+            }
+        )
+    found = webthreads.sites(svc, fresh=True)
+    assert found["proposals"]["posts"] == "proposal" and found["proposals"]["list"] == "public"
+    assert "events" not in found  # <domain>/events is the events page (events.py)
+    relay.events.append(
+        {
+            "id": "p" * 64,
+            "kind": 9,
+            "pubkey": MEMBER,
+            "created_at": 50,
+            "content": "📝 Proposal: A tool library",
+            "tags": [["h", "proposals"], ["proposal", "prop-tools-x"]],
+        }
+    )
+    relay.events.append(
+        {
+            "id": "q" * 64,
+            "kind": 9,
+            "pubkey": MEMBER,
+            "created_at": 51,
+            "content": "just chatting",
+            "tags": [["h", "proposals"]],
+        }
+    )
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
+        page = c.get("/proposals").text
+        assert (
+            "A tool library" in page and "just chatting" not in page and "Open a thread" not in page
+        )
+        assert (
+            c.post(
+                "/proposals", data={"title": "x", "text": "y", "name": "z", "email": "a@b.org"}
+            ).status_code
+            == 403
+        )
