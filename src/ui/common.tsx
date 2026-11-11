@@ -115,12 +115,12 @@ export function useMediaUrl(url: string) {
   return src
 }
 
-export function MediaItem({ m }: { m: Media }) {
+export function MediaItem({ m, onOpen }: { m: Media; /** images: open them in the lightbox instead of a new tab */ onOpen?: () => void }) {
   const src = useMediaUrl(m.url)
   if (!src) return <div className="file">…</div>
   if (m.mime.startsWith('image/'))
     return (
-      <a href={src} target="_blank" rel="noreferrer">
+      <a href={src} target="_blank" rel="noreferrer" onClick={(e) => { if (!onOpen || e.metaKey || e.ctrlKey) return; e.preventDefault(); e.stopPropagation(); onOpen() }}>
         <img src={src} alt={m.name ?? ''} loading="lazy" style={m.w && m.h ? { aspectRatio: `${m.w}/${m.h}` } : undefined} />
       </a>
     )
@@ -136,16 +136,69 @@ export function MediaGrid({ media }: { media: Media[] }) {
   if (!media.length) return null
   const visual = media.filter((m) => /^(image|video)\//.test(m.mime))
   const files = media.filter((m) => !/^(image|video)\//.test(m.mime))
+  const images = visual.filter((m) => m.mime.startsWith('image/'))
+  const [open, setOpen] = useState<number | null>(null)
   return (
     <>
       {visual.length > 0 && (
         <div className={'media' + (visual.length === 1 ? ' one' : '')}>
-          {visual.map((m) => <MediaItem key={m.url} m={m} />)}
+          {visual.map((m) => <MediaItem key={m.url} m={m} onOpen={m.mime.startsWith('image/') ? () => setOpen(images.indexOf(m)) : undefined} />)}
         </div>
       )}
+      {open !== null && <Lightbox images={images} start={open} onClose={() => setOpen(null)} />}
       {files.map((m) => <div key={m.url} style={{ marginTop: 6 }}><MediaItem m={m} /></div>)}
     </>
   )
+}
+
+// ---- lightbox -------------------------------------------------------------------
+
+/** A message's images, as big as the screen allows: swipe or ←/→ (and the side buttons) for the
+ *  others, Esc, ✕ or a tap outside the picture to close. No history entry (‹ never pushes). */
+export function Lightbox({ images, start, onClose }: { images: Media[]; start: number; onClose: () => void }) {
+  const [i, setI] = useState(start)
+  const n = images.length
+  const go = (d: number) => setI((x) => (x + d + n) % n)
+  const at = useRef<{ x: number; y: number } | null>(null)
+  const [dx, setDx] = useState(0)
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); onClose() }
+      else if (e.key === 'ArrowRight' && n > 1) go(1)
+      else if (e.key === 'ArrowLeft' && n > 1) go(-1)
+    }
+    addEventListener('keydown', k, true)
+    const was = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => { removeEventListener('keydown', k, true); document.body.style.overflow = was }
+  }, [n]) // eslint-disable-line react-hooks/exhaustive-deps
+  const m = images[i]
+  return createPortal(
+    <div className="lightbox" role="dialog" aria-modal="true" aria-label={n > 1 ? `Image ${i + 1} of ${n}` : 'Image'}
+      onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('lb-stage')) onClose() }}
+      onPointerDown={(e) => { at.current = { x: e.clientX, y: e.clientY } }}
+      onPointerMove={(e) => { if (at.current && n > 1) setDx(e.clientX - at.current.x) }}
+      onPointerUp={(e) => {
+        const s = at.current; at.current = null; setDx(0)
+        if (s && n > 1 && Math.abs(e.clientX - s.x) > 50 && Math.abs(e.clientX - s.x) > Math.abs(e.clientY - s.y)) go(e.clientX < s.x ? 1 : -1)
+      }}
+      onPointerCancel={() => { at.current = null; setDx(0) }}>
+      <div className="lb-stage"><LightboxImage key={m.url} m={m} dx={dx} /></div>
+      <button className="lb-close icon-btn" aria-label="Close" onClick={onClose}><CloseIcon /></button>
+      {n > 1 && <>
+        <button className="lb-nav prev" aria-label="Previous image" onClick={() => go(-1)}>‹</button>
+        <button className="lb-nav next" aria-label="Next image" onClick={() => go(1)}>›</button>
+        <div className="lb-count">{i + 1} / {n}</div>
+      </>}
+    </div>,
+    document.body,
+  )
+}
+
+function LightboxImage({ m, dx }: { m: Media; dx: number }) {
+  const src = useMediaUrl(m.url)
+  if (!src) return <div className="lb-loading">…</div>
+  return <img src={src} alt={m.name ?? ''} draggable={false} style={{ transform: dx ? `translateX(${dx}px)` : undefined }} />
 }
 
 // ---- sheet ---------------------------------------------------------------------
