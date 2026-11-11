@@ -43,6 +43,8 @@ services:
       OSV_APPS: ${OSV_APPS:-1}
       # …or only these of them (added on apps.<domain>; snippet osv-app)
       EXTRA_APPS: ${EXTRA_APPS:-}
+      # 1: push.<domain> answers (the push gateway, compose profile push-gateway; snippet push)
+      PUSH_GATEWAY: ${PUSH_GATEWAY:-0}
     volumes:
       # the directory, not the file: a git update replaces the Caddyfile (new inode), which a
       # single-file mount would never show; `caddy reload` then picks up the new one
@@ -123,6 +125,8 @@ services:
     restart: unless-stopped
   onboarding:
     ports: !reset []
+    restart: unless-stopped
+  push-gateway:
     restart: unless-stopped
   mail-in:
     # the mail server of the domain: MX <domain> → this host, port 25 open (belfry mail)

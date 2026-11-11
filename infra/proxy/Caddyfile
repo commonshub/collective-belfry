@@ -315,6 +315,26 @@ relay.{$BELFRY_DOMAIN} {
 	redir @osv_off {args[0]} 302
 }
 
+# The push gateway (services/push-gateway, docs/push.md §2): only on the phone apps' publisher's
+# belfry, with PUSH_GATEWAY=1 (compose profile push-gateway); elsewhere the host answers 404.
+# Belfries POST /v1/send signed with their own key (NIP-98); the gateway limits per token and
+# per belfry itself, so no per-address limit here (every belfry is one address).
+push.{$BELFRY_DOMAIN} {
+	import security
+	@push_off expression `{$PUSH_GATEWAY:0} != 1`
+	error @push_off "Not found" 404
+	request_body {
+		max_size 16KB
+	}
+	@push path /v1/send /health
+	handle @push {
+		reverse_proxy push-gateway:8200
+	}
+	handle {
+		error "Not found" 404
+	}
+}
+
 # Blossom file server through its gate (writes need an active pass; reads are public).
 blossom.{$BELFRY_DOMAIN} {
 	import security

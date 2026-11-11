@@ -80,6 +80,8 @@ SECRETS = {
     "STRIPE_WEBHOOK_SECRET": None,             # bootstrap, once Stripe is configured
     "ACCOUNTING_ODOO_API_KEY": None,           # put-secret.sh: the ticket seller's Odoo (API key)
     "SMTP_PASSWORD": None,                     # put-secret.sh smtp_password
+    "APNS_KEY": None,                          # the push gateway's APNs .p8 key (belfry config)
+    "FCM_SERVICE_ACCOUNT": None,               # the push gateway's Firebase service account JSON
 }
 generated = {"KEYCAST_ADMIN_PUBKEY": admin["pubkey_hex"], "HOST_UID": uid, "HOST_GID": gid}
 line_re = re.compile(r"^([A-Z0-9_]+)=(\S*)(\s*#.*)?$")
