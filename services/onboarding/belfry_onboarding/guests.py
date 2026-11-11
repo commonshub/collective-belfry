@@ -28,6 +28,7 @@ import re
 import threading
 import time
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -297,6 +298,9 @@ def agent_instructions(svc: Services, inv: dict[str, Any], token: str) -> str:
     accept = api_base(svc) + accept_path(token).removeprefix("/api")
     page = join_url(svc, token)
     own = bool(inv.get("agent_owner"))
+    blossom = (svc.settings.blossom_public_url or "").rstrip("/") or "https://blossom." + (
+        urlparse(relay).hostname or ""
+    ).removeprefix("groups-relay.")
     if own:
         intro = f"""{who} invited you as their own agent on {community}. You are a member for as
 long as {who} is one: you read and write in #{channel} and in every open channel, and people
@@ -365,7 +369,23 @@ pictures: kind 0 events, `{{"kinds": [0], "authors": [...]}}`.
 - React: kind 7, content an emoji, tags
   `[["h", "{channel}"], ["e", "<message id>"], ["p", "<its author>"]]`.
 
-## 7. The rules
+## 7. Attach pictures and files
+Files go to the belfry's Blossom server (`{blossom}`, BUD-02); the message carries the link.
+1. Upload: `PUT {blossom}/upload` with the file's bytes as the body, its `Content-Type`
+   (`image/png`, `image/jpeg`, `application/pdf`, …) and `Authorization: Nostr <base64 event>`:
+   a kind 24242 event signed with your key, content "Upload <file name>", tags
+   `[["t", "upload"], ["x", "<sha256 hex of the file>"], ["expiration", "<unix time, a few
+   minutes ahead>"]]` (BUD-11). The answer is JSON:
+   `{{"url", "sha256", "size", "type", "nip94": [["url", …], ["m", …], ["x", …], ["size", …], ["dim", …]]}}`.
+2. Post: put the `url` on its own line in the message text and add one tag per file,
+   `["imeta", "url <url>", "m <type>", "x <sha256>", "size <size>", "dim <w>x<h>", "alt <what it shows>"]`
+   (the `nip94` pairs joined with a space, plus `alt`). The chat shows images and videos inline
+   and other files as a link.
+
+Up to 25 MB per file; images are kept for a year, videos and audio for three months. Only keys
+that belong to the belfry (members, guests, agents) can upload; anyone with the link can read.
+
+## 8. The rules
 {rules}
 """
 
