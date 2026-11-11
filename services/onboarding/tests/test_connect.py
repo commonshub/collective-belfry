@@ -299,7 +299,9 @@ def test_belfry_s_own_native_apps_are_approved_by_their_fixed_address(web):
     assert apps.is_approved(services, "sh.belfry.app://connect")
     with pytest.raises(ValueError):
         apps.app_uri("evil.app://connect")
-    page = authorize(web, redirect_uri="sh.belfry.app://connect").text
+    page = authorize(web, redirect_uri="sh.belfry.app://connect", client_id="belfry-ios").text
     chip = page.split('<div class="chip">')[1].split("</h1>")[0]
     assert "Sign in to Belfry for iPhone" in chip and "Not approved" not in chip
+    page = authorize(web, redirect_uri="sh.belfry.app://connect", client_id="belfry-android").text
+    assert "Sign in to Belfry for Android" in page.split("</h1>")[0]
     assert authorize(web, redirect_uri="evil.app://connect").status_code >= 400

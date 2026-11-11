@@ -49,8 +49,17 @@ MAX_NAME = 60
 # Belfry's own native apps: their sign-in return addresses (custom URL schemes), approved by
 # default on every belfry and shown with these fixed names (never a name from the request).
 NATIVE_APPS = {
-    "sh.belfry.app://connect": "Belfry for iPhone",
+    "sh.belfry.app://connect": "Belfry app",
 }
+# Both phone apps share that address; their client_id says which one (fixed names again).
+NATIVE_CLIENTS = {"belfry-ios": "Belfry for iPhone", "belfry-android": "Belfry for Android"}
+
+
+def native_name(uri: str, client_id: str) -> str:
+    """The fixed name of one of Belfry's phone apps ("" for any other app)."""
+    if uri not in NATIVE_APPS:
+        return ""
+    return NATIVE_CLIENTS.get(client_id or "", NATIVE_APPS[uri])
 
 
 def app_uri(raw: str) -> str:

@@ -208,7 +208,12 @@ def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
     found = community.member_token(svc, c["partner"])
     if found is None or found[0] != c["pubkey"]:
         raise ConnectError(409, "own_key")
-    bunker = svc.keycast.create_bunker(found[1], device.name(apps.display_name(svc, c["uri"]), ua))
+    bunker = svc.keycast.create_bunker(
+        found[1],
+        device.name(
+            apps.native_name(c["uri"], c["client_id"]) or apps.display_name(svc, c["uri"]), ua
+        ),
+    )
     return {
         "bunker_url": bunker["bunker_url"],
         "token_type": "bunker",
@@ -322,7 +327,12 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
     if name == apps.address(f["uri"]):  # approved without a name of its own
         name = ""
     # an app the belfry serves itself is called by its name ("Chat"), with its address under it
-    label = apps.app_name(name, "") or apps.own_title(svc, f["uri"]) or addr
+    label = (
+        apps.native_name(f["uri"], f["client_id"])
+        or apps.app_name(name, "")
+        or apps.own_title(svc, f["uri"])
+        or addr
+    )
     badge = "" if approved else '<span class="badge wait">Not approved yet</span>'
     chip = (
         f'<div class="chip"><span class="ic">{APP_ICON}</span><span style="min-width:0">'
