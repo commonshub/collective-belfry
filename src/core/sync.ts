@@ -107,6 +107,7 @@ export async function flush() {
       if (!localOnly && !navigator.onLine) break
       try {
         const ev = await send(item)
+        retryStep = 0
         if (!item.signed) addEvents([ev])
         await dropOutbox(item.localId)
         sentListeners.forEach((f) => f(item, ev))
@@ -134,6 +135,21 @@ export async function flush() {
     flushing = false
   }
   if (again && !stalled.size) void flush()
+  else if (stalled.size) retrySoon()
+}
+
+// A send that failed for now (a dropped socket, a signer that was reconnecting) is tried again
+// within seconds, not at the next 15 s watchdog tick: 1.5 s, 3 s, 6 s, then every 12 s.
+let retryTimer: ReturnType<typeof setTimeout> | undefined
+let retryStep = 0
+function retrySoon() {
+  if (retryTimer) return
+  const ms = Math.min(12_000, 1500 * 2 ** retryStep++)
+  retryTimer = setTimeout(() => {
+    retryTimer = undefined
+    if (!outboxItems().some((o) => o.status === 'queued' && o.tries > 0)) retryStep = 0
+    void flush()
+  }, ms)
 }
 
 /** Save an event that is signed already (gift wraps) and publish it when the relay answers. */
@@ -308,12 +324,27 @@ function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
 async function publish(target: Target, ev: NostrEvent) {
   const r = await within(relay(target), 15000, 'no connection to the relay')
   try {
-    await within(r.publish(ev), 15000, 'the relay did not answer')
+    try {
+      await within(r.publish(ev), 15000, 'the relay did not answer')
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!msg.startsWith('auth-required')) throw e
+      await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
+      await within(r.publish(ev), 15000, 'the relay did not answer')
+    }
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e)
-    if (!msg.startsWith('auth-required')) throw e
-    await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
-    await within(r.publish(ev), 15000, 'the relay did not answer')
+    // no answer on a socket that says it is open: it is dead (a proxy restart can leave it so).
+    // Drop it; onclose reconnects at once and the outbox tries again on the new one.
+    if (/timed out|timeout: the relay/.test(e instanceof Error ? e.message : String(e)) && relays[target] === r) {
+      // (close() by us skips the socket's onclose: reconnect and resubscribe here)
+      r.onclose = null
+      try { r.close() } catch { /* already closed */ }
+      delete relays[target]
+      setRelay(URLS[target], 'down')
+      attempts[target] = 0
+      void connect(target)
+    }
+    throw e
   }
 }
 

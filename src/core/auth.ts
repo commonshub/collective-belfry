@@ -251,24 +251,43 @@ export async function makeSigner(s: Session): Promise<Signer> {
   let bunker = new BunkerSigner(secret, bp)
   let connected: Promise<void> | null = null
   const ensure = () => (connected ??= bunker.connect().catch((e) => { connected = null; throw e }))
-  const TIMEOUT = 20_000
-  const call = async <T,>(fn: () => Promise<T>): Promise<T> => {
+  // A deploy restarts the proxy and every socket drops (Xavier, 2026-11-11: "very slow to send").
+  // BunkerSigner never resubscribes after its socket closes: answers then go nowhere until a
+  // timeout. So a dead socket is replaced before asking, and a request that times out is asked
+  // once more on a fresh connection (signing and decrypting again is harmless).
+  const TIMEOUT = 10_000
+  const rebuild = () => {
+    const old = bunker
+    bunker = new BunkerSigner(secret, bp)
+    connected = null
+    void old.close().catch(() => { /* already gone */ })
+  }
+  const norm = (u: string) => u.replace(/\/+$/, '')
+  const alive = () => {
+    try {
+      const st = (bunker as unknown as { pool: { listConnectionStatus(): Map<string, boolean> } }).pool.listConnectionStatus()
+      return bp.relays.every((u) => [...st].some(([k, up]) => up && norm(k) === norm(u)))
+    } catch { return true } // can't tell: ask, the timeout covers it
+  }
+  const once = async <T,>(fn: () => Promise<T>): Promise<T> => {
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
         (async () => { await ensure(); return fn() })(),
         new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error('timeout: the signer did not answer')), TIMEOUT) }),
       ])
-    } catch (e) {
-      if (e instanceof Error && e.message.startsWith('timeout')) {
-        const old = bunker
-        bunker = new BunkerSigner(secret, bp)
-        connected = null
-        void old.close().catch(() => { /* already gone */ })
-      }
-      throw e
     } finally {
       clearTimeout(timer)
+    }
+  }
+  const call = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    if (connected && !alive()) rebuild()
+    try {
+      return await once(fn)
+    } catch (e) {
+      if (!(e instanceof Error && e.message.startsWith('timeout'))) throw e
+      rebuild()
+      return once(fn)
     }
   }
   // The pubkey is cached so the app opens offline; the bunker is reached only to sign.
