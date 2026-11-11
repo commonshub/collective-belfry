@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MailIcon } from './icons'
 import { Markdown } from './markdown'
-import { address, attachmentsOf, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { address, attachmentsOf, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -119,7 +119,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
           {list.map((d) => {
             const dd = fmtDay(new Date(d.at * 1000))
             const sep = dd !== day ? (day = dd) : ''
-            return <div key={d.rid}>{sep && <div className="day">{sep}</div>}<Bubble d={d} /></div>
+            return <div key={d.rid}>{sep && <div className="day">{sep}</div>}<Bubble d={d} head={mail ? title : ''} /></div>
           })}
         </div>
       </div>
@@ -128,12 +128,16 @@ export function MessageThread({ conv }: { conv: Conv }) {
   )
 }
 
-function Bubble({ d }: { d: Dm }) {
+// The thread's header already names its subject: a bubble shows one only when it differs
+// (Xavier, 2026-11-11: "Don't repeat the subject of emails in each message").
+const sameSubject = (a?: string, b?: string) => baseSubject(a).toLowerCase().replace(/\s+/g, ' ') === baseSubject(b).toLowerCase().replace(/\s+/g, ' ')
+
+function Bubble({ d, head }: { d: Dm; head: string }) {
   const r = d.mine ? report(d.emailId) : undefined
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
-      {d.kind === 1301 && d.subject && <div className="dm-subject">{d.subject}</div>}
+      {d.kind === 1301 && d.subject && !sameSubject(d.subject, head) && <div className="dm-subject">{d.subject}</div>}
       {d.text ? <Markdown text={d.text} className="dm-text" /> : <div className="dm-text">{d.attachments?.length ? '' : '(empty)'}</div>}
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
       <div className="dm-foot">
