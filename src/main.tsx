@@ -2,11 +2,13 @@ import { createRoot } from 'react-dom/client'
 import { App } from './ui/App'
 import './styles.css'
 import { NAME, THEME } from './config'
+import { applyBranding } from './core/branding'
 
 if (THEME === 'belfry') {
   document.documentElement.dataset.theme = 'belfry'
   document.title = `Chat · ${NAME}`
   document.querySelector('meta[name=theme-color]')?.setAttribute('content', '#ffffff')
+  applyBranding() // the admins' colours and logo, from the last copy on this device
 }
 
 // iPhones zoom the page in when a text field under 16px gets the focus, and the page then

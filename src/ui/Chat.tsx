@@ -1,6 +1,7 @@
 import { nip19 } from 'nostr-tools'
 import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
+import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
@@ -65,6 +66,7 @@ function SideUser() {
 export function ChannelList({ current, side = false, section, drawer = false }: { current?: string; side?: boolean; section?: string; drawer?: boolean }) {
   useVersion()
   const title = useCommunityName(side ? NAME : 'Channels')
+  const brand = useBranding()
   const [creating, setCreating] = useState(false)
   const all = groups()
   const chans = all.filter((g) => !g.isEvent && !g.isPod && !g.isProposal)
@@ -95,11 +97,12 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
     <div className="screen">
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the channels" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
-        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side ? title : 'Channels'}</h1>
+        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side && brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{side ? title : 'Channels'}</h1>
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
 
       </div>
       <div className="scroll">
+        {side && brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
         <button className={'chan' + (section === 'dm' ? ' on' : '')} onClick={() => closeDrawer('dm')}>
           <span className="hash"><MailIcon unread={unreadTotal() > 0} /></span>
           <span className="t"><b>Messages</b><small>Direct messages and e-mail{address() ? ` · ${address()}` : ''}</small></span>

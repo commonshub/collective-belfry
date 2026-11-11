@@ -11,6 +11,8 @@ import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/sto
 import { joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
+import { BrandingScreen } from './Branding'
+import { isBelfryAdmin } from '../core/people'
 import { EventsScreen } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
 import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication } from '../core/events'
@@ -178,6 +180,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
   else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
+  else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
@@ -273,6 +276,15 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
               <div className="hint" style={{ fontSize: 14 }}>Requests, members and invite codes</div>
             </div>
             {waiting > 0 && <span className="badge orange">{waiting} waiting</span>}
+          </button>
+        )}
+        {THEME === 'belfry' && isBelfryAdmin(me()) && (
+          <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/branding')}>
+            <div>
+              <div style={{ fontWeight: 600 }}>Branding</div>
+              <div className="hint" style={{ fontSize: 14 }}>Logo, cover image and colours of {NAME}</div>
+            </div>
+            <span className="hint" aria-hidden="true">›</span>
           </button>
         )}
         <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/connections')}>

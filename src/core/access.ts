@@ -3,6 +3,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { ACCESS, DISCOVERY, PLACE } from '../config'
 import { kvGet, kvSet } from './db'
+import { setBranding } from './branding'
 import { all, type Ev } from './store'
 import { currentSigner, enqueue, me, publishNow, queryOnce } from './sync'
 
@@ -35,7 +36,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
   if (!Object.keys(belfryAgents).length) belfryAgents = (await kvGet<Record<string, string>>('belfry-agents')) ?? {}
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
-    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string> }
+    const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string>; branding?: unknown }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -47,6 +48,7 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
     if (res.ok) { // members' own agents: agent key → its member's key (absent when there are none)
       belfryAgents = doc.agents && typeof doc.agents === 'object' ? doc.agents : {}
       await kvSet('belfry-agents', belfryAgents)
+      setBranding(doc.branding ?? {}) // the admins' logo, cover and colours (absent: none)
     }
   } catch { /* offline: the cached state */ }
   listeners.forEach((l) => l())
