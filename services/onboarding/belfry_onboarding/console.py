@@ -811,7 +811,7 @@ def website_html(
         items.append(
             f"""<div class="item"><strong>{E(community.subject(e))}</strong>
 <div class="meta">by {E(site["names"].get(e["pubkey"], ""))} · {community.when(e["created_at"])} ·
-<code>{E(kind)}:{E(pk[:8])}…:{E(d)}</code> · <a href="{E(s.public_url)}/proposals/{e["id"]}">discussion</a></div>{approve}</div>"""
+<code>{E(kind)}:{E(pk[:8])}…:{E(d)}</code></div>{approve}</div>"""
         )
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""

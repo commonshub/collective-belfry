@@ -90,14 +90,16 @@ def world(services, tmp_path, settings, monkeypatch):
     webthreads._cache.update(at=0.0, sites={})
 
 
-def setting(relay, by, on=True, slug="ideas", lst="public", at=10):
+def setting(relay, by, on=True, slug="ideas", lst="public", at=10, vis=None):
     relay.events.append(
         {
             "id": f"s{at}",
             "kind": 30078,
             "pubkey": by,
             "created_at": at,
-            "content": json.dumps({"on": on, "slug": slug, "list": lst}),
+            "content": json.dumps(
+                {"on": on, "slug": slug, **({"visibility": vis} if vis else {"list": lst})}
+            ),
             "tags": [["d", "belfry:web:props"], ["h", "props"], ["t", "belfry-web"]],
         }
     )
@@ -111,7 +113,7 @@ def link_in(msg) -> str:
 
 def test_a_public_page_where_anyone_opens_a_thread(world):
     svc, relay = world
-    with TestClient(create_app(svc)) as c:
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
         assert c.get("/ideas").status_code != 200 or "Open a thread" not in c.get("/ideas").text
         setting(relay, "c" * 64)  # not an admin of the channel: ignored
         assert "Open a thread" not in c.get("/ideas").text
@@ -193,7 +195,7 @@ def test_a_public_page_where_anyone_opens_a_thread(world):
 def test_externals_see_only_their_own_thread_when_the_list_is_private(world):
     svc, relay = world
     setting(relay, ADMIN, lst="own")  # a belfry admin may set it too
-    with TestClient(create_app(svc)) as c:
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
         page = c.get("/ideas").text
         assert "between you and the members" in page and "Threads</h2>" not in page
         c.post(
@@ -208,12 +210,10 @@ def test_externals_see_only_their_own_thread_when_the_list_is_private(world):
 
 def test_bots_wrong_addresses_and_reserved_slugs(world):
     svc, relay = world
-    setting(relay, MEMBER, slug="proposals")  # the members' proposals page (community.py)
-    assert webthreads.sites(svc, fresh=True) == {}
     setting(relay, MEMBER, slug="api", at=11)
     assert webthreads.sites(svc, fresh=True) == {}
     setting(relay, MEMBER, at=12)
-    with TestClient(create_app(svc)) as c:
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
         r = c.post(
             "/ideas", data={"title": "x", "text": "y", "name": "z", "email": "not-an-address"}
         )
@@ -227,3 +227,48 @@ def test_bots_wrong_addresses_and_reserved_slugs(world):
         # an off switch takes the page away
         setting(relay, MEMBER, on=False, at=13)
         assert "Open a thread" not in c.get("/ideas").text
+
+
+def reply(relay, root, at, text, by=MEMBER):
+    relay.events.append(
+        {
+            "id": hashlib.sha256(f"{root}{at}{text}".encode()).hexdigest(),
+            "kind": 1111,
+            "pubkey": by,
+            "created_at": at,
+            "content": text,
+            "tags": [["h", "props"], ["E", root, "", GK], ["K", "9"], ["e", root], ["k", "9"]],
+        }
+    )
+
+
+def test_replies_are_gathered_hourly_one_mail_per_address(world):
+    """Xavier, 2026-11-11: mail is not real time; gather the replies, one mail at most an hour."""
+    svc, relay = world
+    setting(relay, MEMBER, vis="members")  # the channel's visibility, the newer form
+    assert webthreads.sites(svc, fresh=True)["ideas"]["list"] == "own"
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
+        cards = []
+        for title in ("First", "Second"):
+            c.post(
+                "/ideas",
+                data={"title": title, "text": "x", "name": "Eve", "email": "eve@example.org"},
+            )
+            c.get(link_in(mailer.SENT[-1]), follow_redirects=False)
+            cards.append([e for e in relay.events if e["kind"] == 9][-1])
+        t0 = max(e["created_at"] for e in cards)
+        reply(relay, cards[0]["id"], t0 + 5, "One")
+        reply(relay, cards[0]["id"], t0 + 9, "Two")
+        reply(relay, cards[1]["id"], t0 + 12, "Three")
+        mailer.SENT.clear()
+        assert webthreads.notify(svc, now=t0 + 60) == 1  # one mail, both threads
+        text = mailer.SENT[-1].get_body(preferencelist=("plain",)).get_content()
+        assert "Mia: One" in text and "Mia: Two" in text and "Mia: Three" in text
+        assert "2 threads" in text
+        reply(relay, cards[0]["id"], t0 + 120, "Four")
+        assert webthreads.notify(svc, now=t0 + 600) == 0  # not within the hour
+        assert webthreads.notify(svc, now=t0 + 60 + 3600) == 1
+        assert "Mia: Four" in mailer.SENT[-1].get_body(preferencelist=("plain",)).get_content()
+        # the page lives on the public website only: the service's hosts send there
+        r = c.get("https://pass.belfry.test/ideas?x=1", follow_redirects=False)
+        assert r.status_code == 301 and r.headers["location"] == "https://belfry.test/ideas?x=1"

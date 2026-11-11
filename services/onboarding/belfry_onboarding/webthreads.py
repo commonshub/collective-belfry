@@ -12,8 +12,10 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
 
 - **The setting.** A channel admin's NIP-78 event on the groups relay: kind 30078, ``d`` =
   ``belfry:web:<channel>``, ``h`` = the channel, ``t`` = ``belfry-web``, content ``{"on": true,
-  "slug": "proposals", "list": "public" | "own"}``. ``public``: the page lists every thread and
-  anyone reads them; ``own``: someone from outside sees only their own (by the link they get).
+  "slug": "ideas", "visibility": "public" | "members"}``: the channel's visibility, one general
+  setting (2026-11-11; older events said ``"list": "public" | "own"``). ``public``: the page lists
+  every thread and anyone reads them; ``members``: someone from outside sees only their own (by
+  the link they get).
   Only the latest setting by an admin of that channel (39001) or of the belfry counts; a slug
   taken by an earlier channel, or one of the service's own paths, is ignored.
 - **The page** ``<domain>/<slug>``: the channel's name and description, a form to open a thread
@@ -25,7 +27,7 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
   ``subject``, ``client`` = ``belfry-web``), so members see and answer it in the chat like mail
   from outside. The link to the thread (with its key, ``?k=``) is theirs: with it they read it
   (also when the list is not public) and comment; their comments are kind 1111 replies by the
-  groups key with ``mail-from``. Replies by members are mailed to them (a round every 2 minutes).
+  groups key with ``mail-from``. Replies by members are mailed to them, gathered, at most once an hour.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ import secrets
 import threading
 import time
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
@@ -59,6 +61,7 @@ EMAIL = re.compile(r"^[^@\s<>\"]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,}$")
 TTL = 60
 PENDING_SECONDS = 2 * 86400
 LOOP_SECONDS = 120
+DIGEST_SECONDS = 3600  # members' replies are mailed at most once an hour, gathered
 MAX_THREADS = 100
 # first path segments that are never a channel's page (the service's own, and the apex's apps)
 RESERVED = {
@@ -101,7 +104,6 @@ RESERVED = {
     "invite",
     "brand",
     # the service's own pages (pages.py, community.py): a channel can't take them
-    "proposals",
     "changelog",
     "monitor",
     "privacy",
@@ -187,7 +189,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
             (
                 e["created_at"],
                 ch,
-                {"slug": slug, "list": "own" if conf.get("list") == "own" else "public"},
+                {"slug": slug, "list": "own" if _members_only(conf) else "public"},
             )
         )
     out: dict[str, dict[str, Any]] = {}
@@ -197,6 +199,13 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
         name, about = names.get(ch, (ch, ""))
         out[conf["slug"]] = {"channel": ch, "list": conf["list"], "name": name, "about": about}
     return out
+
+
+def _members_only(conf: dict[str, Any]) -> bool:
+    """The channel's visibility (2026-11-11: "public" or "members"); older settings said "list":
+    "own"."""
+    v = conf.get("visibility")
+    return v == "members" if v else conf.get("list") == "own"
 
 
 def _tag(e: dict[str, Any], k: str) -> str:
@@ -588,12 +597,16 @@ def comment(
 
 # ── members' replies, mailed to the author from outside ───────────────────────────────────
 def notify(svc: Services, now: int | None = None) -> int:
-    """Mail the author from outside of each web thread about replies by members since the last
-    round. Returns how many mails went out."""
+    """Mail each author from outside the replies by members since the last round: at most once an
+    hour (Xavier, 2026-11-11: "Email isn't supposed to be real time"), one mail per address that
+    gathers every thread of theirs with news. Returns how many mails went out."""
     now = now or int(time.time())
-    last = int(_param(svc, "belfry.web.notified") or 0) or now - 600
-    sent = 0
+    last = int(_param(svc, "belfry.web.notified") or 0) or now - DIGEST_SECONDS
+    if now - last < DIGEST_SECONDS:
+        return 0
     gk = _groups_pubkey(svc)
+    # address → [(slug, site, root, replies)]
+    news: dict[str, list[tuple[str, dict[str, Any], dict[str, Any], list[dict]]]] = {}
     for slug, site in sites(svc).items():
         roots, replies = _events(svc, site["channel"])
         by_id = {e["id"]: e for e in roots if e["pubkey"] == gk and _tag(e, "client") == TAG}
@@ -601,22 +614,42 @@ def notify(svc: Services, now: int | None = None) -> int:
         for r in replies:
             if last < r["created_at"] <= now and r["pubkey"] != gk and _root_of(r) in by_id:
                 new.setdefault(_root_of(r), []).append(r)
-        if not new:
-            continue
-        names, _roles = _who(svc, [r for rs in new.values() for r in rs])
         for root_id, rs in new.items():
             root = by_id[root_id]
-            email = _tag(root, "mail-from")
-            url = f"{_public_base(svc)}/{slug}/{root_id}?k={thread_key(svc, root_id, email)}"
-            lines = [f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}" for r in rs]
-            _mailer(svc).send(
-                email,
-                f"Re: {_title(root)[:150]}",
-                [f"New in your thread “{_title(root)}” ({site['name']}):", *lines],
-                (url, "Open the thread"),
-                "You get this because you opened this thread.",
-            )
-            sent += 1  # built and handed to the mail provider (kept in tests)
+            email = _tag(root, "mail-from").lower()
+            if email:
+                news.setdefault(email, []).append((slug, site, root, rs))
+    if news:
+        everyone = [r for items in news.values() for (_s, _site, _root, rs) in items for r in rs]
+        names, _roles = _who(svc, everyone)
+    sent = 0
+    for email, items in news.items():
+        lines: list[str] = []
+        for slug, site, root, rs in items:
+            if len(items) > 1:
+                lines.append(f"“{_title(root)}” ({site['name']}):")
+            for r in sorted(rs, key=lambda x: x["created_at"]):
+                lines.append(f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}")
+            if len(items) > 1:
+                link = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], email)}"
+                lines.append(f"Open it: {link}")
+        slug, site, root, rs = items[0]
+        url = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], email)}"
+        n = sum(len(x[3]) for x in items)
+        if len(items) == 1:
+            subject = f"Re: {_title(root)[:150]}"
+            head = f"New in your thread “{_title(root)}” ({site['name']}):"
+        else:
+            subject = f"{n} new replies in your threads"
+            head = f"New in your {len(items)} threads:"
+        _mailer(svc).send(
+            email,
+            subject,
+            [head, *lines],
+            (url, "Open the thread"),
+            "You get this because you opened a thread. Replies are gathered and sent at most once an hour.",
+        )
+        sent += 1  # built and handed to the mail provider (kept in tests)
     _set_param(svc, "belfry.web.notified", str(now))
     return sent
 
@@ -650,6 +683,14 @@ def install(app: FastAPI) -> None:
         site = found.get(slug)
         if site is None or _route_taken(request.app, request.scope):
             return await call_next(request)
+        # one address: the public website's (<domain>/<slug>); the service's hosts send there
+        home = urlsplit(s.settings.site_url or "")
+        host = request.headers.get("host", "").lower()
+        if home.netloc and host != home.netloc.lower():
+            if request.method not in ("GET", "HEAD"):
+                return await call_next(request)
+            q = ("?" + request.url.query) if request.url.query else ""
+            return RedirectResponse(f"{home.scheme}://{home.netloc}{request.url.path}{q}", 301)
         ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
             request.client.host if request.client else ""
         )

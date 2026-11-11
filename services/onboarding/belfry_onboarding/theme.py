@@ -83,7 +83,7 @@ def load(settings: Any) -> Theme:
     console = (getattr(settings, "console_url", "") or "").rstrip("/")
     public = (getattr(settings, "public_url", "") or "").rstrip("/")
     name = name or "Belfry"
-    links = [(f"{public}/proposals", "Proposals"), (f"{public}/changelog", "Changelog")]
+    links = [(f"{public}/changelog", "Changelog")]
     if getattr(settings, "git_repo", ""):
         links.append(((site or public) + "/git", "Code"))
     if console:

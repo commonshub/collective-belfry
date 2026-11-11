@@ -29,7 +29,6 @@ def belfry(services, authentik):
     s.console_url = "https://belfry.belfry.test"
     s.community_name = "Example Commons"
     authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": set()}
-    community._cache["data"] = None
     console._admins["at"] = 0.0
     console._status["data"] = None
     return services

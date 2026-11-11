@@ -1,4 +1,4 @@
-"""Pages every belfry serves by default: ``/monitor``, ``/changelog`` and ``/proposals``.
+"""Pages every belfry serves by default: ``/monitor`` and ``/changelog``.
 
 - ``/monitor`` (members): the community relay live, like a relay monitor: every event as it
   arrives, filtered by author and kind, paused, inspected. The relay is members-only, so the page
@@ -7,12 +7,9 @@
 - ``/changelog`` (public): every change to this belfry and who started it: the deployed code's
   commits (author and co-authors) and the operations run on the server (`belfry config`,
   `apply`, `update`), from ``infra/scripts/changelog.sh`` (mounted at CHANGELOG_PATH).
-- ``/proposals`` (members): any member proposes something, others support it and comment. Nostr
-  behind the scenes on the community relay, the same shape as a public feedback board: a
-  proposal is a kind-1 note tagged ``t=proposal`` and addressed to the belfry's key (``p``),
-  with a ``subject``; comments are kind-1 replies (``e`` root); support is a kind-7 ``+``. Notes
-  are signed as the member through the signer (Keycast); members who hold their own key post
-  the same note from any Nostr client.
+- The members' ``/proposals`` page was removed on 2026-11-11 (Xavier: "Remove the former
+  /proposals. Better to consolidate everything."): a channel's public page (webthreads.py) does
+  that job now, and ``/proposals`` is free for a channel.
 """
 
 from __future__ import annotations
@@ -25,7 +22,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -185,7 +182,7 @@ background:var(--surface-deep);border:1px solid var(--border)}
 
 
 def tabs(current: str) -> str:
-    links = [("/proposals", "Proposals"), ("/changelog", "Changelog"), ("/monitor", "Monitor")]
+    links = [("/changelog", "Changelog"), ("/monitor", "Monitor")]
     return (
         '<nav class="tabs">'
         + "".join(f'<a href="{h}" class="{"on" if h == current else ""}">{t}</a>' for h, t in links)
@@ -204,51 +201,7 @@ def sign_in_card(title: str, what: str) -> str:
     )
 
 
-# ── proposals ───────────────────────────────────────────────────────────────────────────────
-_cache: dict[str, Any] = {"at": 0.0, "data": None}
-
-
-def load_proposals(svc: Services, fresh: bool = False) -> dict[str, Any]:
-    now = time.monotonic()
-    if not fresh and _cache["data"] is not None and now - _cache["at"] < CACHE_SECONDS:
-        return _cache["data"]
-    belfry = belfry_pubkey(svc.settings)
-    roots = [
-        e
-        for e in query(svc, [{"kinds": [1], "#t": [PROPOSAL_TAG], "#p": [belfry], "limit": 300}])
-        if not any(t[0] == "e" for t in e.get("tags", []))
-    ]
-    ids = [e["id"] for e in roots]
-    related = query(svc, [{"kinds": [1, 7], "#e": ids, "limit": 2000}]) if ids else []
-    comments: dict[str, list] = {i: [] for i in ids}
-    support: dict[str, set] = {i: set() for i in ids}
-    for e in related:
-        es = [t[1] for t in e.get("tags", []) if len(t) > 1 and t[0] == "e"]
-        if not es:
-            continue
-        if e["kind"] == 1:
-            root = next(
-                (t[1] for t in e["tags"] if t[0] == "e" and len(t) > 3 and t[3] == "root"), es[0]
-            )
-            if root in comments:
-                comments[root].append(e)
-        elif (
-            e["kind"] == 7
-            and es[-1] in support
-            and (e.get("content") or "+").strip() in ("+", "👍", "❤️", "")
-        ):
-            support[es[-1]].add(e["pubkey"])
-    authors = {e["pubkey"] for e in roots + related}
-    data = {
-        "roots": sorted(roots, key=lambda e: e["created_at"], reverse=True),
-        "comments": {k: sorted(v, key=lambda e: e["created_at"]) for k, v in comments.items()},
-        "support": support,
-        "names": names_for(svc, list(authors)) if authors else {},
-    }
-    _cache.update(at=now, data=data)
-    return data
-
-
+# ── notes ───────────────────────────────────────────────────────────────────────────────────
 def subject(e: dict[str, Any]) -> str:
     s = next((t[1] for t in e.get("tags", []) if len(t) > 1 and t[0] == "subject"), "")
     return s or (e.get("content") or "").strip().split("\n", 1)[0][:MAX_TITLE] or "(untitled)"
@@ -260,71 +213,6 @@ def body_of(e: dict[str, Any]) -> str:
     if text.startswith(s):
         text = text[len(s) :]
     return text.replace("#proposal", "").strip()
-
-
-def proposals_page(data: dict[str, Any], can_post: bool, own_key: bool, msg: str = "") -> str:
-    names, support, comments = data["names"], data["support"], data["comments"]
-    items = []
-    for e in data["roots"]:
-        n_support, n_comments = len(support[e["id"]]), len(comments[e["id"]])
-        items.append(
-            f"""<div class="item"><a href="/proposals/{e["id"]}"><strong>{E(subject(e))}</strong></a>
-<div class="meta">by {E(names.get(e["pubkey"], ""))} · {when(e["created_at"])} ·
-<span class="pill">{n_support} support</span> <span class="pill">{n_comments} comments</span></div></div>"""
-        )
-    listing = "".join(items) or '<p class="muted">No proposals yet. Be the first.</p>'
-    form = ""
-    if can_post:
-        form = f"""<h2>Make a proposal</h2>
-<form method="post" action="/proposals"><p><input type="text" name="title" maxlength="{MAX_TITLE}" required placeholder="What do you propose?"></p>
-<p><textarea name="body" maxlength="{MAX_BODY}" placeholder="Why, how, who is in. Other members can support it and comment."></textarea></p>
-<p><button class="btn" type="submit">Publish the proposal</button></p></form>"""
-    elif own_key:
-        form = """<p class="muted">You hold your own key, so this page can't sign for you. Post from any
-Nostr client to this belfry's relay: a note with the tag <code>#proposal</code> that mentions the
-belfry's account.</p>"""
-    note = f'<p class="ok">{E(msg)}</p>' if msg else ""
-    return page(
-        "Proposals",
-        STYLE
-        + f"""<div class="card">{tabs("/proposals")}<h1>Proposals</h1>
-<p class="muted">Anything a member wants the community to do or change. Support the ones you back;
-comment to improve them. Stored as Nostr notes on this community's relay.</p>{note}{form}
-<h2>All proposals</h2>{listing}</div>""",
-    )
-
-
-def proposal_page(e: dict[str, Any], data: dict[str, Any], can_post: bool, me: str | None) -> str:
-    names = data["names"]
-    supporters = data["support"][e["id"]]
-    comments = data["comments"][e["id"]]
-    who = ", ".join(E(names.get(p, "")) for p in sorted(supporters)) or "nobody yet"
-    thread = (
-        "".join(
-            f"""<div class="item"><div class="meta">{E(names.get(c["pubkey"], ""))} · {when(c["created_at"])}</div>
-<div>{text_html((c.get("content") or "").strip())}</div></div>"""
-            for c in comments
-        )
-        or '<p class="muted">No comments yet.</p>'
-    )
-    actions = ""
-    if can_post:
-        backed = me in supporters
-        actions = f"""<form method="post" action="/proposals/{e["id"]}/support" class="row">
-<button class="btn" type="submit" {"disabled" if backed else ""}>{"You support this" if backed else "Support"}</button></form>
-<h2>Comment</h2><form method="post" action="/proposals/{e["id"]}/comment">
-<p><textarea name="body" maxlength="{MAX_BODY}" required></textarea></p>
-<p><button class="btn" type="submit">Send</button></p></form>"""
-    return page(
-        subject(e),
-        STYLE
-        + f"""<div class="card">{tabs("/proposals")}<p><a href="/proposals">← All proposals</a></p>
-<h1>{E(subject(e))}</h1><div class="meta">by {E(names.get(e["pubkey"], ""))} · {when(e["created_at"])}</div>
-<p>{text_html(body_of(e))}</p>
-<p class="meta"><strong>{len(supporters)} support:</strong> {who}</p>{actions}
-<h2>Comments</h2>{thread}
-<p class="meta">Nostr event <code>{e["id"]}</code></p></div>""",
-    )
 
 
 # ── changelog ───────────────────────────────────────────────────────────────────────────────
@@ -345,10 +233,6 @@ def changelog_page(data: dict[str, Any] | None) -> str:
             link = ""
             if kind == "code" and ref and repo.startswith("https://"):
                 link = f' <a class="meta" href="{E(repo)}/commit/{E(ref)}"><code>{E(ref[:7])}</code></a>'
-            if x.get("proposal"):
-                link += (
-                    f' · <a class="meta" href="/proposals/{E(x["proposal"])}">from a proposal</a>'
-                )
             badge = {"code": "code", "website": "website"}.get(kind, "server")
             days.setdefault(at.strftime("%-d %B %Y"), []).append(
                 f"""<div class="item"><span class="pill">{badge}</span> {E(x.get("summary", ""))}{link}
@@ -577,116 +461,3 @@ def register(app: FastAPI) -> None:
             return JSONResponse({"detail": "members only"}, status_code=401)
         keys = hex_keys(p)[:50]
         return JSONResponse(await run_in_threadpool(names_for, svc(request), keys))
-
-    async def proposals_context(request: Request):
-        pid = await partner(request)
-        signer = None
-        if pid is not None:
-            try:
-                signer = await run_in_threadpool(member_signer, svc(request), pid)
-            except Exception as exc:
-                log.warning("proposals: no signer for partner %s: %s", pid, exc)
-        return pid, signer
-
-    @app.get("/proposals", response_class=HTMLResponse)
-    async def proposals(request: Request):
-        pid, signer = await proposals_context(request)
-        if pid is None:
-            return HTMLResponse(
-                sign_in_card("Proposals", "Proposals from members, with support and comments.")
-            )
-        data = await run_in_threadpool(load_proposals, svc(request))
-        msg = {"sent": "Your proposal is published."}.get(request.query_params.get("msg", ""), "")
-        return HTMLResponse(proposals_page(data, signer is not None, signer is None, msg))
-
-    @app.get("/proposals/{event}", response_class=HTMLResponse)
-    async def proposal(event: str, request: Request):
-        pid, signer = await proposals_context(request)
-        if pid is None:
-            return HTMLResponse(
-                sign_in_card("Proposals", "Proposals from members, with support and comments.")
-            )
-        data = await run_in_threadpool(load_proposals, svc(request))
-        e = next((x for x in data["roots"] if x["id"] == event), None)
-        if e is None:
-            data = await run_in_threadpool(load_proposals, svc(request), True)
-            e = next((x for x in data["roots"] if x["id"] == event), None)
-        if e is None:
-            return HTMLResponse(
-                page(
-                    "Not found",
-                    '<div class="card"><h1>No such proposal</h1><p><a href="/proposals">All proposals</a></p></div>',
-                ),
-                status_code=404,
-            )
-        return HTMLResponse(
-            proposal_page(e, data, signer is not None, signer[0] if signer else None)
-        )
-
-    async def publish_as_member(
-        request: Request, unsigned: dict[str, Any]
-    ) -> RedirectResponse | None:
-        if not same_origin(request):
-            return RedirectResponse("/proposals", status_code=303)
-        pid, signer = await proposals_context(request)
-        if pid is None or signer is None:
-            return RedirectResponse("/proposals", status_code=303)
-        _, sign = signer
-        services = svc(request)
-
-        def send() -> None:
-            event = sign({"created_at": int(time.time()), "content": "", **unsigned})
-            services.relay.publish(event, sign)
-
-        await run_in_threadpool(send)
-        _cache["data"] = None
-        return None
-
-    @app.post("/proposals")
-    async def new_proposal(request: Request, title: str = Form(...), body: str = Form("")):
-        title, body = title.strip()[:MAX_TITLE], body.strip()[:MAX_BODY]
-        if not title:
-            return RedirectResponse("/proposals", status_code=303)
-        belfry = belfry_pubkey(svc(request).settings)
-        refused = await publish_as_member(
-            request,
-            {
-                "kind": 1,
-                "content": f"{title}\n\n{body}\n\n#proposal".replace("\n\n\n\n", "\n\n"),
-                "tags": [
-                    ["t", PROPOSAL_TAG],
-                    ["p", belfry],
-                    ["subject", title],
-                    ["client", "belfry"],
-                ],
-            },
-        )
-        return refused or RedirectResponse("/proposals?msg=sent", status_code=303)
-
-    async def root_author(request: Request, event: str) -> str | None:
-        data = await run_in_threadpool(load_proposals, svc(request))
-        e = next((x for x in data["roots"] if x["id"] == event), None)
-        return e["pubkey"] if e else None
-
-    @app.post("/proposals/{event}/support")
-    async def support(event: str, request: Request):
-        author = await root_author(request, event)
-        if author is None:
-            return RedirectResponse("/proposals", status_code=303)
-        refused = await publish_as_member(
-            request,
-            {"kind": 7, "content": "+", "tags": [["e", event], ["p", author], ["k", "1"]]},
-        )
-        return refused or RedirectResponse(f"/proposals/{event}", status_code=303)
-
-    @app.post("/proposals/{event}/comment")
-    async def comment(event: str, request: Request, body: str = Form(...)):
-        author = await root_author(request, event)
-        body = body.strip()[:MAX_BODY]
-        if author is None or not body:
-            return RedirectResponse(f"/proposals/{event}", status_code=303)
-        refused = await publish_as_member(
-            request,
-            {"kind": 1, "content": body, "tags": [["e", event, "", "root"], ["p", author]]},
-        )
-        return refused or RedirectResponse(f"/proposals/{event}", status_code=303)
