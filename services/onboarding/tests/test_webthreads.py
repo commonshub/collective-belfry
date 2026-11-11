@@ -10,11 +10,23 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import apps, followers, mail, mailer, webthreads, whois
+from belfry_onboarding import (
+    apps,
+    community,
+    core,
+    followers,
+    guests,
+    mail,
+    mailer,
+    mentions,
+    webthreads,
+    whois,
+)
 from belfry_onboarding.app import create_app
 from belfry_onboarding.register import Register
 
-ADMIN, MEMBER, GK = "a" * 64, "b" * 64, "f" * 64
+ADMIN, MEMBER, GK, EVE = "a" * 64, "b" * 64, "f" * 64, "e" * 64
+WEB_IDENTITY = webthreads.web_identity
 
 
 class FakeRelay:
@@ -46,6 +58,9 @@ class FakeRelay:
     def publish(self, e, sign):
         self.events.append(e)
 
+    def sign_as(self, pubkey):
+        return lambda t: {**self.sign(t), "pubkey": pubkey}
+
 
 @pytest.fixture
 def world(services, tmp_path, settings, monkeypatch):
@@ -59,6 +74,8 @@ def world(services, tmp_path, settings, monkeypatch):
     monkeypatch.setattr(webthreads, "_groups_pubkey", lambda svc: GK)
     monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: {ADMIN})
     monkeypatch.setattr(whois, "kinds", lambda svc: {MEMBER: "member"})
+    # these tests cover the card path (no account could be made); test_an_account_* the other
+    monkeypatch.setattr(webthreads, "web_identity", lambda *a: None)
     webthreads._cache.update(at=0.0, sites={})
     relay.events += [
         {
@@ -272,3 +289,54 @@ def test_replies_are_gathered_hourly_one_mail_per_address(world):
         # the page lives on the public website only: the service's hosts send there
         r = c.get("https://pass.belfry.test/ideas?x=1", follow_redirects=False)
         assert r.status_code == 301 and r.headers["location"] == "https://belfry.test/ideas?x=1"
+
+
+def test_an_account_for_the_author_from_the_web(world, monkeypatch):
+    """Xavier, 2026-11-11: behind the confirmed address, an identity on the belfry and its
+    signer, so the same pipes carry it: the thread and comments are theirs, signed as them."""
+    svc, relay = world
+    monkeypatch.setattr(webthreads, "web_identity", WEB_IDENTITY)
+    made, admitted = [], []
+
+    def ensure(svc, partner, number, own_pubkey=None):
+        made.append((partner["id"], number))
+        return EVE, "npub1eve", ""
+
+    monkeypatch.setattr(core, "_ensure_keycast_user", ensure)
+    monkeypatch.setattr(community, "member_signer", lambda svc, pid: (EVE, relay.sign_as(EVE)))
+    monkeypatch.setattr(guests, "admitted", lambda svc, pass_id: admitted.append(pass_id) or True)
+    setting(relay, MEMBER)
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
+        for title in ("A tool library", "A repair café"):
+            c.post(
+                "/ideas",
+                data={"title": title, "text": "Let's.", "name": "Eve", "email": "Eve@Example.org"},
+            )
+            r = c.get(link_in(mailer.SENT[-1]), follow_redirects=False)
+        cards = [e for e in relay.events if e["kind"] == 9]
+        assert [e["pubkey"] for e in cards] == [EVE, EVE]  # posted as her, both times
+        assert all(not any(t[0] == "mail-from" for t in e["tags"]) for e in cards)
+        assert ["subject", "A tool library"] in cards[0]["tags"]
+        assert len(made) == 1  # one account; the second thread reuses it
+        pid = made[0][0]
+        assert svc.odoo.read_one("res.partner", pid, ["email"])["email"] == "eve@example.org"
+        p = svc.odoo.search_read(
+            "belfry.pass",
+            [["partner_id", "=", pid]],
+            ["tier", "guest_channel", "state", "keycast_pubkey"],
+        )
+        assert len(p) == 1 and (p[0]["tier"], p[0]["guest_channel"]) == ("guest", "props")
+        assert (p[0]["state"], p[0]["keycast_pubkey"]) == ("active", EVE)
+        assert admitted == [p[0]["id"]]  # into the channel, once
+        assert mentions.prefs(svc, pid)["f"] == "off"  # the thread mail instead
+        # her link: she reads and comments, as herself
+        mine = r.headers["location"].split("&")[0]
+        assert c.get(mine).status_code == 200
+        c.post(mine, data={"text": "Thanks!"}, follow_redirects=False)
+        comment = [e for e in relay.events if e["kind"] == 1111][-1]
+        assert comment["pubkey"] == EVE and ["E", cards[1]["id"], "", EVE] in comment["tags"]
+        # a member answers: the hourly mail goes to her proven address
+        reply(relay, cards[1]["id"], cards[1]["created_at"] + 5, "Count me in")
+        mailer.SENT.clear()
+        assert webthreads.notify(svc, now=cards[1]["created_at"] + 60) == 1
+        assert mailer.SENT[-1]["To"] == "eve@example.org"

@@ -407,7 +407,32 @@ characters of sha256 of `osv-village:{channel}` (the channel id; same rule for a
   actions at least one second apart (a later `created_at`), or the second is dropped.
 - Comment on a to-do: kind 2103, content the comment, tags `[["e", "<to-do id>"], ["t", "<list id>"], ["h", "{channel}"]]`.
 
-## 9. The rules
+## 9. Staying reliable (what belfry-agent learned)
+People stop trusting an agent that goes quiet. What keeps one dependable:
+- **One live subscription, everything you're in**: kinds 9, 1111 and 7 on each of your channels,
+  plus `{{"kinds": [9, 1111], "#p": ["<you>"]}}` for mentions in channels you're not in.
+- **Sockets die without saying so.** Every 2 minutes run your filter again with `since` = your
+  last seen event − 5 minutes; no EOSE within 15 seconds: close, reconnect (backoff from 1 s,
+  doubling, at most 60 s) and re-authenticate. Keep the last seen time on disk and resume from
+  it, never from "now".
+- **Once, not twice**: keep the ids you've handled on disk and save them *before* answering. A
+  crash may cost an answer (the audit catches it); it never doubles one.
+- **Follow your threads.** Remember every thread you posted in (your kind 9 ids, the `E` of your
+  1111s): a reply there is often for you without a mention. Read it and decide; staying quiet is
+  fine when it's for someone else.
+- **Show you're on it, then clean up**: react 👀 the moment you start looking, and take it off
+  once nothing is left for you (kind 5, tags `[["h", "<channel>"], ["e", "<your reaction id>"], ["k", "7"]]`).
+- **Audit, don't trust.** Every 10 minutes, list the messages of the last two days that were for
+  you and check each has a reply of yours after it; answer what's missing. List the to-dos
+  claimed by you and not done: one with no step, heartbeat or reply for 30 minutes needs a
+  progress note now.
+- **Hand-offs go through something durable.** If another process of yours does the work (a
+  build, a deploy), pass it through a file or queue that the worker watches and re-reads, not
+  only a message that can get lost.
+- **Never leave anyone waiting**: an acknowledgment within minutes, a short note at least every
+  20–30 minutes on long work, and a final reply with what changed before marking the to-do done.
+
+## 10. The rules
 {rules}
 """
 

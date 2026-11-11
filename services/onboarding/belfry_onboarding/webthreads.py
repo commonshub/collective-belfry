@@ -427,8 +427,8 @@ def thread_page(
     root = next((e for e in roots if e["id"] == root_id), None)
     if root is None:
         return _page("Not found", "<h1>No such thread</h1>", 404)
-    mail_from = _tag(root, "mail-from") if root["pubkey"] == _groups_pubkey(svc) else ""
-    mine = bool(mail_from) and hmac.compare_digest(k or "", thread_key(svc, root_id, mail_from))
+    owner = _owner(svc, root)
+    mine = bool(owner) and hmac.compare_digest(k or "", thread_key(svc, root_id, owner))
     if site["list"] != "public" and not mine:
         return _page(
             "Private thread",
@@ -458,6 +458,68 @@ def thread_page(
     else:
         body += '<p class="wt-note">Members answer in the chat. Opened this thread? Comment through the link we mailed you.</p>'
     return _page(_title(root), body)
+
+
+# ── who writes from the web: an account like everyone's ───────────────────────────────────
+GUEST_DAYS = 90
+
+
+def web_identity(svc: Services, channel: str, name: str, email: str) -> dict[str, Any] | None:
+    """The account behind a proven address (Xavier, 2026-11-11: "create an identity for them on
+    the belfry / bunker so that we can reuse all the same pipes"): a member posts as themselves;
+    anyone else becomes a guest of the channel with a key in the signer, like a guest who joined
+    from an invite, with this address saved. ``{"partner", "pubkey"}``; None when it can't be
+    made (no register, the signer is down): the page then posts the old way, as a card."""
+    from . import core, guests, mentions
+
+    make = getattr(svc.odoo, "web_guest", None)
+    if make is None:
+        return None
+    try:
+        got = make(channel, name, email, GUEST_DAYS)
+        pid = int(got["partner_id"])
+        if got["kind"] == "new":
+            row = svc.odoo.read_one("res.partner", pid, ["name"]) or {}
+            partner = {"id": pid, "name": row.get("name") or name}
+            pubkey, npub, _ucan = core._ensure_keycast_user(svc, partner, f"guest-{pid}")
+            svc.odoo.write("res.partner", [pid], {"belfry_npub": npub})
+            svc.odoo.write(
+                "belfry.pass", [got["pass_id"]], {"keycast_pubkey": pubkey, "state": "active"}
+            )
+            # their thread's replies come by the hourly thread mail, not also the daily digest
+            mentions.save(svc, pid, f="off")
+            got["pubkey"] = pubkey
+        if got["kind"] in ("new", "guest"):
+            guests.admitted(svc, got["pass_id"])
+        return {"partner": pid, "pubkey": got["pubkey"]}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("webthreads: no account for a web author: %r", exc)
+        return None
+
+
+def _partner_of_key(svc: Services, pubkey: str) -> int | None:
+    from .core import m2o_id
+
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", pubkey], ["state", "=", "active"]], ["partner_id"]
+    )
+    return m2o_id(rows[0].get("partner_id")) if rows else None
+
+
+def _email_of_key(svc: Services, pubkey: str) -> str:
+    pid = _partner_of_key(svc, pubkey)
+    row = svc.odoo.read_one("res.partner", pid, ["email"]) if pid else None
+    return ((row or {}).get("email") or "").lower()
+
+
+def _owner(svc: Services, root: dict[str, Any] | None) -> str:
+    """Whose thread it is, for its link's key: the author's key for a thread opened from the
+    web by an account, the address for the older cards (posted by the groups key)."""
+    if not root or _tag(root, "client") != TAG:
+        return ""
+    if root["pubkey"] == _groups_pubkey(svc):
+        return _tag(root, "mail-from")
+    return root["pubkey"]
 
 
 # ── actions ────────────────────────────────────────────────────────────────────────────────
@@ -522,24 +584,31 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
     if not p or p.get("slug") != slug:
         return _page("Link used", "<h1>This link was used already or is too old</h1>", 404)
     if p.get("posted"):
+        owner = p.get("owner") or p["email"]
         return RedirectResponse(
-            f"/{slug}/{p['posted']}?k={thread_key(svc, p['posted'], p['email'])}", 303
+            f"/{slug}/{p['posted']}?k={thread_key(svc, p['posted'], owner)}", 303
         )
     if time.time() - p.get("at", 0) > PENDING_SECONDS:
         return _page(
             "Link too old", "<h1>This link is too old</h1><p>Send the thread again.</p>", 410
         )
     text = f"**{p['title']}**\n\n{p['text']}"
-    extra = [
-        ["subject", p["title"][:300]],
-        ["mail-from", p["email"]],
-        ["mail-name", p["name"][:100]],
-        ["belfry-auth", "pass"],  # the address answered the link
-    ]
-    event = drops.post(svc, p["channel"], text, extra, None, client=TAG)
-    p["posted"] = event["id"]
+    me = web_identity(svc, p["channel"], p["name"], p["email"])
+    if me is not None:  # as themselves, an account like everyone's
+        subject = [["subject", p["title"][:300]]]
+        event = drops.post(svc, p["channel"], text, subject, me["partner"], client=TAG)
+    else:  # no account could be made: a card by the groups key, as before
+        extra = [
+            ["subject", p["title"][:300]],
+            ["mail-from", p["email"]],
+            ["mail-name", p["name"][:100]],
+            ["belfry-auth", "pass"],  # the address answered the link
+        ]
+        event = drops.post(svc, p["channel"], text, extra, None, client=TAG)
+    owner = event["pubkey"] if event["pubkey"] != _groups_pubkey(svc) else p["email"]
+    p["posted"], p["owner"] = event["id"], owner
     _set_param(svc, "belfry.web.pending." + token, json.dumps(p))
-    k = thread_key(svc, event["id"], p["email"])
+    k = thread_key(svc, event["id"], owner)
     url = f"{_public_base(svc)}/{slug}/{event['id']}?k={k}"
     _mailer(svc).send(
         p["email"],
@@ -557,40 +626,42 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
 def comment(
     svc: Services, slug: str, site: dict[str, Any], root_id: str, k: str, text: str
 ) -> Response:
-    from . import mail
+    from . import community, mail
 
     roots, _ = _events(svc, site["channel"])
     root = next((e for e in roots if e["id"] == root_id), None)
-    mail_from = _tag(root, "mail-from") if root and root["pubkey"] == _groups_pubkey(svc) else ""
-    if not mail_from or not hmac.compare_digest(k or "", thread_key(svc, root_id, mail_from)):
+    owner = _owner(svc, root)
+    if not owner or not hmac.compare_digest(k or "", thread_key(svc, root_id, owner)):
         return _page("Not allowed", "<h1>Only the thread's author comments here</h1>", 403)
     text = (text or "").strip()[:8000]
     if not text:
         return RedirectResponse(f"/{slug}/{root_id}?k={k}", 303)
-    if mail._limited("web-comment:" + mail_from, 20, 3600):
+    if mail._limited("web-comment:" + owner, 20, 3600):
         return _page("Slow down", "<h1>Too many comments in a short time</h1>", 429)
-    got = _relay(svc)
-    relay, sign = got
-    gk = _groups_pubkey(svc)
-    event = sign(
-        {
-            "kind": 1111,
-            "created_at": int(time.time()),
-            "content": text,
-            "tags": [
-                ["h", site["channel"]],
-                ["E", root_id, "", gk],
-                ["K", "9"],
-                ["P", gk],
-                ["e", root_id, "", gk],
-                ["k", "9"],
-                ["p", gk],
-                ["mail-from", mail_from],
-                ["mail-name", _tag(root, "mail-name")],
-                ["client", TAG],
-            ],
-        }
-    )
+    relay, api_sign = _relay(svc)
+    author = root["pubkey"]
+    tags = [
+        ["h", site["channel"]],
+        ["E", root_id, "", author],
+        ["K", "9"],
+        ["P", author],
+        ["e", root_id, "", author],
+        ["k", "9"],
+        ["p", author],
+        ["client", TAG],
+    ]
+    sign = api_sign
+    if owner == author:  # their own account: the comment is theirs, signed by the signer
+        pid = _partner_of_key(svc, author)
+        found = community.member_signer(svc, pid) if pid else None
+        if found is None:
+            return _page(
+                "Not now", "<h1>Something went wrong</h1><p>Try again in a minute.</p>", 503
+            )
+        sign = found[1]
+    else:  # an older card: the groups key writes for the address
+        tags += [["mail-from", owner], ["mail-name", _tag(root, "mail-name")]]
+    event = sign({"kind": 1111, "created_at": int(time.time()), "content": text, "tags": tags})
     relay.publish(event, sign)
     return RedirectResponse(f"/{slug}/{root_id}?k={k}", 303)
 
@@ -609,14 +680,19 @@ def notify(svc: Services, now: int | None = None) -> int:
     news: dict[str, list[tuple[str, dict[str, Any], dict[str, Any], list[dict]]]] = {}
     for slug, site in sites(svc).items():
         roots, replies = _events(svc, site["channel"])
-        by_id = {e["id"]: e for e in roots if e["pubkey"] == gk and _tag(e, "client") == TAG}
+        by_id = {e["id"]: e for e in roots if _tag(e, "client") == TAG}
         new: dict[str, list[dict]] = {}
         for r in replies:
-            if last < r["created_at"] <= now and r["pubkey"] != gk and _root_of(r) in by_id:
-                new.setdefault(_root_of(r), []).append(r)
+            root = by_id.get(_root_of(r))
+            if root is None or not last < r["created_at"] <= now or r["pubkey"] == gk:
+                continue
+            if r["pubkey"] == root["pubkey"]:  # their own comment
+                continue
+            new.setdefault(root["id"], []).append(r)
         for root_id, rs in new.items():
             root = by_id[root_id]
-            email = _tag(root, "mail-from").lower()
+            owner = _owner(svc, root)
+            email = _email_of_key(svc, owner) if owner == root["pubkey"] else owner.lower()
             if email:
                 news.setdefault(email, []).append((slug, site, root, rs))
     if news:
@@ -631,10 +707,10 @@ def notify(svc: Services, now: int | None = None) -> int:
             for r in sorted(rs, key=lambda x: x["created_at"]):
                 lines.append(f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}")
             if len(items) > 1:
-                link = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], email)}"
+                link = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], _owner(svc, root))}"
                 lines.append(f"Open it: {link}")
         slug, site, root, rs = items[0]
-        url = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], email)}"
+        url = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], _owner(svc, root))}"
         n = sum(len(x[3]) for x in items)
         if len(items) == 1:
             subject = f"Re: {_title(root)[:150]}"

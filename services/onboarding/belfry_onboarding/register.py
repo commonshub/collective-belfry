@@ -828,6 +828,71 @@ class Register(OdooApi):
             self._write("belfry.pass", [pass_id], {"state": "active"})
             return {"kind": "guest", "pass_id": pass_id}
 
+    def web_guest(self, channel: str, name: str, email: str, days: int) -> dict[str, Any]:
+        """Someone who proved EMAIL on a channel's public page (webthreads.py) gets the same
+        kind of account as everyone else (Xavier, 2026-11-11). Returns ``{"kind", "partner_id",
+        "pass_id"?, "pubkey"?}``: ``member`` (a member's address: they post as themselves),
+        ``already`` (a guest of CHANNEL), ``guest`` (an account already, one more guest pass,
+        active), ``new`` (a new contact with this proven address and a pending guest pass: the
+        caller makes the key in the signer and opens it)."""
+        email = email.strip().lower()
+        with self._lock:
+            person = self._partner_by_email(email)
+            keyed: list[dict[str, Any]] = []
+            if person:
+                passes = [
+                    p
+                    for p in self._all("belfry.pass")
+                    if p.get("partner_id") == person["id"] and p.get("state") == "active"
+                ]
+                keyed = [p for p in passes if p.get("keycast_pubkey")]
+                if any(p.get("tier") != "guest" for p in keyed):
+                    pk = next(p for p in keyed if p.get("tier") != "guest")["keycast_pubkey"]
+                    return {"kind": "member", "partner_id": person["id"], "pubkey": pk}
+                here = [p for p in keyed if p.get("guest_channel") == channel]
+                if here:
+                    return {
+                        "kind": "already",
+                        "partner_id": person["id"],
+                        "pass_id": here[0]["id"],
+                        "pubkey": here[0]["keycast_pubkey"],
+                    }
+            today = now().date()
+            vals = {
+                "tier": "guest",
+                "guest_channel": channel,
+                "guest_days": int(days),
+                "guest_inviter": "",
+                "date_start": today.isoformat(),
+                "date_end": (today + dt.timedelta(days=int(days))).isoformat(),
+            }
+            if person and keyed:
+                pass_id = self._create(
+                    "belfry.pass",
+                    {
+                        **vals,
+                        "partner_id": person["id"],
+                        "keycast_pubkey": keyed[0]["keycast_pubkey"],
+                        "own_pubkey": keyed[0].get("own_pubkey") or False,
+                    },
+                )
+                self._write("belfry.pass", [pass_id], {"state": "active"})
+                return {
+                    "kind": "guest",
+                    "partner_id": person["id"],
+                    "pass_id": pass_id,
+                    "pubkey": keyed[0]["keycast_pubkey"],
+                }
+            pid = (
+                person["id"]
+                if person
+                else self._create(
+                    "res.partner", {"name": (name or "").strip()[:100] or "Guest", "email": email}
+                )
+            )
+            pass_id = self._create("belfry.pass", {**vals, "partner_id": pid, "state": "pending"})
+            return {"kind": "new", "partner_id": pid, "pass_id": pass_id}
+
     def _m_belfry_participant_revoke(self, model, partner_id, invite_id, *_a, **_k):
         inv = self._get("belfry.invite", int(invite_id))
         if not inv or inv.get("inviter_partner_id") != int(partner_id):
