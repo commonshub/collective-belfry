@@ -67,7 +67,7 @@ function About({ id }: { id: string }) {
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
   const [openMail, setOpenMail] = useState(false)
-  const [web, setWeb] = useState<WebPage>({ on: false, slug: '', list: 'public' })
+  const [web, setWeb] = useState<WebPage>({ on: false, slug: '', visibility: 'public' })
   const [webError, setWebError] = useState('')
   const [inviting, setInviting] = useState(false)
   if (!g) return null
@@ -102,10 +102,10 @@ function About({ id }: { id: string }) {
       </div>
       <div className="row" style={{ gap: 8 }}>
         <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
-        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setWeb(webPage(g) ?? { on: false, slug: slugify(g.name), list: 'public' }); setWebError(''); setEditing(true) }}>Settings</button>}
+        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setWeb(webPage(g) ?? { on: false, slug: slugify(g.name), visibility: 'public' }); setWebError(''); setEditing(true) }}>Settings</button>}
       </div>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
-      {webPage(g)?.on && <p className="hint web-page-link" style={{ marginTop: 16 }}>Public page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a> · {webPage(g)!.list === 'own' ? 'people from outside see only their own thread' : 'every thread listed'}</p>}
+      {webPage(g)?.on && <p className="hint web-page-link" style={{ marginTop: 16 }}>{webPage(g)!.visibility === 'members' ? 'Members only' : 'Public'} · web page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a></p>}
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
         <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={() => setEditing(false)}>
@@ -123,12 +123,16 @@ function About({ id }: { id: string }) {
             }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
             const was = webPage(g)
-            if (web.on !== !!was?.on || (web.on && (web.slug !== was?.slug || web.list !== was?.list))) await setWebPage(id, web)
+            if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public')) await setWebPage(id, web)
             setEditing(false)
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
             {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
+            {!g.isPod && <div className="field visibility"><span>Visibility</span>
+              <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'public'} onChange={() => setWeb({ ...web, visibility: 'public' })} /> <span><b>Public</b> · anyone reads its threads on the web</span></label>
+              <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'members'} onChange={() => setWeb({ ...web, visibility: 'members' })} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
+            </div>}
             <label className="switch-row">
               <span><b>E-mails from anyone</b><small>Mail to {g.id}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
               <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
@@ -143,10 +147,6 @@ function About({ id }: { id: string }) {
                   <span className="row" style={{ gap: 6, alignItems: 'center' }}><span className="hint" style={{ whiteSpace: 'nowrap' }}>{BELFRY.domain}/</span>
                     <input className="input" aria-label="Page address" value={web.slug} onChange={(e) => { setWebError(''); setWeb({ ...web, slug: e.target.value.toLowerCase() }) }} /></span>
                 </label>
-                <div className="field"><span>Who sees the threads</span>
-                  <label className="toggle"><input type="radio" name="web-list" checked={web.list === 'public'} onChange={() => setWeb({ ...web, list: 'public' })} /> Everyone: the page lists every thread, like GitHub issues</label>
-                  <label className="toggle"><input type="radio" name="web-list" checked={web.list === 'own'} onChange={() => setWeb({ ...web, list: 'own' })} /> People from outside see only their own thread</label>
-                </div>
                 {webError && <p className="error">{webError}</p>}
               </div>
             )}

@@ -363,14 +363,16 @@ export function isInbox(g: Group | undefined): boolean {
 
 // ---- a channel's public page on the web (<domain>/<slug>, Belfry's webthreads.py) ---------
 // The admins' latest NIP-78 event, d = belfry:web:<channel>, t = belfry-web: anyone opens a thread
-// there (it lands here as an e-mail card); "public" lists every thread, "own" shows each person
-// from outside only theirs.
+// there (it lands here as an e-mail card). The channel's visibility (Xavier, 2026-11-11: one
+// general setting, public or members only) rides in the same event: "public" lists every thread
+// on the page, "members" shows someone from outside only their own. Older events said "list".
 export const WEB_D = 'belfry:web:'
-export interface WebPage { on: boolean; slug: string; list: 'public' | 'own' }
+export type ChannelVisibility = 'public' | 'members'
+export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility }
 // paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
 export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
   'market me mentions people photos programme shop signin skills static steward theme tokens vote wallet welcome invite brand ' +
-  'proposals changelog monitor privacy terms refunds rules help').split(' '))
+  'changelog monitor privacy terms refunds rules help').split(' '))
 export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 
 export function webPage(g: Group | undefined): WebPage | undefined {
@@ -378,7 +380,7 @@ export function webPage(g: Group | undefined): WebPage | undefined {
   const own = all(me()).filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && g.admins.has(e.pubkey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
-    return c ? { on: !!c.on, slug: String(c.slug || ''), list: c.list === 'own' ? 'own' : 'public' } : undefined
+    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public' } : undefined
   } catch { return undefined }
 }
 
