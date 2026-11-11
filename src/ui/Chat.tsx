@@ -377,8 +377,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             if (it.t === 'act') {
               const key = 'act:' + it.root.ev.id
               return <Fragment key={key}>
-                <ThreadActivity root={it.root} last={it.last} onOpen={() => toggle(key)} open={openThreads.has(key)} />
-                {openThreads.has(key) && <InlineThread groupId={id} root={it.root} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(it.root)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
+                <ThreadActivity root={it.root} last={it.last} onOpen={() => openThread(it.root)} open={activeThread === it.root.ev.id} />
               </Fragment>
             }
             const m = it.m
@@ -388,8 +387,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-                thread={th.get(m.ev.id)} onThread={() => toggle(key)} onOpenThread={() => openThread(m)} threadOpen={openThreads.has(key)} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
-              {openThreads.has(key) && <InlineThread groupId={id} root={m} focus={replyTo === key} onHide={() => toggle(key)} onOpen={() => openThread(m)} onAct={(r) => { setPicking(false); setActingReply(r) }} />}
+                thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
             </Fragment>
           })}
         </div>
@@ -1079,7 +1077,7 @@ function TodoMark({ todo, onClick }: { todo: Task; onClick: () => void }) {
 }
 
 /** Under a message with replies: one line, the repliers' faces, how many, when, and the start of
- *  the last reply. It unfolds the replies (their "Open thread" link goes to the thread's view). */
+ *  the last reply. It opens the thread (Xavier, 2026-11-11: no more replies unfolded inline). */
 function ThreadLine({ groupId, rootId, thread, open, onClick }: { groupId: string; rootId: string; thread: ThreadInfo; open: boolean; onClick: () => void }) {
   const last = threadReplies(groupId, rootId).at(-1)
   const said = last ? replyText(last).slice(0, 120) || (last.media.length ? 'a photo' : '') : ''
