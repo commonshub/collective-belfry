@@ -321,10 +321,13 @@ relay.{$BELFRY_DOMAIN} {
 # per belfry itself, so no per-address limit here (every belfry is one address).
 push.{$BELFRY_DOMAIN} {
 	import security
-	@push_off expression `{$PUSH_GATEWAY:0} != 1`
-	error @push_off "Not found" 404
 	request_body {
 		max_size 16KB
+	}
+	# off on every belfry but the publisher's: a handle runs before error, so it must be a handle
+	@push_off expression `{$PUSH_GATEWAY:0} != 1`
+	handle @push_off {
+		error "Not found" 404
 	}
 	@push path /v1/send /health
 	handle @push {
