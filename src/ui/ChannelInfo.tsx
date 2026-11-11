@@ -35,10 +35,10 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
 }
 
 /** The tabs and their content (also the pulled-down channel header's full view). */
-export function ChannelInfoBody({ id, tab, setTab }: { id: string; tab: Tab; setTab: (t: Tab) => void }) {
+export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Tab; setTab: (t: Tab) => void; tabs?: [Tab, string][] }) {
   return (
     <>
-      <Tabs tab={tab} setTab={setTab} />
+      <Tabs tab={tab} setTab={setTab} tabs={tabs} />
       <div className="scroll">
         <Summary id={id} tab={tab} open={setTab} />
         {tab === 'about' && <About id={id} />}

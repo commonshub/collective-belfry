@@ -4,7 +4,7 @@ import { address, unreadTotal } from '../core/dm'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, type Task, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useNow } from './common'
@@ -407,11 +407,18 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
   const rx = reactions(groupId)
   const root = messages(groupId).find((m) => m.ev.id === rootId)
   const replies = threadReplies(groupId, rootId)
+  // to-dos made from this thread's messages: each step (made, claimed, working, done…) is a line in it
+  const ids = new Set([rootId, ...replies.map((m) => m.ev.id)])
+  const steps = tasklist(groupId).tasks.filter((t) => t.source && ids.has(t.source)).flatMap((t) => t.history.map((s) => ({ t, s })))
+  const flow: { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep }[] = [
+    ...replies.map((m, i) => ({ at: m.ev.created_at, m, i } as { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep })),
+    ...steps.map((x) => ({ at: x.s.at, ...x } as { at: number; m?: Message; i?: number; t?: Task; s?: TaskStep })),
+  ].sort((a, b) => a.at - b.at || (a.m ? -1 : 0) - (b.m ? -1 : 0))
   const [acting, setActing] = useState<Message | null>(null)
   const [editing, setEditing] = useState<Message | null>(null)
   const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [replies.length])
+  useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [flow.length])
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => up(`c/${encodeURIComponent(groupId)}`)
   const gkey = knownGroupsKey()
@@ -430,8 +437,10 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
           {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
-          {replies.map((m, i) => <Row key={m.ev.id} m={m} prev={replies[i - 1]} head={i === 0} name={nameOf(m)} groupId={groupId}
-            reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} announce={false} />)}
+          {flow.map((x) => x.m
+            ? <Row key={x.m.ev.id} m={x.m} prev={replies[x.i! - 1]} head={x.i === 0} name={nameOf(x.m)} groupId={groupId}
+              reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(x.m!) }} announce={false} />
+            : <TodoStepLine key={x.t!.id + x.s!.at + x.s!.what} t={x.t!} s={x.s!} />)}
         </div>
       </div>
       {root && <Composer groupId={groupId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
@@ -535,8 +544,8 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           )}
           {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
           {todo && (
-            <button className={'todo-chip' + (todo.done ? ' done' : '')} onClick={() => void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done')}
-              aria-label={todo.done ? 'Done. Mark as not done' : 'To do. Mark as done'}>
+            <button className={'todo-chip' + (todo.done ? ' done' : '')} onClick={() => { if (onOpenThread) onOpenThread(); else void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done') }}
+              aria-label={onOpenThread ? `To-do: ${todo.title}. Open its thread` : todo.done ? 'Done. Mark as not done' : 'To do. Mark as done'}>
               <TodoChipBody todo={todo} />
             </button>
           )}
@@ -1030,4 +1039,21 @@ function SaveAccountBar() {
 function TodoChipBody({ todo }: { todo: Task }) {
   const busy = isWorking(todo, useNow())
   return <><span className={'ico-wrap' + (busy ? ' working' : '')}><TodoIcon /></span>{todo.done ? 'Done' : todo.assignee ? `${busy ? 'Working now' : 'To do'} · ${displayName(todo.assignee)}` : 'To do'}</>
+}
+
+const STEP_WORDS: Record<TaskStep['what'], string> = {
+  created: 'made a to-do', claim: 'took the to-do', unclaim: 'let go of the to-do', working: 'started working on',
+  idle: 'stopped working on', done: 'marked done', undone: 'reopened', comment: 'commented on',
+}
+
+/** One step of a to-do, as a line in the thread: who, what, which to-do, when. */
+function TodoStepLine({ t, s }: { t: Task; s: TaskStep }) {
+  const d = new Date(s.at * 1000)
+  return (
+    <div className={'todo-step ' + s.what}>
+      <span className="ico-wrap"><TodoIcon /></span>
+      <span className="what"><b>{displayName(s.who)}</b> {STEP_WORDS[s.what]} “{t.title}”{s.text ? <>: {s.text}</> : null}</span>
+      <time dateTime={d.toISOString()} title={d.toLocaleString()}>{d.toDateString() === new Date().toDateString() ? '' : fmtDay(d) + ' '}{fmtTime(s.at)}</time>
+    </div>
+  )
 }

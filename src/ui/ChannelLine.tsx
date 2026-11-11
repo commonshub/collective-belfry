@@ -9,12 +9,12 @@
 // Everything else shows as small counts on the right (events, proposals, pods, to-dos). Pulling
 // the line down (ChannelHeader) shows the same things in full: PullDown below.
 import { useState, type ReactNode } from 'react'
-import { taskAction } from '../core/actions'
+import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
-import { useVersion } from '../core/store'
+import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, taskTally, messages, type Task, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { fmtDay, go, useNow } from './common'
+import { Btn, Form, fmtDay, go, useNow } from './common'
 import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
@@ -40,11 +40,13 @@ export function channelFacts(id: string) {
   const proposals = subs.filter((x) => x.isProposal).map((x) => proposalFor(x.id)).filter((p): p is Proposal => !!p && OPEN_STATUS.includes(p.status))
   const events = upcoming(id)
   const pins = pinned(id, mayPin(g))
-  const todos = tasklist(id).tasks.filter((t) => !t.done)
+  const allTasks = tasklist(id).tasks
+  const todos = allTasks.filter((t) => !t.done)
+  const tally = taskTally(allTasks)
   const active = recentlyActive(id)
   const own = g?.isProposal ? proposalFor(id) : undefined
   const needsVote = (p: Proposal) => p.status === 'voting' && !!p.poll && p.poll.version === p.version && !p.poll.votes.get(me())
-  return { g, pods, proposals, events, pins, todos, active, own, needsVote }
+  return { g, pods, proposals, events, pins, todos, allTasks, tally, active, own, needsVote }
 }
 
 /** The one line. `topic`: the feed is filtered on it, which the line says first of all. */
@@ -107,7 +109,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
     ['events', <CalendarIcon />, f.events.length - (shownNow === 'event' ? 1 : 0), 'more events'],
     ['proposals', <DocIcon />, f.proposals.length - (shownNow === 'proposal' ? 1 : 0), 'more open proposals'],
     ['pods', <PodShape members={6} size={13} />, f.pods.length, 'pods'],
-    ['todos', <TodoIcon />, f.todos.length, 'to do'],
+    ['todos', <TodoIcon />, f.tally.total, 'to-dos'],
   ]
   return (
     <div className={'chan-line' + (quiet ? ' quiet' : '') + (open ? ' open' : '')} {...pull}>
@@ -117,7 +119,9 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
       </button>
       {pill}
       <button className="line-more" onClick={onToggle} aria-label={open ? 'Close the channel summary' : 'Open the channel summary'}>
-        {!topic && counts.filter((c) => c[2] > 0).map(([k, ico, num, label]) => <span key={k} className="line-count" title={`${num} ${label}`}>{ico}{(k === 'events' && shownNow === 'event') || (k === 'proposals' && shownNow === 'proposal') ? '+' : ''}{num}</span>)}
+        {!topic && counts.filter((c) => c[2] > 0).map(([k, ico, num, label]) => k === 'todos'
+          ? <span key={k} className="line-count" title={`${f.tally.done} of the latest ${f.tally.total} to-dos done`}>{ico}{f.tally.done}/{f.tally.total}</span>
+          : <span key={k} className="line-count" title={`${num} ${label}`}>{ico}{(k === 'events' && shownNow === 'event') || (k === 'proposals' && shownNow === 'proposal') ? '+' : ''}{num}</span>)}
         <span className="line-chev">{open ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
       </button>
     </div>
@@ -125,7 +129,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
 }
 
 /** The line pulled down: everything it summarises, in the same order. */
-export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: string; onTopic: (t?: string) => void; more: (tab: 'about' | 'tasks' | 'members' | 'files') => void }) {
+export function PullDown({ id, topic, onTopic, more, full = false }: { id: string; topic?: string; onTopic: (t?: string) => void; more: (tab: 'about' | 'tasks' | 'members' | 'files') => void; /** the header pulled all the way: the same summary, showing more */ full?: boolean }) {
   useVersion()
   const now = useNow()
   const [, redraw] = useState(0)
@@ -192,16 +196,20 @@ export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: str
           ))}
         </section>
       )}
-      {f.todos.length > 0 && (
-        <section>
-          <h3>To do <span>{f.todos.length}</span></h3>
-          {f.todos.slice(0, 4).map((t) => { const busy = isWorking(t, now); return (
-            <div key={t.id} className="pull-row todo" style={{ opacity: t.pending ? 0.6 : 1 }}>
-              <button className={'check' + (t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={`Mark "${t.title}" as done`} onClick={() => void taskAction(id, t.id, 'done')} />
-              <button className="t" onClick={() => more('tasks')}>{t.title}<small>{t.assignee ? (t.assignee === me() ? (busy ? 'You are working on it now' : 'You are on it') : `${displayName(t.assignee)} is ${busy ? 'working on it now' : 'on it'}`) : 'Nobody on it yet'}</small></button>
+      {f.allTasks.length > 0 && (
+        <section className="pull-todos">
+          <h3>To do <span>{f.tally.done}/{f.tally.total}</span></h3>
+          {(full ? latestTasks(f.allTasks) : f.todos.slice(0, 4)).map((t) => { const busy = isWorking(t, now); return (
+            <div key={t.id} className={'pull-row todo' + (t.done ? ' done' : '')} style={{ opacity: t.pending ? 0.6 : 1 }}>
+              <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? `Reopen "${t.title}"` : `Mark "${t.title}" as done`}
+                onClick={() => void taskAction(id, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : ''}</button>
+              <button className="t" onClick={() => { const th = t.source && threadOfMessage(id, t.source); if (th) go(`c/${encodeURIComponent(id)}/thread/${th}`); else if (!full) more('tasks') }}>
+                <span className="tt">{t.title}</span><small>{t.done ? 'Done' : t.assignee ? (t.assignee === me() ? (busy ? 'You are working on it now' : 'You are on it') : `${displayName(t.assignee)} is ${busy ? 'working on it now' : 'on it'}`) : 'Nobody on it yet'}{t.source ? ' · thread' : ''}</small>
+              </button>
             </div>
           ) })}
-          {f.todos.length > 4 && <button className="link pull-all" onClick={() => more('tasks')}>All {f.todos.length} to-dos</button>}
+          {!full && f.allTasks.length > Math.min(4, f.todos.length) && <button className="link pull-all" onClick={() => more('tasks')}>{f.todos.length ? 'All to-dos' : 'Nothing left to do · show the done ones'}</button>}
+          {full && <NewTodo groupId={id} />}
         </section>
       )}
       {f.pods.length > 0 && (
@@ -219,12 +227,36 @@ export function PullDown({ id, topic, onTopic, more }: { id: string; topic?: str
       <section className="pull-topics">
         <TopicsBar groupId={id} active={topic} onOpen={onTopic} titled />
       </section>
-      <button className="pull-row pull-people" onClick={() => more('members')}>
+      {!full && <button className="pull-row pull-people" onClick={() => more('members')}>
         <PeopleIcon />
         <span className="t">{n ? `${n} ${n === 1 ? 'person' : 'people'} active this month` : 'Nobody active this month yet'}<small>Members, files, settings</small></span>
         <ChevronDownIcon />
-      </button>
-      {g.about && <p className="pull-about">{g.about.split('\n')[0].slice(0, 200)}</p>}
+      </button>}
+      {g.about && !full && <p className="pull-about">{g.about.split('\n')[0].slice(0, 200)}</p>}
     </div>
+  )
+}
+
+/** The latest 20 to-dos: the open ones first, then the done ones; newest first in each. */
+const latestTasks = (tasks: Task[]) => {
+  const recent = [...tasks].sort((a, b) => b.at - a.at).slice(0, 20)
+  return [...recent.filter((t) => !t.done), ...recent.filter((t) => t.done)]
+}
+
+/** The thread a message belongs to: itself, or the root its reply hangs off. */
+function threadOfMessage(groupId: string, id: string): string | undefined {
+  const m = messages(groupId).find((x) => x.ev.id === id)
+  if (m) return m.ev.kind === 1111 ? (m.ev.tags.find((t) => t[0] === 'E')?.[1] ?? id) : id
+  const r = all().find((e) => e.id === id)
+  return r ? (r.kind === 1111 ? r.tags.find((t) => t[0] === 'E')?.[1] : r.id) : undefined
+}
+
+function NewTodo({ groupId }: { groupId: string }) {
+  const [title, setTitle] = useState('')
+  return (
+    <Form className="row pull-newtodo" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
+      <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <Btn className="btn small" disabled={!title.trim()}>Add</Btn>
+    </Form>
   )
 }

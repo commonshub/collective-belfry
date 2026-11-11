@@ -442,7 +442,14 @@ export interface Task {
   source?: string
   /** When its assignee last said "working on it now" (a 2101 `working` heartbeat), unix seconds. */
   beat?: number
+  /** When it was made (unix seconds). */
+  at: number
+  /** What happened to it, oldest first: shown as lines in the thread of the message it came from.
+   *  Heartbeats count once per working stretch (a gap over BEAT_FRESH starts a new one). */
+  history: TaskStep[]
 }
+
+export interface TaskStep { at: number; who: string; what: 'created' | 'claim' | 'unclaim' | 'working' | 'idle' | 'done' | 'undone' | 'comment'; text?: string }
 
 /** A to-do is being worked on right now: its assignee's heartbeat is under 5 minutes old (agents
  *  send one every 2 minutes while busy, `idle` when they stop). One to-do per person at a time. */
@@ -460,14 +467,21 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
   for (const e of evs) {
     if (e.kind === 2100) {
       const title = e.content.trim().slice(0, 300)
-      if (title) tasks.set(e.id, { id: e.id, title, author: e.pubkey, done: false, pending: !!e.pending, comments: [], source: tag(e, 'q') })
+      if (title) tasks.set(e.id, { id: e.id, title, author: e.pubkey, done: false, pending: !!e.pending, comments: [], source: tag(e, 'q'), at: e.created_at, history: [{ at: e.created_at, who: e.pubkey, what: 'created' }] })
     } else if (e.kind === 2102) {
       name = e.content.slice(0, 48)
     } else {
       const t = tasks.get(tag(e, 'e') ?? '')
       if (!t) continue
-      if (e.kind === 2103) t.comments.push({ author: e.pubkey, text: e.content.slice(0, 2000), at: e.created_at })
+      if (e.kind === 2103) { t.comments.push({ author: e.pubkey, text: e.content.slice(0, 2000), at: e.created_at }); t.history.push({ at: e.created_at, who: e.pubkey, what: 'comment', text: e.content.slice(0, 2000) }) }
       const a = tag(e, 'action')
+      if (a === 'working') {
+        // one line per working stretch: not after another beat of the same person within BEAT_FRESH
+        const lastBeat = [...t.history].reverse().find((h) => h.who === e.pubkey && (h.what === 'working' || h.what === 'idle' || h.what === 'done'))
+        const prevAt = (t as Task & { _beat?: number })._beat
+        if (!(lastBeat?.what === 'working' && prevAt && e.created_at - prevAt < BEAT_FRESH)) t.history.push({ at: e.created_at, who: e.pubkey, what: 'working' });
+        (t as Task & { _beat?: number })._beat = e.created_at
+      } else if (a === 'claim' || a === 'unclaim' || a === 'idle' || a === 'done' || a === 'undone') t.history.push({ at: e.created_at, who: e.pubkey, what: a })
       if (a === 'claim') t.assignee = e.pubkey
       if (a === 'unclaim' && t.assignee === e.pubkey) t.assignee = undefined
       if (a === 'done') t.done = true
@@ -478,7 +492,14 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
     }
   }
   for (const [p, b] of beats) { const t = tasks.get(b.task); if (t && t.assignee === p) t.beat = b.at }
+  for (const t of tasks.values()) delete (t as Task & { _beat?: number })._beat
   return { name, tasks: [...tasks.values()] }
+}
+
+/** The badge: done / total among the latest 20 to-dos (by when they were made). */
+export function taskTally(tasks: Task[]): { done: number; total: number } {
+  const recent = [...tasks].sort((a, b) => b.at - a.at).slice(0, 20)
+  return { done: recent.filter((t) => t.done).length, total: recent.length }
 }
 
 // ---- pinned messages: a NIP-32 label in the group (namespace belfry/pin, `l` pinned | unpinned,

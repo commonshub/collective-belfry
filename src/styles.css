@@ -520,6 +520,10 @@ a.chip { text-decoration: none; color: inherit; }
 .chead-peek { padding: 8px 0 30px; touch-action: pan-x; }
 .chead-full { display: flex; flex-direction: column; padding-bottom: 28px; box-sizing: border-box; }
 .chead-full > .scroll { flex: 1; min-height: 0; }
+.chead-more-wrap { overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; position: relative; }
+.chead-more-wrap > .chead-peek { padding-bottom: 8px; }
+.chead-more { padding-bottom: 36px; border-top: 1px solid var(--line); padding-top: 12px; }
+.chead-more .scroll { overflow: visible; flex: none; }
 .pad-x { padding: 0 16px; }
 .chead-about { margin: 4px 0 12px; white-space: pre-wrap; color: var(--text); font-size: 15px; line-height: 1.45; }
 .chead-people { display: flex; align-items: center; gap: 0; overflow-x: auto; scrollbar-width: none; padding: 2px 0 2px 4px; margin: 0 0 12px; width: 100%; background: none; border: 0; }
@@ -873,3 +877,16 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .ev-url .btn { width: auto; flex: none; display: inline-flex; margin: 0; }
 .ev-url code { font-family: inherit; font-size: 14px; }
 .ev-pull .pull-row { width: 100%; }
+
+/* a to-do's step in a thread: a quiet line between the replies, with its time */
+.todo-step { display: flex; align-items: baseline; gap: 8px; margin: 6px 16px 6px 56px; color: var(--muted); font-size: 13px; line-height: 1.4; }
+.todo-step .ico-wrap { display: inline-flex; flex: none; align-self: center; }
+.todo-step .ico-wrap .ico, .todo-step .ico-wrap svg { width: 14px; height: 14px; }
+.todo-step .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.todo-step b { color: var(--text); font-weight: 600; }
+.todo-step time { flex: none; font-size: 12px; color: var(--faint); }
+.todo-step.done .ico-wrap, .todo-step.working .ico-wrap { color: var(--accent); }
+.pull-row.todo.done .t { color: var(--muted); }
+.pull-row.todo.done .t .tt { text-decoration: line-through; }
+.pull-newtodo { margin: 8px 16px 0; gap: 8px; }
+.pull-newtodo .input { flex: 1; min-width: 0; font-size: 16px; }

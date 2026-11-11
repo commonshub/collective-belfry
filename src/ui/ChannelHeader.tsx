@@ -92,6 +92,17 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
   const swallowClick = (e: React.MouseEvent) => { if (start.current?.moved) { e.stopPropagation(); e.preventDefault() } }
   const pull = { onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onUp, onClickCapture: swallowClick }
   const cycle = () => setLevel((l) => (l === 0 ? 1 : l === 1 ? 2 : 0))
+  const fullRef = useRef<HTMLDivElement>(null)
+  const moreRef = useRef<HTMLDivElement>(null)
+  // "All to-dos", "Members…": the full level, scrolled to that part (to-dos are in the summary itself)
+  const openMore = (t: InfoTab) => {
+    setTab(t); setLevel(2)
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const box = fullRef.current
+      const at = t === 'tasks' ? box?.querySelector('.pull-todos') : moreRef.current
+      if (box && at) box.scrollTo({ top: (at as HTMLElement).offsetTop - 8, behavior: 'smooth' })
+    }))
+  }
 
   return (
     <div ref={rootRef} className={'chead lvl' + level + (drag !== null ? ' dragging' : '')}>
@@ -105,9 +116,12 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
       </div>
       {line ? line({ open: level > 0, onToggle: () => setLevel(level ? 0 : 1), pull }) : <SummaryLine id={id} open={level > 0} onToggle={() => setLevel(level ? 0 : 1)} topic={topic} onTopic={onTopic} pull={pull} />}
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
-        {(level === 2 || (drag !== null && height > peekH + 8)) && g
-          ? <div className="chead-full" style={{ height: fullH }}><ChannelInfoBody id={id} tab={tab} setTab={setTab} /></div>
-          : <div ref={peekRef} className="chead-peek">{peek ? peek({ close: () => setLevel(0), more: (t) => { setTab(t); setLevel(2) } }) : <PullDown id={id} topic={topic} onTopic={(t) => { setLevel(0); onTopic(t) }} more={(t) => { setTab(t); setLevel(2) }} />}</div>}
+        {/* one layout at every level: the full one is the same summary, scrollable, showing more
+            (every to-do, then members, files and settings under it), so nothing jumps */}
+        <div ref={fullRef} className={level === 2 ? 'chead-more-wrap' : undefined} style={level === 2 ? { height: fullH } : undefined}>
+          <div ref={peekRef} className="chead-peek">{peek ? peek({ close: () => setLevel(0), more: openMore }) : <PullDown id={id} topic={topic} full={level === 2} onTopic={(t) => { setLevel(0); onTopic(t) }} more={openMore} />}</div>
+          {level === 2 && g && <div ref={moreRef} className="chead-more"><ChannelInfoBody id={id} tab={tab === 'tasks' ? 'about' : tab} setTab={setTab} tabs={[['about', 'About'], ['members', 'Members'], ['files', 'Files']]} /></div>}
+        </div>
       </div>
       <button className="chead-handle" {...pull} onClick={cycle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}
         aria-label={level === 0 ? 'Show the channel details' : level === 1 ? 'Show everything about the channel' : 'Close the channel details'}>
