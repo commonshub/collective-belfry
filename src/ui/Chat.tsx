@@ -383,7 +383,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         </div>
       </div>
       <SaveAccountBar />
-      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer groupId={id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && (topic !== ANNOUNCE || admin) && <Composer groupId={id} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
         onEvent={events ? () => setNewEvent(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
@@ -443,7 +443,7 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
             : <TodoStepLine key={x.t!.id + x.s!.at + x.s!.what} t={x.t!} s={x.s!} />)}
         </div>
       </div>
-      {root && <Composer groupId={groupId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {root && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -657,7 +657,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill }: { prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft }: { /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -703,6 +703,17 @@ export function Composer({ onSend, onEvent, onPod, onProposal, onTodo, groupId, 
   // #channels: "#" and a few letters suggest channels; a pick writes "#Name", sent as nostr:naddr…
   // (a "#word" typed without picking stays a topic)
   const pickedChans = useRef(new Map<string, string>()) // "#Name" → nostr:naddr…
+  // the draft: saved to the conversation the text belongs to (owner), loaded when switching to another
+  const owner = useRef<string | undefined>(undefined)
+  useEffect(() => { if (owner.current) writeDraft(owner.current, text, picked.current, pickedChans.current) }, [text, draft])
+  useEffect(() => {
+    owner.current = draft
+    if (!draft) return
+    const d = readDraft(draft)
+    picked.current = new Map(d?.picked ?? [])
+    pickedChans.current = new Map(d?.chans ?? [])
+    setText(d?.text ?? '')
+  }, [draft])
   const chanQuery = query ? null : /(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_-]{0,30})$/u.exec(text.slice(0, caret))
   const chans = useMemo(() => {
     if (!chanQuery) return []
@@ -890,7 +901,7 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
     <div className="inline-thread" role="region" aria-label="Thread">
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
       {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
-      <Composer groupId={groupId} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
+      <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
         onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>
@@ -1056,4 +1067,17 @@ function TodoStepLine({ t, s }: { t: Task; s: TaskStep }) {
       <time dateTime={d.toISOString()} title={d.toLocaleString()}>{d.toDateString() === new Date().toDateString() ? '' : fmtDay(d) + ' '}{fmtTime(s.at)}</time>
     </div>
   )
+}
+
+// ---- drafts: unsent text per conversation, on this device only (localStorage) ----------
+const DRAFT = 'osv-draft:'
+interface Draft { text: string; picked: [string, string][]; chans: [string, string][]; at: number }
+function readDraft(key: string): Draft | null {
+  try { const d = JSON.parse(localStorage.getItem(DRAFT + key) || 'null') as Draft | null; return d && Date.now() - d.at < 30 * 86400e3 ? d : null } catch { return null }
+}
+function writeDraft(key: string, text: string, picked: Map<string, string>, chans: Map<string, string>) {
+  try {
+    if (!text.trim()) localStorage.removeItem(DRAFT + key)
+    else localStorage.setItem(DRAFT + key, JSON.stringify({ text: text.slice(0, 20000), picked: [...picked], chans: [...chans], at: Date.now() }))
+  } catch { /* private mode or full: no draft */ }
 }
