@@ -83,8 +83,11 @@ class Mailer:
             log.warning("mailer: mail to %s failed: %r", rcpts, exc)
             return False
 
-    def send_html(self, to: str, subject: str, body_html: str, headers: dict[str, str]) -> bool:
-        """A mail whose HTML is made already (the followers' digests, followers.py)."""
+    def send_html(
+        self, to: str, subject: str, body_html: str, headers: dict[str, str], text: str = ""
+    ) -> bool:
+        """A mail whose HTML is made already (the followers' and mentions' digests); TEXT is its
+        plain part, else the HTML without its tags."""
         import re
 
         msg = EmailMessage()
@@ -95,7 +98,10 @@ class Mailer:
         msg["Message-ID"] = email.utils.make_msgid(domain=self.s.nip05_domain or "localhost")
         for k, v in headers.items():
             msg[str(k)] = one_line(v)
-        text = re.sub(r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", body_html))
+        if not text:
+            text = re.sub(
+                r"<[^>]+>", "", re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", body_html)
+            )
         msg.set_content(re.sub(r"\n{3,}", "\n\n", text).strip() + "\n")
         msg.add_alternative(body_html, subtype="html")
         if not self.s.smtp_host:

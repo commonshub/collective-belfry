@@ -21,6 +21,7 @@ import html
 import json
 import logging
 from typing import Any
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, Form, Request
@@ -106,22 +107,109 @@ def _tag(e: dict[str, Any], k: str) -> str:
     return next((t[1] for t in e.get("tags", []) if t and t[0] == k and len(t) > 1), "")
 
 
-def _text(svc: Services, e: dict[str, Any], names: dict[str, str]) -> str:
-    """The message as plain text: nostr:npub… mentions as @name, at most 280 characters."""
+TOKEN = None  # compiled on first use (_parts)
+SNIPPET = 280  # characters of a message a digest shows
+
+
+def _naddr_channel(code: str) -> str:
+    """The group id a ``nostr:naddr1…`` channel link names (NIP-19 TLV type 0), else ""."""
+    from .nostr import bech32_decode
+
+    try:
+        hrp, raw = bech32_decode(code)
+    except ValueError:
+        return ""
+    if hrp != "naddr":
+        return ""
+    i = 0
+    while i + 2 <= len(raw):
+        t, n = raw[i], raw[i + 1]
+        if t == 0:
+            return raw[i + 2 : i + 2 + n].decode("utf-8", "replace")
+        i += 2 + n
+    return ""
+
+
+def _parts(svc: Services, e: dict[str, Any], names: dict[str, str]) -> list[tuple[str, str, str]]:
+    """The message as (kind, shown text, link) pieces: text, a link, @name, #channel, #topic.
+    Markdown marks are dropped (a snippet is plain) and it stops near SNIPPET characters."""
     import re
 
     from .nostr import to_hex_pubkey as npub_to_hex
 
-    def name(m: re.Match) -> str:
-        try:
-            return "@" + (names.get(npub_to_hex(m.group(1))) or m.group(1)[:12] + "…")
-        except Exception:  # noqa: BLE001 — a broken npub stays as it was
-            return m.group(0)
-
-    text = re.sub(r"nostr:(npub1[02-9ac-hj-np-z]+)", name, e.get("content") or "")
-    text = re.sub(r"\*\*|__|~~|`", "", text)  # Markdown marks: a snippet is plain text
+    global TOKEN
+    if TOKEN is None:
+        TOKEN = re.compile(
+            r"(?P<url>https?://[^\s<>\"']+[^\s<>\"'.,;:!?)\]])"
+            r"|nostr:(?P<npub>npub1[02-9ac-hj-np-z]+)"
+            r"|nostr:(?P<naddr>naddr1[02-9ac-hj-np-z]+)"
+            r"|(?<![\w&/#])#(?P<topic>[^\W_][\w-]{0,40})",
+            re.UNICODE,
+        )
+    channel = _tag(e, "h")
+    chat = f"https://chat.{svc.settings.nip05_domain}/#/c/"
+    text = re.sub(r"\*\*|__|~~|`", "", e.get("content") or "")
     text = " ".join(text.split())
-    return text if len(text) <= 280 else text[:277] + "…"
+    out: list[tuple[str, str, str]] = []
+    at = 0
+    for m in TOKEN.finditer(text):
+        if m.start() > at:
+            out.append(("text", text[at : m.start()], ""))
+        at = m.end()
+        if m.group("url"):
+            out.append(("link", m.group("url"), m.group("url")))
+        elif m.group("npub"):
+            try:
+                who = names.get(npub_to_hex(m.group("npub"))) or m.group("npub")[:12] + "…"
+            except Exception:  # noqa: BLE001 — a broken npub stays as it was
+                out.append(("text", m.group(0), ""))
+                continue
+            out.append(("text", "@" + who, ""))
+        elif m.group("naddr"):
+            gid = _naddr_channel(m.group("naddr"))
+            if not gid:
+                out.append(("text", m.group(0), ""))
+                continue
+            from . import followers
+
+            out.append(("chan", followers.channel_label(svc, gid), chat + quote(gid)))
+        else:
+            t = m.group("topic")
+            out.append(("topic", "#" + t, f"{chat}{quote(channel)}/t/{quote(t)}"))
+    if at < len(text):
+        out.append(("text", text[at:], ""))
+    # at most SNIPPET characters: whole links, words of text
+    kept: list[tuple[str, str, str]] = []
+    left = SNIPPET
+    for kind, shown, href in out:
+        if len(shown) <= left:
+            kept.append((kind, shown, href))
+            left -= len(shown)
+            continue
+        if kind == "text" and left > 20:
+            cut = shown[:left].rsplit(" ", 1)[0]
+            kept.append(("text", cut, ""))
+        kept.append(("text", "…", ""))
+        break
+    return kept
+
+
+def _text(svc: Services, e: dict[str, Any], names: dict[str, str]) -> str:
+    """The message as plain text: nostr:npub… mentions as @name, at most SNIPPET characters."""
+    return "".join(shown for _k, shown, _h in _parts(svc, e, names))
+
+
+def _html_text(svc: Services, e: dict[str, Any], names: dict[str, str], color: str) -> str:
+    """The same, as HTML: links, channels and #topics clickable."""
+    out = []
+    for _kind, shown, href in _parts(svc, e, names):
+        if href:
+            out.append(
+                f'<a href="{E(href)}" style="color:{color};text-decoration:none;">{E(shown)}</a>'
+            )
+        else:
+            out.append(E(shown))
+    return "".join(out)
 
 
 def collect(
@@ -182,10 +270,90 @@ def link(svc: Services, e: dict[str, Any]) -> str:
     return f"{base}/thread/{root}" if root else f"{base}/m/{e['id']}"
 
 
-def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
-    """Mail every member whose digest is due (daily; weekly on Mondays)."""
+def digest(
+    svc: Services,
+    name: str,
+    evs: list[dict[str, Any]],
+    names: dict[str, str],
+    community: str,
+    freq: str,
+    other: str,
+    links: dict[str, str],
+) -> tuple[str, str]:
+    """The digest mail as (HTML, text). Xavier, 2026-11-11 (a mix of the two proposals): the
+    community up top (people are in several), no grey page or framed card, the mentions grouped
+    per channel (its name a link) with a thin bar in the community's colour, a Reply link under
+    each, links, channels and #topics clickable, no big button."""
     from . import followers
 
+    color = getattr(theme.current(), "primary", "") or "#2563eb"
+    chat = f"https://chat.{svc.settings.nip05_domain}/"
+    n = len(evs)
+    hello = f"Hello {name}".strip() if name else "Hello"
+    intro = f"{hello}, you were mentioned {n} {'time' if n == 1 else 'times'}:"
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for e in evs[-MAX_PER_MAIL:]:
+        groups.setdefault(_tag(e, "h"), []).append(e)
+    h: list[str] = []
+    t: list[str] = [community, "", intro]
+    initial = E((community.strip()[:1] or "B").upper())
+    h.append(
+        f'<a href="{E(chat)}" style="display:inline-block;color:#18181b;text-decoration:none;'
+        'font-weight:600;font-size:16px;margin:0 0 18px;">'
+        f'<span style="display:inline-block;width:24px;height:24px;line-height:24px;'
+        f"border-radius:6px;background:{color};color:#fff;text-align:center;font-size:14px;"
+        f'vertical-align:middle;margin-right:8px;">{initial}</span>'
+        f'<span style="vertical-align:middle;">{E(community)}</span></a>'
+    )
+    h.append(f'<p style="margin:0 0 16px;">{E(intro)}</p>')
+    for channel, items in groups.items():
+        label = followers.channel_label(svc, channel)
+        curl = f"{chat}#/c/{quote(channel)}"
+        h.append(
+            f'<div style="margin:18px 0 6px;"><a href="{E(curl)}" style="font-size:13px;'
+            f'font-weight:600;color:#71717a;text-decoration:none;">{E(label)}</a></div>'
+        )
+        t += ["", f"{label} ({curl})"]
+        for e in items:
+            who = names.get(e["pubkey"]) or "Someone"
+            url = link(svc, e)
+            h.append(
+                f'<div style="border-left:3px solid {color};padding:2px 0 2px 10px;'
+                f'margin:0 0 12px;"><div><b>{E(who)}</b> · {_html_text(svc, e, names, color)}</div>'
+                f'<div style="margin-top:4px;"><a href="{E(url)}" style="color:{color};'
+                f'font-size:13px;text-decoration:none;">Reply →</a></div></div>'
+            )
+            t += [f"{who}: {_text(svc, e, names)}", f"Reply: {url}"]
+    if len(evs) > MAX_PER_MAIL:
+        more = f"…and {len(evs) - MAX_PER_MAIL} more in the chat."
+        h.append(
+            f'<p style="margin:12px 0 0;"><a href="{E(chat)}" '
+            f'style="color:{color};">{E(more)}</a></p>'
+        )
+        t += ["", f"{more} {chat}"]
+    h.append(
+        '<p style="font-size:12px;color:#a1a1aa;margin:24px 0 0;">'
+        f"You get these {E(SAID[freq])}. "
+        f'<a href="{E(links[other])}" style="color:#a1a1aa;">{E(other.capitalize())} instead</a> · '
+        f'<a href="{E(links["off"])}" style="color:#a1a1aa;">Stop them</a></p>'
+    )
+    t += [
+        "",
+        "-- ",
+        f"You get these {SAID[freq]}. {other.capitalize()} instead: {links[other]} · "
+        f"Stop them: {links['off']}",
+    ]
+    body = (
+        "<div style=\"padding:16px 18px;max-width:600px;font-family:-apple-system,'Segoe UI',"
+        'Helvetica,Arial,sans-serif;font-size:15px;line-height:1.5;color:#18181b;">'
+        + "".join(h)
+        + "</div>"
+    )
+    return body, "\n".join(t) + "\n"
+
+
+def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
+    """Mail every member whose digest is due (daily; weekly on Mondays)."""
     people = [p for p in members(svc)]
     due = []
     for p in people:
@@ -210,32 +378,21 @@ def send_digests(svc: Services, now: dt.datetime) -> dict[str, int]:
         if not evs:
             save(svc, p["partner"], last=int(now.timestamp()))
             continue
-        lines = []
-        for e in evs[-MAX_PER_MAIL:]:
-            who = names.get(e["pubkey"]) or "Someone"
-            where = followers.channel_label(svc, _tag(e, "h"))
-            lines.append(f"{who} in {where}: {_text(svc, e, names)}\n{link(svc, e)}")
-        if len(evs) > MAX_PER_MAIL:
-            lines.append(f"…and {len(evs) - MAX_PER_MAIL} more in the chat.")
         pr = prefs(svc, p["partner"])
         other = "weekly" if pr["f"] == "daily" else "daily"
         tok = token(svc, p["partner"])
-        footer = (
-            f"You get these {SAID[pr['f']]}. {other.capitalize()} instead: "
-            f"{public}/mentions/{tok}?f={other} · Stop them: {public}/mentions/{tok}?f=off"
-        )
+        links = {
+            other: f"{public}/mentions/{tok}?f={other}",
+            "off": f"{public}/mentions/{tok}?f=off",
+        }
+        body, text = digest(svc, p["name"], evs, names, community, pr["f"], other, links)
         n = len(evs)
-        ok = svc.odoo.mailer.send(
+        ok = svc.odoo.mailer.send_html(
             p["email"],
             f"{n} {'mention' if n == 1 else 'mentions'} on {community}",
-            [
-                f"Hello {p['name'] or ''}".strip() + ",",
-                f"You were mentioned {n} {'time' if n == 1 else 'times'}:",
-                *lines,
-            ],
-            (f"https://chat.{svc.settings.nip05_domain}/", "Open the chat"),
-            footer,
-            {"List-Unsubscribe": f"<{public}/mentions/{tok}?f=off>"},
+            body,
+            {"List-Unsubscribe": f"<{links['off']}>"},
+            text=text,
         )
         if ok:
             sent += 1

@@ -83,8 +83,13 @@ def test_a_daily_digest_of_mentions(world):
     msg = mailer.SENT[-1]
     text = msg.get_body(preferencelist=("plain",)).get_content()
     assert msg["To"] == "bob@example.org" and "1 mention on" in msg["Subject"]
-    assert "Ana in #garden: Can you water the plants, @Bob?" in text
-    assert "https://chat.belfry.test/#/c/garden/m/e1" in text
+    assert "#garden (https://chat.belfry.test/#/c/garden)" in text
+    assert "Ana: Can you water the plants, @Bob?" in text
+    assert "Reply: https://chat.belfry.test/#/c/garden/m/e1" in text
+    page = msg.get_body(preferencelist=("html",)).get_content()
+    assert "background:#fafafa" not in page and "Open the chat" not in page  # no frame, no button
+    assert 'href="https://chat.belfry.test/#/c/garden"' in page and ">#garden</a>" in page
+    assert 'href="https://chat.belfry.test/#/c/garden/m/e1"' in page and "Reply →" in page
     assert "Weekly instead: https://pass.belfry.test/mentions/" in text
     # once a day only
     assert mentions.morning(svc, morning + dt.timedelta(hours=2)) is None
@@ -123,3 +128,42 @@ def test_the_footer_page_switches_with_a_button(world):
         assert c.get(f"/mentions/{ids['Bob']}.forged").status_code == 404
         assert c.post(f"/mentions/{tok}", data={"f": "hourly"}).status_code == 404
         assert re.search(r"once a week", c.get(f"/mentions/{tok}").text)
+
+
+def test_a_digest_groups_per_channel_and_links_what_the_messages_say(world):
+    """Xavier, 2026-11-11: a reply link under each message, the channel's name clickable, links,
+    channels and #topics in messages clickable, the community named up top."""
+    from belfry_onboarding.nostr import bech32_encode
+
+    svc, relay, ids = world
+    morning = dt.datetime(2026, 11, 10, 9, 0, tzinfo=TZ)
+    at = int(morning.timestamp()) - 3600
+    tlv = bytes([0, 7]) + b"general" + bytes([3, 4]) + (39000).to_bytes(4, "big")
+    naddr = bech32_encode("naddr", tlv)
+    mention(relay, at - 20, channel="garden", eid="g1")
+    relay.events.append(
+        {
+            "id": "k1",
+            "kind": 1111,
+            "pubkey": ANA,
+            "created_at": at - 10,
+            "tags": [["h", "kitchen"], ["E", "root1"], ["p", BOB]],
+            "content": f"See https://example.org/menu, and nostr:{naddr} for #soup <b>now</b>",
+        }
+    )
+    mention(relay, at, channel="garden", eid="g2")
+    mailer.SENT.clear()
+    mentions.morning(svc, morning)
+    msg = mailer.SENT[-1]
+    page = msg.get_body(preferencelist=("html",)).get_content()
+    text = msg.get_body(preferencelist=("plain",)).get_content()
+    # grouped: garden (both), then kitchen
+    assert page.index(">#garden</a>") < page.index("/m/g2") < page.index(">#kitchen</a>")
+    assert page.count(">#garden</a>") == 1
+    assert 'href="https://example.org/menu"' in page
+    assert re.search(r'href="https://chat\.belfry\.test/#/c/general"[^>]*>#general</a>', page)
+    assert re.search(r'href="https://chat\.belfry\.test/#/c/kitchen/t/soup"[^>]*>#soup</a>', page)
+    assert "&lt;b&gt;now&lt;/b&gt;" in page and "<b>now</b>" not in page
+    assert 'href="https://chat.belfry.test/#/c/kitchen/thread/root1"' in page
+    assert "you were mentioned 3 times" in page and page.count("Reply →") == 3
+    assert "Ana: See https://example.org/menu, and #general for #soup <b>now</b>" in text
