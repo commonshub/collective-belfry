@@ -70,6 +70,7 @@ from . import (
     volunteer,
     wallet_tokens,
     website,
+    webthreads,
     whois,
 )
 from .clients.authentik import AuthentikClient
@@ -215,6 +216,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             mentions.running(app),  # @mentions by e-mail, daily or weekly (mentions.py)
             mail.running(app),  # members' outgoing mail, gift-wrapped to the belfry (mail.py)
             push.running(app),  # push notifications to the phone apps (push.py)
+            webthreads.running(app),  # members' replies mailed to web threads' authors
         ):
             yield
 
@@ -368,6 +370,9 @@ def create_app(services: Services | None = None) -> FastAPI:
                 target += "?" + request.url.query
             return RedirectResponse(target, status_code=302)
         return await call_next(request)
+
+    # a channel's public page (<domain>/<slug>, webthreads.py): before the homepage takes the path
+    webthreads.install(app)
 
     def wants_html(request: Request) -> bool:
         return "text/html" in request.headers.get("accept", "")
