@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
 import { enqueue, me, newId } from './sync'
 
 // Every user action is one or more nostr events queued in the outbox.
@@ -79,6 +79,8 @@ export const postThreadReply = (groupId: string, root: { id: string; pubkey: str
   }, files)
 
 /** Turn a channel's shared inbox on or off (admins: the bridge ignores anyone else's setting). */
+export const setWebPage = (groupId: string, page: WebPage) =>
+  enqueue('groups', { kind: 30078, content: JSON.stringify(page), tags: [['d', WEB_D + groupId], ['h', groupId], ['t', 'belfry-web']] })
 export const setInbox = (groupId: string, on: boolean) =>
   enqueue('groups', { kind: 30078, content: JSON.stringify({ on }), tags: [['d', INBOX_D], ['h', groupId]] })
 

@@ -361,6 +361,27 @@ export function isInbox(g: Group | undefined): boolean {
   try { return !!own.length && !!JSON.parse(own.at(-1)!.content || '{}').on } catch { return false }
 }
 
+// ---- a channel's public page on the web (<domain>/<slug>, Belfry's webthreads.py) ---------
+// The admins' latest NIP-78 event, d = belfry:web:<channel>, t = belfry-web: anyone opens a thread
+// there (it lands here as an e-mail card); "public" lists every thread, "own" shows each person
+// from outside only theirs.
+export const WEB_D = 'belfry:web:'
+export interface WebPage { on: boolean; slug: string; list: 'public' | 'own' }
+// paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
+export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
+  'market me mentions people photos programme shop signin skills static steward theme tokens vote wallet welcome invite brand ' +
+  'proposals changelog monitor privacy terms refunds rules help').split(' '))
+export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+
+export function webPage(g: Group | undefined): WebPage | undefined {
+  if (!g) return undefined
+  const own = all(me()).filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && g.admins.has(e.pubkey)).sort(byTime)
+  try {
+    const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
+    return c ? { on: !!c.on, slug: String(c.slug || ''), list: c.list === 'own' ? 'own' : 'public' } : undefined
+  } catch { return undefined }
+}
+
 export type CardStatus = 'open' | 'waiting' | 'closed'
 export interface CardState { status: CardStatus; assignee?: string; answered: number }
 

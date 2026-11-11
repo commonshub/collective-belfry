@@ -917,3 +917,5 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .brand-edit .swatch input[type=color] { width: 44px; height: 44px; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: none; flex: none; }
 .brand-edit .swatch .input { max-width: 140px; font-family: ui-monospace, monospace; }
 .brand-edit .preview-btn { display: inline-block; padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 14px; }
+.web-page-fields { margin: -4px 0 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.web-page-fields .toggle { font-size: 14px; margin: 6px 0; }

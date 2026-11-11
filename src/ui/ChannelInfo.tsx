@@ -4,8 +4,8 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
-import { setInbox } from '../core/actions'
-import { isInbox } from '../core/model'
+import { setInbox, setWebPage } from '../core/actions'
+import { isInbox, slugify, webPage, WEB_RESERVED, type WebPage } from '../core/model'
 import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
@@ -67,6 +67,8 @@ function About({ id }: { id: string }) {
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
   const [openMail, setOpenMail] = useState(false)
+  const [web, setWeb] = useState<WebPage>({ on: false, slug: '', list: 'public' })
+  const [webError, setWebError] = useState('')
   const [inviting, setInviting] = useState(false)
   if (!g) return null
   return (
@@ -100,9 +102,10 @@ function About({ id }: { id: string }) {
       </div>
       <div className="row" style={{ gap: 8 }}>
         <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
-        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setEditing(true) }}>Settings</button>}
+        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setWeb(webPage(g) ?? { on: false, slug: slugify(g.name), list: 'public' }); setWebError(''); setEditing(true) }}>Settings</button>}
       </div>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
+      {webPage(g)?.on && <p className="hint web-page-link" style={{ marginTop: 16 }}>Public page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a> · {webPage(g)!.list === 'own' ? 'people from outside see only their own thread' : 'every thread listed'}</p>}
       <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {editing && (
         <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={() => setEditing(false)}>
@@ -110,7 +113,17 @@ function About({ id }: { id: string }) {
             e.preventDefault()
             if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
               await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
+            if (web.on) {
+              const slug = slugify(web.slug)
+              if (slug.length < 2) { setWebError('Give the page an address: two letters or more.'); return }
+              if (WEB_RESERVED.has(slug)) { setWebError(`${BELFRY.domain}/${slug} is taken by ${BELFRY.domain} itself: pick another address.`); return }
+              const taken = groups().find((x) => x.id !== id && webPage(x)?.on && webPage(x)?.slug === slug)
+              if (taken) { setWebError(`${BELFRY.domain}/${slug} is the page of #${taken.name}: pick another address.`); return }
+              web.slug = slug
+            }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
+            const was = webPage(g)
+            if (web.on !== !!was?.on || (web.on && (web.slug !== was?.slug || web.list !== was?.list))) await setWebPage(id, web)
             setEditing(false)
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -120,6 +133,23 @@ function About({ id }: { id: string }) {
               <span><b>E-mails from anyone</b><small>Mail to {g.id}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
               <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
             </label>
+            <label className="switch-row">
+              <span><b>Threads from the web</b><small>A public page at {BELFRY.domain}/{slugify(web.slug) || '…'} where anyone opens a thread: it lands here as a card, and members' replies are mailed back to its author.</small></span>
+              <input type="checkbox" role="switch" checked={web.on} onChange={(e) => setWeb({ ...web, on: e.target.checked })} />
+            </label>
+            {web.on && (
+              <div className="web-page-fields">
+                <label className="field"><span>Address</span>
+                  <span className="row" style={{ gap: 6, alignItems: 'center' }}><span className="hint" style={{ whiteSpace: 'nowrap' }}>{BELFRY.domain}/</span>
+                    <input className="input" aria-label="Page address" value={web.slug} onChange={(e) => { setWebError(''); setWeb({ ...web, slug: e.target.value.toLowerCase() }) }} /></span>
+                </label>
+                <div className="field"><span>Who sees the threads</span>
+                  <label className="toggle"><input type="radio" name="web-list" checked={web.list === 'public'} onChange={() => setWeb({ ...web, list: 'public' })} /> Everyone: the page lists every thread, like GitHub issues</label>
+                  <label className="toggle"><input type="radio" name="web-list" checked={web.list === 'own'} onChange={() => setWeb({ ...web, list: 'own' })} /> People from outside see only their own thread</label>
+                </div>
+                {webError && <p className="error">{webError}</p>}
+              </div>
+            )}
             <button className="btn" disabled={!name.trim()}>Save</button>
           </Form>
         </Sheet>
