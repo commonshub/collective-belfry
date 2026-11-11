@@ -164,13 +164,13 @@ const VIS: [Visibility, string, string][] = [
 
 /** Make an event, or edit one (EDIT): title, Markdown description, cover, when (all day or
  *  times in a time zone), where, online link, who sees it, its custom URL. */
-export function EventFormSheet({ edit, onClose, onSaved }: { edit?: CalEvent; onClose: () => void; onSaved?: (link: string) => void }) {
+export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' }: { edit?: CalEvent; onClose: () => void; onSaved?: (link: string) => void; /** a new event's: #events public, #bookings members */ visibility?: Visibility }) {
   const start = new Date()
   start.setHours(start.getHours() + 1, 0, 0, 0)
   const end = new Date(+start + 3600_000)
   const [n, setN] = useState<EventForm>(() => edit ? formOf(edit) : {
     title: '', description: '', location: THEME === 'belfry' ? '' : 'Commons Hub Brussels', allDay: false,
-    start: localInput(start), end: localInput(end), tz: localTz(), online: '', visibility: 'members', slug: '',
+    start: localInput(start), end: localInput(end), tz: localTz(), online: '', visibility, slug: '',
   })
   const set = (patch: Partial<EventForm>) => setN((x) => ({ ...x, ...patch }))
   const [slugEdited, setSlugEdited] = useState(!!edit?.slug)
@@ -275,8 +275,8 @@ export function EventFormSheet({ edit, onClose, onSaved }: { edit?: CalEvent; on
 }
 
 /** Kept for the composer's ＋ (Chat.tsx): a new event; its URL is put in the composer after. */
-export function NewEventSheet({ onClose, onCreated }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void }) {
-  return <EventFormSheet onClose={onClose} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
+export function NewEventSheet({ onClose, onCreated, visibility }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void; visibility?: Visibility }) {
+  return <EventFormSheet onClose={onClose} visibility={visibility} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
 }
 
 export { CalendarIcon }

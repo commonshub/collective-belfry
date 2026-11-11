@@ -371,7 +371,7 @@ export function isInbox(g: Group | undefined): boolean {
 export const WEB_D = 'belfry:web:'
 export type ChannelVisibility = 'public' | 'members'
 // "posts": a channel that takes one type of post only (#proposals, #events: Xavier, 2026-11-11)
-export type PostType = 'proposal' | 'event'
+export type PostType = 'proposal' | 'event' | 'request'
 export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility; posts?: PostType }
 // paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
 export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
@@ -387,7 +387,7 @@ export function webPage(g: Group | undefined): WebPage | undefined {
   const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && (g.admins.has(e.pubkey) || e.pubkey === relayKey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
-    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...(c.posts === 'proposal' || c.posts === 'event' ? { posts: c.posts } : {}) } : undefined
+    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...(c.posts === 'proposal' || c.posts === 'event' || c.posts === 'request' ? { posts: c.posts } : {}) } : undefined
   } catch { return undefined }
 }
 

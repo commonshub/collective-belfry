@@ -944,3 +944,4 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .only-bar { display: flex; align-items: center; gap: 12px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
 .only-bar .hint { flex: 1; min-width: 0; font-size: 13px; color: var(--muted); }
 .only-bar .btn { width: auto; flex: none; }
+.purpose-line { padding: 6px 16px 0; font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); }
