@@ -1,0 +1,39 @@
+[project]
+name = "belfry-push-gateway"
+version = "0.1.0"
+description = "Belfry push gateway: relays belfries' encrypted notifications to APNs and FCM for the Belfry phone apps"
+requires-python = ">=3.12"
+license = { text = "AGPL-3.0-or-later" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx[http2]>=0.27",
+    "pydantic-settings>=2.3",
+    "pyjwt[crypto]>=2.8",
+    "coincurve>=20",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "respx>=0.21",
+    "ruff>=0.5",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["push_gateway*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
