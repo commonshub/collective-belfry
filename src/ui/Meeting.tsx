@@ -21,6 +21,8 @@ export function MeetingSheet({ channel, onClose, onCreated }: { channel: string;
   })
   const set = (patch: Partial<MeetingForm>) => setM((x) => ({ ...x, ...patch }))
   const [q, setQ] = useState('')
+  const [nm, setNm] = useState({ name: '', email: '' })
+  const named = m.named ?? []
   const [error, setError] = useState('')
   const found = findPeople(channel, q, q ? 8 : 12).filter((k) => !m.people.includes(k))
   const toggle = (k: string) => set({ people: m.people.includes(k) ? m.people.filter((x) => x !== k) : [...m.people, k] })
@@ -62,6 +64,21 @@ export function MeetingSheet({ channel, onClose, onCreated }: { channel: string;
           {!found.length && <p className="hint">{q ? 'Nobody by that name.' : 'Nobody else here yet.'}</p>}
         </div>
 
+        <div className="meet-named">
+          <span className="hint">Not here yet? Add them by name: an account is made for them (e-mail optional)</span>
+          {named.map((n, i) => (
+            <button type="button" key={i} className="meet-person on" onClick={() => set({ named: named.filter((_, j) => j !== i) })} aria-label={`Remove ${n.name}`}>
+              <span className="meet-initial" aria-hidden="true">{n.name.trim()[0]?.toUpperCase()}</span><span>{n.name}{n.email ? ' ✉' : ''}</span><b aria-hidden="true">×</b>
+            </button>
+          ))}
+          <div className="row meet-named-row">
+            <input className="input" placeholder="Name" value={nm.name} maxLength={100} onChange={(e) => setNm({ ...nm, name: e.target.value })} aria-label="Their name" />
+            <input className="input" type="email" placeholder="E-mail (optional)" value={nm.email} onChange={(e) => setNm({ ...nm, email: e.target.value })} aria-label="Their e-mail (optional)" />
+            <button type="button" className="btn small ghost" disabled={!nm.name.trim() || (!!nm.email.trim() && !/^\S+@\S+\.\S+$/.test(nm.email.trim()))}
+              onClick={() => { set({ named: [...named, { name: nm.name.trim(), ...(nm.email.trim() ? { email: nm.email.trim() } : {}) }] }); setNm({ name: '', email: '' }) }}>Add</button>
+          </div>
+        </div>
+
         <label className="field"><span>When</span>
           <input className="input" type="datetime-local" value={m.start} onChange={(e) => set({ start: e.target.value })} /></label>
         <div className="field"><span>How long</span></div>
@@ -78,7 +95,7 @@ export function MeetingSheet({ channel, onClose, onCreated }: { channel: string;
 
         {error && <p className="error" role="alert">{error}</p>}
         <button className="btn" disabled={!ok}>Create the meeting</button>
-        <p className="hint" style={{ marginTop: 10 }}>Members only. {m.people.length ? `${m.people.length === 1 ? displayName(m.people[0]) + ' sees' : m.people.length + ' people see'} it in their upcoming events and get its chat.` : 'The people you invite see it in their upcoming events and get its chat.'}</p>
+        <p className="hint" style={{ marginTop: 10 }}>Members only. {m.people.length ? `${m.people.length === 1 ? displayName(m.people[0]) + ' sees' : m.people.length + ' people see'} it in their upcoming events and get its chat.` : 'The people you invite see it in their upcoming events and get its chat.'}{named.length ? ` ${named.length === 1 ? named[0].name + ' gets' : named.length + ' people get'} an account; without an e-mail, it stays yours to hand over.` : ''}</p>
       </Form>
     </Sheet>
   )

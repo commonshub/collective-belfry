@@ -10,13 +10,16 @@
 //     don't use their phone. Their own RSVP still counts as "going".
 import { calendar, group, recentlyActive, profiles, displayName, type CalEvent } from './model'
 import { all } from './store'
-import { enqueue, me } from './sync'
-import { createEvent, localTz, zonedToUtc, utcToZoned } from './events'
+import { enqueue, isLocalOnly, me, signedFetch } from './sync'
+import { BELFRY } from '../config'
+import { createEvent, editEvent, formOf, localTz, zonedToUtc, utcToZoned } from './events'
+import { bytesToHex } from '@noble/hashes/utils'
 
 export const ATTENDANCE_NS = 'belfry/attendance'
 const tag = (e: { tags: string[][] }, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 
-export interface MeetingForm { topic: string; people: string[]; start: string /* YYYY-MM-DDTHH:mm, local */; minutes: number; place: string; online: string }
+export interface Named { name: string; email?: string }
+export interface MeetingForm { topic: string; people: string[]; /** people who aren't on the belfry, by name (an identity is made for them) */ named?: Named[]; start: string /* YYYY-MM-DDTHH:mm, local */; minutes: number; place: string; online: string }
 export const LENGTHS = [30, 45, 60, 90, 120]
 
 /** Make a meeting from channel CHANNEL; returns the event's id (d). */
@@ -29,7 +32,61 @@ export async function createMeeting(channel: string, m: MeetingForm): Promise<st
     [['t', 'meeting'], ['channel', channel], ...people.map((p) => ['p', p, '', 'invited'])],
   )
   for (const p of people) await enqueue('groups', { kind: 9000, tags: [['h', 'ev-' + d], ['p', p, 'member']] })
+  // people who aren't on the belfry: an account each, once the meeting's chat is on the relay
+  const named = (m.named ?? []).filter((n) => n.name.trim())
+  if (named.length) {
+    const keys: string[] = []
+    for (const n of named) {
+      for (let i = 0; ; i++) {
+        try { keys.push(await accountFor('ev-' + d, n)); break } catch (x) {
+          if (i >= 5) throw new Error(`The meeting is made, but ${n.name} could not be added: ${x instanceof Error ? x.message : x}. Add them from the meeting.`)
+          await new Promise((r) => setTimeout(r, 1000 * (i + 1)))
+        }
+      }
+    }
+    const e = calendar().find((x) => x.d === d)
+    if (e) await editEvent(e, formOf(e), keys.map((k) => ['p', k, '', 'invited']))
+  }
   return d
+}
+
+/** The belfry makes an account for someone who isn't on it (meetingguests.py): with EMAIL, the
+ *  account behind that address; without, one held by me until I hand it over. Returns its key. */
+export async function accountFor(groupId: string, n: Named): Promise<string> {
+  if (isLocalOnly()) { // demo: a key of our own, put in the chat the way the belfry does it
+    const pk = bytesToHex(crypto.getRandomValues(new Uint8Array(32)))
+    await enqueue('groups', { kind: 9000, tags: [['h', groupId], ['p', pk, 'member'], ['guest', ''], ['invited-by', me()], ['name', n.name.trim().slice(0, 100)], ...(n.email ? [] : [['unsaved', '1']])] })
+    return pk
+  }
+  const r = await signedFetch(`${BELFRY.api}/meeting-guests`, 'POST', { channel: groupId, name: n.name.trim(), ...(n.email?.trim() ? { email: n.email.trim() } : {}) })
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || !j.pubkey) throw new Error(j.message || 'Could not add them just now.')
+  return j.pubkey as string
+}
+
+/** Invite more people to meeting E: in its chat, and on the event (a new version). */
+export async function invite(e: CalEvent, keys: string[]) {
+  const fresh = keys.filter((k) => !e.invited.includes(k))
+  if (!fresh.length) return
+  for (const k of fresh) await enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', k, 'member']] })
+  await editEvent(e, formOf(e), fresh.map((k) => ['p', k, '', 'invited']))
+}
+
+/** Someone added by name joins meeting E: their account, invited. */
+export async function addByName(e: CalEvent, n: Named): Promise<string> {
+  const pk = await accountFor(e.groupId, n)
+  await invite(e, [pk])
+  return pk
+}
+
+/** Hand a name-only account I made to its person: their address goes on it. */
+export async function handOver(groupId: string, pubkey: string, email: string) {
+  if (isLocalOnly()) {
+    await enqueue('groups', { kind: 1985, tags: [['h', groupId], ['L', 'belfry/guest'], ['l', 'saved', 'belfry/guest'], ['p', pubkey]] })
+    return
+  }
+  const r = await signedFetch(`${BELFRY.api}/meeting-guests/transfer`, 'POST', { pubkey, email: email.trim() })
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'That did not work.')
 }
 
 /** Who the hosts marked as there (true) or not (false), latest label per person. */

@@ -994,3 +994,8 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .meet-row .t small { color: var(--muted); font-size: 12px; }
 .meet-row.there .t small { color: var(--accent); font-weight: 600; }
 .badge.meet { margin-right: 6px; }
+.meet-named { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px; }
+.meet-named > .hint { width: 100%; font-size: 13px; }
+.meet-named-row, .meet-add, .meet-give { width: 100%; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.meet-named-row .input, .meet-add .input, .meet-give .input { flex: 1 1 140px; min-width: 0; }
+.meet-initial { width: 24px; height: 24px; border-radius: 99px; background: var(--surface); display: grid; place-items: center; font-size: 12px; font-weight: 650; }

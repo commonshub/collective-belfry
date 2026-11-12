@@ -23,7 +23,8 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 import { CalendarIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
-import { attendance, checkIn } from '../core/meetings'
+import { addByName, attendance, checkIn, handOver } from '../core/meetings'
+import { guestJoins } from '../core/model'
 import { Logo } from './Login'
 
 const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Today' : fmtDay(d))
@@ -89,7 +90,7 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
         </button>
         {pill}
         <button className="line-more" onClick={onToggle} aria-label={isOpen ? 'Close the event’s details' : 'Open the event’s details'}>
-          <span className="line-count" title="going"><PeopleIcon />{goingList(e, p).length}</span>
+          {e.meeting ? <span className="line-count" title="people"><PeopleIcon />{new Set([e.creator, ...e.invited]).size}</span> : <span className="line-count" title="going"><PeopleIcon />{goingList(e, p).length}</span>}
           <span className="line-chev">{isOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
         </button>
       </div>
@@ -158,6 +159,11 @@ function MeetingPeople({ e, host }: { e: CalEvent; host: boolean }) {
   useVersion()
   const there = attendance(e)
   const keys = [...new Set([e.creator, ...e.invited, ...[...e.rsvps.keys()]])]
+  // name-only accounts I made: mine to hand over (the belfry checks it too)
+  const held = new Set(guestJoins(e.groupId).filter((j) => j.unsaved && j.by === me()).map((j) => j.pubkey))
+  const [adding, setAdding] = useState({ name: '', email: '' })
+  const [giving, setGiving] = useState<{ k: string; email: string } | null>(null)
+  const [err, setErr] = useState('')
   const started = +e.start - Date.now() < 3600e3
   const sub = (k: string) => {
     const r = e.rsvps.get(k)
@@ -169,10 +175,25 @@ function MeetingPeople({ e, host }: { e: CalEvent; host: boolean }) {
       {keys.map((k) => (
         <div key={k} className={'meet-row' + (there.get(k) ? ' there' : '')}>
           <button className="face" onClick={() => openProfile(k)} aria-label={`${displayName(k)}: profile`}><Avatar pubkey={k} size={32} /></button>
-          <span className="t">{displayName(k)}<small>{sub(k)}</small></span>
+          <span className="t">{displayName(k)}<small>{sub(k)}{held.has(k) ? ' · account held by you' : ''}</small></span>
+          {host && held.has(k) && <button className="btn small ghost" onClick={() => setGiving({ k, email: '' })}>Hand over</button>}
           {host && <Btn className={'btn small' + (there.get(k) ? '' : ' ghost')} aria-pressed={!!there.get(k)} onClick={() => checkIn(e, k, !there.get(k))}>{there.get(k) ? '✓ There' : started ? 'Check in' : 'Confirm'}</Btn>}
         </div>
       ))}
+      {giving && (
+        <Form className="row meet-give" onSubmit={async (x) => { x.preventDefault(); setErr(''); try { await handOver(e.groupId, giving.k, giving.email); setGiving(null) } catch (y) { setErr(y instanceof Error ? y.message : String(y)) } }}>
+          <input className="input" type="email" autoFocus placeholder={`${displayName(giving.k)}'s e-mail`} value={giving.email} onChange={(x) => setGiving({ ...giving, email: x.target.value })} aria-label="Their e-mail" />
+          <button className="btn small" disabled={!/^\S+@\S+\.\S+$/.test(giving.email.trim())}>Give it</button>
+        </Form>
+      )}
+      {host && (
+        <Form className="row meet-add" onSubmit={async (x) => { x.preventDefault(); setErr(''); try { await addByName(e, { name: adding.name, ...(adding.email.trim() ? { email: adding.email.trim() } : {}) }); setAdding({ name: '', email: '' }) } catch (y) { setErr(y instanceof Error ? y.message : String(y)) } }}>
+          <input className="input" placeholder="Add someone by name" value={adding.name} maxLength={100} onChange={(x) => setAdding({ ...adding, name: x.target.value })} aria-label="Their name" />
+          <input className="input" type="email" placeholder="E-mail (optional)" value={adding.email} onChange={(x) => setAdding({ ...adding, email: x.target.value })} aria-label="Their e-mail (optional)" />
+          <button className="btn small ghost" disabled={!adding.name.trim()}>Add</button>
+        </Form>
+      )}
+      {err && <p className="error" role="alert">{err}</p>}
     </section>
   )
 }
