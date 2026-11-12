@@ -819,6 +819,8 @@ class Register(OdooApi):
                     "guest_days": int(days),
                     "guest_inviter": inviter,
                     "guest_agent": bool(mine[0].get("guest_agent")),
+                    # still in guest mode (no name yet): in this channel too
+                    "guest_unnamed": any(p.get("guest_unnamed") for p in mine),
                     "keycast_pubkey": pubkey,
                     "own_pubkey": mine[0].get("own_pubkey") or False,
                     "date_start": today.isoformat(),
@@ -1187,6 +1189,7 @@ class Register(OdooApi):
                     "guest_days": days,
                     "guest_inviter": inv.get("guest_inviter") or "",
                     "guest_agent": bool(mine[0].get("guest_agent")),
+                    "guest_unnamed": any(p.get("guest_unnamed") for p in mine),
                     "keycast_pubkey": pubkey,
                     "own_pubkey": mine[0].get("own_pubkey") or False,
                     "date_start": today.isoformat(),

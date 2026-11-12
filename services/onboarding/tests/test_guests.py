@@ -397,6 +397,12 @@ def test_opening_a_link_is_guest_mode_and_joining_takes_a_name_and_an_e_mail(
         me = PrivateKey()
         me_pk = me.public_key_xonly.format().hex()
         rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+        # a second link opened while still in guest mode: reading there too, the same guest
+        time.sleep(1.1)
+        r = join(c, link("kitchen"), me, "")
+        assert r.status_code == 200 and r.json()["new"] is False
+        kind, tags = published[-1]
+        assert kind == 9000 and ["h", "kitchen"] in tags and ["reading", "1"] in tags
         r = _signed(c, me, "/guest/save", {"email": "gus@example.org"})
         assert r.status_code == 422 and r.json()["error"] == "name_needed"
         sent = len(mailer.SENT)
@@ -423,10 +429,13 @@ def test_opening_a_link_is_guest_mode_and_joining_takes_a_name_and_an_e_mail(
             False,
             None,
         )
-        (k1, t1), (k2, t2) = published[lines:]
-        assert k1 == 9000 and ["p", me_pk, "member"] in t1 and ["name", "Gus Guest"] in t1
-        assert ["reading", "1"] not in t1 and ["unsaved", "1"] not in t1
-        assert k2 == 1985 and ["l", "saved", "belfry/guest"] in t2 and ["p", me_pk] in t2
+        new = published[lines:]
+        assert [k for k, _t in new] == [9000, 1985, 9000, 1985]  # both channels
+        for (k1, t1), (k2, t2) in (new[:2], new[2:]):
+            assert k1 == 9000 and ["p", me_pk, "member"] in t1 and ["name", "Gus Guest"] in t1
+            assert ["reading", "1"] not in t1 and ["unsaved", "1"] not in t1
+            assert k2 == 1985 and ["l", "saved", "belfry/guest"] in t2 and ["p", me_pk] in t2
+        assert {t[1] for _k, tg in new for t in tg if t[0] == "h"} == {"garden", "kitchen"}
         assert rsvc.odoo.invite_by_token(token)["guest_uses"] == 1  # joining is not a second use
 
 
