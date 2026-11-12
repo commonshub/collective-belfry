@@ -141,3 +141,16 @@ def test_an_app_nobody_approved_gets_no_session(
     assert r.status_code == 403 and r.json()["error"] == "app_not_approved"
     req = [e for e in relay.events if e["kind"] == apps.REQUEST]
     assert len(req) == 1 and ["r", CHAT] in req[0]["tags"]
+
+
+def test_the_phone_app_signs_in_without_a_browser(services, odoo, keycast, member, client):
+    key = PrivateKey()
+    body = {"nip05": nip05(services), "app": "sh.belfry.app://connect", "client": "belfry-android"}
+    r = post(client, key, "/api/session", body)
+    assert r.status_code == 200 and r.json()["state"] == "code_sent"
+    r = post(client, key, "/api/session/verify", {"code": "000000"})
+    assert r.status_code == 422 and r.json()["error"] == "wrong_code"
+    assert r.json()["tries_left"] >= 1
+    code = odoo.mailed_codes["ana@example.org"]
+    r = post(client, key, "/api/session/verify", {"code": code})
+    assert r.status_code == 200 and r.json()["state"] == "open", r.text

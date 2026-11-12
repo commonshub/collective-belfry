@@ -15,7 +15,14 @@ session on the member's key.
    event it asks the bunker to sign is signed with the member's key.
 
 The same two steps work over HTTPS for apps that don't do NIP-17, NIP-98 signed with the session
-key: ``POST /api/session {"nip05", "app"}`` then ``POST /api/session/verify {"code"}``.
+key: ``POST /api/session {"nip05", "app", "client"}`` then ``POST /api/session/verify {"code"}``
+(belfry.<domain>/api/v1/session). The phone apps sign in this way, without a browser: ``app`` =
+``sh.belfry.app://connect`` and ``client`` = ``belfry-android`` / ``belfry-ios`` (names the
+session). Answers: ``{"state": "code_sent", "to": "x•••@…", "nip05"}`` then ``{"state": "open",
+"bunker_url", "pubkey", "npub", "nip05"}``; errors ``{"error": code}``: 404 ``unknown``, 409
+``no_email`` / ``own_key`` / ``mismatch`` / ``key_taken``, 422 ``invalid`` / ``wrong_code`` (with
+``tries_left``), 410 ``expired``, 429 ``too_many``, 403 ``app_not_approved``. The connection is
+bound to the session key when it is made.
 
 ``app`` is the app's address (https://…). Only apps an admin approved get a session (apps.py):
 for any other app the right code sends the admins a request (a Nostr event signed by the member)
@@ -46,6 +53,7 @@ from starlette.concurrency import run_in_threadpool
 from . import apps as apps_mod
 from . import homepage, nostr
 from .blossom import event_id, verify_signature
+from .clients.keycast import ClientKeyTaken
 from .clients.odoo import OdooError
 from .core import Services
 from .holder_invites import ApiError, authenticate
@@ -61,9 +69,9 @@ PATH = "/api/session"
 
 
 class SessionError(Exception):
-    def __init__(self, status: int, code: str, message: str):
+    def __init__(self, status: int, code: str, message: str, **data: Any):
         super().__init__(message)
-        self.status, self.code, self.message = status, code, message
+        self.status, self.code, self.message, self.data = status, code, message, data
 
 
 # ── NIP-17 / NIP-59 ─────────────────────────────────────────────────────────────────────────
@@ -159,7 +167,7 @@ class Sessions:
             raise SessionError(409, "no_email", f"{name} has no e-mail address to send a code to.")
         return pubkey, pid, email
 
-    def request(self, session: str, nip05: str, app: str = "") -> dict[str, Any]:
+    def request(self, session: str, nip05: str, app: str = "", client: str = "") -> dict[str, Any]:
         m = NAME.search(nip05 or "")
         if not m:
             raise SessionError(422, "invalid", "Name the address to sign in with: name@domain.")
@@ -197,6 +205,7 @@ class Sessions:
                 "partner": pid,
                 "email": email,
                 "app": app,
+                "client": client[:40],
                 "at": now,
             }
         log.info("sessions: key %s asks for %s@%s (%s)", session[:12], name, domain, app or "app")
@@ -225,6 +234,7 @@ class Sessions:
                 422,
                 "wrong_code",
                 f"That code is not right ({int(row.get('tries_left') or 0)} tries left).",
+                tries_left=int(row.get("tries_left") or 0),
             )
         if state == "expired":
             raise SessionError(410, "expired", "The code expired: ask again with your address.")
@@ -263,10 +273,16 @@ class Sessions:
         )
         if result.get("pubkey") != req["pubkey"]:
             raise SessionError(409, "mismatch", "The member's key moved; ask again.")
+        label = apps_mod.native_name(req["app"], req.get("client", "")) or apps_mod.display_name(
+            self.svc, req["app"]
+        )
         try:
-            bunker = self.svc.keycast.create_bunker(
-                result["token"], apps_mod.display_name(self.svc, req["app"])
-            )
+            # bound to the session key when it is made: the URL alone opens nothing
+            bunker = self.svc.keycast.create_bunker(result["token"], label, session)
+        except ClientKeyTaken as exc:
+            raise SessionError(
+                409, "key_taken", "This device's key is linked to another account: start again."
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — a self-custody member has no key here
             log.warning("sessions: no bunker for %s: %s", name, exc)
             raise SessionError(
@@ -406,7 +422,7 @@ def register(app: FastAPI) -> None:
         try:
             return answer(await run_in_threadpool(fn, *args))
         except SessionError as exc:
-            return answer({"error": exc.code, "message": exc.message}, exc.status)
+            return answer({"error": exc.code, "message": exc.message, **exc.data}, exc.status)
 
     @app.post(PATH)
     async def api_session(request: Request):
@@ -415,7 +431,11 @@ def register(app: FastAPI) -> None:
         except ApiError as exc:
             return answer({"error": exc.error, "message": exc.message}, exc.status)
         return await run(
-            sessions.request, pubkey, str(body.get("nip05", "")), str(body.get("app", ""))
+            sessions.request,
+            pubkey,
+            str(body.get("nip05", "")),
+            str(body.get("app", "")),
+            str(body.get("client", "")),
         )
 
     @app.post(PATH + "/verify")
