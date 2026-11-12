@@ -978,3 +978,19 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .mentions-list .mention .h b { color: var(--text); }
 .mentions-list .mention .x { font-size: 15px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .mentions-list .mention time { flex: none; font-size: 12px; color: var(--faint); }
+
+/* meetings (Meeting.tsx, Events.tsx) */
+.meet-picked { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 8px; }
+.meet-person { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 3px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font-size: 14px; cursor: pointer; }
+.meet-person b { font-weight: 400; color: var(--muted); }
+.meet-search { margin-bottom: 8px; }
+.meet-faces { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px 4px; margin-bottom: 14px; }
+.meet-face { display: flex; flex-direction: column; align-items: center; gap: 4px; border: 0; background: none; padding: 4px 0; cursor: pointer; color: var(--text); min-width: 0; }
+.meet-face small { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.meet-lengths { margin-bottom: 14px; }
+.meet-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+.meet-row .face { border: 0; padding: 0; background: none; cursor: pointer; flex: none; }
+.meet-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.meet-row .t small { color: var(--muted); font-size: 12px; }
+.meet-row.there .t small { color: var(--accent); font-weight: 600; }
+.badge.meet { margin-right: 6px; }

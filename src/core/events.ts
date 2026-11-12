@@ -83,7 +83,7 @@ export function fromApi(a: ApiEvent): CalEvent {
   return {
     coord: a.coord, d: a.d, ev: fake, versions: [fake], title: a.title, description: a.description, location: a.location || undefined,
     allDay, start: parse(a.start) ?? new Date(), end: parse(a.end), tz: a.tz || undefined, groupId: a.group, links: a.links,
-    channels: [], rsvps: new Map(a.me?.rsvp ? [[me(), a.me.rsvp]] : []), rsvpEvents: new Map(), isNew: true, creator,
+    channels: [], rsvps: new Map(a.me?.rsvp ? [[me(), a.me.rsvp]] : []), rsvpEvents: new Map(), isNew: true, creator, meeting: false, invited: [],
     hosts: new Set(a.hosts.map((h) => h.pubkey)), cover: a.cover ?? undefined, visibility: a.visibility, slug: a.link !== a.d ? a.link : undefined,
     status: a.status, statusReason: a.status_reason || undefined, remote: true,
   }
@@ -267,12 +267,12 @@ function versionTags(d: string, n: EventForm, extra: string[][] = []): { kind: n
 
 /** A new event: its group (ev-<d>, me as creator and admin), then the NIP-52 event. No post in
  *  any channel: sending its URL in one shows its card there. Returns its id. */
-export async function createEvent(n: EventForm): Promise<string> {
+export async function createEvent(n: EventForm, extra: string[][] = []): Promise<string> {
   const d = newEventD()
   const groupId = 'ev-' + d
   await enqueue('groups', { kind: 9007, tags: [['h', groupId]] })
   await enqueue('groups', { kind: 9002, tags: [['h', groupId], ['name', n.title.trim()], ['about', n.description.split('\n')[0].slice(0, 200) || 'The event’s chat'], ...(n.cover ? [['picture', n.cover]] : []), n.closed ? ['closed'] : ['open']] })
-  const v = versionTags(d, n)
+  const v = versionTags(d, n, extra)
   await enqueue('main', { kind: v.kind, content: n.description, tags: v.tags })
   if (n.slug) await claimSlug(d, n.slug).catch(() => undefined)
   return d

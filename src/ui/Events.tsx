@@ -23,6 +23,7 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 import { CalendarIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
+import { attendance, checkIn } from '../core/meetings'
 import { Logo } from './Login'
 
 const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Today' : fmtDay(d))
@@ -103,6 +104,7 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
         {e.links.map((l) => <a key={l} className="btn small" style={{ display: 'inline-flex', marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join online</a>)}
         {!e.links.length && api?.online && <p className="hint">Online: the link shows once you have a place.</p>}
       </section>
+      {e.meeting && <MeetingPeople e={e} host={host} />}
       {open && <section><h3>Your RSVP</h3><RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} /></section>}
       <section>
         <h3>Hosts</h3>
@@ -127,7 +129,7 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
   return (
     <div className="screen">
       <ChannelHeader id={e.groupId} onTopic={() => {}}
-        title={<>{e.title}<small>Event · {community}</small></>}
+        title={<>{e.title}<small>{e.meeting ? 'Meeting · members only' : 'Event · ' + community}</small></>}
         left={<button className="icon-btn" aria-label="Back" onClick={() => back('events')}>‹</button>}
         right={<>{g && <FollowButton channel={e.groupId} />}<button className="icon-btn" aria-label="More" onClick={() => setSheet('menu')}><MoreIcon /></button></>}
         line={line} peek={peek} />
@@ -147,6 +149,31 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
       {sheet === 'delete' && <DeleteSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'take' && <TakeSheet e={e} tks={tks} p={p} t={ticketFor} onPick={setTicketFor} onClose={() => { setSheet(''); setTicketFor(null) }} />}
     </div>
+  )
+}
+
+/** A meeting's people: the host and everyone invited, what they answered, and whether they were
+ *  there; a host marks it for each (for people who don't use their phone). */
+function MeetingPeople({ e, host }: { e: CalEvent; host: boolean }) {
+  useVersion()
+  const there = attendance(e)
+  const keys = [...new Set([e.creator, ...e.invited, ...[...e.rsvps.keys()]])]
+  const started = +e.start - Date.now() < 3600e3
+  const sub = (k: string) => {
+    const r = e.rsvps.get(k)
+    return there.get(k) ? 'There' : r ? LABEL[r] : e.hosts.has(k) ? 'Host' : 'Invited'
+  }
+  return (
+    <section className="meet-people">
+      <h3>People <span>{keys.length}{there.size ? ` · ${[...there.values()].filter(Boolean).length} there` : ''}</span></h3>
+      {keys.map((k) => (
+        <div key={k} className={'meet-row' + (there.get(k) ? ' there' : '')}>
+          <button className="face" onClick={() => openProfile(k)} aria-label={`${displayName(k)}: profile`}><Avatar pubkey={k} size={32} /></button>
+          <span className="t">{displayName(k)}<small>{sub(k)}</small></span>
+          {host && <Btn className={'btn small' + (there.get(k) ? '' : ' ghost')} aria-pressed={!!there.get(k)} onClick={() => checkIn(e, k, !there.get(k))}>{there.get(k) ? '✓ There' : started ? 'Check in' : 'Confirm'}</Btn>}
+        </div>
+      ))}
+    </section>
   )
 }
 
@@ -399,7 +426,7 @@ function GuestList({ e, onClose }: { e: CalEvent; onClose: () => void }) {
 /** In the drawer: the events I host or have a place at, upcoming and up to 30 days after. */
 export function yourEvents(): CalEvent[] {
   const since = Date.now() - 30 * 86400e3
-  return calendar().filter((e) => e.isNew && +(e.end ?? e.start) >= since && (() => { const s = myState(e); return s === 'host' || s === 'ticket' || s === 'maybe' || s === 'applied' || s === 'waitlist' || e.hosts.has(me()) })())
+  return calendar().filter((e) => e.isNew && +(e.end ?? e.start) >= since && (() => { const s = myState(e); return s === 'host' || s === 'ticket' || s === 'maybe' || s === 'applied' || s === 'waitlist' || e.hosts.has(me()) || (e.meeting && e.invited.includes(me())) })())
 }
 
 // ---- someone with no account opens an event's URL in the chat -----------------------------

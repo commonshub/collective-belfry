@@ -101,9 +101,9 @@ function EventRow({ e }: { e: CalEvent }) {
     <button className="ev" onClick={() => openEvent(e)} style={{ opacity: e.ev.pending ? 0.6 : 1 }}>
       {e.cover ? <img className="ev-thumb" src={e.cover} alt="" loading="lazy" /> : <DateChip d={e.start} />}
       <div className="info">
-        <b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>} {e.title}</b>
+        <b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>}{e.meeting && <span className="badge meet">Meeting</span>} {e.title}</b>
         <small>{fmtDay(e.start)} · {when(e)}{e.location ? ' · ' + e.location : ''}{e.links.length ? ' · online' : ''}</small>
-        <small>{s ? `${s} · ` : ''}{going(e)} going</small>
+        <small>{s ? `${s} · ` : ''}{e.meeting ? `${new Set([e.creator, ...e.invited]).size} people` : `${going(e)} going`}</small>
       </div>
     </button>
   )

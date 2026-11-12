@@ -608,6 +608,13 @@ export interface CalEvent {
   versions: Ev[]
   /** Read from the belfry's API (a guest: the community relay is not theirs). */
   remote?: boolean
+  /** A meeting (Xavier, 2026-11-12): a members-only event made from a channel's ＋ menu with a
+   *  topic, the people invited, a time, a length and a place. Its `t` tag is `meeting`. */
+  meeting: boolean
+  /** The people invited to a meeting: its `p` tags marked `invited`. */
+  invited: string[]
+  /** The channel it was made from (`channel` tag), for meetings. */
+  from?: string
 }
 
 export const isEventKind = (k: number) => k === 31922 || k === 31923
@@ -704,6 +711,9 @@ export const calendar: () => CalEvent[] = perLog((list) => {
       visibility: vis === 'public' || vis === 'link' ? vis : 'members',
       slug: tag(e, 'slug') || undefined,
       status, statusReason,
+      meeting: e.tags.some((t) => t[0] === 't' && t[1] === 'meeting'),
+      invited: [...new Set(e.tags.filter((t) => t[0] === 'p' && t[3] === 'invited' && /^[0-9a-f]{64}$/.test(t[1] ?? '')).map((t) => t[1]))],
+      from: tag(e, 'channel') || undefined,
       rsvps: new Map([...m.entries()].map(([p, v]) => [p, v.s])),
       rsvpEvents: new Map([...m.entries()].map(([p, v]) => [p, v.ev])),
     })
