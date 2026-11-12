@@ -1357,6 +1357,59 @@ class Register(OdooApi):
             self._write("res.partner", [row["partner_id"]], {"email": email})
             return {"state": "saved", "partner_id": row["partner_id"]}
 
+    def held_guest(self, channel: str, name: str, inviter: str, days: int) -> dict[str, Any]:
+        """Someone added to a meeting by name only (Xavier, 2026-11-12: "this should create an
+        identity for them"): a new contact with no address and a pending guest pass of CHANNEL,
+        held by INVITER (``guest_inviter``), the only one who may hand it over later
+        (``transfer_held_guest``). The caller makes the key in the signer and opens the pass.
+        Returns ``{"partner_id", "pass_id"}``."""
+        with self._lock:
+            today = now().date()
+            pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Guest"})
+            pass_id = self._create(
+                "belfry.pass",
+                {
+                    "tier": "guest",
+                    "guest_channel": channel,
+                    "guest_days": int(days),
+                    "guest_inviter": inviter,
+                    "date_start": today.isoformat(),
+                    "date_end": (today + dt.timedelta(days=int(days))).isoformat(),
+                    "partner_id": pid,
+                    "state": "pending",
+                },
+            )
+            return {"partner_id": pid, "pass_id": pass_id}
+
+    def transfer_held_guest(self, owner: str, pubkey: str, email: str) -> dict[str, Any]:
+        """OWNER, who made the name-only identity PUBKEY, gives it to the person: EMAIL goes on
+        its contact, so whoever holds that address signs in with it (the sign-in proves it).
+        ``{"state": "transferred" | "not_yours" | "has_email" | "taken", "channels"?}``."""
+        email, pubkey = self._clean(email, pubkey)
+        owner = (owner or "").strip().lower()
+        with self._lock:
+            rows = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+            ]
+            if not rows or any(p.get("tier") != "guest" for p in rows):
+                return {"state": "not_yours"}
+            if not any(p.get("guest_inviter") == owner for p in rows):
+                return {"state": "not_yours"}
+            pid = rows[0]["partner_id"]
+            partner = self._get("res.partner", pid) or {}
+            if partner.get("email"):
+                return {"state": "has_email"}
+            other = self._partner_by_email(email)
+            if other and other["id"] != pid:
+                return {"state": "taken"}
+            self._write("res.partner", [pid], {"email": email})
+            return {
+                "state": "transferred",
+                "channels": sorted({p["guest_channel"] for p in rows if p.get("guest_channel")}),
+            }
+
     def accept_invite(self, token: str, name: str, email: str) -> dict[str, Any]:
         """The invitee confirmed their address: their person and a pending pass, the invite
         reserved for it. Returns {"pass_id", "partner_id"} or raises OdooError."""
