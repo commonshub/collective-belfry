@@ -677,7 +677,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
             {m.text && <Item icon={<CopyIcon />} label={copied === 'text' ? 'Copied' : 'Copy text'} onClick={() => void copy('text', m.text)} />}
             <Item icon={<LinkIcon />} label={copied === 'link' ? 'Copied' : 'Copy link'} onClick={() => void copy('link', link)} />
             {onPropose && !m.ev.pending && <Item icon={<DocIcon />} label="Turn into a proposal" onClick={() => { onClose(); onPropose() }} />}
-            {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the to-dos' : 'Turn into a to-do'} onClick={() => { if (copied === 'todo') return; setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
+            {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the todos' : 'Turn into a todo'} onClick={() => { if (copied === 'todo') return; setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
             {canAdmin(g) && !m.ev.pending && m.ev.kind === 9 && <Item icon={<PushPinIcon />} label={isPinned ? 'Unpin from the channel' : 'Pin to the channel'} onClick={() => { onClose(); void pinMessage(groupId, m.ev.id, !isPinned) }} />}
             {isAdmin() && nsiteRef(m.text) && <Item icon={<GlobeIcon />} label="Make this the website" onClick={() => { onClose(); void makeWebsite(m) }} />}
           </div>
@@ -891,7 +891,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
           </div>
           <div className="act-group">
             {canAnnounce && <button className="act" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}><MegaphoneIcon /><span>Announcement<small>Stands out; followers get it by e-mail</small></span></button>}
-            {onTodo && <button className="act" onClick={() => { setMenu(false); onTodo() }}><TodoIcon /><span>To-do<small>Something to get done, on the channel's list</small></span></button>}
+            {onTodo && <button className="act" onClick={() => { setMenu(false); onTodo() }}><TodoIcon /><span>Todo<small>Something to get done, on the channel's list</small></span></button>}
             {onMeeting && <button className="act" onClick={() => { setMenu(false); onMeeting() }}><PeopleIcon /><span>Meeting<small>Members only: a topic, people, a time</small></span></button>}
             {onEvent && <button className="act" onClick={() => { setMenu(false); onEvent() }}><CalendarIcon /><span>Event</span></button>}
             {onProposal && <button className="act" onClick={() => { setMenu(false); onProposal() }}><DocIcon /><span>Proposal<small>A text to discuss and vote on</small></span></button>}
@@ -909,7 +909,7 @@ function NewTodoSheet({ groupId, onClose }: { groupId: string; onClose: () => vo
   const title = d.title
   const setTitle = (t: string) => setD(() => ({ title: t }))
   return (
-    <Sheet title="New to-do" onClose={onClose}>
+    <Sheet title="New todo" onClose={onClose}>
       <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim()) return; await addTask(groupId, title.trim()); clearDraft(); onClose() }}>
         <label className="field"><span>What needs doing?</span>
           <input className="input" autoFocus maxLength={300} placeholder="e.g. Book the room for Friday" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
@@ -1112,7 +1112,7 @@ export function replyText(m: Message): string {
 // Only a to-do's status shows in its thread (Xavier, 2026-11-11): comments are replies already,
 // and "stopped working" or "let go" is noise.
 const STEP_WORDS: Partial<Record<TaskStep['what'], string>> = {
-  created: 'made a to-do', claim: 'took it', working: 'started working on it', done: 'marked it done', undone: 'reopened it',
+  created: 'made a todo', claim: 'took it', working: 'started working on it', done: 'marked it done', undone: 'reopened it',
 }
 export interface StepGroup { t: Task; who: string; at: number; what: TaskStep['what'][] }
 

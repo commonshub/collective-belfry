@@ -6,7 +6,7 @@ import { openProfile } from './Profile'
 const MembersMap = lazy(() => import('./MembersMap'))
 import { setInbox, setWebPage } from '../core/actions'
 import { isInbox, mailLocal, slugify, webPage, WEB_RESERVED, type WebPage } from '../core/model'
-import { BELFRY } from '../config'
+import { BELFRY, NAME } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
 import { useVersion } from '../core/store'
@@ -14,22 +14,28 @@ import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
 import { canAdmin } from '../core/access'
 import { me } from '../core/sync'
-import { Avatar, back, fmtTime, go, MediaGrid, Sheet, Btn, Form, useNow, WorkRing } from './common'
-import { AccessFields, stepGroups, stepText } from './Chat'
+import { Avatar, back, devMode, fmtDay, fmtTime, go, Guard, MediaGrid, Sheet, Btn, Form, useNow, WorkRing } from './common'
+import { all, type Ev } from '../core/store'
+import { isAdmin } from '../core/access'
+import { AccessFields } from './Chat'
+import { GearIcon } from './icons'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
 
 export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: Tab }) {
   useVersion()
   const [tab, setTab] = useState<Tab>(initial)
+  const [settings, setSettings] = useState(false)
   const g = groups().find((x) => x.id === id)
   return (
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + id)}>‹</button>
         <h1>{channelIcon(g)} {g?.name ?? id}</h1>
+        {g && canAdmin(g) && <button className="icon-btn" aria-label="Settings" onClick={() => setSettings(true)}><GearIcon /></button>}
       </div>
       <ChannelInfoBody id={id} tab={tab} setTab={setTab} />
+      {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
     </div>
   )
 }
@@ -40,7 +46,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
     <>
       <Tabs tab={tab} setTab={setTab} tabs={tabs} />
       <div className="scroll">
-        <Summary id={id} tab={tab} open={setTab} />
+        {tab !== 'about' && tab !== 'log' && <Summary id={id} tab={tab} open={setTab} />}
         {tab === 'about' && <About id={id} />}
         {tab === 'tasks' && <Tasks groupId={id} />}
         {tab === 'members' && <Members groupId={id} />}
@@ -53,7 +59,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
 export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
-  const list = tabs ?? ([['about', 'About'], ['tasks', 'To-dos'], ['members', 'Members'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
+  const list = tabs ?? ([['about', 'About'], ['members', 'Members'], ['tasks', 'Todos'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
   return (
     <div className="seg">
       {list.map(([k, label]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>)}
@@ -61,57 +67,61 @@ export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: 
   )
 }
 
-/** COMPACT: under the pulled-down header, which shows the members and photos itself. */
+/** About a channel (Xavier, 2026-11-12: no boxes): its description, "2/12 active members" with
+ *  an invite link, the e-mail line, its web page. Settings: the gear in the header
+ *  (ChannelSettingsSheet). COMPACT: under the pulled-down header, which shows the description,
+ *  members and photos itself. */
 export function About({ id, compact = false }: { id: string; compact?: boolean }) {
+  useVersion()
   const g = groups().find((x) => x.id === id)
-  const [editing, setEditing] = useState(false)
-  const [name, setName] = useState(g?.name ?? '')
-  const [about, setAbout] = useState(g?.about ?? '')
-  const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
-  const [openMail, setOpenMail] = useState(false)
-  const [web, setWeb] = useState<WebPage>({ on: false, slug: '', visibility: 'public' })
-  const [webError, setWebError] = useState('')
   const [inviting, setInviting] = useState(false)
+  const [settings, setSettings] = useState(false)
   if (!g) return null
+  const active = recentlyActive(id)
+  const parent = groups().find((x) => x.id === g.parent)
   return (
-    <div className="pad">
-      {g.isPod && !compact && (
-        <div className="card">
-          <div className="hint">Pod in</div>
-          <button className="link" onClick={() => go('c/' + encodeURIComponent(g.parent ?? 'general'))}>
-            {channelIcon(groups().find((x) => x.id === g.parent))} {groups().find((x) => x.id === g.parent)?.name ?? g.parent}
+    <div className="pad about">
+      {!compact && (g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint">No description yet.</p>)}
+      {compact && g.about.trim().includes('\n') && <Markdown text={g.about} className="chead-about" />}
+      {!compact && (
+        <div className="about-line">
+          <button className="about-faces" onClick={() => go(`c/${encodeURIComponent(id)}/members`)} aria-label="See the members">
+            {active.slice(0, 6).map((a) => <Avatar key={a.pubkey} pubkey={a.pubkey} size={24} />)}
+            <span><b>{active.length}/{g.members.size}</b> active members</span>
           </button>
+          <span className="sep">·</span>
+          <button className="link" onClick={() => setInviting(true)}>Invite</button>
         </div>
       )}
-      {compact && g.about.trim().includes('\n') && <div className="card"><div className="hint">Description</div><Markdown text={g.about} /></div>}
-      {!compact && <ActiveCard id={id} />}
-      {!compact && <div className="card">
-        <div className="hint">Members</div>
-        <div>{g.members.size}</div>
-      </div>}
-      {g.isPod && (
-        <div className="card">
-          <div className="hint">Who can join</div>
-          <div>{g.closed ? 'Closed: apply, admins admit' : 'Open: any member joins'}</div>
-          {g.closed && <div className="hint" style={{ marginTop: 6, whiteSpace: 'pre-wrap' }}>Question: {g.prompt || '—'}</div>}
-        </div>
+      {compact && <p className="about-line"><button className="link" onClick={() => setInviting(true)}>Invite people</button>{canAdmin(g) && <> · <button className="link" onClick={() => setSettings(true)}>Settings</button></>}</p>}
+      {g.isPod && !compact && parent && (
+        <p className="about-line">Pod in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button> · {g.closed ? 'closed: apply, admins admit' : 'open: any member joins'}</p>
       )}
+      {g.isPod && g.closed && !compact && <p className="hint" style={{ whiteSpace: 'pre-wrap' }}>Question: {g.prompt || '—'}</p>}
       {g.isPod && (g.members.has(me())
         ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
         : !g.closed && <Btn className="btn" style={{ marginBottom: 10 }} onClick={() => joinGroup(id)}>Join pod</Btn>)}
-      <div className="card">
-        <div className="hint">E-mail</div>
-        <div>{isInbox(g) ? <>Anyone can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: their mail shows as their message.</>}</div>
-      </div>
-      <div className="row" style={{ gap: 8 }}>
-        <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
-        {canAdmin(g) && <button className="btn ghost" style={{ flex: 1 }} onClick={() => { setName(g.name); setAbout(g.about); setAccess({ closed: g.closed, prompt: g.prompt ?? '' }); setOpenMail(isInbox(g)); setWeb(webPage(g) ?? { on: false, slug: slugify(g.name), visibility: 'public' }); setWebError(''); setEditing(true) }}>Settings</button>}
-      </div>
+      <p className="about-mail">✉️ {isInbox(g) ? <>Anyone can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: their mail shows as their message.</>}</p>
+      {webPage(g)?.on && <p className="hint web-page-link">{webPage(g)!.visibility === 'members' ? 'Members only' : 'Public'} · web page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a></p>}
+      <p className="hint">{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
-      {webPage(g)?.on && <p className="hint web-page-link" style={{ marginTop: 16 }}>{webPage(g)!.visibility === 'members' ? 'Members only' : 'Public'} · web page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a></p>}
-      <p className="hint" style={{ marginTop: 16 }}>{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
-      {editing && (
-        <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={() => setEditing(false)}>
+      {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
+    </div>
+  )
+}
+
+/** A channel's settings (its admins): name, description, visibility, mail, its web page. */
+export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const g = groups().find((x) => x.id === id)
+  const [name, setName] = useState(g?.name ?? '')
+  const [about, setAbout] = useState(g?.about ?? '')
+  const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
+  const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
+  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'public' })
+  const [webError, setWebError] = useState('')
+  if (!g) return null
+  return (
+    <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={onClose}>
           <Form onSubmit={async (e) => {
             e.preventDefault()
             if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
@@ -127,7 +137,7 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
             const was = webPage(g)
             if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public')) await setWebPage(id, web)
-            setEditing(false)
+            onClose()
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
@@ -155,9 +165,7 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
             )}
             <button className="btn" disabled={!name.trim()}>Save</button>
           </Form>
-        </Sheet>
-      )}
-    </div>
+    </Sheet>
   )
 }
 
@@ -173,10 +181,10 @@ export function Tasks({ groupId }: { groupId: string }) {
   return (
     <div>
       <Form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-        <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="input" placeholder="Add a todo…" value={title} onChange={(e) => setTitle(e.target.value)} />
         <button className="btn small" disabled={!title.trim()}>Add</button>
       </Form>
-      {tasks.length === 0 && <div className="empty">No to-dos yet.</div>}
+      {tasks.length === 0 && <div className="empty">No todos yet.</div>}
       {[...todo, ...done].map((t) => (
         <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
       ))}
@@ -249,11 +257,11 @@ export function Members({ groupId }: { groupId: string }) {
         </div>
       ))}
       {reviewing.length > 0 && <div className="section-title">Members <span>{g?.members.size}</span></div>}
-      <Suspense fallback={<div className="members-map" />}>
+      <Guard fallback={null}><Suspense fallback={<div className="members-map" />}>
         {mapped.length > 0
           ? <MembersMap pubkeys={members} onOpen={openProfile} />
           : <p className="hint pad-x">Nobody here shares their city yet. {isMember ? <button className="link" onClick={() => openProfile(me())}>Add yours</button> : null}</p>}
-      </Suspense>
+      </Suspense></Guard>
       {members.map((p) => (
         <div key={p} className="member">
           <button className="member-open" onClick={() => openProfile(p)} aria-label={`${displayName(p)}: profile`}><Avatar pubkey={p} /></button>
@@ -305,21 +313,113 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
   )
 }
 
-// ---- log: what happened to the channel's to-dos, newest first ------------------------------
+// ---- log: everything that happened in the channel, newest first (Xavier, 2026-11-12) ----------
+// One line per Nostr event in the group: who did what, an icon for the kind of thing, the time;
+// a day per section, with the days as chips to jump. A tap shows more and a way to go there;
+// admins in developer mode (Me) see the raw event. Heartbeats and "seen" markers are left out.
+
+interface LogItem { ev: Ev; icon: string; text: string; detail?: string; go?: string }
+
+const LABEL_WORDS: Record<string, string> = { pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
+const TASK_WORDS: Record<string, string> = { claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
+const short = (t: string, n = 80) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x }
+
+function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem | null {
+  const t = (k: string) => e.tags.find((x) => x[0] === k)?.[1]
+  const at = (p: string) => `c/${encodeURIComponent(groupId)}/${p}`
+  switch (e.kind) {
+    case 9: {
+      if (t('pod')) return { ev: e, icon: '⬡', text: 'created a pod', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (t('proposal')) return { ev: e, icon: '📄', text: 'made a proposal', detail: short(e.content, 200), go: at('m/' + e.id) }
+      const media = e.tags.filter((x) => x[0] === 'imeta').map((x) => x.find((v) => v.startsWith('m '))?.slice(2) ?? '')
+      if (media.some((m) => m.startsWith('audio/'))) return { ev: e, icon: '🎙', text: 'posted a recording', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (media.some((m) => m.startsWith('image/'))) return { ev: e, icon: '🖼', text: media.length > 1 ? `posted ${media.length} photos` : 'posted a photo', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (media.length) return { ev: e, icon: '📎', text: 'posted a file', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (t('mail-from')) return { ev: e, icon: '✉️', text: 'an e-mail came in', detail: short(t('subject') || e.content, 200), go: at('m/' + e.id) }
+      return { ev: e, icon: '💬', text: 'posted a message', detail: short(e.content, 200), go: at('m/' + e.id) }
+    }
+    case 1111: return { ev: e, icon: '↩️', text: 'replied in a thread', detail: short(e.content, 200), go: at('thread/' + (t('E') ?? e.id)) }
+    case 1010: return { ev: e, icon: '✏️', text: 'edited a message', detail: short(e.content, 200), go: t('e') ? at('m/' + t('e')) : undefined }
+    case 7: return { ev: e, icon: e.content && e.content.length <= 4 && e.content !== '+' ? e.content : '👍', text: 'reacted', go: t('e') ? at('m/' + t('e')) : undefined }
+    case 5: case 9005: return { ev: e, icon: '🗑', text: t('k') === '7' ? 'took back a reaction' : 'deleted something' }
+    case 2100: return { ev: e, icon: '☑️', text: 'made a todo', detail: short(t('title') || e.content, 200), go: at('todos') }
+    case 2101: { const w = TASK_WORDS[t('action') ?? ''] ; if (!w) return null; const title = titles.get(t('e') ?? ''); return { ev: e, icon: t('action') === 'done' ? '✅' : '☑️', text: w, detail: title, go: at('todos') } }
+    case 2103: return { ev: e, icon: '💬', text: 'commented on a todo', detail: short(e.content, 200), go: at('todos') }
+    case 9000: return { ev: e, icon: '👋', text: e.tags.some((x) => x[0] === 'p' && x[2] === 'admin') ? 'made someone an admin' : 'added someone', detail: t('p') ? displayName(t('p')!) : undefined, go: at('members') }
+    case 9001: return { ev: e, icon: '🚪', text: 'removed someone', detail: t('p') ? displayName(t('p')!) : undefined, go: at('members') }
+    case 9021: return { ev: e, icon: '🙋', text: 'asked to join', detail: short(e.content, 200) }
+    case 9022: return { ev: e, icon: '🚪', text: 'left' }
+    case 9002: return { ev: e, icon: '⚙️', text: 'changed the channel', detail: [t('name'), t('about')].filter(Boolean).map((x) => short(x!, 120)).join(' · ') }
+    case 9007: return { ev: e, icon: '✨', text: 'created the channel' }
+    case 1985: {
+      const l = e.tags.find((x) => x[0] === 'l')?.[1] ?? ''
+      if (t('L') === '#t') return { ev: e, icon: '#', text: 'changed the pinned topics' }
+      const who = t('p') ? displayName(t('p')!) : undefined
+      return { ev: e, icon: l === 'pinned' || l === 'unpinned' ? '📌' : l === 'attended' ? '✅' : '🏷', text: LABEL_WORDS[l] ?? `labelled something ${l}`, detail: who, go: t('e') ? at('m/' + t('e')) : undefined }
+    }
+    case 30078: {
+      const d = t('d') ?? ''
+      if (d.startsWith('seen:')) return null
+      return { ev: e, icon: '⚙️', text: 'changed a setting', detail: d }
+    }
+    case 31922: case 31923: return { ev: e, icon: e.tags.some((x) => x[0] === 't' && x[1] === 'meeting') ? '👥' : '📅', text: e.tags.some((x) => x[0] === 't' && x[1] === 'meeting') ? 'set the meeting' : 'set the event', detail: t('title') }
+    case 31925: return { ev: e, icon: '📅', text: `answered ${t('status') === 'accepted' ? 'going' : t('status') === 'declined' ? "can't go" : 'maybe'}` }
+    default: return { ev: e, icon: '•', text: `kind ${e.kind}` }
+  }
+}
 
 export function Log({ groupId }: { groupId: string }) {
   useVersion()
-  const steps = stepGroups(tasklist(groupId).tasks).sort((a, b) => b.at - a.at).slice(0, 200)
-  if (!steps.length) return <div className="empty">Nothing happened to this channel's to-dos yet.</div>
+  const [open, setOpen] = useState<string | null>(null)
+  const [raw, setRaw] = useState<Ev | null>(null)
+  const g = groups().find((x) => x.id === groupId)
+  const dev = devMode() && ((g && canAdmin(g)) || isAdmin())
+  const evs = all(me()).filter((e) => e.tags.some((x) => x[0] === 'h' && x[1] === groupId))
+  const titles = new Map(tasklist(groupId).tasks.map((t) => [t.id, t.title]))
+  // the relay signs joins and channel changes itself: say so instead of showing its key
+  const relayKey = all(me()).find((e) => e.kind === 39000 && e.tags.some((x) => x[0] === 'd' && x[1] === groupId))?.pubkey
+  const who = (pk: string) => (pk !== me() && pk === relayKey ? NAME : displayName(pk))
+  const items = evs.sort((a, b) => b.created_at - a.created_at).map((e) => logItem(e, groupId, titles)).filter((x): x is LogItem => !!x).slice(0, 1000)
+  if (!items.length) return <div className="empty">Nothing happened here yet.</div>
+  const dayOf = (s: number) => new Date(s * 1000).toDateString()
+  const days: [string, LogItem[]][] = []
+  for (const it of items) { const d = dayOf(it.ev.created_at); const last = days.at(-1); if (last && last[0] === d) last[1].push(it); else days.push([d, [it]]) }
+  const label = (d: string) => (d === new Date().toDateString() ? 'Today' : d === new Date(Date.now() - 86400e3).toDateString() ? 'Yesterday' : fmtDay(new Date(d)))
   return (
-    <div className="pad log-list">
-      {steps.map((s, i) => (
-        <div key={s.t.id + i} className="log-row">
-          <Avatar pubkey={s.who} size={24} />
-          <span><b>{displayName(s.who)}</b> {stepText(s.what)}: “{s.t.title}”</span>
-          <time className="hint">{fmtTime(s.at)}</time>
-        </div>
+    <div className="log">
+      <div className="log-days" role="navigation" aria-label="Days">
+        {days.map(([d, l]) => <button key={d} className="chip" onClick={() => document.getElementById('log-' + d.replace(/\s/g, '-'))?.scrollIntoView({ behavior: 'smooth', block: 'start' })}>{label(d)} <small>{l.length}</small></button>)}
+      </div>
+      {days.map(([d, list]) => (
+        <section key={d} id={'log-' + d.replace(/\s/g, '-')} className="log-day">
+          <h3 className="log-date">{label(d)}</h3>
+          {list.map((it) => (
+            <div key={it.ev.id} className={'log-row' + (open === it.ev.id ? ' open' : '')}>
+              <button className="log-main" onClick={() => setOpen(open === it.ev.id ? null : it.ev.id)} aria-expanded={open === it.ev.id}>
+                <span className="log-ico" aria-hidden="true">{it.icon}</span>
+                <span className="log-text"><b>{who(it.ev.pubkey)}</b> {it.text}{it.detail && open !== it.ev.id ? <small>{short(it.detail, 60)}</small> : null}</span>
+                <time className="hint">{fmtTime(it.ev.created_at)}</time>
+              </button>
+              {open === it.ev.id && (
+                <div className="log-more">
+                  {it.detail && <p>{it.detail}</p>}
+                  <p className="hint">{new Date(it.ev.created_at * 1000).toLocaleString()}</p>
+                  <div className="row" style={{ gap: 8 }}>
+                    {it.go && <button className="btn small" onClick={() => go(it.go!)}>Go there</button>}
+                    {dev && <button className="btn small ghost" onClick={() => setRaw(it.ev)}>Inspect the Nostr event</button>}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </section>
       ))}
+      {raw && (
+        <Sheet title={`Nostr event · kind ${raw.kind}`} onClose={() => setRaw(null)}>
+          <pre className="raw-event">{JSON.stringify({ id: raw.id, pubkey: raw.pubkey, created_at: raw.created_at, kind: raw.kind, tags: raw.tags, content: raw.content, sig: (raw as { sig?: string }).sig }, null, 2)}</pre>
+          <button className="btn small ghost" onClick={() => void navigator.clipboard?.writeText(JSON.stringify(raw))}>Copy</button>
+        </Sheet>
+      )}
     </div>
   )
 }

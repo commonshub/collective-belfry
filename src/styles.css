@@ -537,8 +537,10 @@ a.chip { text-decoration: none; color: inherit; }
 .chead-media .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .chead-media .chip { flex: none; height: 32px; padding: 0 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 13px; white-space: nowrap; }
 /* the handle: a pill under the header (closed) or under the panel (open), always there */
-.chead-handle { position: absolute; left: 50%; transform: translateX(-50%); width: 64px; height: 20px; padding: 0; border: 0; background: none;
+.chead-handle { position: absolute; left: calc(50% - 32px); width: 64px; height: 20px; padding: 0; border: 0; background: none;
   display: grid; place-items: center; touch-action: none; cursor: grab; z-index: 6; transition: top 260ms cubic-bezier(0.2, 0, 0, 1); }
+/* centred without a transform: a pressed button's scale() would push it aside (Xavier, 2026-11-12) */
+.chead-handle:active:not(:disabled) { transform: none; opacity: 1; }
 .chead-handle span { width: 36px; height: 4px; border-radius: 99px; background: var(--line); }
 .chead-handle:hover span, .chead-handle:focus-visible span { background: var(--muted); }
 .chead.dragging .chead-handle { transition: none; }
@@ -800,7 +802,10 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .pull-people .ico { width: 18px; height: 18px; flex: none; }
 .pull-about { margin: 0; font-size: 14px; color: var(--muted); line-height: 1.4; }
 /* the latest photos: one row in the small pull-down, a mosaic in the full one */
-.photo-row { display: flex; gap: 6px; overflow: hidden; }
+/* swiped sideways for more (Xavier, 2026-11-12) */
+.photo-row { display: flex; gap: 6px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x; scroll-snap-type: x proximity; margin: 0 -16px; padding: 0 16px; -webkit-overflow-scrolling: touch; }
+.photo-row::-webkit-scrollbar { display: none; }
+.photo-row .thumb { scroll-snap-align: start; }
 .photo-row .thumb { flex: none; width: 60px; height: 60px; }
 .photo-mosaic { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 @media (min-width: 600px) { .photo-mosaic { grid-template-columns: repeat(4, 1fr); } }
@@ -817,9 +822,6 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .pull-faces.big .face { margin: 0; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
 .pull-faces.big .face small { font-size: 12px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pull-links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 14px; }
-.log-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
-.log-row span { flex: 1; min-width: 0; }
-.log-row time { font-size: 12px; white-space: nowrap; }
 .pull .prop-head { padding: 0; border: 0; max-height: none; overflow: visible; }
 
 .todo-chip { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; padding: 5px 10px; border-radius: 8px; background: var(--surface); color: var(--text); font-size: 13px; font-weight: 600; }
@@ -1032,3 +1034,26 @@ audio.audio { width: 100%; max-width: 420px; display: block; margin-top: 6px; }
 .meet-add-step .input { flex: 1; min-width: 0; }
 .meet-add-step .hint { margin: 0; }
 .meet-matches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+/* About (ChannelInfo.tsx): lines, no boxes */
+.about > p, .about .about-line { margin: 0 0 12px; }
+.about-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 15px; }
+.about-faces { display: inline-flex; align-items: center; gap: 0; border: 0; background: none; padding: 0 0 0 6px; color: var(--text); cursor: pointer; font-size: 15px; }
+.about-faces .avatar { margin-left: -6px; border: 2px solid var(--bg); border-radius: 99px; }
+.about-faces span { margin-left: 8px; }
+.about-line .sep { color: var(--muted); }
+.about-mail { font-size: 15px; line-height: 1.45; }
+/* Log */
+.log-days { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; padding: 10px 16px; position: sticky; top: 0; background: var(--bg); z-index: 2; border-bottom: 1px solid var(--line); }
+.log-days .chip { flex: none; font-size: 13px; padding: 5px 10px; margin: 0; border: 0; cursor: pointer; color: var(--text); }
+.log-days .chip small { color: var(--muted); margin-left: 4px; }
+.log-day { scroll-margin-top: 52px; }
+.log-date { margin: 0; padding: 12px 16px 4px; font-size: 13px; color: var(--muted); font-weight: 600; }
+.log-row { border-bottom: 1px solid var(--line); }
+.log-main { display: flex; align-items: flex-start; gap: 10px; width: 100%; padding: 9px 16px; border: 0; background: none; color: var(--text); text-align: left; cursor: pointer; font-size: 14px; }
+.log-ico { width: 24px; flex: none; text-align: center; font-size: 16px; line-height: 20px; }
+.log-text { flex: 1; min-width: 0; line-height: 20px; }
+.log-text small { display: block; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-main time { font-size: 12px; white-space: nowrap; line-height: 20px; }
+.log-more { padding: 0 16px 12px 50px; font-size: 14px; }
+.log-more p { margin: 0 0 8px; overflow-wrap: anywhere; }
+.raw-event { font-size: 12px; line-height: 1.4; background: var(--surface-2); padding: 10px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; }

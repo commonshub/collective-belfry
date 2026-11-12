@@ -124,7 +124,7 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
         <button className="btn small ghost" onClick={() => setSheet('qr')}>QR code</button>
       </section>
       {host && <button className="pull-row" onClick={() => setSheet('guests')}><PeopleIcon /><span className="t">Guest list<small>{goingList(e, p).length} going{asking ? ` · ${asking} asking` : ''}</small></span></button>}
-      {g && <button className="pull-row pull-people" onClick={() => more('members')}><PeopleIcon /><span className="t">The event’s chat<small>Members, files, to-dos</small></span><ChevronDownIcon /></button>}
+      {g && <button className="pull-row pull-people" onClick={() => more('members')}><PeopleIcon /><span className="t">The event’s chat<small>Members, files, todos</small></span><ChevronDownIcon /></button>}
     </div>
   )
   return (

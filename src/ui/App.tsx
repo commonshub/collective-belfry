@@ -23,7 +23,7 @@ import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
 import { demoInboxMail, demoMailPost } from './MailPost'
-import { Avatar, back, go, useRoute, useWide, WIDE3 } from './common'
+import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, JoinScreen, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
@@ -219,6 +219,17 @@ const EVENT_KEY = 'belfry-event-open'
 const pendingEvent = () => { try { return localStorage.getItem(EVENT_KEY) ?? '' } catch { return '' } }
 const setPendingEvent = (link: string) => { try { if (link) localStorage.setItem(EVENT_KEY, link); else localStorage.removeItem(EVENT_KEY) } catch { /* private mode */ } }
 
+/** Admins: show the raw Nostr events (a channel's Log links to them). */
+function DevModeRow() {
+  const [on, setOn] = useState(devMode())
+  return (
+    <label className="card switch-row" style={{ width: '100%' }}>
+      <span><b>Developer mode</b><small>A channel's Log links each item to its Nostr event</small></span>
+      <input type="checkbox" role="switch" checked={on} onChange={(e) => { setDevMode(e.target.checked); setOn(e.target.checked) }} />
+    </label>
+  )
+}
+
 function lastChannel() {
   const m = /#\/c\/([^/]+)/.exec(sessionStorage.getItem('osv-last-channel') ?? '')
   return m ? decodeURIComponent(m[1]) : undefined
@@ -292,6 +303,7 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
             <span className="hint" aria-hidden="true">›</span>
           </button>
         )}
+        {(isAdmin() || (THEME === 'belfry' && isBelfryAdmin(me()))) && <DevModeRow />}
         <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/connections')}>
           <div>
             <div style={{ fontWeight: 600 }}>Connections</div>

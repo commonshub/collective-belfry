@@ -117,7 +117,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
       {line ? line({ open: level > 0, onToggle: () => setLevel(level ? 0 : 1), pull }) : <SummaryLine id={id} open={level > 0} onToggle={() => setLevel(level ? 0 : 1)} topic={topic} onTopic={onTopic} pull={pull} />}
       <div className="chead-panel" style={{ height }} aria-hidden={height === 0}>
         {/* one layout at every level: the full one is the same summary, scrollable, showing more
-            (every to-do, then members, files and settings under it), so nothing jumps */}
+            (every todo, then members, files and settings under it), so nothing jumps */}
         <div ref={fullRef} className={level === 2 ? 'chead-more-wrap' : undefined} style={level === 2 ? { height: fullH } : undefined}>
           <div ref={peekRef} className="chead-peek">{peek ? peek({ close: () => setLevel(0), more: openMore }) : <PullDown id={id} topic={topic} full={level === 2} onTopic={(t) => { setLevel(0); onTopic(t) }} more={openMore} />}</div>
           {/* the rest: e-mail, invite, settings (members, photos and files have their own pages: c/<id>/members…) */}

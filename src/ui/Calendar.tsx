@@ -270,7 +270,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
         {slugState.msg && <p className={'hint' + (slugState.free === false ? ' error' : '')} role="status" style={{ marginTop: -8 }}>{slugState.checking ? 'Checking…' : slugState.msg}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <button className="btn" disabled={!ok}>{edit ? 'Save' : 'Create the event'}</button>
-        <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone who RSVPed sees the change.' : 'It gets its own chat, photos and to-dos. Send its URL in a channel to show it there.'}</p>
+        <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone who RSVPed sees the change.' : 'It gets its own chat, photos and todos. Send its URL in a channel to show it there.'}</p>
       </Form>
     </Sheet>
   )

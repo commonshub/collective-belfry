@@ -3,6 +3,7 @@ import { App } from './ui/App'
 import './styles.css'
 import { NAME, THEME } from './config'
 import { applyBranding } from './core/branding'
+import { Guard, reloadOnce } from './ui/common'
 
 if (THEME === 'belfry') {
   document.documentElement.dataset.theme = 'belfry'
@@ -32,7 +33,12 @@ document.addEventListener('click', (e) => {
   setTimeout(() => b.removeAttribute('data-tapped'), 600)
 }, true)
 
-createRoot(document.getElementById('root')!).render(<App />)
+// A new version shipped while this page was open: its old code chunks are gone from the server
+// (a lazy part, the members map, then failed to load and blanked the app: Xavier, 2026-11-12).
+// Load the new version instead, once.
+addEventListener('vite:preloadError', (e) => { e.preventDefault(); reloadOnce() })
+
+createRoot(document.getElementById('root')!).render(<Guard whole><App /></Guard>)
 
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   navigator.serviceWorker.register('./sw.js').catch(() => { /* offline shell is a bonus */ })

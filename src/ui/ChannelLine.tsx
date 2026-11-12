@@ -115,7 +115,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
     ['proposals', <DocIcon />, f.proposals.length - (shownNow === 'proposal' ? 1 : 0), 'more open proposals'],
     ['pods', <PodShape members={6} size={13} />, f.pods.length, 'pods'],
     ['photos', <ImageIcon />, f.photos.length, 'photos'],
-    ['todos', <TodoIcon />, f.tally.total, 'to-dos'],
+    ['todos', <TodoIcon />, f.tally.total, 'todos'],
   ]
   return (
     <div className={'chan-line' + (quiet ? ' quiet' : '') + (open ? ' open' : '')} {...pull}>
@@ -126,7 +126,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
       {pill}
       <button className="line-more" onClick={onToggle} aria-label={open ? 'Close the channel summary' : 'Open the channel summary'}>
         {!topic && counts.filter((c) => c[2] > 0).map(([k, ico, num, label]) => k === 'todos'
-          ? <span key={k} className="line-count" title={`${f.tally.done} of the latest ${f.tally.total} to-dos done`}>{ico}{f.tally.done}/{f.tally.total}</span>
+          ? <span key={k} className="line-count" title={`${f.tally.done} of the latest ${f.tally.total} todos done`}>{ico}{f.tally.done}/{f.tally.total}</span>
           : <span key={k} className="line-count" title={`${num} ${label}`}>{ico}{(k === 'events' && shownNow === 'event') || (k === 'proposals' && shownNow === 'proposal') ? '+' : ''}{num}</span>)}
         <span className="line-chev">{open ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
       </button>
@@ -216,7 +216,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
               </button>
             </div>
           ) })}
-          {!full && f.allTasks.length > Math.min(4, f.todos.length) && <button className="link pull-all" onClick={() => more('tasks')}>{f.todos.length ? 'All to-dos' : 'Nothing left to do · show the done ones'}</button>}
+          {!full && f.allTasks.length > Math.min(4, f.todos.length) && <button className="link pull-all" onClick={() => more('tasks')}>{f.todos.length ? 'All todos' : 'Nothing left to do · show the done ones'}</button>}
           {full && <NewTodo groupId={id} />}
         </section>
       )}
@@ -246,7 +246,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
         <div className="pull-links">
           <button className="link" onClick={() => path('members')}>All members</button>
           {f.files > 0 && <button className="link" onClick={() => path('files')}>{f.files} {f.files === 1 ? 'file' : 'files'}</button>}
-          {f.allTasks.length > 0 && <button className="link" onClick={() => path('todos')}>To-dos</button>}
+          {f.allTasks.length > 0 && <button className="link" onClick={() => path('todos')}>Todos</button>}
           {f.allTasks.length > 0 && <button className="link" onClick={() => path('log')}>Log</button>}
           {!full && <button className="link" onClick={() => more('about')}>More</button>}
         </div>
@@ -261,7 +261,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
 /** The latest photos: one row in the small pull-down, a mosaic when it is pulled all the way. */
 function Photos({ photos, full, all }: { photos: Media[]; full: boolean; all: () => void }) {
   const [open, setOpen] = useState<number | null>(null)
-  const shown = photos.slice(0, full ? 12 : 8)
+  const shown = photos.slice(0, full ? 12 : 24) // the row scrolls sideways
   return (
     <section className="pull-photos">
       <h3>Latest photos <span>{photos.length}</span></h3>
@@ -297,7 +297,7 @@ function NewTodo({ groupId }: { groupId: string }) {
   const [title, setTitle] = useState('')
   return (
     <Form className="row pull-newtodo" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-      <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input className="input" placeholder="Add a todo…" value={title} onChange={(e) => setTitle(e.target.value)} />
       <Btn className="btn small" disabled={!title.trim()}>Add</Btn>
     </Form>
   )

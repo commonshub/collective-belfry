@@ -1,5 +1,5 @@
 import { Drawer } from 'vaul'
-import { useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
+import { Component, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 /** Busy on it now: a ring that fills clockwise over the hour (one minute = 6°), "1h", "2h"… in it
@@ -406,3 +406,45 @@ export function Btn({ onClick, disabled, children, ...rest }: BtnProps) {
   const [busy, run] = useBusy()
   return <button type="button" {...rest} disabled={disabled || busy} aria-busy={busy || undefined} onClick={(e) => void run(() => onClick?.(e))}>{children}</button>
 }
+
+// ---- errors: never a white screen ----------------------------------------------------------
+
+const RELOADED = 'osv-reloaded-at'
+/** Load the page again for a newer version, at most once a minute (no loops). */
+export function reloadOnce(): boolean {
+  try {
+    const at = Number(sessionStorage.getItem(RELOADED) || 0)
+    if (Date.now() - at < 60_000) return false
+    sessionStorage.setItem(RELOADED, String(Date.now()))
+  } catch { /* private mode: reload anyway */ }
+  location.reload()
+  return true
+}
+const isChunkError = (e: unknown) => /dynamically imported module|Importing a module script failed|module script|Failed to fetch dynamically|error loading dynamically|ChunkLoadError|MIME type/i.test(String((e as Error)?.message ?? e))
+
+/** Catches what a part of the screen throws: a code chunk from an older version reloads the page
+ *  once; anything else shows a line (the whole app: with a Reload button) instead of blanking. */
+export class Guard extends Component<{ children: ReactNode; whole?: boolean; fallback?: ReactNode }, { error: unknown }> {
+  state = { error: null as unknown }
+  static getDerivedStateFromError(error: unknown) { return { error } }
+  componentDidCatch(error: unknown) {
+    console.error('caught:', error)
+    if (isChunkError(error)) reloadOnce()
+  }
+  render() {
+    if (!this.state.error) return this.props.children
+    if (!this.props.whole) return this.props.fallback ?? <p className="hint pad-x">This part could not be shown. <button className="link" onClick={() => location.reload()}>Reload</button></p>
+    return (
+      <div className="screen"><div className="empty" role="alert">
+        <p><b>Something went wrong.</b></p>
+        <p className="hint">{isChunkError(this.state.error) ? 'A new version is out.' : String((this.state.error as Error)?.message ?? this.state.error).slice(0, 200)}</p>
+        <button className="btn" onClick={() => location.reload()}>Reload</button>
+      </div></div>
+    )
+  }
+}
+
+// ---- dev mode: admins see the raw Nostr events (Me → Developer mode), on this device only ----
+const DEV = 'osv-dev-mode'
+export const devMode = () => { try { return localStorage.getItem(DEV) === '1' } catch { return false } }
+export const setDevMode = (on: boolean) => { try { if (on) localStorage.setItem(DEV, '1'); else localStorage.removeItem(DEV) } catch { /* private mode */ } }
