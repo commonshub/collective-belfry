@@ -1020,3 +1020,15 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .rec-unsent { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; }
 .rec-unsent span { flex: 1; min-width: 0; }
 audio.audio { width: 100%; max-width: 420px; display: block; margin-top: 6px; }
+.meet-people-pick { margin-bottom: 14px; }
+.meet-face .ring { position: relative; display: inline-flex; border-radius: 99px; padding: 2px; border: 2px solid transparent; }
+.meet-face.on .ring { border-color: var(--accent); }
+.meet-face .tick { position: absolute; right: -3px; bottom: -3px; width: 20px; height: 20px; border-radius: 99px; background: var(--accent); color: var(--on-accent); font-size: 12px; display: grid; place-items: center; border: 2px solid var(--bg); }
+.meet-face.on small { color: var(--text); font-weight: 600; }
+.meet-initial.big { width: 44px; height: 44px; font-size: 18px; background: var(--surface-2); }
+.meet-plus { width: 44px; height: 44px; border-radius: 99px; border: 1.5px dashed var(--muted); display: grid; place-items: center; font-size: 24px; color: var(--muted); }
+.meet-add-step { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.meet-add-step .row { gap: 6px; }
+.meet-add-step .input { flex: 1; min-width: 0; }
+.meet-add-step .hint { margin: 0; }
+.meet-matches { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
