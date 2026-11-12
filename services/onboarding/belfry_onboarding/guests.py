@@ -9,9 +9,24 @@
   (``GET /api/channel-invites/<token>``) and joins with ONE signed request
   (``POST /api/channel-invites/<token>/join``, NIP-98), whoever is asking:
   the key of an account (member or guest) → that account gets the channel, no second account;
-  a key nobody knows, with a name → a new guest: a contact, a guest pass, an account in the
-  signer and its session, handed back in the answer. No e-mail, no code.
+  a key nobody knows → a new guest: a contact, a guest pass, an account in the signer and its
+  session, handed back in the answer. No e-mail, no code.
   The pass is of tier ``guest`` and ends after the days (core.py); the usual expiry closes it.
+- Guest mode (2026-11-12): the chat sends no name when a link is opened. The guest is "Guest",
+  the pass says ``guest_unnamed`` and the answer ``"reading": true``: they read the channel, and
+  the chat shows "Guest mode" with a Join button where the composer would be. Their 9000 carries
+  ``["reading", "1"]`` (and ``["unsaved", "1"]``, no ``name``): clients show no join line for it
+  and leave them out of member lists, counts and mention pickers. Read-only is the client's
+  doing: the relay would take a write from such a key like from any guest.
+  Join = a name and an e-mail, then the 6-digit code mailed to it
+  (``POST /api/guest/save`` ``{"email", "name"}`` → ``POST /api/guest/save/verify``
+  ``{"email", "code", "name"}``, both NIP-98 by the guest's identity). The right code puts name
+  and address on the contact, clears ``guest_unnamed``, and the channel gets a second 9000 with
+  the ``name`` and no ``reading`` / ``unsaved`` (the join line, at the time they joined), then
+  the label ``saved``. An address that is another account's here: 409 ``taken``; for a guest who
+  was only reading, that account gets the channel and the anonymous guest pass closes
+  (``"moved": true``): they sign in with the address and the channel is there.
+  A request with ``{"name"}`` (older clients, the phone apps) joins by name at once, as before.
 - ``admitted``: the groups key puts the guest in the channel (kind 9000, ``invited-by`` the
   inviter, the guest's ``name``); the chat shows "<name> joined as a guest, invited by <inviter>".
   The groups relay (zooid patch 0002, ``[groups] guests = true``) lets a key that is in a group
@@ -73,6 +88,7 @@ def _guest(svc: Services, pass_id: int) -> dict[str, Any] | None:
             "guest_inviter",
             "date_end",
             "guest_agent",
+            "guest_unnamed",
         ],
     )
     if not row or row.get("tier") != "guest" or not row.get("guest_channel"):
@@ -97,10 +113,13 @@ def admitted(svc: Services, pass_id: int) -> bool:
     ]
     if g.get("guest_inviter"):
         tags.append(["invited-by", g["guest_inviter"]])
-    if g["name"]:
+    reading = bool(g.get("guest_unnamed")) and not g.get("guest_agent")
+    if g["name"] and not reading:
         tags.append(["name", g["name"]])
     if g.get("guest_agent"):  # an agent with its own key, not a person (the chat says so)
         tags.append(["agent", "1"])
+    elif reading:  # guest mode: the link was opened, nobody joined yet (no join line, no name)
+        tags += [["unsaved", "1"], ["reading", "1"]]
     elif not g.get("email"):  # joined with a name only: "not saved" until they add an e-mail
         tags.append(["unsaved", "1"])
     ok = _channel_event(svc, 9000, tags)
@@ -314,7 +333,7 @@ on {who}. The channels: `{{"kinds": [39000]}}` lists them (the `d` tag is the id
         intro = f"""{who} invited you as a guest of #{channel} for {days} days. A guest reads and
 writes in #{channel} only. Everyone there sees that {who} invited you.
 
-- **A person?** Open {page} in a browser: your name, and you are in.
+- **A person?** Open {page} in a browser: you read at once, and join with a name and an e-mail.
 - **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed."""
         rules = f"""You are a guest for {days} days; then the relay stops accepting your key. You
 can only read and write in #{channel}, unless a member brings you into another channel too: you
@@ -588,6 +607,7 @@ _join_lock = threading.Lock()  # one new guest at a time: a second tap waits, th
 
 def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str, Any]:
     """Make the guest and their session: ``{"bunker_url", "pubkey", "channel", "guest"}``.
+    Without a NAME they are in guest mode (``"reading": true``): reading, until they join.
     CLIENT (the key that signed the request) makes it safe to ask twice: the same device gets the
     same account again, with a new session, and is announced in the channel once. The session is
     made for CLIENT alone; a CLIENT the signer knows as another account's is refused (409)."""
@@ -598,7 +618,7 @@ def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str
     bind = client.lower() if re.fullmatch(r"[0-9a-fA-F]{64}", client or "") else None
 
     with _join_lock:
-        made = svc.odoo.join_guest(token, name, client)
+        made = svc.odoo.join_guest(token, name, client, not name)
         pid = made["partner_id"]
         row = svc.odoo.read_one("res.partner", pid, ["name"]) or {}
         partner = {"id": pid, "name": row.get("name") or name}
@@ -630,6 +650,7 @@ def join_new(svc: Services, token: str, name: str, client: str = "") -> dict[str
         "channel": made["channel"],
         "guest": True,
         "new": True,
+        "reading": bool(made.get("unnamed")),
     }
 
 
@@ -750,6 +771,67 @@ def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
     }
 
 
+def _unnamed(svc: Services, pubkey: str) -> bool | None:
+    """Whether PUBKEY is a guest in guest mode (no name yet); None: no guest pass at all."""
+    if hasattr(svc.odoo, "guest_unnamed"):
+        return svc.odoo.guest_unnamed(pubkey)
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["tier", "=", "guest"]],
+        ["id"],
+    )
+    return False if rows else None
+
+
+def _move_to_account(svc: Services, pubkey: str, other_partner: int) -> bool:
+    """A guest in guest mode proved an address that is another account's here: that account gets
+    the channels the anonymous guest was reading (a guest of them, or simply in for a member),
+    and the anonymous guest passes close (their key leaves the channels, their signer account is
+    suspended). The person signs in with the address and finds the channel. False when that
+    account has no key to put in (nothing moves; the anonymous pass stays until it expires)."""
+    from . import core
+
+    theirs = [
+        r
+        for r in svc.odoo.search_read(
+            "belfry.pass",
+            [["state", "=", "active"], ["partner_id", "=", other_partner]],
+            ["keycast_pubkey"],
+        )
+        if r.get("keycast_pubkey")
+    ]
+    if not theirs:
+        return False
+    account = theirs[0]["keycast_pubkey"]
+    mine = [
+        r
+        for r in svc.odoo.search_read(
+            "belfry.pass",
+            [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["tier", "=", "guest"]],
+            ["guest_channel", "guest_inviter", "guest_unnamed", "guest_event"],
+        )
+        if r.get("guest_unnamed") and r.get("guest_channel") and not r.get("guest_event")
+    ]
+    for r in mine:
+        channel, inviter = r["guest_channel"], r.get("guest_inviter") or ""
+        got = svc.odoo.add_guest_channel(account, channel, inviter, DAYS)
+        if got and got["kind"] == "guest":
+            admitted(svc, got["pass_id"])
+        elif got and got["kind"] == "member" and not _in_channel(svc, channel, account):
+            partner = svc.odoo.read_one("res.partner", other_partner, ["name"]) or {}
+            tags = [["h", channel], ["p", account, "member"]]
+            if inviter:
+                tags.append(["invited-by", inviter])
+            if partner.get("name"):
+                tags.append(["name", str(partner["name"])[:100]])
+            _channel_event(svc, 9000, tags)
+        try:
+            core.revoke_pass(svc, r["id"], "signed in with their own account")
+        except Exception:  # noqa: BLE001 — the account has the channel; this pass ends by itself
+            log.exception("guest pass %s: not closed after moving to the account", r["id"])
+    return bool(mine)
+
+
 def saved_label(svc: Services, pubkey: str, channel: str) -> None:
     """The channel learns the guest saved their account (the chat drops "not saved")."""
     _channel_event(
@@ -800,9 +882,11 @@ def register_join_routes(app: FastAPI) -> None:
     @app.post("/api/channel-invites/{token}/join")
     async def channel_invite_join(request: Request, token: str) -> JSONResponse:
         """Join with a guest link (NIP-98). Signed by an account's key: that account gets the
-        channel → ``{"channel", "new": false}``. Signed by a key nobody knows, with
-        ``{"name"}``: a new guest → ``{"channel", "new": true, "bunker_url", "pubkey"}``; the
-        signing key is the one that will hold the session."""
+        channel → ``{"channel", "new": false}``. Signed by a key nobody knows: a new guest →
+        ``{"channel", "new": true, "bunker_url", "pubkey", "reading"}``; the signing key is the
+        one that will hold the session. With ``{"name"}`` they join by that name at once
+        (``"reading": false``); without, they are in guest mode (``"reading": true``) until they
+        join with a name and an e-mail (``/api/guest/save``)."""
         from . import invite
         from .holder_invites import ApiError, authenticate
 
@@ -831,8 +915,6 @@ def register_join_routes(app: FastAPI) -> None:
             out = await run_in_threadpool(join_account, s, token, pubkey)
             if out is None:
                 name = " ".join(str(data.get("name") or "").split())[:100]
-                if not name:
-                    raise ApiError(422, "name_needed", "Tell us your name.")
                 out = await run_in_threadpool(join_new, s, token, name, pubkey)
                 if (inv or {}).get("guest_role") == "host":
                     # in as a guest; a co-host once they saved an e-mail and use the link again
@@ -865,13 +947,19 @@ def register_join_routes(app: FastAPI) -> None:
 
     @app.post("/api/guest/save")
     async def guest_save(request: Request) -> JSONResponse:
-        """``{"email"}``: a 6-digit code to that address, for the signed-in guest's key."""
+        """``{"email", "name"?}``: a 6-digit code to that address, for the signed-in guest's key.
+        A guest in guest mode (no name yet) must send their name too, here and with the code."""
         from .holder_invites import ApiError
 
         s, pubkey, data = await guest_of(request, "/api/guest/save", await request.body())
         email = str(data.get("email") or "").strip()
         if "@" not in email or len(email) > 254:
             raise ApiError(422, "invalid", "That is not an e-mail address.")
+        unnamed = await run_in_threadpool(_unnamed, s, pubkey)
+        if unnamed is None:
+            raise ApiError(409, "not_guest", "This key holds no guest pass.")
+        if unnamed and not " ".join(str(data.get("name") or "").split()):
+            raise ApiError(422, "name_needed", "Tell us your name.")
         row = await run_in_threadpool(
             s.odoo.call,
             "belfry.key.code",
@@ -884,7 +972,9 @@ def register_join_routes(app: FastAPI) -> None:
 
     @app.post("/api/guest/save/verify")
     async def guest_save_verify(request: Request) -> JSONResponse:
-        """``{"email", "code"}``: the address goes on the guest's own contact."""
+        """``{"email", "code", "name"?}``: the address (and the name) go on the guest's own
+        contact → ``{"saved": true, "joined"}``. ``joined``: they were in guest mode until now;
+        the channel then gets their 9000 with the name (the join line)."""
         from .holder_invites import ApiError
 
         s, pubkey, data = await guest_of(request, "/api/guest/save/verify", await request.body())
@@ -893,8 +983,11 @@ def register_join_routes(app: FastAPI) -> None:
             pubkey,
             str(data.get("email") or ""),
             str(data.get("code") or ""),
+            " ".join(str(data.get("name") or "").split())[:100],
         )
         state = out.get("state")
+        if state == "name_needed":
+            raise ApiError(422, "name_needed", "Tell us your name.")
         if state == "wrong_code":
             raise ApiError(
                 422,
@@ -904,8 +997,19 @@ def register_join_routes(app: FastAPI) -> None:
         if state == "expired":
             raise ApiError(410, "expired", "That code expired. Send a new one.")
         if state == "taken":
-            raise ApiError(
-                409, "taken", "This address belongs to a member already: sign in with it instead."
+            moved = False
+            if out.get("unnamed") and out.get("other"):
+                try:
+                    moved = await run_in_threadpool(_move_to_account, s, pubkey, int(out["other"]))
+                except Exception:  # noqa: BLE001 — they can still sign in; the link may be spent
+                    log.exception("guest save: moving the channel to the account failed")
+            return JSONResponse(
+                {
+                    "error": "taken",
+                    "message": "This address has an account here already: sign in with it.",
+                    "moved": moved,
+                },
+                status_code=409,
             )
         if state != "saved":
             raise ApiError(409, "not_guest", "This key holds no guest pass.")
@@ -913,9 +1017,12 @@ def register_join_routes(app: FastAPI) -> None:
             s.odoo.search_read,
             "belfry.pass",
             [["keycast_pubkey", "=", pubkey], ["state", "=", "active"]],
-            ["guest_channel"],
+            ["guest_channel", "tier"],
         )
         for r in rows:
             if r.get("guest_channel"):
+                if out.get("joined") and r.get("tier") == "guest":
+                    # out of guest mode: the 9000 with their name, at the time they joined
+                    await run_in_threadpool(admitted, s, r["id"])
                 await run_in_threadpool(saved_label, s, pubkey, r["guest_channel"])
-        return JSONResponse({"saved": True})
+        return JSONResponse({"saved": True, "joined": bool(out.get("joined"))})

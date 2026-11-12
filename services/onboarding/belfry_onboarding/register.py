@@ -1073,9 +1073,14 @@ class Register(OdooApi):
                 "days": days,
             }
 
-    def join_guest(self, token: str, name: str, client: str = "") -> dict[str, Any]:
-        """A person joins a guest invite with a name only (guests.py): their contact and a
-        pending guest pass; the account and the session come next. Returns pass and contact.
+    def join_guest(
+        self, token: str, name: str, client: str = "", unnamed: bool = False
+    ) -> dict[str, Any]:
+        """A person opens a guest invite (guests.py): their contact and a pending guest pass; the
+        account and the session come next. Returns pass and contact. With a name (older clients)
+        they are in as that name; UNNAMED (guest mode: the link was only opened) the contact is
+        "Guest" and the pass says ``guest_unnamed`` until they join with a name and an e-mail
+        (``save_guest_email``).
         CLIENT is the key that signed the request (the device's session key): the same device
         asking again (a second tap, a retry) gets the same contact and pass (``"again"``), never
         a second account."""
@@ -1096,11 +1101,16 @@ class Register(OdooApi):
                             "channel": inv["guest_channel"],
                             "days": int(p.get("guest_days") or 30),
                             "again": p.get("state") == "active",
+                            "unnamed": bool(p.get("guest_unnamed")),
                         }
             inv = self._usable(inv)
             if inv["state"] != "open":
                 raise _user_error(f"This invite is {inv['state']}.")
-            pid = self._create("res.partner", {"name": (name or "").strip()[:100] or "Guest"})
+            unnamed = bool(unnamed) or not (name or "").strip()
+            pid = self._create(
+                "res.partner",
+                {"name": "Guest" if unnamed else (name or "").strip()[:100]},
+            )
             days = int(inv.get("guest_days") or 30)
             today = now().date()
             pass_id = self._create(
@@ -1113,6 +1123,7 @@ class Register(OdooApi):
                     "guest_days": days,
                     "guest_inviter": inv.get("guest_inviter") or "",
                     "guest_client": client or False,
+                    "guest_unnamed": unnamed,
                     "date_start": today.isoformat(),
                     "date_end": (today + dt.timedelta(days=days)).isoformat(),
                 },
@@ -1123,6 +1134,7 @@ class Register(OdooApi):
                 "channel": inv["guest_channel"],
                 "days": days,
                 "again": False,
+                "unnamed": unnamed,
             }
 
     def join_existing(self, token: str, pubkey: str) -> dict[str, Any]:
@@ -1317,11 +1329,42 @@ class Register(OdooApi):
         with self._lock:
             self._count_guest_use(int(invite_id))
 
-    def save_guest_email(self, pubkey: str, email: str, code: str) -> dict[str, Any]:
-        """The guest proves EMAIL with the code mailed to it (belfry_key_code_send for their key)
-        and it goes on their own contact, so they can sign in from any device."""
-        email, pubkey = self._clean(email, pubkey)
+    def guest_unnamed(self, pubkey: str) -> bool | None:
+        """Whether the guest behind PUBKEY only opened a link so far (guest mode: no name yet).
+        None when the key holds no active guest pass."""
         with self._lock:
+            mine = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey
+                and p.get("state") == "active"
+                and p.get("tier") == "guest"
+            ]
+            return any(p.get("guest_unnamed") for p in mine) if mine else None
+
+    def save_guest_email(
+        self, pubkey: str, email: str, code: str, name: str = ""
+    ) -> dict[str, Any]:
+        """The guest proves EMAIL with the code mailed to it (belfry_key_code_send for their key)
+        and it goes on their own contact, so they can sign in from any device. NAME, when given,
+        becomes the contact's name; a guest who only opened a link (``guest_unnamed``) must give
+        one: that is how they join. ``{"state": "saved", "partner_id", "joined"}`` (``joined``:
+        they were unnamed until now), or ``wrong_code`` / ``expired`` / ``not_guest`` /
+        ``name_needed`` / ``taken`` (with ``other``, the contact that holds the address, and
+        ``unnamed``)."""
+        email, pubkey = self._clean(email, pubkey)
+        name = " ".join(str(name or "").split())[:100]
+        with self._lock:
+            mine = [
+                p
+                for p in self._all("belfry.pass")
+                if p.get("keycast_pubkey") == pubkey
+                and p.get("state") == "active"
+                and p.get("tier") == "guest"
+            ]
+            unnamed = any(p.get("guest_unnamed") for p in mine)
+            if unnamed and not name:  # before the code is touched: asking again costs no try
+                return {"state": "name_needed"}
             live = [
                 c
                 for c in self._all("belfry.key.code")
@@ -1339,23 +1382,20 @@ class Register(OdooApi):
             ):
                 return {"state": "wrong_code", "tries_left": CODE_TRIES - tries}
             self._write("belfry.key.code", [rec["id"]], {"used_at": stamp()})
-            row = next(
-                (
-                    p
-                    for p in self._all("belfry.pass")
-                    if p.get("keycast_pubkey") == pubkey
-                    and p.get("state") == "active"
-                    and p.get("tier") == "guest"
-                ),
-                None,
-            )
-            if row is None:
+            if not mine:
                 return {"state": "not_guest"}
+            row = mine[0]
             other = self._partner_by_email(email)
             if other and other["id"] != row["partner_id"]:
-                return {"state": "taken"}
-            self._write("res.partner", [row["partner_id"]], {"email": email})
-            return {"state": "saved", "partner_id": row["partner_id"]}
+                return {"state": "taken", "other": other["id"], "unnamed": unnamed}
+            vals: dict[str, Any] = {"email": email}
+            if name:
+                vals["name"] = name
+            self._write("res.partner", [row["partner_id"]], vals)
+            for p in mine:
+                if p.get("guest_unnamed"):
+                    self._write("belfry.pass", [p["id"]], {"guest_unnamed": False})
+            return {"state": "saved", "partner_id": row["partner_id"], "joined": unnamed}
 
     def held_guest(self, channel: str, name: str, inviter: str, days: int) -> dict[str, Any]:
         """Someone added to a meeting by name only (Xavier, 2026-11-12: "this should create an

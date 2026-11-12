@@ -243,10 +243,10 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
         assert info["channel"] == "garden" and info["state"] == "open"
         assert info["inviter"] == "Ada Admin"
         session = PrivateKey()  # the chat's own new key signs; no code anywhere
-        assert join(c, session, b"{}").json()["error"] == "name_needed"
-        got = join(c, session, b'{"name": "Gus"}')
+        got = join(c, session, b'{"name": "Gus"}')  # an older client: a name, in at once
         assert got.status_code == 200 and got.json()["bunker_url"].startswith("bunker://")
         assert got.json()["channel"] == "garden" and got.json()["new"] is True
+        assert got.json()["reading"] is False
         # the session is made for the key that signed, in the signer itself (Keycast 0022)
         session_pk = session.public_key_xonly.format().hex()
         assert keycast.bunkers[-1]["client_pubkey"] == session_pk
@@ -260,7 +260,7 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
         guest_pk = got.json()["pubkey"]
         kind, tags = published[-1]
         assert kind == 9000 and ["p", guest_pk, "member"] in tags and ["unsaved", "1"] in tags
-        assert ["name", "Gus"] in tags
+        assert ["name", "Gus"] in tags and ["reading", "1"] not in tags
         inv = rsvc.odoo.invite_by_token(token)
         assert inv["state"] == "open" and inv["guest_uses"] == 1  # a QR for a room: still open
         # saving: our own key stands in for the guest's (the signer holds the real one)
@@ -321,6 +321,205 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
         assert r.status_code == 409
 
 
+def _signed(c, key, path, data):
+    from .test_holder_invites import nip98
+
+    body = json.dumps(data).encode()
+    return c.post(
+        "/api/v1" + path,
+        content=body,
+        headers={
+            "Host": "belfry.belfry.test",
+            "Content-Type": "application/json",
+            "Authorization": nip98(key, "https://belfry.belfry.test/api/v1" + path, "POST", body),
+        },
+    )
+
+
+def _code() -> str:
+    text = mailer.SENT[-1].get_body(preferencelist=("plain",)).get_content()
+    return re.search(r"\b(\d{6})\b", text).group(1)
+
+
+def _reading_guest(rsvc, keycast, c, link, join, channel="garden"):
+    """Open a link with no name (guest mode); our own key then stands in for the guest's
+    identity (the signer holds the real one). Returns (token, that key, its hex, the pass)."""
+    token = link(channel)
+    got = join(c, token, PrivateKey(), "")
+    assert got.status_code == 200, got.text
+    assert got.json()["reading"] is True and got.json()["bunker_url"].startswith("bunker://")
+    me = PrivateKey()
+    me_pk = me.public_key_xonly.format().hex()
+    p = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["id", "partner_id"]
+    )[0]
+    rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+    keycast.status[me_pk] = "active"  # the signer knows the stand-in too
+    return token, me, me_pk, p
+
+
+def test_opening_a_link_is_guest_mode_and_joining_takes_a_name_and_an_e_mail(
+    rsvc, published, keycast, monkeypatch
+):
+    """Guest mode: opening the link makes a nameless guest who reads (their 9000 says
+    ``reading``, no name); joining = name + e-mail + the code mailed to it, and then the channel
+    gets the 9000 with the name and the ``saved`` label."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    with TestClient(create_app(rsvc)) as c:
+        token = link()
+        session = PrivateKey()
+        got = join(c, token, session, "")
+        assert got.status_code == 200 and got.json()["reading"] is True
+        guest_pk = got.json()["pubkey"]
+        kind, tags = published[-1]
+        assert kind == 9000 and ["p", guest_pk, "member"] in tags
+        assert ["reading", "1"] in tags and ["unsaved", "1"] in tags
+        assert not [t for t in tags if t[0] == "name"]
+        p = rsvc.odoo.search_read(
+            "belfry.pass",
+            [["keycast_pubkey", "=", guest_pk]],
+            ["id", "partner_id", "guest_unnamed"],
+        )[0]
+        assert p["guest_unnamed"] is True
+        pid = core.m2o_id(p["partner_id"])
+        assert rsvc.odoo.read_one("res.partner", pid, ["name"])["name"] == "Guest"
+        assert rsvc.odoo.invite_by_token(token)["guest_uses"] == 1
+        # the same browser opens the link again (a reload): the same guest, announced once
+        lines = len(published)
+        time.sleep(1.1)
+        again = join(c, token, session, "")
+        assert again.json()["pubkey"] == guest_pk and again.json()["reading"] is True
+        assert len(published) == lines and rsvc.odoo.invite_by_token(token)["guest_uses"] == 1
+        # not on the members' whitelist, like every guest
+        assert guest_pk not in core.active_pubkeys(rsvc)
+
+        # joining: our own key stands in for the guest's identity
+        me = PrivateKey()
+        me_pk = me.public_key_xonly.format().hex()
+        rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+        r = _signed(c, me, "/guest/save", {"email": "gus@example.org"})
+        assert r.status_code == 422 and r.json()["error"] == "name_needed"
+        sent = len(mailer.SENT)
+        time.sleep(1.1)
+        r = _signed(c, me, "/guest/save", {"email": "gus@example.org", "name": " Gus  Guest "})
+        assert r.status_code == 202 and len(mailer.SENT) == sent + 1
+        code = _code()
+        # the code without the name: refused, and it costs no try
+        time.sleep(1.1)
+        r = _signed(c, me, "/guest/save/verify", {"email": "gus@example.org", "code": code})
+        assert r.status_code == 422 and r.json()["error"] == "name_needed"
+        lines = len(published)
+        time.sleep(1.1)
+        r = _signed(
+            c,
+            me,
+            "/guest/save/verify",
+            {"email": "gus@example.org", "code": code, "name": " Gus  Guest "},
+        )
+        assert r.status_code == 200 and r.json() == {"saved": True, "joined": True}
+        partner = rsvc.odoo.read_one("res.partner", pid, ["name", "email"])
+        assert partner["name"] == "Gus Guest" and partner["email"] == "gus@example.org"
+        assert rsvc.odoo.read_one("belfry.pass", p["id"], ["guest_unnamed"])["guest_unnamed"] in (
+            False,
+            None,
+        )
+        (k1, t1), (k2, t2) = published[lines:]
+        assert k1 == 9000 and ["p", me_pk, "member"] in t1 and ["name", "Gus Guest"] in t1
+        assert ["reading", "1"] not in t1 and ["unsaved", "1"] not in t1
+        assert k2 == 1985 and ["l", "saved", "belfry/guest"] in t2 and ["p", me_pk] in t2
+        assert rsvc.odoo.invite_by_token(token)["guest_uses"] == 1  # joining is not a second use
+
+
+def test_a_reading_guest_whose_address_has_an_account_is_sent_to_sign_in(
+    rsvc, published, keycast, monkeypatch
+):
+    """The address proven in guest mode is a member's: that member gets the channel, the
+    anonymous guest closes, and the answer says to sign in."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    ada_pk = rsvc.odoo.search_read(
+        "belfry.pass", [["tier", "!=", "guest"], ["state", "=", "active"]], ["keycast_pubkey"]
+    )[0]["keycast_pubkey"]
+    with TestClient(create_app(rsvc)) as c:
+        token, me, me_pk, p = _reading_guest(rsvc, keycast, c, link, join)
+        r = _signed(c, me, "/guest/save", {"email": "admin@belfry.test", "name": "Ada"})
+        assert r.status_code == 202  # nothing said before the address is proven
+        lines = len(published)
+        time.sleep(1.1)
+        r = _signed(
+            c,
+            me,
+            "/guest/save/verify",
+            {"email": "admin@belfry.test", "code": _code(), "name": "Ada"},
+        )
+        assert r.status_code == 409 and r.json()["error"] == "taken" and r.json()["moved"] is True
+        kinds = [(k, t) for k, t in published[lines:]]
+        assert (9000, True) in [(k, ["p", ada_pk, "member"] in t) for k, t in kinds]
+        assert (9001, True) in [(k, ["p", me_pk] in t) for k, t in kinds]
+        assert rsvc.odoo.read_one("belfry.pass", p["id"], ["state"])["state"] == "revoked"
+        # the member's contact is untouched
+        ada = rsvc.odoo.search_read("res.partner", [["email", "=", "admin@belfry.test"]], ["name"])
+        assert [a["name"] for a in ada] == ["Ada Admin"]
+
+        # … and when the address is a guest's (of another channel): one more guest pass for them
+        other, okey, opk, _op = _reading_guest(rsvc, keycast, c, link, join, "kitchen")
+        time.sleep(1.1)
+        _signed(c, okey, "/guest/save", {"email": "hal@example.org", "name": "Hal"})
+        time.sleep(1.1)
+        r = _signed(
+            c,
+            okey,
+            "/guest/save/verify",
+            {"email": "hal@example.org", "code": _code(), "name": "Hal"},
+        )
+        assert r.status_code == 200 and r.json()["joined"] is True
+        token3, me3, me3_pk, p3 = _reading_guest(rsvc, keycast, c, link, join, "garden")
+        time.sleep(1.1)
+        _signed(c, me3, "/guest/save", {"email": "hal@example.org", "name": "Hal"})
+        time.sleep(1.1)
+        r = _signed(
+            c,
+            me3,
+            "/guest/save/verify",
+            {"email": "hal@example.org", "code": _code(), "name": "Hal"},
+        )
+        assert r.status_code == 409 and r.json()["moved"] is True
+        hal = rsvc.odoo.search_read(
+            "belfry.pass",
+            [["keycast_pubkey", "=", opk], ["state", "=", "active"]],
+            ["guest_channel"],
+        )
+        assert sorted(x["guest_channel"] for x in hal) == ["garden", "kitchen"]
+        assert rsvc.odoo.read_one("belfry.pass", p3["id"], ["state"])["state"] == "revoked"
+
+
+def test_a_named_guest_saves_with_an_e_mail_only_and_may_change_the_name(
+    rsvc, published, keycast, monkeypatch
+):
+    """Older clients: joined by name, saving later takes the e-mail alone; a name sent along
+    replaces the contact's. No second 9000 (they were announced when they joined)."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    with TestClient(create_app(rsvc)) as c:
+        token = link()
+        got = join(c, token, PrivateKey(), "Gus")
+        me = PrivateKey()
+        me_pk = me.public_key_xonly.format().hex()
+        p = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["id", "partner_id"]
+        )[0]
+        rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": me_pk})
+        assert _signed(c, me, "/guest/save", {"email": "gus@example.org"}).status_code == 202
+        lines = len(published)
+        time.sleep(1.1)
+        r = _signed(c, me, "/guest/save/verify", {"email": "gus@example.org", "code": _code()})
+        assert r.status_code == 200 and r.json() == {"saved": True, "joined": False}
+        assert [k for k, _t in published[lines:]] == [1985]
+        pid = core.m2o_id(p["partner_id"])
+        assert rsvc.odoo.read_one("res.partner", pid, ["name"])["name"] == "Gus"
+        # a key with no guest pass gets no code
+        r = _signed(c, PrivateKey(), "/guest/save", {"email": "x@example.org", "name": "X"})
+        assert r.status_code == 409 and r.json()["error"] == "not_guest"
+
+
 def _guest_link(rsvc, monkeypatch, channel="garden"):
     from .test_holder_invites import nip98
 
@@ -337,7 +536,7 @@ def _guest_link(rsvc, monkeypatch, channel="garden"):
         return row["url"].rsplit("/", 1)[1]
 
     def join(c, token, k, name):
-        body = json.dumps({"name": name}).encode()
+        body = json.dumps({"name": name} if name else {}).encode()
         url = f"https://belfry.belfry.test/api/v1/channel-invites/{token}/join"
         return c.post(
             f"/api/v1/channel-invites/{token}/join",
