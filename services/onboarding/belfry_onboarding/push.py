@@ -5,7 +5,8 @@ holding an active pass (member, guest or agent):
 
 - ``{"add": {"platform", "token", "env", "key", "app", "name"}}`` → ``{"id"}``. ``key`` is 32
   random bytes (base64) the device made; the belfry encrypts every notification to it. The same
-  token again replaces the old row (a new key, maybe a new owner).
+  token from the same key replaces that row (a new device key); another identity on the same
+  phone (same token, its own key and K) gets its own row, so both get their notifications.
 - ``{"remove": "<token>"}`` → ``{"ok": true}`` (only the caller's own device).
 - ``{}`` → ``{"devices": [{"id", "app", "name", "since"}]}``.
 

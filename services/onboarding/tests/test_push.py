@@ -96,11 +96,16 @@ def test_devices_add_list_replace_remove(world):
                 "since": r.json()["devices"][0]["since"],
             }
         ]
-        # the same token from Bob: Bob's now (a phone changed hands), Ada has none
+        # the same token from Bob (two identities on one phone): one row each
         assert post(c, bob, "/api/push/devices", {"add": device()}).status_code == 200
-        assert post(c, ada, "/api/push/devices", {}).json() == {"devices": []}
-        # Ada can't remove Bob's device
+        assert len(post(c, ada, "/api/push/devices", {}).json()["devices"]) == 1
+        assert len(post(c, bob, "/api/push/devices", {}).json()["devices"]) == 1
+        # the same token and key again replaces that identity's row only
+        assert post(c, bob, "/api/push/devices", {"add": device()}).status_code == 200
+        assert len(rsvc.odoo.push_devices()) == 2
+        # Ada signing out removes only hers
         assert post(c, ada, "/api/push/devices", {"remove": "a" * 64}).json() == {"ok": True}
+        assert post(c, ada, "/api/push/devices", {}).json() == {"devices": []}
         assert len(post(c, bob, "/api/push/devices", {}).json()["devices"]) == 1
         assert post(c, bob, "/api/push/devices", {"remove": "a" * 64}).json() == {"ok": True}
         assert post(c, bob, "/api/push/devices", {}).json() == {"devices": []}
@@ -530,3 +535,32 @@ def test_runner_skips_history_on_the_first_connection(scene):
     asyncio.run(run())
     f = runner.community_filters(True)[0]
     assert f["kinds"] == [1059] and sorted(f["#p"]) == sorted(pk(k) for k in keys.values())
+
+
+def test_an_old_one_row_per_token_table_is_rebuilt(tmp_path):
+    import sqlite3
+
+    from belfry_onboarding.register import Register
+
+    path = tmp_path / "register.sqlite"
+    db = sqlite3.connect(path)
+    db.executescript(
+        """
+        CREATE TABLE push_devices (
+            id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL,
+            env TEXT NOT NULL, key TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL,
+            pubkey TEXT NOT NULL, partner_id INTEGER NOT NULL, since TEXT NOT NULL,
+            seen INTEGER NOT NULL);
+        INSERT INTO push_devices VALUES ('d1', 'tok', 'fcm', 'production', 'k', 'belfry-android',
+            'Tablet', 'aa', 1, '2026-11-11', 1);
+        """
+    )
+    db.commit()
+    db.close()
+    reg = Register(path, type("S", (), {"nip05_domain": "belfry.test"})())
+    assert [d["id"] for d in reg.push_devices()] == ["d1"]
+    dev = {"token": "tok", "platform": "fcm", "env": "production", "key": "k2"}
+    dev |= {"app": "belfry-android", "name": "Tablet", "pubkey": "bb", "partner_id": 2}
+    reg.push_add(dev, 1)
+    assert sorted(d["pubkey"] for d in reg.push_devices()) == ["aa", "bb"]
+    assert reg.push_remove("tok") == 2  # a dead token goes for every identity

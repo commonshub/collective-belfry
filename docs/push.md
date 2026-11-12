@@ -68,7 +68,8 @@ so two identical calls in the same second need different `created_at`s.
 `POST /api/v1/push/devices`
 - `{"add": {"platform": "apns"|"fcm", "token": "…", "env": "production"|"sandbox",
   "key": "<base64 32 random bytes>", "app": "belfry-ios"|"belfry-android", "name": "…"}}` →
-  `{"id": "<device id>"}`. The same token again replaces the old row (a new key, a new owner).
+  `{"id": "<device id>"}`. The same token from the same key replaces that row (a new device key);
+  another identity on the same phone (same token, its own key `K`) gets its own row *(2026-11-12)*.
 - `{"remove": "<token>"}` → `{"ok": true}` (the app calls this on sign-out, before revoking).
 - `{}` → `{"devices": [{"id", "app", "name", "since"}]}` (the caller's).
 - A device goes away when its pass closes, when the gateway answers 410, or after 60 days with

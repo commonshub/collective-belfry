@@ -135,13 +135,14 @@ class Register(OdooApi):
             CREATE TABLE IF NOT EXISTS sequences (name TEXT PRIMARY KEY, value INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS params (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS push_devices (
-                id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL,
+                id TEXT PRIMARY KEY, token TEXT NOT NULL, platform TEXT NOT NULL,
                 env TEXT NOT NULL, key TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL,
                 pubkey TEXT NOT NULL, partner_id INTEGER NOT NULL, since TEXT NOT NULL,
-                seen INTEGER NOT NULL);
+                seen INTEGER NOT NULL, UNIQUE (token, pubkey));
             CREATE INDEX IF NOT EXISTS push_devices_pubkey ON push_devices (pubkey);
             """
         )
+        self._push_one_row_per_identity()
 
     # ── storage ──────────────────────────────────────────────────────────────────────────────
     def _all(self, model: str) -> list[dict[str, Any]]:
@@ -1996,11 +1997,39 @@ class Register(OdooApi):
     # ── phone devices for push notifications (push.py) ──────────────────────────────────────
     PUSH_FIELDS = ("id", "token", "platform", "env", "key", "app", "name", "pubkey", "partner_id")
 
+    def _push_one_row_per_identity(self) -> None:
+        """Tables made before 2026-11-12 had one row per token: a phone with two identities on
+        this belfry got pushes for the last one only. Rebuild them keyed by (token, pubkey)."""
+        sql = self._db.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'push_devices'"
+        ).fetchone()
+        if not sql or "UNIQUE (token, pubkey)" in sql[0]:
+            return
+        with self._db:
+            self._db.executescript(
+                """
+                ALTER TABLE push_devices RENAME TO push_devices_old;
+                CREATE TABLE push_devices (
+                    id TEXT PRIMARY KEY, token TEXT NOT NULL, platform TEXT NOT NULL,
+                    env TEXT NOT NULL, key TEXT NOT NULL, app TEXT NOT NULL, name TEXT NOT NULL,
+                    pubkey TEXT NOT NULL, partner_id INTEGER NOT NULL, since TEXT NOT NULL,
+                    seen INTEGER NOT NULL, UNIQUE (token, pubkey));
+                INSERT INTO push_devices SELECT id, token, platform, env, key, app, name, pubkey,
+                    partner_id, since, seen FROM push_devices_old;
+                DROP TABLE push_devices_old;
+                CREATE INDEX IF NOT EXISTS push_devices_pubkey ON push_devices (pubkey);
+                """
+            )
+
     def push_add(self, device: dict[str, Any], seen: int) -> str:
-        """Register a device; the same token again replaces the old row (new key, new owner)."""
+        """Register a device for one identity; the same token and key again replaces that row
+        (a new device key). Two identities on one phone share the token: one row each."""
         dev_id = secrets.token_urlsafe(12)
         with self._lock:
-            self._db.execute("DELETE FROM push_devices WHERE token = ?", (device["token"],))
+            self._db.execute(
+                "DELETE FROM push_devices WHERE token = ? AND pubkey = ?",
+                (device["token"], device["pubkey"]),
+            )
             self._db.execute(
                 "INSERT INTO push_devices (id, token, platform, env, key, app, name, pubkey,"
                 " partner_id, since, seen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
