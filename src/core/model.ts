@@ -379,6 +379,16 @@ export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat 
   'changelog monitor privacy terms refunds rules help').split(' '))
 export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
 
+/** The left part of a channel's e-mail address (Xavier, 2026-11-12): its plain slug, bugs@ rather
+ *  than bugs-c3e5@, when no other channel answers to it; the server resolves it the same way
+ *  (mail.channel_by_slug) and keeps taking the full id. */
+export function mailLocal(g: Group): string {
+  const plain = (x: Group) => [x.id.replace(/-[0-9a-z]{3,8}$/, ''), slugify(x.name)]
+  const want = slugify(g.name) || g.id.replace(/-[0-9a-z]{3,8}$/, '')
+  if (!want || want === g.id) return g.id
+  return groups().filter((x) => plain(x).includes(want)).length === 1 ? want : g.id
+}
+
 export function webPage(g: Group | undefined): WebPage | undefined {
   if (!g) return undefined
   const evs = all(me())

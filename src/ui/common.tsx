@@ -153,41 +153,84 @@ export function MediaGrid({ media }: { media: Media[] }) {
 
 // ---- lightbox -------------------------------------------------------------------
 
-/** A message's images, as big as the screen allows: swipe or ←/→ (and the side buttons) for the
- *  others, Esc, ✕ or a tap outside the picture to close. No history entry (‹ never pushes). */
+/** A message's images, as big as the screen allows. Swipe sideways for the others: the pictures sit
+ *  side by side on one strip that follows the finger and glides to the next one on release (a short
+ *  flick is enough), with the neighbours already loaded (Xavier, 2026-11-12: it wasn't smooth).
+ *  Swipe down, Esc, ✕ or a tap beside the picture closes it; ←/→ and the side buttons on a laptop.
+ *  No history entry (‹ never pushes). */
 export function Lightbox({ images, start, onClose }: { images: Media[]; start: number; onClose: () => void }) {
-  const [i, setI] = useState(start)
   const n = images.length
-  const go = (d: number) => setI((x) => (x + d + n) % n)
-  const at = useRef<{ x: number; y: number } | null>(null)
-  const [dx, setDx] = useState(0)
+  const [i, setI] = useState(Math.min(Math.max(start, 0), n - 1))
+  const [drag, setDrag] = useState<{ dx: number; dy: number } | null>(null)
+  const [glide, setGlide] = useState(false)
+  const at = useRef<{ x: number; y: number; t: number; axis: '' | 'x' | 'y'; moved: boolean } | null>(null)
+  const box = useRef<HTMLDivElement>(null)
+  const swiped = useRef(false) // the click after a swipe is not a tap
+  const go = (d: number) => { setGlide(true); setI((x) => Math.min(n - 1, Math.max(0, x + d))) }
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose() }
-      else if (e.key === 'ArrowRight' && n > 1) go(1)
-      else if (e.key === 'ArrowLeft' && n > 1) go(-1)
+      else if (e.key === 'ArrowRight') go(1)
+      else if (e.key === 'ArrowLeft') go(-1)
     }
     addEventListener('keydown', k, true)
     const was = document.body.style.overflow
     document.body.style.overflow = 'hidden'
     return () => { removeEventListener('keydown', k, true); document.body.style.overflow = was }
   }, [n]) // eslint-disable-line react-hooks/exhaustive-deps
-  const m = images[i]
+  const down = (e: React.PointerEvent) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    at.current = { x: e.clientX, y: e.clientY, t: performance.now(), axis: '', moved: false }
+  }
+  const move = (e: React.PointerEvent) => {
+    const s = at.current
+    if (!s) return
+    let dx = e.clientX - s.x
+    const dy = e.clientY - s.y
+    if (!s.axis) {
+      if (Math.hypot(dx, dy) < 6) return
+      s.axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y'
+      s.moved = true
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+      setGlide(false)
+    }
+    if (s.axis === 'x') {
+      if ((i === 0 && dx > 0) || (i === n - 1 && dx < 0)) dx /= 3 // the ends give a little, then stop
+      setDrag({ dx, dy: 0 })
+    } else setDrag({ dx: 0, dy: Math.max(0, dy) })
+  }
+  const up = (e: React.PointerEvent) => {
+    const s = at.current
+    at.current = null
+    if (!s?.moved) return
+    swiped.current = true
+    setTimeout(() => { swiped.current = false }, 0)
+    const dx = e.clientX - s.x, dy = e.clientY - s.y
+    const speed = Math.abs(s.axis === 'x' ? dx : dy) / Math.max(1, performance.now() - s.t) // px per ms
+    const w = box.current?.clientWidth ?? innerWidth
+    setGlide(true)
+    setDrag(null)
+    if (s.axis === 'x' && (Math.abs(dx) > w * 0.2 || (speed > 0.35 && Math.abs(dx) > 20))) go(dx < 0 ? 1 : -1)
+    else if (s.axis === 'y' && (dy > 140 || (speed > 0.5 && dy > 40))) onClose()
+  }
+  const cancel = () => { at.current = null; setGlide(true); setDrag(null) }
+  const dx = drag?.dx ?? 0, dy = drag?.dy ?? 0
   return createPortal(
-    <div className="lightbox" role="dialog" aria-modal="true" aria-label={n > 1 ? `Image ${i + 1} of ${n}` : 'Image'}
-      onClick={(e) => { if (e.target === e.currentTarget || (e.target as HTMLElement).classList.contains('lb-stage')) onClose() }}
-      onPointerDown={(e) => { at.current = { x: e.clientX, y: e.clientY } }}
-      onPointerMove={(e) => { if (at.current && n > 1) setDx(e.clientX - at.current.x) }}
-      onPointerUp={(e) => {
-        const s = at.current; at.current = null; setDx(0)
-        if (s && n > 1 && Math.abs(e.clientX - s.x) > 50 && Math.abs(e.clientX - s.x) > Math.abs(e.clientY - s.y)) go(e.clientX < s.x ? 1 : -1)
-      }}
-      onPointerCancel={() => { at.current = null; setDx(0) }}>
-      <div className="lb-stage"><LightboxImage key={m.url} m={m} dx={dx} /></div>
+    <div ref={box} className="lightbox" role="dialog" aria-modal="true" aria-label={n > 1 ? `Image ${i + 1} of ${n}` : 'Image'}
+      style={{ background: `rgba(0, 0, 0, ${0.92 * (1 - Math.min(dy / 400, 0.6))})` }}
+      onClickCapture={(e) => { if (swiped.current) { e.stopPropagation(); e.preventDefault() } }}
+      onClick={(e) => { const c = (e.target as HTMLElement).classList; if (e.target === e.currentTarget || c.contains('lb-slide') || c.contains('lb-track')) onClose() }}
+      onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={cancel}>
+      <div className={'lb-track' + (glide ? ' glide' : '')} onTransitionEnd={() => setGlide(false)}
+        style={{ transform: `translate3d(calc(${-i * 100}% + ${dx}px), ${dy}px, 0)${dy ? ` scale(${1 - Math.min(dy / 1600, 0.15)})` : ''}` }}>
+        {images.map((m, k) => (
+          <div key={m.url + k} className="lb-slide" aria-hidden={k !== i}>{Math.abs(k - i) <= 1 ? <LightboxImage m={m} /> : null}</div>
+        ))}
+      </div>
       <button className="lb-close icon-btn" aria-label="Close" onClick={onClose}><CloseIcon /></button>
       {n > 1 && <>
-        <button className="lb-nav prev" aria-label="Previous image" onClick={() => go(-1)}>‹</button>
-        <button className="lb-nav next" aria-label="Next image" onClick={() => go(1)}>›</button>
+        {i > 0 && <button className="lb-nav prev" aria-label="Previous image" onClick={() => go(-1)}>‹</button>}
+        {i < n - 1 && <button className="lb-nav next" aria-label="Next image" onClick={() => go(1)}>›</button>}
         <div className="lb-count">{i + 1} / {n}</div>
       </>}
     </div>,
@@ -195,10 +238,10 @@ export function Lightbox({ images, start, onClose }: { images: Media[]; start: n
   )
 }
 
-function LightboxImage({ m, dx }: { m: Media; dx: number }) {
+function LightboxImage({ m }: { m: Media }) {
   const src = useMediaUrl(m.url)
   if (!src) return <div className="lb-loading">…</div>
-  return <img src={src} alt={m.name ?? ''} draggable={false} style={{ transform: dx ? `translateX(${dx}px)` : undefined }} />
+  return <img src={src} alt={m.name ?? ''} draggable={false} />
 }
 
 // ---- sheet ---------------------------------------------------------------------

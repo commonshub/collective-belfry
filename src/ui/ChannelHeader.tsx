@@ -10,7 +10,7 @@ import { markSeen } from '../core/actions'
 import { channelIcon, group, type Group } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { ChannelInfoBody, type InfoTab } from './ChannelInfo'
+import { About, type InfoTab } from './ChannelInfo'
 import { PullDown, SummaryLine } from './ChannelLine'
 import { PodShape } from './icons'
 
@@ -26,7 +26,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
   useVersion()
   const g = group(id)
   const [level, setLevel] = useState<Level>(0)
-  const [tab, setTab] = useState<InfoTab>('about')
+  const [, setTab] = useState<InfoTab>('about')
   const [drag, setDrag] = useState<number | null>(null) // px moved while dragging
   const peekRef = useRef<HTMLDivElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
@@ -120,7 +120,8 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
             (every to-do, then members, files and settings under it), so nothing jumps */}
         <div ref={fullRef} className={level === 2 ? 'chead-more-wrap' : undefined} style={level === 2 ? { height: fullH } : undefined}>
           <div ref={peekRef} className="chead-peek">{peek ? peek({ close: () => setLevel(0), more: openMore }) : <PullDown id={id} topic={topic} full={level === 2} onTopic={(t) => { setLevel(0); onTopic(t) }} more={openMore} />}</div>
-          {level === 2 && g && <div ref={moreRef} className="chead-more"><ChannelInfoBody id={id} tab={tab === 'tasks' ? 'about' : tab} setTab={setTab} tabs={[['about', 'About'], ['members', 'Members'], ['files', 'Files']]} /></div>}
+          {/* the rest: e-mail, invite, settings (members, photos and files have their own pages: c/<id>/members…) */}
+          {level === 2 && g && <div ref={moreRef} className="chead-more"><About id={id} compact /></div>}
         </div>
       </div>
       <button className="chead-handle" {...pull} onClick={cycle} style={{ top: height ? `calc(100% + ${height - 22}px)` : 'calc(100% - 4px)' }}

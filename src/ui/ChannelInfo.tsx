@@ -5,7 +5,7 @@ import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
 import { setInbox, setWebPage } from '../core/actions'
-import { isInbox, slugify, webPage, WEB_RESERVED, type WebPage } from '../core/model'
+import { isInbox, mailLocal, slugify, webPage, WEB_RESERVED, type WebPage } from '../core/model'
 import { BELFRY } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
@@ -15,9 +15,9 @@ import { InviteSheet } from './Invite'
 import { canAdmin } from '../core/access'
 import { me } from '../core/sync'
 import { Avatar, back, fmtTime, go, MediaGrid, Sheet, Btn, Form, useNow, WorkRing } from './common'
-import { AccessFields } from './Chat'
+import { AccessFields, stepGroups, stepText } from './Chat'
 
-type Tab = 'about' | 'tasks' | 'members' | 'files'
+type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
 
 export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: Tab }) {
   useVersion()
@@ -45,6 +45,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
         {tab === 'tasks' && <Tasks groupId={id} />}
         {tab === 'members' && <Members groupId={id} />}
         {tab === 'files' && <Files groupId={id} />}
+        {tab === 'log' && <Log groupId={id} />}
       </div>
     </>
   )
@@ -52,7 +53,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
 export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
-  const list = tabs ?? ([['about', 'About'], ['tasks', 'To-dos'], ['members', 'Members'], ['files', 'Files']] as [T, string][])
+  const list = tabs ?? ([['about', 'About'], ['tasks', 'To-dos'], ['members', 'Members'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
   return (
     <div className="seg">
       {list.map(([k, label]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>)}
@@ -60,7 +61,8 @@ export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: 
   )
 }
 
-function About({ id }: { id: string }) {
+/** COMPACT: under the pulled-down header, which shows the members and photos itself. */
+export function About({ id, compact = false }: { id: string; compact?: boolean }) {
   const g = groups().find((x) => x.id === id)
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(g?.name ?? '')
@@ -73,7 +75,7 @@ function About({ id }: { id: string }) {
   if (!g) return null
   return (
     <div className="pad">
-      {g.isPod && (
+      {g.isPod && !compact && (
         <div className="card">
           <div className="hint">Pod in</div>
           <button className="link" onClick={() => go('c/' + encodeURIComponent(g.parent ?? 'general'))}>
@@ -81,11 +83,12 @@ function About({ id }: { id: string }) {
           </button>
         </div>
       )}
-      <ActiveCard id={id} />
-      <div className="card">
+      {compact && g.about.trim().includes('\n') && <div className="card"><div className="hint">Description</div><Markdown text={g.about} /></div>}
+      {!compact && <ActiveCard id={id} />}
+      {!compact && <div className="card">
         <div className="hint">Members</div>
         <div>{g.members.size}</div>
-      </div>
+      </div>}
       {g.isPod && (
         <div className="card">
           <div className="hint">Who can join</div>
@@ -98,7 +101,7 @@ function About({ id }: { id: string }) {
         : !g.closed && <Btn className="btn" style={{ marginBottom: 10 }} onClick={() => joinGroup(id)}>Join pod</Btn>)}
       <div className="card">
         <div className="hint">E-mail</div>
-        <div>{isInbox(g) ? <>Anyone can e-mail <b>{g.id}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{g.id}@{BELFRY.domain}</b>: their mail shows as their message.</>}</div>
+        <div>{isInbox(g) ? <>Anyone can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: their mail shows as their message.</>}</div>
       </div>
       <div className="row" style={{ gap: 8 }}>
         <button className="btn" style={{ flex: 1 }} onClick={() => setInviting(true)}>Invite</button>
@@ -134,7 +137,7 @@ function About({ id }: { id: string }) {
               <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'members'} onChange={() => setWeb({ ...web, visibility: 'members' })} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
             </div>}
             <label className="switch-row">
-              <span><b>E-mails from anyone</b><small>Mail to {g.id}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
+              <span><b>E-mails from anyone</b><small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
               <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
             </label>
             <label className="switch-row">
@@ -299,6 +302,25 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
       </Form>
       <Btn className="btn" onClick={async () => { await setMemberLabels(groupId, pubkey, sel); onClose() }}>Save labels</Btn>
     </Sheet>
+  )
+}
+
+// ---- log: what happened to the channel's to-dos, newest first ------------------------------
+
+export function Log({ groupId }: { groupId: string }) {
+  useVersion()
+  const steps = stepGroups(tasklist(groupId).tasks).sort((a, b) => b.at - a.at).slice(0, 200)
+  if (!steps.length) return <div className="empty">Nothing happened to this channel's to-dos yet.</div>
+  return (
+    <div className="pad log-list">
+      {steps.map((s, i) => (
+        <div key={s.t.id + i} className="log-row">
+          <Avatar pubkey={s.who} size={24} />
+          <span><b>{displayName(s.who)}</b> {stepText(s.what)}: “{s.t.title}”</span>
+          <time className="hint">{fmtTime(s.at)}</time>
+        </div>
+      ))}
+    </div>
   )
 }
 

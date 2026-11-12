@@ -196,7 +196,7 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     } else if (wide && three && b === 'thread' && c) {
       view = <ChannelView id={id} activeThread={c} />
       pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
-    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b && Object.hasOwn(INFO_PAGES, b) ? <ChannelInfo key={b} id={id} initial={INFO_PAGES[b]} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
@@ -211,6 +211,9 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     </div>
   )
 }
+
+/** c/<id>/members, /photos, /files, /todos, /log: a channel's full lists (Xavier, 2026-11-12). */
+const INFO_PAGES: Record<string, 'members' | 'files' | 'tasks' | 'log' | 'about'> = { members: 'members', images: 'files', photos: 'files', files: 'files', todos: 'tasks', log: 'log', about: 'about' }
 
 const EVENT_KEY = 'belfry-event-open'
 const pendingEvent = () => { try { return localStorage.getItem(EVENT_KEY) ?? '' } catch { return '' } }

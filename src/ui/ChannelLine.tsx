@@ -5,20 +5,22 @@
 //   2. a pinned message (its notice);
 //   3. the next event;
 //   4. an open proposal;
-//   5. how many people were active this month.
-// Everything else shows as small counts on the right (events, proposals, pods, to-dos). Pulling
-// the line down (ChannelHeader) shows the same things in full: PullDown below.
+//   5. how many members it has.
+// Everything else shows as small counts on the right (events, proposals, pods, photos, then the
+// to-dos last). Pulling the line down (ChannelHeader) shows the same things in full: PullDown
+// below, with the description at the top, the latest photos and the members (Xavier, 2026-11-12).
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, recentlyActive, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Btn, Form, fmtDay, go, useNow, WorkRing } from './common'
+import { Avatar, Btn, Form, fmtDay, go, Lightbox, useMediaUrl, useNow, WorkRing } from './common'
+import { openProfile } from './Profile'
 import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
-import { CalendarIcon, ChevronDownIcon, ChevronUpIcon, DocIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
+import { CalendarIcon, ChevronDownIcon, ChevronUpIcon, DocIcon, ImageIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
 import { RichText } from './Topics'
 
 const HIDDEN = 'belfry-pins-hidden'
@@ -43,10 +45,13 @@ export function channelFacts(id: string) {
   const allTasks = tasklist(id).tasks
   const todos = allTasks.filter((t) => !t.done)
   const tally = taskTally(allTasks)
-  const active = recentlyActive(id)
+  const members = g ? [...g.members] : []
+  const media = [...new Map(messages(id).flatMap((m) => m.media).map((x) => [x.url, x])).values()].reverse()
+  const photos = media.filter((m) => m.mime.startsWith('image/'))
+  const files = media.length - photos.length - media.filter((m) => m.mime.startsWith('video/')).length
   const own = g?.isProposal ? proposalFor(id) : undefined
   const needsVote = (p: Proposal) => p.status === 'voting' && !!p.poll && p.poll.version === p.version && !p.poll.votes.get(me())
-  return { g, pods, proposals, events, pins, todos, allTasks, tally, active, own, needsVote }
+  return { g, pods, proposals, events, pins, todos, allTasks, tally, members, photos, files, own, needsVote }
 }
 
 /** The one line. `topic`: the feed is filtered on it, which the line says first of all. */
@@ -60,8 +65,8 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   const next = f.events[0]
   const unanswered = f.events.find((e) => !stateLabel(e) && e.status !== 'cancelled')
   const toVote = f.proposals.find(f.needsVote)
-  const n = f.active.length
-  const people = n ? `${n} ${n === 1 ? 'person' : 'people'} active this month` : 'Nobody active this month yet'
+  const n = f.members.length
+  const people = `${n} ${n === 1 ? 'member' : 'members'}`
 
   let icon: ReactNode = <PeopleIcon />
   let text: ReactNode = people
@@ -109,6 +114,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
     ['events', <CalendarIcon />, f.events.length - (shownNow === 'event' ? 1 : 0), 'more events'],
     ['proposals', <DocIcon />, f.proposals.length - (shownNow === 'proposal' ? 1 : 0), 'more open proposals'],
     ['pods', <PodShape members={6} size={13} />, f.pods.length, 'pods'],
+    ['photos', <ImageIcon />, f.photos.length, 'photos'],
     ['todos', <TodoIcon />, f.tally.total, 'to-dos'],
   ]
   return (
@@ -138,9 +144,11 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
   if (!g) return null
   const parent = g.parent ? group(g.parent) : undefined
   const hidden = hiddenPins()
-  const n = f.active.length
+  const path = (p: string) => go(`c/${encodeURIComponent(id)}/${p}`)
   return (
-    <div className="pull">
+    <div className={'pull' + (full ? ' full' : '')}>
+      {/* the same at both levels, so nothing jumps when it opens all the way; the whole text is under it */}
+      {g.about && <p className="pull-about">{g.about.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').slice(0, 200)}</p>}
       {(g.isPod || g.isProposal) && parent && (
         <button className="link pull-parent" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{g.isProposal ? 'Proposal' : 'Pod'} in {parent.isPod ? '' : '# '}{parent.name}</button>
       )}
@@ -224,17 +232,51 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
           </div>
         </section>
       )}
+      {f.photos.length > 0 && <Photos photos={f.photos} full={full} all={() => path('photos')} />}
+      <section className="pull-members">
+        <h3>Members <span>{f.members.length}</span></h3>
+        <div className={full ? 'pull-faces big' : 'pull-faces'}>
+          {f.members.slice(0, full ? 24 : 10).map((p) => (
+            <button key={p} className="face" onClick={() => openProfile(p)} aria-label={displayName(p)}>
+              <Avatar pubkey={p} size={full ? 44 : 28} />{full && <small>{displayName(p)}</small>}
+            </button>
+          ))}
+          {!full && f.members.length > 10 && <span className="more">+{f.members.length - 10}</span>}
+        </div>
+        <div className="pull-links">
+          <button className="link" onClick={() => path('members')}>All members</button>
+          {f.files > 0 && <button className="link" onClick={() => path('files')}>{f.files} {f.files === 1 ? 'file' : 'files'}</button>}
+          {f.allTasks.length > 0 && <button className="link" onClick={() => path('todos')}>To-dos</button>}
+          {f.allTasks.length > 0 && <button className="link" onClick={() => path('log')}>Log</button>}
+          {!full && <button className="link" onClick={() => more('about')}>More</button>}
+        </div>
+      </section>
       <section className="pull-topics">
         <TopicsBar groupId={id} active={topic} onOpen={onTopic} titled />
       </section>
-      {!full && <button className="pull-row pull-people" onClick={() => more('members')}>
-        <PeopleIcon />
-        <span className="t">{n ? `${n} ${n === 1 ? 'person' : 'people'} active this month` : 'Nobody active this month yet'}<small>Members, files, settings</small></span>
-        <ChevronDownIcon />
-      </button>}
-      {g.about && !full && <p className="pull-about">{g.about.split('\n')[0].slice(0, 200)}</p>}
     </div>
   )
+}
+
+/** The latest photos: one row in the small pull-down, a mosaic when it is pulled all the way. */
+function Photos({ photos, full, all }: { photos: Media[]; full: boolean; all: () => void }) {
+  const [open, setOpen] = useState<number | null>(null)
+  const shown = photos.slice(0, full ? 12 : 8)
+  return (
+    <section className="pull-photos">
+      <h3>Latest photos <span>{photos.length}</span></h3>
+      <div className={full ? 'photo-mosaic' : 'photo-row'}>
+        {shown.map((m, i) => <Thumb key={m.url} m={m} onOpen={() => setOpen(i)} />)}
+      </div>
+      {photos.length > shown.length && <button className="link pull-all" onClick={all}>All {photos.length} photos</button>}
+      {open !== null && <Lightbox images={photos} start={open} onClose={() => setOpen(null)} />}
+    </section>
+  )
+}
+
+function Thumb({ m, onOpen }: { m: Media; onOpen: () => void }) {
+  const src = useMediaUrl(m.url)
+  return <button className="thumb" onClick={onOpen} aria-label={m.name || 'Photo'}>{src ? <img src={src} alt="" loading="lazy" /> : null}</button>
 }
 
 /** The latest 20 to-dos: the open ones first, then the done ones; newest first in each. */

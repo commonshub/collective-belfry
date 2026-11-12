@@ -509,7 +509,7 @@ function useHold(open: () => void, off = false) {
   }
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, todo, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -570,9 +570,9 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
-          {(rx.length > 0 || todo) && (
+          {/* no to-do mark here any more (Xavier, 2026-11-12): the ⏳ / ☑️ reactions say it */}
+          {rx.length > 0 && (
             <div className="reactions">
-              {todo && <TodoMark todo={todo} onClick={() => { if (onOpenThread) onOpenThread(); else void taskAction(groupId, todo.id, todo.done ? 'undone' : 'done') }} />}
               {rx.map((r) => (
                 <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
                   onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
@@ -1075,22 +1075,6 @@ function SaveAccountBar() {
       </Form>}
       {error && <div className="error">{error}</div>}
     </div>
-  )
-}
-
-/** A message that became a to-do: an 18 px mark before its reactions (proposal A): a circle
- *  while open, a filling ring while its assignee works on it, a tick once done. */
-function TodoMark({ todo, onClick }: { todo: Task; onClick: () => void }) {
-  const now = useNow()
-  const busy = !todo.done && isWorking(todo, now)
-  const state = todo.done ? 'done' : busy ? `${displayName(todo.assignee!)} is working on it` : todo.assignee ? `${displayName(todo.assignee)} is on it` : 'open'
-  return (
-    <button className={'todo-mark' + (todo.done ? ' done' : busy ? ' busy' : '')} onClick={onClick} title={`To-do: ${todo.title} (${state})`} aria-label={`To-do, ${state}: ${todo.title}`}>
-      {todo.done
-        ? <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="8" fill="currentColor" /><path d="M5 9.2l2.6 2.5L13 6.5" stroke="var(--bg, #fff)" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
-        : busy ? <WorkRing since={workingSince(todo) ?? now} now={now} size={18} />
-          : <svg viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="7.5" fill="none" stroke="currentColor" strokeWidth="2" /></svg>}
-    </button>
   )
 }
 
