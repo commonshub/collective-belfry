@@ -1,6 +1,6 @@
 # Guests of a channel
 
-Someone without a membership, in one channel, for 30 days. The code is
+Someone without a membership, in one channel, for a day, a week or a month. The code is
 `services/onboarding/belfry_onboarding/guests.py` (its docstring is the reference) and the
 register's `join_guest` / `save_guest_email`. Guests need the belfry's own register
 (`REGISTER=belfry`). All paths below are under `https://belfry.<domain>/api/v1`; requests marked
@@ -9,10 +9,17 @@ NIP-98 carry `Authorization: Nostr <base64 kind 27235>` with `u`, `method` and `
 ## The link
 
 `POST /channel-invites` (NIP-98, a member who has the channel) `{"channel", "people"?: 1|50,
-"link_days"?: 1|7|30}` → `{"url": "https://chat.<domain>/join/<token>", …}`.
+"link_days"?: 1|7|30, "guest_days"?: 1|7|30}` → `{"url": "https://chat.<domain>/join/<token>",
+"days", "as": "guest", …}`. `link_days` is how long the link can be opened; `guest_days` how long
+the guest stays (absent: 30, as older clients expect; the chat sends it, a day by default).
+
+A belfry admin can make the link a **member link** instead (`"as": "member", "role",
+"membership"`): see docs/roles.md. Opening and joining work as below; joining makes them a member
+with that role.
 
 `GET /channel-invites/<token>` (no auth) → `{"community", "channel", "channel_name", "about",
-"inviter", "state": "open"|"used"|"expired"|"revoked", "days", "role"}`; 404 `not_found`.
+"inviter", "state": "open"|"used"|"expired"|"revoked", "days", "role", "as": "guest"|"member"}`
+(member links add `member_role`, `member_role_label`, `membership`); 404 `not_found`.
 
 ## Opening it: guest mode (since 2026-11-12)
 
@@ -65,4 +72,8 @@ the channel (one more guest pass for a guest; a 9000 for a member) and closed th
 (9001 for its key, its signer account suspended): the client drops the guest session and signs in
 with the address; the channel is there. `moved: false`: nothing changed (the account has no key).
 
-Guests who never join end with their pass (30 days), like every guest.
+Guests who never join end with their pass, like every guest.
+
+A member link (docs/roles.md) adds to these answers: the join answer has `"as": "member"` and
+`"email_needed": true` until they joined; `/guest/save/verify` answers `"member": true, "role"`
+once the membership opened. An agent's key can't use a member link (403 `agent`).

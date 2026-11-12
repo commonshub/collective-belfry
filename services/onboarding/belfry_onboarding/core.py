@@ -1015,6 +1015,13 @@ def _finish_activation(
             )
         )
     svc.odoo.write("belfry.pass", [pass_row["id"]], vals)
+    if tier not in ("guest", "agent"):
+        try:  # a new member gets the default role, unless they have one (roles.py)
+            from . import roles
+
+            roles.give_default(svc, partner_id)
+        except Exception:  # noqa: BLE001 — the membership is open; the role is a label
+            log.exception("activate_pass: no default role for partner %s", partner_id)
     log.info(
         "activate_pass: pass %s active for partner %s (%s), npub %s, %s..%s",
         pass_row["id"],
@@ -1049,6 +1056,7 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "own_pubkey_proof",
                 "invoice_id",
                 "guest_days",
+                "membership_days",
             ],
         )
         if row is None:
@@ -1079,6 +1087,8 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
         end = MEMBERSHIP_END
         if tier == "guest":
             end = today() + dt.timedelta(days=int(row.get("guest_days") or 30))
+        elif row.get("membership_days"):  # a member link for a month or a year (roles.py)
+            end = today() + dt.timedelta(days=int(row["membership_days"]))
         result = _finish_activation(svc, row, partner, tier, None, today(), end, {})
         if tier == "guest":
             from . import guests

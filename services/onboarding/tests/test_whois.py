@@ -22,7 +22,9 @@ def test_whois_tells_members_guests_and_agents_apart(world):
         keys = [pk(ada), pk(bot), pk(stranger)]
         r = post(c, ada, "/api/whois", {"pubkeys": keys})
         assert r.status_code == 200, r.text
-        assert r.json() == {"people": {pk(ada): "member", pk(bot): "guest"}}
+        assert r.json()["people"] == {pk(ada): "member", pk(bot): "guest"}
+        # roles apart (roles.py): members only, "people" keeps its three values
+        assert r.json()["roles"] == {pk(ada): "member"}
         # the guest may ask too; a key with no pass may not
         assert post(c, bot, "/api/whois", {"pubkeys": [pk(ada)]}).status_code == 200
         assert post(c, stranger, "/api/whois", {"pubkeys": [pk(ada)]}).status_code == 403
@@ -30,7 +32,7 @@ def test_whois_tells_members_guests_and_agents_apart(world):
         # Ada makes it her own agent: an agent now, not a guest
         assert post(c, ada, "/api/agents", {"pubkey": pk(bot), "mine": True}).status_code == 200
         r = post(c, ada, "/api/whois", {"pubkeys": [pk(bot)]})
-        assert r.json() == {"people": {pk(bot): "agent"}}
+        assert r.json() == {"people": {pk(bot): "agent"}, "roles": {}}
 
 
 def test_belfry_json_revalidates(world):

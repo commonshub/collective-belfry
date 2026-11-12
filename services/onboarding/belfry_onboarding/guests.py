@@ -1,4 +1,4 @@
-"""A channel's guests: someone without a membership, in one channel, for 30 days.
+"""A channel's guests: someone without a membership, in one channel, for a day to a month.
 
 - A member asks for a link in the chat
   (``POST /api/channel-invites``, NIP-98: ``{"channel"}``). It is an invite of the belfry's own
@@ -35,6 +35,15 @@
   but not a relay member read and write in its groups only. Guests are on no other whitelist
   (core.active_pubkeys): not the community relay, not the git server, not the console.
 - ``left``: when the pass closes (expiry or revocation), kind 9001 takes them out again.
+- How long (2026-11-12): ``"guest_days"`` 1 | 7 | 30 on the link (the chat offers a day, a week,
+  a month); a request without it keeps 30 (older clients, the phone apps).
+- Member links (2026-11-12, roles.py): ``{"as": "member", "role", "membership"}`` from a belfry
+  admin only (403 ``not_admin``). Opening one is guest mode as above (``"as": "member",
+  "email_needed": true`` in the answer); joining with name, e-mail and code makes them a member
+  with that role (``/api/guest/save/verify`` answers ``"member": true, "role"``), their guest
+  pass closes, they stay in the channel. A guest with a saved e-mail becomes a member as soon
+  as they use it; a member just gets the channel (their role doesn't change); an agent's key is
+  refused (403 ``agent``). docs/roles.md has the whole contract.
 """
 
 from __future__ import annotations
@@ -51,13 +60,15 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import roles
 from .clients.odoo import OdooError
 from .core import Services, m2o_id
 
 log = logging.getLogger(__name__)
 
 API = "/api/channel-invites"
-DAYS = 30
+DAYS = 30  # a guest's access when the link doesn't say (older clients)
+GUEST_DAYS = (1, 7, 30)  # what the chat offers: a day, a week, a month
 
 
 def _channel_event(svc: Services, kind: int, tags: list[list[str]]) -> bool:
@@ -196,6 +207,32 @@ def _option(data: Any, key: str, default: int, allowed: tuple[int, ...]) -> int:
     return value
 
 
+def _member_link(
+    svc: Services, pubkey: str, who: dict[str, Any], data: Any, own_agent: bool, role: str
+) -> dict[str, str] | None:
+    """``{"role", "membership"}`` when the request asks for a member link (``"as": "member"``);
+    None for a guest link. Only the belfry's admins may; the role must exist."""
+    from . import apps
+    from .holder_invites import ApiError
+
+    kind = data.get("as", "guest") if isinstance(data, dict) else "guest"
+    if kind not in ("guest", "member"):
+        raise ApiError(422, "invalid", 'as: "guest" or "member"')
+    if kind == "guest":
+        return None
+    if own_agent or role:
+        raise ApiError(422, "invalid", "A member link is not for an agent or a co-host.")
+    if not who.get("steward") and pubkey not in apps.admin_pubkeys(svc):
+        raise ApiError(403, "not_admin", "Only the belfry's admins invite members.")
+    rid = str(data.get("role") or roles.default_role(svc))
+    if not roles.exists(svc, rid):
+        raise ApiError(404, "unknown_role", "No such role.")
+    membership = str(data.get("membership") or "permanent")
+    if membership not in roles.MEMBERSHIP_DAYS:
+        raise ApiError(422, "invalid", 'membership: "month", "year" or "permanent"')
+    return {"role": rid, "membership": membership}
+
+
 def _inviter(rows: list[dict[str, Any]]) -> None:
     """Only a member brings people in: not a guest, not a member's agent."""
     from .holder_invites import ApiError
@@ -244,8 +281,10 @@ def register(app: FastAPI) -> None:
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
             raise ApiError(403, "not_allowed", "You can't invite guests here.")
-        # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>)
-        role = str(data.get("role") or "") if isinstance(data, dict) else ""
+        # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>);
+        # on a member link ("as": "member") "role" is the member's role instead (roles.py)
+        as_member = isinstance(data, dict) and data.get("as") == "member"
+        role = str(data.get("role") or "") if isinstance(data, dict) and not as_member else ""
         if role not in ("", "host"):
             raise ApiError(422, "invalid", 'role: "host" or nothing')
         if role == "host":
@@ -264,37 +303,50 @@ def register(app: FastAPI) -> None:
             _option(data, "people", 1, (1, 50)),
             _option(data, "link_days", 1, (1, 7, 30)),
         )
+        # how long a guest stays: a day, a week or a month (the chat sends it); a request
+        # without it (older clients, the phone apps) keeps the 30 days it always had
+        days = _option(data, "guest_days", DAYS, GUEST_DAYS)
         # "agent": the link is for one agent, which becomes the member's own (agents.py)
         own_agent = isinstance(data, dict) and data.get("agent") is True
+        # "as": "member": the link makes its user a member of the belfry (roles.py), with a role
+        # and a length of membership; only the belfry's admins make such links
+        member = await run_in_threadpool(_member_link, s, pubkey, who, data, own_agent, role)
+        if member:
+            days = link_days  # reading until they join: as long as the link can be opened
+            if member["role"] == roles.ADMIN:
+                people = 1  # an admin link is for one person
         try:
             row = await run_in_threadpool(
                 s.odoo.create_guest_invite,
                 who["partner_id"],
                 pubkey,
                 channel,
-                DAYS,
+                days,
                 1 if own_agent else people,
                 link_days,
                 own_agent,
                 role,
+                member["role"] if member else "",
+                member["membership"] if member else "",
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
         token = str(row["url"]).rsplit("/", 1)[-1]
-        return JSONResponse(
-            {
-                "url": join_url(s, token),
-                # what an agent reads: how to join with its own key
-                "agent_url": row["url"] + ".md",
-                "days": 0 if own_agent else DAYS,
-                "own_agent": own_agent,
-                "people": 1 if own_agent else people,
-                "link_days": link_days,
-                "role": role or None,
-                "expires_at": row.get("expires_at") or None,
-            },
-            headers={"Cache-Control": "no-store"},
-        )
+        out = {
+            "url": join_url(s, token),
+            # what an agent reads: how to join with its own key
+            "agent_url": row["url"] + ".md",
+            "days": 0 if own_agent or member else days,
+            "own_agent": own_agent,
+            "people": 1 if own_agent else people,
+            "link_days": link_days,
+            "role": role or None,
+            "expires_at": row.get("expires_at") or None,
+            "as": "member" if member else "guest",
+        }
+        if member:
+            out.update(member_role=member["role"], membership=member["membership"])
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
 # ── agents as guests: their own key, no e-mail ──────────────────────────────────────────────
@@ -684,7 +736,70 @@ def _make_host(svc: Services, channel: str, pubkey: str, inv: dict[str, Any]) ->
     return _channel_event(svc, 9000, tags)
 
 
+def _is_agent(svc: Services, pubkey: str) -> bool:
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        ["tier", "guest_agent"],
+    )
+    return any(r.get("tier") == "agent" or r.get("guest_agent") for r in rows)
+
+
+def member_invite_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
+    """The newest member link (roles.py) that brought the guest PUBKEY in, if any."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["tier", "=", "guest"]],
+        ["invite_id"],
+    )
+    for r in sorted(rows, key=lambda r: -int(r["id"])):
+        inv_id = m2o_id(r.get("invite_id"))
+        inv = (
+            svc.odoo.read_one("belfry.invite", inv_id, ["member_role", "membership"])
+            if inv_id
+            else None
+        )
+        if inv and inv.get("member_role"):
+            return inv
+    return None
+
+
+def become_member(svc: Services, pubkey: str, inv: dict[str, Any]) -> bool:
+    """A guest who came with a member link and has a proven e-mail: a member now, with the link's
+    role (the default when that role was deleted since) and length of membership."""
+    rid = str(inv.get("member_role") or "")
+    if not roles.exists(svc, rid):
+        rid = roles.default_role(svc)
+    days = roles.MEMBERSHIP_DAYS.get(str(inv.get("membership") or "permanent"), 0)
+    return roles.make_member(svc, pubkey, rid, days)
+
+
 def join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | None:
+    """The account behind PUBKEY takes the invite; None when the key has no account. A member
+    link (roles.py): a guest with a proven e-mail becomes a member with its role (``"member":
+    true``), one without is told to save it first (``"email_needed": true``; saving it makes
+    them a member, ``/api/guest/save/verify``); a member gets the channel and keeps their role;
+    an agent is refused (403 ``agent``)."""
+    from .holder_invites import ApiError
+
+    inv = svc.odoo.invite_by_token(token) or {}
+    if not inv.get("member_role"):
+        return _join_account(svc, token, pubkey)
+    if _is_agent(svc, pubkey):
+        raise ApiError(403, "agent", "This link makes a person a member: not for an agent.")
+    out = _join_account(svc, token, pubkey)
+    if out is None:
+        return None
+    out = {**out, "as": "member"}
+    if not out.get("guest"):  # a member already: the channel, their role unchanged
+        return out
+    if not _saved_email(svc, pubkey):
+        return {**out, "email_needed": True}
+    become_member(svc, pubkey, inv)
+    return {**out, "guest": False, "member": True, "role": roles.role_of(svc, pubkey)}
+
+
+def _join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | None:
     """The account behind PUBKEY takes the invite; None when the key has no account. A co-host
     link (role host) makes them an admin of the event's group, once they have a proven e-mail
     (never a name-only admin)."""
@@ -770,6 +885,23 @@ def invite_info(svc: Services, token: str) -> dict[str, Any] | None:
         "state": inv["state"] if inv["state"] in ("open", "used", "expired", "revoked") else "used",
         "days": int(inv.get("guest_days") or DAYS),
         "role": inv.get("guest_role") or None,
+        **_member_info(svc, inv),
+    }
+
+
+def _member_info(svc: Services, inv: dict[str, Any]) -> dict[str, Any]:
+    """What a member link says it gives (roles.py): ``"as"``, and for a member link the role
+    (id, label) and the length of membership."""
+    rid = inv.get("member_role")
+    if not rid:
+        return {"as": "guest"}
+    found = {r["id"]: r for r in roles.listing(svc)[0]}
+    role = found.get(rid) or found.get(roles.default_role(svc)) or {}
+    return {
+        "as": "member",
+        "member_role": role.get("id"),
+        "member_role_label": role.get("label"),
+        "membership": inv.get("membership") or "permanent",
     }
 
 
@@ -931,6 +1063,9 @@ def register_join_routes(app: FastAPI) -> None:
             if out is None:
                 name = " ".join(str(data.get("name") or "").split())[:100]
                 out = await run_in_threadpool(join_new, s, token, name, pubkey)
+                if (inv or {}).get("member_role"):
+                    # reading (or in by name): a member once they join with an e-mail
+                    out = {**out, "as": "member", "email_needed": True}
                 if (inv or {}).get("guest_role") == "host":
                     # in as a guest; a co-host once they saved an e-mail and use the link again
                     out = {**out, "email_needed": True}
@@ -1046,4 +1181,15 @@ def register_join_routes(app: FastAPI) -> None:
                     # out of guest mode: the 9000 with their name, at the time they joined
                     await run_in_threadpool(admitted, s, r["id"])
                 await run_in_threadpool(saved_label, s, pubkey, r["guest_channel"])
-        return JSONResponse({"saved": True, "joined": bool(out.get("joined"))})
+        answer = {"saved": True, "joined": bool(out.get("joined"))}
+        # came with a member link (roles.py): a member of the belfry now, with its role
+        inv = await run_in_threadpool(member_invite_of, s, pubkey)
+        if inv is not None:
+            try:
+                if await run_in_threadpool(become_member, s, pubkey, inv):
+                    role = await run_in_threadpool(roles.role_of, s, pubkey)
+                    answer.update(member=True, role=role)
+            except ApiError as exc:  # saved as a guest; an admin can still make them a member
+                log.warning("guest save: not a member yet: %s", exc.error)
+                answer["member"] = False
+        return JSONResponse(answer)

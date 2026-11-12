@@ -638,13 +638,22 @@ class Register(OdooApi):
         link_days: int = GUEST_LINK_DAYS_DEFAULT,
         own_agent: bool = False,
         role: str = "",
+        member_role: str = "",
+        membership: str = "",
     ) -> dict[str, Any]:
         """A link that makes its user a guest of CHANNEL for DAYS days (guests.py). It is for
         PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked).
         ROLE ``host``: the link makes its user a co-host (an admin) of an event's group.
+        MEMBER_ROLE (roles.py): the link makes its user a member of the belfry with that role,
+        for MEMBERSHIP (``month`` / ``year`` / ``permanent``) once they joined with an e-mail;
+        until then they read CHANNEL as a guest in guest mode, for DAYS days.
         OWN_AGENT: the link is for one agent, which becomes the inviter's own agent (agents.py):
         a member for as long as the inviter is one, not a guest."""
         partner = self._member(partner_id, "Only members can invite guests.")
+        if member_role:
+            note = f"Member ({member_role}), starting in #{channel}"
+        else:
+            note = f"Guest of #{channel}"
         if own_agent:
             people = 1
             self._agent_room(partner["id"])
@@ -655,7 +664,7 @@ class Register(OdooApi):
             {
                 "inviter_partner_id": partner["id"],
                 "inviter_name": partner.get("name"),
-                "note": f"Guest of #{channel}",
+                "note": note,
                 "guest_channel": channel,
                 "guest_days": int(days),
                 "guest_inviter": inviter_pubkey,
@@ -663,6 +672,8 @@ class Register(OdooApi):
                 "guest_uses": 0,
                 "agent_owner": partner["id"] if own_agent else False,
                 "guest_role": role or False,
+                "member_role": member_role or False,
+                "membership": (membership or "permanent") if member_role else False,
                 "expires_at": stamp(now() + dt.timedelta(days=link_days)),
             },
         )

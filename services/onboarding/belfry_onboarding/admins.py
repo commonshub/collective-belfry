@@ -5,7 +5,9 @@ the stewards group (console.admin_emails); the target must be an active member. 
 who saved their account (an e-mail on it) becomes a member with the role: same key, a membership
 next to the guest passes (guests.became_member). A guest without an e-mail and an agent can't.
 The last admin can't be removed. The relay sync follows at once, so the new admin administers
-every channel (zooid patch 0003) and belfry.json lists them.
+every channel (zooid patch 0003) and belfry.json lists them. The admin role of roles.py is this
+same list: its stored role follows (``roles.after_admin_change``), and ``POST /api/member-roles``
+with ``"role": "admin"`` comes here.
 """
 
 from __future__ import annotations
@@ -77,6 +79,9 @@ def change(svc: Services, caller: str, target: str, admin: bool) -> list[str]:
             if member_key(svc, target) is None:
                 raise ApiError(500, "not_promoted", "The guest's membership did not open.")
             guests.became_member(svc, target)
+        from . import roles
+
+        roles.after_admin_change(svc, target, admin)  # the stored role follows (roles.py)
     core.sync_relay_whitelist(svc)
     return sorted(apps.admin_pubkeys(svc))
 

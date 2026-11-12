@@ -62,6 +62,7 @@ from . import (
     programme,
     push,
     reports,
+    roles,
     sessions,
     setup,
     signin,
@@ -241,6 +242,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     branding.register(app)  # /api/branding: logo, cover, colours (branding.py)
     agents.register(app)  # /api/agents: a member's own agents (agents.py)
     push.register(app)  # /api/push/devices, /api/notifications: the phone apps' push (push.py)
+    roles.register(app)  # /api/roles, /api/member-roles: members' roles (roles.py)
     whois.register(app)  # /api/whois: member, agent or guest, per key (whois.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website

@@ -8,6 +8,8 @@ event saying so unless a label was published). The register knows, so it answers
   "guest" when one key holds several passes; "agent" means a member's own agent (agents.py,
   its member is in belfry.json ``agents``).
 - Anyone holding an active pass may ask (guests too: they see who joined their channel).
+- The answer also has ``"roles": {"<hex>": "<role id>"}`` for the members among the keys
+  (roles.py; guests and agents have no role). Labels: ``GET /api/roles``.
 """
 
 from __future__ import annotations
@@ -53,7 +55,16 @@ def answer(svc: Services, caller: str, keys: list[str]) -> dict[str, Any]:
     known = kinds(svc)
     if caller not in known:
         raise ApiError(403, "not_here", "Only people of this belfry can ask.")
-    return {"people": {k: known[k] for k in keys if k in known}}
+    out: dict[str, Any] = {"people": {k: known[k] for k in keys if k in known}}
+    # a member's role (roles.py), apart: "people" keeps its three values for the apps
+    from . import roles
+
+    try:
+        held = roles.members(svc)
+        out["roles"] = {k: held[k] for k in keys if k in held}
+    except Exception:  # noqa: BLE001 — the kinds answer anyway
+        pass
+    return out
 
 
 def register(app: FastAPI) -> None:
