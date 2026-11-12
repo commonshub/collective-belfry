@@ -1065,7 +1065,8 @@ def register_join_routes(app: FastAPI) -> None:
                 out = await run_in_threadpool(join_new, s, token, name, pubkey)
                 if (inv or {}).get("member_role"):
                     # reading (or in by name): a member once they join with an e-mail
-                    out = {**out, "as": "member", "email_needed": True}
+                    info = await run_in_threadpool(_member_info, s, inv)
+                    out = {**out, **info, "email_needed": True}
                 if (inv or {}).get("guest_role") == "host":
                     # in as a guest; a co-host once they saved an e-mail and use the link again
                     out = {**out, "email_needed": True}

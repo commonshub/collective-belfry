@@ -94,7 +94,7 @@ Guest links answer `"as": "guest"` and now take `"guest_days"` 1 | 7 | 30 (absen
 
 | Signed by | Result |
 |---|---|
-| a new key | guest mode, reading the channel: the usual answer plus `"as": "member", "email_needed": true` |
+| a new key | guest mode, reading the channel: the usual answer plus `"as": "member", "member_role", "member_role_label", "membership", "email_needed": true` |
 | a guest with a saved e-mail | a member at once: `{"channel", "guest": false, "member": true, "role", "as": "member"}` |
 | a guest without an e-mail | the channel as a guest, `"email_needed": true`: saving the e-mail makes them a member |
 | a member | the channel; **their role does not change** |

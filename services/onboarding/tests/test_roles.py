@@ -234,7 +234,8 @@ def test_a_member_link_makes_a_member_once_they_join_with_an_e_mail(world):
         got = _join(c, token, PrivateKey())
         assert got.status_code == 200, got.text
         assert got.json()["reading"] is True and got.json()["email_needed"] is True
-        assert got.json()["as"] == "member"
+        assert got.json()["as"] == "member" and got.json()["member_role_label"] == "Host"
+        assert got.json()["membership"] == "year"
         # our own key stands in for the identity the signer holds
         me = PrivateKey()
         p = rsvc.odoo.search_read(
