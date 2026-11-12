@@ -20,7 +20,7 @@ key: ``POST /api/session {"nip05", "app", "client"}`` then ``POST /api/session/v
 ``sh.belfry.app://connect`` and ``client`` = ``belfry-android`` / ``belfry-ios`` (names the
 session). Answers: ``{"state": "code_sent", "to": "x•••@…", "nip05"}`` then ``{"state": "open",
 "bunker_url", "pubkey", "npub", "nip05"}``; errors ``{"error": code}``: 404 ``unknown``, 409
-``no_email`` / ``own_key`` / ``mismatch`` / ``key_taken``, 422 ``invalid`` / ``wrong_code`` (with
+``no_email`` / ``own_key`` / ``mismatch`` / ``key_taken``, 503 ``signer`` (try again), 422 ``invalid`` / ``wrong_code`` (with
 ``tries_left``), 410 ``expired``, 429 ``too_many``, 403 ``app_not_approved``. The connection is
 bound to the session key when it is made.
 
@@ -285,6 +285,12 @@ class Sessions:
             ) from exc
         except Exception as exc:  # noqa: BLE001 — a self-custody member has no key here
             log.warning("sessions: no bunker for %s: %s", name, exc)
+            status = getattr(getattr(exc, "response", None), "status_code", 0)
+            if not 400 <= status < 500:
+                # the signer is down or failing (the code is spent: the app asks for a new one)
+                raise SessionError(
+                    503, "signer", "The signer isn't answering: try again in a moment."
+                ) from exc
             raise SessionError(
                 409, "own_key", f"{name} holds their own key: sign in with your own signer."
             ) from exc

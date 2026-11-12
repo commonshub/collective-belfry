@@ -154,3 +154,16 @@ def test_the_phone_app_signs_in_without_a_browser(services, odoo, keycast, membe
     code = odoo.mailed_codes["ana@example.org"]
     r = post(client, key, "/api/session/verify", {"code": code})
     assert r.status_code == 200 and r.json()["state"] == "open", r.text
+
+
+def test_a_signer_that_does_not_answer_is_not_an_own_key(services, odoo, keycast, member, client):
+    key = PrivateKey()
+    body = {"nip05": nip05(services), "app": "sh.belfry.app://connect", "client": "belfry-ios"}
+    assert post(client, key, "/api/session", body).status_code == 200
+
+    def down(*_a, **_k):
+        raise RuntimeError("connection refused")
+
+    services.keycast.create_bunker = down
+    r = post(client, key, "/api/session/verify", {"code": odoo.mailed_codes["ana@example.org"]})
+    assert r.status_code == 503 and r.json()["error"] == "signer"
