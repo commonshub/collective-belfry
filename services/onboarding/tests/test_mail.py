@@ -73,6 +73,20 @@ def test_who_an_address_is(m):
     assert mail.resolve(m, "../x@belfry.test") is None
 
 
+def test_a_channel_answers_to_its_plain_slug(m, monkeypatch):
+    """bugs@ reaches bugs-c3e5 (Xavier, 2026-11-12); two channels answering to it: neither."""
+    chans = [("bugs-c3e5", "bugs"), ("feature-requests-d803", "feature-requests"),
+             ("Garden Talk".lower().replace(" ", "-") + "-a1b2", "Garden Talk"),
+             ("twin-1111", "twin"), ("twin-2222", "Twin")]
+    monkeypatch.setattr(mail, "_top_channels", lambda svc: chans)
+    assert mail.resolve(m, "bugs@belfry.test") == {"kind": "channel", "channel": "bugs-c3e5"}
+    assert mail.resolve(m, "Feature-Requests@belfry.test")["channel"] == "feature-requests-d803"
+    assert mail.channel_id(m, "garden-talk") == "garden-talk-a1b2"
+    assert mail.channel_id(m, "garden") == "garden"  # an exact id first
+    assert mail.channel_id(m, "twin") is None
+    assert mail.resolve(m, "ana@belfry.test")["kind"] == "member"  # a member still wins
+
+
 def test_mail_to_a_member_is_a_gift_wrapped_kind_1301(m):
     code, _ = mail.deliver(
         m, message(), "203.0.113.5", "mx.example.org", "bob@example.org", ["ana@belfry.test"]

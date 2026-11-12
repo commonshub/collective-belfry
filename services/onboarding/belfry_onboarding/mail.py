@@ -118,6 +118,60 @@ def channel_exists(svc: Services, channel: str) -> bool:
     return bool(relay.query([{"kinds": [39000], "#d": [channel], "limit": 1}], sign))
 
 
+def _top_channels(svc: Services) -> list[tuple[str, str]]:
+    """(id, name) of the relay's channels (kind 39000), cached a minute."""
+    with _lock:
+        held = _cache.get("channels:")
+    if held and time.monotonic() - held[0] < 60:
+        return held[1]
+    got = followers._relay(svc)
+    found: list[tuple[str, str]] = []
+    if got is not None:
+        relay, sign = got
+        for e in relay.query([{"kinds": [39000], "limit": 1000}], sign):
+            d = tag(e, "d")
+            if d:
+                found.append((d, tag(e, "name") or d))
+    with _lock:
+        _cache["channels:"] = (time.monotonic(), found)
+    return found
+
+
+_SUFFIX = re.compile(r"-[0-9a-z]{3,8}$")
+
+
+def _slug(name: str) -> str:
+    """The chat's slugify (core/model.ts): ASCII letters and digits, dashes between words."""
+    import unicodedata
+
+    folded = unicodedata.normalize("NFKD", (name or "").lower())
+    folded = "".join(c for c in folded if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9]+", "-", folded).strip("-")[:40]
+
+
+def channel_by_slug(svc: Services, local: str) -> str | None:
+    """The channel a plain address names (Xavier, 2026-11-12: bugs@ rather than bugs-c3e5@):
+    the one channel whose id is LOCAL plus its random suffix, or whose name slugifies to LOCAL.
+    Two channels answering to it: neither (the full id still works)."""
+    hits = {
+        cid
+        for cid, name in _top_channels(svc)
+        if _SUFFIX.sub("", cid) == local or _slug(name) == local
+    }
+    return hits.pop() if len(hits) == 1 else None
+
+
+def channel_id(svc: Services, local: str) -> str | None:
+    """The channel LOCAL@ reaches: its id itself, or its plain slug."""
+    if channel_exists(svc, local):
+        return local
+    try:
+        return channel_by_slug(svc, local)
+    except Exception as exc:  # noqa: BLE001 — the relay not answering: no slug lookup
+        log.info("mail: slug lookup for %s failed: %s", local, exc)
+        return None
+
+
 INBOX_D = "belfry:inbox"  # a group's NIP-78 setting (kind 30078): {"on": true} = shared inbox
 
 
@@ -173,8 +227,8 @@ def resolve(svc: Services, address: str) -> dict[str, Any] | None:
         pubkey = svc.keycast.pubkey_for_name(local)
         if pubkey and active_pubkey(svc, pubkey):
             found = {"kind": "member", "pubkeys": [pubkey], "name": local}
-        elif channel_exists(svc, local):
-            found = {"kind": "channel", "channel": local}
+        elif ch := channel_id(svc, local):
+            found = {"kind": "channel", "channel": ch}
     with _lock:
         _cache[local] = (time.monotonic(), found)
     return found
@@ -576,15 +630,16 @@ def outgoing(
         raise MailError(554, f"You can only send as your own address at {domain(svc)}.")
     as_channel = None
     if svc.keycast.pubkey_for_name(local) != sender or not active_pubkey(svc, sender):
-        # a shared inbox answers as the channel: its admins only
+        # a shared inbox answers as the channel (its id or its plain slug): its admins only
+        ch = channel_id(svc, local)
         if not (
-            channel_exists(svc, local)
-            and inbox_on(svc, local)
-            and sender in group_admins(svc, local)
+            ch
+            and inbox_on(svc, ch)
+            and sender in group_admins(svc, ch)
             and active_pubkey(svc, sender)
         ):
             raise MailError(554, f"{mail_from} is not yours, or your membership is not active.")
-        as_channel = local
+        as_channel = ch
     if _limited("out:" + sender, SENT_PER_HOUR, 3600):
         raise MailError(451, "Too many mails this hour; try again later.")
     raw = rumor.get("content") or ""

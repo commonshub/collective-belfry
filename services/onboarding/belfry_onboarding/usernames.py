@@ -72,7 +72,7 @@ def _free(svc: Services, name: str) -> bool:
     try:
         from . import mail
 
-        return not mail.channel_exists(svc, name)
+        return not mail.channel_id(svc, name)  # a channel's id or its plain slug (bugs@)
     except Exception as exc:  # noqa: BLE001 — the relay not answering: the signer still checks
         log.info("usernames: channels not checked for %s: %s", name, exc)
         return True
