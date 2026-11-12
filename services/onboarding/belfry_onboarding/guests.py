@@ -25,7 +25,9 @@
   the ``name`` and no ``reading`` / ``unsaved`` (the join line, at the time they joined), then
   the label ``saved``. An address that is another account's here: 409 ``taken``; for a guest who
   was only reading, that account gets the channel and the anonymous guest pass closes
-  (``"moved": true``): they sign in with the address and the channel is there.
+  (``"moved": true``): they sign in with the address and the channel is there. The answer also
+  carries ``nip05`` (that account's name@domain, for the apps' native sign-in) when it can be
+  read, and a wrong code carries ``tries_left``.
   A request with ``{"name"}`` (older clients, the phone apps) joins by name at once, as before.
 - ``admitted``: the groups key puts the guest in the channel (kind 9000, ``invited-by`` the
   inviter, the guest's ``name``); the chat shows "<name> joined as a guest, invited by <inviter>".
@@ -783,6 +785,19 @@ def _unnamed(svc: Services, pubkey: str) -> bool | None:
     return False if rows else None
 
 
+def _account_nip05(svc: Services, partner: int) -> str:
+    """name@domain of a member's account ("" when it can't be read)."""
+    from . import community, usernames
+
+    try:
+        found = community.member_token(svc, partner)
+        name = usernames.current(svc, found[1]) if found else ""
+    except Exception as exc:  # noqa: BLE001 — the answer works without it
+        log.info("guest save: no username for partner %s: %s", partner, exc)
+        return ""
+    return f"{name}@{svc.settings.nip05_domain}" if name else ""
+
+
 def _move_to_account(svc: Services, pubkey: str, other_partner: int) -> bool:
     """A guest in guest mode proved an address that is another account's here: that account gets
     the channels the anonymous guest was reading (a guest of them, or simply in for a member),
@@ -989,11 +1004,13 @@ def register_join_routes(app: FastAPI) -> None:
         if state == "name_needed":
             raise ApiError(422, "name_needed", "Tell us your name.")
         if state == "wrong_code":
-            raise ApiError(
+            exc = ApiError(
                 422,
                 "wrong_code",
                 f"That code is not right ({out.get('tries_left', 0)} tries left).",
             )
+            exc.extra["tries_left"] = int(out.get("tries_left") or 0)
+            raise exc
         if state == "expired":
             raise ApiError(410, "expired", "That code expired. Send a new one.")
         if state == "taken":
@@ -1003,14 +1020,18 @@ def register_join_routes(app: FastAPI) -> None:
                     moved = await run_in_threadpool(_move_to_account, s, pubkey, int(out["other"]))
                 except Exception:  # noqa: BLE001 — they can still sign in; the link may be spent
                     log.exception("guest save: moving the channel to the account failed")
-            return JSONResponse(
-                {
-                    "error": "taken",
-                    "message": "This address has an account here already: sign in with it.",
-                    "moved": moved,
-                },
-                status_code=409,
-            )
+            answer: dict[str, Any] = {
+                "error": "taken",
+                "message": "This address has an account here already: sign in with it.",
+                "moved": moved,
+            }
+            # the code proved the address: say which name signs in with it (the apps' native
+            # sign-in takes name@domain, not an e-mail address)
+            if out.get("other") and (
+                nip05 := await run_in_threadpool(_account_nip05, s, int(out["other"]))
+            ):
+                answer["nip05"] = nip05
+            return JSONResponse(answer, status_code=409)
         if state != "saved":
             raise ApiError(409, "not_guest", "This key holds no guest pass.")
         rows = await run_in_threadpool(

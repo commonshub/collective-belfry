@@ -289,6 +289,8 @@ def test_a_person_joins_with_a_name_and_saves_the_account_later(
             headers={**host, "Authorization": nip98(me, vurl, "POST", wrong)},
         )
         assert r.status_code == 422 or sent_code == "000000"
+        if sent_code != "000000":
+            assert r.json()["error"] == "wrong_code" and r.json()["tries_left"] >= 1
         ok = f'{{"email": "gus@example.org", "code": "{sent_code}"}}'.encode()
         time.sleep(1.1)
         r = c.post(
@@ -461,6 +463,7 @@ def test_a_reading_guest_whose_address_has_an_account_is_sent_to_sign_in(
             {"email": "admin@belfry.test", "code": _code(), "name": "Ada"},
         )
         assert r.status_code == 409 and r.json()["error"] == "taken" and r.json()["moved"] is True
+        assert r.json().get("nip05", "").endswith("@" + rsvc.settings.nip05_domain)
         kinds = [(k, t) for k, t in published[lines:]]
         assert (9000, True) in [(k, ["p", ada_pk, "member"] in t) for k, t in kinds]
         assert (9001, True) in [(k, ["p", me_pk] in t) for k, t in kinds]
