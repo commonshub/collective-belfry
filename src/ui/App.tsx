@@ -3,12 +3,14 @@ import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
-import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, pendingInvite, setPendingInvite, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
+import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
+import { closeJoin, openingNow, setOpening, useGuestMode } from '../core/guestmode'
+import { GuestJoinHost, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
-import { joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
+import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { BrandingScreen } from './Branding'
@@ -25,7 +27,7 @@ import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
 import { demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
-import { dropCode, JoinScreen, MembershipScreen, WelcomeScreen } from './Login'
+import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
@@ -57,9 +59,12 @@ export function App() {
         await wipe()
         s = undefined
       }
+      // a guest link and nobody signed in: the loading screen from here until its channel is drawn
+      if (!s && pendingInvite()) setOpening({})
       setPhase(s ? { p: 'in', s } : { p: 'out' })
     })()
   }, [])
+  useGuestMode()
 
   const enter = async (s: Session) => {
     await saveSession(s)
@@ -83,21 +88,39 @@ export function App() {
     location.reload()
   }
 
-  if (phase.p === 'loading') return null
+  // An address proven in guest mode had an account already (GuestJoin.tsx): this guest session
+  // goes, and the person signs in; the channel opens after.
+  const signInInstead = async (channel: string, moved: boolean) => {
+    const s = phase.p === 'in' ? phase.s : undefined
+    if (s?.backend === 'demo') { setGuestInfo(null); closeJoin(); await clearSession(); await wipe(); location.hash = ''; return location.reload() }
+    if (s && !moved) await endSession(s) // (moved: the belfry closed the guest account itself)
+    stop()
+    await clearSession()
+    await wipe()
+    forgetDevice()
+    setOpenAfterSignIn(channel)
+    await startSignIn()
+    await new Promise(() => { /* the page is leaving: the button stays busy */ })
+  }
+
+  // The loading screen of a guest link stays mounted from the link to the channel (the same
+  // element over whatever comes under it), so nothing blinks in between.
+  const op = openingNow()
+  const veil = op ? <OpeningScreen name={op.name} /> : null
+  if (phase.p === 'loading') return veil
   if (phase.p === 'out' && pendingInvite() && !signInFirst && !phase.error)
-    return <JoinScreen token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
-      onJoined={async (s) => { await wipe(); await enter(s) }}
-      onDemo={(name) => { setPendingInvite(''); void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`)) }} />
+    return <>{veil}<OpenInvite token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
+      onJoined={async (s) => { await wipe(); await enter(s) }} /></>
   // an event's URL opened in the chat by someone with no account: the event, RSVP or apply
   if (phase.p === 'out' && eventLinkFromUrl() && !signInFirst && !phase.error)
     return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); setSignInFirst(true) }}
       onJoined={async (s) => { await wipe(); await enter(s) }}
       onDemo={(name) => void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`))} />
   if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
-  return <Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} />
+  return <>{veil}<Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} onSignIn={signInInstead} /></>
 }
 
-function Village({ session, onSignOut }: { session: Session; onSignOut: () => void }) {
+function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut: () => void; onSignIn: (channel: string, moved: boolean) => Promise<void> }) {
   const [ready, setReady] = useState(false)
   const [error, setError] = useState('')
   const [, setTick] = useState(0)
@@ -114,16 +137,27 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoPeople, demoApply, demoGuest })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
       } catch (e) {
+        setOpening(null)
         setError(e instanceof Error ? e.message : String(e))
       }
     })()
     return () => { cancelled = true; stop() }
   }, [session.bunkerUrl, session.demoSecret])
+  // A guest link just used: the loading screen stays until the channel can be drawn in full (the
+  // relay let this key in and sent what it has, or said no), at most 10 s more.
+  useGuestMode()
+  const opening = !!openingNow()
+  useEffect(() => {
+    if (!opening || !ready) return
+    if (isLocalOnly() || status.access !== 'unknown') return setOpening(null)
+    const t = setTimeout(() => setOpening(null), 10_000)
+    return () => clearTimeout(t)
+  }, [opening, ready, status.access])
 
   const route = useRoute()
   const wide = useWide()
@@ -151,9 +185,13 @@ function Village({ session, onSignOut }: { session: Session; onSignOut: () => vo
     if (!ready) return
     const link = pendingEvent()
     if (link) { setPendingEvent(''); go('events/' + encodeURIComponent(link)) }
+    // signed in after guest mode said "you have an account": the channel they were reading
+    const ch = openAfterSignIn()
+    if (ch) { setOpenAfterSignIn(''); go('c/' + encodeURIComponent(ch)) }
   }, [ready])
   useEffect(() => { if (status.access === 'ok' && pendingApplication()) setPendingApplication(null) }, [status.access])
-  const toast = joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null
+  const toast = <>{joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null}<GuestJoinHost onSignIn={onSignIn} /></>
+  if (opening) return null // under the guest link's loading screen: nothing else is drawn
   if (error)
     return (
       <div className="screen login">
@@ -322,6 +360,23 @@ function demoGuestJoin(channel: string, name: string) {
   const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
   addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
     tags: [['h', channel], ['p', hex(32), 'member'], ['invited-by', me()], ['name', name], ['guest', '']] }])
+}
+
+/** Demo only: someone opens a guest link of CHANNEL (guest mode: a 9000 tagged `reading`, no
+ *  name) → their key; with NAME, that key then joins (a second 9000 with the name, then `saved`). */
+function demoGuestReading(channel: string, pubkey?: string, name?: string) {
+  const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const pk = pubkey ?? hex(32)
+  const now = Math.floor(Date.now() / 1000)
+  const base = { pubkey: hex(32), sig: hex(64), content: '' }
+  const members = [...(groups().find((g) => g.id === channel)?.members ?? []), ...(groups().find((g) => g.id === channel)?.reading ?? []), pk]
+  addEvents(name
+    ? [{ ...base, id: hex(32), kind: 9000, created_at: now + 1, tags: [['h', channel], ['p', pk, 'member'], ['guest', ''], ['invited-by', me()], ['name', name]] },
+       { ...base, id: hex(32), kind: 1985, created_at: now + 2, tags: [['h', channel], ['L', 'belfry/guest'], ['l', 'saved', 'belfry/guest'], ['p', pk]] }]
+    : [{ ...base, id: hex(32), kind: 9000, created_at: now - 1, tags: [['h', channel], ['p', pk, 'member'], ['guest', ''], ['invited-by', me()], ['unsaved', '1'], ['reading', '1']] },
+       // what the relay then says: its member list has their key
+       { ...base, id: hex(32), kind: 39002, created_at: now, tags: [['d', channel], ...[...new Set(members)].map((p) => ['p', p])] }])
+  return pk
 }
 
 /** Demo only: three members of CHANNEL with a profile, tags and a city (people.ts). */

@@ -4,6 +4,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
 import type { Signer } from './auth'
+import { GUEST_MODE, askToJoin, reading } from './guestmode'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
 import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
 
@@ -40,6 +41,17 @@ export function newId(bytes = 8) {
 }
 
 export async function enqueue(
+  target: Target,
+  t: { kind: number; content?: string; tags: string[][] },
+  files: File[] = []
+) {
+  // guest mode: nothing is sent before joining; the Join sheet opens instead
+  if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  return put(target, t, files)
+}
+
+/** Save and send, whoever asks (the app's own first events; everything else goes through enqueue). */
+async function put(
   target: Target,
   t: { kind: number; content?: string; tags: string[][] },
   files: File[] = []
@@ -160,6 +172,7 @@ if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown
 let demoShift = 0
 
 export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
+  if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
   const item: OutboxItem = {
     localId: 'local-' + newId(), target, kind: ev.kind, content: ev.content, tags: ev.tags, created_at: ev.created_at,
     attachments: [], status: 'queued', tries: 0, signed: ev, dm,
@@ -242,6 +255,8 @@ async function resize(file: File, max: number): Promise<Blob> {
 /** fetch() with a NIP-98 Authorization signed by the member's key (through the session). */
 export async function signedFetch(url: string, method = 'GET', body?: unknown): Promise<Response> {
   if (!signer) throw new Error('Not signed in.')
+  // guest mode: only joining itself (and ending the session, using a link) is asked of the belfry
+  if (method !== 'GET' && reading() && !/\/(guest\/save(\/verify)?|me\/sessions\/revoke|channel-invites\/[^/]+\/join)$/.test(url)) { askToJoin(); throw new Error(GUEST_MODE) }
   const text = body === undefined ? '' : JSON.stringify(body)
   const tags = [['u', url], ['method', method]]
   if (text) tags.push(['payload', bytesToHex(sha256(new TextEncoder().encode(text)))])
@@ -512,8 +527,8 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
   watchNetwork()
   if (localOnly) {
     if (!latestCreatedAt((e) => e.kind === 39000)) {
-      await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
-      await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
+      await put('groups', { kind: 9007, tags: [['h', 'general']] })
+      await put('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
     }
   } else {
     void connect('groups')
@@ -526,7 +541,7 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
 // may create a group; its creator administers it). Once per page load, after the relay's EOSE.
 let firstChannelTried = false
 async function firstChannel() {
-  if (firstChannelTried || latestCreatedAt((e) => e.kind === 39000)) return
+  if (firstChannelTried || reading() || latestCreatedAt((e) => e.kind === 39000)) return
   firstChannelTried = true
   await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
   await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })

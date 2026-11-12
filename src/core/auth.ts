@@ -17,6 +17,7 @@ export interface Session {
   refreshToken?: string
   clientSecret: string // hex: this device's key for the bunker, kept and reused
   demoSecret?: string // hex: the user's key in demo mode (never leaves the device)
+  pubkey?: string // hex: whose key the bunker signs for, when the belfry said so (a guest link)
   email?: string
   membership: Membership
 }
@@ -97,12 +98,14 @@ export async function finishSignIn(): Promise<Session | null> {
 // The link is chat.<domain>/join/<token> (the proxy turns it into #/join/<token>). The browser
 // that will hold the session is the one that asks: one signed request (NIP-98), no code.
 //   signed in        → signed with the account: it gets the channel (joinWithAccount, sync.ts)
-//   not signed in    → this device makes its session key, signs with it and sends a name; the
-//                      belfry makes the account and answers with its session (joinAsNew)
+//   not signed in    → this device makes its session key and signs with it, no name: the belfry
+//                      makes a nameless guest and answers with its session (joinAsNew). They
+//                      read the channel in guest mode (guestmode.ts) until they join with a name
+//                      and an e-mail (guestjoin.ts)
 const GUEST_KEY = 'belfry-guest'
 const INVITE_KEY = 'belfry-invite'
 const JOIN_KEY = 'belfry-join-key'
-export interface GuestInfo { channel: string; saved: boolean }
+export interface GuestInfo { channel: string; saved: boolean; /** guest mode: only opened a link so far, no name: reads, sends nothing */ reading?: boolean }
 export interface InviteInfo { community: string; channel: string; channel_name: string; about: string; inviter: string; state: string; days: number }
 
 /** The invite waiting to be used (kept while someone signs in first). */
@@ -132,10 +135,19 @@ export const INVITE_CLOSED: Record<string, string> = {
   revoked: 'This invite was withdrawn. Ask for a new one.',
 }
 
-/** A new guest: this device's new session key signs the request; the answer is the session. */
-export async function joinAsNew(token: string, name: string): Promise<Session> {
-  // one key per invite on this device, kept until the join succeeds: a second tap, a retry or a
-  // reload signs with the same key, and the belfry answers with the same account (never a second)
+/** What the join request can say (fixed messages by code; nothing from the address bar). */
+const JOIN_SAID: Record<string, string> = {
+  closed: 'This invite can’t be used any more. Ask for a new one.',
+  for_agent: 'This link is for an AI agent, not a person.',
+  unsupported: 'This belfry does not take guests.',
+  name_needed: 'This belfry is being updated. Try again in a few minutes.',
+}
+
+/** A new guest: this device's new session key signs the request (no name: guest mode); the
+ *  answer is the session and the guest's public key. */
+export async function joinAsNew(token: string, retried = false): Promise<Session> {
+  // one key per invite on this device, kept until the join succeeds: a retry or a reload signs
+  // with the same key, and the belfry answers with the same account (never a second)
   let sk: Uint8Array | undefined
   try { const kept = JSON.parse(localStorage.getItem(JOIN_KEY) ?? 'null'); if (kept?.token === token && /^[0-9a-f]{64}$/.test(kept.sk)) sk = hexToBytes(kept.sk) } catch { /* none */ }
   if (!sk) {
@@ -143,25 +155,37 @@ export async function joinAsNew(token: string, name: string): Promise<Session> {
     try { localStorage.setItem(JOIN_KEY, JSON.stringify({ token, sk: bytesToHex(sk) })) } catch { /* private mode */ }
   }
   const url = `${BELFRY.api}/channel-invites/${token}/join`
-  const text = JSON.stringify({ name })
+  const text = '{}'
   const auth = finalizeEvent({
     kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000),
     tags: [['u', url], ['method', 'POST'], ['payload', bytesToHex(sha256(new TextEncoder().encode(text)))]],
   }, sk)
-  const res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
-  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; channel?: string; message?: string; email_needed?: boolean }
-  // this device's key is another account's in the signer: a fresh key next time
-  if (res.status === 409) try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
-  if (!res.ok || !body.bunker_url) throw new Error(body.message || 'Joining did not work just now. Try again.')
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
+  } catch { throw new Error('No connection to the belfry. Try again.') }
+  const body = (await res.json().catch(() => ({}))) as { bunker_url?: string; pubkey?: string; channel?: string; error?: string; email_needed?: boolean; reading?: boolean }
+  if (res.status === 409 && body.error === 'session_taken') {
+    // this device's key is another account's in the signer: once more with a fresh key
+    try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
+    if (!retried) return joinAsNew(token, true)
+  }
+  if (!res.ok || !body.bunker_url) throw new Error(JOIN_SAID[body.error ?? ''] ?? 'Joining did not work just now. Try again.')
   try { localStorage.removeItem(JOIN_KEY) } catch { /* private mode */ }
   setPendingInvite('')
-  setGuestInfo({ channel: body.channel ?? 'general', saved: false })
-  // a co-host link (an event's): a host needs a proven e-mail; after saving it, the link again
+  setGuestInfo({ channel: body.channel ?? 'general', saved: false, reading: body.reading !== false })
+  // a co-host link (an event's): a host needs a proven e-mail; after joining with it, the link again
   setCoHostToken(body.email_needed ? token : '')
   if (body.channel) history.replaceState(null, '', `${location.pathname}${location.search}#/c/${encodeURIComponent(body.channel)}`)
+  // the belfry said whose key the session signs for: the app opens without asking the signer first
   await kvDel('pubkey')
-  return { backend: 'belfry', bunkerUrl: body.bunker_url, clientSecret: bytesToHex(sk), membership: { status: 'unknown' } }
+  return { backend: 'belfry', bunkerUrl: body.bunker_url, clientSecret: bytesToHex(sk), membership: { status: 'unknown' }, ...(body.pubkey && /^[0-9a-f]{64}$/.test(body.pubkey) ? { pubkey: body.pubkey } : {}) }
 }
+
+/** Where to land after signing in (an address that had an account already: guestjoin.ts). */
+const OPEN_KEY = 'belfry-open-channel'
+export const openAfterSignIn = (): string => { try { return localStorage.getItem(OPEN_KEY) ?? '' } catch { return '' } }
+export const setOpenAfterSignIn = (channel: string) => { try { if (channel) localStorage.setItem(OPEN_KEY, channel); else localStorage.removeItem(OPEN_KEY) } catch { /* private mode */ } }
 
 const COHOST_KEY = 'belfry-cohost-invite'
 /** A co-host link used before saving an e-mail: used again once the e-mail is saved. */
@@ -292,6 +316,7 @@ export async function makeSigner(s: Session): Promise<Signer> {
   }
   // The pubkey is cached so the app opens offline; the bunker is reached only to sign.
   let pubkey = await kvGet<string>('pubkey')
+  if (!pubkey && s.pubkey) { pubkey = s.pubkey; await kvSet('pubkey', pubkey) }
   if (!pubkey) {
     pubkey = await call(() => bunker.getPublicKey())
     await kvSet('pubkey', pubkey)

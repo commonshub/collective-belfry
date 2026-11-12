@@ -4,6 +4,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
 import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
 import { enqueue, me, newId } from './sync'
+import { reading } from './guestmode'
 
 // Every user action is one or more nostr events queued in the outbox.
 
@@ -312,6 +313,7 @@ export const endDropLink = (groupId: string, ev: { id: string; pubkey: string },
 /** I opened this channel: tell it, at most every 6 hours (one replaceable event per channel). */
 const seenSent = new Map<string, number>()
 export function markSeen(groupId: string) {
+  if (reading()) return // guest mode: reading leaves no trace
   const now = Date.now() / 1000
   const last = Math.max(mySeen(groupId), seenSent.get(groupId) ?? 0)
   if (now - last < 6 * 3600) return

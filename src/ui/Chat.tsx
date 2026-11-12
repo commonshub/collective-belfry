@@ -28,7 +28,9 @@ import { AtIcon, MicIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, He
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
-import { coHostToken, guestInfo, setCoHostToken, setGuestInfo } from '../core/auth'
+import { coHostToken, guestInfo } from '../core/auth'
+import { askToJoin, reading, useGuestMode } from '../core/guestmode'
+import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
@@ -313,6 +315,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newTodo, setNewTodo] = useState(false)
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   useVersion()
+  // guest mode: reading only; the composer's place says so, with Join (GuestJoin.tsx)
+  useGuestMode()
+  const guestReading = reading()
+  if (guestReading) readOnly = true
   const g = group(id)
   const admin = canAdmin(g)
   const list = messages(id).filter((m) => !topic || (topic === ANNOUNCE ? isAnnouncement(m, g) : m.topics.includes(topic)))
@@ -387,7 +393,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         <div className="messages">
           {list.length === 0 && (topic
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
-            : <div className="empty-start">
+            : guestReading ? <div className="empty">No messages here yet.</div> : <div className="empty-start">
                 <b>{g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : id} is new</b>
                 <p>No messages yet. Bring the people who belong here, then say hi.</p>
                 <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
@@ -407,13 +413,13 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             return <Fragment key={key}>
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
-                reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
+                reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
                 thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
             </Fragment>
           })}
         </div>
       </div>
-      <SaveAccountBar />
+      {guestReading ? <GuestBar groupId={id} /> : <SaveAccountBar />}
       {!readOnly && only && (
         <div className="only-bar">
           <span className="hint">{only === 'proposal'
@@ -481,16 +487,17 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
       {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
+          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
           {flow.map((x) => x.m
             ? <Row key={x.m.ev.id} m={x.m} prev={replies[x.i! - 1]} head={x.i === 0} name={nameOf(x.m)} groupId={groupId}
-              reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { setPicking(!!emoji); setActing(x.m!) }} announce={false} />
+              reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.m!) }} announce={false} />
             : <TodoStepLine key={x.g!.t.id + x.g!.at + x.g!.what.join()} g={x.g!} />)}
         </div>
       </div>
-      {root && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {root && reading() && <GuestBar groupId={groupId} />}
+      {root && !reading() && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -942,8 +949,8 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
     <div className="inline-thread" role="region" aria-label="Thread">
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
       {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
-      <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
-        onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />
+      {!reading() && <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
+        onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>
         <button className="link thread-hide thread-open" onClick={onOpen}>Open thread<ChevronRightIcon /></button>
@@ -1036,54 +1043,26 @@ async function makeWebsite(m: Message) {
   }
 }
 
-/** A guest who joined with a name only, once they did something (a message, a reply, a
- *  reaction): a slim line above the composer to save the account with an e-mail and its code. */
+/** A guest who joined with a name only (an event's guest, an older link), once they did
+ *  something (a message, a reply, a reaction): a slim line above the composer to save the account.
+ *  Save opens the same sheet as joining from guest mode: the e-mail, then the code sent to it. */
 function SaveAccountBar() {
   useVersion()
-  const [g, setG] = useState(guestInfo())
-  const [step, setStep] = useState<'line' | 'email' | 'code' | 'done'>('line')
-  const [email, setEmail] = useState('')
-  const [code, setCode] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
+  useGuestMode()
+  const g = guestInfo()
+  const [open, setOpen] = useState(false)
+  const [savedAs, setSavedAs] = useState('')
   const [hidden, setHidden] = useState(() => { try { return sessionStorage.getItem('belfry-save-hidden') === '1' } catch { return false } })
   const acted = all(me()).some((e) => e.pubkey === me() && (e.kind === 9 || e.kind === 1111 || e.kind === 7)) || outboxItems().some((o) => [9, 1111, 7].includes(o.kind))
   const cohost = coHostToken()
-  if (!g || (g.saved && step !== 'done') || (!acted && !cohost) || (hidden && !cohost)) return null
-  const post = async (path: string, body: unknown) => {
-    setBusy(true); setError('')
-    try {
-      const r = await signedFetch(`${BELFRY.api}${path}`, 'POST', body)
-      const d = await r.json().catch(() => ({}))
-      if (!r.ok) throw new Error(d.message || 'That did not work. Try again.')
-      return true
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); return false } finally { setBusy(false) }
-  }
-  if (step === 'done') return <div className="save-bar done" role="status">Saved. Sign in with {email} on any device.<button className="link" onClick={() => setG(null)}>OK</button></div>
+  if (savedAs) return <div className="save-bar done" role="status">Saved. Sign in with {savedAs} on any device.<button className="link" onClick={() => setSavedAs('')}>OK</button></div>
+  if (!g || g.saved || g.reading || (!acted && !cohost) || (hidden && !cohost)) return null
   return (
     <div className="save-bar" role="region" aria-label="Save your account">
-      {step === 'line' && <>
-        <span>{cohost ? 'You were invited as a co-host: save your account with your e-mail to become one.' : 'Save your account: add your e-mail to come back from any device.'}</span>
-        <button className="btn small" onClick={() => setStep('email')}>Save</button>
-        <button className="link close" aria-label="Not now" onClick={() => { setHidden(true); try { sessionStorage.setItem('belfry-save-hidden', '1') } catch { /* private mode */ } }}>✕</button>
-      </>}
-      {step === 'email' && <Form onSubmit={async (e) => { e.preventDefault(); if (await post('/guest/save', { email: email.trim() })) setStep('code') }}>
-        <input className="input" type="email" inputMode="email" autoComplete="email" autoFocus placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button className="btn small" disabled={busy || !email.includes('@')}>{busy ? '…' : 'Send code'}</button>
-      </Form>}
-      {step === 'code' && <Form onSubmit={async (e) => {
-        e.preventDefault()
-        if (await post('/guest/save/verify', { email: email.trim(), code: code.trim() })) {
-          setGuestInfo({ ...g, saved: true })
-          // the co-host link waiting for this: now it makes them a host
-          if (cohost) { try { await joinWithAccount(cohost); setCoHostToken('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }
-          setStep('done')
-        }
-      }}>
-        <input className="input" inputMode="numeric" autoComplete="one-time-code" autoFocus placeholder="6-digit code" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} />
-        <button className="btn small" disabled={busy || code.length !== 6}>{busy ? '…' : 'Confirm'}</button>
-      </Form>}
-      {error && <div className="error">{error}</div>}
+      <span>{cohost ? 'You were invited as a co-host: save your account with your e-mail to become one.' : 'Save your account: add your e-mail to come back from any device.'}</span>
+      <button className="btn small" onClick={() => setOpen(true)}>Save</button>
+      <button className="link close" aria-label="Not now" onClick={() => { setHidden(true); try { sessionStorage.setItem('belfry-save-hidden', '1') } catch { /* private mode */ } }}>✕</button>
+      {open && <JoinSheet saveOnly onClose={() => setOpen(false)} onSaved={setSavedAs} />}
     </div>
   )
 }

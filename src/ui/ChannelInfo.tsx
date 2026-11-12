@@ -237,6 +237,8 @@ export function Members({ groupId }: { groupId: string }) {
   const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   const vocab = [...new Set([...labels.values()].flat())].sort()
   const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
+  // guest mode: people who opened an invite link and have not joined are a number, not members
+  const readingN = g ? [...g.reading].filter((p) => p !== me()).length : 0
   // guests (people or agents) and who brought them in: whose agent it is
   const invited = new Map(guestJoins(groupId).filter((j) => !j.member).map((j) => [j.pubkey, j]))
   const ex = extras()
@@ -280,6 +282,7 @@ export function Members({ groupId }: { groupId: string }) {
           </div>
         </div>
       ))}
+      {readingN > 0 && <p className="hint pad-x guests-reading">{readingN === 1 ? '1 guest is reading' : `${readingN} guests are reading`}: they opened an invite link and have not joined yet.</p>}
       {editing && <LabelEditor groupId={groupId} pubkey={editing} current={labels.get(editing) ?? []} vocab={vocab} onClose={() => setEditing(null)} />}
     </div>
   )

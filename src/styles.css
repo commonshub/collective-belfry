@@ -1057,3 +1057,32 @@ audio.audio { width: 100%; max-width: 420px; display: block; margin-top: 6px; }
 .log-more { padding: 0 16px 12px 50px; font-size: 14px; }
 .log-more p { margin: 0 0 8px; overflow-wrap: anywhere; }
 .raw-event { font-size: 12px; line-height: 1.4; background: var(--surface-2); padding: 10px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; }
+
+/* ---- guest mode (GuestJoin.tsx) ---- */
+/* one loading screen from an invite link to its channel: over everything, opaque */
+.opening { position: fixed; inset: 0; z-index: 200; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; background: var(--bg); padding: 24px; }
+.opening p { margin: 0; min-height: 1.5em; color: var(--muted); font-size: 16px; text-align: center; }
+.opening p b { color: var(--text); font-weight: 600; }
+/* where the composer would be */
+.guest-bar { display: flex; align-items: center; gap: 12px; padding: 10px 12px calc(10px + var(--bottom)); border-top: 1px solid var(--line); background: var(--surface); font-size: 14px; }
+.guest-bar > span { flex: 1; min-width: 0; color: var(--muted); }
+.guest-bar > span b { color: var(--text); }
+.guest-bar .btn.small { flex: none; padding: 9px 20px; }
+/* the Join sheet */
+.join-sheet { display: flex; flex-direction: column; }
+.join-sheet p { margin: 0 0 16px; }
+.join-sheet .hint.small { font-size: 13px; margin: 12px 0 0; }
+.join-sheet .addr { overflow-wrap: anywhere; }
+.join-sheet .input { font-size: 16px; }
+.code-boxes { position: relative; display: block; margin: 4px 0 10px; }
+.code-boxes input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; font-size: 16px; border: 0; padding: 0; margin: 0; }
+.code-boxes .cells { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; max-width: 336px; margin: 0 auto; }
+.code-boxes .cells i { display: grid; place-items: center; height: 54px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); font: 600 24px/1 ui-monospace, 'JetBrains Mono', monospace; font-style: normal; color: var(--text); }
+.code-boxes input:focus + .cells i.on, .code-boxes input:focus-visible + .cells i.on { border-color: var(--text); box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 12%, transparent); }
+.code-boxes.bad .cells i { border-color: var(--danger); }
+.code-boxes input:disabled + .cells { opacity: .55; }
+.join-state { min-height: 22px; text-align: center; font-size: 14px; }
+.join-state .error { margin: 0; }
+.join-links { display: flex; justify-content: center; gap: 22px; margin-top: 14px; }
+.join-links .link { background: none; border: 0; padding: 8px 2px; font-size: 14px; text-decoration: underline; cursor: pointer; }
+.join-links .link:disabled { opacity: .5; }

@@ -83,6 +83,8 @@ export interface Group {
   createdAt: number
   lastActivity: number
   members: Set<string>
+  /** guests who only opened a link so far (guest mode, guests.py): reading, not counted as members */
+  reading: Set<string>
   isEvent: boolean
   /** A working group: a channel with a parent (where it was posted), members, events, sub-pods. */
   isPod: boolean
@@ -157,7 +159,7 @@ export const groups: () => Group[] = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -191,8 +193,17 @@ export const groups: () => Group[] = perLog((list) => {
     if (e.kind === 9000 || e.kind === 9001) {
       const p = tag(e, 'p')
       if (p) { if (e.kind === 9000) g.members.add(p); else g.members.delete(p); decided.set(id + p, e.created_at) }
+      // guest mode (guests.py): a 9000 tagged `reading` is someone who opened a guest link and
+      // has not joined; a later 9000 without it (they joined), a `saved` / `member` label or a
+      // 9001 ends that
+      if (p && e.kind === 9000 && tag(e, 'reading') === '1') g.reading.add(p)
+      else if (p) g.reading.delete(p)
       // a co-host (events): put in with the admin role; the relay's 39001 says the same
       if (p && e.kind === 9000 && e.tags.some((t) => t[0] === 'p' && t[1] === p && t[2] === 'admin')) g.admins.add(p)
+    }
+    if (e.kind === 1985 && tag(e, 'L') === 'belfry/guest' && e.tags.some((t) => t[0] === 'l' && (t[1] === 'saved' || t[1] === 'member'))) {
+      const p = tag(e, 'p')
+      if (p) g.reading.delete(p)
     }
     if (e.kind === 9) {
       g.lastActivity = Math.max(g.lastActivity, e.created_at)
@@ -219,6 +230,9 @@ export const groups: () => Group[] = perLog((list) => {
     if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue
     g.applications.push({ pubkey: e.pubkey, answer: e.content, at: e.created_at, ev: e })
   }
+  // … and until then they are in no member list or count (the relay's 39002 has their key)
+  const self = me()
+  for (const g of map.values()) for (const p of g.reading) if (p !== self) g.members.delete(p)
   const gone = new Set([...map.values()].filter((g) => list.some((e) => e.kind === 9008 && tag(e, 'h') === g.id)).map((g) => g.id))
   return [...map.values()]
     .filter((g) => !gone.has(g.id))
@@ -845,7 +859,7 @@ export function recentlyActive(groupId: string): { pubkey: string; at: number }[
   }
   // a channel with a member list: only its members (not the keys that post e-mail or drop-box cards)
   const known = g && g.members.size ? new Set([...g.members, ...g.admins]) : undefined
-  return [...last].filter(([pk]) => !known || known.has(pk)).map(([pubkey, at]) => ({ pubkey, at })).sort((a, b) => b.at - a.at)
+  return [...last].filter(([pk]) => (!known || known.has(pk)) && !g?.reading.has(pk)).map(([pubkey, at]) => ({ pubkey, at })).sort((a, b) => b.at - a.at)
 }
 
 /** When I last told this channel I opened it (0: never, or more than 30 days ago). */
@@ -868,6 +882,7 @@ export function guestJoins(groupId: string): GuestJoin[] {
     && e.tags.some((t) => t[0] === 'l' && t[1] === 'member')).map((e) => tag(e, 'p')))
   for (const e of list) {
     if (e.kind !== 9000 || tag(e, 'h') !== groupId || !tag(e, 'invited-by')) continue
+    if (tag(e, 'reading') === '1') continue // guest mode: opened the link, not joined: no line, no guest chip
     const p = tag(e, 'p')
     if (p) out.push({ id: e.id, pubkey: p, by: tag(e, 'invited-by'), at: e.created_at, agent: tag(e, 'agent') === '1', unsaved: tag(e, 'unsaved') === '1' && !saved.has(p) && !member.has(p), member: member.has(p) })
   }

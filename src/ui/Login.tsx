@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
-import { Form } from './common'
-import { INVITE_CLOSED, inviteInfo, joinAsNew, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
+import { useEffect, useRef, useState } from 'react'
+import { Btn, Form } from './common'
+import { INVITE_CLOSED, demoSession, inviteInfo, joinAsNew, setGuestInfo, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
+import { openingNow, setOpening } from '../core/guestmode'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
 import { BELFRY, NAME, PLACE, THEME, type Backend } from '../config'
@@ -37,55 +38,53 @@ export function savedCode() {
 const saveCode = (code: string) => { try { localStorage.setItem(CODE_KEY, normalizeCode(code)) } catch { /* private mode */ } }
 export const dropCode = () => { try { localStorage.removeItem(CODE_KEY) } catch { /* private mode */ } }
 
-/** Opened from a guest link, not signed in: who invites to what, a name, and you're in. */
-export function JoinScreen({ token, backend, onJoined, onSignIn, onDemo }: { token: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void; onDemo: (name: string) => void }) {
-  const [info, setInfo] = useState<InviteInfo | null>(null)
+/** Opened from a guest link, not signed in: straight to the channel, in guest mode. This device
+ *  makes its key and uses the link (no name asked); App shows one loading screen until the channel
+ *  is there. Only a link that can't be used gets a screen of its own. */
+export function OpenInvite({ token, backend, onJoined, onSignIn }: { token: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void }) {
   const [error, setError] = useState('')
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [closed, setClosed] = useState(false)
+  const started = useRef('')
   useEffect(() => {
-    if (backend === 'demo') return setInfo({ community: NAME, channel: 'general', channel_name: 'general', about: 'Where everyone talks.', inviter: 'Ana', state: 'open', days: 30 })
-    inviteInfo(token).then(setInfo, (e) => setError(e instanceof Error ? e.message : String(e)))
+    if (started.current === token) return
+    started.current = token
+    setOpening(openingNow() ?? {})
+    void (async () => {
+      if (backend === 'demo') { // tests: what the belfry would answer, after a moment
+        await new Promise((r) => setTimeout(r, 300))
+        setOpening({ channel: 'general', name: 'general' })
+        await new Promise((r) => setTimeout(r, 300))
+        setPendingInvite('')
+        setGuestInfo({ channel: 'general', saved: false, reading: true })
+        history.replaceState(null, '', `${location.pathname}${location.search}#/c/general`)
+        return onJoined(demoSession('guest@example.org'))
+      }
+      // what the link is (for the loading line, and to say why when it can't be used) …
+      const info = inviteInfo(token).then((i) => ({ i, e: '' }), (e) => ({ i: null as InviteInfo | null, e: e instanceof Error ? e.message : '' }))
+      void info.then(({ i }) => { if (i?.state === 'open' && openingNow()) setOpening({ channel: i.channel, name: i.channel_name }) })
+      // … while this device uses it
+      try {
+        onJoined(await joinAsNew(token))
+      } catch (x) {
+        const { i, e } = await info
+        const shut = i && i.state !== 'open' ? INVITE_CLOSED[i.state] ?? INVITE_CLOSED.used : ''
+        setClosed(!!shut)
+        setError(shut || e || (x instanceof Error ? x.message : 'Joining did not work just now. Try again.'))
+        setOpening(null)
+      }
+    })()
   }, [token])
-  const forget = () => { setPendingInvite(''); location.reload() }
-  const closed = info && info.state !== 'open' ? INVITE_CLOSED[info.state] ?? INVITE_CLOSED.used : ''
-  const join = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const n = name.trim().replace(/\s+/g, ' ')
-    if (!n || busy) return
-    if (backend === 'demo') return onDemo(n)
-    setBusy(true); setError('')
-    try { onJoined(await joinAsNew(token, n)) } catch (x) {
-      const m = x instanceof Error ? x.message : String(x)
-      setError(/fetch|network|load/i.test(m) ? 'No connection to the belfry. Try again.' : m)
-      setBusy(false)
-    }
-  }
-  if (!info || closed)
-    return (
-      <div className="screen login">
-        <Logo />
-        {closed || error ? <><h2>This invite can’t be used</h2><p role="alert">{closed || error}</p></> : <p role="status">Opening the invite…</p>}
-        {(closed || error) && <>
-          <button className="btn" onClick={() => { if (closed) setPendingInvite(''); onSignIn() }}>I have an account: sign in</button>
-          <div style={{ height: 12 }} />
-          <button className="link" style={{ alignSelf: 'center' }} onClick={forget}>Close</button>
-        </>}
-      </div>
-    )
+  if (!error) return null
   return (
-    <Form className="screen login" onSubmit={join}>
+    <div className="screen login">
       <Logo />
-      <h2>{info.inviter || 'A member'} invited you to # {info.channel_name}</h2>
-      {info.about && <p style={{ marginBottom: 12 }}>{info.about}</p>}
-      {error && <div className="error" role="alert">{error}</div>}
-      <label className="field"><span>Your name</span>
-        <input className="input" value={name} maxLength={100} autoComplete="name" autoFocus onChange={(e) => setName(e.target.value)} /></label>
-      <button className="btn" disabled={busy || !name.trim()}>{busy ? 'Joining…' : `Join # ${info.channel_name}`}</button>
-      <p className="hint" style={{ fontSize: 13, margin: '12px 0 0' }}>You’ll be a guest of {info.community} for {info.days} days: you see and post in this channel only. No e-mail needed now.</p>
-      <div style={{ height: 28 }} />
-      <button type="button" className="link" style={{ alignSelf: 'center' }} onClick={onSignIn}>Already have an account? Sign in</button>
-    </Form>
+      <h2>This invite can’t be used</h2>
+      <p role="alert">{error}</p>
+      {!closed && <><Btn className="btn" onClick={() => location.reload()}>Try again</Btn><div style={{ height: 12 }} /></>}
+      <button className={closed ? 'btn' : 'btn ghost'} onClick={() => { if (closed) setPendingInvite(''); onSignIn() }}>I have an account: sign in</button>
+      <div style={{ height: 12 }} />
+      <button className="link" style={{ alignSelf: 'center' }} onClick={() => { setPendingInvite(''); location.reload() }}>Close</button>
+    </div>
   )
 }
 
