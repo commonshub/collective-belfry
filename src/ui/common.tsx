@@ -125,6 +125,7 @@ export function MediaItem({ m, onOpen }: { m: Media; /** images: open them in th
       </a>
     )
   if (m.mime.startsWith('video/')) return <video src={src} controls playsInline preload="metadata" />
+  if (m.mime.startsWith('audio/')) return <audio className="audio" src={src} controls preload="metadata" />
   return (
     <a className="file" href={src} target="_blank" rel="noreferrer" download={m.name}>
       📎 <span>{m.name || m.url.split('/').pop()}</span>

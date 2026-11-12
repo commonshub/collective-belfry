@@ -11,6 +11,8 @@ import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { MeetingSheet } from './Meeting'
+import { RecorderSheet, RecordingBar } from './Recorder'
+import { canRecord } from '../core/recorder'
 import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
@@ -22,7 +24,7 @@ import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
 const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
-import { AtIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, MicIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -299,6 +301,7 @@ export function MenuButton() {
 export function Conversation({ id, events = false, readOnly = false, topic, onTopic, focus, activeThread }: { id: string; events?: boolean; readOnly?: boolean; topic?: string; onTopic?: (t?: string) => void; focus?: string; activeThread?: string }) {
   const [newEvent, setNewEvent] = useState(false)
   const [newMeeting, setNewMeeting] = useState(false)
+  const [recording, setRecording] = useState(false)
   const [newPod, setNewPod] = useState(false)
   const [newProp, setNewProp] = useState(false)
   // #proposals, #events: one type of post only (their page's "posts"), no free text at the top level
@@ -420,9 +423,11 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         </div>
       )}
       {!readOnly && !only && isPublic && <div className="purpose-line">🌐 Public: anyone on the web sees this channel{page?.posts === 'request' ? '. Members can turn a request into a proposal.' : '.'}</div>}
-      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
+      {!readOnly && <RecordingBar groupId={id} />}
+      {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}
         onEvent={events ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
+      {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
       {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => setPrefill(`https://${BELFRY.domain}/events/${d} `)} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
@@ -689,7 +694,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onMeeting, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft }: { /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft }: { /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -845,7 +850,7 @@ export function Composer({ onSend, onEvent, onMeeting, onPod, onProposal, onTodo
       ))}
       <div className="bar">
         <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a pod' : 'Add photos or files'}
-          onClick={() => (onEvent || canAnnounce ? setMenu(true) : picker.current?.click())}>＋</button>
+          onClick={() => (onEvent || canAnnounce || onRecord ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
         {people.length > 0 && (
@@ -878,10 +883,11 @@ export function Composer({ onSend, onEvent, onMeeting, onPod, onProposal, onTodo
           }} />
         <button className="send" aria-label="Send" disabled={!text.trim() && !files.length} onClick={() => void send()}>↑</button>
       </div>
-      {menu && (onEvent || canAnnounce) && (
+      {menu && (onEvent || canAnnounce || onRecord) && (
         <Sheet title="Add to the conversation" hideTitle onClose={() => setMenu(false)}>
           <div className="act-group">
             <button className="act" onClick={() => { setMenu(false); picker.current?.click() }}><ImageIcon /><span>Photos or files</span></button>
+            {onRecord && <button className="act" onClick={() => { setMenu(false); onRecord() }}><MicIcon /><span>Audio recording<small>Kept on this device until it is sent</small></span></button>}
           </div>
           <div className="act-group">
             {canAnnounce && <button className="act" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}><MegaphoneIcon /><span>Announcement<small>Stands out; followers get it by e-mail</small></span></button>}

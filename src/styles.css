@@ -999,3 +999,24 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .meet-named-row, .meet-add, .meet-give { width: 100%; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .meet-named-row .input, .meet-add .input, .meet-give .input { flex: 1 1 140px; min-width: 0; }
 .meet-initial { width: 24px; height: 24px; border-radius: 99px; background: var(--surface); display: grid; place-items: center; font-size: 12px; font-weight: 650; }
+/* audio recordings (Recorder.tsx) */
+.rec { display: flex; flex-direction: column; align-items: stretch; gap: 10px; }
+.rec-clock { font-size: 56px; font-weight: 300; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: 1px; margin-top: 4px; }
+.rec-clock.on::before { content: ''; display: inline-block; width: 14px; height: 14px; border-radius: 99px; background: #e5484d; margin-right: 12px; vertical-align: middle; animation: rec-blink 1.2s infinite; }
+@keyframes rec-blink { 50% { opacity: 0.25; } }
+.rec-meter { display: flex; gap: 3px; justify-content: center; height: 28px; align-items: flex-end; }
+.rec-meter span { width: 6px; height: 100%; border-radius: 3px; background: var(--surface-2); }
+.rec-meter span.lit { background: var(--accent); }
+.rec-state { text-align: center; margin: 0; }
+.rec-buttons { display: flex; gap: 10px; }
+.rec-buttons .btn { flex: 1; }
+.rec-start { background: #e5484d; color: #fff; }
+.rec-done { margin: 0; }
+.rec-q { margin: 6px 0 0; font-size: 15px; }
+.rec-discard { align-self: center; margin-top: 6px; color: var(--muted); }
+.rec-pill { position: sticky; bottom: 0; align-self: center; margin: 6px auto; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--text); font-size: 14px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.rec-pill .dot { width: 10px; height: 10px; border-radius: 99px; background: var(--muted); }
+.rec-pill .dot.on { background: #e5484d; animation: rec-blink 1.2s infinite; }
+.rec-unsent { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--line); font-size: 14px; }
+.rec-unsent span { flex: 1; min-width: 0; }
+audio.audio { width: 100%; max-width: 420px; display: block; margin-top: 6px; }
