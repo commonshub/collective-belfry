@@ -8,6 +8,7 @@ import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editM
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
+import { isBelfryAdmin } from '../core/people'
 import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { MeetingSheet } from './Meeting'
@@ -24,7 +25,7 @@ import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
 const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
-import { AtIcon, MicIcon, CalendarIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -45,19 +46,8 @@ function eventTags(text: string): string[][] {
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
 
 /** The community's name from the belfry (/.well-known/belfry.json), else the domain. */
-let communityName = ''
-let asked = false
-export function useCommunityName(fallback: string) {
-  const [, bump] = useState(0)
-  useEffect(() => {
-    if (asked || THEME !== 'belfry') return
-    asked = true
-    fetch(`https://${BELFRY.domain}/.well-known/belfry.json`).then((r) => r.json()).then((j) => {
-      if (typeof j?.name === 'string' && j.name.trim()) { communityName = j.name.trim().slice(0, 60); bump((n) => n + 1) }
-    }).catch(() => {})
-  }, [])
-  return communityName || fallback
-}
+import { useCommunityName } from './community'
+export { useCommunityName }
 
 /** On a laptop: who is signed in, bottom left (opens Me). */
 function SideUser() {
@@ -75,6 +65,9 @@ function SideUser() {
 export function ChannelList({ current, side = false, section, drawer = false }: { current?: string; side?: boolean; section?: string; drawer?: boolean }) {
   useVersion()
   const title = useCommunityName(side ? NAME : 'Channels')
+  const community = useCommunityName(NAME)
+  // the belfry's admins: its name at the top opens the settings (Settings.tsx), as in Discord
+  const settings = THEME === 'belfry' && isBelfryAdmin(me())
   const brand = useBranding()
   const [creating, setCreating] = useState(false)
   const all = groups()
@@ -111,7 +104,9 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
     <div className="screen">
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the channels" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
-        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side && brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{side ? title : 'Channels'}</h1>
+        {settings
+          ? <h1 style={{ paddingLeft: drawer ? 0 : 8 }}><button type="button" className="belfry-name" aria-label={`${community} settings`} onClick={() => closeDrawer('settings')}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span>{community}</span><ChevronDownIcon /></button></h1>
+          : <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{side && brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{side ? title : 'Channels'}</h1>}
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}>＋</button>
 
       </div>

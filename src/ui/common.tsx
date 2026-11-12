@@ -290,6 +290,11 @@ export function Sheet({ title, onClose, children, hideTitle = false }: { title: 
   )
 }
 
+/** A sheet's second screen: ‹ and its title on one line (‹ is this sheet's own step, no history). */
+export function BackHead({ title, onBack }: { title: string; onBack: () => void }) {
+  return <div className="sheet-back-head"><button type="button" className="icon-btn" aria-label="Back" onClick={onBack}>‹</button><h3 aria-hidden="true">{title}</h3></div>
+}
+
 /** On a laptop the same content opens as a dialog in the middle (native <dialog>: focus kept
  *  inside, Escape closes, the page behind is inert); a click on the backdrop closes it too. */
 function Modal({ title, onClose, children, hideTitle = false }: { title: string; onClose: () => void; children: ReactNode; hideTitle?: boolean }) {

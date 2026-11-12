@@ -1,19 +1,21 @@
 // Someone's page (#/u/<npub>): reached by tapping a name or a face anywhere in the chat.
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
-// or nothing). Belfry admins can make another member an admin here.
+// or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
 import { BELFRY } from '../config'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { channelIcon, displayName, groups, guestJoins, profiles } from '../core/model'
-import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setBelfryAdmin, setUsername, type Place, type Share } from '../core/people'
+import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
+import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
+import { RolePickerSheet } from './RolePicker'
 import { agentOwner, isAdmin } from '../core/access'
 import { isGuest, setMyAgent } from '../core/invite'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
-import { PinIcon } from './icons'
+import { ChevronRightIcon, PinIcon } from './icons'
 
 export const profileHref = (pubkey: string) => 'u/' + nip19.npubEncode(pubkey)
 export const openProfile = (pubkey: string) => go(profileHref(pubkey))
@@ -32,6 +34,8 @@ export function ProfileView({ id }: { id?: string }) {
   const [error, setError] = useState('')
   const [dropping, setDropping] = useState(false)
   const [agentError, setAgentError] = useState('')
+  const [picking, setPicking] = useState(false)
+  useEffect(() => { if (isAdmin() && !rolesLoaded()) void loadRoles() }, [])
   if (!pk) return <div className="screen"><div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Profile</h1></div><div className="empty">This link doesn't point to a person.</div></div>
   const mine = pk === me()
   const p = profiles().get(pk)
@@ -40,7 +44,7 @@ export function ProfileView({ id }: { id?: string }) {
   const joins = groups().flatMap((g) => guestJoins(g.id)).filter((j) => j.pubkey === pk && !j.member)
   const guest = joins[0]
   // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
-  const noAdmin = joins.some((j) => j.agent) ? 'An agent cannot be an admin.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them an admin.' : ''
+  const noAdmin = joins.some((j) => j.agent) ? 'An agent has no role.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them a member.' : ''
   const shared = groups().filter((g) => g.members.has(pk) && !g.isProposal)
   // a member's own agent (a member while its member is one), or a guest agent that can become mine
   const owner = agentOwner(pk)
@@ -48,12 +52,10 @@ export function ProfileView({ id }: { id?: string }) {
   const canOwn = guestAgent && !isGuest(me()) && !agentOwner(me()) && (isAdmin() || joins.some((j) => j.by === me()))
   const canDrop = !!owner && (owner === me() || isAdmin())
   const admin = isBelfryAdmin(pk)
-  const toggleAdmin = async () => {
-    const name = displayName(pk)
-    if (!confirm(admin ? `Remove ${name} as an admin of the belfry?` : guest ? `Make ${name} a member and an admin of the belfry? They are a guest now. Admins manage members, every channel and the belfry's settings.` : `Make ${name} an admin of the belfry? Admins manage members, every channel and the belfry's settings.`)) return
-    setBusy(true); setError('')
-    try { await setBelfryAdmin(pk, !admin) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
-  }
+  // their role (roles.ts): admins change it here, through the one role picker
+  const role = roleOf(pk) ?? (admin ? ADMIN : undefined)
+  const badge = roleBadge(pk) || (admin ? roleById(ADMIN)?.label ?? 'Admin' : '')
+  const canRole = isAdmin() && !mine && !owner
   return (
     <div className="screen">
       <div className="topbar">
@@ -68,7 +70,7 @@ export function ProfileView({ id }: { id?: string }) {
             <div className="profile-name">{p?.name || displayName(pk)}</div>
             {p?.nip05 && <div className="hint" style={{ overflowWrap: 'anywhere' }}>{p.nip05}</div>}
             <div className="profile-badges">
-              {admin && <span className="chip">admin</span>}
+              {badge && <span className="chip role">{badge}</span>}
               {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
               {guest && <span className="chip">{guest.agent ? 'agent' : guest.unsaved ? 'guest · not saved' : 'guest'}</span>}
               {guest?.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
@@ -105,16 +107,20 @@ export function ProfileView({ id }: { id?: string }) {
             {agentError && <div className="error" style={{ marginTop: 8 }}>{agentError}</div>}
           </div>
         )}
-        {isAdmin() && !mine && !owner && (
+        {canRole && (
           <div className="card">
-            <label className="switch-row" style={{ margin: 0 }}>
-              <span><b>Admin of the belfry</b><small>{noAdmin || (guest ? 'A guest now: this makes them a member too. Manages members, every channel and the belfry\'s settings.' : 'Manages members, every channel and the belfry\'s settings.')}</small></span>
-              <input type="checkbox" role="switch" checked={admin} disabled={busy || (!!noAdmin && !admin)} onChange={() => void toggleAdmin()} />
-            </label>
+            <button type="button" className="pick-row role-row" disabled={!!noAdmin && !role} onClick={() => { setError(''); setPicking(true) }}>
+              <span className="k">Role</span>
+              <span className="t"><b>{role ? roleById(role)?.label ?? role : guest ? (guest.agent ? 'Agent' : 'Guest') : '—'}</b>
+                <small>{noAdmin || (role ? roleById(role)?.description : 'A guest now: a role makes them a member of the belfry.')}</small></span>
+              <ChevronRightIcon />
+            </button>
             {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
           </div>
         )}
       </div>
+      {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}
+        onPick={async (id) => { setBusy(true); try { await setMemberRole(pk, id) } finally { setBusy(false) } }} />}
       {editing && <EditProfile onClose={() => setEditing(false)} />}
     </div>
   )

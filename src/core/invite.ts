@@ -7,7 +7,7 @@ import { agentOwner, canAdmin, loadAccessInfo } from './access'
 import { admit } from './actions'
 import { sendDm } from './dm'
 import { group, groups, guestJoins, profiles, type Group } from './model'
-import { me, signedFetch } from './sync'
+import { isLocalOnly, me, signedFetch } from './sync'
 import { touch } from './store'
 
 /** Someone who is in this belfry only as a channel's guest (a person or an agent). */
@@ -66,4 +66,45 @@ export async function setMyAgent(pubkey: string, mine: boolean): Promise<MyAgent
   await loadAccessInfo()
   touch()
   return out
+}
+
+// ── the invite sheet's link (Belfry guests.py, roles.py) ────────────────────────────────────
+// Guest of the channel for a day, a week or a month; or (the belfry's admins only) a member of
+// the belfry with a role, for a month, a year or for good. The link itself: how many people
+// (one, up to 50) and how long it can be opened (a day, a week, a month).
+export type GuestDays = 1 | 7 | 30
+export type Membership = 'month' | 'year' | 'permanent'
+export type JoinsAs = { as: 'guest'; days: GuestDays } | { as: 'member'; role: string; membership: Membership } | { as: 'agent' }
+export interface LinkOpts { people: 1 | 50; linkDays: 1 | 7 | 30 }
+
+export type LinkError = 'not_admin' | 'not_allowed' | 'guest' | 'agent' | 'unknown_role' | 'limit' | 'unsupported' | 'offline' | 'failed'
+export const LINK_ERRORS: Record<LinkError, string> = {
+  not_admin: 'Only admins of the belfry invite members.',
+  not_allowed: 'You can’t invite people to this channel.',
+  guest: 'Guests can’t invite.',
+  agent: 'Agents can’t invite.',
+  unknown_role: 'That role doesn’t exist any more. Pick another.',
+  limit: 'You have your agent already.',
+  unsupported: 'This belfry does not take guests.',
+  offline: 'No connection to the belfry.',
+  failed: 'The link could not be made. Try again.',
+}
+export class LinkFailed extends Error { constructor(public code: LinkError) { super(LINK_ERRORS[code]) } }
+
+/** A link for CHANNEL: ``{url, agentUrl}``. */
+export async function makeInviteLink(channel: string, who: JoinsAs, link: LinkOpts): Promise<{ url: string; agentUrl: string }> {
+  const body: Record<string, unknown> = { channel, people: who.as === 'agent' ? 1 : link.people, link_days: link.linkDays }
+  if (who.as === 'guest') body.guest_days = who.days
+  else if (who.as === 'member') Object.assign(body, { as: 'member', role: who.role, membership: who.membership })
+  else body.agent = true
+  if (isLocalOnly()) { // demo: what the belfry would answer
+    await new Promise((r) => setTimeout(r, 250))
+    const token = [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('')
+    return { url: `https://chat.${BELFRY.domain}/join/${token}`, agentUrl: `https://belfry.${BELFRY.domain}/invite/${token}.md` }
+  }
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}/channel-invites`, 'POST', body) } catch { throw new LinkFailed('offline') }
+  const d = (await r.json().catch(() => ({}))) as { url?: string; agent_url?: string; error?: string }
+  if (!r.ok || !d.url) throw new LinkFailed((d.error && d.error in LINK_ERRORS ? d.error : 'failed') as LinkError)
+  return { url: String(d.url), agentUrl: String(d.agent_url ?? '') }
 }

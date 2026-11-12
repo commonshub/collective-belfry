@@ -1,3 +1,4 @@
+import { roleBadge } from '../core/roles'
 import { lazy, Suspense, useState } from 'react'
 import { extras, placeLabel } from '../core/people'
 import { Markdown } from './markdown'
@@ -268,7 +269,7 @@ export function Members({ groupId }: { groupId: string }) {
         <div key={p} className="member">
           <button className="member-open" onClick={() => openProfile(p)} aria-label={`${displayName(p)}: profile`}><Avatar pubkey={p} /></button>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <button className="member-name" onClick={() => openProfile(p)}>{displayName(p)}</button>
+            <button className="member-name" onClick={() => openProfile(p)}>{displayName(p)}{roleBadge(p) && <span className="role-tag">{roleBadge(p)}</span>}</button>
             {ex.get(p)?.place && <div className="hint member-place">{placeLabel(ex.get(p)!.place)}</div>}
             {invited.get(p) && (
               <div className="hint invited-by">

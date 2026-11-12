@@ -65,6 +65,8 @@ export const agentOwner = (pubkey: string): string | undefined => belfryAgents[p
 // listed as its members (zooid patch 0003 lets the relay take their moderation).
 let belfryAdmins: string[] = []
 export const belfryAdminKeys = () => belfryAdmins
+/** Demo only (roles.ts): who the admins are, on this device. */
+export function demoSetAdmins(keys: string[]) { belfryAdmins = keys; listeners.forEach((l) => l()) }
 export const isAdmin = () => !!info?.admins.includes(me()) || belfryAdmins.includes(me())
 /** May I administer this channel: its own admins, and the community's. */
 export const canAdmin = (g?: { admins: Set<string> }) => !!g && (g.admins.has(me()) || isAdmin())

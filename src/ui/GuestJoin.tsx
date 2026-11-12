@@ -2,7 +2,7 @@
 // that stands where the composer would be, and the Join sheet (name and e-mail, then the code
 // that was sent by e-mail).
 import { useEffect, useRef, useState } from 'react'
-import { BELFRY } from '../config'
+import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
 import { JOIN_ERRORS, JoinFailed, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
@@ -10,6 +10,10 @@ import { channelIcon, group } from '../core/model'
 import { touch } from '../core/store'
 import { joinWithAccount } from '../core/sync'
 import { Btn, Form, Sheet } from './common'
+import { useCommunityName } from './community'
+
+/** "as a member", "as Host": the plain role reads as a member. */
+const asWho = (label: string) => (label.toLowerCase() === 'member' ? 'a member' : label)
 
 /** From the link to the channel: one screen, nothing else in between (App.tsx). */
 export function OpeningScreen({ name }: { name?: string }) {
@@ -25,10 +29,14 @@ export function OpeningScreen({ name }: { name?: string }) {
 export function GuestBar({ groupId }: { groupId: string }) {
   useGuestMode()
   const g = group(groupId)
+  const community = useCommunityName(NAME)
   if (!reading()) return null
+  const member = guestInfo()?.member
   return (
     <div className="guest-bar" role="region" aria-label="Guest mode">
-      <span><b>Guest mode</b> · You’re reading {g ? channelIcon(g) : '#'} {g?.name ?? groupId} as a guest.</span>
+      {member
+        ? <span><b>You’re invited</b> to join {community} as {asWho(member.label)}.</span>
+        : <span><b>Guest mode</b> · You’re reading {g ? channelIcon(g) : '#'} {g?.name ?? groupId} as a guest.</span>}
       <button className="btn small" onClick={askToJoin}>Join</button>
     </div>
   )
@@ -102,13 +110,17 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
       onClose()
     } catch (e) { setCode(''); fail(e) } finally { setBusy(false) }
   }
-  const title = step === 'code' ? 'Check your e-mail' : step === 'taken' ? 'You have an account here' : saveOnly ? 'Save your account' : `Join ${label}`
+  const community = useCommunityName(NAME)
+  const member = saveOnly ? undefined : info?.member
+  const title = step === 'code' ? 'Check your e-mail' : step === 'taken' ? 'You have an account here' : saveOnly ? 'Save your account' : member ? `Join ${community} as ${member.label}` : `Join ${label}`
   return (
     <Sheet title={title} onClose={() => { if (!busy) onClose() }}>
       {step === 'who' && (
         <Form className="join-sheet" onSubmit={send}>
           <p className="hint">{saveOnly
             ? 'Add your e-mail address to come back from any device. We’ll send a 6-digit code to it.'
+            : member
+            ? `Your name and e-mail address, and you are a member of ${community}${member.membership === 'permanent' ? '' : member.membership === 'year' ? ' for a year' : ' for a month'}. We’ll send a 6-digit code to your e-mail to confirm it.`
             : 'Your name and e-mail address, and you can write here. We’ll send a 6-digit code to your e-mail to confirm it.'}</p>
           {askName && <label className="field"><span>Your name</span>
             <input className="input" value={name} maxLength={100} autoComplete="name" autoFocus required onChange={(e) => setName(e.target.value)} /></label>}

@@ -10,6 +10,7 @@ import { guestInfo, setGuestInfo } from './auth'
 import { guestChanged } from './guestmode'
 import { addEvents } from './store'
 import { isLocalOnly, me, signedFetch } from './sync'
+import { demoRoles, setDemoRole } from './roles'
 
 export type JoinError = 'invalid' | 'name_needed' | 'too_many' | 'wrong_code' | 'expired' | 'taken' | 'not_guest' | 'offline' | 'failed'
 export class JoinFailed extends Error {
@@ -61,8 +62,20 @@ export async function verifyJoinCode(email: string, code: string, name?: string)
     if (g?.reading && name) addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
       tags: [['h', g.channel], ['p', me(), 'member'], ['guest', ''], ['invited-by', hex(32)], ['name', clean(name)]] }])
   } else {
-    await post('/guest/save/verify', { email: email.trim(), code, ...(name ? { name: clean(name) } : {}) })
+    const d = await post('/guest/save/verify', { email: email.trim(), code, ...(name ? { name: clean(name) } : {}) })
+    if (d.member === true) return becameMember(g?.channel)
   }
+  if (g?.member && isLocalOnly()) return becameMember(g.channel, g.member.role)
   if (g) setGuestInfo({ channel: g.channel, saved: true })
   guestChanged()
+}
+
+/** A member link was used (roles.py): no guest any more. The session is the same key, now a
+ *  member's; the app opens again so the relays and the belfry see it as one. */
+function becameMember(channel?: string, demoRole?: string) {
+  setGuestInfo(null)
+  guestChanged()
+  if (isLocalOnly()) { demoRoles(demoRole === 'admin', []); if (demoRole) setDemoRole(demoRole); return }
+  location.replace(`${location.pathname}${location.search}#/c/${encodeURIComponent(channel ?? 'general')}`)
+  location.reload()
 }

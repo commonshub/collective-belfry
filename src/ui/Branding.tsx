@@ -2,13 +2,13 @@ import { useEffect, useState } from 'react'
 import { applyBranding, branding, onColor, saveBranding, type Branding } from '../core/branding'
 import { uploadBlob } from '../core/sync'
 import { NAME } from '../config'
-import { back, Form } from './common'
+import { back, Form, up } from './common'
 
 const HEX = /^#[0-9a-f]{6}$/i
 
 /** #/me/branding: the belfry's admins set its logo, cover image and two colours (branding.ts).
  *  The page shows them as they are picked; Save publishes them for everyone. */
-export function BrandingScreen() {
+export function BrandingScreen({ parent, embedded = false }: { /** opened from the settings: ‹ goes there */ parent?: string; /** inside the settings' panel (laptop): no top bar of its own */ embedded?: boolean } = {}) {
   const [b, setB] = useState<Branding>(branding())
   const [busy, setBusy] = useState<'' | 'logo' | 'cover'>('')
   const [error, setError] = useState('')
@@ -35,11 +35,12 @@ export function BrandingScreen() {
   )
   const bad = (['primary', 'secondary'] as const).find((k) => b[k] && !HEX.test(b[k]))
   return (
-    <div className="screen">
+    <div className={embedded ? 'settings-embed' : 'screen'}>
+      {embedded ? <h2 className="panel-title">Branding</h2> : (
       <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back('me')}>‹</button>
+        <button className="icon-btn" aria-label="Back" onClick={() => (parent ? up(parent) : back('me'))}>‹</button>
         <h1>Branding<small>{NAME}</small></h1>
-      </div>
+      </div>)}
       <div className="scroll pad brand-edit">
         <Form onSubmit={async (e) => {
           e.preventDefault()

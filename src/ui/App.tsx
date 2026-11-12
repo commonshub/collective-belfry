@@ -4,7 +4,7 @@ import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
 import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
-import { closeJoin, openingNow, setOpening, useGuestMode } from '../core/guestmode'
+import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
@@ -14,6 +14,8 @@ import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../cor
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { BrandingScreen } from './Branding'
+import { SettingsScreen } from './Settings'
+import { demoRoles, loadRoles } from '../core/roles'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
@@ -137,10 +139,12 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
+        // members' roles (roles.ts): shown next to names; not asked in guest mode
+        if (THEME === 'belfry' && !reading()) void loadRoles()
       } catch (e) {
         setOpening(null)
         setError(e instanceof Error ? e.message : String(e))
@@ -222,6 +226,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
+  else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
   else if (section === 'u') view = <ProfileView id={a} />
@@ -333,10 +338,10 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </button>
         )}
         {THEME === 'belfry' && isBelfryAdmin(me()) && (
-          <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/branding')}>
+          <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('settings')}>
             <div>
-              <div style={{ fontWeight: 600 }}>Branding</div>
-              <div className="hint" style={{ fontSize: 14 }}>Logo, cover image and colours of {NAME}</div>
+              <div style={{ fontWeight: 600 }}>Settings of the belfry</div>
+              <div className="hint" style={{ fontSize: 14 }}>Branding, roles, members, e-mail and more</div>
             </div>
             <span className="hint" aria-hidden="true">›</span>
           </button>
