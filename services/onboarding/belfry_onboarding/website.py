@@ -21,7 +21,8 @@
   (every minute) publishes the ref of a proposal once its latest status label (kind 1985,
   ``belfry/proposal-status``, in its own chat) is ``passed``, set by someone who is a belfry admin
   now, and no newer version of the proposal came after it. The ref comes from the author's signed
-  30023, never from the card; each (proposal, version) goes live once.
+  30023, never from the card; each (proposal, version, pass) is tried once, so a publish that
+  failed is retried by marking it Passed again.
 """
 
 from __future__ import annotations
@@ -239,9 +240,6 @@ def passed_proposals(svc: Services) -> list[dict[str, Any]]:
         ref = parse_ref(_tagv(latest, "website"), domain(svc))
         if ref is None:
             continue
-        key = f"{coord}:{latest['id']}"
-        if key in done:
-            continue
         labels = groups.query([{"kinds": [1985], "#h": [group], "limit": 500}], gsign) or []
         labels = [
             x
@@ -259,6 +257,10 @@ def passed_proposals(svc: Services) -> list[dict[str, Any]]:
         if status != "passed" or last.get("pubkey") not in admins:
             continue
         if last.get("created_at", 0) < latest.get("created_at", 0):
+            continue
+        # once per (version, pass): marking it Passed again retries a publish that failed
+        key = f"{coord}:{latest['id']}:{last.get('id', '')}"
+        if key in done:
             continue
         out.append(
             {
@@ -297,9 +299,17 @@ async def watch(svc: Services, app: Any = None) -> int:
         name = (community.names_for(svc, [p["admin"]]) or {}).get(p["admin"]) or "an admin"
         try:
             await publish_from(svc, p["ref"][0], p["ref"][1], name)
-        except homepage.HomepageError as exc:
-            log.warning("website: proposal %s passed but not published: %s", p["key"], exc)
-            note = f"This proposal passed, but the website could not be updated: {exc}"
+        except Exception as exc:  # noqa: BLE001 — said in the proposal's chat, retried on a new pass
+            log.warning("website: proposal %s passed but not published: %r", p["key"], exc)
+            why = (
+                str(exc)
+                if isinstance(exc, homepage.HomepageError)
+                else "the files could not be copied"
+            )
+            note = (
+                f"⚠️ Couldn't publish this version ({why}). "
+                "An admin can mark it Passed again to retry."
+            )
         else:
             n += 1
             note = (

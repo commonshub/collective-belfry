@@ -62,6 +62,7 @@ def version(at: int, ref: str = f"nsite:{NPUB}", vid: str = "v1") -> dict:
 
 def label(status: str, at: int, by: str = ADMIN) -> dict:
     return {
+        "id": f"{status}{at}",
         "pubkey": by,
         "created_at": at,
         "tags": [
@@ -129,3 +130,25 @@ def test_watch_publishes_once_and_says_so(world, monkeypatch):
     assert calls == [(AUTHOR, "", "Ada")]
     assert any("Live now" in e["content"] and ["h", "prop-x"] in e["tags"] for e in g.sent)
     assert asyncio.run(website.watch(svc)) == 0 and len(calls) == 1  # once
+
+
+def test_a_failed_publish_says_so_and_a_new_pass_retries(world, monkeypatch):
+    svc, g = world
+    Main.versions = [version(100)]
+    g.labels = [label("passed", 200)]
+    tries: list[int] = []
+
+    async def publish(s, pk, name, admin):
+        tries.append(1)
+        if len(tries) == 1:
+            raise OSError("blossom down")
+        return {"files": 3}
+
+    monkeypatch.setattr(website, "publish_from", publish)
+    assert asyncio.run(website.watch(svc)) == 0
+    assert any(
+        "Couldn't publish" in e["content"] and "Passed again" in e["content"] for e in g.sent
+    )
+    assert asyncio.run(website.watch(svc)) == 0 and len(tries) == 1  # not on its own
+    g.labels = [label("passed", 200), label("passed", 400)]
+    assert asyncio.run(website.watch(svc)) == 1 and len(tries) == 2
