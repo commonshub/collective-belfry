@@ -16,8 +16,10 @@ also bring an agent of their own, which is a member for as long as they are one:
 
 The agent holds a pass of tier ``agent`` with ``agent_owner`` = its member's contact. It is on
 the relay whitelist like a member (core.active_pubkeys), signs with its own key, has no e-mail,
-no signer account, can't invite and can't be an admin. When its member's membership closes, so
-does the agent's pass (core._close_pass → ``closed``), and it is taken out of every channel.
+no signer account, can't invite and can't be an admin. It is in every channel its member is in
+(``mirror``, #issues 2026-11-13: "the exact same access as the parent"). When its member's
+membership closes, so does the agent's pass (core._close_pass → ``closed``), and it is taken out
+of every channel.
 The limit is the register's ``belfry.agents_per_member`` (1 unless set), or
 ``belfry.agents_per_tier.<tier>`` for a membership tier; the belfry's admins have
 none. belfry.json lists agent → member.
@@ -25,6 +27,8 @@ none. belfry.json lists agent → member.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -98,6 +102,75 @@ def closed(svc: Services, pass_row: dict[str, Any]) -> None:
         out_of_channels(svc, pubkey)
 
 
+MIRROR_SECONDS = 600
+
+
+def mirror(svc: Services, only: str = "") -> int:
+    """A member's own agent has the same access as its member (#issues, 2026-11-13): it is put in
+    every channel its member is in (kind 9000, ``agent``), closed ones and meetings too. Only
+    ever adds: an agent invited somewhere by itself stays there, and leaving follows the pass
+    (closed). ONLY: just that agent. Runs when an agent becomes someone's, and every 10 minutes
+    for the channels its member joins later."""
+    from . import followers, guests
+
+    owners = {
+        a: o for a, o in svc.odoo.agent_owners().items() if a and o and (not only or a == only)
+    }
+    if not owners:
+        return 0
+    got = followers._relay(svc)
+    if got is None:
+        return 0
+    relay, sign = got
+    try:
+        lists = relay.query([{"kinds": [39002], "limit": 5000}], sign)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("agents: channel lists not read: %s", exc)
+        return 0
+    n = 0
+    for e in lists:
+        tags = e.get("tags", [])
+        channel = next((t[1] for t in tags if t[:1] == ["d"] and len(t) > 1), "")
+        if not channel:
+            continue
+        inside = {t[1] for t in tags if t[:1] == ["p"] and len(t) > 1}
+        for agent, owner in owners.items():
+            if owner in inside and agent not in inside:
+                if guests._channel_event(
+                    svc,
+                    9000,
+                    [["h", channel], ["p", agent, "member"], ["agent", "1"], ["invited-by", owner]],
+                ):
+                    n += 1
+    if n:
+        log.info("agents: %d channel(s) opened to members' agents", n)
+    return n
+
+
+@contextlib.asynccontextmanager
+async def running(app: FastAPI):
+    async def loop() -> None:
+        while True:
+            await asyncio.sleep(MIRROR_SECONDS)
+            try:
+                if invite_own(app.state.services):
+                    await run_in_threadpool(mirror, app.state.services)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("agents: mirror failed: %r", exc)
+
+    task = asyncio.create_task(loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+def invite_own(svc: Services) -> bool:
+    from . import invite
+
+    return invite.own(svc)
+
+
 def joined(svc: Services, pubkey: str, channel: str, inviter: str, name: str) -> None:
     """A new agent came in as a member's own (a link made for it): into the link's channel, and
     onto the relay."""
@@ -115,6 +188,7 @@ def joined(svc: Services, pubkey: str, channel: str, inviter: str, name: str) ->
         1985,
         [["h", channel], ["L", "belfry/guest"], ["l", "member", "belfry/guest"], ["p", pubkey]],
     )
+    mirror(svc, pubkey)  # and every other channel its member is in
 
 
 def _owner(svc: Services, caller: str) -> int:
@@ -158,6 +232,7 @@ def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:
             raise ApiError(409, code, str(exc.message or "Refused.")) from exc
         core.sync_relay_whitelist(svc)
         guests.became_member(svc, target)  # the guest passes close; it stays in those channels
+        mirror(svc, target)  # the same channels as its member
     else:
         rows = [
             r
