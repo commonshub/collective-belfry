@@ -39,7 +39,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import community, core, flash, homepage, mypass, steward
+from . import community, core, flash, homepage, mypass, pages, steward
 from .claim import page
 from .core import Services
 from .nip46check import sign_event
@@ -693,8 +693,7 @@ let it in: give it <a href="/agents.md">{E(console_url(s))}/agents.md</a>.</p></
         if agents_waiting:
             steps.append(
                 (
-                    f"{agents_waiting} agent{'s' if agents_waiting > 1 else ''} "
-                    "asking to join.",
+                    f"{agents_waiting} agent{'s' if agents_waiting > 1 else ''} asking to join.",
                     "/agents",
                     "Review",
                 )
@@ -839,7 +838,7 @@ def website_html(
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""
     )
-    skill = f"{s.public_url.rstrip('/')}/skills/belfry-homepage.md"
+    skill = f"{pages.skills_base(s)}/skills/belfry-homepage.md"
     return frame(
         "Website",
         "/website",
@@ -854,64 +853,69 @@ def website_html(
 
 
 PLACEHOLDER_STYLE = """<style>
-main{max-width:680px;padding-top:48px}
-.ph h1{font-size:2.4rem;line-height:1.1;margin:0 0 12px}
-.ph .lead{font-size:1.1rem;margin:0 0 20px;color:var(--fg-muted)}
-.ph .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px}
-.ph .card{margin:24px 0 0}
+main{max-width:680px;padding-top:56px}
+.ph{text-align:center}
+.ph .logo{width:160px;height:160px;object-fit:contain;border-radius:28px;margin:0 auto 24px;display:block}
+.ph h1{font-size:2.6rem;line-height:1.1;margin:0 0 12px}
+.ph .lead{font-size:1.15rem;margin:0 auto 28px;color:var(--fg-muted);max-width:34rem}
+.ph .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:center;margin:0 0 8px}
+.ph .card{margin:32px 0 0;text-align:left}
 .ph h2{font-size:1.05rem;margin:0 0 8px}
 .ph blockquote{margin:12px 0;padding:12px 14px;border-left:3px solid var(--accent);
 background:var(--surface-deep);border-radius:0 8px 8px 0;word-break:break-word}
 .ph .small{font-size:.9rem}
+.ph .foot{margin-top:40px}
 </style>"""
 
 
 def placeholder_html(settings: Any, svc: Services | None = None) -> str:
     """What the apex shows before a website is published (HOMEPAGE=nsite, no manifest yet), in
-    the belfry's look (theme.frame: the base theme, and the community's theme folder if any).
-    Two states: no admin yet (set it up: belfry.<domain>/setup, or let an agent ask to join), or
-    an admin and no website. Fixed text plus the settings; nothing from the request; no script
-    needed."""
-    from . import agentrequests, setup, theme
+    the belfry's look (theme.frame). The logo in big (the branding's, else Belfry's mark), the
+    community's name and description (the branding's ``description``, else a default line), and
+    a link to the chat. With no admin yet, a "Set up this belfry" button and the agent route
+    instead of the chat link. Fixed text plus the settings and branding; nothing from the
+    request; no script needed."""
+    from . import agentrequests, appshome, branding, setup, theme
 
     name = settings.community_name or "This community"
     domain = httpx.URL(settings.site_url).host if settings.site_url else "this domain"
     console = console_url(settings) or settings.public_url
     host = httpx.URL(console).host if console else ""
-    skill = f"{settings.public_url.rstrip('/')}/skills/belfry-homepage.md"
     agents_md = agentrequests.instructions_url(settings) or f"{console}/agents.md"
+    brand: dict[str, str] = {}
     no_admin = False
     if svc is not None:
+        try:
+            brand = branding.current(svc)
+        except Exception:  # noqa: BLE001 — the defaults then
+            brand = {}
         try:
             no_admin = not setup.admin_known(svc)
         except Exception:  # noqa: BLE001 — unsure: show the ordinary placeholder
             no_admin = False
+    logo = brand.get("logo") or (
+        console + theme.current().logo if console else theme.current().logo
+    )
+    about = brand.get("description") or branding.DEFAULT_DESCRIPTION
+    head = f"""<img class="logo" src="{E(logo)}" alt="">
+<h1>{E(name)}</h1>
+<p class="lead">{E(about)}</p>"""
     if no_admin:
-        body = f"""<div class="ph"><h1>{E(name)}</h1>
-<p class="lead">This is a belfry: a community's own server for its members' accounts, channels
-and files. It has no admin yet.</p>
+        body = f"""<div class="ph">{head}
 <div class="row"><a class="btn" href="{E(console)}/setup">Set up this belfry</a></div>
-<p class="muted small">The first person to open the setup becomes its admin, then invites the
-others. No code needed.</p>
+<p class="muted small">This belfry has no admin yet. The first person to open the setup becomes
+its admin, then invites the others. No code needed.</p>
 <div class="card"><h2>Or let your agent do it</h2>
 <p class="muted">An agent can ask to join now, and set up the channels once you let it in. Give
 it this:</p>
 <blockquote>Join the belfry at {E(domain)} as my agent: follow {E(agents_md)}</blockquote>
 <p class="muted small">Then open the setup yourself: its request waits for you.</p></div></div>"""
     else:
-        body = f"""<div class="ph"><h1>{E(name)}</h1>
-<p class="lead">The website of {E(name)} will be here.</p>
-<div class="card"><h2>Publish it</h2>
-<p>Ask your agent:</p>
-<blockquote>Build the website of {E(name)} and publish it on {E(domain)} as an nsite. Follow {E(skill)}</blockquote>
-<p class="small"><strong>Who can publish:</strong> the belfry's admins publish directly. Any member
-can propose a version; an admin approves it, and the belfry publishes it under its own key.
-Versions and approvals are listed at <a href="{E(console)}/website">{E(host)}/website</a>.</p></div>
-<div class="card"><h2>Agents</h2>
-<p class="small">An agent asks to join with its own key by following
-<a href="{E(agents_md)}">{E(agents_md)}</a>; an admin lets it in as their own agent.</p></div>
-<p class="small" style="margin-top:24px"><a href="{E(settings.public_url)}">Join or sign in</a> ·
-<a href="{E(console)}">{E(host)}</a>: the belfry's status and members</p></div>"""
+        chat = appshome.app_url(settings, "chat")
+        body = f"""<div class="ph">{head}
+<div class="row"><a class="btn" href="{E(chat)}">Open the chat</a></div>
+<p class="small foot muted"><a href="{E(console)}">{E(host)}</a> · the belfry's members,
+status and settings</p></div>"""
     return theme.frame(name, PLACEHOLDER_STYLE + body)
 
 
@@ -1203,12 +1207,6 @@ def register(app: FastAPI) -> None:
         log.info("console: %s approved website %s", me["email"], event)
         return back("/website", msg=f"Published: {result['files']} files.")
 
-    @app.get("/console/skills/{name}.md", include_in_schema=False)
-    async def skills(name: str, request: Request):
-        return RedirectResponse(
-            f"{svc(request).settings.public_url.rstrip('/')}/skills/{name}.md", status_code=302
-        )
-
 
 API_V1 = "/api/v1"  # the belfry's API, on belfry.<domain> (pass.<domain>/api/… still answers)
 
@@ -1227,11 +1225,26 @@ def map_host(request: Request) -> Response | None:
             request.scope["raw_path"] = request.scope["path"].encode()
             return None
         # invites and the mention-mail page are links people get: they live here, not on pass.
-        if not path.startswith(
-            ("/console", "/brand/", "/me/", "/theme/", "/static/", "/invite/", "/mentions/")
+        if (
+            not path.startswith(
+                (
+                    "/console",
+                    "/brand/",
+                    "/me/",
+                    "/theme/",
+                    "/static/",
+                    "/invite/",
+                    "/mentions/",
+                    "/skills/",
+                )
+            )
+            and path != "/skill.md"
         ):
             request.scope["path"] = "/console" + (path if path != "/" else "")
         return None
+    # the skills live on belfry.<domain>: old links to pass.<domain>/skills/… move there
+    if path.startswith("/skills/") or path == "/skill.md":
+        return RedirectResponse(console_url(settings) + path, status_code=301)
     if path.startswith("/console"):
         rest = path.removeprefix("/console") or "/"
         query = ("?" + request.url.query) if request.url.query else ""

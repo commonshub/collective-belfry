@@ -11,7 +11,7 @@ you can read their invite, order the pass they choose and tell them what happens
 itself, its sign-in link and its certificate always go to the visitor's e-mail, never to you.
 
 The hosts are on `<domain>`, the domain of the visitor's invite link. The copy served at
-`https://pass.<domain>/skill.md` has it filled in.
+`https://belfry.<domain>/skill.md` has it filled in.
 
 | Host | What is there |
 | --- | --- |

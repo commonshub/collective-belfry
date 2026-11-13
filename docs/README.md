@@ -21,7 +21,7 @@
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |
 | `../brand/README.md` | colours, fonts, logos and where copies of them live |
 | `runbook.md` | operating the server before and during the event, and what to do when something breaks |
-| `../skills/*/SKILL.md` | instructions for agents: install a belfry, its homepage, its theme, sign-in for apps, helping a steward or a visitor; served at `pass.<domain>/skills/<name>.md` |
+| `../skills/*/SKILL.md` | instructions for agents: install a belfry, its homepage, its theme, sign-in for apps, helping a steward or a visitor; served at `belfry.<domain>/skills/<name>.md` (pass.<domain>/skills redirects there) |
 | `../services/onboarding/content/` | the texts of the pages on `pass.<domain>`: privacy notice, terms, refund policy, community rules, help (`/privacy`, `/terms`, `/refunds`, `/rules`, `/help`) |
 
 ## Plan

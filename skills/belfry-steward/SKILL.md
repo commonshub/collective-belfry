@@ -12,7 +12,7 @@ steward, or an agent or app acting for one, can do and where.
 
 The hosts are on `<domain>`. Everything below is also listed, with this Belfry's exact
 addresses, at `https://<domain>/.well-known/belfry.json`. Read it first when you build an app.
-The participant-side skill (passes, ordering, posting, groups) is at `https://pass.<domain>/skill.md`.
+The participant-side skill (passes, ordering, posting, groups) is at `https://belfry.<domain>/skill.md`.
 
 ## How the pieces fit
 

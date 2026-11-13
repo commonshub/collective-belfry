@@ -9,9 +9,11 @@ key of belfry.json) on the community relay: ``picture`` (the logo), ``banner`` (
 ``website``. Any Nostr client sees the logo and cover; Belfry's apps read the colours too.
 
 - ``GET /api/branding`` (belfry.<domain>/api/v1/branding): ``{"logo","cover","primary",
-  "secondary","name"}``, anyone.
+  "secondary","description","name"}``, anyone. ``description`` is the profile's ``about``: the
+  line under the name on the default homepage.
 - ``POST /api/branding``: NIP-98 by an admin, any of ``logo``, ``cover`` (https URLs, "" clears),
-  ``primary``, ``secondary`` (``#rrggbb``, "" clears). The profile is republished with the rest
+  ``primary``, ``secondary`` (``#rrggbb``, "" clears), ``description`` (plain text, at most 500
+  characters, "" clears). The profile is republished with the rest
   of it kept.
 """
 
@@ -42,7 +44,11 @@ FIELDS = {
     "cover": "banner",
     "primary": "primary_color",
     "secondary": "secondary_color",
+    "description": "about",
 }
+DEFAULT_DESCRIPTION = (
+    "A sovereign community that is self organised and keeps its data on their own server."
+)
 
 _cache: dict[str, Any] = {"at": 0.0, "profile": {}, "created_at": 0}
 _lock = threading.Lock()
@@ -123,11 +129,15 @@ def _clean(data: dict[str, Any]) -> dict[str, str]:
             and (not v.startswith("https://") or len(v) > 600 or any(c in v for c in ' "<>'))
         ):
             raise ApiError(400, "invalid", f"{k}: an https:// address of an image.")
+        if k == "description" and len(v) > 500:
+            raise ApiError(400, "invalid", "description: at most 500 characters.")
         if k in ("primary", "secondary") and v and not COLOR.match(v):
             raise ApiError(400, "invalid", f"{k}: a colour as #rrggbb.")
         change[k] = v.lower() if k in ("primary", "secondary") else v
     if not change:
-        raise ApiError(400, "invalid_json", 'Send any of {"logo","cover","primary","secondary"}.')
+        raise ApiError(
+            400, "invalid_json", 'Send any of {"logo","cover","primary","secondary","description"}.'
+        )
     return change
 
 

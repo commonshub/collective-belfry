@@ -213,6 +213,13 @@ def site_domain(settings: Any) -> str:
     return host.removeprefix("pass.") if host.startswith("pass.") else ""
 
 
+def skills_base(settings: Any) -> str:
+    """Where the skills are served: belfry.<domain> (the belfry's own host), else pass.<domain>
+    for a belfry without a console host. pass.<domain>/skills/* redirects there."""
+    base = (getattr(settings, "console_url", "") or "").rstrip("/")
+    return base or (settings.public_url or "").rstrip("/")
+
+
 def skill_text(settings: Any, skill: str = SKILL) -> str:
     # a local checkout finds the folder itself; in the image it is mounted (SKILLS_DIR)
     env = os.environ.get("SKILLS_DIR")

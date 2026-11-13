@@ -128,7 +128,7 @@ def document(settings: Any) -> dict[str, Any]:
                     else public + "/api"
                 )
                 + "/session",
-                "skill": f"{public}/skills/belfry-app.md",
+                "skill": f"{pages.skills_base(settings)}/skills/belfry-app.md",
             }
             if _belfry_key(settings)
             else None,
@@ -141,7 +141,10 @@ def document(settings: Any) -> dict[str, Any]:
             for name, url, text in pages.listed_apps(settings)
         ],
         "skills": {
-            **{role: f"{public}/skills/{name}.md" for role, name in SKILLS.items()},
+            **{
+                role: f"{pages.skills_base(settings)}/skills/{name}.md"
+                for role, name in SKILLS.items()
+            },
             # an agent asking to join by itself (agentrequests.py): Markdown on belfry.<domain>
             **({"join_as_agent": f"{console}/agents.md"} if console else {}),
         },

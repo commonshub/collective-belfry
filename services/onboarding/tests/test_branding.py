@@ -70,6 +70,7 @@ def test_admins_brand_the_belfry_in_its_own_profile(world):
             "cover": "",
             "primary": "",
             "secondary": "",
+            "description": "Our place",
             "name": "Belfry",
         }
         want = {

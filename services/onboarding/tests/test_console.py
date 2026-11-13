@@ -282,10 +282,12 @@ def test_placeholder_until_the_website_is_published(web, belfry, authentik):
     make_admin(authentik, "boss@example.org")
     console._admins["at"] = 0.0
     r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
-    assert "has no admin yet" not in r.text and "/agents.md" in r.text
-    assert r.status_code == 200 and "The website of Example Commons will be here" in r.text
-    assert "https://pass.belfry.test/skills/belfry-homepage.md" in r.text
-    assert 'href="https://belfry.belfry.test"' in r.text and "belfry.belfry.test/website" in r.text
+    assert "has no admin yet" not in r.text and r.status_code == 200
+    # the default homepage: the logo in big, the name, the description, the chat
+    assert '<img class="logo" src="https://belfry.belfry.test/theme/belfry/logo.svg"' in r.text
+    assert "<h1>Example Commons</h1>" in r.text
+    assert "A sovereign community that is self organised" in r.text
+    assert 'href="https://chat.' in r.text and "Open the chat" in r.text
 
 
 def test_admin_approves_a_members_website(web, belfry, odoo, authentik, relay):
@@ -515,3 +517,19 @@ def test_admins_are_not_asked_again_at_once_when_authentik_is_down(belfry, monke
     assert console.admin_emails(belfry) == {"ada@belfry.test"}
     assert console.admin_emails(belfry) == {"ada@belfry.test"}
     assert len(calls) == 1
+
+
+def test_skills_live_on_the_belfry_host(web):
+    r = web.get("/skills/belfry-homepage.md", headers={"Host": "belfry.belfry.test"})
+    assert r.status_code == 200 and "text/markdown" in r.headers["content-type"]
+    assert web.get("/skill.md", headers={"Host": "belfry.belfry.test"}).status_code == 200
+    # old links on pass.<domain> move there
+    r = web.get(
+        "/skills/belfry-homepage.md",
+        headers={"Host": "pass.belfry.test"},
+        follow_redirects=False,
+    )
+    assert r.status_code == 301
+    assert r.headers["location"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
+    doc = web.get("/.well-known/belfry.json", headers={"Host": "pass.belfry.test"}).json()
+    assert doc["skills"]["website"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
