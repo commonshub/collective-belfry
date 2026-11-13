@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { applyBranding, branding, onColor, saveBranding, type Branding } from '../core/branding'
+import { BELFRY } from '../config'
+import { applyBranding, branding, fetchBranding, onColor, saveBranding, type Branding } from '../core/branding'
 import { uploadBlob } from '../core/sync'
 import { NAME } from '../config'
 import { back, Form, up } from './common'
@@ -14,6 +15,8 @@ export function BrandingScreen({ parent, embedded = false }: { /** opened from t
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
   // a live preview of the colours while picking; leaving without saving puts the saved ones back
+  // the homepage's line is not in belfry.json: ask the belfry (once), unless it is being typed
+  useEffect(() => { void fetchBranding().then((got) => { if (got) setB((x) => (x.description ? x : { ...x, description: got.description })) }) }, [])
   useEffect(() => { applyBranding({ ...b, primary: HEX.test(b.primary) ? b.primary : '', secondary: HEX.test(b.secondary) ? b.secondary : '' }) }, [b])
   useEffect(() => () => applyBranding(), [])
   const set = (k: keyof Branding, v: string) => { setSaved(false); setB((x) => ({ ...x, [k]: v })) }
@@ -51,6 +54,8 @@ export function BrandingScreen({ parent, embedded = false }: { /** opened from t
           <p className="hint" style={{ fontSize: 14, marginTop: 0 }}>
             Shown in the chat, in the mails and in any Nostr app: they are kept in the profile of the belfry's own Nostr account.
           </p>
+          <label className="field"><span>Description · the line under {NAME} on its homepage, {BELFRY.domain}</span>
+            <textarea className="input" rows={3} maxLength={500} placeholder="Empty: the default line" value={b.description} onChange={(e) => { setSaved(false); setB({ ...b, description: e.target.value }) }} /></label>
           <div style={{ fontWeight: 600 }}>Logo</div>
           <div className="brand-pick">
             {b.logo ? <img className="prev" src={b.logo} alt="The logo" /> : <span className="prev" aria-hidden="true" />}

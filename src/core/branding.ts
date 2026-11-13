@@ -6,8 +6,10 @@ import { BELFRY, THEME, getBackend } from '../config'
 import { useEffect, useState } from 'react'
 import { signedFetch } from './sync'
 
-export interface Branding { logo: string; cover: string; primary: string; secondary: string }
-const EMPTY: Branding = { logo: '', cover: '', primary: '', secondary: '' }
+// description: the line under the community's name on its homepage (the belfry profile's about,
+// plain text, at most 500; "" = the default line)
+export interface Branding { logo: string; cover: string; primary: string; secondary: string; description: string }
+const EMPTY: Branding = { logo: '', cover: '', primary: '', secondary: '', description: '' }
 const KEY = 'osv-branding'
 const HEX = /^#[0-9a-f]{6}$/i
 // https only (data:image/… is the demo's uploads, on this device)
@@ -26,6 +28,7 @@ function clean(b: Partial<Record<keyof Branding, unknown>> | undefined): Brandin
     cover: URL_OK(b?.cover) ? b!.cover as string : '',
     primary: typeof b?.primary === 'string' && HEX.test(b.primary) ? b.primary.toLowerCase() : '',
     secondary: typeof b?.secondary === 'string' && HEX.test(b.secondary) ? b.secondary.toLowerCase() : '',
+    description: typeof b?.description === 'string' ? b.description.slice(0, 500) : '',
   }
 }
 
@@ -85,4 +88,13 @@ export async function saveBranding(change: Partial<Branding>): Promise<Branding>
   if (!res.ok) throw new Error(body.message || 'The branding could not be saved just now.')
   setBranding(body)
   return brand
+}
+
+/** The branding as the belfry has it now (GET, anyone): belfry.json may not carry the description. */
+export async function fetchBranding(): Promise<Branding | null> {
+  if (getBackend() === 'demo') return brand
+  try {
+    const res = await fetch(`${BELFRY.api}/branding`)
+    return res.ok ? clean(await res.json()) : null
+  } catch { return null }
 }
