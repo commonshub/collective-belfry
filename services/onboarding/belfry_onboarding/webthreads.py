@@ -19,9 +19,12 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
   was public: the page shows only what was posted then (moving a channel is never retroactive).
   Only the latest setting by an admin of that channel (39001) or of the belfry counts; a slug
   taken by an earlier channel, or one of the service's own paths, is ignored.
-- **The page** ``<domain>/<slug>``: the channel's name and description, a form to open a thread
-  (title, text, name, e-mail), and, when public, the threads like GitHub issues: title, author and
-  their role (admin, member, agent, guest, from outside), replies, last activity.
+- **The page** ``<domain>/<slug>`` (two templates, #issues 2026-11-13): a public channel is
+  **issues**: like GitHub issues, every thread listed, Open / Closed (the members' label on it in
+  the chat), author and their role (admin, member, agent, guest, from outside), replies, last
+  activity. A members-only channel is **requests**: like writing to hello@, the form first,
+  nobody from outside sees anyone else's. Both offer members to sign in (the chat) and anyone
+  else to post as a guest (title, text, name, e-mail).
   ``<domain>/<slug>/<thread id>``: the thread, every comment with its author's role.
 - **From outside.** The form mails a confirmation link (the address must be theirs); opening it
   posts the thread in the channel as an e-mail card (groups key, ``mail-from``, ``mail-name``,
@@ -383,6 +386,11 @@ STYLE = """<style>
 .wt-form input,.wt-form textarea{width:100%;box-sizing:border-box;font:inherit;font-size:16px;padding:10px 12px;border:1px solid var(--border,#e4e4e7);border-radius:8px;background:var(--surface,#fff);color:inherit}
 .wt-form button{margin-top:12px}
 .wt-note{font-size:13px;color:var(--muted,#71717a)}
+.wt-lead{font-size:16px;margin:0 0 8px}
+.wt-tabs{display:flex;gap:16px;margin:-4px 0 10px;font-size:14px}.wt-tabs a{text-decoration:none;color:var(--muted,#71717a)}
+.wt-tabs a[aria-current]{color:inherit;font-weight:600}
+.wt-state{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:99px;margin-right:8px;vertical-align:2px}
+.wt-state.open{background:#dcfce7;color:#166534}.wt-state.closed{background:#ede9fe;color:#5b21b6}
 </style>"""
 
 
@@ -406,7 +414,11 @@ def _page(title: str, body: str, status: int = 200) -> HTMLResponse:
 
 
 def _form(
-    slug: str, error: str = "", values: dict[str, str] | None = None, heading: str = "Open a thread"
+    slug: str,
+    error: str = "",
+    values: dict[str, str] | None = None,
+    heading: str = "Open a thread",
+    button: str = "Send",
 ) -> str:
     v = values or {}
     err = f'<p class="error" role="alert">{E(error)}</p>' if error else ""
@@ -418,7 +430,36 @@ def _form(
 <label for="m">Your e-mail</label><input id="m" name="email" type="email" maxlength="200" required value="{E(v.get("email", ""))}">
 <p class="wt-note">We mail you a link to confirm: the thread appears once you open it. Answers come by e-mail too.</p>
 <input type="text" name="website" value="" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
-<button class="btn" type="submit">Send</button></form>"""
+<button class="btn" type="submit">{E(button)}</button></form>"""
+
+
+def _states(svc: Services, channel: str) -> dict[str, str]:
+    """Each thread's state, open or closed: the members' latest label on it in the chat (NIP-32,
+    namespace ``belfry/inbox``, as e-mail cards have)."""
+    got = _relay(svc)
+    if got is None:
+        return {}
+    relay, sign = got
+    try:
+        evs = relay.query([{"kinds": [1985], "#h": [channel], "limit": 2000}], sign) or []
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, tuple[int, str]] = {}
+    for e in evs:
+        if ["L", "belfry/inbox"] not in [t[:2] for t in e.get("tags", [])]:
+            continue
+        lab = next(
+            (t[1] for t in e["tags"] if t[:1] == ["l"] and len(t) > 2 and t[2] == "belfry/inbox"),
+            "",
+        )
+        card = _tag(e, "e")
+        if lab in ("open", "closed") and card and e["created_at"] >= out.get(card, (0, ""))[0]:
+            out[card] = (e["created_at"], lab)
+    return {k: v for k, (_at, v) in out.items()}
+
+
+def _chat_link(svc: Services, channel: str) -> str:
+    return f"https://chat.{svc.settings.nip05_domain}/#/c/{quote(channel, safe='')}"
 
 
 def list_page(
@@ -427,7 +468,12 @@ def list_page(
     site: dict[str, Any],
     error: str = "",
     values: dict[str, str] | None = None,
+    state: str = "open",
 ) -> HTMLResponse:
+    """Two templates (#issues, 2026-11-13). **Issues**, a public channel: like GitHub issues,
+    everyone reads every thread, Open / Closed. **Requests**, a members-only channel: like
+    writing to hello@, the form first, and nobody from outside sees anyone else's. Both: members
+    sign in and post from the chat; anyone else posts as a guest with a name and an e-mail."""
     from . import followers
 
     head = f'<div class="wt-head"><h1>{E(site["name"])}</h1>'
@@ -435,6 +481,20 @@ def list_page(
         head += f"<p>{followers.text_html(site['about'])}</p>"
     head += "</div>"
     body = head
+    proposals = site.get("posts") == "proposal"
+    requests = site.get("posts") == "request"
+    public = site["list"] == "public"
+    signin = (
+        f'<p class="wt-note wt-signin">Have an account here? <a href="{E(_chat_link(svc, site["channel"]))}">Sign in</a>'
+        " and post from the chat. No account? Post as a guest: your name and e-mail are enough.</p>"
+    )
+    if not public and not proposals:
+        body += (
+            '<p class="wt-lead">Write to the members of this channel. Only they read what you send, '
+            "and their answers come to you by e-mail.</p>"
+        )
+        if site.get("posts") in ("", None, "request"):
+            body += signin + _form(slug, error, values, "Send a request", "Send")
     if site.get("periods"):
         roots, replies = _events(svc, site["channel"])
         # only what was posted while the channel was public (never retroactive)
@@ -446,44 +506,65 @@ def list_page(
             root = _root_of(r)
             count[root] = count.get(root, 0) + 1
             last[root] = max(last.get(root, 0), r["created_at"])
-        if site.get("posts") == "proposal":
+        if proposals:
             roots = [e for e in roots if _tag(e, "proposal")]
-        roots.sort(key=lambda e: max(e["created_at"], last.get(e["id"], 0)), reverse=True)
-        roots = roots[:MAX_THREADS]
-        names, roles = _who(svc, roots)
+        states = {} if proposals else _states(svc, site["channel"])
+        closed = [e for e in roots if states.get(e["id"]) == "closed"]
+        opened = [e for e in roots if states.get(e["id"]) != "closed"]
+        state = "closed" if state == "closed" and not proposals else "open"
+        shown = closed if state == "closed" else (roots if proposals else opened)
+        shown.sort(key=lambda e: max(e["created_at"], last.get(e["id"], 0)), reverse=True)
+        shown = shown[:MAX_THREADS]
+        names, roles = _who(svc, shown)
         items = []
-        for e in roots:
+        for e in shown:
             who, role = _author(svc, e, names, roles)
             n = count.get(e["id"], 0)
+            mark = (
+                ""
+                if proposals
+                else (
+                    '<span class="wt-state closed">Closed</span>'
+                    if states.get(e["id"]) == "closed"
+                    else '<span class="wt-state open">Open</span>'
+                )
+            )
             items.append(
-                f'<li><a href="/{E(slug)}/{E(e["id"])}">{E(_title(e))}</a>'
+                f'<li>{mark}<a href="/{E(slug)}/{E(e["id"])}">{E(_title(e))}</a>'
                 f'<div class="wt-meta">{E(who)}{_role(role)} · {_ago(e["created_at"])}'
                 f"{f' · {n} {chr(0x1F4AC)}' if n else ''}</div></li>"
             )
-        if site.get("posts") == "proposal":  # proposals only: members make them in the chat
-            body += "<h2>Proposals</h2>" + (
-                f'<ul class="wt-list">{"".join(items)}</ul>'
-                if items
-                else "<p>No proposals yet.</p>"
+        word = "Proposals" if proposals else ("Requests" if requests else "Issues")
+        if not proposals and public:
+            body += f'<p><a class="btn" href="#new">{"Make a request" if requests else "Open an issue"}</a></p>'
+        if not public:
+            body += '<p class="wt-note">These were posted while the channel was public.</p>'
+        tabs = ""
+        if not proposals:
+            tabs = (
+                '<nav class="wt-tabs">'
+                f'<a href="/{E(slug)}"{" aria-current=page" if state == "open" else ""}>Open <b>{len(opened)}</b></a>'
+                f'<a href="/{E(slug)}?state=closed"{" aria-current=page" if state == "closed" else ""}>Closed <b>{len(closed)}</b></a>'
+                "</nav>"
             )
-        else:
-            ask, listed = (
-                ("Make a request", "Requests")
-                if site.get("posts") == "request"
-                else ("Open a thread", "Threads")
+        empty = (
+            "No proposals yet."
+            if proposals
+            else (
+                "Nothing closed yet."
+                if state == "closed"
+                else ("Nothing open: be the first." if public else "Nothing open.")
             )
-            body += f'<p><a class="btn" href="#new">{ask}</a></p><h2>{listed}</h2>' + (
-                f'<ul class="wt-list">{"".join(items)}</ul>'
-                if items
-                else "<p>No threads yet: be the first.</p>"
-            )
-        if site["list"] != "public":
-            body += '<p class="wt-note">These were posted while the channel was public. It is members only now: a new thread is between you and the members, and you get its link by e-mail.</p>'
-    else:
-        body += '<p class="wt-note">Your thread is between you and the members: you get its link by e-mail.</p>'
-    if site.get("posts") in ("", None, "request"):
-        heading = "Make a request" if site.get("posts") == "request" else "Open a thread"
-        body += _form(slug, error, values, heading)
+        )
+        body += f"<h2>{word}</h2>{tabs}" + (
+            f'<ul class="wt-list">{"".join(items)}</ul>' if items else f"<p>{empty}</p>"
+        )
+    elif not public and not proposals:
+        pass
+    if public and site.get("posts") in ("", None, "request"):
+        body += signin + _form(
+            slug, error, values, "Make a request" if requests else "Open an issue"
+        )
     return _page(site["name"], body, 400 if error else 200)
 
 
@@ -851,7 +932,8 @@ def install(app: FastAPI) -> None:
         m = request.method
         try:
             if len(parts) == 1 and m in ("GET", "HEAD"):
-                return await run_in_threadpool(list_page, s, slug, site)
+                st = "closed" if request.query_params.get("state") == "closed" else "open"
+                return await run_in_threadpool(list_page, s, slug, site, "", None, st)
             if len(parts) == 1 and m == "POST":
                 form = {k: str(v) for k, v in (await request.form()).items()}
                 return await run_in_threadpool(submit, s, slug, site, form, ip)

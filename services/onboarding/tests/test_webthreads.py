@@ -141,7 +141,9 @@ def test_a_public_page_where_anyone_opens_a_thread(world):
             and "Proposals" in page.text
             and "Ideas for the community" in page.text
         )
-        assert "No threads yet" in page.text
+        # the issues template (#issues 2026-11-13): Open / Closed, sign in or post as a guest
+        assert "Nothing open: be the first" in page.text and "Open an issue" in page.text
+        assert "Sign in</a>" in page.text and "chat.belfry.test/#/c/props" in page.text
         r = c.post(
             "/ideas",
             data={
@@ -169,6 +171,27 @@ def test_a_public_page_where_anyone_opens_a_thread(world):
         # the list: the thread, its author from outside
         page = c.get("/ideas").text
         assert "A tool library" in page and "from outside" in page
+        assert "Open <b>1</b>" in page and "wt-state open" in page
+        # a member closes it in the chat: under Closed now
+        relay.events.append(
+            {
+                "id": "l" * 64,
+                "kind": 1985,
+                "pubkey": MEMBER,
+                "created_at": card["created_at"] + 1,
+                "content": "",
+                "tags": [
+                    ["h", "props"],
+                    ["L", "belfry/inbox"],
+                    ["l", "closed", "belfry/inbox"],
+                    ["e", card["id"]],
+                ],
+            }
+        )
+        assert "A tool library" not in c.get("/ideas").text
+        closed = c.get("/ideas?state=closed").text
+        assert "A tool library" in closed and "Closed <b>1</b>" in closed
+        relay.events.pop()
         # a member answers in the chat; Eve gets a mail; the page shows Mia as a member
         relay.events.append(
             {
@@ -214,7 +237,9 @@ def test_externals_see_only_their_own_thread_when_the_list_is_private(world):
     setting(relay, ADMIN, lst="own")  # a belfry admin may set it too
     with TestClient(create_app(svc), base_url="https://belfry.test") as c:
         page = c.get("/ideas").text
-        assert "between you and the members" in page and "Threads</h2>" not in page
+        # the requests template: the form first, nobody's list
+        assert "Only they read what you send" in page and "Issues</h2>" not in page
+        assert page.index("Send a request") < page.index("</form>")
         c.post(
             "/ideas",
             data={"title": "Secret", "text": "Hush", "name": "Eve", "email": "eve@example.org"},
