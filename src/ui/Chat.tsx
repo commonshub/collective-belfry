@@ -33,6 +33,7 @@ import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
 import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
+import { ChannelSettingsSheet } from './ChannelInfo'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
@@ -149,6 +150,32 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   )
 }
 
+/** A channel that takes threads only (its settings): a title and what it is about, posted like a
+ *  thread from the web (bold title line + `subject`), so the page and the chat read it the same. */
+function NewThreadSheet({ groupId, onClose, onSent }: { groupId: string; onClose: () => void; onSent: () => void }) {
+  const [d, setD, clearDraft] = useFormDraft('thread:' + groupId, () => ({ title: '', text: '' }))
+  const [files, setFiles] = useState<File[]>([])
+  return (
+    <Sheet title="New thread" onClose={onClose}>
+      <Form onSubmit={async (e) => {
+        e.preventDefault()
+        const title = d.title.trim().replace(/\s+/g, ' ').slice(0, 140)
+        if (!title) return
+        await postMessage(groupId, `**${title}**` + (d.text.trim() ? '\n\n' + d.text.trim() : ''), files, undefined, false, [['subject', title]])
+        clearDraft(); onSent(); onClose()
+      }}>
+        <label className="field"><span>Title</span>
+          <input className="input" autoFocus maxLength={140} placeholder="In a few words" value={d.title} onChange={(e) => setD((x) => ({ ...x, title: e.target.value }))} /></label>
+        <label className="field"><span>Details · Markdown works</span>
+          <textarea className="input" rows={6} value={d.text} onChange={(e) => setD((x) => ({ ...x, text: e.target.value }))} /></label>
+        <label className="field"><span>Pictures or files</span>
+          <input type="file" multiple onChange={(e) => setFiles([...(e.target.files ?? [])])} /></label>
+        <button className="btn" disabled={!d.title.trim()}>Post thread</button>
+      </Form>
+    </Sheet>
+  )
+}
+
 function NewChannel({ onClose }: { onClose: () => void }) {
   const [d, setD, clearDraft] = useFormDraft('channel', () => ({ name: '', about: '' }))
   const { name, about } = d
@@ -180,11 +207,16 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
   useVersion()
   const all = groups()
   const g = all.find((x) => x.id === id)
+  const [settings, setSettings] = useState(false)
+  useEffect(() => setSettings(false), [id])
   return (
     <div className="screen">
       <ChannelHeader id={id} topic={topic} onTopic={openTopic}
         left={<MenuButton />}
-        right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} /></>} />
+        right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} />
+          {/* the channel's admins: its settings, right of the bell (Xavier, #issues 2026-11-13) */}
+          {g && canAdmin(g) && <button className="icon-btn" aria-label="Channel settings" onClick={() => setSettings(true)}><GearIcon /></button>}</>} />
+      {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
       <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
@@ -303,7 +335,8 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [newProp, setNewProp] = useState(false)
   // #proposals, #events: one type of post only (their page's "posts"), no free text at the top level
   const page = webPage(group(id))
-  const only = page?.posts === 'proposal' || page?.posts === 'event' ? page.posts : undefined
+  const only = page?.posts === 'proposal' || page?.posts === 'event' || page?.posts === 'thread' ? page.posts : undefined
+  const [newThread, setNewThread] = useState(false)
   const isPublic = isPublicChannel(group(id))
   // a request a member turns into a proposal (#requests → #proposals)
   const [proposeFrom, setProposeFrom] = useState<Message | null>(null)
@@ -417,10 +450,12 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {guestReading ? <GuestBar groupId={id} /> : <SaveAccountBar />}
       {!readOnly && only && (
         <div className="only-bar">
-          <span className="hint">{only === 'proposal'
+          <span className="hint">{only === 'thread'
+            ? (isPublic ? 'Threads only, public: every post has a title; talk goes in its thread.' : 'Threads only: every post has a title; talk goes in its thread.')
+            : only === 'proposal'
             ? (isPublic ? 'Public proposals: anyone on the web sees them.' : 'Members only: proposals to discuss and vote on.')
             : (isPublic ? <>Public: anyone on the web sees these events. Internal? <a href="#/c/bookings">#bookings</a></> : 'Members only: internal bookings.')}</span>
-          <button className="btn" onClick={() => (only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'proposal' ? 'New proposal' : 'New event'}</button>
+          <button className="btn" onClick={() => (only === 'thread' ? setNewThread(true) : only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'thread' ? 'New thread' : only === 'proposal' ? 'New proposal' : 'New event'}</button>
         </div>
       )}
       {!readOnly && !only && isPublic && <div className="purpose-line">🌐 Public: anyone on the web sees this channel{page?.posts === 'request' ? '. Members can turn a request into a proposal.' : '.'}</div>}
@@ -431,6 +466,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
       {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => setPrefill(`https://${BELFRY.domain}/events/${d} `)} />}
       {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
+      {newThread && <NewThreadSheet groupId={id} onClose={() => setNewThread(false)} onSent={() => { stick.current = true }} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
       {acting && <MessageActions onPropose={page?.posts === 'request' && !guestInfo() && acting.ev.kind === 9 ? () => setProposeFrom(acting) : undefined} emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}

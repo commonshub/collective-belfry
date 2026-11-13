@@ -137,7 +137,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
             }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
             const was = webPage(g)
-            if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public')) await setWebPage(id, web)
+            if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public') || (web.posts ?? '') !== (was?.posts ?? '')) await setWebPage(id, web)
             onClose()
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -146,6 +146,12 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
             {!g.isPod && <div className="field visibility"><span>Visibility</span>
               <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'public'} onChange={() => setWeb({ ...web, visibility: 'public' })} /> <span><b>Public</b> · anyone reads its threads on the web</span></label>
               <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'members'} onChange={() => setWeb({ ...web, visibility: 'members' })} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
+            </div>}
+            {!g.isPod && <div className="field visibility"><span>Posts</span>
+              {([['', 'Anything', 'messages, threads, events, proposals'], ['thread', 'Threads only', 'every post has a title; talk goes in its thread'], ['event', 'Events only', 'the composer becomes "New event"'], ['proposal', 'Proposals only', 'to discuss and vote on'],
+                ...(web.posts === 'request' ? [['request', 'Requests', 'from the web; members turn them into proposals']] : [])] as [string, string, string][]).map(([v, label, hint]) => (
+                <label key={v || 'any'} className="toggle"><input type="radio" name="posts" checked={(web.posts ?? '') === v} onChange={() => setWeb({ ...web, posts: (v || undefined) as WebPage['posts'] })} /> <span><b>{label}</b> · {hint}</span></label>
+              ))}
             </div>}
             <label className="switch-row">
               <span><b>E-mails from anyone</b><small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>

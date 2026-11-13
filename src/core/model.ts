@@ -384,8 +384,11 @@ export function isInbox(g: Group | undefined): boolean {
 // on the page, "members" shows someone from outside only their own. Older events said "list".
 export const WEB_D = 'belfry:web:'
 export type ChannelVisibility = 'public' | 'members'
-// "posts": a channel that takes one type of post only (#proposals, #events: Xavier, 2026-11-11)
-export type PostType = 'proposal' | 'event' | 'request'
+// "posts": a channel that takes one type of post only (#proposals, #events: Xavier, 2026-11-11);
+// its admins pick it in the channel's settings (#issues, 2026-11-13). "thread": every post has a
+// title and talk goes in its thread (a forum, GitHub-issues style); "request": the web's #requests.
+export const POST_TYPES = ['thread', 'event', 'proposal', 'request'] as const
+export type PostType = typeof POST_TYPES[number]
 export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility; posts?: PostType }
 // paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
 export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
@@ -411,7 +414,7 @@ export function webPage(g: Group | undefined): WebPage | undefined {
   const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && (g.admins.has(e.pubkey) || e.pubkey === relayKey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
-    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...(c.posts === 'proposal' || c.posts === 'event' || c.posts === 'request' ? { posts: c.posts } : {}) } : undefined
+    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...((POST_TYPES as readonly string[]).includes(c.posts) ? { posts: c.posts as PostType } : {}) } : undefined
   } catch { return undefined }
 }
 
