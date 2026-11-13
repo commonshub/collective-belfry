@@ -799,6 +799,8 @@ export interface Proposal {
   text: string
   version: number
   status: ProposalStatus
+  /** A new version of the website (an nsite ref): live once a belfry admin marks it Passed. */
+  website?: string
   /** The latest poll on it, with its version and each member's latest answer. */
   poll?: { ev: Ev; version: number; votes: Map<string, string> }
 }
@@ -845,7 +847,7 @@ export function proposals(): Proposal[] {
     out.push({
       coord, d: tag(e, 'd')!, ev: e, author: e.pubkey, groupId,
       title: tag(e, 'title') || 'Untitled proposal', summary: tag(e, 'summary') ?? '', text: e.content,
-      version: Number(tag(e, 'version')) || 1, status, poll,
+      version: Number(tag(e, 'version')) || 1, status, poll, website: tag(e, 'website') || undefined,
     })
   }
   return out

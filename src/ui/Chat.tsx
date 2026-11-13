@@ -18,7 +18,7 @@ import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
 import { newMentions, preview } from './Mentions'
-import { NewProposalSheet, ProposalCard } from './Proposals'
+import { NewProposalSheet, ProposalCard, SiteBar } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
 import { BELFRY, NAME, THEME } from '../config'
@@ -321,6 +321,7 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
           {/* the channel's admins: its settings, right of the bell (Xavier, #issues 2026-11-13) */}
           {g && canAdmin(g) && <button className="icon-btn" aria-label="Channel settings" onClick={() => setSettings(true)}><GearIcon /></button>}</>} />
       {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
+      {g?.isProposal && <SiteBar groupId={id} />}
       <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
     </div>
@@ -444,6 +445,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const isPublic = isPublicChannel(group(id))
   // a request a member turns into a proposal (#requests → #proposals)
   const [proposeFrom, setProposeFrom] = useState<Message | null>(null)
+  const [proposeSite, setProposeSite] = useState<Message | null>(null)
   const [newTodo, setNewTodo] = useState(false)
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   useVersion()
@@ -573,11 +575,12 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {newThread && <NewThreadSheet groupId={id} onClose={() => setNewThread(false)} onSent={() => { stick.current = true }} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
-      {acting && <MessageActions onPropose={page?.posts === 'request' && !guestInfo() && acting.ev.kind === 9 ? () => setProposeFrom(acting) : undefined} emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
+      {acting && <MessageActions onPropose={page?.posts === 'request' && !guestInfo() && acting.ev.kind === 9 ? () => setProposeFrom(acting) : undefined} onProposeSite={!reading() && nsiteRef(acting.text) ? () => setProposeSite(acting) : undefined} emojiOnly={picking} m={acting} groupId={id} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)}
         thread={th.get(acting.ev.id)} onReply={() => openThread(acting, true)}
         onThread={th.get(acting.ev.id)?.count ? () => openThread(acting) : undefined} onEdit={() => setEditing(acting)} />}
       {actingReply && <MessageActions m={actingReply} groupId={id} mine={rx.get(actingReply.ev.id) ?? []} onClose={() => setActingReply(null)} onEdit={() => setEditing(actingReply)} />}
       {editing && <EditSheet m={editing} groupId={id} onClose={() => setEditing(null)} />}
+      {proposeSite && <NewProposalSheet parent={group('website') ? 'website' : id} onClose={() => setProposeSite(null)} website={{ ref: nsiteRef(proposeSite.text)!, by: displayName(proposeSite.ev.pubkey) }} />}
       {proposeFrom && <NewProposalSheet parent="proposals" onClose={() => setProposeFrom(null)}
         from={{ title: (proposeFrom.ev.tags.find((t) => t[0] === 'subject')?.[1] ?? plainRefs(proposeFrom.text, '').split('\n')[0].replace(/\*\*/g, '')).slice(0, 140), text: proposeFrom.text.replace(/^\*\*[^\n]*\*\*\n+/, ''), by: displayName(proposeFrom.ev.pubkey), link: `https://${BELFRY.domain}/${page?.slug ?? id}/${proposeFrom.ev.id}` }}
         onMade={(_pid, title) => void postThreadReply(id, proposeFrom.ev, `Became a proposal: “${title}”. Members discuss it and vote on it in #proposals.`, [])} />}
@@ -759,7 +762,7 @@ const MORE_EMOJIS = [
   '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
 ]
 
-function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, onEdit, onPropose, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; onEdit?: () => void; /** #requests: a member turns it into a proposal */ onPropose?: () => void; emojiOnly?: boolean }) {
+function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, onEdit, onPropose, onProposeSite, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; onEdit?: () => void; /** #requests: a member turns it into a proposal */ onPropose?: () => void; /** a version of the website: propose it (#issues 2026-11-13) */ onProposeSite?: () => void; emojiOnly?: boolean }) {
   // your own plain message or reply can be edited (not a card, an event, a pod, a proposal or an e-mail)
   const canEdit = !!onEdit && m.ev.pubkey === me() && !m.ev.pending && !!m.text && !(m.text.startsWith('📅') && eventCoordOf(m.ev)) && !podOf(m.ev) && !proposalOf(m.ev) && !mailOf(m.ev) && !cardOf(m.ev, knownGroupsKey()) && !sentOf(m.ev, knownGroupsKey())
   // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
@@ -821,7 +824,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
             {onPropose && !m.ev.pending && <Item icon={<DocIcon />} label="Turn into a proposal" onClick={() => { onClose(); onPropose() }} />}
             {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the todos' : 'Turn into a todo'} onClick={() => { if (copied === 'todo') return; setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
             {canAdmin(g) && !m.ev.pending && m.ev.kind === 9 && <Item icon={<PushPinIcon />} label={isPinned ? 'Unpin from the channel' : 'Pin to the channel'} onClick={() => { onClose(); void pinMessage(groupId, m.ev.id, !isPinned) }} />}
-            {isAdmin() && nsiteRef(m.text) && <Item icon={<GlobeIcon />} label="Make this the website" onClick={() => { onClose(); void makeWebsite(m) }} />}
+            {onProposeSite && nsiteRef(m.text) && !m.ev.pending && <Item icon={<GlobeIcon />} label="Propose as the website" onClick={() => { onClose(); onProposeSite() }} />}
           </div>
           {m.ev.pubkey === me() && (
             <div className="act-group">
@@ -1162,20 +1165,6 @@ function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Mes
 export function nsiteRef(text: string): string | null {
   const m = /nsite:npub1[02-9ac-hj-np-z]{58}(?:\/[a-z0-9-]{1,13})?|https:\/\/preview\.[^/\s]+\/p\/npub1[02-9ac-hj-np-z]{58}(?:@[a-z0-9-]{1,13})?|https:\/\/npub1[02-9ac-hj-np-z]{58}\.[a-z0-9.-]+/.exec(text || '')
   return m ? m[0] : null
-}
-
-/** An admin makes the version a message shares the website (Belfry copies it, website.py). */
-async function makeWebsite(m: Message) {
-  const ref = nsiteRef(m.text)
-  if (!ref || !confirm(`Publish this version as ${BELFRY.domain}? The belfry copies it; the author's preview stays theirs.`)) return
-  try {
-    const r = await signedFetch(`${BELFRY.api}/website/publish`, 'POST', { ref, message: m.ev.id })
-    const d = await r.json().catch(() => ({}))
-    if (!r.ok) throw new Error(d.message || 'Not published.')
-    alert(`Published: ${d.files} files are now https://${BELFRY.domain}. A note went to #website.`)
-  } catch (e) {
-    alert(e instanceof Error ? e.message : String(e))
-  }
 }
 
 /** A guest who joined with a name only (an event's guest, an older link), once they did

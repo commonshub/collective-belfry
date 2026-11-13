@@ -1,3 +1,4 @@
+import { BELFRY } from '../config'
 import { useState } from 'react'
 import { createProposal, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
 import { canDecide, displayName, groups, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
@@ -102,8 +103,12 @@ function Fields({ n, set }: { n: Omit<NewProposal, 'status'>; set: (patch: Parti
 
 /** FROM: a request (#requests) a member turns into a proposal: its words to start from, a link
  *  back in the text, and ONMADE to say so in the request's thread. */
-export function NewProposalSheet({ parent, onClose, from, onMade }: { parent: string; onClose: () => void; from?: { title: string; text: string; by: string; link: string }; onMade?: (id: string, title: string) => void }) {
-  const [n, setN, clearDraft] = useFormDraft<NewProposal>(from ? null : 'proposal:' + parent, () => ({ title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' }))
+export function NewProposalSheet({ parent, onClose, from, onMade, website }: { parent: string; onClose: () => void; from?: { title: string; text: string; by: string; link: string }; onMade?: (id: string, title: string) => void
+  /** a new version of the website (#issues 2026-11-13): its nsite ref, and who made it */
+  website?: { ref: string; by: string } }) {
+  const [n, setN, clearDraft] = useFormDraft<NewProposal>(from || website ? null : 'proposal:' + parent, () => website
+    ? { title: 'A new version of the website', summary: `By ${website.by}`, text: `Preview it: ${previewLink(website.ref)}\n\nWhat changes:\n- `, status: 'feedback', website: website.ref }
+    : { title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' })
   const set = (patch: Partial<NewProposal>) => setN((x) => ({ ...x, ...patch }))
   const where = groups().find((g) => g.id === parent)
   return (
@@ -115,7 +120,7 @@ export function NewProposalSheet({ parent, onClose, from, onMade }: { parent: st
           <button type="button" className={n.status === 'feedback' ? 'on' : ''} onClick={() => set({ status: 'feedback' })}><b>Open for feedback</b><small>Ask for comments</small></button>
         </div>
         <button className="btn" disabled={!n.title.trim()}>Post proposal</button>
-        <p className="hint" style={{ marginTop: 10 }}>Posted in {where?.name ?? parent}. It gets its own chat for feedback; you can publish new versions.</p>
+        <p className="hint" style={{ marginTop: 10 }}>Posted in {where?.name ?? parent}. It gets its own chat for feedback; you can publish new versions.{n.website ? ` Once an admin marks it Passed, this version goes live at ${BELFRY.domain}.` : ''}</p>
       </Form>
     </Sheet>
   )
@@ -134,5 +139,25 @@ function ReviseSheet({ p, onClose }: { p: Proposal; onClose: () => void }) {
         {p.status === 'voting' && <p className="hint" style={{ marginTop: 10 }}>The vote restarts on the new version.</p>}
       </Form>
     </Sheet>
+  )
+}
+
+/** Where to look at an nsite version: its preview on this belfry (nsite:<npub>[/<name>] → preview.<domain>/p/<npub>[@<name>]). */
+export function previewLink(ref: string): string {
+  const m = /^nsite:(npub1[02-9ac-hj-np-z]{58})(?:\/([a-z0-9-]{1,13}))?$/.exec(ref)
+  return m ? `https://preview.${BELFRY.domain}/p/${m[1]}${m[2] ? '@' + m[2] : ''}` : ref
+}
+
+/** Under a website proposal's header, always (#issues 2026-11-13): look at the version, and
+ *  how it goes live. */
+export function SiteBar({ groupId }: { groupId: string }) {
+  useVersion()
+  const p = proposalFor(groupId)
+  if (!p?.website) return null
+  return (
+    <div className="prop-site">
+      <a className="btn small" href={previewLink(p.website)} target="_blank" rel="noreferrer">Preview this version</a>
+      <span className="hint">{p.status === 'passed' ? `Passed: it is (or is about to be) live at ${BELFRY.domain}.` : `A new version of ${BELFRY.domain}: it goes live once a belfry admin marks this proposal Passed.`}</span>
+    </div>
   )
 }

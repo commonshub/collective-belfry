@@ -1176,3 +1176,6 @@ div.settings-row { cursor: default; }
 .chan-slot.drop-after::after { top: auto; bottom: -1px; }
 .drop-hint { padding: 2px 16px 8px; font-size: 13px; }
 .agent-badge { margin-left: 6px; font-size: 11px; font-weight: 500; white-space: nowrap; }
+.prop-site { display: flex; gap: 10px; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.prop-site .hint { font-size: 13px; flex: 1 1 200px; }
+.prop-site a.btn { color: var(--on-accent); text-decoration: none; flex: none; }
