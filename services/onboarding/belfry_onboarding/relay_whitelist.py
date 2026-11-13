@@ -42,12 +42,33 @@ def normalize_pubkeys(pubkeys: Any) -> list[str]:
     return sorted(out)
 
 
-def render(template: str, pubkeys: list[str]) -> str:
-    """Replace every marked ``pubkey_whitelist`` list in ``template`` with ``pubkeys``."""
+_INFO = re.compile(
+    r'^(?P<key>\s*(?P<field>name|description)\s*=\s*)"[^"\n]*"(?P<suffix>\s*#\s*belfry:info.*)$',
+    re.MULTILINE,
+)
+
+
+def _toml_str(text: str) -> str:
+    return text.replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ")[:200]
+
+
+def render(template: str, pubkeys: list[str], community: str = "") -> str:
+    """Replace every marked ``pubkey_whitelist`` list in ``template`` with ``pubkeys``, and the
+    relay's NIP-11 name and description (lines marked ``# belfry:info``) with the community's."""
     if not _LINE.search(template):
         raise WhitelistTemplateError(f"template has no line marked '# {MARKER}'")
     rendered = "[" + ", ".join(f'"{k}"' for k in pubkeys) + "]"
-    return _LINE.sub(lambda m: f"{m.group('prefix')}{rendered}{m.group('suffix')}", template)
+    out = _LINE.sub(lambda m: f"{m.group('prefix')}{rendered}{m.group('suffix')}", template)
+    if community.strip():
+        name = _toml_str(community.strip())
+        values = {
+            "name": name,
+            "description": f"{name} community relay. Members only (NIP-42).",
+        }
+        out = _INFO.sub(
+            lambda m: f'{m.group("key")}"{values[m.group("field")]}"{m.group("suffix")}', out
+        )
+    return out
 
 
 def write_in_place(path: Path, content: str) -> bool:
@@ -71,15 +92,18 @@ def write_in_place(path: Path, content: str) -> bool:
 class RelayWhitelist:
     """Renders ``template_path`` into ``config_path``. Both are regular files."""
 
-    def __init__(self, template_path: str, config_path: str, extra_pubkeys: str = ""):
+    def __init__(
+        self, template_path: str, config_path: str, extra_pubkeys: str = "", community: str = ""
+    ):
         self.template_path = Path(template_path)
         self.config_path = Path(config_path)
         self.extra_pubkeys = normalize_pubkeys(extra_pubkeys.split(","))
+        self.community = community
 
     def sync(self, pubkeys: list[str]) -> dict[str, Any]:
         keys = normalize_pubkeys([*pubkeys, *self.extra_pubkeys])
         template = self.template_path.read_text(encoding="utf-8")
-        changed = write_in_place(self.config_path, render(template, keys))
+        changed = write_in_place(self.config_path, render(template, keys, self.community))
         if changed:
             log.info("relay whitelist: %s rewritten with %d pubkeys", self.config_path, len(keys))
         return {"pubkeys": len(keys), "changed": changed, "path": str(self.config_path)}

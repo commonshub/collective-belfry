@@ -156,3 +156,16 @@ def test_sync_endpoint_and_startup_sync(client, services, odoo):
     assert r.json()["result"] == "synced" and r.json()["pubkeys"] == 1
     assert len(rendered(services)) == 1
     assert client.post("/admin/sync-relay?token=wrong").status_code == 401
+
+
+def test_the_relay_is_named_after_the_community():
+    from belfry_onboarding.relay_whitelist import render
+
+    out = render(TEMPLATE.read_text(), [], 'Belfry "Brussels"')
+    assert 'name = "Belfry \\"Brussels\\""' in out
+    assert 'description = "Belfry \\"Brussels\\" community relay. Members only (NIP-42)."' in out
+    assert "Open Source Village" not in out
+    # without a name the template's neutral text stays
+    assert 'description = "Community relay. Members only (NIP-42)."' in render(
+        TEMPLATE.read_text(), []
+    )

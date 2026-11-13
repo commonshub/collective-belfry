@@ -11,8 +11,8 @@
 # belfry-event policy must allow kind 22242.
 
 [information]
-name = "Belfry"
-description = "Open Source Village community relay. Participants only (NIP-42)."
+name = "Belfry"  # belfry:info (the community's name, filled in by the onboarding service)
+description = "Community relay. Members only (NIP-42)."  # belfry:info
 software = "https://github.com/rnostr/rnostr"
 
 [data]

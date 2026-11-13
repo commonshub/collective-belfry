@@ -162,6 +162,7 @@ def build_services(settings: Settings) -> Services:
                     )
                     if k
                 ),
+                community=settings.community_name or "",
             )
             if settings.relay_config_path
             else None
