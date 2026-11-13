@@ -15,6 +15,8 @@
 | `../infra/relay/README.md`, `../infra/blossom/README.md`, `../infra/mint/README.md` | community relay, file server, token mint |
 | `../infra/groups-relay/README.md`, `../infra/git/README.md` | the groups relay (channels, NIP-29) and the git server |
 | `register.md` | the belfry's own register (`REGISTER=belfry`, the installer's default) and Odoo as an add-on |
+| `setup.md` | a new belfry's first run: open setup (first come, first served), the homepage placeholder, `belfry setup-reset` |
+| `agents.md` | agents asking to join (`belfry.<domain>/agents.md`, `/api/v1/agent-requests`) and what an approved agent can do |
 | `mail.md` | e-mail as messages: receiving for members and channels, shared inboxes, sending from the chat |
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |
 | `../brand/README.md` | colours, fonts, logos and where copies of them live |

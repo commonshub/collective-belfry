@@ -3,19 +3,24 @@
 A channel's guest can be an agent (guests.py: its own key, 30 days, one channel). A member can
 also bring an agent of their own, which is a member for as long as they are one:
 
-- ``{}`` → ``{"agents": [{"pubkey", "name", "since"}], "limit": n}``: the caller's agents.
+- ``{}`` → ``{"agents": [{"pubkey", "name", "since"}], "limit": n}``: the caller's agents; an
+  admin's answer adds ``"unlimited": true`` (admins may have as many agents as they wish).
 - ``{"pubkey", "mine": true}``: an agent that is a guest here becomes the caller's agent. Only
-  the member who invited it (or an admin, for themselves) can do that, within their limit.
+  the member who invited it (or an admin, for themselves) can do that, within their limit
+  (none for an admin).
 - ``{"pubkey", "mine": false}``: the agent is removed (its member, or an admin).
 - ``{"limit": n}`` by an admin: how many agents each member can bring (0 to 20).
 - A link made with ``"agent": true`` (guests.py) brings a new agent in as the inviter's own.
+- An agent can also ask to join by itself (agentrequests.py, ``/agents.md``): an admin who lets
+  it in becomes its member.
 
 The agent holds a pass of tier ``agent`` with ``agent_owner`` = its member's contact. It is on
 the relay whitelist like a member (core.active_pubkeys), signs with its own key, has no e-mail,
 no signer account, can't invite and can't be an admin. When its member's membership closes, so
 does the agent's pass (core._close_pass → ``closed``), and it is taken out of every channel.
 The limit is the register's ``belfry.agents_per_member`` (1 unless set), or
-``belfry.agents_per_tier.<tier>`` for a membership tier. belfry.json lists agent → member.
+``belfry.agents_per_tier.<tier>`` for a membership tier; the belfry's admins have
+none. belfry.json lists agent → member.
 """
 
 from __future__ import annotations
@@ -123,14 +128,20 @@ def _owner(svc: Services, caller: str) -> int:
 
 
 def mine(svc: Services, caller: str) -> dict[str, Any]:
+    from . import apps
+
     owner = _owner(svc, caller)
-    return {
+    out: dict[str, Any] = {
         "agents": [
             {"pubkey": a["pubkey"], "name": a["name"], "since": a["since"]}
             for a in svc.odoo.agents_of(owner)
         ],
         "limit": svc.odoo.agents_limit(owner),
     }
+    if caller in apps.admin_pubkeys(svc):
+        # an admin may have as many agents as they wish; `limit` stays the members' number
+        out["unlimited"] = True
+    return out
 
 
 def change(svc: Services, caller: str, target: str, on: bool) -> dict[str, Any]:

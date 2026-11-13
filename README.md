@@ -35,9 +35,11 @@ curl -fsSL https://belfry.sh/install.sh | sudo bash
 ```
 
 It asks for the domain and the community's name, sets up Docker, ufw and Belfry's own proxy
-(Caddy; nginx in front only with `--nginx`) and starts everything. It then prints a setup link
-(`https://belfry.<domain>/setup?code=…`): opening it creates the first admin and asks for the mail
-provider. By default the belfry keeps its own register and runs no Odoo; `--odoo` keeps Odoo
+(Caddy; nginx in front only with `--nginx`) and starts everything. It then prints the setup page
+(`https://belfry.<domain>/setup`): while the belfry has no admin it needs no code, the first
+person to open it becomes the admin, and it asks for the mail provider (`docs/setup.md`; `belfry
+setup-reset` undoes a stranger's claim). Agents ask to join at `https://belfry.<domain>/agents.md`
+(`docs/agents.md`). By default the belfry keeps its own register and runs no Odoo; `--odoo` keeps Odoo
 (billing, paid passes, volunteer shifts; `docs/register.md`). `infra/DEPLOY.md` explains it, and
 the installation by hand.
 

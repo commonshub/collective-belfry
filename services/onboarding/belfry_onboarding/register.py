@@ -51,6 +51,7 @@ M2O: dict[str, dict[str, str]] = {
     "belfry.feedback": {"partner_id": "res.partner"},
     "belfry.follower": {"partner_id": "res.partner"},
     "belfry.key.code": {"partner_id": "res.partner"},
+    "belfry.agent.request": {},
     "res.partner": {},
 }
 MODELS = set(M2O)
@@ -640,6 +641,7 @@ class Register(OdooApi):
         role: str = "",
         member_role: str = "",
         membership: str = "",
+        unlimited: bool = False,
     ) -> dict[str, Any]:
         """A link that makes its user a guest of CHANNEL for DAYS days (guests.py). It is for
         PEOPLE people (one unless asked) and works for LINK_DAYS days (one unless asked).
@@ -648,7 +650,8 @@ class Register(OdooApi):
         for MEMBERSHIP (``month`` / ``year`` / ``permanent``) once they joined with an e-mail;
         until then they read CHANNEL as a guest in guest mode, for DAYS days.
         OWN_AGENT: the link is for one agent, which becomes the inviter's own agent (agents.py):
-        a member for as long as the inviter is one, not a guest."""
+        a member for as long as the inviter is one, not a guest. UNLIMITED: the inviter is an
+        admin, who may have as many agents as they wish."""
         partner = self._member(partner_id, "Only members can invite guests.")
         if member_role:
             note = f"Member ({member_role}), starting in #{channel}"
@@ -656,7 +659,7 @@ class Register(OdooApi):
             note = f"Guest of #{channel}"
         if own_agent:
             people = 1
-            self._agent_room(partner["id"])
+            self._agent_room(partner["id"], unlimited)
         people = max(1, min(GUEST_MAX, int(people)))
         link_days = max(1, min(GUEST_LINK_DAYS, int(link_days)))
         inv_id = self._create(
@@ -671,6 +674,7 @@ class Register(OdooApi):
                 "guest_max": people,
                 "guest_uses": 0,
                 "agent_owner": partner["id"] if own_agent else False,
+                "agent_unlimited": bool(own_agent and unlimited),
                 "guest_role": role or False,
                 "member_role": member_role or False,
                 "membership": (membership or "permanent") if member_role else False,
@@ -739,10 +743,14 @@ class Register(OdooApi):
                 and p.get("agent_owner") in key
             }
 
-    def _agent_room(self, owner_id: int) -> None:
+    def _agent_room(self, owner_id: int, unlimited: bool = False) -> None:
+        """Room for one more agent of OWNER's. UNLIMITED: the owner is an admin (they may have as
+        many agents as they wish); they still have to be a member."""
         limit = self.agents_limit(owner_id)
-        if limit <= 0:
+        if limit <= 0 and not (unlimited and self._is_member(owner_id)):
             raise _user_error("Only members can bring an agent of their own.", "not_member")
+        if unlimited:
+            return
         if len(self.agents_of(owner_id)) >= limit:
             raise _user_error(
                 "You have one agent already: remove it first."
@@ -767,6 +775,14 @@ class Register(OdooApi):
         )
         self._write("belfry.pass", [pass_id], {"state": "active"})
         return pass_id
+
+    def _is_member(self, partner_id: int) -> bool:
+        return any(
+            p.get("partner_id") == int(partner_id)
+            and p.get("state") == "active"
+            and p.get("tier") not in ("guest", "agent")
+            for p in self._all("belfry.pass")
+        )
 
     def make_agent(self, pubkey: str, owner_id: int, caller: str, admin: bool) -> dict[str, Any]:
         """A channel's guest agent becomes OWNER's own agent: a member's pass on the agent's
@@ -794,7 +810,7 @@ class Register(OdooApi):
                     raise _user_error(
                         "Only the member who invited this agent can make it theirs.", "not_inviter"
                     )
-                self._agent_room(owner_id)
+                self._agent_room(owner_id, admin)  # an admin has no limit
                 pid = mine[0]["partner_id"]
                 pass_id = self._agent_pass(pid, owner_id, pubkey, False)
             except BaseException:
@@ -802,6 +818,112 @@ class Register(OdooApi):
                 raise
             self._db.execute("COMMIT")
             return {"pass_id": pass_id, "partner_id": pid}
+
+    # ── agents asking to join (agentrequests.py) ─────────────────────────────────────────────
+    def agent_request_ask(
+        self, pubkey: str, name: str, about: str, route: str, limits: dict[str, int]
+    ) -> dict[str, Any]:
+        """An agent asks to join with its own key. Returns ``{"id", "state", "new"}``; the same
+        key asking again while its request waits gets that request (``new`` False). Refused with
+        codes ``in_already`` (the key holds an active pass), ``too_many`` (the key asked too often
+        today), ``busy`` (too many requests wait, or came in the last hour)."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                if any(
+                    p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+                    for p in self._all("belfry.pass")
+                ):
+                    raise _user_error("This key is in already.", "in_already")
+                rows = self._all("belfry.agent.request")
+                waiting = next(
+                    (r for r in rows if r.get("pubkey") == pubkey and r.get("state") == "pending"),
+                    None,
+                )
+                if waiting is not None:
+                    self._db.execute("COMMIT")
+                    return {"id": waiting["id"], "state": "pending", "new": False}
+                day = stamp(now() - dt.timedelta(days=1))
+                hour = stamp(now() - dt.timedelta(hours=1))
+                if (
+                    sum(1 for r in rows if r.get("pubkey") == pubkey and r["create_date"] >= day)
+                    >= limits["per_key_day"]
+                ):
+                    raise _user_error("This key asked too often today.", "too_many")
+                if (
+                    sum(1 for r in rows if r.get("state") == "pending") >= limits["pending"]
+                    or sum(1 for r in rows if r["create_date"] >= hour) >= limits["per_hour"]
+                ):
+                    raise _user_error("Too many requests wait already. Try later.", "busy")
+                rid = self._create(
+                    "belfry.agent.request",
+                    {
+                        "pubkey": pubkey,
+                        "name": name,
+                        "about": about,
+                        "route": route,
+                        "state": "pending",
+                    },
+                )
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+            return {"id": rid, "state": "pending", "new": True}
+
+    def agent_requests(
+        self, state: str | None = None, pubkey: str | None = None
+    ) -> list[dict[str, Any]]:
+        """The requests, newest first (STATE pending|approved|declined, PUBKEY: one agent's)."""
+        with self._lock:
+            rows = self._all("belfry.agent.request")
+        return sorted(
+            (
+                r
+                for r in rows
+                if (state is None or r.get("state") == state)
+                and (pubkey is None or r.get("pubkey") == pubkey)
+            ),
+            key=lambda r: r["id"],
+            reverse=True,
+        )
+
+    def agent_request_decide(self, rid: int, approve: bool, owner_id: int) -> dict[str, Any]:
+        """An admin lets a waiting agent in as their own agent (OWNER_ID: the admin's contact; no
+        limit: an admin may have as many agents as they wish), or declines it. Returns the
+        request; codes ``not_found``, ``decided`` (not waiting any more), ``in_already``."""
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                req = self._get("belfry.agent.request", rid)
+                if req is None:
+                    raise _user_error("No such request.", "not_found")
+                if req.get("state") != "pending":
+                    raise _user_error("This request was answered already.", "decided")
+                vals: dict[str, Any] = {"decided_at": stamp(), "decided_by": int(owner_id)}
+                if approve:
+                    pubkey = req["pubkey"]
+                    if any(
+                        p.get("keycast_pubkey") == pubkey and p.get("state") == "active"
+                        for p in self._all("belfry.pass")
+                    ):
+                        raise _user_error("This key is in already.", "in_already")
+                    self._agent_room(int(owner_id), True)
+                    pid = self._create("res.partner", {"name": req.get("name") or "Agent"})
+                    vals.update(
+                        state="approved",
+                        owner_id=int(owner_id),
+                        partner_id=pid,
+                        pass_id=self._agent_pass(pid, int(owner_id), pubkey, False),
+                    )
+                else:
+                    vals["state"] = "declined"
+                self._write("belfry.agent.request", [rid], vals)
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+            return self._get("belfry.agent.request", rid) or {}
 
     def add_guest_channel(
         self, pubkey: str, channel: str, inviter: str, days: int
@@ -1046,7 +1168,7 @@ class Register(OdooApi):
                 days = int(inv.get("guest_days") or 30)
                 today = now().date()
                 if inv.get("agent_owner"):  # the inviter's own agent: a member, not a guest
-                    self._agent_room(int(inv["agent_owner"]))
+                    self._agent_room(int(inv["agent_owner"]), bool(inv.get("agent_unlimited")))
                     pass_id = self._agent_pass(pid, int(inv["agent_owner"]), pubkey, inv["id"])
                     self._write("belfry.invite", [inv["id"]], {"pass_id": pass_id})
                     self._db.execute("COMMIT")

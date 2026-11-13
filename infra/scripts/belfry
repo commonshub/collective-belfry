@@ -13,7 +13,12 @@
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
 #   belfry setup-code [NAME]         a link to https://belfry.<domain>/setup with a code in it, for
-#                                    NAME (valid 24 h); a new belfry's link creates its first admin
+#                                    NAME (valid 24 h). A new belfry needs none: while it has no
+#                                    admin, https://belfry.<domain>/setup is open to the first
+#                                    person who opens it
+#   belfry setup-reset [--yes] [--all-admins] [--keep-settings]   undo a stranger's claim: remove
+#                                    the first admin, clear the mail key and put back the settings
+#                                    they changed; /setup is open again (docs/setup.md)
 #   belfry setup-apply               apply what the setup page saved (run by belfry-setup.path)
 #   belfry setup-units               install the systemd units that watch the setup page (root)
 #   belfry theme set DIR | show | reset   the community's own look (custom.css, logo, theme.json)
@@ -661,6 +666,67 @@ PY
   say "  https://belfry.$(env_get BELFRY_DOMAIN)/setup?code=$code"
 }
 
+# belfry setup-reset: someone else claimed the first admin's place on a new belfry. Removes
+# them (setup.reset in the onboarding service: passes revoked, so the relays drop their key and
+# their agents go, signer account suspended, out of the stewards group; first-admin.json kept as
+# first-admin.reset-<time>.json; setup cookies made before stop working), then puts back the
+# settings the setup page changed during the claim: secrets (the mail key above all: mail sent
+# through a stranger's account would show them every sign-in code) are cleared and mail goes
+# back to none; the others (name, sender, homepage…) get the value they had before. Members they
+# invited stay. Safe to run again: with no admin it does nothing.
+cmd_setup_reset() {
+  local yes=0 all="" keep=0 a out
+  for a in "$@"; do
+    case "$a" in
+      --yes|-y) yes=1 ;;
+      --all-admins) all=--all-admins ;;
+      --keep-settings) keep=1 ;;
+      *) die "usage: belfry setup-reset [--yes] [--all-admins] [--keep-settings]" ;;
+    esac
+  done
+  local link="https://belfry.$(env_get BELFRY_DOMAIN)/setup"
+  out=$(compose --profile app exec -T onboarding python -m belfry_onboarding setup-reset --dry-run $all | tail -n1) \
+    || die "the onboarding service did not answer (is the stack running? belfry status)"
+  python3 -c '
+import json, sys
+d = json.loads(sys.argv[1])
+fa = d.get("first_admin")
+print("First admin: %s <%s> (%s)" % (fa.get("username"), fa.get("email"), fa.get("nip05")) if fa else "No first admin recorded (first-admin.json).")
+print("Would remove: " + (", ".join(d["removed"]) or "nobody"))
+if d["remaining_admins"]:
+    print("Admins who stay: " + ", ".join(d["remaining_admins"]) + " (/setup stays closed while an admin is left; --all-admins removes them too)")
+if d["revert"]:
+    print("Settings the setup page changed during the claim: " + ", ".join(sorted(d["revert"])))
+' "$out"
+  if [[ "$(python3 -c 'import json,sys; print(len(json.loads(sys.argv[1])["removed"]))' "$out")" == 0 ]]; then
+    say "Nothing to reset. /setup is open while there is no admin: $link"
+    return 0
+  fi
+  if [[ $yes -ne 1 ]]; then
+    [[ -t 0 ]] || die "add --yes to reset without a terminal"
+    local answer
+    read -r -p "Remove them and open the setup again? Type yes: " answer
+    [[ "$answer" == yes ]] || die "nothing changed"
+  fi
+  out=$(compose --profile app exec -T onboarding python -m belfry_onboarding setup-reset $all | tail -n1) \
+    || die "the reset failed: see belfry logs onboarding"
+  say "Removed: $(python3 -c 'import json,sys; print(", ".join(json.loads(sys.argv[1])["removed"]))' "$out")"
+  rm -f "$SETUP_DIR/pending.env"
+  local changed=0
+  if [[ $keep -ne 1 ]]; then
+    changed=$(python3 "$INFRA/scripts/setup-revert.py" "$out" "$ENV_FILE" "$SECRETS")
+  fi
+  setup_status
+  record "Setup reset: the first admin's claim was undone"
+  if [[ "$changed" == 1 ]]; then
+    say "Settings put back; applying them."
+    cmd_apply
+  fi
+  say ""
+  say "The setup is open again: the first person to open it becomes the admin."
+  say "  $link"
+}
+
 cmd_setup_apply() {
   local pending="$SETUP_DIR/pending.env" work log keys=() line k ok=true msg=""
   [[ -f "$pending" ]] || return 0
@@ -928,6 +994,7 @@ case "${1:-help}" in
   update-request) cmd_update_request ;;
   homepage) shift; cmd_homepage "$@" ;;
   setup-code) shift; cmd_setup_code "$@" ;;
+  setup-reset) shift; cmd_setup_reset "$@" ;;
   setup-apply) cmd_setup_apply ;;
   setup-units) cmd_setup_units ;;
   theme) shift; cmd_theme "$@" ;;

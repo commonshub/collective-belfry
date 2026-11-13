@@ -297,7 +297,7 @@ def test_first_run_admin_mail_code(fresh, folder, odoo, authentik, keycast, monk
     assert fa["community_name"] == "Village Commons"
     # signed in as the admin on belfry.<domain>; a second first admin is refused
     assert console.COOKIE in r.cookies
-    assert make_first_admin(fresh, folder, csrf, session).status_code in (403, 422)
+    assert make_first_admin(fresh, folder, csrf, session).status_code in (403, 409, 422)
     # reload: the wizard resumes at the mail provider
     page = fresh.get("/setup").text
     assert 'data-start="sender"' in page and "Resend" in page

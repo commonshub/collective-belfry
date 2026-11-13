@@ -168,7 +168,7 @@
 # this host's paths under /console; sign-in goes through pass.<domain>/me.
 belfry.{$BELFRY_DOMAIN} {
 	import security
-	import limit console-forms 60 1m /members/* /website/*
+	import limit console-forms 60 1m /members/* /website/* /agents/*
 	import limit setup-code 10 1m /setup/code
 	# the belfry's API (/api/v1/…, the same endpoints pass.<domain>/api/… had), rate-limited alike
 	import limit console-api 60 1m /api/*

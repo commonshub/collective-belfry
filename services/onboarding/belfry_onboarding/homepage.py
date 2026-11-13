@@ -324,8 +324,9 @@ class Homepage:
                 # the belfry's own site, not published yet: the placeholder (console.py)
                 from .console import placeholder_html
 
+                svc = getattr(request.app.state, "services", None)
                 return Response(
-                    placeholder_html(self.settings),
+                    await run_in_threadpool(placeholder_html, self.settings, svc),
                     media_type="text/html",
                     headers={"Cache-Control": "no-store"},
                 )

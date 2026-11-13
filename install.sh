@@ -477,7 +477,7 @@ EOF
   step "The stack (the first start builds the signer: 15 to 30 minutes)"
   runuser -u belfry -- "$DIR/infra/scripts/belfry" apply
   "$DIR/infra/scripts/belfry" setup-units >/dev/null || warn "the setup page's watcher is not installed; run: belfry setup-units"
-  SETUP_LINK=$(runuser -u belfry -- "$DIR/infra/scripts/belfry" setup-code </dev/null | sed -n 's/^  \(https:.*\)/\1/p') || true
+  SETUP_LINK="https://belfry.$BELFRY_DOMAIN/setup"
   if [[ $RUN_SMOKE -eq 1 ]]; then
     step "Smoke test"
     runuser -u belfry -- "$DIR/infra/scripts/belfry" smoke || warn "the smoke test failed: see above and $LOG"
@@ -485,11 +485,11 @@ EOF
 
   step "Your belfry is up"
   if [[ -n "${SETUP_LINK:-}" ]]; then
-    printf '\n  %sOpen this link to finish (valid 24 hours):%s\n\n    %s\n\n' "$bold" "$reset" "$SETUP_LINK"
-    printf '  It makes you the first admin, then asks for the key of a mail provider (Lettermint or\n  Resend) so members can get their sign-in codes by e-mail.\n\n'
+    printf '\n  %sOpen this link now to finish:%s\n\n    %s\n\n' "$bold" "$reset" "$SETUP_LINK"
+    printf '  No code: the first person to open it becomes the admin, so open it before you share the\n  address. It then asks for the key of a mail provider (Lettermint or Resend) so members can\n  get their sign-in codes by e-mail. If someone else got there first: belfry setup-reset.\n  An agent can ask to join meanwhile: https://belfry.%s/agents.md\n\n' "$BELFRY_DOMAIN"
   fi
   cat <<EOF
-  https://belfry.$BELFRY_DOMAIN/setup     settings (belfry setup-code makes a new link)
+  https://belfry.$BELFRY_DOMAIN/setup     settings (admins; belfry setup-code makes a link for others)
   https://belfry.$BELFRY_DOMAIN           this belfry's status and members
   https://$BELFRY_DOMAIN                  the homepage (a placeholder until you publish one)
   https://$BELFRY_DOMAIN/.well-known/belfry.json   what apps and agents read

@@ -5,7 +5,9 @@ their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay;
 ``... sync-programme`` for the programme and room bookings as calendar events (programme.py);
 ``... accounting-check`` for the ticket seller's Odoo and its ids, ``... accounting-book [pass id]``
-to book paid tickets there (accounting.py)."""
+to book paid tickets there (accounting.py); ``... setup-reset [--all-admins] [--dry-run]`` to
+open /setup again after a stranger claimed a new belfry (setup.reset; prints JSON, run by
+``belfry setup-reset``)."""
 
 from __future__ import annotations
 
@@ -71,6 +73,12 @@ def main(argv: list[str] | None = None) -> int:
     pub.add_argument("--title", default="")
     pub.add_argument("--by", default="", help="who publishes, for the changelog")
     sub.add_parser("homepage-status", help="what the apex serves and the published nsite")
+    rst = sub.add_parser(
+        "setup-reset",
+        help="remove the first admin so /setup is open again (JSON out; belfry setup-reset)",
+    )
+    rst.add_argument("--all-admins", action="store_true", help="remove every admin")
+    rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
     imp = sub.add_parser(
         "register-import",
         help="copy people, passes and invites from Odoo into the belfry's own register",
@@ -111,6 +119,11 @@ def main(argv: list[str] | None = None) -> int:
         result = steward.add_steward(
             services, args.email, args.name, steward.activation_via_hook(services)
         )
+    elif args.command == "setup-reset":
+        from . import setup
+
+        print(json.dumps(setup.reset(services, args.all_admins, args.dry_run)))
+        return 0
     elif args.command == "usernames":
         from . import usernames
 

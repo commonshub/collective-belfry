@@ -140,7 +140,15 @@ def document(settings: Any) -> dict[str, Any]:
             {"name": name, "url": url, "description": text}
             for name, url, text in pages.listed_apps(settings)
         ],
-        "skills": {role: f"{public}/skills/{name}.md" for role, name in SKILLS.items()},
+        "skills": {
+            **{role: f"{public}/skills/{name}.md" for role, name in SKILLS.items()},
+            # an agent asking to join by itself (agentrequests.py): Markdown on belfry.<domain>
+            **({"join_as_agent": f"{console}/agents.md"} if console else {}),
+        },
+        # how an agent asks to join (agentrequests.py): the instructions and the endpoint
+        "agents_join": {"instructions": f"{console}/agents.md", "api": base + "/agent-requests"}
+        if console
+        else None,
     }
     return {k: v for k, v in doc.items() if v not in ("", None)}
 

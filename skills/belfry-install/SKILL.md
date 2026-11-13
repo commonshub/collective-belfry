@@ -19,7 +19,7 @@ apps on one VM. One script sets it up: `https://belfry.sh/install.sh` (the sourc
    pointing at the server. The apex serves the community's start page, so don't use a domain
    that already hosts a website; a subdomain like `belfry.example.org` is fine.
 3. **An e-mail** for Let's Encrypt notices (default `admin@<domain>`). The first admin is
-   whoever opens the setup link (below), not this address.
+   whoever opens the setup page first (below), not this address.
 4. **The community's name.**
 5. **Mail**: a Resend API key (resend.com → API Keys, sending access) or a Lettermint API token,
    and a sender address on a domain verified there. Without mail nobody can sign in. Other SMTP
@@ -32,11 +32,18 @@ apps on one VM. One script sets it up: `https://belfry.sh/install.sh` (the sourc
    recipients** (`age1…`) for the custody seed that members' keys derive from.
 
 Simplest, and what to do unless the person asks otherwise: install with only the domain (and the
-community's name), then give the person the **setup link** the installer prints at the end
-(`https://belfry.<domain>/setup?code=…`). Opening it makes them the first admin (their e-mail and a
-username: `<username>@<domain>`; their browser makes the first session key), then asks for a
-Resend or Lettermint key so members can get sign-in codes, then verifies their address. They type the keys
-there, over HTTPS; you never see them. `belfry setup-code` makes a new link if it expired.
+community's name), then give the person the **setup page** the installer prints at the end
+(`https://belfry.<domain>/setup`) and ask them to open it **right away**: while the belfry has no
+admin it needs no code, and the first person to open it becomes the admin (their e-mail and a
+username: `<username>@<domain>`; their browser makes the first session key). It then asks for a
+Resend or Lettermint key so members can get sign-in codes, then verifies their address. They type
+the keys there, over HTTPS; you never see them. If someone else got there first, `belfry
+setup-reset` on the server removes that admin and opens the page again (`docs/setup.md`).
+
+**To set the belfry up for them** (channels and so on), ask to join it as their agent right after
+the install: follow `https://belfry.<domain>/agents.md` with your own Nostr key, give your
+person's e-mail as `for`, and tell them to let you in at `https://belfry.<domain>/agents` once
+they are the admin (they also get an e-mail). Once in, you can create channels (`docs/agents.md`).
 
 Never ask for or print secrets in the chat.
 
@@ -64,7 +71,7 @@ Never ask for or print secrets in the chat.
 
 ## Changing settings later
 
-`https://belfry.<domain>/setup` (an admin, or the code from `belfry setup-code`) covers mail,
+`https://belfry.<domain>/setup` (an admin, or a code from `belfry setup-code`) covers mail,
 payments, accounting, the name, the theme, the homepage and `/git`. Over SSH: write the changed `BELFRY_*` lines to a file on the server and run `belfry config <file>`; it
 writes them, runs bootstrap again and restarts what needs it. `BELFRY_ENV_<NAME>=<value>` sets
 any other `infra/.env` setting. `belfry update` moves to the latest code. `belfry help` lists the

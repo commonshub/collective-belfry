@@ -2,9 +2,21 @@
 theme, homepage, code) over HTTPS, without SSH.
 
 Who may use it: an admin signed in on ``belfry.<domain>`` (the stewards group), or anyone with
-the setup code. Before mail works nobody can sign in, so the installer prints a code
-(``belfry setup-code`` prints a new one at any time over SSH); it is valid for 24 hours and only
-its SHA-256 is stored (``code.json`` in SETUP_DIR).
+the setup code (``belfry setup-code`` over SSH; valid for 24 hours, only its SHA-256 is stored in
+``code.json`` in SETUP_DIR).
+
+**First come, first served** (Xavier, 2026-11-13): while the belfry has no admin at all (no
+``first-admin.json`` and nobody in the stewards group), ``https://belfry.<domain>/setup`` opens the
+first-run wizard without a code. The page sets a setup cookie marked ``open``; that cookie is
+only good while there is still no admin. Creating the first admin takes a lock (a thread lock and
+an ``flock`` on ``.first-admin.lock`` in SETUP_DIR) and checks again inside it, so of two people
+at once only one becomes the admin; the other gets a fixed message (409). Anyone who reaches a
+fresh belfry's /setup first can claim it: ``belfry setup-reset`` on the server undoes a claim
+(``reset`` below, docs/setup.md).
+
+While the first admin's claim stands, every key the setup page queues is recorded in
+``first-admin-changes.json`` (whether it is a secret, and the value before for the others), so a
+reset can take the claimant's mail key away and put the name back.
 
 How a value gets to the server, with no Docker socket and no write access to ``infra/.env`` in
 this container: the page writes ``pending.env`` (BELFRY_* lines, the format of ``belfry config``)
@@ -17,6 +29,8 @@ values, and the result of the last apply. The page shows that file; secrets are 
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import hashlib
 import hmac
 import html
@@ -25,6 +39,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -217,7 +232,31 @@ def write_pending(settings: Any, values: dict[str, str], by: str) -> list[str]:
     with os.fdopen(fd, "w") as f:
         f.write(text)
     os.replace(tmp, pending)
+    _note_changes(settings, values)
     return sorted(merged)
+
+
+CHANGES_FILE = "first-admin-changes.json"
+
+
+def _note_changes(settings: Any, values: dict[str, str]) -> None:
+    """While a first admin's claim stands, remember what the setup page changed (once per key:
+    the value before; a secret only as "secret"), so ``belfry setup-reset`` can undo a
+    stranger's claim. Its own file, so the wizard's saves of first-admin.json never drop it."""
+    folder = setup_dir(settings)
+    if folder is None or not first_admin(settings):
+        return
+    before = state(settings).get("values") or {}
+    changes = read_json(folder / CHANGES_FILE)
+    for k in values:
+        if k in changes:
+            continue
+        secret = FIELDS.get(k, ("", False))[1]
+        changes[k] = {"secret": True} if secret else {"secret": False, "before": before.get(k, "")}
+    tmp = folder / f".{CHANGES_FILE}.{secrets.token_hex(4)}"
+    with contextlib.suppress(OSError):
+        tmp.write_text(json.dumps(changes))
+        os.replace(tmp, folder / CHANGES_FILE)
 
 
 def state(settings: Any) -> dict[str, Any]:
@@ -267,11 +306,56 @@ def has_admin(svc: Services) -> bool:
         return True
 
 
+def open_for_anyone(svc: Services) -> bool:
+    """/setup needs no code: the belfry has no admin yet (first come, first served)."""
+    return setup_dir(svc.settings) is not None and not has_admin(svc)
+
+
+def admin_known(svc: Services) -> bool:
+    """For the public homepage: an admin exists (cached a minute, console.admin_emails). When the
+    stewards group can't be read the last answer stands; the claim itself checks again."""
+    if first_admin(svc.settings):
+        return True
+    return bool(console.admin_emails(svc))
+
+
+RESET_FILE = "reset.json"
+
+
+def reset_at(settings: Any) -> int:
+    """When ``belfry setup-reset`` last ran: setup cookies issued before it no longer count."""
+    folder = setup_dir(settings)
+    if folder is None:
+        return 0
+    at = read_json(folder / RESET_FILE).get("at", 0)
+    return int(at) if isinstance(at, (int, float)) else 0
+
+
+_claim_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def claim_lock(settings: Any):
+    """One first admin at a time, across threads and processes (flock on the setup folder)."""
+    folder = setup_dir(settings)
+    with _claim_lock:
+        if folder is None:
+            yield
+            return
+        with open(folder / ".first-admin.lock", "a") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+
+TAKEN = "Someone else has just become this belfry's admin. Ask them to invite you."
+
+
 def create_first_admin(
     svc: Services, email: str, username: str, session_pubkey: str, community: str = ""
 ) -> dict[str, Any]:
-    from . import steward
-
     community = " ".join(community.split())[:MAX_NAME]
     email = email.strip()
     username = username.strip().lower()
@@ -281,8 +365,22 @@ def create_first_admin(
         raise ValueError("A username is 1 to 30 letters, digits, dots, dashes or underscores.")
     if not re.fullmatch(r"[0-9a-f]{64}", session_pubkey or ""):
         raise ValueError("The browser did not make a session key.")
-    if has_admin(svc):
-        raise ValueError("This belfry has an admin already.")
+    with claim_lock(svc.settings):
+        # checked again inside the lock: of two people at once, only one becomes the admin
+        if has_admin(svc):
+            raise AdminTaken(TAKEN)
+        return _create_first_admin(svc, email, username, session_pubkey, community)
+
+
+class AdminTaken(ValueError):
+    """The first admin's place was taken (409)."""
+
+
+def _create_first_admin(
+    svc: Services, email: str, username: str, session_pubkey: str, community: str
+) -> dict[str, Any]:
+    from . import steward
+
     made = steward.add_steward(svc, email, username)
     row = svc.odoo.read_one(
         "belfry.pass", made["pass"]["pass_id"], ["partner_id", "keycast_pubkey", "state"]
@@ -413,6 +511,80 @@ def verify_admin_code(svc: Services, code: str) -> None:
     fa["verified_at"] = int(time.time())
     save_first_admin(svc.settings, fa)
     log.info("setup: the first admin's address %s is verified", fa["email"])
+    try:  # agents that asked to join before there was an admin: tell them now (agentrequests.py)
+        from . import agentrequests
+
+        agentrequests.notify_waiting(svc)
+    except Exception:  # noqa: BLE001 — the console lists them anyway
+        log.exception("setup: waiting agent requests not mailed")
+
+
+# ── undoing a claim (belfry setup-reset) ────────────────────────────────────────────────────
+def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    """Open /setup again after a stranger claimed a new belfry (``belfry setup-reset``).
+
+    The first admin (``first-admin.json``) loses their memberships (passes revoked, so the relay
+    drops their key, their agents go and their signer account is suspended) and the admin role;
+    the file is kept as ``first-admin.reset-<time>.json`` and ``reset.json`` records the time,
+    so setup cookies made before stop working. With ALL_ADMINS every other admin goes too
+    (/setup only opens when nobody is admin). Returns what was done, and ``revert``: the settings
+    the setup page changed during the claim (secrets: always cleared by the CLI; others: put back
+    to ``before``). Members the claimant invited stay. Idempotent: with no admin it does nothing.
+    """
+    folder = setup_dir(svc.settings)
+    if folder is None:
+        raise ValueError("this belfry has no setup folder (SETUP_DIR)")
+    fa = first_admin(svc.settings)
+    console._admins["at"] = 0.0
+    admins = sorted(console.admin_emails(svc))
+    first_email = str(fa.get("email") or "").lower()
+    gone = ([first_email] if fa else []) + (
+        [e for e in admins if e != first_email] if all_admins else []
+    )
+    remaining = [e for e in admins if e not in gone]
+    out: dict[str, Any] = {
+        "first_admin": {k: fa.get(k, "") for k in ("username", "email", "nip05")} if fa else None,
+        "removed": gone,
+        "remaining_admins": remaining,
+        "revert": read_json(folder / CHANGES_FILE) if fa else {},
+        "open": not remaining,
+        "dry_run": dry_run,
+    }
+    if dry_run or not gone:
+        return out
+    if fa and fa.get("partner"):
+        try:
+            console.remove_member(svc, int(fa["partner"]))
+        except ValueError:
+            log.warning("setup-reset: the first admin's contact %s is gone", fa["partner"])
+    for email in gone:
+        member = _member_of(svc, email)
+        if member is not None and member != fa.get("partner"):
+            console.remove_member(svc, member)
+        console.set_admin(svc, email, False)  # also without a pass (the stewards group)
+    if fa:
+        at = int(time.time())
+        os.replace(folder / FIRST_ADMIN, folder / f"first-admin.reset-{at}.json")
+        if (folder / CHANGES_FILE).exists():
+            os.replace(folder / CHANGES_FILE, folder / f"first-admin-changes.reset-{at}.json")
+    tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
+    tmp.write_text(json.dumps({"at": int(time.time()), "removed": gone}))
+    os.replace(tmp, folder / RESET_FILE)
+    console._admins["at"] = 0.0
+    with contextlib.suppress(Exception):
+        from . import apps
+
+        apps.forget()
+    log.warning("setup-reset: removed %s; /setup open: %s", ", ".join(gone), not remaining)
+    return out
+
+
+def _member_of(svc: Services, email: str) -> int | None:
+    rows = svc.odoo.search_read("res.partner", [["email", "=ilike", email]], ["email"], limit=5)
+    for r in rows:
+        if (r.get("email") or "").strip().lower() == email:
+            return int(r["id"])
+    return None
 
 
 RESEND_API = "https://api.resend.com"
@@ -870,12 +1042,19 @@ Your belfry sends from belfry@{E(domain)}; you can change that later.</p>
 {WIZARD_JS}"""
 
 
-def code_form(err: str = "") -> str:
+def code_form(err: str = "", claimed: bool = False) -> str:
     error = f'<p class="err" role="alert">{E(err)}</p>' if err else ""
+    note = (
+        '<p class="muted">Someone is setting up this belfry already: they became its admin. '
+        "If that is not you or someone you know, the server's owner can undo it with "
+        "<code>belfry setup-reset</code>.</p>"
+        if claimed
+        else ""
+    )
     return f"""<div class="card wiz"><section>
-<h1>Set up this belfry</h1>
-<p class="muted">Open the setup link from the installer, or type its code. On the server,
-<code>belfry setup-code "Your name"</code> makes a new one. Admins can <a href="/login?to=/setup">sign in</a> instead.</p>
+<h1>Set up this belfry</h1>{note}
+<p class="muted">Admins <a href="/login?to=/setup">sign in</a>. Or type a setup code: on the server,
+<code>belfry setup-code "Your name"</code> makes one.</p>
 <form method="post" action="/setup/code">
 <input type="text" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
  placeholder="XXXX-XXXX-XXXX-XXXX" required aria-label="Setup code">
@@ -1167,9 +1346,15 @@ def register(app: FastAPI) -> None:
         if who is not None:
             return str(who.get("csrf", "")), who.get("name") or who.get("email") or "an admin"
         sess = code_session(request)
-        if sess is not None:
-            return str(sess.get("csrf", "")), str(sess.get("who") or "")
-        return None
+        if sess is None:
+            return None
+        services = svc(request)
+        if int(sess.get("iat") or 0) < reset_at(services.settings):
+            return None  # made before `belfry setup-reset`: the claimant's cookie ends with it
+        # an open session (no code: the belfry had no admin) counts only while there is none
+        if sess.get("open") and await run_in_threadpool(has_admin, services):
+            return None
+        return str(sess.get("csrf", "")), str(sess.get("who") or "")
 
     NO_STORE = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"}
 
@@ -1238,9 +1423,21 @@ def register(app: FastAPI) -> None:
         msg, err = flash.peek(request, services)
         ok = await allowed(request)
         fresh = await run_in_threadpool(first_run, services)
+        if ok is None and fresh and mypass.enabled(services):
+            if await run_in_threadpool(open_for_anyone, services):
+                # no admin yet: first come, first served; no code (the cookie is set right here,
+                # so a browser without cookies sees the wizard and is refused at the first step)
+                csrf = secrets.token_urlsafe(24)
+                info = await run_in_threadpool(progress, services)
+                response = bare(
+                    request, "Set up your belfry", wizard("name", csrf, services.settings, info)
+                )
+                set_setup_cookie(response, request, {"csrf": csrf, "who": "", "open": True})
+                return response
         if ok is None:
+            claimed = fresh and bool(first_admin(services.settings))
             return (
-                bare(request, "Set up your belfry", code_form(err))
+                bare(request, "Set up your belfry", code_form(err, claimed))
                 if fresh
                 else await page_(request, f'<div class="wiz">{code_form(err)}</div>')
             )
@@ -1316,6 +1513,8 @@ def register(app: FastAPI) -> None:
                 str(body.get("session_pubkey", "")),
                 str(body.get("name", "")),
             )
+        except AdminTaken:
+            return JSONResponse({"message": TAKEN, "error": "taken"}, status_code=409)
         except ValueError as exc:
             return JSONResponse({"message": str(exc)}, status_code=422)
         except Exception:  # noqa: BLE001

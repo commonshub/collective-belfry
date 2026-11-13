@@ -265,13 +265,24 @@ def test_members_forms_need_an_admin_and_the_csrf(web, belfry, odoo, authentik):
 
 
 # ── website ─────────────────────────────────────────────────────────────────────────────────
-def test_placeholder_until_the_website_is_published(web, belfry):
+def test_placeholder_until_the_website_is_published(web, belfry, authentik):
     belfry.settings.homepage = "nsite"
     web.app.state.homepage = homepage.Homepage(
         belfry.settings, homepage.parse_config(belfry.settings)
     )
     web.app.state.homepage._resolve = lambda: (_ for _ in ()).throw(homepage.HomepageError("none"))
+    # no admin yet: set it up (no code), or let an agent ask; the belfry's look, no script needed
+    console._admins["at"] = 0.0
     r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
+    assert r.status_code == 200 and "has no admin yet" in r.text
+    assert 'href="https://belfry.belfry.test/setup">Set up this belfry' in r.text
+    assert "https://belfry.belfry.test/agents.md" in r.text
+    assert "/theme/belfry/theme.css" in r.text and "will be here" not in r.text
+    assert "evil" not in web.get("/?msg=evil", headers={"Host": "belfry.test"}).text
+    make_admin(authentik, "boss@example.org")
+    console._admins["at"] = 0.0
+    r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
+    assert "has no admin yet" not in r.text and "/agents.md" in r.text
     assert r.status_code == 200 and "The website of Example Commons will be here" in r.text
     assert "https://pass.belfry.test/skills/belfry-homepage.md" in r.text
     assert 'href="https://belfry.belfry.test"' in r.text and "belfry.belfry.test/website" in r.text

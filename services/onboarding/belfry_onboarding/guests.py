@@ -315,6 +315,8 @@ def register(app: FastAPI) -> None:
             days = link_days  # reading until they join: as long as the link can be opened
             if member["role"] == roles.ADMIN:
                 people = 1  # an admin link is for one person
+        # an admin may have as many agents as they wish
+        unlimited = own_agent and pubkey in await run_in_threadpool(apps_admins, s)
         try:
             row = await run_in_threadpool(
                 s.odoo.create_guest_invite,
@@ -328,6 +330,7 @@ def register(app: FastAPI) -> None:
                 role,
                 member["role"] if member else "",
                 member["membership"] if member else "",
+                unlimited,
             )
         except OdooError as exc:
             raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
@@ -352,6 +355,12 @@ def register(app: FastAPI) -> None:
 # ── agents as guests: their own key, no e-mail ──────────────────────────────────────────────
 def accept_path(token: str) -> str:
     return f"/api/guest-invites/{token}/accept"
+
+
+def apps_admins(svc: Services) -> set[str]:
+    from . import apps
+
+    return apps.admin_pubkeys(svc)
 
 
 def api_base(svc: Services) -> str:

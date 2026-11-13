@@ -537,6 +537,7 @@ ADMIN_TABS = [
     ("/website", "Website"),
     ("/monitor", "Monitor"),
     ("/apps", "Apps"),
+    ("/agents", "Agents"),
     ("/setup", "Setup"),
 ]
 MEMBER_TABS = [("/members", "Members"), ("/monitor", "Monitor")]
@@ -622,6 +623,8 @@ def overview_html(
     site: dict[str, Any],
     who: dict[str, Any] | None,
     code: dict[str, Any] | None = None,
+    no_admin: bool = False,
+    agents_waiting: int = 0,
 ) -> str:
     s = svc.settings
     name = s.community_name or "This community"
@@ -635,6 +638,17 @@ def overview_html(
         )
         + ' · <a href="/status">status</a></span></div>'
     )
+    if who is None and no_admin:
+        body = f"""<section class="hero"><p class="eyebrow">A new belfry</p>
+<h1>{E(name)}</h1>
+<p class="muted" style="margin:0">This belfry has no admin yet. The first person to open the setup
+becomes its admin, then invites the others.</p>
+<div class="row"><a class="btn" href="/setup">Set up this belfry</a></div></section>
+<div class="panel"><h2 style="margin:0 0 8px;font-size:1rem">Or let your agent help</h2>
+<p class="muted" style="margin:0">An agent can ask to join now and set up the channels once you
+let it in: give it <a href="/agents.md">{E(console_url(s))}/agents.md</a>.</p></div>
+{foot}"""
+        return frame(name, "/", None, body)
     if who is None:
         from . import appshome
 
@@ -675,6 +689,15 @@ def overview_html(
         if not current and site.get("mode") == "nsite":
             steps.append(
                 ("Publish a website: the homepage is a placeholder.", "/website", "Website")
+            )
+        if agents_waiting:
+            steps.append(
+                (
+                    f"{agents_waiting} agent{'s' if agents_waiting > 1 else ''} "
+                    "asking to join.",
+                    "/agents",
+                    "Review",
+                )
             )
         if behind:
             steps.append(
@@ -830,33 +853,66 @@ def website_html(
     )
 
 
-def placeholder_html(settings: Any) -> str:
-    """What the apex shows before a website is published (HOMEPAGE=nsite, no manifest yet)."""
+PLACEHOLDER_STYLE = """<style>
+main{max-width:680px;padding-top:48px}
+.ph h1{font-size:2.4rem;line-height:1.1;margin:0 0 12px}
+.ph .lead{font-size:1.1rem;margin:0 0 20px;color:var(--fg-muted)}
+.ph .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0 0 8px}
+.ph .card{margin:24px 0 0}
+.ph h2{font-size:1.05rem;margin:0 0 8px}
+.ph blockquote{margin:12px 0;padding:12px 14px;border-left:3px solid var(--accent);
+background:var(--surface-deep);border-radius:0 8px 8px 0;word-break:break-word}
+.ph .small{font-size:.9rem}
+</style>"""
+
+
+def placeholder_html(settings: Any, svc: Services | None = None) -> str:
+    """What the apex shows before a website is published (HOMEPAGE=nsite, no manifest yet), in
+    the belfry's look (theme.frame: the base theme, and the community's theme folder if any).
+    Two states: no admin yet (set it up: belfry.<domain>/setup, or let an agent ask to join), or
+    an admin and no website. Fixed text plus the settings; nothing from the request; no script
+    needed."""
+    from . import agentrequests, setup, theme
+
     name = settings.community_name or "This community"
     domain = httpx.URL(settings.site_url).host if settings.site_url else "this domain"
     console = console_url(settings) or settings.public_url
+    host = httpx.URL(console).host if console else ""
     skill = f"{settings.public_url.rstrip('/')}/skills/belfry-homepage.md"
-    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>{E(name)}</title>
-<style>
-:root{{color-scheme:light dark;--bg:#f6f3ec;--ink:#1f1d1a;--muted:#5d574e;--line:#d9d2c3;--accent:#a4532b}}
-@media (prefers-color-scheme:dark){{:root{{--bg:#16140f;--ink:#efe9dc;--muted:#a69f91;--line:#3a352c;--accent:#e08a5c}}}}
-body{{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 system-ui,sans-serif}}
-main{{max-width:640px;margin:0 auto;padding:56px 20px}} h1{{font-size:2rem;margin:0 0 8px}}
-.muted{{color:var(--muted)}} a{{color:var(--accent)}}
-blockquote{{margin:20px 0;padding:14px 16px;border-left:3px solid var(--accent);background:color-mix(in srgb,var(--line) 35%,transparent);border-radius:0 8px 8px 0}}
-footer{{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);font-size:.92rem}}
-</style><script src="/static/busy.js" defer></script></head><body><main>
-<h1>{E(name)}</h1>
-<p class="muted">The website of {E(name)} will be here.</p>
-<p>To publish it, ask your agent:</p>
+    agents_md = agentrequests.instructions_url(settings) or f"{console}/agents.md"
+    no_admin = False
+    if svc is not None:
+        try:
+            no_admin = not setup.admin_known(svc)
+        except Exception:  # noqa: BLE001 — unsure: show the ordinary placeholder
+            no_admin = False
+    if no_admin:
+        body = f"""<div class="ph"><h1>{E(name)}</h1>
+<p class="lead">This is a belfry: a community's own server for its members' accounts, channels
+and files. It has no admin yet.</p>
+<div class="row"><a class="btn" href="{E(console)}/setup">Set up this belfry</a></div>
+<p class="muted small">The first person to open the setup becomes its admin, then invites the
+others. No code needed.</p>
+<div class="card"><h2>Or let your agent do it</h2>
+<p class="muted">An agent can ask to join now, and set up the channels once you let it in. Give
+it this:</p>
+<blockquote>Join the belfry at {E(domain)} as my agent: follow {E(agents_md)}</blockquote>
+<p class="muted small">Then open the setup yourself: its request waits for you.</p></div></div>"""
+    else:
+        body = f"""<div class="ph"><h1>{E(name)}</h1>
+<p class="lead">The website of {E(name)} will be here.</p>
+<div class="card"><h2>Publish it</h2>
+<p>Ask your agent:</p>
 <blockquote>Build the website of {E(name)} and publish it on {E(domain)} as an nsite. Follow {E(skill)}</blockquote>
-<p><strong>Who can publish:</strong> the belfry's admins publish directly. Any member can propose a version; an admin approves it,
-and the belfry publishes it under its own key. Versions and approvals are listed at
-<a href="{E(console)}/website">{E(httpx.URL(console).host)}/website</a>.</p>
-<footer><a href="{E(console)}">{E(httpx.URL(console).host)}</a>: the belfry's status and members ·
-<a href="{E(settings.public_url)}">join or sign in</a></footer>
-</main></body></html>"""
+<p class="small"><strong>Who can publish:</strong> the belfry's admins publish directly. Any member
+can propose a version; an admin approves it, and the belfry publishes it under its own key.
+Versions and approvals are listed at <a href="{E(console)}/website">{E(host)}/website</a>.</p></div>
+<div class="card"><h2>Agents</h2>
+<p class="small">An agent asks to join with its own key by following
+<a href="{E(agents_md)}">{E(agents_md)}</a>; an admin lets it in as their own agent.</p></div>
+<p class="small" style="margin-top:24px"><a href="{E(settings.public_url)}">Join or sign in</a> ·
+<a href="{E(console)}">{E(host)}</a>: the belfry's status and members</p></div>"""
+    return theme.frame(name, PLACEHOLDER_STYLE + body)
 
 
 # ── routes ──────────────────────────────────────────────────────────────────────────────────
@@ -958,8 +1014,24 @@ def register(app: FastAPI) -> None:
         site = await run_in_threadpool(website_data, services)
         counts = {"members": len(mem), "admins": sum(1 for m in mem if m["admin"])}
         info = await run_in_threadpool(code_info, services.settings) if me and me["admin"] else {}
+        from . import agentrequests, setup
+
+        no_admin = me is None and not await run_in_threadpool(setup.admin_known, services)
+        waiting = 0
+        if me and me["admin"] and agentrequests.own(services):
+            waiting = len(await run_in_threadpool(services.odoo.agent_requests, "pending"))
         return HTMLResponse(
-            overview_html(services, status, mem if me else None, counts, site, me, info),
+            overview_html(
+                services,
+                status,
+                mem if me else None,
+                counts,
+                site,
+                me,
+                info,
+                no_admin=no_admin,
+                agents_waiting=waiting,
+            ),
             headers={"Cache-Control": "no-store"},
         )
 
