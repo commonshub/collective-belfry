@@ -146,7 +146,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
-  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'public' })
+  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   const [moving, setMoving] = useState<ChannelVisibility | null>(null)
   if (!g) return null
