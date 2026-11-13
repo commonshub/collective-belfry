@@ -139,7 +139,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -365,6 +365,18 @@ function demoGuestJoin(channel: string, name: string) {
   const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
   addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
     tags: [['h', channel], ['p', hex(32), 'member'], ['invited-by', me()], ['name', name], ['guest', '']] }])
+}
+
+/** Demo only: an agent joins CHANNEL as a guest (9000 with `agent`) and says TEXT there. */
+function demoAgentPost(channel: string, name: string, text: string) {
+  const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const pk = hex(32), now = Math.floor(Date.now() / 1000)
+  addEvents([
+    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: now - 2, tags: [['h', channel], ['p', pk, 'member'], ['invited-by', me()], ['name', name], ['guest', ''], ['agent', '1']] },
+    { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, content: JSON.stringify({ name }), created_at: now - 2, tags: [] },
+    { id: hex(32), pubkey: pk, sig: hex(64), kind: 9, content: text, created_at: now - 1, tags: [['h', channel]] },
+  ])
+  return pk
 }
 
 /** Demo only: someone opens a guest link of CHANNEL (guest mode: a 9000 tagged `reading`, no

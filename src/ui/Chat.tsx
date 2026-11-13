@@ -157,6 +157,20 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   )
 }
 
+/** Next to an agent's name, wherever it writes (#issues, 2026-11-13: "clearly marked as User's
+ *  agent"): whose agent it is, or that it is an agent (a channel's guest). */
+function AgentTag({ pk }: { pk: string }) {
+  const owner = agentOwner(pk)
+  if (owner) return <span className="badge agent-badge" title="An AI agent, acting for its member">🤖 {owner === me() ? 'Your agent' : `${displayName(owner)}'s agent`}</span>
+  return guestAgents().has(pk) ? <span className="badge agent-badge" title="An AI agent">🤖 Agent</span> : null
+}
+// channels' guest agents, worked out at most once a second (every row asks)
+let agentsAt = 0, agentsSet = new Set<string>()
+function guestAgents(): Set<string> {
+  if (Date.now() - agentsAt > 1000) { agentsAt = Date.now(); agentsSet = new Set(groups().flatMap((g) => guestJoins(g.id).filter((j) => j.agent).map((j) => j.pubkey))) }
+  return agentsSet
+}
+
 /** The belfry's admins drag channels to reorder them (#issues, 2026-11-13); across the two sections
  *  it makes the channel public or members only, after the confirmation (VisibilitySheet). A mouse
  *  drags after a few pixels; a finger holds still for 0.4 s first, so the list still scrolls. */
@@ -697,7 +711,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
         {...hold}>
         {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
@@ -1086,7 +1100,7 @@ function InlineReply({ r, groupId, onAct }: { r: Message; groupId: string; onAct
     <div id={'m-' + r.ev.id} className={'thread-reply' + (r.ev.pending ? ' pending' : '')} {...hold}>
       <Avatar pubkey={r.ev.pubkey} size={24} />
       <div className="body">
-        <div className="who">{displayName(r.ev.pubkey)}<time>{fmtTime(r.ev.created_at)}</time>{r.edited && <span className="edited">edited</span>}</div>
+        <div className="who">{displayName(r.ev.pubkey)}<AgentTag pk={r.ev.pubkey} /><time>{fmtTime(r.ev.created_at)}</time>{r.edited && <span className="edited">edited</span>}</div>
         {r.text && <RichText text={r.text} groupId={groupId} />}
         <MediaGrid media={r.media} />
       </div>
