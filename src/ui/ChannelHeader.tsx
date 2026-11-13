@@ -7,7 +7,8 @@
 // a message will actually reach.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { markSeen } from '../core/actions'
-import { channelIcon, group, type Group } from '../core/model'
+import { channelIcon, group, isInbox, isPublicChannel, mailLocal, webPage, type Group } from '../core/model'
+import { BELFRY } from '../config'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { About, type InfoTab } from './ChannelInfo'
@@ -110,7 +111,8 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
         {left}
         <h1 className="tap" onClick={() => setLevel(level ? 0 : 1)} aria-expanded={level > 0}>
           {title ?? <>{g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
-          {(g?.isPod || g?.isProposal) && <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>}</>}
+          {(g?.isPod || g?.isProposal) ? <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>
+            : g && !g.isEvent && <small className="vis-line">{visibilityLine(g)}</small>}</>}
         </h1>
         {right}
       </div>
@@ -133,3 +135,14 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
 }
 
 const parentOf = (g: Group) => { const p = g.parent ? group(g.parent) : undefined; return p ? (p.isPod ? p.name : '# ' + p.name) : 'the community' }
+
+/** Under a channel's name, always (#issues, 2026-11-13): who reads it, and where people reach it
+ *  from outside when that is on: "Public on <domain>/<slug> and <slug>@<domain>". */
+export function visibilityLine(g: Group): string {
+  const w = webPage(g)
+  const mail = isInbox(g) ? `${mailLocal(g)}@${BELFRY.domain}` : ''
+  const page = w?.on ? `${BELFRY.domain}/${w.slug}` : ''
+  if (isPublicChannel(g)) return `🌐 Public on ${[page, mail].filter(Boolean).join(' and ')}`
+  const outside = [page && `threads from ${page}`, mail && `mail to ${mail}`].filter(Boolean)
+  return '🔒 Members only' + (outside.length ? ' · ' + outside.join(', ') : '')
+}

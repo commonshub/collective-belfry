@@ -5,7 +5,7 @@ import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -33,7 +33,8 @@ import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
 import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
-import { ChannelSettingsSheet } from './ChannelInfo'
+import { ChannelSettingsSheet, VisibilitySheet } from './ChannelInfo'
+import { inOrder, mayOrder, setChannelOrder } from '../core/order'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
@@ -80,9 +81,11 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
     const m = messages(id).at(-1)
     return m ? `${displayName(m.ev.pubkey)}: ${preview(m.text) || (m.media.length ? 'Photo' : '')}` : undefined
   }
-  // public channels first, then the members' (Xavier, 2026-11-11); pods and proposals stay under theirs
-  const pub = chans.filter((g) => isPublicChannel(g))
-  const members = chans.filter((g) => !isPublicChannel(g))
+  // public channels first, then the members' (Xavier, 2026-11-11); pods and proposals stay under theirs;
+  // in the order the belfry's admins dragged them into (#issues, 2026-11-13)
+  const pub = inOrder(chans.filter((g) => isPublicChannel(g)))
+  const members = inOrder(chans.filter((g) => !isPublicChannel(g)))
+  const dnd = useChannelDrag(pub, members)
   const next = calendar().filter((e) => e.status !== 'cancelled' && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
   const fresh = newMentions()
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
@@ -127,10 +130,14 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
           <span className="t"><b>Direct messages</b><small>And e-mail{address() ? ` · ${address()}` : ''}</small></span>
           {unreadTotal() > 0 && <span className="badge lime">{unreadTotal()}</span>}
         </button>
-        {pub.length > 0 && <div className="section-title">Public channels <span>{pub.length}</span></div>}
-        {pub.map((g) => <Tree key={g.id} g={g} />)}
-        {(members.length > 0 || orphans.length > 0) && <div className="section-title">Members only <span>{members.length + orphans.length}</span></div>}
-        {members.map((g) => <Tree key={g.id} g={g} />)}
+        <div ref={dnd.ref} className={'chan-sections' + (dnd.drag ? ' sorting' : '')}>
+        {(pub.length > 0 || dnd.may) && <div className={'section-title' + (dnd.into('pub') ? ' drop-into' : '')} data-sec="pub">Public channels <span>{pub.length}</span></div>}
+        {pub.length === 0 && dnd.may && <div className="hint drop-hint">Drag a channel here to make it public.</div>}
+        {pub.map((g, i) => <div key={g.id} {...dnd.slot(g, 'pub', i)}><Tree g={g} /></div>)}
+        {(members.length > 0 || orphans.length > 0 || dnd.may) && <div className={'section-title' + (dnd.into('mem') ? ' drop-into' : '')} data-sec="mem">Members only <span>{members.length + orphans.length}</span></div>}
+        {members.map((g, i) => <div key={g.id} {...dnd.slot(g, 'mem', i)}><Tree g={g} /></div>)}
+        </div>
+        {dnd.sheet}
         {orphans.map((g) => <Tree key={g.id} g={g} />)}
         {chans.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
         {mineEvents.length > 0 && <div className="section-title">Your events <span>{mineEvents.length}</span></div>}
@@ -148,6 +155,88 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
       {creating && <NewChannel onClose={() => setCreating(false)} />}
     </div>
   )
+}
+
+/** The belfry's admins drag channels to reorder them (#issues, 2026-11-13); across the two sections
+ *  it makes the channel public or members only, after the confirmation (VisibilitySheet). A mouse
+ *  drags after a few pixels; a finger holds still for 0.4 s first, so the list still scrolls. */
+function useChannelDrag(pub: Group[], members: Group[]) {
+  const may = mayOrder()
+  const ref = useRef<HTMLDivElement>(null)
+  type Sec = 'pub' | 'mem'
+  const [drag, setDrag] = useState<{ id: string; sec: Sec; to: Sec; pos: number } | null>(null)
+  const [moving, setMoving] = useState<{ g: Group; to: ChannelVisibility; order: string[] } | null>(null)
+  const st = useRef<{ id: string; sec: Sec; x: number; y: number; armed: boolean; on: boolean; timer?: number; moved: boolean } | null>(null)
+  const dragRef = useRef(drag); dragRef.current = drag
+  const dropped = useRef(false)
+  // a held finger: stop the list from scrolling while it drags
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !may) return
+    const tm = (e: TouchEvent) => { if (st.current?.on || st.current?.armed) e.preventDefault() }
+    el.addEventListener('touchmove', tm, { passive: false })
+    return () => el.removeEventListener('touchmove', tm)
+  }, [may])
+  const where = (y: number): { to: Sec; pos: number } => {
+    const box = ref.current!
+    const memTitle = box.querySelector('.section-title[data-sec="mem"]') as HTMLElement | null
+    const to: Sec = memTitle && y > memTitle.getBoundingClientRect().top ? 'mem' : 'pub'
+    const slots = [...box.querySelectorAll(`.chan-slot[data-sec="${to}"]`)].filter((x) => (x as HTMLElement).dataset.chan !== st.current?.id) as HTMLElement[]
+    return { to, pos: slots.filter((x) => { const r = x.getBoundingClientRect(); return r.top + r.height / 2 < y }).length }
+  }
+  const finish = () => {
+    const s = st.current, d = dragRef.current
+    if (s?.timer) clearTimeout(s.timer)
+    dropped.current = !!(s?.on || s?.armed)
+    setTimeout(() => { dropped.current = false }, 0) // only the click that ends this drag
+    st.current = null
+    setDrag(null)
+    if (!s?.on || !d) return
+    const ids = (l: Group[]) => l.map((g) => g.id).filter((id) => id !== d.id)
+    const p = ids(pub), m = ids(members)
+    ;(d.to === 'pub' ? p : m).splice(d.pos, 0, d.id)
+    const order = [...p, ...m]
+    const g = [...pub, ...members].find((x) => x.id === d.id)!
+    if (d.to !== d.sec) setMoving({ g, to: d.to === 'pub' ? 'public' : 'members', order })
+    else void setChannelOrder(order)
+  }
+  const slot = (g: Group, sec: Sec, i: number) => {
+    const base = { className: 'chan-slot', 'data-chan': g.id, 'data-sec': sec } as Record<string, unknown>
+    if (!may) return base
+    const d = drag
+    const before = d && d.to === sec && d.pos === i - ((sec === d.sec && (sec === 'pub' ? pub : members).findIndex((x) => x.id === d.id) < i) ? 1 : 0) && d.id !== g.id
+    const rest = d ? (sec === 'pub' ? pub : members).filter((x) => x.id !== d.id) : []
+    const after = d && d.to === sec && d.pos === rest.length && rest.at(-1)?.id === g.id
+    return {
+      ...base,
+      className: 'chan-slot' + (d?.id === g.id ? ' dragging' : '') + (before ? ' drop-before' : '') + (after ? ' drop-after' : ''),
+      onPointerDown: (e: React.PointerEvent) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return
+        const s = { id: g.id, sec, x: e.clientX, y: e.clientY, armed: false, on: false, moved: false } as NonNullable<typeof st.current>
+        if (e.pointerType !== 'mouse') s.timer = window.setTimeout(() => { if (st.current === s && !s.moved) { s.armed = true; navigator.vibrate?.(15) } }, 400)
+        st.current = s
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        const s = st.current
+        if (!s || s.id !== g.id) return
+        const dy = e.clientY - s.y, dx = e.clientX - s.x
+        if (!s.on) {
+          if (e.pointerType === 'mouse' ? Math.abs(dy) < 6 : !s.armed) { if (Math.hypot(dx, dy) > 8) { s.moved = true; if (!s.armed && s.timer) clearTimeout(s.timer) } return }
+          s.on = true
+          ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+        }
+        setDrag({ id: g.id, sec, ...where(e.clientY) })
+      },
+      onPointerUp: finish,
+      onPointerCancel: () => { const s = st.current; if (s?.timer) clearTimeout(s.timer); st.current = null; setDrag(null) },
+      // the click that ends a drag (or a held finger) doesn't open the channel
+      onClickCapture: (e: React.MouseEvent) => { if (dropped.current) { e.stopPropagation(); e.preventDefault() } dropped.current = false },
+      onContextMenu: (e: React.MouseEvent) => { if (st.current?.armed) e.preventDefault() },
+    }
+  }
+  const into = (sec: Sec) => !!drag && drag.to === sec && (sec === 'pub' ? pub : members).filter((x) => x.id !== drag.id).length === 0
+  const sheet = moving && <VisibilitySheet g={moving.g} to={moving.to} onClose={() => setMoving(null)} onDone={() => { void setChannelOrder(moving.order); setMoving(null) }} />
+  return { ref, drag, slot, into, sheet, may }
 }
 
 /** A channel that takes threads only (its settings): a title and what it is about, posted like a
@@ -194,6 +283,7 @@ function NewChannel({ onClose }: { onClose: () => void }) {
           <input className="input" autoFocus placeholder="e.g. rust-hackers" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Description</span>
           <textarea className="input" rows={3} placeholder="What is this channel about?" value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+        <p className="hint">🔒 New channels are for members only. Its admins can make it public later, in its settings.</p>
         <button className="btn" disabled={!name.trim()}>Create channel</button>
       </Form>
     </Sheet>
@@ -458,7 +548,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           <button className="btn" onClick={() => (only === 'thread' ? setNewThread(true) : only === 'proposal' ? setNewProp(true) : setNewEvent(true))}>{only === 'thread' ? 'New thread' : only === 'proposal' ? 'New proposal' : 'New event'}</button>
         </div>
       )}
-      {!readOnly && !only && isPublic && <div className="purpose-line">🌐 Public: anyone on the web sees this channel{page?.posts === 'request' ? '. Members can turn a request into a proposal.' : '.'}</div>}
+      {!readOnly && !only && page?.posts === 'request' && <div className="purpose-line">Members can turn a request into a proposal.</div>}
       {!readOnly && <RecordingBar groupId={id} />}
       {!readOnly && !only && (topic !== ANNOUNCE || admin) && <Composer groupId={id} onRecord={canRecord() ? () => setRecording(true) : undefined} draft={'c:' + id} placeholder={topic && topic !== ANNOUNCE ? `Message #${topic}` : undefined} canAnnounce={admin} announcing={topic === ANNOUNCE}
         onSend={(text, files, announce) => { stick.current = true; return postMessage(id, text, files, topic === ANNOUNCE ? undefined : topic, announce, eventTags(text)) }} prefill={prefill}

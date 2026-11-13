@@ -5,8 +5,8 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
-import { setInbox, setWebPage } from '../core/actions'
-import { isInbox, mailLocal, slugify, webPage, WEB_RESERVED, type WebPage } from '../core/model'
+import { setInbox, setVisibility, setWebPage } from '../core/actions'
+import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
@@ -111,6 +111,34 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
   )
 }
 
+/** Moving channel G to public or members only (its admins, #issues 2026-11-13): what it changes,
+ *  worked out from the channel as it is, then a confirmation. Never retroactive (setVisibility). */
+export function VisibilitySheet({ g, to, onClose, onDone }: { g: Group; to: ChannelVisibility; onClose: () => void; onDone: (page: WebPage) => void }) {
+  const n = messages(g.id).length
+  const w = webPage(g)
+  const slug = w?.slug || slugify(g.name)
+  const wasPublic = publicPeriods(g).length > 0
+  const where = <b>{BELFRY.domain}/{slug}</b>
+  const mail = <b>{mailLocal(g)}@{BELFRY.domain}</b>
+  return (
+    <Sheet title={to === 'public' ? `Make #${g.name} public?` : `Make #${g.name} members only?`} onClose={onClose}>
+      <div className="pad vis-sheet">
+        {to === 'public' ? <>
+          <p>From now on, anyone on the web reads what is posted here, at {where}{isInbox(g) ? <>, and anyone can write to {mail}</> : null}.</p>
+          <p>{n ? <>Its <b>{n} message{n === 1 ? '' : 's'}</b> already here stay members only: only messages posted from now on are public.</> : 'It has no messages yet.'}</p>
+        </> : <>
+          <p>From now on, what is posted here is for members only. People from outside see only their own thread.</p>
+          <p>{wasPublic && n ? <>What was posted while it was public stays public at {where}: only new messages are members only.</> : n ? 'Its messages were never public.' : 'It has no messages yet.'}</p>
+        </>}
+        <div className="row" style={{ gap: 8, marginTop: 12 }}>
+          <button type="button" className="btn ghost" onClick={onClose}>Cancel</button>
+          <Btn className="btn" onClick={async () => onDone(await setVisibility(g.id, to))}>{to === 'public' ? 'Make it public' : 'Make it members only'}</Btn>
+        </div>
+      </div>
+    </Sheet>
+  )
+}
+
 /** A channel's settings (its admins): name, description, visibility, mail, its web page. */
 export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
   const g = groups().find((x) => x.id === id)
@@ -120,6 +148,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'public' })
   const [webError, setWebError] = useState('')
+  const [moving, setMoving] = useState<ChannelVisibility | null>(null)
   if (!g) return null
   return (
     <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={onClose}>
@@ -137,6 +166,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
             }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
             const was = webPage(g)
+            if (was) { web.visibility = was.visibility; web.periods = was.periods; if (was.visibility === 'public') web.on = web.on || was.on }
             if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public') || (web.posts ?? '') !== (was?.posts ?? '')) await setWebPage(id, web)
             onClose()
           }}>
@@ -144,9 +174,10 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
             {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
             {!g.isPod && <div className="field visibility"><span>Visibility</span>
-              <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'public'} onChange={() => setWeb({ ...web, visibility: 'public' })} /> <span><b>Public</b> · anyone reads its threads on the web</span></label>
-              <label className="toggle"><input type="radio" name="visibility" checked={web.visibility === 'members'} onChange={() => setWeb({ ...web, visibility: 'members' })} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
+              <label className="toggle"><input type="radio" name="visibility" checked={isPublicChannel(g)} onChange={() => setMoving('public')} /> <span><b>Public</b> · anyone reads it on the web</span></label>
+              <label className="toggle"><input type="radio" name="visibility" checked={!isPublicChannel(g)} onChange={() => setMoving('members')} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
             </div>}
+            {moving && <VisibilitySheet g={g} to={moving} onClose={() => setMoving(null)} onDone={(page) => { setWeb({ ...web, on: page.on, visibility: page.visibility, periods: page.periods, slug: web.on ? web.slug : page.slug }); setMoving(null) }} />}
             {!g.isPod && <div className="field visibility"><span>Posts</span>
               {([['', 'Anything', 'messages, threads, events, proposals'], ['thread', 'Threads only', 'every post has a title; talk goes in its thread'], ['event', 'Events only', 'the composer becomes "New event"'], ['proposal', 'Proposals only', 'to discuss and vote on'],
                 ...(web.posts === 'request' ? [['request', 'Requests', 'from the web; members turn them into proposals']] : [])] as [string, string, string][]).map(([v, label, hint]) => (

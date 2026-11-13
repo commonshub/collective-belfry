@@ -1163,3 +1163,15 @@ div.settings-row { cursor: default; }
 .sheet-back-head .icon-btn { font-size: 22px; }
 .settings-nav .settings-row .v { display: none; }
 .settings-nav .settings-row .t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* channels the belfry's admins drag into order (#issues, 2026-11-13) */
+.chan-sections.sorting { user-select: none; -webkit-user-select: none; }
+.chan-slot { position: relative; -webkit-touch-callout: none; }
+.chan-slot.dragging { opacity: .45; }
+.chan-slot.drop-before::before, .chan-slot.drop-after::after, .section-title.drop-into::after { content: ''; position: absolute; left: 12px; right: 12px; top: -1px; height: 3px; border-radius: 2px; background: var(--accent, #2563eb); }
+.section-title.drop-into { position: relative; }
+.section-title.drop-into::after { top: auto; bottom: -2px; }
+.vis-line { white-space: nowrap; }
+.vis-sheet p { margin: 0 0 10px; line-height: 1.45; }
+.chan-slot.drop-after::after { top: auto; bottom: -1px; }
+.drop-hint { padding: 2px 16px 8px; font-size: 13px; }

@@ -389,7 +389,21 @@ export type ChannelVisibility = 'public' | 'members'
 // title and talk goes in its thread (a forum, GitHub-issues style); "request": the web's #requests.
 export const POST_TYPES = ['thread', 'event', 'proposal', 'request'] as const
 export type PostType = typeof POST_TYPES[number]
-export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility; posts?: PostType }
+// "periods": when it was public, [from, to | null] in seconds (#issues, 2026-11-13: moving a channel
+// never changes who could read what was posted before; the page shows only what was posted while
+// public). A setting from before periods that says public counts as public since ever.
+export type Period = [number, number | null]
+export interface WebPage { on: boolean; slug: string; visibility: ChannelVisibility; posts?: PostType; periods?: Period[] }
+
+/** When channel G was public (its page on and public), oldest first. */
+export function publicPeriods(g: Group | undefined): Period[] {
+  const w = webPage(g)
+  if (!w) return []
+  if (w.periods) return w.periods
+  return w.on && w.visibility === 'public' ? [[0, null]] : []
+}
+/** Was a message of G posted at AT (seconds) public on the web? */
+export const publicAt = (g: Group | undefined, at: number) => publicPeriods(g).some(([a, b]) => at >= a && (b === null || at < b))
 // paths of the belfry's own: a channel can't take them (webthreads.RESERVED)
 export const WEB_RESERVED = new Set(('api admin apply apps bridge calendar chat check claim console connect door drop events feedback follow git groups hooks internal ' +
   'market me mentions people photos programme shop signin skills static steward theme tokens vote wallet welcome invite brand ' +
@@ -414,8 +428,13 @@ export function webPage(g: Group | undefined): WebPage | undefined {
   const own = evs.filter((e) => e.kind === 30078 && tag(e, 'd') === WEB_D + g.id && tag(e, 'h') === g.id && (g.admins.has(e.pubkey) || e.pubkey === relayKey)).sort(byTime)
   try {
     const c = own.length ? JSON.parse(own.at(-1)!.content || '{}') : null
-    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...((POST_TYPES as readonly string[]).includes(c.posts) ? { posts: c.posts as PostType } : {}) } : undefined
+    return c ? { on: !!c.on, slug: String(c.slug || ''), visibility: c.visibility === 'members' || (!c.visibility && c.list === 'own') ? 'members' : 'public', ...((POST_TYPES as readonly string[]).includes(c.posts) ? { posts: c.posts as PostType } : {}), ...(Array.isArray(c.periods) ? { periods: cleanPeriods(c.periods) } : {}) } : undefined
   } catch { return undefined }
+}
+
+function cleanPeriods(raw: unknown[]): Period[] {
+  return raw.filter((p): p is [number, number | null] => Array.isArray(p) && Number.isFinite(p[0]) && (p[1] === null || Number.isFinite(p[1])))
+    .map(([a, b]) => [Math.floor(a), b === null ? null : Math.floor(b)] as Period).sort((x, y) => x[0] - y[0]).slice(-100)
 }
 
 export type CardStatus = 'open' | 'waiting' | 'closed'
