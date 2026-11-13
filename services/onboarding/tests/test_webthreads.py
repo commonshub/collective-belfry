@@ -458,3 +458,45 @@ def test_old_default_descriptions_are_refreshed(world, monkeypatch):
     assert not [
         e for e in relay.events if e["kind"] == 9002 and ["h", "events"] in e["tags"]
     ]  # changed by people: kept
+
+
+def test_moving_a_channel_is_never_retroactive(world):
+    """#issues 2026-11-13: what was posted while members only stays private once it goes public,
+    and what was posted while public stays public once it goes members only."""
+    svc, relay = world
+
+    def post(id_, at, text):
+        relay.events.append(
+            {
+                "id": id_,
+                "kind": 9,
+                "pubkey": MEMBER,
+                "created_at": at,
+                "content": text,
+                "tags": [["h", "props"], ["subject", text]],
+            }
+        )
+
+    post("1" * 64, 100, "Before")
+    post("2" * 64, 300, "During")
+    post("3" * 64, 600, "After")
+    relay.events.append(
+        {
+            "id": "s1",
+            "kind": 30078,
+            "pubkey": ADMIN,
+            "created_at": 700,
+            "content": json.dumps(
+                {"on": True, "slug": "ideas", "visibility": "members", "periods": [[200, 500]]}
+            ),
+            "tags": [["d", "belfry:web:props"], ["h", "props"], ["t", "belfry-web"]],
+        }
+    )
+    webthreads._cache.update(at=0.0, sites={})
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
+        page = c.get("/ideas").text
+        assert "During" in page and "Before" not in page and "After" not in page
+        assert "posted while the channel was public" in page
+        assert c.get("/ideas/" + "2" * 64).status_code == 200
+        assert c.get("/ideas/" + "1" * 64).status_code == 403
+        assert c.get("/ideas/" + "3" * 64).status_code == 403

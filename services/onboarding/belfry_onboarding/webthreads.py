@@ -15,7 +15,8 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
   "slug": "ideas", "visibility": "public" | "members"}``: the channel's visibility, one general
   setting (2026-11-11; older events said ``"list": "public" | "own"``). ``public``: the page lists
   every thread and anyone reads them; ``members``: someone from outside sees only their own (by
-  the link they get).
+  the link they get). ``"periods": [[from, to | null], …]`` (#issues, 2026-11-13) says when it
+  was public: the page shows only what was posted then (moving a channel is never retroactive).
   Only the latest setting by an admin of that channel (39001) or of the belfry counts; a slug
   taken by an earlier channel, or one of the service's own paths, is ignored.
 - **The page** ``<domain>/<slug>``: the channel's name and description, a form to open a thread
@@ -197,6 +198,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
                 {
                     "slug": slug,
                     "list": "own" if _members_only(conf) else "public",
+                    "periods": _periods(conf),
                     "posts": conf.get("posts")
                     if conf.get("posts") in ("proposal", "event", "request")
                     else "",
@@ -211,6 +213,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
         out[conf["slug"]] = {
             "channel": ch,
             "list": conf["list"],
+            "periods": conf["periods"],
             "posts": conf["posts"],
             "name": name,
             "about": about,
@@ -223,6 +226,31 @@ def _members_only(conf: dict[str, Any]) -> bool:
     "own"."""
     v = conf.get("visibility")
     return v == "members" if v else conf.get("list") == "own"
+
+
+def _periods(conf: dict[str, Any]) -> list[tuple[int, int | None]]:
+    """When the channel was public (#issues, 2026-11-13): ``"periods": [[from, to | null], …]``
+    in seconds. Moving a channel is never retroactive: what was posted while it was members only
+    stays private, what was posted while public stays public. A setting without periods is public
+    since ever when it says public, else never."""
+    raw = conf.get("periods")
+    if not isinstance(raw, list):
+        return [] if _members_only(conf) else [(0, None)]
+    out: list[tuple[int, int | None]] = []
+    for p in raw[-100:]:
+        if (
+            isinstance(p, list)
+            and len(p) == 2
+            and isinstance(p[0], int)
+            and (p[1] is None or isinstance(p[1], int))
+        ):
+            out.append((p[0], p[1]))
+    return sorted(out)
+
+
+def public_at(site: dict[str, Any], at: int) -> bool:
+    """Was something posted at AT public on the page?"""
+    return any(a <= at and (b is None or at < b) for a, b in site.get("periods") or [])
 
 
 def _tag(e: dict[str, Any], k: str) -> str:
@@ -407,8 +435,11 @@ def list_page(
         head += f"<p>{followers.text_html(site['about'])}</p>"
     head += "</div>"
     body = head
-    if site["list"] == "public":
+    if site.get("periods"):
         roots, replies = _events(svc, site["channel"])
+        # only what was posted while the channel was public (never retroactive)
+        roots = [e for e in roots if public_at(site, e["created_at"])]
+        replies = [r for r in replies if public_at(site, r["created_at"])]
         count: dict[str, int] = {}
         last: dict[str, int] = {}
         for r in replies:
@@ -446,6 +477,8 @@ def list_page(
                 if items
                 else "<p>No threads yet: be the first.</p>"
             )
+        if site["list"] != "public":
+            body += '<p class="wt-note">These were posted while the channel was public. It is members only now: a new thread is between you and the members, and you get its link by e-mail.</p>'
     else:
         body += '<p class="wt-note">Your thread is between you and the members: you get its link by e-mail.</p>'
     if site.get("posts") in ("", None, "request"):
@@ -465,13 +498,20 @@ def thread_page(
         return _page("Not found", "<h1>No such thread</h1>", 404)
     owner = _owner(svc, root)
     mine = bool(owner) and hmac.compare_digest(k or "", thread_key(svc, root_id, owner))
-    if site["list"] != "public" and not mine:
+    if not public_at(site, root["created_at"]) and not mine:
         return _page(
             "Private thread",
             "<h1>This thread is private</h1><p>Open it with the link we mailed you.</p>",
             403,
         )
-    comments = sorted((r for r in replies if _root_of(r) == root_id), key=lambda e: e["created_at"])
+    comments = sorted(
+        (
+            r
+            for r in replies
+            if _root_of(r) == root_id and (mine or public_at(site, r["created_at"]))
+        ),
+        key=lambda e: e["created_at"],
+    )
     names, roles = _who(svc, [root, *comments])
 
     def card(e: dict[str, Any]) -> str:
