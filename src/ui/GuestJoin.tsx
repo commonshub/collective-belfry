@@ -108,11 +108,11 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
       return true
     } catch (e) { fail(e); return false }
   }
-  const verify = async (c: string) => {
+  const verify = async (c: string, again = false) => {
     if (busy) return
     setBusy(true); setError(''); setNote('')
     try {
-      await verifyJoinCode(sentTo.current, c, askName ? name : undefined)
+      await verifyJoinCode(sentTo.current, c, askName ? name : undefined, again)
       // a co-host link waiting for a proven e-mail: now it makes them a host
       const cohost = coHostToken()
       if (cohost) { try { await joinWithAccount(cohost); setCoHostToken('') } catch { /* the link again later */ } }
@@ -130,7 +130,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
   // the code that could not be checked (no connection): again when the page is back in front
   const retryable = useRef('')
   useEffect(() => {
-    const back = () => { if (document.visibilityState === 'visible' && retryable.current && !busy) { const c = retryable.current; retryable.current = ''; void verify(c) } }
+    const back = () => { if (document.visibilityState === 'visible' && retryable.current && !busy) { const c = retryable.current; retryable.current = ''; void verify(c, true) } }
     document.addEventListener('visibilitychange', back)
     addEventListener('online', back)
     return () => { document.removeEventListener('visibilitychange', back); removeEventListener('online', back) }
@@ -164,7 +164,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
           <div className="join-state" role="status" aria-live="polite">
             {busy ? <span className="hint">Checking the code…</span> : error ? <span className="error" role="alert">{error}</span> : note ? <span className="hint">{note}</span> : <span className="hint">Not there? Look in your spam folder.</span>}
           </div>
-          {!busy && error && code.length === 6 && <Btn className="btn" onClick={() => { retryable.current = ''; return verify(code) }}>Try again</Btn>}
+          {!busy && error && code.length === 6 && <Btn className="btn" onClick={() => { retryable.current = ''; return verify(code, true) }}>Try again</Btn>}
           <div className="join-links">
             <Btn className="link" disabled={busy} onClick={async () => { if (await send()) setNote('A new code is on its way to your e-mail.') }}>Send a new code</Btn>
             <button type="button" className="link" disabled={busy} onClick={() => { setStep('who'); setError(''); setNote(''); setCode('') }}>Use another address</button>
