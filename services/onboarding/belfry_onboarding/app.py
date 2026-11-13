@@ -220,6 +220,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             mail.running(app),  # members' outgoing mail, gift-wrapped to the belfry (mail.py)
             push.running(app),  # push notifications to the phone apps (push.py)
             webthreads.running(app),  # members' replies mailed to web threads' authors
+            website.running(app),  # a website proposal that passed goes live (website.py)
             agents.running(app),  # members' agents follow their member into channels (agents.py)
         ):
             yield
