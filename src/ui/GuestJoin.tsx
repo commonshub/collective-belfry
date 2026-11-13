@@ -49,6 +49,15 @@ export function GuestJoinHost({ onSignIn }: { onSignIn: (channel: string, moved:
   return <JoinSheet onClose={closeJoin} onSignIn={onSignIn} />
 }
 
+/** What the six boxes hold after a change: the digits, at most six; a whole code pasted over a
+ *  full row replaces it; one more digit typed into a full row changes nothing. */
+export function nextCode(old: string, raw: string): string {
+  const d = raw.replace(/\D/g, '')
+  if (d.length <= 6) return d
+  const added = d.startsWith(old) ? d.slice(old.length) : d
+  return (added.length >= 6 ? added : d).slice(0, 6)
+}
+
 /** Six boxes for the code: one real field under them (paste, autofill and backspace just work). */
 function CodeBoxes({ value, onChange, disabled, invalid }: { value: string; onChange: (v: string) => void; disabled?: boolean; invalid?: boolean }) {
   const ref = useRef<HTMLInputElement>(null)
@@ -56,8 +65,10 @@ function CodeBoxes({ value, onChange, disabled, invalid }: { value: string; onCh
   return (
     <label className={'code-boxes' + (invalid ? ' bad' : '')}>
       <span className="sr-only">The 6-digit code from the e-mail</span>
-      <input ref={ref} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" maxLength={6} disabled={disabled}
-        value={value} onChange={(e) => onChange(e.target.value.replace(/\D/g, '').slice(0, 6))} />
+      {/* no maxLength: it would cut a pasted "123 456" or "Code: 123456" before the digits are
+          picked, and refuse a new code pasted over a full row (#issues 2026-11-13) */}
+      <input ref={ref} inputMode="numeric" pattern="[0-9]*" autoComplete="one-time-code" disabled={disabled}
+        value={value} onChange={(e) => onChange(nextCode(value, e.target.value))} />
       <span className="cells" aria-hidden="true">
         {[0, 1, 2, 3, 4, 5].map((i) => <i key={i} className={i === Math.min(value.length, 5) ? 'on' : ''}>{value[i] ?? ''}</i>)}
       </span>
@@ -108,8 +119,22 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
       touch()
       onSaved?.(sentTo.current)
       onClose()
-    } catch (e) { setCode(''); fail(e) } finally { setBusy(false) }
+    } catch (e) {
+      // a wrong or expired code is cleared; a connection that failed keeps the digits for Try again
+      const f = e instanceof JoinFailed ? e.code : 'failed'
+      if (f === 'wrong_code' || f === 'expired') setCode('')
+      else retryable.current = c
+      fail(e)
+    } finally { setBusy(false) }
   }
+  // the code that could not be checked (no connection): again when the page is back in front
+  const retryable = useRef('')
+  useEffect(() => {
+    const back = () => { if (document.visibilityState === 'visible' && retryable.current && !busy) { const c = retryable.current; retryable.current = ''; void verify(c) } }
+    document.addEventListener('visibilitychange', back)
+    addEventListener('online', back)
+    return () => { document.removeEventListener('visibilitychange', back); removeEventListener('online', back) }
+  })
   const community = useCommunityName(NAME)
   const member = saveOnly ? undefined : info?.member
   const title = step === 'code' ? 'Check your e-mail' : step === 'taken' ? 'You have an account here' : saveOnly ? 'Save your account' : member ? `Join ${community} as ${member.label}` : `Join ${label}`
@@ -139,6 +164,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
           <div className="join-state" role="status" aria-live="polite">
             {busy ? <span className="hint">Checking the code…</span> : error ? <span className="error" role="alert">{error}</span> : note ? <span className="hint">{note}</span> : <span className="hint">Not there? Look in your spam folder.</span>}
           </div>
+          {!busy && error && code.length === 6 && <Btn className="btn" onClick={() => { retryable.current = ''; return verify(code) }}>Try again</Btn>}
           <div className="join-links">
             <Btn className="link" disabled={busy} onClick={async () => { if (await send()) setNote('A new code is on its way to your e-mail.') }}>Send a new code</Btn>
             <button type="button" className="link" disabled={busy} onClick={() => { setStep('who'); setError(''); setNote(''); setCode('') }}>Use another address</button>

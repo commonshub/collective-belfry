@@ -31,19 +31,25 @@ export const JOIN_ERRORS: Record<JoinError, string> = {
 }
 const KNOWN = new Set(Object.keys(JOIN_ERRORS))
 
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const clean = (name: string) => name.trim().replace(/\s+/g, ' ').slice(0, 100)
 
 async function post(path: string, body: unknown): Promise<Record<string, unknown>> {
-  let r: Response
-  try { r = await signedFetch(`${BELFRY.api}${path}`, 'POST', body) } catch (e) {
-    throw new JoinFailed(/timeout/i.test(String((e as Error)?.message ?? e)) ? 'failed' : 'offline')
+  let r: Response | undefined
+  // coming back from the mail app with the code, the phone may have dropped the connection (or
+  // the signer's) while the page slept: try again for a few seconds before saying so (#issues
+  // 2026-11-13, "Can't enter the 6-digit after join")
+  for (let i = 0; ; i++) {
+    try { r = await signedFetch(`${BELFRY.api}${path}`, 'POST', body); break } catch (e) {
+      if (i >= 3) throw new JoinFailed(/timeout/i.test(String((e as Error)?.message ?? e)) ? 'failed' : 'offline')
+      await wait(1000 * (i + 1))
+    }
   }
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
   if (!r.ok) throw new JoinFailed(KNOWN.has(String(d.error)) ? (d.error as JoinError) : 'failed', d.moved === true)
   return d
 }
 
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** Ask for the code: it goes by e-mail to EMAIL. NAME is sent when the guest has none yet. */
 export async function sendJoinCode(email: string, name?: string) {
