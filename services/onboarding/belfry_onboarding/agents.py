@@ -107,10 +107,11 @@ MIRROR_SECONDS = 600
 
 def mirror(svc: Services, only: str = "") -> int:
     """A member's own agent has the same access as its member (#issues, 2026-11-13): it is put in
-    every channel its member is in (kind 9000, ``agent``), closed ones and meetings too. Only
-    ever adds: an agent invited somewhere by itself stays there, and leaving follows the pass
-    (closed). ONLY: just that agent. Runs when an agent becomes someone's, and every 10 minutes
-    for the channels its member joins later."""
+    every channel its member is in (kind 9000, ``agent``, ``mirror``), closed ones and meetings
+    too; and out of one (9001, ``mirror``) once its member is no longer in it, when it came in
+    that way (an agent invited somewhere by itself stays there). A closed pass takes it out of
+    everything (closed). ONLY: just that agent. Runs when an agent becomes someone's, and every
+    10 minutes for the channels its member joins or leaves later."""
     from . import followers, guests
 
     owners = {
@@ -124,9 +125,22 @@ def mirror(svc: Services, only: str = "") -> int:
     relay, sign = got
     try:
         lists = relay.query([{"kinds": [39002], "limit": 5000}], sign)
+        # how each agent last came into a channel: by mirroring, or on its own
+        adds = relay.query([{"kinds": [9000], "#p": sorted(owners), "limit": 5000}], sign) or []
     except Exception as exc:  # noqa: BLE001
         log.warning("agents: channel lists not read: %s", exc)
         return 0
+    last: dict[tuple[str, str], dict] = {}
+    for a in adds:
+        ch = next((t[1] for t in a.get("tags", []) if t[:1] == ["h"] and len(t) > 1), "")
+        for t in a.get("tags", []):
+            if t[:1] == ["p"] and len(t) > 1 and t[1] in owners:
+                k = (ch, t[1])
+                if k not in last or a.get("created_at", 0) >= last[k].get("created_at", 0):
+                    last[k] = a
+    mirrored = {
+        k for k, a in last.items() if any(t[:2] == ["mirror", "1"] for t in a.get("tags", []))
+    }
     n = 0
     for e in lists:
         tags = e.get("tags", [])
@@ -136,14 +150,19 @@ def mirror(svc: Services, only: str = "") -> int:
         inside = {t[1] for t in tags if t[:1] == ["p"] and len(t) > 1}
         for agent, owner in owners.items():
             if owner in inside and agent not in inside:
+                tags_in = [["h", channel], ["p", agent, "member"], ["agent", "1"]]
+                tags_in += [["invited-by", owner], ["mirror", "1"]]
+                if guests._channel_event(svc, 9000, tags_in):
+                    n += 1
+            elif agent in inside and owner not in inside and (channel, agent) in mirrored:
                 if guests._channel_event(
                     svc,
-                    9000,
-                    [["h", channel], ["p", agent, "member"], ["agent", "1"], ["invited-by", owner]],
+                    9001,
+                    [["h", channel], ["p", agent], ["mirror", "1"], ["reason", "its member left"]],
                 ):
                     n += 1
     if n:
-        log.info("agents: %d channel(s) opened to members' agents", n)
+        log.info("agents: %d channel change(s) for members' agents", n)
     return n
 
 
