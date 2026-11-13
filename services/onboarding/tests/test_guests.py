@@ -849,7 +849,7 @@ def test_passes_that_ended_are_closed_by_the_service_itself(rsvc, published, aut
             "date_end": yesterday,
         },
     )
-    followers._expired_at = 0.0
+    followers._expired_at = float("-inf")
     assert followers.expire_passes(rsvc) == {"expired": [pass_id]}
     assert reg.read_one("belfry.pass", pass_id, ["state"])["state"] == "expired"
     assert (9001, [["h", "garden"], ["p", "c" * 64], ["guest", "ended"]]) in published

@@ -484,7 +484,7 @@ def soon(svc: Services, now: float | None = None) -> dict[str, int]:
 
 
 EXPIRE_SECONDS = 3600
-_expired_at = 0.0
+_expired_at = float("-inf")  # the first tick after a start runs (monotonic time starts at boot)
 
 
 def expire_passes(svc: Services) -> dict[str, Any] | None:

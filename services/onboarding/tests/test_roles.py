@@ -331,6 +331,6 @@ def test_a_membership_with_an_end_closes_like_a_guest_pass(world, monkeypatch):
             "date_end": (dt.date.today() - dt.timedelta(days=1)).isoformat(),
         },
     )
-    followers._expired_at = 0.0
+    followers._expired_at = float("-inf")
     assert pass_id in followers.expire_passes(rsvc)["expired"]
     assert rsvc.odoo.read_one("belfry.pass", pass_id, ["state"])["state"] == "expired"
