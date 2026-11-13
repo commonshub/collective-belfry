@@ -893,9 +893,8 @@ def placeholder_html(settings: Any, svc: Services | None = None) -> str:
             no_admin = not setup.admin_known(svc)
         except Exception:  # noqa: BLE001 — unsure: show the ordinary placeholder
             no_admin = False
-    logo = brand.get("logo") or (
-        console + theme.current().logo if console else theme.current().logo
-    )
+    # same origin as the page (the apex serves /theme/*), or the branding's https logo
+    logo = brand.get("logo") or theme.current().logo
     about = brand.get("description") or branding.DEFAULT_DESCRIPTION
     head = f"""<img class="logo" src="{E(logo)}" alt="">
 <h1>{E(name)}</h1>

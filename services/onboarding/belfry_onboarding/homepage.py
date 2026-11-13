@@ -96,6 +96,15 @@ HOP_BY_HOP = {
 }
 
 
+# the placeholder's own policy (Caddy only adds its default when none is set): the branding's
+# logo is an https image (Blossom or anywhere an admin put it), nothing else leaves the page
+PLACEHOLDER_CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: https:; font-src 'self'; connect-src 'self'; form-action 'self'; "
+    "base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
+)
+
+
 class HomepageError(RuntimeError):
     pass
 
@@ -328,7 +337,10 @@ class Homepage:
                 return Response(
                     await run_in_threadpool(placeholder_html, self.settings, svc),
                     media_type="text/html",
-                    headers={"Cache-Control": "no-store"},
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Security-Policy": PLACEHOLDER_CSP,
+                    },
                 )
             return Response(
                 "This site is not published yet.", status_code=503, media_type="text/plain"

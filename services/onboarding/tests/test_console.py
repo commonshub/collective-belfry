@@ -284,7 +284,7 @@ def test_placeholder_until_the_website_is_published(web, belfry, authentik):
     r = web.get("/", headers={"Host": "belfry.test", "Accept": "text/html"})
     assert "has no admin yet" not in r.text and r.status_code == 200
     # the default homepage: the logo in big, the name, the description, the chat
-    assert '<img class="logo" src="https://belfry.belfry.test/theme/belfry/logo.svg"' in r.text
+    assert '<img class="logo" src="/theme/belfry/logo.svg"' in r.text
     assert "<h1>Example Commons</h1>" in r.text
     assert "A sovereign community that is self organised" in r.text
     assert 'href="https://chat.' in r.text and "Open the chat" in r.text
