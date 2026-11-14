@@ -104,7 +104,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   } else if (f.proposals[0]) {
     say(<DocIcon />, <><b>{f.proposals[0].title}</b> · {f.proposals[0].status}</>, null, 'proposal')
   } else if (g?.isPod) {
-    say(<PodShape members={g.members.size} size={18} />, <>{g.members.size} {g.members.size === 1 ? 'member' : 'members'} · {g.closed ? 'by application' : 'open to join'}</>)
+    say(<PodShape members={g.members.size} size={18} />, <>{g.members.size} {g.members.size === 1 ? 'member' : 'members'} · {g.closed ? 'by request' : 'open to join'}</>)
     quiet = true
   }
   void redraw
@@ -113,7 +113,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   const counts: [string, ReactNode, number, string][] = [
     ['events', <CalendarIcon />, f.events.length - (shownNow === 'event' ? 1 : 0), 'more events'],
     ['proposals', <DocIcon />, f.proposals.length - (shownNow === 'proposal' ? 1 : 0), 'more open proposals'],
-    ['pods', <PodShape members={6} size={13} />, f.pods.length, 'pods'],
+    ['pods', <PodShape members={6} size={13} />, f.pods.length, 'groups'],
     ['photos', <ImageIcon />, f.photos.length, 'photos'],
     ['todos', <TodoIcon />, f.tally.total, 'todos'],
   ]
@@ -150,7 +150,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
       {/* the same at both levels, so nothing jumps when it opens all the way; the whole text is under it */}
       {g.about && <p className="pull-about">{g.about.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').slice(0, 200)}</p>}
       {(g.isPod || g.isProposal) && parent && (
-        <button className="link pull-parent" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{g.isProposal ? 'Proposal' : 'Pod'} in {parent.isPod ? '' : '# '}{parent.name}</button>
+        <button className="link pull-parent" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}</button>
       )}
       {g.isProposal && <ProposalHeader groupId={id} />}
       {g.isPod && canAdmin(g) && g.applications.length > 0 && (
@@ -222,7 +222,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
       )}
       {f.pods.length > 0 && (
         <section>
-          <h3>Pods</h3>
+          <h3>Groups</h3>
           <div className="pull-pods">
             {f.pods.map((p) => (
               <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>

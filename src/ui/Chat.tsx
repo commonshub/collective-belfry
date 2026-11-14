@@ -25,7 +25,7 @@ import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
 const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
-import { AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -38,6 +38,7 @@ import { inOrder, mayOrder, setChannelOrder } from '../core/order'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
+import { requestCount, showRequests } from '../core/requests'
 
 /** The `a` tags of the events a message's text links to (https://<domain>/events/<link>): the
  *  ones this device knows, or the belfry told it about. Receivers resolve the rest themselves. */
@@ -88,6 +89,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   const dnd = useChannelDrag(pub, members)
   const next = calendar().filter((e) => e.status !== 'cancelled' && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
   const fresh = newMentions()
+  const waitingN = requestCount()
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
     <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
       onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
@@ -95,7 +97,7 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
       <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
     </button>
   )
-  // pods nest under the channel or pod they were posted in: a tree, as deep as it goes
+  // groups nest under the channel or group they were posted in: a tree, as deep as it goes
   const Tree = ({ g, depth = 0, seen = new Set<string>() }: { g: Group; depth?: number; seen?: Set<string> }) => (
     <>
       <Row g={g} depth={depth} />
@@ -116,6 +118,13 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
       </div>
       <div className="scroll">
         {side && brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
+        {showRequests() && (
+          <button className={'chan requests-row' + (section === 'requests' ? ' on' : '')} onClick={() => closeDrawer('requests')}>
+            <span className="hash"><InboxIcon /></span>
+            <span className="t"><b>Requests</b><small>{waitingN ? `${waitingN} waiting for you` : 'People and agents asking to join'}</small></span>
+            {waitingN > 0 && <span className="badge lime">{waitingN}</span>}
+          </button>
+        )}
         <button className={'chan' + (section === 'events' && !current ? ' on' : '')} onClick={() => closeDrawer('events')}>
           <span className="hash"><CalendarIcon /></span>
           <span className="t"><b>Upcoming events</b><small>{next ? `${fmtDay(next.start)} · ${next.title}` : 'Upcoming, yours, the ones you host'}</small></span>
@@ -328,7 +337,7 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
   )
 }
 
-/** Not in this pod: join it (open), or apply by answering its question (closed). */
+/** Not in this group: join it (open), or ask to join by answering its question (closed). */
 function JoinBar({ g }: { g: Group }) {
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState('')
@@ -336,15 +345,15 @@ function JoinBar({ g }: { g: Group }) {
   if (!g.closed)
     return (
       <div className="join-bar">
-        <span>You're not in this pod yet.</span>
+        <span>You're not in this group yet.</span>
         <Btn className="btn small" onClick={() => joinGroup(g.id)}>Join</Btn>
       </div>
     )
   return (
     <>
       <div className="join-bar">
-        <span>{applied ? 'Application sent. The pod’s admins will answer.' : 'This pod is closed: apply to join.'}</span>
-        {!applied && <button className="btn small" onClick={() => setAsking(true)}>Apply</button>}
+        <span>{applied ? (g.vouches > 0 ? 'Request sent. Its members vouch, or its admins answer.' : 'Request sent. The group’s admins will answer.') : 'People join this group by request.'}</span>
+        {!applied && <button className="btn small" onClick={() => setAsking(true)}>Apply to join</button>}
       </div>
       {asking && (
         <Sheet title={`Apply to ${g.name}`} onClose={() => setAsking(false)}>
@@ -352,8 +361,8 @@ function JoinBar({ g }: { g: Group }) {
             <p className="apply-q">{g.prompt || DEFAULT_PROMPT}</p>
             <textarea className="input" rows={4} autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} />
             <div style={{ height: 12 }} />
-            <button className="btn" disabled={!answer.trim()}>Send my application</button>
-            <p className="hint" style={{ marginTop: 10 }}>The pod’s admins see your answer and admit you, or not.</p>
+            <button className="btn" disabled={!answer.trim()}>Send my request</button>
+            <p className="hint" style={{ marginTop: 10 }}>{g.vouches > 0 ? `${g.vouches === 1 ? 'One member' : `${g.vouches} members`} vouching for you, or an admin, let you in.` : 'The group’s admins see your answer and let you in, or not.'}</p>
           </Form>
         </Sheet>
       )}
@@ -361,36 +370,57 @@ function JoinBar({ g }: { g: Group }) {
   )
 }
 
-/** The post a pod leaves in its parent: a card to open (or join) it. */
+/** The post a group leaves in its parent: a card that opens the group's page (GroupPage.tsx). */
 function PodCard({ id, fallback }: { id: string; fallback: string }) {
   const g = groups().find((x) => x.id === id)
   if (!g) return <div className="text">{fallback}</div>
   const inIt = g.members.has(me())
+  const pending = g.applications.some((a) => a.pubkey === me())
   return (
-    <div className="ev-card pod-card" role="button" tabIndex={0} onClick={() => go('c/' + encodeURIComponent(id))}>
+    <div className="ev-card pod-card" role="button" tabIndex={0} aria-label={`Group ${g.name}: about it, who's in, join`} onClick={() => go(`c/${encodeURIComponent(id)}/group`)} onKeyDown={(e) => { if (e.key === 'Enter') go(`c/${encodeURIComponent(id)}/group`) }}>
       <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
       <span className="info">
         <b>{g.name}</b>
         {g.about && <small>{g.about}</small>}
-        <small>{g.closed ? 'Closed pod' : 'Pod'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : ''}</small>
+        <small>{g.closed ? 'Group · by request' : 'Group · open'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : pending ? ' · request sent' : ''}</small>
       </span>
       {!inIt && !g.closed && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
-      {!inIt && g.closed && <span className="badge">Closed</span>}
+      {!inIt && g.closed && !pending && <button className="btn small ghost" onClick={(e) => { e.stopPropagation(); go(`c/${encodeURIComponent(id)}/group`) }}>Apply</button>}
+      {!inIt && pending && <span className="badge">Pending</span>}
     </div>
   )
 }
 
-export function AccessFields({ closed, prompt, set }: { closed: boolean; prompt: string; set: (a: { closed: boolean; prompt: string }) => void }) {
+type Access = { closed: boolean; prompt: string; vouches?: number }
+export function AccessFields({ closed, prompt, vouches = 0, set }: Access & { set: (a: Access) => void }) {
   return (
     <>
       <div className="field"><span>Who can join</span></div>
       <div className="choice" style={{ marginTop: -8 }}>
-        <button type="button" className={!closed ? 'on' : ''} onClick={() => set({ closed: false, prompt })}><b>Open</b><small>Any member joins</small></button>
-        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt })}><b>Closed</b><small>Apply, admins admit</small></button>
+        <button type="button" className={!closed ? 'on' : ''} onClick={() => set({ closed: false, prompt, vouches })}><b>Open</b><small>Any member joins</small></button>
+        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt, vouches })}><b>By request</b><small>People ask to join</small></button>
       </div>
       {closed && (
-        <label className="field"><span>Question applicants answer</span>
-          <textarea className="input" rows={2} placeholder={DEFAULT_PROMPT} value={prompt} onChange={(e) => set({ closed, prompt: e.target.value })} /></label>
+        <label className="field"><span>Question people answer when they ask</span>
+          <textarea className="input" rows={2} placeholder={DEFAULT_PROMPT} value={prompt} onChange={(e) => set({ closed, prompt: e.target.value, vouches })} /></label>
+      )}
+      {closed && (
+        <div className="field vouch-rule"><span>Requests are accepted</span>
+          <div className="pick-group" role="radiogroup" aria-label="How requests are accepted">
+            <button type="button" role="radio" aria-checked={!vouches} className={'pick-row' + (!vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: 0 })}>
+              <span className="radio" aria-hidden="true" /><span className="t"><b>By its admins</b><small>An admin accepts or declines each request</small></span>
+            </button>
+            <button type="button" role="radio" aria-checked={!!vouches} className={'pick-row' + (vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: vouches || 2 })}>
+              <span className="radio" aria-hidden="true" /><span className="t"><b>When members vouch</b><small>Once enough of its members vouch, they’re in. Admins can still answer.</small></span>
+            </button>
+          </div>
+          {!!vouches && (
+            <div className="seg small vouch-n" role="group" aria-label="How many vouches">
+              {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className={vouches === n ? 'on' : ''} aria-pressed={vouches === n} onClick={() => set({ closed, prompt, vouches: n })}>{n}</button>)}
+            </div>
+          )}
+          {!!vouches && <small className="hint">{vouches === 1 ? 'One vouch' : `${vouches} vouches`} from different members of the group (not guests, not agents).</small>}
+        </div>
       )}
     </>
   )
@@ -399,10 +429,10 @@ export function AccessFields({ closed, prompt, set }: { closed: boolean; prompt:
 function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
-  const [access, setAccess] = useState({ closed: false, prompt: '' })
+  const [access, setAccess] = useState<Access>({ closed: false, prompt: '', vouches: 0 })
   const where = groups().find((g) => g.id === parent)
   return (
-    <Sheet title="New pod" onClose={onClose}>
+    <Sheet title="New group" onClose={onClose}>
       <Form onSubmit={async (e) => {
         e.preventDefault()
         const id = await createPod(name.trim(), about.trim(), parent, access)
@@ -413,9 +443,9 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
           <input className="input" autoFocus placeholder="e.g. Garden crew" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>What is it working on?</span>
           <textarea className="input" rows={3} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
-        <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />
-        <button className="btn" disabled={!name.trim()}>Create pod</button>
-        <p className="hint" style={{ marginTop: 10 }}>A working group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, tasks and pods.</p>
+        <AccessFields closed={access.closed} prompt={access.prompt} vouches={access.vouches} set={setAccess} />
+        <button className="btn" disabled={!name.trim()}>Create group</button>
+        <p className="hint" style={{ marginTop: 10 }}>A group inside {channelIcon(where)} {where?.name ?? parent}, with its own members, chat, events, photos, to-dos and groups. You run it: you let people in. It doesn’t make anyone a member of the belfry.</p>
       </Form>
     </Sheet>
   )
@@ -423,11 +453,14 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
 
 /** ☰: the channels drawer; the number of unread messages on it (like Discord's). */
 export function MenuButton() {
-  const n = unreadTotal()
+  const unread = unreadTotal()
+  const asks = requestCount() // requests waiting for me (Requests at the top of the list)
+  const n = unread + asks
+  const said = [unread ? `${unread} unread messages` : '', asks ? `${asks} ${asks === 1 ? 'request' : 'requests'} waiting` : ''].filter(Boolean).join(', ')
   return (
-    <button className="icon-btn menu-btn" aria-label={n ? `Channels · ${n} unread messages` : 'Channels'} aria-expanded="false" onClick={toggleDrawer}>
+    <button className="icon-btn menu-btn" aria-label={said ? `Channels · ${said}` : 'Channels'} aria-expanded="false" onClick={toggleDrawer}>
       <MenuIcon />
-      {n > 0 && <span className="count" aria-hidden="true">{n > 99 ? '99+' : n}</span>}
+      {n > 0 && <span className={'count' + (asks ? ' asks' : '')} aria-hidden="true">{n > 99 ? '99+' : n}</span>}
     </button>
   )
 }
@@ -716,7 +749,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
         <div className="body">
           {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
-          {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'a pod' : 'a proposal'}</div>}
+          {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
           {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
           {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
@@ -994,7 +1027,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
         </div>
       ))}
       <div className="bar">
-        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a pod' : 'Add photos or files'}
+        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a group' : 'Add photos or files'}
           onClick={() => (onEvent || canAnnounce || onRecord ? setMenu(true) : picker.current?.click())}>＋</button>
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
@@ -1040,7 +1073,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
             {onMeeting && <button className="act" onClick={() => { setMenu(false); onMeeting() }}><PeopleIcon /><span>Meeting<small>Members only: a topic, people, a time</small></span></button>}
             {onEvent && <button className="act" onClick={() => { setMenu(false); onEvent() }}><CalendarIcon /><span>Event</span></button>}
             {onProposal && <button className="act" onClick={() => { setMenu(false); onProposal() }}><DocIcon /><span>Proposal<small>A text to discuss and vote on</small></span></button>}
-            {onPod && <button className="act" onClick={() => { setMenu(false); onPod() }}><HexIcon /><span>Pod<small>A working group with its own channel</small></span></button>}
+            {onPod && <button className="act" onClick={() => { setMenu(false); onPod() }}><HexIcon /><span>Group<small>A working group with its own members and chat</small></span></button>}
           </div>
         </Sheet>
       )}

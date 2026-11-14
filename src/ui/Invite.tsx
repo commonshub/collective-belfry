@@ -11,7 +11,8 @@ import { channelIcon, displayName, group, profiles } from '../core/model'
 import { inChannel, inviteMember, isAgent, isGuest, LinkFailed, makeInviteLink, myAgents, type GuestDays, type JoinsAs, type LinkOpts, type Membership, type MyAgents } from '../core/invite'
 import { agentOwner } from '../core/access'
 import { isBelfryAdmin } from '../core/people'
-import { loadRoles, roleById } from '../core/roles'
+import { defaultRole, loadRoles, roleById } from '../core/roles'
+import { loadMembership, mayInviteMembers } from '../core/requests'
 import { me } from '../core/sync'
 import { useVersion } from '../core/store'
 import { Avatar, BackHead, Btn, go, Sheet } from './common'
@@ -40,9 +41,12 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
   useVersion()
   const g = group(id)
   const community = useCommunityName(NAME)
-  // only the belfry's admins invite members (Belfry refuses others: 403 not_admin)
+  // members of the belfry: its admins invite them, and any member when its Membership settings
+  // say so (then with the default role only; Belfry refuses the rest: 403 not_admin)
   const admin = isBelfryAdmin(me())
-  useEffect(() => { if (admin) void loadRoles() }, [admin])
+  const members = mayInviteMembers()
+  useEffect(() => { void loadMembership() }, [])
+  useEffect(() => { if (members) void loadRoles() }, [members])
   const [view, setView] = useState<View>('main')
   const [who, setWho] = useState<JoinsAs>({ as: 'guest', days: 1 })
   const [link, setLink] = useState<LinkOpts>({ people: 1, linkDays: 1 })
@@ -96,7 +100,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
     return (
       <Sheet title="Joins as" hideTitle onClose={onClose}>
         <BackHead title="Joins as" onBack={() => setView('main')} />
-        <div className="pick-head">Guest of {label}</div>
+        <div className="pick-head">{g?.isPod ? `Into ${label} only, as a guest` : `Guest of ${label}`}</div>
         <div className="pick-group" role="radiogroup" aria-label={`Guest of ${label}`}>
           {([1, 7, 30] as const).map((d) => (
             <button key={d} type="button" role="radio" aria-checked={isOn({ as: 'guest', days: d })} className={'pick-row' + (isOn({ as: 'guest', days: d }) ? ' on' : '')} onClick={() => pick({ as: 'guest', days: d })}>
@@ -114,16 +118,23 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
             </button>
           </div>
         )}
-        {admin && <>
+        {members && <>
           <div className="pick-head">Member of {community}</div>
           <div className="invite-opts" role="group" aria-label="Length of membership">
             <div><span>Membership</span>
               <div className="seg small">{(['month', 'year', 'permanent'] as const).map((m) => <button key={m} type="button" className={membership === m ? 'on' : ''} aria-pressed={membership === m}
                 onClick={() => { setMembership(m); if (who.as === 'member') setWho({ ...who, membership: m }) }}>{m === 'month' ? 'One month' : m === 'year' ? 'One year' : 'Permanent'}</button>)}</div></div>
           </div>
-          <RoleList value={memberRole} onPick={(r) => pick({ as: 'member', role: r, membership })} />
-          <button type="button" className="pick-row edit-roles" onClick={() => { onClose(); go('settings/roles') }}><PencilIcon /><span>Edit roles…</span></button>
+          {admin
+            ? <RoleList value={memberRole} onPick={(r) => pick({ as: 'member', role: r, membership })} />
+            : <div className="pick-group" role="radiogroup" aria-label="Member">
+                <button type="button" role="radio" aria-checked={who.as === 'member'} className={'pick-row' + (who.as === 'member' ? ' on' : '')} onClick={() => pick({ as: 'member', role: defaultRole(), membership })}>
+                  <span className="radio" aria-hidden="true" /><span className="t"><b>{roleById(defaultRole())?.label ?? 'Member'}</b><small>A member of {community}, not only of {label}</small></span>
+                </button>
+              </div>}
+          {admin && <button type="button" className="pick-row edit-roles" onClick={() => { onClose(); go('settings/roles') }}><PencilIcon /><span>Edit roles…</span></button>}
         </>}
+        {!members && g?.isPod && <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>This brings people into {label} only. Only admins of {community} make someone a member of {community}.</p>}
       </Sheet>
     )
   }
@@ -190,7 +201,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
 }
 
 /** Pick a member by name: they get the channel's link as a direct message (and are let in at
- *  once when it is a closed pod I administer). */
+ *  once when it is a group by request that I run). */
 function InviteMember({ id }: { id: string }) {
   const g = group(id)
   const [q, setQ] = useState('')

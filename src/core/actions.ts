@@ -2,7 +2,7 @@ import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS } from './model'
 import { enqueue, me, newId } from './sync'
 import { reading } from './guestmode'
 
@@ -19,21 +19,26 @@ export async function createChannel(name: string, about: string, id = slug(name)
   return id
 }
 
-export interface PodAccess { closed: boolean; prompt: string }
+/** Who joins a group: open, or closed (people apply: `prompt` is the question). Requests are
+ *  accepted by its admins, or by VOUCHES members vouching (1–5; 0 = admins accept). */
+export interface PodAccess { closed: boolean; prompt: string; vouches?: number }
 export const DEFAULT_PROMPT = 'Why do you want to join, and what would you bring?'
 
-/** NIP-29 metadata tags for a pod's access: `open` or `closed`, and our `prompt` (the question). */
-const accessTags = (a: PodAccess) => [a.closed ? ['closed'] : ['open'], ...(a.closed ? [['prompt', a.prompt.trim() || DEFAULT_PROMPT]] : [])]
+/** NIP-29 metadata tags for a group's access: `open` or `closed`, our `prompt` (the question)
+ *  and `vouches` (how many vouches admit someone; Belfry's vouches.py reads it). */
+const accessTags = (a: PodAccess) => [a.closed ? ['closed'] : ['open'], ...(a.closed ? [['prompt', a.prompt.trim() || DEFAULT_PROMPT]] : []),
+  ...(a.closed && (a.vouches ?? 0) > 0 ? [['vouches', String(Math.min(5, Math.max(1, a.vouches!)))]] : [])]
 
-/** A pod (working group): its own group `pod-…`, announced in its parent (channel or pod),
- *  which is what links the two. Pods nest: a pod can hold pods. */
+/** A group (a working group; the protocol keeps its old word: ids `pod-…`, the `pod` tag): its
+ *  own NIP-29 group, announced in its parent (channel or group), which is what links the two.
+ *  Groups nest: a group can hold groups. Whoever creates it is its admin. */
 export async function createPod(name: string, about: string, parent = 'general', access: PodAccess = { closed: false, prompt: '' }) {
   const id = 'pod-' + slug(name).slice(0, 24) + '-' + newId(2)
   await enqueue('groups', { kind: 9007, tags: [['h', id]] })
   await enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
   await enqueue('groups', {
     kind: 9,
-    content: `⬡ New pod: ${name}${about ? ' · ' + about : ''}`,
+    content: `⬡ New group: ${name}${about ? ' · ' + about : ''}`,
     tags: [['h', parent], ['pod', id]],
   })
   return id
@@ -49,6 +54,10 @@ export const leaveGroup = (id: string) => enqueue('groups', { kind: 9022, tags: 
 /** An admin admits an applicant (9000 put-user) or declines / removes them (9001 remove-user). */
 export const admit = (id: string, pubkey: string) => enqueue('groups', { kind: 9000, tags: [['h', id], ['p', pubkey, 'member']] })
 export const decline = (id: string, pubkey: string) => enqueue('groups', { kind: 9001, tags: [['h', id], ['p', pubkey]] })
+/** Vouch for (or take back a vouch for) someone's request to join group ID: a NIP-32 label on
+ *  their 9021. Enough vouches and Belfry admits them (vouches.py). */
+export const vouch = (id: string, request: { id: string; pubkey: string }, on = true) =>
+  enqueue('groups', { kind: 1985, tags: [['h', id], ['L', VOUCH_NS], ['l', on ? 'vouch' : 'withdrawn', VOUCH_NS], ['e', request.id], ['p', request.pubkey]] })
 
 export const editChannel = (id: string, name: string, about: string) =>
   enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })

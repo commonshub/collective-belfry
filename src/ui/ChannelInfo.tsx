@@ -19,6 +19,8 @@ import { Avatar, back, devMode, fmtDay, fmtTime, go, Guard, MediaGrid, Sheet, Bt
 import { all, type Ev } from '../core/store'
 import { isAdmin } from '../core/access'
 import { AccessFields } from './Chat'
+import { GroupRequest } from './Requests'
+import { groupRequestsFor } from '../core/requests'
 import { GearIcon } from './icons'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
@@ -96,15 +98,15 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
       )}
       {compact && <p className="about-line"><button className="link" onClick={() => setInviting(true)}>Invite people</button>{canAdmin(g) && <> · <button className="link" onClick={() => setSettings(true)}>Settings</button></>}</p>}
       {g.isPod && !compact && parent && (
-        <p className="about-line">Pod in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button> · {g.closed ? 'closed: apply, admins admit' : 'open: any member joins'}</p>
+        <p className="about-line">Group in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button> · {g.closed ? (g.vouches > 0 ? `by request: ${g.vouches === 1 ? 'one vouch' : `${g.vouches} vouches`} or an admin lets people in` : 'by request: its admins let people in') : 'open: any member joins'} · <button className="link" onClick={() => go(`c/${encodeURIComponent(id)}/group`)}>Group page</button></p>
       )}
       {g.isPod && g.closed && !compact && <p className="hint" style={{ whiteSpace: 'pre-wrap' }}>Question: {g.prompt || '—'}</p>}
       {g.isPod && (g.members.has(me())
-        ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave pod</button>
-        : !g.closed && <Btn className="btn" style={{ marginBottom: 10 }} onClick={() => joinGroup(id)}>Join pod</Btn>)}
+        ? <button className="btn ghost" style={{ marginBottom: 10 }} onClick={() => { if (confirm(`Leave ${g.name}?`)) void leaveGroup(id) }}>Leave group</button>
+        : !g.closed && <Btn className="btn" style={{ marginBottom: 10 }} onClick={() => joinGroup(id)}>Join group</Btn>)}
       <p className="about-mail">✉️ {isInbox(g) ? <>Anyone can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: mails land here as cards, and the channel's admins answer as the channel.</> : <>Members can e-mail <b>{mailLocal(g)}@{BELFRY.domain}</b>: their mail shows as their message.</>}</p>
       {webPage(g)?.on && <p className="hint web-page-link">{webPage(g)!.visibility === 'members' ? 'Members only' : 'Public'} · web page: <a href={`https://${BELFRY.domain}/${webPage(g)!.slug}`} target="_blank" rel="noreferrer">{BELFRY.domain}/{webPage(g)!.slug}</a></p>}
-      <p className="hint">{g.isPod ? 'Pod' : 'Channel'} id <code>{g.id}</code></p>
+      <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
       {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
       {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
     </div>
@@ -144,14 +146,14 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   const g = groups().find((x) => x.id === id)
   const [name, setName] = useState(g?.name ?? '')
   const [about, setAbout] = useState(g?.about ?? '')
-  const [access, setAccess] = useState({ closed: !!g?.closed, prompt: g?.prompt ?? '' })
+  const [access, setAccess] = useState<{ closed: boolean; prompt: string; vouches?: number }>({ closed: !!g?.closed, prompt: g?.prompt ?? '', vouches: g?.vouches ?? 0 })
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   const [moving, setMoving] = useState<ChannelVisibility | null>(null)
   if (!g) return null
   return (
-    <Sheet title={`${g.isPod ? 'Pod' : 'Channel'} settings`} onClose={onClose}>
+    <Sheet title={`${g.isPod ? 'Group' : 'Channel'} settings`} onClose={onClose}>
           <Form onSubmit={async (e) => {
             e.preventDefault()
             if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
@@ -172,7 +174,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
-            {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} set={setAccess} />}
+            {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} vouches={access.vouches} set={setAccess} />}
             {!g.isPod && <div className="field visibility"><span>Visibility</span>
               <label className="toggle"><input type="radio" name="visibility" checked={isPublicChannel(g)} onChange={() => setMoving('public')} /> <span><b>Public</b> · anyone reads it on the web</span></label>
               <label className="toggle"><input type="radio" name="visibility" checked={!isPublicChannel(g)} onChange={() => setMoving('members')} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
@@ -274,7 +276,8 @@ export function Members({ groupId }: { groupId: string }) {
   const [editing, setEditing] = useState<string | null>(null)
   const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   const vocab = [...new Set([...labels.values()].flat())].sort()
-  const reviewing = g?.isPod && canAdmin(g) ? g.applications : []
+  // requests to join: its admins answer; while it accepts by vouches, its members vouch
+  const reviewing = g?.isPod ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
   // guest mode: people who opened an invite link and have not joined are a number, not members
   const readingN = g ? [...g.reading].filter((p) => p !== me()).length : 0
   // guests (people or agents) and who brought them in: whose agent it is
@@ -285,17 +288,7 @@ export function Members({ groupId }: { groupId: string }) {
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
-      {reviewing.map((a) => (
-        <div key={a.pubkey} className="appl">
-          <div className="who"><Avatar pubkey={a.pubkey} size={28} />{displayName(a.pubkey)}<span className="hint" style={{ fontWeight: 400, fontSize: 12 }}>{fmtTime(a.at)}</span></div>
-          {g?.prompt && <div className="hint" style={{ fontSize: 13, marginTop: 6 }}>{g.prompt}</div>}
-          <blockquote>{a.answer || '(no answer)'}</blockquote>
-          <div className="row">
-            <Btn className="btn small" onClick={() => admit(groupId, a.pubkey)}>Admit</Btn>
-            <button className="btn small ghost" onClick={() => { if (confirm(`Decline ${displayName(a.pubkey)}?`)) void decline(groupId, a.pubkey) }}>Decline</button>
-          </div>
-        </div>
-      ))}
+      {reviewing.map((a) => <GroupRequest key={a.ev.id} g={g!} a={a} />)}
       {reviewing.length > 0 && <div className="section-title">Members <span>{g?.members.size}</span></div>}
       <Guard fallback={null}><Suspense fallback={<div className="members-map" />}>
         {mapped.length > 0
@@ -370,7 +363,7 @@ function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem |
   const at = (p: string) => `c/${encodeURIComponent(groupId)}/${p}`
   switch (e.kind) {
     case 9: {
-      if (t('pod')) return { ev: e, icon: '⬡', text: 'created a pod', detail: short(e.content, 200), go: at('m/' + e.id) }
+      if (t('pod')) return { ev: e, icon: '⬡', text: 'created a group', detail: short(e.content, 200), go: at('m/' + e.id) }
       if (t('proposal')) return { ev: e, icon: '📄', text: 'made a proposal', detail: short(e.content, 200), go: at('m/' + e.id) }
       const media = e.tags.filter((x) => x[0] === 'imeta').map((x) => x.find((v) => v.startsWith('m '))?.slice(2) ?? '')
       if (media.some((m) => m.startsWith('audio/'))) return { ev: e, icon: '🎙', text: 'posted a recording', detail: short(e.content, 200), go: at('m/' + e.id) }

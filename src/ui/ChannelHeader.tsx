@@ -111,7 +111,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
         {left}
         <h1 className="tap" onClick={() => setLevel(level ? 0 : 1)} aria-expanded={level > 0}>
           {title ?? <>{g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
-          {(g?.isPod || g?.isProposal) ? <small>{g.isProposal ? 'Proposal' : 'Pod'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by application' : ' · open') : ''}</small>
+          {(g?.isPod || g?.isProposal) ? <small>{g.isProposal ? 'Proposal' : 'Group'} in {parentOf(g)}{g.isPod ? (g.closed ? ' · by request' : ' · open') : ''}</small>
             : g && !g.isEvent && <small className="vis-line">{visibilityLine(g)}</small>}</>}
         </h1>
         {right}

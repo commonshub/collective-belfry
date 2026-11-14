@@ -140,7 +140,9 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
         </>
       )}
       <p className="hint" style={{ marginTop: 18, fontSize: 14 }}>
-        No invite? Sign in all the same and ask to join: {THEME === 'belfry' ? 'the admins' : "the village's admins"} get your note.
+        {THEME === 'belfry'
+          ? <>Not a member yet? <a href={`${BELFRY.pass}/apply`} target="_blank" rel="noreferrer">Ask to join</a>: the answer comes by e-mail.</>
+          : <>No invite? Sign in all the same and ask to join: the village's admins get your note.</>}
       </p>
     </div>
   )

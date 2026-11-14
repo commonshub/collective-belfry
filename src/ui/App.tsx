@@ -15,6 +15,9 @@ import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
+import { RequestsScreen } from './Requests'
+import { GroupPage } from './GroupPage'
+import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen } from './Calendar'
@@ -139,12 +142,14 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
         // members' roles (roles.ts): shown next to names; not asked in guest mode
         if (THEME === 'belfry' && !reading()) void loadRoles()
+        // requests waiting for me (Requests.tsx) and the Membership settings
+        if (THEME === 'belfry' && !reading()) startRequests()
       } catch (e) {
         setOpening(null)
         setError(e instanceof Error ? e.message : String(e))
@@ -227,6 +232,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
+  else if (section === 'requests') view = <RequestsScreen />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
   else if (section === 'u') view = <ProfileView id={a} />
@@ -239,7 +245,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     } else if (wide && three && b === 'thread' && c) {
       view = <ChannelView id={id} activeThread={c} />
       pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
-    } else view = b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b && Object.hasOwn(INFO_PAGES, b) ? <ChannelInfo key={b} id={id} initial={INFO_PAGES[b]} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+    } else view = b === 'group' ? <GroupPage key={id} id={id} /> : b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b && Object.hasOwn(INFO_PAGES, b) ? <ChannelInfo key={b} id={id} initial={INFO_PAGES[b]} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
@@ -394,6 +400,35 @@ function demoGuestReading(channel: string, pubkey?: string, name?: string) {
        // what the relay then says: its member list has their key
        { ...base, id: hex(32), kind: 39002, created_at: now, tags: [['d', channel], ...[...new Set(members)].map((p) => ['p', p])] }])
   return pk
+}
+
+/** Demo only: a group in PARENT made by someone else (Ana) or by me (ADMIN), announced there with
+ *  its card; MEMBER puts me in it; APPLICANTS people ask to join (with an answer); VOUCHED of
+ *  them got a vouch from Ben (a member). Returns the group id. */
+function demoGroup(opts: { name?: string; parent?: string; closed?: boolean; vouches?: number; admin?: boolean; member?: boolean; applicants?: number; vouched?: number } = {}) {
+  const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  const now = Math.floor(Date.now() / 1000)
+  const { name = 'Garden club', parent = 'general', closed = true, vouches = 0, admin = false, member = false, applicants = 0, vouched = 0 } = opts
+  const id = 'pod-' + name.toLowerCase().replace(/[^a-z0-9]+/g, '-') + '-' + hex(2)
+  const person = (n: string) => { const pk = getPublicKey(generateSecretKey()); return { pk, ev: { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now - 900, tags: [], content: JSON.stringify({ name: n }) } } }
+  const ana = person('Ana'), ben = person('Ben')
+  const owner = admin ? me() : ana.pk
+  const members = [owner, ben.pk, ...(member && !admin ? [me()] : [])]
+  const evs: Record<string, unknown>[] = [ana.ev, ben.ev,
+    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9007, created_at: now - 800, tags: [['h', id]], content: '' },
+    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9002, created_at: now - 800, tags: [['h', id], ['name', name], ['about', 'We grow vegetables on the roof. **Wednesdays** at 6.'], closed ? ['closed'] : ['open'], ...(closed ? [['prompt', 'What would you like to grow?']] : []), ...(vouches ? [['vouches', String(vouches)]] : [])], content: '' },
+    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39001, created_at: now - 790, tags: [['d', id], ['p', owner, 'admin']], content: '' },
+    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39002, created_at: now - 790, tags: [['d', id], ...members.map((p) => ['p', p])], content: '' },
+    { id: hex(32), pubkey: owner, sig: hex(64), kind: 9, created_at: now - 780, tags: [['h', parent], ['pod', id]], content: `⬡ New group: ${name}` },
+  ]
+  for (let i = 0; i < applicants; i++) {
+    const a = person(['Nora', 'Omar', 'Pia'][i % 3])
+    const req = { id: hex(32), pubkey: a.pk, sig: hex(64), kind: 9021, created_at: now - 600 + i, tags: [['h', id]], content: i === 0 ? 'Tomatoes, and <i>basil</i>.' : 'Herbs.' }
+    evs.push(a.ev, req)
+    if (i < vouched) evs.push({ id: hex(32), pubkey: ben.pk, sig: hex(64), kind: 1985, created_at: now - 500, tags: [['h', id], ['L', 'belfry/vouch'], ['l', 'vouch', 'belfry/vouch'], ['e', req.id], ['p', a.pk]], content: '' })
+  }
+  addEvents(evs as unknown as Parameters<typeof addEvents>[0])
+  return id
 }
 
 /** Demo only: three members of CHANNEL with a profile, tags and a city (people.ts). */

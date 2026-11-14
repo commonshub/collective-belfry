@@ -86,7 +86,8 @@ export interface Group {
   /** guests who only opened a link so far (guest mode, guests.py): reading, not counted as members */
   reading: Set<string>
   isEvent: boolean
-  /** A working group: a channel with a parent (where it was posted), members, events, sub-pods. */
+  /** A group (a working group; ids `pod-…`, the protocol's old word): a channel with a parent
+   *  (where it was posted), its own members, events and sub-groups. */
   isPod: boolean
   /** A proposal: a channel holding one NIP-23 text (versioned), a status and a vote. */
   isProposal: boolean
@@ -96,6 +97,9 @@ export interface Group {
   closed: boolean
   /** The question applicants answer (our `prompt` tag on the group's 9002). */
   prompt?: string
+  /** How many members vouching admits an applicant (our `vouches` tag on the 9002, 1–5;
+   *  0: its admins accept). Belfry's vouches.py does the admitting. */
+  vouches: number
   admins: Set<string>
   /** Open applications to a closed group: the latest 9021 of someone not admitted nor declined. */
   applications: Application[]
@@ -159,7 +163,7 @@ export const groups: () => Group[] = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, admins: new Set(), applications: [], pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -185,6 +189,12 @@ export const groups: () => Group[] = perLog((list) => {
       if (access !== undefined && (g.metaAt.closed ?? 0) <= e.created_at) { g.closed = access; g.metaAt.closed = e.created_at }
       const prompt = tag(e, 'prompt')
       if (prompt !== undefined && (g.metaAt.prompt ?? 0) <= e.created_at) { g.prompt = prompt; g.metaAt.prompt = e.created_at }
+      // the vouches rule goes with the access tags: an edit that says open / closed without it means "admins accept"
+      if ((access !== undefined || tag(e, 'vouches') !== undefined) && (g.metaAt.vouches ?? 0) <= e.created_at) {
+        const n = Number(tag(e, 'vouches') ?? 0)
+        g.vouches = access === false ? 0 : Number.isInteger(n) ? Math.max(0, Math.min(n, 5)) : 0
+        g.metaAt.vouches = e.created_at
+      }
     }
     if (e.kind === 9007) g.admins.add(e.pubkey) // its creator administers it (Belfry's relay patch)
     if (e.kind === 39001) for (const t of e.tags) if (t[0] === 'p') g.admins.add(t[1])
@@ -238,6 +248,30 @@ export const groups: () => Group[] = perLog((list) => {
     .filter((g) => !gone.has(g.id))
     .sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.lastActivity - a.lastActivity))
 })
+
+/** Vouches for requests to join a group (NIP-32 kind 1985, `L belfry/vouch`, `l vouch|withdrawn`,
+ *  `e` = the 9021, `p` = the applicant, `h` = the group): request id → author → latest value. */
+export const VOUCH_NS = 'belfry/vouch'
+const vouchLabels: () => Map<string, Map<string, { v: string; at: number }>> = perLog((list) => {
+  const out = new Map<string, Map<string, { v: string; at: number }>>()
+  for (const e of list) {
+    if (e.kind !== 1985 || tag(e, 'L') !== VOUCH_NS) continue
+    const req = tag(e, 'e'), v = tag(e, 'l')
+    if (!req || !v) continue
+    const m = out.get(req) ?? new Map()
+    const was = m.get(e.pubkey)
+    if (!was || was.at <= e.created_at) m.set(e.pubkey, { v, at: e.created_at })
+    out.set(req, m)
+  }
+  return out
+})
+/** Who vouches for application A in group G now: members of G, never the applicant. (Belfry also
+ *  leaves out guests and agents when it counts: isCounted filters those where the chat knows.) */
+export function vouchesFor(g: Group, a: Application, isCounted: (pk: string) => boolean = () => true): string[] {
+  const m = vouchLabels().get(a.ev.id)
+  if (!m) return []
+  return [...m].filter(([pk, x]) => x.v === 'vouch' && pk !== a.pubkey && g.members.has(pk) && isCounted(pk)).map(([pk]) => pk)
+}
 
 /** An announcement: a message tagged `t announcement` (NIP-24) by one of its channel's admins.
  *  Any member can tag one; only the admins' count (here and in Belfry's e-mails to followers). */
