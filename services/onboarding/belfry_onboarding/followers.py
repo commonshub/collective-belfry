@@ -115,25 +115,17 @@ def _publish(relay: RelayPublisher, sign: Any, kind: int, tags: list[list[str]])
     )
 
 
-# channels every belfry has (Xavier, 2026-11-11). The channel says who sees what is in it, no
-# switch per item: 🌐 #events (public, the events page) and #bookings (members, internal);
-# 🌐 #requests (anyone asks, a page at <domain>/requests) and #proposals (members discuss and vote).
+# channels every new belfry gets (Xavier, 2026-11-11). The channel says who sees what is in it,
+# no switch per item: 🌐 #events (public, the events page) and #proposals (members discuss and
+# vote). #bookings and #requests were defaults too until 2026-11-14 (Xavier: "bookings and requests
+# channels shouldn't be created by default"): belfries that have them keep them as they are (their
+# posts, their 30078 web setting and the /requests page, webthreads.py), none are made any more.
 DEFAULTS: list[dict[str, Any]] = [
     {"id": GENERAL, "about": "Everything about {domain}. Say hi 👋"},
     {
         "id": "events",
         "about": "Public events at {domain}: anyone sees them, members and people from outside post them.",
         "web": {"on": True, "slug": "events", "visibility": "public", "posts": "event"},
-    },
-    {
-        "id": "bookings",
-        "about": "Internal bookings: rooms, slots, team meetups. Members only.",
-        "web": {"on": False, "slug": "bookings", "visibility": "members", "posts": "event"},
-    },
-    {
-        "id": "requests",
-        "about": "Ideas, asks and suggestions from anyone. Members can turn one into a proposal.",
-        "web": {"on": True, "slug": "requests", "visibility": "public", "posts": "request"},
     },
     {
         "id": "proposals",

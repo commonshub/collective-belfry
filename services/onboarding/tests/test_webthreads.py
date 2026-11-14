@@ -368,14 +368,20 @@ def test_an_account_for_the_author_from_the_web(world, monkeypatch):
 
 
 def test_default_channels(world, monkeypatch):
-    """Xavier, 2026-11-11: the channel says who sees it. 🌐 #events and #requests are public
-    (pages at <domain>/events and /requests), #bookings and #proposals are for members; each
-    takes its own type of post. The relay's own key sets them up."""
+    """Xavier, 2026-11-11: the channel says who sees it. 🌐 #events is public (the events page at
+    <domain>/events), #proposals is for members; each takes its own type of post. The relay's own
+    key sets them up. Since 2026-11-14 no #bookings and no #requests on new belfries."""
     svc, relay = world
     monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
     relay.events = [e for e in relay.events if e["kind"] != 39000]
     made = followers.ensure_channels(svc)["made"]
-    assert made == ["general", "events", "bookings", "requests", "proposals"]
+    assert made == ["general", "events", "proposals"]
+    assert not [
+        e
+        for e in relay.events
+        if e["kind"] in (9002, 9007, 30078)
+        and any(t[:2] in (["h", "bookings"], ["h", "requests"]) for t in e["tags"])
+    ]
     for cid in made:  # the relay publishes 39000 for them, signed by its key
         relay.events.append(
             {
@@ -387,10 +393,47 @@ def test_default_channels(world, monkeypatch):
                 "content": "",
             }
         )
-    found = webthreads.sites(svc, fresh=True)
-    assert sorted(found) == ["requests"]  # /events is the events page; the others are members'
-    assert found["requests"]["posts"] == "request" and found["requests"]["list"] == "public"
+    assert webthreads.sites(svc, fresh=True) == {}  # /events is the events page, proposals members'
     assert followers.ensure_channels(svc)["made"] == []  # once
+
+
+def test_requests_channel_of_an_earlier_default_keeps_working(world, monkeypatch):
+    """A belfry set up before 2026-11-14 has #requests and #bookings: they stay as they are, and
+    the public /requests page still takes requests."""
+    svc, relay = world
+    monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
+    old = {
+        "requests": {"on": True, "slug": "requests", "visibility": "public", "posts": "request"},
+        "bookings": {"on": False, "slug": "bookings", "visibility": "members", "posts": "event"},
+    }
+    for cid in ("general", "events", "bookings", "requests", "proposals"):
+        relay.events.append(
+            {
+                "id": "meta-" + cid,
+                "kind": 39000,
+                "pubkey": GK,
+                "created_at": 2,
+                "tags": [["d", cid], ["name", cid]],
+                "content": "",
+            }
+        )
+        if cid in old:
+            relay.events.append(
+                {
+                    "id": "web-" + cid,
+                    "kind": 30078,
+                    "pubkey": GK,
+                    "created_at": 3,
+                    "content": json.dumps(old[cid]),
+                    "tags": [["d", f"belfry:web:{cid}"], ["h", cid], ["t", "belfry-web"]],
+                }
+            )
+    before = len(relay.events)
+    assert followers.ensure_channels(svc)["made"] == []
+    assert len(relay.events) == before  # nothing changed, nothing removed
+    found = webthreads.sites(svc, fresh=True)
+    assert sorted(found) == ["requests"]
+    assert found["requests"]["posts"] == "request" and found["requests"]["list"] == "public"
     with TestClient(create_app(svc), base_url="https://belfry.test") as c:
         page = c.get("/requests").text
         assert "Make a request" in page and "Requests</h2>" in page
