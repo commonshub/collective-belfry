@@ -1,6 +1,6 @@
 """Announcements: messages a channel's admins flag as such, followed by e-mail like an account.
 
-**Announcements.** Any channel, pod or event (a NIP-29 group on the groups relay) can have them:
+**Announcements.** Any channel, group or event (a NIP-29 group on the groups relay) can have them:
 a kind-9 message tagged ``["t", "announcement"]`` (NIP-24) by one of the group's admins (its
 creator, kind 9007, and the keys of its kind 39001). The relay lets any member tag a message;
 only the admins' count, here and in the chat. ``general`` is made at start when missing (by the
@@ -224,7 +224,7 @@ def chat_link(svc: Services, channel: str) -> str:
 
 
 def channel_label(svc: Services, channel: str) -> str:
-    """How mails and pages name a channel: ``#general``, or a pod's or event's own name."""
+    """How mails and pages name a channel: ``#general``, or a group's or event's own name."""
     held = _names.get(channel)
     if held and time.monotonic() - held[0] < 600:
         return held[1]
@@ -495,6 +495,26 @@ def expire_passes(svc: Services) -> dict[str, Any] | None:
     return result
 
 
+_round_from: float | None = None
+
+
+def membership_round(svc: Services) -> None:
+    """Requests accepted by vouches: groups (vouches.watch) and the belfry (membership.settle).
+    Not in the first minute after start: the register is busy enough then (and short-lived test
+    apps never run it)."""
+    global _round_from
+    from .membership import settle
+    from .vouches import watch
+
+    now = time.monotonic()
+    if _round_from is None:
+        _round_from = now
+    if now - _round_from < 60:
+        return
+    watch(svc)
+    settle(svc)
+
+
 def tick(svc: Services) -> None:
     from .drops import ensure_profile
     from .events import watch as events_watch
@@ -508,6 +528,7 @@ def tick(svc: Services) -> None:
         soon,
         morning,
         events_watch,
+        membership_round,
     ):
         try:
             job(svc)

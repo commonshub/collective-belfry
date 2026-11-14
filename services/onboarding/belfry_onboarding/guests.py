@@ -173,9 +173,9 @@ def _closed(svc: Services, channel: str) -> bool | None:
 
 def may_invite(svc: Services, pubkey: str, channel: str, steward: bool) -> bool:
     """Only someone who has the channel themselves may bring a guest into it (Xavier,
-    2026-11-10): any member for an open channel; for a closed one (a pod by application) its
+    2026-11-10): any member for an open channel; for a closed one (a group by application) its
     members and admins. The community's admins always may. Guests can't (checked before). When
-    the relay can't be asked, nobody but an admin may: a link into a closed pod is not a thing
+    the relay can't be asked, nobody but an admin may: a link into a closed group is not a thing
     to hand out on a guess."""
     from . import apps, mail
 
@@ -211,8 +211,9 @@ def _member_link(
     svc: Services, pubkey: str, who: dict[str, Any], data: Any, own_agent: bool, role: str
 ) -> dict[str, str] | None:
     """``{"role", "membership"}`` when the request asks for a member link (``"as": "member"``);
-    None for a guest link. Only the belfry's admins may; the role must exist."""
-    from . import apps
+    None for a guest link. The belfry's admins may, and any member when the Membership settings
+    say so (then with the default role only); the role must exist."""
+    from . import apps, membership
     from .holder_invites import ApiError
 
     kind = data.get("as", "guest") if isinstance(data, dict) else "guest"
@@ -222,11 +223,15 @@ def _member_link(
         return None
     if own_agent or role:
         raise ApiError(422, "invalid", "A member link is not for an agent or a co-host.")
-    if not who.get("steward") and pubkey not in apps.admin_pubkeys(svc):
+    admin = bool(who.get("steward")) or pubkey in apps.admin_pubkeys(svc)
+    # the belfry's Membership settings (membership.py): admins only, unless any member may
+    if not membership.may_invite_members(svc, pubkey, admin):
         raise ApiError(403, "not_admin", "Only the belfry's admins invite members.")
     rid = str(data.get("role") or roles.default_role(svc))
     if not roles.exists(svc, rid):
         raise ApiError(404, "unknown_role", "No such role.")
+    if not admin and rid != roles.default_role(svc):  # a member gives the default role only
+        raise ApiError(403, "not_admin", "Only the belfry's admins give other roles.")
     membership = str(data.get("membership") or "permanent")
     if membership not in roles.MEMBERSHIP_DAYS:
         raise ApiError(422, "invalid", 'membership: "month", "year" or "permanent"')

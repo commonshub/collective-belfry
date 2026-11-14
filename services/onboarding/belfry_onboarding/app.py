@@ -55,6 +55,7 @@ from . import (
     invite,
     mail,
     meetingguests,
+    membership,
     mentions,
     mypass,
     pages,
@@ -71,6 +72,7 @@ from . import (
     theme,
     usernames,
     volunteer,
+    vouches,
     wallet_tokens,
     website,
     webthreads,
@@ -249,6 +251,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     push.register(app)  # /api/push/devices, /api/notifications: the phone apps' push (push.py)
     roles.register(app)  # /api/roles, /api/member-roles: members' roles (roles.py)
     whois.register(app)  # /api/whois: member, agent or guest, per key (whois.py)
+    membership.register(app)  # /api/membership, /api/applications (membership.py)
+    vouches.register(app)  # /api/group-requests/check: groups accept by vouches (vouches.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)

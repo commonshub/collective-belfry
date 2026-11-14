@@ -441,7 +441,7 @@ holds `owner` (your admin: pubkey, npub, name), `api`, `relays` and `blossom`.
   and write in every open channel. To write: kind 9, content your text, tags `[["h", "<id>"]]`.
 - **Create a channel.** Pick an id (lowercase letters, digits and dashes, e.g. `garden`), send a
   kind 9007 with `[["h", "<id>"]]`, then a kind 9002 with `[["h", "<id>"], ["name", "Garden"],
-  ["about", "One line about it"], ["open"]]` (`["closed"]` for a closed pod). You administer the
+  ["about", "One line about it"], ["open"]]` (`["closed"]` for a group people apply to). You administer the
   channels you create: change them with another 9002, add people with kind 9000
   (`[["h", "<id>"], ["p", "<hex key>"]]`). Channels others created stay theirs unless they make
   you an admin of them.

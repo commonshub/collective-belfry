@@ -69,7 +69,9 @@ description up to 200), 409 `taken` (same label), 400 `builtin`, 422 `admin_defa
 
 ## Member links
 
-`POST /channel-invites` (docs/guests.md) takes, from a belfry admin only:
+`POST /channel-invites` (docs/guests.md) takes, from a belfry admin (or from any member when the
+belfry's Membership settings say `"invite": "members"`, docs/membership.md; a member then gives
+the default role only):
 
 ```json
 {"channel": "general", "as": "member", "role": "host", "membership": "year",
@@ -80,7 +82,8 @@ description up to 200), 409 `taken` (same label), 400 `builtin`, 422 `admin_defa
   on a guest link it still means a co-host (`"host"`, events).
 - `membership`: `month` (30 days), `year` (365 days) or `permanent` (default).
 - an `admin` link is for one person whatever `people` says.
-- 403 `not_admin` for anyone else; 404 `unknown_role`; 422 `invalid`.
+- 403 `not_admin` for anyone else (and for a member asking for another role than the default);
+  404 `unknown_role`; 422 `invalid`.
 
 Answer: the usual fields plus `"as": "member"`, `"member_role"`, `"membership"` (`"days": 0`).
 Guest links answer `"as": "guest"` and now take `"guest_days"` 1 | 7 | 30 (absent: 30).

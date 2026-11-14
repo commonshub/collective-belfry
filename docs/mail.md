@@ -5,7 +5,7 @@ A belfry receives mail for its members and channels, and members answer from the
 | Address | Goes to |
 |---|---|
 | `<username>@<domain>` | the member (active pass), in the chat's **Messages** |
-| `<channel>@<domain>` | the channel, pod or event chat, posted as the member who sent it (members only, and the mail must pass DKIM or SPF aligned with its From). The post carries `client belfry-mail`, a `subject` tag and `mail-original` (the whole e-mail, AES-GCM on Blossom: url, key, nonce); the chat shows it as the member's message with a "via e-mail" tag and a "Full e-mail" link |
+| `<channel>@<domain>` | the channel, group or event chat, posted as the member who sent it (members only, and the mail must pass DKIM or SPF aligned with its From). The post carries `client belfry-mail`, a `subject` tag and `mail-original` (the whole e-mail, AES-GCM on Blossom: url, key, nonce); the chat shows it as the member's message with a "via e-mail" tag and a "Full e-mail" link |
 | `postmaster@`, `abuse@` | the admins' Messages |
 
 Usernames win over channel names.

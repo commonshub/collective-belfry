@@ -119,7 +119,7 @@ Plaintext (JSON, at most 2 KB before encryption; `body` cut to 180 characters):
   and `from` are the pinned message's id and author.
 - *(built)* A thread reply's `url` opens its thread: `https://chat.<domain>/#/c/<group id>/thread/<root id>`
   (`event` is the reply's own id). `title` is the channel's label as the e-mails write it
-  (`#name`, or a pod's / event's own name). A message without text shows "📷 Photo" (or "…").
+  (`#name`, or a group's / event's own name). A message without text shows "📷 Photo" (or "…").
 - announcement: `title` = "📣 #channel".
 - The apps never trust `url` blindly: they check its host is `chat.<domain>` of the belfry they
   are signed in to, and open the channel / message by id; otherwise they open the app's home.
@@ -132,7 +132,7 @@ Plaintext (JSON, at most 2 KB before encryption; `body` cut to 180 characters):
 ## 5. What triggers a notification (the belfry's watcher)
 
 A live subscription (reconnecting with backoff, 1 s to 5 min). *(built)* The groups relay is read
-as the groups API key (the relay's owner: it sees closed pods too, as followers.py and
+as the groups API key (the relay's owner: it sees closed groups too, as followers.py and
 mentions.py do); the community relay as the belfry key:
 
 - groups relay: kinds 9, 1111 (thread replies), 1985 with `L belfry/pin`, for every group;

@@ -52,7 +52,7 @@ more while images build.
 | `wallet` | http://localhost:3400 | village token wallet (`apps/wallet/README.md`) |
 | `vote` | http://localhost:3500 | anonymous polls (`../services/vote/README.md`) |
 | `village` | http://localhost:3600, :3700, :3800, :3900 | directory, marketplace, photos, programme (`../services/village/README.md`) |
-| `groups-relay` | ws://localhost:3190 | the groups relay (zooid, NIP-29): channels, pods and events of the chat (`groups-relay/README.md`) |
+| `groups-relay` | ws://localhost:3190 | the groups relay (zooid, NIP-29): channels, groups and events of the chat (`groups-relay/README.md`) |
 | `groups` | http://localhost:3150 | the groups app, Flotilla (`apps/groups/README.md`) |
 | `git` | http://localhost:3170 | the git server, ngit-grasp (`git/README.md`) |
 | `mail-in` | localhost:2525 (port 25 on a server) | receives mail for members and channels (`../docs/mail.md`) |

@@ -11,7 +11,7 @@ nostr.json:
     from the belfry key with ``mail-from`` (the legacy sender), gift-wrapped to the member and
     published on the community relay, their DM relay (10050). A message too big for a gift wrap
     goes to Blossom encrypted with AES-GCM (Nostr Mail's large MIME), the key in the rumor.
-  - ``<channel>@<domain>``: a channel, pod or event chat of the groups relay. Only a member may
+  - ``<channel>@<domain>``: a channel, group or event chat of the groups relay. Only a member may
     post, from their own address, and the mail must prove it (DKIM or SPF aligned with From): it
     is posted as the member, attachments on Blossom.
   - ``postmaster@`` and ``abuse@`` go to the admins, like a member's mail.

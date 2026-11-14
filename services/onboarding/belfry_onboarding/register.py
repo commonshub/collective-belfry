@@ -1676,7 +1676,7 @@ class Register(OdooApi):
                 [
                     f"{data['name']} ({data['email']}) asks to join:",
                     data["motivation"],
-                    "Answer in the admin console.",
+                    "Answer in the chat, under Requests (top of the channel list).",
                 ],
             )
         return app_id

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import logging
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -29,24 +30,38 @@ class ApplyError(Exception):
     pass
 
 
-def form_page(error: str = "", values: dict[str, str] | None = None) -> str:
+def form_page(
+    error: str = "",
+    values: dict[str, str] | None = None,
+    community: str = "",
+    volunteers: bool = True,
+) -> str:
+    name = E(community or "this community")
     v = values or {}
     err = f'<p class="bad">{E(error)}</p>' if error else ""
     volunteer = " checked" if v.get("kind") == "volunteer" else ""
+    # volunteer shifts are the Odoo add-on's (OSV); a belfry on its own register has none
+    shifts = (
+        f'<label class="check"><input type="checkbox" name="kind" value="volunteer"{volunteer}>'
+        "I would like to volunteer (volunteers get a two-week pass for at least three shifts)"
+        "</label>"
+        if volunteers
+        else ""
+    )
     body = f"""<div class="card">
 <h1>Apply to join</h1>
-<p class="muted">Open Source Village grows through people who know each other. No invite yet?
-Tell the stewards who you are and why you would like to come; they answer by mail. If they invite
-you, you choose your pass and pay on the invite page.</p>
+<p class="muted">{name} grows through people who know each other. No invite yet? Tell its members
+who you are and why you would like to join; you get the answer by mail, with an invite if they
+say yes.</p>
 {err}
 <form method="post" action="/apply" class="fb">
 <label>Your name <input type="text" name="name" maxlength="200" required value="{E(v.get("name", ""))}"></label>
 <label>Your e-mail <input type="email" name="email" maxlength="200" required value="{E(v.get("email", ""))}"></label>
 <label>Why would you like to join? <textarea name="motivation" rows="6" maxlength="4000" required>{E(v.get("motivation", ""))}</textarea></label>
-<label class="check"><input type="checkbox" name="kind" value="volunteer"{volunteer}>
-I would like to volunteer (volunteers get a two-week pass for at least three shifts)</label>
+{shifts}
 <label class="hp" aria-hidden="true">Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
-<p class="muted small">The stewards see what you write here; it is kept with your application.
+<p class="muted small">The admins (and, when the community accepts people by vouching, its
+members) see your name and what you write here; your e-mail address only the admins.
 See <a href="/privacy">privacy</a>.</p>
 <button class="btn" type="submit">Send application</button>
 </form>
@@ -60,19 +75,20 @@ See <a href="/privacy">privacy</a>.</p>
  .fb button {{ border: 0; font: inherit; font-weight: 600; cursor: pointer; justify-self: start; }}
  .hp {{ position: absolute; left: -9999px; }} .small {{ font-size: 0.85rem; }}
 </style>"""
-    return page("Apply to join Open Source Village", body)
+    return page(f"Apply to join {community or 'this community'}", body)
 
 
 def thanks_page() -> str:
     body = """<div class="card"><h1>Thank you</h1>
-<p>Your application went to the stewards. You get a confirmation by mail now, and their answer
-in a few days.</p></div>"""
+<p>Your request is in. You get a confirmation by mail now, and the answer by mail too.</p></div>"""
     return page("Application sent", body)
 
 
 def submit(svc: Services, vals: dict[str, str]) -> int:
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        from . import console
+
+        stewards = sorted(console.admin_emails(svc))
     except Exception:  # noqa: BLE001 - the application counts even when the mail cannot be addressed
         log.exception("apply: could not list the stewards' e-mail addresses")
         stewards = []
@@ -85,6 +101,12 @@ def submit(svc: Services, vals: dict[str, str]) -> int:
     return int(app_id)
 
 
+def _ctx(svc: Services) -> dict[str, Any]:
+    from . import invite
+
+    return {"community": svc.settings.community_name or "", "volunteers": not invite.own(svc)}
+
+
 def register(app: FastAPI) -> None:
     """Mount /apply (create_app calls this)."""
 
@@ -92,8 +114,8 @@ def register(app: FastAPI) -> None:
         return request.app.state.services
 
     @app.get("/apply", response_class=HTMLResponse)
-    async def apply_form():
-        return HTMLResponse(form_page())
+    async def apply_form(request: Request):
+        return HTMLResponse(form_page(**_ctx(svc(request))))
 
     @app.post("/apply", response_class=HTMLResponse)
     async def apply_submit(request: Request):
@@ -110,10 +132,16 @@ def register(app: FastAPI) -> None:
         }
         if not vals["name"] or not vals["email"] or not vals["motivation"]:
             return HTMLResponse(
-                form_page("Please fill in your name, e-mail and motivation.", vals), status_code=400
+                form_page(
+                    "Please fill in your name, e-mail and motivation.", vals, **_ctx(svc(request))
+                ),
+                status_code=400,
             )
         try:
             await run_in_threadpool(submit, svc(request), vals)
         except ApplyError as exc:
-            return HTMLResponse(form_page(str(exc), vals), status_code=400)
+            return HTMLResponse(
+                form_page(str(exc), vals, **_ctx(svc(request))),
+                status_code=400,
+            )
         return HTMLResponse(thanks_page())
