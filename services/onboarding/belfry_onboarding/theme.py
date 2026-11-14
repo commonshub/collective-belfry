@@ -20,20 +20,23 @@ Two layers, so a belfry can be rebranded and still updated without losing the ch
 
 The community's name is COMMUNITY_NAME (``belfry config``: BELFRY_NAME), its website SITE_URL.
 Pages use only the variables, so a theme restyles them without a fork. Files are served at
-``/theme/belfry/…`` and ``/theme/custom/…`` on every host.
+``/theme/belfry/…`` and ``/theme/custom/…`` on every host. ``/theme/belfry/logo.svg`` and
+``favicon.svg`` are drawn in the branding's two colours when it has them (``mark_svg``).
 """
 
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import logging
 import mimetypes
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 log = logging.getLogger(__name__)
@@ -210,6 +213,77 @@ def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: boo
 </main></body></html>"""
 
 
+# ── the mark in the belfry's own colours ─────────────────────────────────────────────────────
+# Xavier, 2026-11-14: "the logo should make use of the two colors defined by the theme of the
+# belfry when set." The Arms (themes/belfry/logo.svg: shield, tower over water) is drawn with the
+# branding's colours (branding.py, kind-0 profile of the belfry key): the shield in the primary,
+# the tower and the water in the secondary (white, or near black, when the secondary is missing or
+# reads badly on the primary). Without a primary colour the static file is served as before.
+HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
+LIGHT_BG, DARK_BG, WHITE, INK = "#ffffff", "#09090b", "#ffffff", "#09090b"
+_SHIELD = "M8 6a2 2 0 0 1 2-2h44a2 2 0 0 1 2 2v24c0 17-11 29-24 35C19 59 8 47 8 30Z"
+_TOWER = "M22 43V24h-2v-6h4v3h3v-3h4v3h2v-3h4v3h3v-3h4v6h-2v19Z"
+_DOOR = "M29 43v-5a3 3 0 0 1 6 0v5Z"
+_WATER = "M16 49q4-2.5 8 0t8 0t8 0t8 0"
+
+
+def _luminance(color: str) -> float:
+    def ch(v: int) -> float:
+        c = v / 255
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (int(color[i : i + 2], 16) for i in (1, 3, 5))
+    return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+
+
+def contrast(a: str, b: str) -> float:
+    la, lb = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+def mark_colors(primary: str, secondary: str = "") -> tuple[str, str] | None:
+    """(shield, tower) for the branding's colours, or None to keep the plain mark. Only #rrggbb
+    ever reaches the SVG; the tower takes the secondary when it stands out on the shield."""
+    if not HEX.match(primary or ""):
+        return None
+    shield = primary.lower()
+    sec = (secondary or "").lower()
+    if HEX.match(sec) and contrast(sec, shield) >= 2.2:
+        return shield, sec
+    return shield, max((WHITE, INK), key=lambda c: contrast(c, shield))
+
+
+def mark_svg(primary: str, secondary: str = "", favicon: bool = False) -> str | None:
+    """The Arms in these colours (None without a valid primary). A shield too close to the page's
+    background (light or dark) gets a thin outline in that scheme so it never disappears."""
+    got = mark_colors(primary, secondary)
+    if got is None:
+        return None
+    shield, tower = got
+    rules = []
+    for query, bg, line in (
+        ("not (prefers-color-scheme:dark)", LIGHT_BG, INK),
+        ("(prefers-color-scheme:dark)", DARK_BG, "#fafafa"),
+    ):
+        if contrast(shield, bg) < 1.6:
+            rules.append(f"@media {query}{{.f{{stroke:{line};stroke-width:1.5}}}}")
+    style = f"<style>{''.join(rules)}</style>" if rules else ""
+    if favicon:
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 70">{style}'
+            f'<path class="f" fill="{shield}" d="{_SHIELD}"/>'
+            f'<path fill="{tower}" d="{_TOWER}"/></svg>'
+        )
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 70">{style}'
+        f'<path class="f" fill="{shield}" d="{_SHIELD}"/>'
+        f'<path fill="{tower}" d="{_TOWER}"/>'
+        f'<path fill="{shield}" d="{_DOOR}"/>'
+        f'<path d="{_WATER}" fill="none" stroke="{tower}" stroke-width="2.2" stroke-linecap="round"/>'
+        "</svg>"
+    )
+
+
 def register(app: FastAPI) -> None:
     mimetypes.add_type("font/woff2", ".woff2")
 
@@ -254,6 +328,37 @@ def register(app: FastAPI) -> None:
         if folder is None:
             raise HTTPException(status_code=404)
         return serve(folder, rel, 3600)
+
+    async def colored_mark(request: Request, name: str, favicon: bool) -> Response:
+        from starlette.concurrency import run_in_threadpool
+
+        from . import branding
+
+        try:
+            b = await run_in_threadpool(branding.current, request.app.state.services)
+        except Exception:  # noqa: BLE001 — the plain mark then
+            b = {}
+        svg = mark_svg(b.get("primary", ""), b.get("secondary", ""), favicon=favicon)
+        if svg is None:
+            return serve(BUILTIN, f"belfry/{name}", 300)
+        tag = '"' + hashlib.sha256(svg.encode()).hexdigest()[:16] + '"'
+        headers = {
+            "Cache-Control": "public, max-age=300",
+            "ETag": tag,
+            "Access-Control-Allow-Origin": "*",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if request.headers.get("if-none-match") == tag:
+            return Response(status_code=304, headers=headers)
+        return Response(svg, media_type="image/svg+xml", headers=headers)
+
+    @app.get("/theme/belfry/logo.svg", include_in_schema=False)
+    async def logo_svg(request: Request):
+        return await colored_mark(request, "logo.svg", favicon=False)
+
+    @app.get("/theme/belfry/favicon.svg", include_in_schema=False)
+    async def favicon_svg(request: Request):
+        return await colored_mark(request, "favicon.svg", favicon=True)
 
     @app.get("/theme/{rel:path}", include_in_schema=False)
     async def builtin_file(rel: str):

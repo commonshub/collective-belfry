@@ -108,3 +108,34 @@ def test_a_name_with_an_ampersand_is_escaped_once_in_the_title(services, monkeyp
     page = theme.frame("Welcome to Open Source Village", "<p>Open Source Village</p>")
     assert "<title>Welcome to Bread &amp; Roses</title>" in page
     assert "<p>Bread &amp; Roses</p>" in page
+
+
+def test_the_mark_takes_the_belfrys_colours(services, monkeypatch):
+    """Xavier, 2026-11-14: the logo uses the two colours of the belfry's branding when set."""
+    from belfry_onboarding import branding
+
+    brand = {"primary": "", "secondary": ""}
+    monkeypatch.setattr(branding, "current", lambda svc, fresh=False: dict(brand))
+    with TestClient(create_app(services)) as c:
+        plain = c.get("/theme/belfry/logo.svg")
+        assert plain.status_code == 200 and "#09090b" in plain.text  # the static mark
+        brand.update(primary="#1d4ed8", secondary="#fbbf24")
+        r = c.get("/theme/belfry/logo.svg")
+        assert r.headers["content-type"].startswith("image/svg+xml")
+        assert 'fill="#1d4ed8"' in r.text and 'stroke="#fbbf24"' in r.text
+        assert "max-age=300" in r.headers["cache-control"]
+        again = c.get("/theme/belfry/logo.svg", headers={"If-None-Match": r.headers["etag"]})
+        assert again.status_code == 304
+        fav = c.get("/theme/belfry/favicon.svg").text
+        assert 'fill="#1d4ed8"' in fav and 'fill="#fbbf24"' in fav
+        # a secondary that does not stand out on the shield: white (or ink) instead
+        brand.update(primary="#1d4ed8", secondary="#1e40af")
+        assert 'fill="#ffffff"' in c.get("/theme/belfry/logo.svg").text
+        brand.update(primary="#fde047", secondary="")
+        light = c.get("/theme/belfry/logo.svg").text
+        assert 'fill="#09090b"' in light and "stroke:#09090b" in light  # outlined on white
+        # anything but #rrggbb never reaches the SVG
+        brand.update(primary='#fff"/><script>', secondary="red")
+        assert "<script>" not in c.get("/theme/belfry/logo.svg").text
+    assert theme.mark_colors("#000000", "#000001") == ("#000000", "#ffffff")
+    assert theme.mark_colors("blue") is None
