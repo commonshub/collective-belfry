@@ -40,7 +40,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from starlette.concurrency import run_in_threadpool
 
 from . import community, core, flash, homepage, mypass, pages, steward
-from .claim import page
 from .core import Services
 from .nip46check import sign_event
 
@@ -97,13 +96,27 @@ def viewer(svc: Services, sess: dict[str, Any] | None) -> dict[str, Any] | None:
         return None  # a channel's guest (guests.py) is no member of the belfry
     partner = (svc.odoo.read("res.partner", [pid], ["name", "email"]) or [{}])[0]
     email = (partner.get("email") or "").lower()
+    admin = bool(email) and email in admin_emails(svc)
     return {
         "partner": pid,
         "name": partner.get("name") or "",
         "email": email,
-        "admin": bool(email) and email in admin_emails(svc),
+        "admin": admin,
         "csrf": sess.get("csrf", ""),
+        "agents_waiting": agents_waiting(svc) if admin else 0,
     }
+
+
+def agents_waiting(svc: Services) -> int:
+    """How many agents ask to join (the badge on Agents in the menu); 0 when unknown."""
+    from . import agentrequests
+
+    try:
+        if not agentrequests.own(svc):
+            return 0
+        return len(svc.odoo.agent_requests("pending"))
+    except Exception:  # noqa: BLE001 — a badge is not worth a failed page
+        return 0
 
 
 # ── status ──────────────────────────────────────────────────────────────────────────────────
@@ -497,13 +510,8 @@ main{max-width:1040px} header.site{display:none}
 .bar .brand img{height:28px;width:auto;display:block}
 .bar .right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .who{display:inline-flex;align-items:center;gap:8px;color:var(--fg-muted);font-size:.92rem}
-.av{width:32px;height:32px;border-radius:99px;background:var(--surface-deep);border:1px solid var(--border);
-display:inline-grid;place-items:center;font-weight:600;color:var(--fg)}
 .btn2{display:inline-block;padding:9px 14px;border-radius:10px;border:1px solid var(--border-strong,var(--border));
 background:var(--surface);color:var(--fg);text-decoration:none;font-weight:600;font-size:.92rem}
-.manage{display:flex;gap:4px;flex-wrap:wrap;margin:0 0 24px;border-bottom:1px solid var(--border)}
-.manage a{padding:8px 12px;text-decoration:none;color:var(--fg-muted);border-bottom:2px solid transparent;margin-bottom:-1px}
-.manage a.on{color:var(--fg);border-bottom-color:var(--fg);font-weight:600}
 .panel{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:22px}
 .eyebrow{margin:0;font-size:.8rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-faint)}
 .hero{display:flex;flex-direction:column;gap:14px;max-width:640px;padding:40px 0 32px}
@@ -531,60 +539,262 @@ border-radius:14px;text-decoration:none;color:var(--fg)} .app:hover{border-color
 .chip{display:inline-block;padding:5px 10px;border-radius:99px;background:var(--surface-deep);font-size:.85rem}
 </style>"""
 
-ADMIN_TABS = [
-    ("/status", "Status"),
-    ("/members", "Members"),
-    ("/website", "Website"),
-    ("/monitor", "Monitor"),
-    ("/apps", "Apps"),
-    ("/agents", "Agents"),
-    ("/setup", "Setup"),
+# ── the frame: a side menu (Xavier, 2026-11-14: "The admin side needs a redesign to be more
+# usable on mobile. Make use of a left side menu bar.") ─────────────────────────────────────────
+# Wide screens (≥900px): the menu stays on the left. Phones: a top bar with ☰ opens the same menu
+# as a drawer. The drawer is a checkbox and labels, so it works without script; a small inline
+# script adds Esc, keyboard opening, focus moving in and back, and makes the page behind inert.
+# Grouped like the settings design (canvas Settings-Wide): Community, People, Belfry.
+ICONS = {
+    "home": '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+    "website": '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/>',
+    "members": '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M17 11a3 3 0 1 0 0-6M22 21a6 6 0 0 0-4-5.6"/>',
+    "agents": '<rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 4v4M9 13h.01M15 13h.01M9.5 17h5"/>',
+    "status": '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+    "monitor": '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/>',
+    "apps": '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    "setup": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+    "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "signout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+}
+
+# (section, [(path, label, icon, who may see it: "admin" | "member")])
+SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
+    ("Community", [("/", "Home", "home", "member"), ("/website", "Website", "website", "admin")]),
+    (
+        "People",
+        [("/members", "Members", "members", "member"), ("/agents", "Agents", "agents", "admin")],
+    ),
+    (
+        "Belfry",
+        [
+            ("/status", "Status", "status", "member"),
+            ("/monitor", "Monitor", "monitor", "member"),
+            ("/apps", "Apps", "apps", "admin"),
+            ("/setup", "Setup", "setup", "admin"),
+        ],
+    ),
 ]
-MEMBER_TABS = [("/members", "Members"), ("/monitor", "Monitor")]
+
+
+def icon(name: str, size: int = 20) -> str:
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+        'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" '
+        f'focusable="false">{ICONS[name]}</svg>'
+    )
+
+
+def menu_items(who: dict[str, Any]) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """The sections and pages this person may open: admins everything, members Home, Members,
+    Status and Monitor (the pages they could open before, behind the Manage row)."""
+    out = []
+    for section, items in SECTIONS:
+        mine = [(h, t, i) for h, t, i, need in items if need == "member" or who.get("admin")]
+        if mine:
+            out.append((section, mine))
+    return out
 
 
 def initial(name: str) -> str:
     return (name.strip()[:1] or "?").upper()
 
 
+def brand_mark() -> tuple[str, str]:
+    """(logo URL, name): the branding's uploaded logo wins over the theme's mark (which is drawn
+    in the branding's colours, theme.mark_svg)."""
+    from . import branding, theme
+
+    t = theme.current()
+    logo = branding.cached().get("logo") or t.logo
+    return logo, t.name
+
+
+def logo_img(alt: str = "", cls: str = "") -> str:
+    """The belfry's logo; an uploaded one that does not load (another host blocked, gone) falls
+    back to the theme's mark."""
+    from . import theme
+
+    logo, _name = brand_mark()
+    mark = theme.current().logo
+    fallback = (
+        f" onerror=\"this.onerror=null;this.src='{E(mark)}'\""
+        if logo != mark and "'" not in mark
+        else ""
+    )
+    klass = f' class="{cls}"' if cls else ""
+    return f'<img{klass} src="{E(logo)}" alt="{E(alt)}"{fallback}>'
+
+
 def topbar(who: dict[str, Any] | None) -> str:
+    """The bar for visitors (not signed in): the belfry's name and Sign in; no menu."""
     from . import theme
 
     t = theme.current()
+    logo, name = brand_mark()
     brand = (
-        f'<img src="{E(t.logo)}" alt="{E(t.name)}">'
-        if t.logo_is_wordmark
-        else f'<img src="{E(t.logo)}" alt=""><span>{E(t.name)}</span>'
+        logo_img(name)
+        if t.logo_is_wordmark and logo == t.logo
+        else f"{logo_img()}<span>{E(name)}</span>"
     )
     if who:
-        manage = '<a class="btn2" href="/status">Manage</a>' if who["admin"] else ""
-        right = (
-            f'{manage}<span class="who">{E(who["name"])}{" · admin" if who["admin"] else ""}'
-            f'<span class="av" aria-hidden="true">{E(initial(who["name"]))}</span></span>'
-            '<a href="/logout" class="who">Sign out</a>'
-        )
+        right = '<a href="/logout" class="who">Sign out</a>'
     else:
         right = '<a class="btn" href="/login">Sign in</a>'
     return f'<div class="bar"><a class="brand" href="/">{brand}</a><span class="right">{right}</span></div>'
 
 
-def nav(current: str, who: dict[str, Any] | None) -> str:
-    """The bar, and under it the pages to manage the belfry (none on the home page)."""
-    tabs = ADMIN_TABS if who and who["admin"] else MEMBER_TABS
-    links = "".join(
-        f'<a href="{h}" class="{"on" if h == current else ""}">{t}</a>' for h, t in tabs
+def side_menu(current: str, who: dict[str, Any]) -> str:
+    _logo, name = brand_mark()
+    groups = ""
+    for section, items in menu_items(who):
+        links = ""
+        for h, t, i in items:
+            on = ' aria-current="page"' if h == current else ""
+            badge = ""
+            if h == "/agents" and int(who.get("agents_waiting") or 0):
+                n = int(who["agents_waiting"])
+                badge = f'<span class="badge" aria-label="{n} waiting">{n}</span>'
+            links += f'<a href="{h}"{on}>{icon(i)}<span class="lbl">{t}</span>{badge}</a>'
+        groups += f'<p class="sec">{section}</p>{links}'
+    role = " · admin" if who.get("admin") else ""
+    return f"""<aside class="side" id="side" aria-label="Menu">
+<div class="side-top"><a class="side-brand" href="/">{logo_img()}<span>{E(name)}</span></a>
+<label for="nav-open" class="icon-btn close" aria-label="Close the menu" tabindex="0" role="button">{icon("close")}</label></div>
+<nav class="side-nav" aria-label="Manage">{groups}</nav>
+<div class="side-me"><span class="av" aria-hidden="true">{E(initial(who.get("name", "")))}</span>
+<span class="me-name"><b>{E(who.get("name", ""))}</b><small>{E(who.get("email", ""))}{role}</small></span>
+<a href="/logout" class="icon-btn" title="Sign out" aria-label="Sign out">{icon("signout")}</a></div>
+</aside>"""
+
+
+SHELL_STYLE = """<style>
+main{max-width:none;padding:0;margin:0} header.site{display:none}
+input,select,textarea{font-size:16px}
+.shell{min-height:100vh;min-height:100dvh}
+.nav-toggle{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px;left:-99px}
+.side{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;
+gap:2px;padding:20px 12px 12px;box-sizing:border-box}
+.side-top{display:flex;align-items:center;gap:8px;padding:0 6px 14px}
+.side-brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0;text-decoration:none;color:var(--fg);
+font:700 1.05rem/1.2 var(--font-title)}
+.side-brand img{width:32px;height:32px;object-fit:contain;border-radius:8px;flex:none}
+.side-brand span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-nav{display:flex;flex-direction:column;gap:2px;flex:1}
+.side .sec{margin:0;padding:14px 10px 4px;font-size:.75rem;font-weight:600;letter-spacing:.04em;
+text-transform:uppercase;color:var(--fg-faint)}
+.side .sec:first-child{padding-top:4px}
+.side-nav a{display:flex;align-items:center;gap:12px;padding:9px 10px;border-radius:8px;text-decoration:none;
+color:var(--fg-muted);font-size:.95rem;min-height:24px}
+.side-nav a:hover{background:var(--surface-deep);color:var(--fg)}
+.side-nav a[aria-current=page]{background:var(--surface-deep);color:var(--fg);font-weight:600;
+box-shadow:inset 3px 0 0 var(--accent)}
+.side-nav .lbl{flex:1}
+.badge{font-size:.75rem;font-weight:600;color:#fff;background:var(--accent-2,#b91c1c);border-radius:99px;
+padding:1px 7px;line-height:1.4}
+.side-me{display:flex;align-items:center;gap:10px;padding:12px 6px 4px;margin-top:12px;border-top:1px solid var(--border)}
+.side-me .me-name{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
+.side-me b{font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.side-me small{font-size:.8rem;color:var(--fg-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.av{width:32px;height:32px;border-radius:99px;background:var(--surface-deep);border:1px solid var(--border);
+display:inline-grid;place-items:center;font-weight:600;color:var(--fg);flex:none}
+.icon-btn{width:40px;height:40px;display:inline-grid;place-items:center;border-radius:10px;color:var(--fg-muted);
+cursor:pointer;flex:none;text-decoration:none}
+.icon-btn:hover{background:var(--surface-deep);color:var(--fg)}
+.icon-btn:focus-visible,.side-nav a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.mbar{display:none}
+.content{min-width:0;display:flex;flex-direction:column}
+.page{flex:1;width:100%;max-width:1040px;box-sizing:border-box;margin:0 auto;padding:32px 32px 24px}
+.content > footer{max-width:1040px;width:100%;box-sizing:border-box;margin:0 auto;padding:0 32px 32px}
+.tscroll{max-width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tscroll table{min-width:520px} .ph-only{display:none}
+@media (max-width:640px){
+.tscroll table.list{min-width:0} table.list tr:first-child:has(th){display:none}
+table.list,table.list tbody,table.list tr,table.list td{display:block;width:auto}
+table.list tr{border-bottom:1px solid var(--border);padding:10px 0}
+table.list td{border:0;padding:2px 0} table.list td:empty{display:none} .ph-only{display:inline}
+}
+.panel{overflow-wrap:anywhere}
+@media (min-width:900px){
+.shell{display:grid;grid-template-columns:260px minmax(0,1fr)}
+.side{position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto}
+.side .close,.shade{display:none}
+}
+@media (max-width:899.98px){
+.mbar{display:flex;align-items:center;gap:6px;position:sticky;top:0;z-index:20;padding:8px 10px;
+background:var(--bg);border-bottom:1px solid var(--border)}
+.mbar b{flex:1;min-width:0;font-size:1.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mbar .mlogo{width:28px;height:28px;object-fit:contain;border-radius:6px}
+.side{position:fixed;z-index:40;top:0;bottom:0;left:0;width:min(300px,86vw);overflow-y:auto;
+transform:translateX(-102%);transition:transform .25s cubic-bezier(.2,0,0,1),visibility 0s .25s;visibility:hidden;
+box-shadow:0 0 40px rgba(0,0,0,.25)}
+.shade{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;
+transition:opacity .2s}
+.nav-toggle:checked ~ .side{transform:none;visibility:visible;transition:transform .25s cubic-bezier(.2,0,0,1)}
+.nav-toggle:checked ~ .shade{opacity:1;pointer-events:auto}
+body:has(.nav-toggle:checked){overflow:hidden}
+.page{padding:20px 16px 16px} .content > footer{padding:0 16px 24px}
+.panel{padding:18px 16px;border-radius:12px}
+.hero{padding:16px 0 20px} .hero h1{font-size:2.2rem}
+.stats{grid-template-columns:1fr 1fr} .stat{border-right:0;border-bottom:1px solid var(--border);padding:14px 16px}
+.stat:nth-child(odd){border-right:1px solid var(--border)} .stat b{font-size:1.2rem}
+.strip .head{padding:12px 16px} .steps{padding:12px 16px}
+}
+@media (prefers-reduced-motion:reduce){.side,.shade{transition:none!important}}
+</style>"""
+
+# the drawer without script is the checkbox; this adds Esc, Enter/Space on the labels, focus into
+# the menu and back to ☰, and keeps the page behind out of reach while it is open
+SHELL_SCRIPT = """<script>
+(function(){var t=document.getElementById('nav-open');if(!t)return;
+var side=document.getElementById('side'),content=document.querySelector('.content'),
+btn=document.querySelector('.mbar .menu-btn');
+function sync(){var open=t.checked&&getComputedStyle(side).position==='fixed';
+if(btn)btn.setAttribute('aria-expanded',open?'true':'false');
+if(content){if(open)content.setAttribute('inert','');else content.removeAttribute('inert');}
+if(open){var f=side.querySelector('[aria-current=page]')||side.querySelector('a');if(f)f.focus();}}
+t.addEventListener('change',function(){sync();if(!t.checked&&btn)btn.focus();});
+document.querySelectorAll('label[for=nav-open][role=button]').forEach(function(l){
+l.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();l.click();}});});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&t.checked){t.checked=false;
+t.dispatchEvent(new Event('change'));}});
+window.addEventListener('pageshow',function(){if(t.checked){t.checked=false;sync();}});
+})();
+</script>"""
+
+
+def _scroll_tables(body: str) -> str:
+    """Wide tables scroll inside their own box, never the page (375px phones)."""
+    return body.replace("<table", '<div class="tscroll"><table').replace(
+        "</table>", "</table></div>"
     )
-    sub = (
-        f'<nav class="manage" aria-label="Manage"><a href="/">← Home</a>{links}</nav>'
-        if current != "/"
-        else ""
-    )
-    return topbar(who) + sub
 
 
 def frame(title: str, current: str, who: dict[str, Any] | None, body: str) -> str:
-    inner = body if current == "/" else f'<div class="panel">{body}</div>'
-    return page(title, STYLE + HOME_STYLE + nav(current, who) + inner, wide=True)
+    """A console page. Signed-in people get the side menu (a drawer on phones); visitors the bar
+    with Sign in. Fixed text, the settings and the viewer only: nothing from the URL."""
+    from . import theme
+    from .claim import TEST_NOTICE
+
+    inner = body if current == "/" else f'<div class="panel">{_scroll_tables(body)}</div>'
+    t = theme.current()
+    links = "".join(f'<a href="{E(h)}">{E(text)}</a>' for h, text in t.links)
+    foot = f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"
+    if who is None:
+        page_ = f'<div class="shell"><div class="content"><div class="page">{topbar(None)}{inner}</div>{foot}</div></div>'
+        return theme.frame(title, STYLE + HOME_STYLE + SHELL_STYLE + page_, TEST_NOTICE, bare=True)
+    shown = title if current != "/" else "Home"
+    page_ = f"""<div class="shell">
+<input type="checkbox" id="nav-open" class="nav-toggle" tabindex="-1" aria-hidden="true">
+<label for="nav-open" class="shade" aria-hidden="true"></label>
+{side_menu(current, who)}
+<div class="content">
+<header class="mbar"><label for="nav-open" class="icon-btn menu-btn" role="button" tabindex="0"
+aria-label="Open the menu" aria-controls="side" aria-expanded="false">{icon("menu")}</label>
+{logo_img(cls="mlogo")}<b>{E(shown)}</b></header>
+<div class="page">{inner}</div>{foot}</div></div>{SHELL_SCRIPT}"""
+    return theme.frame(title, STYLE + HOME_STYLE + SHELL_STYLE + page_, TEST_NOTICE, bare=True)
 
 
 def mail_state(s: Any) -> tuple[str, str]:
@@ -781,8 +991,9 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
 <form method="post" action="/members/{m["partner"]}/remove" onsubmit="return confirm('Remove {E(m["name"])}? Their pass ends now; their key stays theirs.')">
 <input type="hidden" name="csrf" value="{csrf}"><button type="submit">Remove</button></form></details></td>"""
         rows.append(
-            f"<tr><td>{E(m['name'])}</td>{email}<td>{'admin' if m['admin'] else 'member'}</td>"
-            f'<td class="meta">{E(m["since"])}</td>{actions}</tr>'
+            f'<tr><td class="who-cell"><b>{E(m["name"])}</b></td>{email}'
+            f"<td>{'admin' if m['admin'] else 'member'}</td>"
+            f'<td class="meta"><span class="ph-only">since </span>{E(m["since"])}</td>{actions}</tr>'
         )
     head = (
         "<tr><th>Name</th>"
@@ -807,7 +1018,7 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
         "/members",
         who,
         f"""<h1>Members</h1><p class="muted">{len(mem)} members with an active pass.</p>{note}{add}
-<h2>Everyone</h2><table>{head}{"".join(rows)}</table>""",
+<h2>Everyone</h2><table class="list">{head}{"".join(rows)}</table>""",
     )
 
 

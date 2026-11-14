@@ -174,7 +174,8 @@ belfry.{$BELFRY_DOMAIN} {
 	import limit console-api 60 1m /api/*
 	# the mail-in service's hand-over (mail.py) stays on the Compose network
 	error /internal/* 404
-	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'"
+	# images: the branding's logo may be an https:// image on another host (branding.py)
+	import csp_default "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self'; connect-src 'self'; form-action 'self'"
 	reverse_proxy onboarding:8100
 }
 

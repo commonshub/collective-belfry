@@ -9,7 +9,7 @@ import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import community, console, homepage, mypass
+from belfry_onboarding import console, homepage, mypass
 from belfry_onboarding.app import create_app
 from belfry_onboarding.nip46check import sign_event
 
@@ -104,15 +104,75 @@ def test_home_for_a_member_and_for_an_admin(web, belfry, odoo, authentik):
     sign_in(web, belfry, alice)
     r = web.get("/", headers=CONSOLE)
     assert "Welcome, Alice" in r.text and "Your pass" in r.text and "Bob" in r.text
-    assert "Your belfry" not in r.text and 'href="/status">Manage' not in r.text
+    assert "Your belfry" not in r.text
+    side = menu_of(r.text)
+    assert 'href="/members"' in side and 'href="/monitor"' in side
+    assert 'href="/setup"' not in side and 'href="/agents"' not in side  # admins only
     make_admin(authentik, "alice@example.org")
     r = web.get("/", headers=CONSOLE)
-    assert "Your belfry" in r.text and 'href="/status">Manage' in r.text
+    assert "Your belfry" in r.text and 'href="/setup"' in menu_of(r.text)
     assert "1 of 2 services working" in r.text and "Placeholder" in r.text
     assert "Set up e-mail" in r.text  # no mail provider in the tests
     assert "Invite your first members" not in r.text  # two members already
     sub = web.get("/members", headers=CONSOLE).text
-    assert 'class="manage"' in sub and 'href="/setup"' in sub
+    assert '<a href="/members" aria-current="page">' in menu_of(sub)
+    assert 'href="/setup"' in menu_of(sub) and "Alice · admin" not in sub
+
+
+def menu_of(page: str) -> str:
+    """The side menu of a console page."""
+    assert '<aside class="side" id="side"' in page, "no side menu"
+    return page.split('<aside class="side" id="side"', 1)[1].split("</aside>", 1)[0]
+
+
+ADMIN_PAGES = [
+    ("/", "/"),
+    ("/status", "/status"),
+    ("/members", "/members"),
+    ("/website", "/website"),
+    ("/monitor", "/monitor"),
+    ("/apps", "/apps"),
+    ("/apps/add?app=vote", "/apps"),
+    ("/agents", "/agents"),
+    ("/setup", "/setup"),
+]
+
+
+@pytest.mark.parametrize(("path", "current"), ADMIN_PAGES)
+def test_every_console_page_has_the_side_menu(web, belfry, odoo, authentik, path, current):
+    """Xavier, 2026-11-14: a left side menu (a drawer on phones) instead of the Manage row."""
+    alice = member(odoo, "Alice")
+    sign_in(web, belfry, alice)
+    make_admin(authentik, "alice@example.org")
+    page = web.get(path, headers=CONSOLE).text
+    side = menu_of(page)
+    assert side.count('aria-current="page"') == 1
+    assert f'<a href="{current}" aria-current="page">' in side
+    for section in ("Community", "People", "Belfry"):
+        assert f'<p class="sec">{section}</p>' in side
+    assert "Alice" in side and "admin" in side and 'href="/logout"' in side
+    # the phone bar: ☰ opens the same menu
+    assert 'class="icon-btn menu-btn"' in page and 'for="nav-open"' in page
+    assert 'class="manage"' not in page  # the old tab row is gone
+
+
+def test_the_menu_counts_agents_waiting(web, belfry, odoo, authentik, monkeypatch):
+    from belfry_onboarding import agentrequests
+
+    alice = member(odoo, "Alice")
+    sign_in(web, belfry, alice)
+    make_admin(authentik, "alice@example.org")
+    monkeypatch.setattr(agentrequests, "own", lambda svc: True)
+    monkeypatch.setattr(
+        type(odoo), "agent_requests", lambda self, state=None: [{"id": 1}, {"id": 2}], raising=False
+    )
+    side = menu_of(web.get("/status", headers=CONSOLE).text)
+    assert '<span class="badge" aria-label="2 waiting">2</span>' in side
+
+
+def test_visitors_get_the_bar_without_a_menu(web):
+    page = web.get("/status", headers=CONSOLE).text
+    assert '<aside class="side"' not in page and 'href="/login"' in page
 
 
 def test_console_paths_move_to_the_console_host(web):
@@ -419,7 +479,7 @@ def test_the_monitor_lives_on_the_console(web, belfry, odoo):
     assert r.status_code == 302 and r.headers["location"] == "https://belfry.belfry.test/monitor"
     page = web.get("/monitor", headers=CONSOLE)
     assert page.status_code == 200 and "sign in" in page.text and "EventSource" not in page.text
-    assert 'href="/monitor"' in page.text  # in the console's tabs
+    assert 'href="/login?to=/monitor"' in page.text  # visitors: no menu, a way to sign in
     assert web.get("/monitor/stream", headers=CONSOLE).status_code == 401
     assert web.get("/monitor/names?p=" + "a" * 64, headers=CONSOLE).status_code == 401
 
@@ -533,3 +593,17 @@ def test_skills_live_on_the_belfry_host(web):
     assert r.headers["location"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
     doc = web.get("/.well-known/belfry.json", headers={"Host": "pass.belfry.test"}).json()
     assert doc["skills"]["website"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
+
+
+def test_the_menu_shows_the_branding_logo(web, belfry, odoo, authentik, monkeypatch):
+    """An uploaded logo wins over the theme's mark; if it doesn't load, the mark comes back."""
+    from belfry_onboarding import branding
+
+    alice = member(odoo, "Alice")
+    sign_in(web, belfry, alice)
+    monkeypatch.setattr(
+        branding, "cached", lambda: {"logo": "https://blossom.belfry.test/logo.png"}
+    )
+    side = menu_of(web.get("/members", headers=CONSOLE).text)
+    assert 'src="https://blossom.belfry.test/logo.png"' in side
+    assert "this.src='/theme/belfry/logo.svg'" in side

@@ -22,7 +22,7 @@ Needs the belfry's own register (REGISTER=belfry); with Odoo the API answers 409
    push notification of type `agent_request` on their phones when push is on. With no admin yet
    (or no mail provider), the request waits: the console lists it, and the first admin is mailed
    when their address is verified at the end of the setup wizard.
-4. An admin answers on `https://belfry.<domain>/agents` (Manage → Agents): **Let it in as my
+4. An admin answers on `https://belfry.<domain>/agents` (menu → People → Agents): **Let it in as my
    agent** or **Decline**. Or from an app with `{"decide": id, "approve": bool}` (below).
 5. The agent asks `POST …/agent-requests/me` (`{}`) until `state` is `approved` (or `declined`,
    `removed`); the approved answer carries its owner, the API base, the relays and Blossom.
