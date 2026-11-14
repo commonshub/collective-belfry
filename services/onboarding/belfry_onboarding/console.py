@@ -658,13 +658,13 @@ def side_menu(current: str, who: dict[str, Any]) -> str:
                 badge = f'<span class="badge" aria-label="{n} waiting">{n}</span>'
             links += f'<a href="{h}"{on}>{icon(i)}<span class="lbl">{t}</span>{badge}</a>'
         groups += f'<p class="sec">{section}</p>{links}'
-    role = " · admin" if who.get("admin") else ""
+    role = "Admin · " if who.get("admin") else ""
     return f"""<aside class="side" id="side" aria-label="Menu">
 <div class="side-top"><a class="side-brand" href="/">{logo_img()}<span>{E(name)}</span></a>
 <label for="nav-open" class="icon-btn close" aria-label="Close the menu" tabindex="0" role="button">{icon("close")}</label></div>
 <nav class="side-nav" aria-label="Manage">{groups}</nav>
 <div class="side-me"><span class="av" aria-hidden="true">{E(initial(who.get("name", "")))}</span>
-<span class="me-name"><b>{E(who.get("name", ""))}</b><small>{E(who.get("email", ""))}{role}</small></span>
+<span class="me-name"><b>{E(who.get("name", ""))}</b><small title="{E(who.get("email", ""))}">{role}{E(who.get("email", ""))}</small></span>
 <a href="/logout" class="icon-btn" title="Sign out" aria-label="Sign out">{icon("signout")}</a></div>
 </aside>"""
 
@@ -675,7 +675,7 @@ input,select,textarea{font-size:16px}
 .shell{min-height:100vh;min-height:100dvh}
 .nav-toggle{position:fixed;opacity:0;pointer-events:none;width:1px;height:1px;left:-99px}
 .side{background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;
-gap:2px;padding:20px 12px 12px;box-sizing:border-box}
+gap:2px;padding:20px 16px 12px;box-sizing:border-box}
 .side-top{display:flex;align-items:center;gap:8px;padding:0 6px 14px}
 .side-brand{display:flex;align-items:center;gap:10px;flex:1;min-width:0;text-decoration:none;color:var(--fg);
 font:700 1.05rem/1.2 var(--font-title)}
@@ -727,6 +727,7 @@ background:var(--bg);border-bottom:1px solid var(--border)}
 .mbar b{flex:1;min-width:0;font-size:1.05rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mbar .mlogo{width:28px;height:28px;object-fit:contain;border-radius:6px}
 .side{position:fixed;z-index:40;top:0;bottom:0;left:0;width:min(300px,86vw);overflow-y:auto;
+padding:16px 16px calc(12px + env(safe-area-inset-bottom)) calc(16px + env(safe-area-inset-left));
 transform:translateX(-102%);transition:transform .25s cubic-bezier(.2,0,0,1),visibility 0s .25s;visibility:hidden;
 box-shadow:0 0 40px rgba(0,0,0,.25)}
 .shade{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;
@@ -750,16 +751,17 @@ SHELL_SCRIPT = """<script>
 (function(){var t=document.getElementById('nav-open');if(!t)return;
 var side=document.getElementById('side'),content=document.querySelector('.content'),
 btn=document.querySelector('.mbar .menu-btn');
-function sync(){var open=t.checked&&getComputedStyle(side).position==='fixed';
+function sync(move){var open=t.checked&&getComputedStyle(side).position==='fixed';
 if(btn)btn.setAttribute('aria-expanded',open?'true':'false');
 if(content){if(open)content.setAttribute('inert','');else content.removeAttribute('inert');}
-if(open){var f=side.querySelector('[aria-current=page]')||side.querySelector('a');if(f)f.focus();}}
-t.addEventListener('change',function(){sync();if(!t.checked&&btn)btn.focus();});
+if(open&&move){var f=side.querySelector('[aria-current=page]')||side.querySelector('a');if(f)f.focus();}}
+t.addEventListener('change',function(){sync(true);if(!t.checked&&btn)btn.focus();});
 document.querySelectorAll('label[for=nav-open][role=button]').forEach(function(l){
 l.addEventListener('keydown',function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();l.click();}});});
 document.addEventListener('keydown',function(e){if(e.key==='Escape'&&t.checked){t.checked=false;
 t.dispatchEvent(new Event('change'));}});
-window.addEventListener('pageshow',function(){if(t.checked){t.checked=false;sync();}});
+window.addEventListener('pageshow',function(e){if(e.persisted&&t.checked){t.checked=false;sync();}});
+sync();
 })();
 </script>"""
 

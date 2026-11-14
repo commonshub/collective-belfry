@@ -150,7 +150,7 @@ def test_every_console_page_has_the_side_menu(web, belfry, odoo, authentik, path
     assert f'<a href="{current}" aria-current="page">' in side
     for section in ("Community", "People", "Belfry"):
         assert f'<p class="sec">{section}</p>' in side
-    assert "Alice" in side and "admin" in side and 'href="/logout"' in side
+    assert "Alice" in side and "Admin · alice@example.org" in side and 'href="/logout"' in side
     # the phone bar: ☰ opens the same menu
     assert 'class="icon-btn menu-btn"' in page and 'for="nav-open"' in page
     assert 'class="manage"' not in page  # the old tab row is gone
