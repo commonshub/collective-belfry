@@ -248,7 +248,8 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
         <div className="ev-content" onWheel={fold} onTouchMove={fold}>
           {tab === 'chat' && <Conversation id={e.groupId} readOnly={readOnly || e.remote === true && !p.holders.has(me())} activeThread={activeThread} />}
           {tab === 'photos' && <EventPhotos groupId={e.groupId} readOnly={readOnly || reading()} />}
-          {tab === 'people' && <EventPeople e={e} p={p} holders={holders} titles={titles} may={may} plain={plain} onCheckIn={() => setSheet('checkin')} />}
+          {tab === 'people' && e.meeting && <div className="scroll ev-people pad-x"><MeetingPeople e={e} host={host} /></div>}
+          {tab === 'people' && !e.meeting && <EventPeople e={e} p={p} holders={holders} titles={titles} may={may} plain={plain} onCheckIn={() => setSheet('checkin')} />}
         </div>
       </> : <div className="scroll"><div className="empty ev-closed">
           {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The chat, photos and people open once you have a place.'}
