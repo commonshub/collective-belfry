@@ -86,7 +86,7 @@ function AgentRow({ a }: { a: AgentRequest }) {
   )
 }
 
-function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
+export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
   const [error, setError] = useState('')
   const [done, setDone] = useState('')
   const m = membership()
@@ -96,13 +96,14 @@ function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
       <div className="who"><span className="req-ic initial" aria-hidden="true">{(p.name.trim()[0] ?? '?').toUpperCase()}</span>
         <span className="t">{p.name || 'Someone'}<small>{admin && p.email ? `${p.email} · ` : ''}{when(p.created)}</small></span></div>
       {p.motivation && <blockquote>{p.motivation}</blockquote>}
-      {vouching && <div className="hint vouch-line"><VouchIcon /> {vouchLine(p.vouches, m.vouches)}{p.vouched ? ' · you vouched' : ''}</div>}
+      {/* anyone vouches (#issues 2026-11-15); while the admins decide, vouches tell them who stands for whom */}
+      <div className="hint vouch-line"><VouchIcon /> {vouching ? vouchLine(p.vouches, m.vouches) : `${p.vouches} ${p.vouches === 1 ? 'vouch' : 'vouches'} · the admins decide`}{p.vouched ? ' · you vouched' : ''}</div>
       <Fail error={error} />
       {done ? <div className="hint">{done}</div> : (
         <div className="row">
           {admin && <Btn className="btn small" onClick={() => decidePerson(p.id, true).catch((e) => setError(fixed(e)))}>Accept</Btn>}
           {admin && <Btn className="btn small ghost" onClick={() => decidePerson(p.id, false).catch((e) => setError(fixed(e)))}>Decline</Btn>}
-          {vouching && !admin && (
+          {(
             <Btn className={'btn small' + (p.vouched ? ' ghost' : '')} aria-pressed={p.vouched}
               onClick={() => vouchPerson(p.id, !p.vouched).then((inNow) => { if (inNow) setDone('Accepted: they get an invite by e-mail.') }, (e) => setError(fixed(e)))}>
               {p.vouched ? 'Take back my vouch' : 'Vouch'}</Btn>

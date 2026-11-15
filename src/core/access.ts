@@ -60,6 +60,8 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
 let belfryAgents: Record<string, string> = {}
 /** Whose agent PUBKEY is, when it is a member's own agent. */
 export const agentOwner = (pubkey: string): string | undefined => belfryAgents[pubkey]
+/** Every member's own agent → its member (belfry.json "agents"). */
+export const agentOwners = (): Record<string, string> => ({ ...belfryAgents })
 
 // The community's admins (belfry.json "admins"): admins of every channel too, without being
 // listed as its members (zooid patch 0003 lets the relay take their moderation).

@@ -1227,3 +1227,14 @@ div.settings-row { cursor: default; }
 .pull-about p { margin: 0 0 6px; }
 .pull-vis { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 12px; background: var(--surface); font-size: 14px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
 .pull-vis b { color: var(--text); font-weight: 600; }
+
+/* #/members: the members directory (#issues 2026-11-15) */
+.dir-search { padding-top: 10px; padding-bottom: 6px; }
+.dir-member { border-bottom: 1px solid var(--line); }
+.dir-row { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 16px; background: none; border: 0; text-align: left; color: var(--text); cursor: pointer; }
+.dir-row:hover { background: var(--surface); }
+.dir-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.dir-row .t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-row .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dir-row.agent { padding-left: 46px; padding-top: 4px; }
+.role-badge { font-size: 11px; white-space: nowrap; }

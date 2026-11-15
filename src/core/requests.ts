@@ -14,7 +14,7 @@
 // may_invite_members, admin}.
 // Names, notes and answers are the askers' own words: shown as plain text, never as HTML.
 import { BELFRY, getBackend } from '../config'
-import { agentOwner } from './access'
+import { agentOwner, agentOwners } from './access'
 import { isAgent, isGuest } from './invite'
 import { groups, vouchesFor, type Application, type Group } from './model'
 import { isBelfryAdmin } from './people'
@@ -104,7 +104,8 @@ export function loadRequests(): Promise<void> {
     await loadMembership()
     const admin = isBelfryAdmin(me())
     const jobs: Promise<unknown>[] = []
-    if (admin || (settings.accept === 'vouches' && !isGuest(me()) && !agentOwner(me())))
+    // any member sees who asks and vouches (#issues 2026-11-15), whatever the setting
+    if (admin || (!isGuest(me()) && !agentOwner(me())))
       jobs.push(call('/applications', 'POST', { list: true }).then((d) => { people = cleanPeople(d.applications) }, () => { /* not allowed or offline */ }))
     else people = []
     if (admin) jobs.push(call('/agent-requests', 'POST', { list: true }).then((d) => { agents = cleanAgents(d.requests) }, () => { /* offline */ }))
@@ -199,5 +200,31 @@ export function demoRequests(opts: { vouching?: boolean; needed?: number; invite
     { id: 2, name: 'Omar B.', motivation: 'A friend of Ana’s.', created: ago(30), vouches: 0, vouched: false, ...(isBelfryAdmin(me()) ? { email: 'omar@example.org' } : {}) },
   ]
   agents = isBelfryAdmin(me()) ? [{ id: 7, pubkey: 'b'.repeat(64), name: 'Scout', about: 'Sorts the bug reports in #issues.', created: ago(2), forMe: true }] : []
+  touch()
+}
+
+// ---- the members directory (whois {"directory": true}, #issues 2026-11-15) ------------------
+
+export interface DirMember { pubkey: string; name: string; role?: string; agents: { pubkey: string; name: string }[] }
+let dir: DirMember[] | null = null
+export const directory = () => dir
+/** Every member of the belfry, their own agents under them (members only). */
+export async function loadDirectory(): Promise<void> {
+  if (isLocalOnly()) {
+    const keys = [...new Set(groups().flatMap((g) => [...g.members]))].filter((k) => !isGuest(k) && !agentOwner(k))
+    dir = keys.map((k) => ({ pubkey: k, name: '', agents: Object.entries(agentOwners()).filter(([, o]) => o === k).map(([a]) => ({ pubkey: a, name: '' })) }))
+    touch(); return
+  }
+  try {
+    const d = await call('/whois', 'POST', { directory: true })
+    const agents = (d.agents && typeof d.agents === 'object' ? d.agents : {}) as Record<string, string>
+    const names = (d.names && typeof d.names === 'object' ? d.names : {}) as Record<string, string>
+    const hex = /^[0-9a-f]{64}$/
+    dir = (Array.isArray(d.members) ? d.members : []).filter((m: { pubkey?: unknown }) => typeof m?.pubkey === 'string' && hex.test(m.pubkey as string))
+      .map((m: { pubkey: string; name?: unknown; role?: unknown }) => ({
+        pubkey: m.pubkey, name: typeof m.name === 'string' ? m.name.slice(0, 100) : '', role: typeof m.role === 'string' ? m.role : undefined,
+        agents: Object.entries(agents).filter(([a, o]) => o === m.pubkey && hex.test(a)).map(([a]) => ({ pubkey: a, name: String(names[a] ?? '').slice(0, 100) })),
+      }))
+  } catch { dir = dir ?? [] }
   touch()
 }

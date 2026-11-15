@@ -15,6 +15,7 @@ import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
 import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
+import { MembersDirectory } from './Directory'
 import { RequestsScreen } from './Requests'
 import { GroupPage } from './GroupPage'
 import { demoRequests, startRequests } from '../core/requests'
@@ -233,6 +234,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
   else if (section === 'requests') view = <RequestsScreen />
+  else if (section === 'members') view = <MembersDirectory />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
   else if (section === 'u') view = <ProfileView id={a} />
