@@ -22,6 +22,8 @@ import { ProposalHeader } from './Proposals'
 import { TopicsBar } from './Topics'
 import { CalendarIcon, ChevronDownIcon, ChevronUpIcon, DocIcon, ImageIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
 import { RichText } from './Topics'
+import { Markdown } from './markdown'
+import { visibilityText } from './ChannelHeader'
 
 const HIDDEN = 'belfry-pins-hidden'
 const hiddenPins = (): string[] => { try { return JSON.parse(localStorage.getItem(HIDDEN) ?? '[]') } catch { return [] } }
@@ -148,7 +150,11 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
   return (
     <div className={'pull' + (full ? ' full' : '')}>
       {/* the same at both levels, so nothing jumps when it opens all the way; the whole text is under it */}
-      {g.about && <p className="pull-about">{g.about.split('\n').find((l) => l.trim())?.replace(/[*_`#>]/g, '').slice(0, 200)}</p>}
+      {/* the whole description, then who reads it and who can write (#issues 2026-11-15) */}
+      {g.about && <Markdown className="pull-about" text={g.about} />}
+      {!g.isPod && !g.isProposal && !g.isEvent && (() => { const v = visibilityText(g); return (
+        <div className="pull-vis"><b>{v.title}</b>{v.lines.map((l) => <span key={l}>{l}</span>)}</div>
+      ) })()}
       {(g.isPod || g.isProposal) && parent && (
         <button className="link pull-parent" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}</button>
       )}

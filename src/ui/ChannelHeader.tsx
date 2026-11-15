@@ -7,7 +7,7 @@
 // a message will actually reach.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { markSeen } from '../core/actions'
-import { channelIcon, group, isInbox, isPublicChannel, mailLocal, webPage, type Group } from '../core/model'
+import { channelIcon, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group } from '../core/model'
 import { BELFRY } from '../config'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -136,13 +136,33 @@ export function ChannelHeader({ id, left, right, topic, onTopic, title, line, pe
 
 const parentOf = (g: Group) => { const p = g.parent ? group(g.parent) : undefined; return p ? (p.isPod ? p.name : '# ' + p.name) : 'the community' }
 
-/** Under a channel's name, always (#issues, 2026-11-13): who reads it, and where people reach it
- *  from outside when that is on: "Public on <domain>/<slug> and <slug>@<domain>". */
+/** Under a channel's name, always (#issues 2026-11-13, 2026-11-15): who reads it, and where people
+ *  reach it from outside when that is on. Public: just the addresses (the globe is in the name
+ *  already, and an address says what it is). */
 export function visibilityLine(g: Group): string {
   const w = webPage(g)
   const mail = isInbox(g) ? `${mailLocal(g)}@${BELFRY.domain}` : ''
   const page = w?.on ? `${BELFRY.domain}/${w.slug}` : ''
-  if (isPublicChannel(g)) return `🌐 Public on ${[page, mail].filter(Boolean).join(' and ')}`
-  const outside = [page && `threads from ${page}`, mail && `mail to ${mail}`].filter(Boolean)
-  return '🔒 Members only' + (outside.length ? ' · ' + outside.join(', ') : '')
+  if (isPublicChannel(g)) return [page, mail].filter(Boolean).join(' · ')
+  return 'Members only' + ([page, mail].some(Boolean) ? ' · ' + [page, mail].filter(Boolean).join(' · ') : '')
+}
+
+/** The pull-down's words on who reads what and who can write (#issues 2026-11-15): whether every
+ *  message is public and where, or members only, and whether people from outside can post. */
+export function visibilityText(g: Group): { title: string; lines: string[] } {
+  const w = webPage(g)
+  const page = w?.on ? `${BELFRY.domain}/${w.slug}` : ''
+  const mail = `${mailLocal(g)}@${BELFRY.domain}`
+  const since = publicPeriods(g).at(-1)?.[0]
+  const lines: string[] = []
+  if (isPublicChannel(g)) {
+    lines.push(`Everything posted here${since ? ` since ${new Date(since * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' })}` : ''} is public: anyone can read it at ${page}.`)
+    lines.push(w?.posts === 'proposal' || w?.posts === 'event' ? 'Members post here; people from outside read.' : `People from outside can open a thread there${isInbox(g) ? ` or write to ${mail}` : ''}; members answer here.`)
+    return { title: '🌐 Public', lines }
+  }
+  lines.push('Only members read what is posted here.')
+  if (page) lines.push(`People from outside can open a thread at ${page}: they see only their own.`)
+  lines.push(isInbox(g) ? `Anyone can write to ${mail}: their mail lands here.` : `Members can write to ${mail}.`)
+  if (publicPeriods(g).length) lines.push(`What was posted while it was public stays readable at ${page || BELFRY.domain}.`)
+  return { title: '🔒 Members only', lines }
 }
