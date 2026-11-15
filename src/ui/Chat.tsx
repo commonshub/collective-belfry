@@ -34,6 +34,7 @@ import { askToJoin, reading, useGuestMode } from '../core/guestmode'
 import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
 import { ChannelSettingsSheet, VisibilitySheet } from './ChannelInfo'
+import { MORE_EMOJIS, ReactionChips } from './Reactions'
 import { inOrder, mayOrder, setChannelOrder } from '../core/order'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
@@ -757,17 +758,10 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
           {/* no to-do mark here any more (Xavier, 2026-11-12): the ⏳ / ☑️ reactions say it */}
-          {rx.length > 0 && (
-            <div className="reactions">
-              {rx.map((r) => (
-                <button key={r.emoji} className={r.mine ? 'on' : ''} title={[...r.who].map((k) => displayName(k)).join(', ')}
-                  onClick={() => void react(groupId, m.ev, r.emoji, r.mine)}>
-                  <span>{r.emoji}</span> {r.who.size}
-                </button>
-              ))}
-              {!p && rx.length > 0 && <button className="react-add" aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>}
-            </div>
-          )}
+          {/* the add button where the reactions are (#issues 2026-11-15), on hover when there are none */}
+          <ReactionChips chips={rx.map((r) => ({ emoji: r.emoji, who: r.at, mine: !!r.mine }))} disabled={!!p}
+            onToggle={(emoji) => { const r = rx.find((x) => x.emoji === emoji); void react(groupId, m.ev, emoji, r?.mine) }}
+            onAdd={p ? undefined : () => onAct(true)} />
           {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
           {thread && thread.count > 0 && thread.last > 0 && (onOpenThread || onThread) && (
             <ThreadLine groupId={groupId} rootId={m.ev.id} thread={thread} open={threadOpen} onClick={onThread ?? onOpenThread!} />
@@ -779,7 +773,6 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
         </div>
         {!p && (
           <div className="msg-tools" role="toolbar" aria-label="Message actions">
-            <button aria-label="Add a reaction" title="Add a reaction" onClick={() => onAct(true)}><SmilePlusIcon /></button>
             <button aria-label="More" title="More" onClick={() => onAct()}><MoreIcon /></button>
           </div>
         )}
@@ -788,12 +781,6 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   )
 }
 
-const MORE_EMOJIS = [
-  '👍', '❤️', '😂', '🎉', '🙏', '👀', '🔥', '👏', '😍', '🤔', '😮', '😢',
-  '😅', '🙌', '💪', '✅', '❌', '💯', '🚀', '✨', '🌱', '☕', '🍕', '🍻',
-  '😊', '😎', '🤗', '🥳', '😴', '🤯', '😬', '🙈', '👋', '🤝', '👌', '✌️',
-  '💡', '📌', '📅', '⏰', '🎶', '📷', '🌞', '🌧️', '❄️', '🌈', '🐝', '🌻',
-]
 
 function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, onEdit, onPropose, onProposeSite, emojiOnly = false }: { m: Message; groupId: string; mine: Reaction[]; onClose: () => void; thread?: ThreadInfo; onThread?: () => void; onReply?: () => void; onEdit?: () => void; /** #requests: a member turns it into a proposal */ onPropose?: () => void; /** a version of the website: propose it (#issues 2026-11-13) */ onProposeSite?: () => void; emojiOnly?: boolean }) {
   // your own plain message or reply can be edited (not a card, an event, a pod, a proposal or an e-mail)

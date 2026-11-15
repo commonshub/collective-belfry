@@ -46,6 +46,10 @@ export interface Report { status: 'delivered' | 'failed' | 'delayed' | 'queued';
 
 const items = new Map<string, Dm>() // by rid
 const seen = new Set<string>() // event ids already read (gift wraps, kind 4)
+// reactions to direct messages (NIP-17: a kind 7 rumor in its own gift wraps, `e` = the message's
+// rumor id; taking one back is a kind 5 rumor naming it). By reaction rumor id.
+export interface DmReaction { rid: string; target: string; from: string; emoji: string; at: number; pending?: boolean }
+const dmReacts = new Map<string, DmReaction>()
 const reports = new Map<string, Report>() // by email-id
 let read: Record<string, number> = {}
 let myAddress = ''
@@ -128,6 +132,7 @@ async function load() {
   loaded = true
   for (const d of (await kvGet<Dm[]>('dm-items')) ?? []) items.set(d.rid, d)
   for (const id of (await kvGet<string[]>('dm-seen')) ?? []) seen.add(id)
+  for (const r of (await kvGet<DmReaction[]>('dm-reactions')) ?? []) dmReacts.set(r.rid, r)
   for (const [k, v] of Object.entries((await kvGet<Record<string, Report>>('dm-reports')) ?? {})) reports.set(k, v)
   read = (await kvGet<Record<string, number>>('dm-read')) ?? {}
   // mail stored before threads: one conversation per address → one per subject
@@ -155,6 +160,7 @@ function save() {
     void kvSet('dm-items', [...items.values()]) // unsent ones too: their wraps wait in the outbox
     void kvSet('dm-seen', [...seen])
     void kvSet('dm-reports', Object.fromEntries(reports))
+    void kvSet('dm-reactions', [...dmReacts.values()])
   }, 300)
 }
 
@@ -262,7 +268,8 @@ async function process() {
         let d: Dm | null = null
         if (e.kind === 1059) {
           const rumor = await unwrap(e)
-          if (rumor) d = await fromRumor(rumor)
+          if (rumor && (rumor.kind === 7 || rumor.kind === 5)) reactionRumor(rumor)
+          else if (rumor) d = await fromRumor(rumor)
         } else if (e.pubkey === self || e.tags.some((t) => t[0] === 'p' && t[1] === self)) {
           const peer = e.pubkey === self ? tag(e, 'p') ?? self : e.pubkey
           const s = currentSigner()
@@ -402,6 +409,48 @@ function watchOutbox() {
       save()
     },
   )
+}
+
+function reactionRumor(r: NostrEvent) {
+  const id = r.id || getEventHash(r)
+  if (r.kind === 7) {
+    const target = r.tags.filter((t) => t[0] === 'e').at(-1)?.[1]
+    const emoji = (r.content || '+').trim() === '+' ? '👍' : r.content.trim()
+    if (target && emoji && emoji.length <= 16) dmReacts.set(id, { rid: id, target, from: r.pubkey, emoji, at: r.created_at })
+  } else {
+    // kind 5: only its author takes a reaction back
+    for (const t of r.tags) if (t[0] === 'e' && dmReacts.get(t[1])?.from === r.pubkey) dmReacts.delete(t[1])
+  }
+}
+
+/** The reactions to direct message RID, most given first (who → when). */
+export function dmReactions(rid: string): { emoji: string; who: Map<string, number>; mine?: DmReaction }[] {
+  const by = new Map<string, { emoji: string; who: Map<string, number>; mine?: DmReaction }>()
+  for (const r of [...dmReacts.values()].filter((x) => x.target === rid).sort((a, b) => a.at - b.at)) {
+    const c = by.get(r.emoji) ?? { emoji: r.emoji, who: new Map<string, number>() }
+    c.who.set(r.from, r.at)
+    if (r.from === me()) c.mine = r
+    by.set(r.emoji, c)
+  }
+  return [...by.values()].sort((a, b) => b.who.size - a.who.size)
+}
+
+/** React to D with EMOJI, or take my reaction back (MINE): sealed to the same people. */
+export async function reactDm(d: Dm, emoji: string, mine?: DmReaction) {
+  await load()
+  const to = peers(d.conv)
+  if (mine) {
+    const rumor = rumorOf(5, [['e', mine.rid], ['k', '7'], ...to.filter((p) => p !== me()).map((p) => ['p', p])], '')
+    dmReacts.delete(mine.rid); save()
+    await deliver(rumor, to)
+    return
+  }
+  const rumor = rumorOf(7, [['e', d.rid, '', d.from], ['p', d.from], ['k', String(d.kind)], ...to.filter((p) => p !== me() && p !== d.from).map((p) => ['p', p])], emoji)
+  dmReacts.set(rumor.id, { rid: rumor.id, target: d.rid, from: me(), emoji, at: rumor.created_at, pending: !isLocalOnly() })
+  save()
+  await deliver(rumor, to)
+  const r = dmReacts.get(rumor.id); if (r) r.pending = false
+  save()
 }
 
 function rumorOf(kind: number, tags: string[][], content: string): NostrEvent {

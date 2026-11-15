@@ -499,7 +499,7 @@ export function inboxStates(groupId: string, sender?: string): Map<string, CardS
 
 // ---- reactions (NIP-25, kind 7 in the group: e = the message, content = the emoji) -----
 
-export interface Reaction { emoji: string; who: Set<string>; mine?: Ev }
+export interface Reaction { emoji: string; who: Set<string>; mine?: Ev; /** pubkey → when (seconds) */ at: Map<string, number> }
 
 /** Per message id: its reactions, most given first; `mine` is your reaction event (to undo it). */
 export function reactions(groupId: string): Map<string, Reaction[]> {
@@ -511,8 +511,9 @@ export function reactions(groupId: string): Map<string, Reaction[]> {
     const emoji = (e.content || '+').trim() === '+' ? '👍' : e.content.trim()
     if (!target || !emoji || emoji.length > 16) continue
     const m = byMsg.get(target) ?? new Map<string, Reaction>()
-    const r = m.get(emoji) ?? { emoji, who: new Set<string>() }
+    const r = m.get(emoji) ?? { emoji, who: new Set<string>(), at: new Map<string, number>() }
     r.who.add(e.pubkey)
+    r.at.set(e.pubkey, e.created_at)
     if (e.pubkey === me()) r.mine = e
     m.set(emoji, r)
     byMsg.set(target, m)

@@ -1206,3 +1206,18 @@ div.settings-row { cursor: default; }
 .group-page .scroll.pad .section-title { margin-left: 0; margin-right: 0; }
 .group-page .member-open-row { padding-left: 0; padding-right: 0; }
 .group-page .appl { padding-left: 0; padding-right: 0; }
+
+/* reactions (#issues 2026-11-15): no reactions yet → the add button floats where they would be,
+   on hover (laptops); phones hold the message instead */
+.reactions.rx-empty { display: none; position: absolute; left: 60px; bottom: -13px; margin: 0; z-index: 3; }
+.reactions.rx-empty .react-add { background: var(--bg); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+@media (hover: hover) and (pointer: fine) { .msg:hover .reactions.rx-empty, .dm:hover .reactions.rx-empty { display: flex; } }
+.dm .reactions.rx-empty { left: 8px; }
+.dm.mine .reactions.rx-empty { left: auto; right: 8px; }
+.dm { position: relative; }
+.dm .reactions { margin-top: 6px; }
+.who-reacted { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 8px; }
+.who-reacted .who-row { display: flex; align-items: center; gap: 10px; }
+.who-reacted .t { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.who-reacted time { color: var(--muted); font-size: 13px; white-space: nowrap; }
+.reactions button { -webkit-touch-callout: none; user-select: none; }

@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { MailIcon } from './icons'
 import { Markdown } from './markdown'
-import { address, attachmentsOf, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -145,7 +146,24 @@ function Bubble({ d, head }: { d: Dm; head: string }) {
         {d.kind === 1301 && !d.mine && !d.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
         {d.mine && <DmState d={d} r={r} />}
       </div>
+      {/* reactions (#issues 2026-11-15): e-mail has none, a message still in the outbox not yet */}
+      {d.kind !== 1301 && <DmReactions d={d} />}
     </div>
+  )
+}
+
+function DmReactions({ d }: { d: Dm }) {
+  const [picking, setPicking] = useState(false)
+  const rx = dmReactions(d.rid)
+  const off = !!d.pending || !!d.failed
+  return (
+    <>
+      <ReactionChips chips={rx.map((r) => ({ emoji: r.emoji, who: r.who, mine: !!r.mine }))} disabled={off}
+        onToggle={(emoji) => { const r = rx.find((x) => x.emoji === emoji); void reactDm(d, emoji, r?.mine) }}
+        onAdd={off ? undefined : () => setPicking(true)} />
+      {picking && <EmojiSheet onClose={() => setPicking(false)} isOn={(e) => rx.some((r) => r.emoji === e && r.mine)}
+        onPick={(e) => { const r = rx.find((x) => x.emoji === e); void reactDm(d, e, r?.mine) }} />}
+    </>
   )
 }
 
