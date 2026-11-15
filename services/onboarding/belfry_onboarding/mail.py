@@ -222,8 +222,16 @@ def group_admins(svc: Services, channel: str) -> set[str]:
     if got is None:
         return set()
     relay, sign = got
-    found = relay.query([{"kinds": [39001], "#d": [channel], "limit": 1}], sign)
-    return {t[1] for e in found[:1] for t in e.get("tags", []) if t[0] == "p" and len(t) > 1}
+    found = relay.query(
+        [{"kinds": [39001], "#d": [channel], "limit": 1}, {"kinds": [9000, 9001], "#h": [channel]}],
+        sign,
+    )
+    lists = [e for e in found if e.get("kind") == 39001]
+    out = {t[1] for e in lists[:1] for t in e.get("tags", []) if t[0] == "p" and len(t) > 1}
+    # and whoever was put in with the admin role (co-hosts; zooid's 39001 never lists them)
+    from .checkin import role_admins
+
+    return out | role_admins([e for e in found if e.get("kind") in (9000, 9001)])
 
 
 def inbox_on(svc: Services, channel: str) -> bool:

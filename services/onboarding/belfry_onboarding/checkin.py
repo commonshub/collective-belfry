@@ -1,0 +1,455 @@
+"""Roles in a group, tickets with a QR code, and checking people in (docs/checkin.md).
+
+Xavier, 2026-11-15: a ticket's QR opens the event; the event's admins (host, co-hosts) and its
+stewards check people in, by scanning or from the list.
+
+Roles per group (a channel, a group, an event's ``ev-<d>``):
+
+- ``admin``: the relay's 39001 (the relay owner, the community's admins through zooid patch 0003,
+  the group's creator) plus everyone put in with the admin role: the latest 9000/9001 for that key
+  in the group is a 9000 whose ``p`` tag says ``admin`` (co-host links do this, guests.py). A 9000
+  tagged ``["role", "member"]`` or a 9001 ends it; a ticket's 9000 (no ``role`` tag) does not.
+  zooid itself has no per-group admins (its 39001 never lists them, and it refuses their
+  moderation events), so whatever such an admin does on the relay goes through the belfry, signed
+  by the groups key (events.decide, the check-in below).
+- ``steward``: events only. Kind 1985, ``L`` ``belfry/group-role``, ``l`` ``steward`` (``none``
+  clears it), ``p``, ``h``, ``by``, by the groups key; the latest per ``p`` wins.
+- ``member``: everyone else.
+
+Tickets: everyone holding one (a 9000 with a ``ticket`` tag; on an event with only the implicit
+free ticket, a member's own RSVP "going" counts too) has a code, 16 characters of lowercase
+base32 of HMAC-SHA256(secret, "belfry-ticket:<d>:<pubkey>")[:10]. The QR holds
+``https://chat.<domain>/events/<link>/t/<code>``.
+
+Check-in: kind 1985, ``L`` ``belfry/ticket``, ``l`` ``checked-in`` / ``not-checked-in``, ``p``,
+``h``, ``by``, by the groups key; the latest per ``p`` wins.
+
+API (belfry.<domain>/api/v1/…, NIP-98): ``POST /group-roles``, ``POST /events/<d>/attendees``,
+``POST /events/<d>/checkin``; and new fields in ``GET /events/<link>``'s ``me`` (also sent as
+``viewer``): ``ticket_code``, ``ticket_url``, ``checked_in``, ``roles``, ``may_check_in``.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import re
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
+
+from . import events
+from .core import Services
+
+ROLE_NS = "belfry/group-role"
+TICKET_NS = "belfry/ticket"
+ROLES = ("admin", "steward", "member")
+GROUP_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+HEX = re.compile(r"^[0-9a-f]{64}$")
+CODE_RE = re.compile(r"^[a-z2-7]{16}$")
+PATH = "/api/group-roles"
+
+
+def is_event_group(group: str) -> bool:
+    return group.startswith(("ev-", "ws-"))
+
+
+def groups_pubkey(svc: Services) -> str:
+    """The groups key's pubkey: only its labels count."""
+    key = getattr(getattr(svc, "groups", None), "key", None)
+    return key.public_key_xonly.format().hex() if key is not None else ""
+
+
+def role_admins(found: list[dict[str, Any]]) -> set[str]:
+    """Keys put in GROUP with the admin role and not taken out since (9000/9001 of one group)."""
+    state: dict[str, bool] = {}
+    for e in sorted(found, key=lambda e: (e.get("created_at", 0), e.get("id", ""))):
+        k = e.get("kind")
+        if k not in (9000, 9001):
+            continue
+        for t in e.get("tags", []):
+            if t[:1] != ["p"] or len(t) < 2:
+                continue
+            p = str(t[1])
+            if k == 9001:
+                state[p] = False
+            elif len(t) > 2 and t[2] == "admin":
+                state[p] = True
+            elif events.tag(e, "role") == "member":
+                state[p] = False
+    return {p for p, on in state.items() if on}
+
+
+def latest_labels(found: list[dict[str, Any]], ns: str, signer: str) -> dict[str, tuple[str, int]]:
+    """Per ``p``: the latest label of NS by SIGNER → (value, created_at)."""
+    out: dict[str, tuple[str, int]] = {}
+    for e in sorted(found, key=lambda e: (e.get("created_at", 0), e.get("id", ""))):
+        if e.get("kind") != 1985 or not signer or e.get("pubkey") != signer:
+            continue
+        if events.tag(e, "L") != ns:
+            continue
+        value = next(
+            (t[1] for t in e.get("tags", []) if t[:1] == ["l"] and len(t) > 2 and t[2] == ns),
+            None,
+        )
+        p = events.tag(e, "p")
+        if value and p:
+            out[p] = (str(value), int(e.get("created_at", 0)))
+    return out
+
+
+@dataclass
+class GroupState:
+    group: str
+    relay_admins: set[str]  # 39001
+    creator: str | None
+    by_role: set[str]  # put in with the admin role
+    stewards: set[str]
+    members: set[str]  # 39002, plus anyone whose latest 9000/9001 is a 9000
+    checked: dict[str, int] = field(default_factory=dict)  # pubkey → checked in at
+
+    @property
+    def admins(self) -> set[str]:
+        return self.relay_admins | self.by_role | ({self.creator} if self.creator else set())
+
+
+def group_state(svc: Services, group: str) -> GroupState:
+    found = events.groups(
+        svc,
+        [
+            {"kinds": [39001, 39002], "#d": [group]},
+            {"kinds": [9007, 9000, 9001], "#h": [group]},
+            {"kinds": [1985], "#h": [group], "#L": [ROLE_NS, TICKET_NS]},
+        ],
+    )
+    relay_admins: set[str] = set()
+    listed: set[str] = set()
+    latest_list: dict[int, int] = {}
+    for e in found:
+        k = e.get("kind")
+        if k in (39001, 39002) and events.tag(e, "d") == group:
+            if e.get("created_at", 0) < latest_list.get(k, 0):
+                continue
+            latest_list[k] = e.get("created_at", 0)
+            keys = {str(t[1]) for t in e.get("tags", []) if t[:1] == ["p"] and len(t) > 1}
+            if k == 39001:
+                relay_admins = keys
+            else:
+                listed = keys
+    made = sorted(
+        (e for e in found if e.get("kind") == 9007 and events.tag(e, "h") == group),
+        key=lambda e: e["created_at"],
+    )
+    put: dict[str, bool] = {}
+    for e in sorted(found, key=lambda e: e.get("created_at", 0)):
+        if e.get("kind") in (9000, 9001) and events.tag(e, "h") == group:
+            p = events.tag(e, "p")
+            if p:
+                put[p] = e["kind"] == 9000
+    gk = groups_pubkey(svc)
+    in_group = [e for e in found if events.tag(e, "h") == group]
+    roles = latest_labels(in_group, ROLE_NS, gk)
+    checks = latest_labels(in_group, TICKET_NS, gk)
+    return GroupState(
+        group=group,
+        relay_admins=relay_admins,
+        creator=made[0]["pubkey"] if made else None,
+        by_role=role_admins(in_group),
+        stewards={p for p, (v, _) in roles.items() if v == "steward"}
+        if is_event_group(group)
+        else set(),
+        members=listed | {p for p, on in put.items() if on},
+        checked={p: at for p, (v, at) in checks.items() if v == "checked-in"},
+    )
+
+
+def _belfry_admins(svc: Services) -> set[str]:
+    from . import apps
+
+    try:
+        return set(apps.admin_pubkeys(svc))
+    except Exception:  # noqa: BLE001 — without the list, only the group's own admins
+        return set()
+
+
+def viewer_roles(
+    svc: Services, st: GroupState, pubkey: str, creator: str | None = None
+) -> list[str]:
+    """Of host / cohost / steward. Host = the creator; co-host = any other admin of the group
+    except the community's admins and the relay's own keys (they administer every group)."""
+    creator = creator or st.creator
+    out = []
+    if pubkey == creator:
+        out.append("host")
+    elif pubkey in st.by_role or (
+        pubkey in st.relay_admins
+        and pubkey not in _belfry_admins(svc)
+        and pubkey != groups_pubkey(svc)
+    ):
+        out.append("cohost")
+    if pubkey in st.stewards and not out:
+        out.append("steward")
+    return out
+
+
+def may_check_in(svc: Services, st: GroupState, pubkey: str, creator: str | None = None) -> bool:
+    if not pubkey:
+        return False
+    return (
+        bool(viewer_roles(svc, st, pubkey, creator))
+        or pubkey in st.admins
+        or pubkey in _belfry_admins(svc)
+    )
+
+
+# ── changing a role ─────────────────────────────────────────────────────────────────────────
+def _label(svc: Services, ns: str, value: str, pubkey: str, group: str, caller: str) -> bool:
+    return events.publish(
+        svc,
+        1985,
+        [["L", ns], ["l", value, ns], ["p", pubkey], ["h", group], ["by", caller]],
+    )
+
+
+def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
+    from . import guests
+    from .holder_invites import ApiError
+
+    group = str(data.get("channel") or "").strip()
+    target = str(data.get("pubkey") or "").strip().lower()
+    role = data.get("role")
+    if not GROUP_RE.match(group) or not HEX.match(target) or role not in ROLES:
+        raise ApiError(
+            422, "invalid", 'Send {"channel", "pubkey", "role": "admin" | "steward" | "member"}.'
+        )
+    st = group_state(svc, group)
+    belfry_admins = _belfry_admins(svc)
+    if caller not in st.admins and caller not in belfry_admins:
+        raise ApiError(403, "not_allowed", "Only the group's admins change roles.")
+    if role == "steward" and not is_event_group(group):
+        raise ApiError(409, "events_only", "Stewards are for events.")
+    inside = target in st.members or target in st.admins
+    if not inside and group.startswith("ev-") and events.D_RE.match(group[3:]):
+        ev = events.load(svc, group[3:])
+        if ev is not None:
+            ppl = events.people(svc, ev)
+            inside = target in ppl.holders or ppl.rsvps.get(target) in ("accepted", "tentative")
+    if not inside:
+        raise ApiError(409, "not_in_group", "This person is not in the group.")
+    always = st.relay_admins | ({st.creator} if st.creator else set()) | belfry_admins
+    was_admin = target in st.admins
+    was_steward = target in st.stewards
+    relay_fail = ApiError(503, "relay", "The group could not be reached. Try again.")
+    if role == "admin":
+        if guests._is_agent(svc, target):
+            raise ApiError(409, "agent", "An agent can't be an admin.")
+        if not guests._saved_email(svc, target):
+            raise ApiError(409, "guest_not_saved", "This person has no e-mail address yet.")
+        if not was_admin and not events.publish(
+            svc,
+            9000,
+            [["h", group], ["p", target, "admin"], ["role", "admin"], ["by", caller]],
+        ):
+            raise relay_fail
+        if was_steward and not _label(svc, ROLE_NS, "none", target, group, caller):
+            raise relay_fail
+        return {"role": "admin"}
+    # member or steward
+    if was_admin:
+        if target in always:
+            raise ApiError(409, "always_admin", "The creator and the belfry's admins stay admins.")
+        if not (st.admins - {target}):
+            raise ApiError(409, "last_admin", "A group keeps at least one admin.")
+        if not events.publish(
+            svc,
+            9000,
+            [["h", group], ["p", target, "member"], ["role", "member"], ["by", caller]],
+        ):
+            raise relay_fail
+    if role == "steward" and not was_steward:
+        if not _label(svc, ROLE_NS, "steward", target, group, caller):
+            raise relay_fail
+    if role == "member" and was_steward:
+        if not _label(svc, ROLE_NS, "none", target, group, caller):
+            raise relay_fail
+    return {"role": role}
+
+
+# ── tickets ─────────────────────────────────────────────────────────────────────────────────
+def ticket_code(svc: Services, d: str, pubkey: str) -> str:
+    secret = (svc.settings.pass_page_secret or svc.settings.hook_token or "").encode()
+    mac = hmac.new(secret, f"belfry-ticket:{d}:{pubkey}".encode(), hashlib.sha256).digest()
+    return base64.b32encode(mac[:10]).decode().lower()
+
+
+def ticket_url(svc: Services, ev: events.Event, code: str) -> str:
+    return f"https://chat.{events.domain(svc)}/events/{events.link_of(svc, ev)}/t/{code}"
+
+
+def holders(ev: events.Event, ppl: events.People, tks: list[events.Ticket]) -> dict[str, str]:
+    """Who has a ticket → its ``d``: the 9000s, and on an event with only the implicit free
+    ticket, everyone whose own RSVP says going."""
+    out = dict(ppl.holders)
+    if len(tks) == 1 and tks[0].implicit:
+        for p, s in ppl.rsvps.items():
+            if s == "accepted" and p not in out:
+                out[p] = tks[0].d
+    return out
+
+
+def viewer_fields(
+    svc: Services, ev: events.Event, viewer: str, ppl: events.People
+) -> dict[str, Any]:
+    """The check-in fields of ``GET /events/<link>``'s viewer block."""
+    st = group_state(svc, ev.group)
+    tks = events.tickets(svc, ev)
+    mine = holders(ev, ppl, tks)
+    code = ticket_code(svc, ev.d, viewer) if viewer in mine else None
+    return {
+        "ticket_code": code,
+        "ticket_url": ticket_url(svc, ev, code) if code else None,
+        "checked_in": st.checked.get(viewer) if viewer in mine else None,
+        "roles": viewer_roles(svc, st, viewer, ev.creator),
+        "may_check_in": may_check_in(svc, st, viewer, ev.creator),
+    }
+
+
+def _person(
+    svc: Services,
+    ev: events.Event,
+    st: GroupState,
+    ppl: events.People,
+    tks: dict[str, events.Ticket],
+    pubkey: str,
+    ticket_d: str,
+    name: str,
+) -> dict[str, Any]:
+    t = tks.get(ticket_d)
+    roles = viewer_roles(svc, st, pubkey, ev.creator)
+    return {
+        "pubkey": pubkey,
+        "name": name,
+        "ticket": ticket_d,
+        "ticket_title": t.title if t else "",
+        "rsvp": ppl.rsvps.get(pubkey, "accepted"),
+        "checked_in": st.checked.get(pubkey),
+        "role": roles[0] if roles else "member",
+    }
+
+
+def _check_allowed(svc: Services, ev: events.Event, caller: str) -> GroupState:
+    from .holder_invites import ApiError
+
+    st = group_state(svc, ev.group)
+    if not may_check_in(svc, st, caller, ev.creator):
+        raise ApiError(403, "not_allowed", "Only the event's hosts and stewards check people in.")
+    return st
+
+
+def attendees(svc: Services, ev: events.Event, caller: str) -> dict[str, Any]:
+    st = _check_allowed(svc, ev, caller)
+    ppl = events.people(svc, ev)
+    tks = events.tickets(svc, ev)
+    have = holders(ev, ppl, tks)
+    by_d = {t.d: t for t in tks}
+    names = events.names(svc, sorted(have))
+    people = [_person(svc, ev, st, ppl, by_d, p, d, names.get(p, "")) for p, d in have.items()]
+    people.sort(key=lambda x: ((x["name"] or "~").casefold(), x["pubkey"]))
+    return {
+        "people": people,
+        "going": sum(1 for x in people if x["rsvp"] == "accepted"),
+        "checked_in": sum(1 for x in people if x["checked_in"]),
+    }
+
+
+def checkin(svc: Services, ev: events.Event, caller: str, data: dict[str, Any]) -> dict[str, Any]:
+    from .holder_invites import ApiError
+
+    st = _check_allowed(svc, ev, caller)
+    code = data.get("code")
+    pubkey = data.get("pubkey")
+    undo = data.get("undo") is True
+    if (code is None) == (pubkey is None):
+        raise ApiError(422, "invalid", 'Send {"code"} or {"pubkey"}, and "undo": true to undo.')
+    ppl = events.people(svc, ev)
+    tks = events.tickets(svc, ev)
+    have = holders(ev, ppl, tks)
+    who = None
+    if code is not None:
+        code = str(code).strip().lower()
+        if CODE_RE.match(code):
+            who = next(
+                (p for p in have if hmac.compare_digest(ticket_code(svc, ev.d, p), code)), None
+            )
+    else:
+        p = str(pubkey).strip().lower()
+        who = p if HEX.match(p) and p in have else None
+    if who is None:
+        raise ApiError(404, "no_ticket", "This is not a ticket for this event.")
+    before = st.checked.get(who)
+    already = (before is None) if undo else (before is not None)
+    if not already:
+        value = "not-checked-in" if undo else "checked-in"
+        if not _label(svc, TICKET_NS, value, who, ev.group, caller):
+            raise ApiError(503, "relay", "The event could not be reached. Try again.")
+        if undo:
+            st.checked.pop(who, None)
+        else:
+            st.checked[who] = int(time.time())
+    name = events.names(svc, [who]).get(who, "")
+    person = _person(svc, ev, st, ppl, {t.d: t for t in tks}, who, have[who], name)
+    return {"person": person, "already": already}
+
+
+# ── routes ──────────────────────────────────────────────────────────────────────────────────
+def register(app: FastAPI) -> None:
+    from .holder_invites import ApiError, authenticate
+
+    async def signed(request: Request, path: str) -> tuple[Services, str, dict[str, Any]]:
+        s = request.app.state.services
+        body = await request.body()
+        caller = authenticate(
+            s, request.app.state.api_seen, request.headers.get("authorization"), "POST", path, body
+        )
+        try:
+            data: Any = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_json", "Send a JSON object.")
+        return s, caller, data
+
+    async def event_of(s: Services, d: str) -> events.Event:
+        ev = await run_in_threadpool(events.load, s, d)
+        if ev is None:
+            raise ApiError(404, "not_found", "No such event.")
+        return ev
+
+    @app.post(PATH)
+    async def group_roles(request: Request) -> JSONResponse:
+        s, caller, data = await signed(request, PATH)
+        out = await run_in_threadpool(set_role, s, caller, data)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.post(events.API + "/{d}/attendees")
+    async def event_attendees(request: Request, d: str) -> JSONResponse:
+        s, caller, _data = await signed(request, f"{events.API}/{d}/attendees")
+        ev = await event_of(s, d)
+        out = await run_in_threadpool(attendees, s, ev, caller)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.post(events.API + "/{d}/checkin")
+    async def event_checkin(request: Request, d: str) -> JSONResponse:
+        s, caller, data = await signed(request, f"{events.API}/{d}/checkin")
+        ev = await event_of(s, d)
+        out = await run_in_threadpool(checkin, s, ev, caller, data)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+
+__all__ = ["register", "set_role", "attendees", "checkin", "ticket_code", "group_state"]

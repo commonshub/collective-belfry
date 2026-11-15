@@ -112,3 +112,8 @@ can't be opened the answer has `"member": false` and they stay a saved guest.
 Memberships with an end close like guest passes: the service's hourly round (`core.expire`)
 closes every active pass whose last day has passed, whatever its tier; closing a membership
 takes the person (and their agents) out of their channels.
+
+## Roles in one channel, group or event
+
+These roles are the belfry-wide ones. A person also has a role in each group they are in
+(admin, member, and for events steward), set with `POST /api/v1/group-roles`: see `checkin.md`.

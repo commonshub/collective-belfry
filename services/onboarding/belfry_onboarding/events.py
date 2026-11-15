@@ -315,8 +315,14 @@ def _when(value: str | None, all_day: bool) -> dt.datetime | dt.date | None:
 
 def hosts_of(svc: Services, group: str) -> tuple[set[str], str | None]:
     """The group's admins (39001), and its creator (the author of its 9007), when known."""
+    from .checkin import role_admins
+
     found = groups(
-        svc, [{"kinds": [39001], "#d": [group], "limit": 1}, {"kinds": [9007], "#h": [group]}]
+        svc,
+        [
+            {"kinds": [39001], "#d": [group], "limit": 1},
+            {"kinds": [9007, 9000, 9001], "#h": [group]},
+        ],
     )
     admins = {
         t[1]
@@ -325,6 +331,8 @@ def hosts_of(svc: Services, group: str) -> tuple[set[str], str | None]:
         for t in e.get("tags", [])
         if t[:1] == ["p"] and len(t) > 1
     }
+    # co-hosts: put in with the admin role (zooid's 39001 never lists them; checkin.py)
+    admins |= role_admins([e for e in found if tag(e, "h") == group])
     made = sorted((e for e in found if e.get("kind") == 9007), key=lambda e: e["created_at"])
     return admins, (made[0]["pubkey"] if made else None)
 
@@ -629,6 +637,9 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
             "rsvp": ppl.rsvps.get(viewer),
             "member": is_member(svc, viewer),
         }
+        from .checkin import viewer_fields
+
+        me.update(viewer_fields(svc, ev, viewer, ppl))
     return {
         "d": ev.d,
         "coord": ev.coord,
@@ -654,6 +665,7 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         "going": ppl.going(),
         "community": _community_name(),
         "me": me,
+        "viewer": me,  # the same block, under the name docs/checkin.md uses
     }
 
 
