@@ -49,7 +49,7 @@ from .core import Services
 
 ROLE_NS = "belfry/group-role"
 TICKET_NS = "belfry/ticket"
-ROLES = ("admin", "steward", "member")
+ROLES = ("admin", "steward", "member", "removed")
 GROUP_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
 HEX = re.compile(r"^[0-9a-f]{64}$")
 CODE_RE = re.compile(r"^[a-z2-7]{16}$")
@@ -226,7 +226,9 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
     role = data.get("role")
     if not GROUP_RE.match(group) or not HEX.match(target) or role not in ROLES:
         raise ApiError(
-            422, "invalid", 'Send {"channel", "pubkey", "role": "admin" | "steward" | "member"}.'
+            422,
+            "invalid",
+            'Send {"channel", "pubkey", "role": "admin" | "steward" | "member" | "removed"}.',
         )
     st = group_state(svc, group)
     belfry_admins = _belfry_admins(svc)
@@ -260,6 +262,18 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         if was_steward and not _label(svc, ROLE_NS, "none", target, group, caller):
             raise relay_fail
         return {"role": "admin"}
+    if role == "removed":
+        # out of the group (a 9001 by the groups key; for an event that also takes the ticket
+        # back, as a host's removal does): co-hosts can't publish a 9001 on the relay themselves
+        if target in always:
+            raise ApiError(409, "always_admin", "The creator and the belfry's admins stay admins.")
+        if was_admin and not (st.admins - {target}):
+            raise ApiError(409, "last_admin", "A group keeps at least one admin.")
+        if not events.publish(svc, 9001, [["h", group], ["p", target], ["by", caller]]):
+            raise relay_fail
+        if was_steward and not _label(svc, ROLE_NS, "none", target, group, caller):
+            raise relay_fail
+        return {"role": "removed"}
     # member or steward
     if was_admin:
         if target in always:
@@ -279,6 +293,84 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         if not _label(svc, ROLE_NS, "none", target, group, caller):
             raise relay_fail
     return {"role": role}
+
+
+# ── a group's name and description, by any of its admins ────────────────────────────────
+META_PATH = "/api/group-meta"
+FLAGS = ("closed", "open", "private", "public", "hidden", "restricted")
+
+
+def current_meta(svc: Services, group: str) -> list[list[str]] | None:
+    """The group's metadata as the relay has it (its latest 39000), as 9002 tags (no ``h``)."""
+    found = [
+        e
+        for e in events.groups(svc, [{"kinds": [39000], "#d": [group]}])
+        if e.get("kind") == 39000 and events.tag(e, "d") == group
+    ]
+    if not found:
+        return None
+    latest = max(found, key=lambda e: e.get("created_at", 0))
+    return [list(map(str, t)) for t in latest.get("tags", []) if t and t[0] not in ("d", "-")]
+
+
+def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
+    """``{"channel", "name"?, "about"?, "picture"?, "closed"?, "prompt"?, "vouches"?}``: a new
+    9002 by the groups key with every other tag of the current metadata kept (zooid replaces the
+    whole metadata with each 9002). For admins by role, whose own 9002 the relay refuses."""
+    from .holder_invites import ApiError
+
+    group = str(data.get("channel") or "").strip()
+    if not GROUP_RE.match(group):
+        raise ApiError(422, "invalid", 'Send {"channel", "name"?, "about"?}.')
+    st = group_state(svc, group)
+    if caller not in st.admins and caller not in _belfry_admins(svc):
+        raise ApiError(403, "not_allowed", "Only the group's admins change it.")
+    tags = current_meta(svc, group)
+    if tags is None:
+        raise ApiError(404, "not_found", "No such group.")
+
+    def put(name: str, value: str | None) -> None:
+        nonlocal tags
+        tags = [t for t in tags if t[0] != name]
+        if value:
+            tags.append([name, value])
+
+    if "name" in data:
+        name = " ".join(str(data["name"] or "").split())[:100]
+        if not name:
+            raise ApiError(422, "invalid", "A name, please.")
+        put("name", name)
+    if "about" in data:
+        put("about", str(data["about"] or "")[:2000])
+    if "picture" in data:
+        pic = str(data["picture"] or "")
+        if pic and not pic.startswith("https://"):
+            raise ApiError(422, "invalid", "picture: an https:// URL.")
+        put("picture", pic[:500])
+    if "closed" in data:
+        if not isinstance(data["closed"], bool):
+            raise ApiError(422, "invalid", "closed: true or false.")
+        tags = [t for t in tags if t[0] not in ("closed", "open")]
+        tags.append(["closed"] if data["closed"] else ["open"])
+    if "prompt" in data:
+        put("prompt", str(data["prompt"] or "")[:500])
+    if "vouches" in data:
+        try:
+            n = int(data["vouches"] or 0)
+        except (TypeError, ValueError):
+            n = -1
+        if not 0 <= n <= 5:
+            raise ApiError(422, "invalid", "vouches: 0 to 5.")
+        put("vouches", str(n) if n else None)
+    if not events.publish(svc, 9002, [["h", group], *tags]):
+        raise ApiError(503, "relay", "The group could not be reached. Try again.")
+    meta = {t[0]: (t[1] if len(t) > 1 else True) for t in tags}
+    return {
+        "channel": group,
+        "name": meta.get("name", ""),
+        "about": meta.get("about", ""),
+        "closed": "closed" in meta,
+    }
 
 
 # ── tickets ─────────────────────────────────────────────────────────────────────────────────
@@ -393,6 +485,10 @@ def checkin(svc: Services, ev: events.Event, caller: str, data: dict[str, Any]) 
     if who is None:
         raise ApiError(404, "no_ticket", "This is not a ticket for this event.")
     before = st.checked.get(who)
+    if data.get("peek") is True:  # who it is and where they stand, nothing recorded
+        name = events.names(svc, [who]).get(who, "")
+        person = _person(svc, ev, st, ppl, {t.d: t for t in tks}, who, have[who], name)
+        return {"person": person, "already": before is not None}
     already = (before is None) if undo else (before is not None)
     if not already:
         value = "not-checked-in" if undo else "checked-in"
@@ -437,6 +533,12 @@ def register(app: FastAPI) -> None:
         out = await run_in_threadpool(set_role, s, caller, data)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
+    @app.post(META_PATH)
+    async def group_meta(request: Request) -> JSONResponse:
+        s, caller, data = await signed(request, META_PATH)
+        out = await run_in_threadpool(set_meta, s, caller, data)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
     @app.post(events.API + "/{d}/attendees")
     async def event_attendees(request: Request, d: str) -> JSONResponse:
         s, caller, _data = await signed(request, f"{events.API}/{d}/attendees")
@@ -452,4 +554,4 @@ def register(app: FastAPI) -> None:
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
-__all__ = ["register", "set_role", "attendees", "checkin", "ticket_code", "group_state"]
+__all__ = ["register", "set_role", "set_meta", "attendees", "checkin", "ticket_code", "group_state"]

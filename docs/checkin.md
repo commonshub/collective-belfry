@@ -50,12 +50,42 @@ by an admin of the group or a belfry admin → `{"role": "<now>"}`.
   steward label is cleared;
 - steward: (demoted first when an admin) the steward label.
 
+- removed (`"role": "removed"`): a 9001 by the groups key `["h", g] ["p", key] ["by", caller]`
+  (for an event this also takes the ticket back, as a host's removal does), a steward label
+  cleared. `always_admin` for the creator, the community's admins and the relay's keys;
+  `last_admin` when the person is the last admin. Answer `{"role": "removed"}`. Admins by role
+  can't publish a 9001 on the relay themselves: clients use this call (and the direct 9001 only
+  when the belfry answers 404 without an error code, i.e. it predates this call).
+
 Errors: 403 `not_allowed`; 409 `not_in_group` (not in the group's 39002 / latest 9000, holds no
 ticket and has no RSVP for the event); 409 `last_admin`; 409 `guest_not_saved` (an admin needs an
 account with an e-mail); 409 `agent`; 409 `events_only` (steward outside `ev-` / `ws-`); **409
 `always_admin`** (added: the group's creator, the community's admins and the relay's own keys are
 admins of the group by the relay itself and can't be made member or steward); 422 `invalid`;
 503 `relay`.
+
+### A group's name and description: `POST /group-meta`
+
+zooid also refuses a 9002 (edit metadata) from an admin by role (checked with a Go test against
+the pinned zooid). And each 9002 *replaces* the whole metadata (its 39000), so a 9002 with only a
+name drops `closed`, `prompt`, `vouches`, `picture`.
+
+`POST /group-meta {"channel", "name"?, "about"?, "picture"?, "closed"?, "prompt"?, "vouches"?}` by
+an admin of the group (any kind, including by role) or a belfry admin. The server takes the
+group's current metadata (the relay's latest 39000, without `d`), replaces only the fields sent
+(`name` 1–100 characters, `about` up to 2000, `picture` an https:// URL or "" to remove,
+`closed` true/false → `closed` / `open`, `prompt` "" to remove, `vouches` 0–5, 0 removes) and
+publishes it as a 9002 by the groups key. Answer `{"channel", "name", "about", "closed"}`.
+Errors: 403 `not_allowed`, 404 `not_found` (no metadata), 422 `invalid`, 503 `relay`.
+
+Clients publish their own 9002 when they can (the relay's 39001, the creator, a community admin)
+and use this call otherwise: the web chat's channel / group settings, an event's edit (name,
+cover) and its tickets (closing the group when a ticket needs an application).
+
+Also through the belfry for admins by role on the web: approving / declining an event's
+applications (`/events/<d>/decide`, existing) and "Make co-host" (`/group-roles`). Not covered:
+accepting someone into a closed group (pod) by an admin by role: the web hides Accept / Decline
+for them (they can still vouch); the relay-level admins accept.
 
 ## 2. Tickets and their QR
 
@@ -89,6 +119,8 @@ take it as a universal / app link (`/events/*` is already in apple-app-site-asso
   `{"person": {…}, "already": bool}`. `already` = it was in that state (then `checked_in` is the
   time of the first check-in). Errors: 404 `no_ticket` (also for another event's code or a code
   of the wrong shape), 403 `not_allowed`, 422 `invalid`, 503 `relay`.
+- `"peek": true` (with a code or a pubkey): who it is and whether they are in
+  (`already` = checked in), nothing recorded. For the card a ticket URL opens.
 - Recorded as kind 1985 by the groups key in the group: `["L","belfry/ticket"]`,
   `["l","checked-in"|"not-checked-in","belfry/ticket"]`, `["p", key]`, `["h","ev-<d>"]`,
   `["by", caller]`. The latest per `p` wins; only the groups key's labels count.
@@ -130,14 +162,16 @@ the belfry agent's workspace (58 checks, including a fake camera showing a ticke
   "N of M checked in", a search field, the ticket holders (name, ticket type, "in at", a check);
   tap → check in (locks), tap a checked one → "Undo check-in?". The list follows the relay's
   labels live, so every checker's phone updates.
-- **A ticket URL** (`chat.<domain>/events/<link>/t/<code>`): for those who may check in, the check-in
-  is done at once and a card says how it went (with Undo); the code leaves the address at once
+- **A ticket URL** (`chat.<domain>/events/<link>/t/<code>`): for those who may check in, a card
+  (asked with `peek`) shows the person, their ticket and whether they are in, with a "Check in"
+  button (locks while it runs; then green with Undo). Nothing happens by itself: a link can be
+  opened by accident or by a link preview. The check-in screen's camera still checks in at once; the code leaves the address at once
   (`location.replace`), never shows on screen. Signed in without the right: the event only. Not
   signed in: `https://<domain>/events/<link>`.
 - **Profiles.** Opened from a group (`#/u/<npub>/in/<group>`): "In <group>" with the role there,
   a radio list for that group's admins and the belfry's (Member / Admin, or Attendee / Co-host /
   Steward for an event; the creator is "Host", read only) and "Remove from <group>" (a 9001,
-  confirmed). The belfry-wide "Role in <community>" now shows to members too (read only); admins
+  confirmed, through `/group-roles` "removed"). The belfry-wide "Role in <community>" now shows to members too (read only); admins
   get the picker and "Edit roles…" (→ Belfry settings → Roles).
 - **People lists.** Channel members have no label chips any more: face, name, the role (or guest /
   place) as the second line; tap → the profile with that channel. The Members screen has an
@@ -147,7 +181,5 @@ the belfry agent's workspace (58 checks, including a fake camera showing a ticke
 
 ## Open
 
-- Removing someone from a group from a co-host's profile publishes the 9001 as the co-host, which
-  zooid refuses (co-hosts are not relay admins); it should go through the belfry like decisions.
 - A zooid patch (0005) letting per-group admins moderate on the relay and listing them in 39001
   would make clients that only read 39001 see co-hosts too. Not done: a relay rebuild on every box.

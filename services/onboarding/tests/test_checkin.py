@@ -289,3 +289,134 @@ def test_attendees_and_check_in(rsvc, cw, monkeypatch):
             ],
         )
         assert call(c, ada, "POST", f"/{D}/attendees", {}).json()["checked_in"] == 1
+
+
+def test_removed_by_a_co_host_through_the_belfry(rsvc, cw):
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    cy = member(rsvc, "cy@belfry.test", "Cy")
+    dan = member(rsvc, "dan@belfry.test", "Dan")
+    make_event(cw, ada)
+    ticket(cw, ada, "std", "Standard")
+    hold(cw, cy)
+    hold(cw, dan)
+    cw.put(cw.gkey, 9000, [["h", GROUP], ["p", pk(bea), "admin"]])  # Bea co-hosts by role
+    cw.put(
+        cw.gkey,
+        1985,
+        [
+            ["L", "belfry/group-role"],
+            ["l", "steward", "belfry/group-role"],
+            ["p", pk(dan)],
+            ["h", GROUP],
+        ],
+    )
+    with TestClient(create_app(rsvc)) as c:
+        r = roles_post(c, cy, {"channel": GROUP, "pubkey": pk(dan), "role": "removed"})
+        assert r.status_code == 403 and r.json()["error"] == "not_allowed"
+        r = roles_post(c, bea, {"channel": GROUP, "pubkey": pk(dan), "role": "removed"})
+        assert r.json() == {"role": "removed"}
+        out = [e for e in cw.grp.events if e["kind"] == 9001][-1]
+        assert out["pubkey"] == pk(cw.gkey)
+        assert ["p", pk(dan)] in out["tags"] and ["by", pk(bea)] in out["tags"]
+        assert ["l", "none", "belfry/group-role"] in cw.grp.events[-1]["tags"]
+        assert pk(dan) not in events.people(rsvc, events.load(rsvc, D)).holders  # ticket back
+        # the creator stays
+        r = roles_post(c, bea, {"channel": GROUP, "pubkey": pk(ada), "role": "removed"})
+        assert r.status_code == 409 and r.json()["error"] == "always_admin"
+        # a co-host by role can be removed too (another admin is left)
+        r = roles_post(c, ada, {"channel": GROUP, "pubkey": pk(bea), "role": "removed"})
+        assert r.json() == {"role": "removed"}
+        assert pk(bea) not in events.load(rsvc, D).hosts
+    # the last admin of an old group can't be removed
+    cw.put(cw.gkey, 9000, [["h", "old"], ["p", pk(cy), "admin"]])
+    cw.belfry_admins = {pk(ada)}
+    with TestClient(create_app(rsvc)) as c:
+        r = roles_post(c, ada, {"channel": "old", "pubkey": pk(cy), "role": "removed"})
+        assert r.status_code == 409 and r.json()["error"] == "last_admin"
+
+
+def meta_post(c, key, data):
+    body = json.dumps(data).encode()
+    time.sleep(1.05)
+    url = "https://belfry.belfry.test/api/v1/group-meta"
+    return c.post(
+        "/api/v1/group-meta",
+        content=body,
+        headers={**HOST, "Authorization": nip98(key, url, "POST", body)},
+    )
+
+
+def test_group_meta_keeps_the_other_tags(rsvc, cw):
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    cy = member(rsvc, "cy@belfry.test", "Cy")
+    cw.put(ada, 9007, [["h", "pod-garden"]])
+    cw.put(
+        cw.gkey,
+        39000,
+        [
+            ["d", "pod-garden"],
+            ["name", "Garden"],
+            ["about", "Old"],
+            ["picture", "https://x.test/p.jpg"],
+            ["closed"],
+            ["prompt", "Why?"],
+            ["vouches", "2"],
+        ],
+    )
+    cw.put(cw.gkey, 9000, [["h", "pod-garden"], ["p", pk(bea), "admin"]])
+    cw.put(cw.gkey, 9000, [["h", "pod-garden"], ["p", pk(cy)]])
+    with TestClient(create_app(rsvc)) as c:
+        r = meta_post(c, cy, {"channel": "pod-garden", "name": "x"})
+        assert r.status_code == 403 and r.json()["error"] == "not_allowed"
+        r = meta_post(c, bea, {"channel": "pod-garden", "name": "  Roof   garden ", "about": "New"})
+        assert r.status_code == 200, r.text
+        assert r.json() == {
+            "channel": "pod-garden",
+            "name": "Roof garden",
+            "about": "New",
+            "closed": True,
+        }
+        e = cw.grp.events[-1]
+        assert e["kind"] == 9002 and e["pubkey"] == pk(cw.gkey)
+        for t in (
+            ["h", "pod-garden"],
+            ["name", "Roof garden"],
+            ["about", "New"],
+            ["picture", "https://x.test/p.jpg"],
+            ["closed"],
+            ["prompt", "Why?"],
+            ["vouches", "2"],
+        ):
+            assert t in e["tags"], t
+        assert not any(t[0] == "d" for t in e["tags"])
+        r = meta_post(c, bea, {"channel": "pod-garden", "closed": False, "vouches": 0})
+        tags = cw.grp.events[-1]["tags"]
+        assert ["open"] in tags and ["closed"] not in tags
+        assert not any(t[0] == "vouches" for t in tags)
+        assert meta_post(c, bea, {"channel": "pod-garden", "name": ""}).status_code == 422
+        assert meta_post(c, bea, {"channel": "nope", "name": "x"}).status_code in (403, 404)
+        assert (
+            meta_post(c, bea, {"channel": "pod-garden", "picture": "http://x"}).status_code == 422
+        )
+
+
+def test_peek_records_nothing(rsvc, cw):
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    make_event(cw, ada)
+    ticket(cw, ada, "std", "Standard")
+    hold(cw, bea)
+    code = checkin.ticket_code(rsvc, D, pk(bea))
+    with TestClient(create_app(rsvc)) as c:
+        n = len(cw.grp.events)
+        r = call(c, ada, "POST", f"/{D}/checkin", {"code": code, "peek": True}).json()
+        assert r["already"] is False and r["person"]["pubkey"] == pk(bea)
+        assert r["person"]["ticket_title"] == "Standard" and r["person"]["checked_in"] is None
+        assert len(cw.grp.events) == n
+        call(c, ada, "POST", f"/{D}/checkin", {"code": code})
+        r = call(c, ada, "POST", f"/{D}/checkin", {"code": code, "peek": True}).json()
+        assert r["already"] is True and r["person"]["checked_in"]
+        bad = call(c, ada, "POST", f"/{D}/checkin", {"code": "a" * 16, "peek": True})
+        assert bad.status_code == 404 and bad.json()["error"] == "no_ticket"
