@@ -517,13 +517,14 @@ def to_channel(
     body = text_of(msg)[:8000]
     text = "\n\n".join(x for x in (f"**{subject}**" if subject else "", body) if x)
     files = [f for f in attachments(msg) if len(f[2]) <= 20_000_000]
-    imeta = drops.upload(svc, files) if files else []
-    if not text and not imeta:
+    imeta, refused = _files(svc, files) if files else ([], [])
+    text += _refused_note(refused)
+    if not text.strip() and not imeta:
         raise MailError(550, "5.6.0 This mail is empty.")
     if community.member_signer(svc, member["partner"]) is None:
         text = f"✉️ From {member['name']}\n\n{text}"  # their own key: posted by the belfry
     # the whole e-mail, encrypted on Blossom; the key travels in the (members-only) message
-    extra = [["subject", subject[:300]], _original(svc, raw)]
+    extra = [["subject", subject[:300]], *_original(svc, raw)]
     try:
         drops.post(svc, channel, text, imeta + extra, member["partner"], client="belfry-mail")
     except Exception as exc:  # noqa: BLE001 — the relay refuses non-members of closed channels
@@ -531,9 +532,37 @@ def to_channel(
         raise MailError(550, f"5.7.1 You cannot post in {channel}.") from exc
 
 
-def _original(svc: Services, raw: bytes) -> list[str]:
-    found = {t[0]: t[1] for t in store_large(svc, raw)}
-    return ["mail-original", found["url"], found["decryption-key"], found["decryption-nonce"]]
+def _original(svc: Services, raw: bytes) -> list[list[str]]:
+    """The whole e-mail, encrypted on Blossom: a ``mail-original`` tag, or none when it could not
+    be stored (the mail itself still goes in; #issues 2026-11-15, potluck@ lost a mail on a 415)."""
+    try:
+        found = {t[0]: t[1] for t in store_large(svc, raw)}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mail: the original could not be kept: %r", exc)
+        return []
+    return [["mail-original", found["url"], found["decryption-key"], found["decryption-nonce"]]]
+
+
+def _files(svc: Services, files: list[tuple[str, str, bytes]]) -> tuple[list[list[str]], list[str]]:
+    """Each attachment on Blossom, one by one: (their imeta tags, the names it refused)."""
+    tags: list[list[str]] = []
+    refused: list[str] = []
+    for f in files:
+        try:
+            tags += drops.upload(svc, [f])
+        except Exception as exc:  # noqa: BLE001 — a type it does not take, too large
+            log.info("mail: attachment %r not kept: %r", f[0], exc)
+            refused.append(f[0] or "an attachment")
+    return tags, refused
+
+
+def _refused_note(refused: list[str]) -> str:
+    return (
+        f"\n\n_(Not kept: {', '.join(refused)}. "
+        "Only pictures, sound, video, PDF and text files are.)_"
+        if refused
+        else ""
+    )
 
 
 def to_inbox(
@@ -545,11 +574,13 @@ def to_inbox(
     body = text_of(msg)[:8000]
     name = email.utils.parseaddr(str(msg["From"] or ""))[0].strip()
     files = [f for f in attachments(msg) if len(f[2]) <= 20_000_000]
-    imeta = drops.upload(svc, files) if files else []
-    text = "\n\n".join(x for x in (f"**{subject}**" if subject else "", body) if x)
+    imeta, refused = _files(svc, files) if files else ([], [])
+    text = "\n\n".join(x for x in (f"**{subject}**" if subject else "", body) if x) + _refused_note(
+        refused
+    )
     extra = [
         ["subject", subject[:300]],
-        _original(svc, raw),
+        *_original(svc, raw),
         ["mail-from", sender],
         ["mail-name", name[:100]],
         ["message-id", str(msg["Message-ID"] or "").strip()[:300]],

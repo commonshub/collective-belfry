@@ -75,9 +75,13 @@ def test_who_an_address_is(m):
 
 def test_a_channel_answers_to_its_plain_slug(m, monkeypatch):
     """bugs@ reaches bugs-c3e5 (Xavier, 2026-11-12); two channels answering to it: neither."""
-    chans = [("bugs-c3e5", "bugs"), ("feature-requests-d803", "feature-requests"),
-             ("Garden Talk".lower().replace(" ", "-") + "-a1b2", "Garden Talk"),
-             ("twin-1111", "twin"), ("twin-2222", "Twin")]
+    chans = [
+        ("bugs-c3e5", "bugs"),
+        ("feature-requests-d803", "feature-requests"),
+        ("Garden Talk".lower().replace(" ", "-") + "-a1b2", "Garden Talk"),
+        ("twin-1111", "twin"),
+        ("twin-2222", "Twin"),
+    ]
     monkeypatch.setattr(mail, "_top_channels", lambda svc: chans)
     assert mail.resolve(m, "bugs@belfry.test") == {"kind": "channel", "channel": "bugs-c3e5"}
     assert mail.resolve(m, "Feature-Requests@belfry.test")["channel"] == "feature-requests-d803"
@@ -159,6 +163,18 @@ def test_channel_mail_only_from_members_who_prove_it(m, monkeypatch):
     assert found["subject"] == ["Seeds"]
     url, key, nonce = found["mail-original"]
     assert url == "https://blossom.belfry.test/abc" and len(base64.b64decode(key)) == 32
+
+    # Blossom refusing the original (a 415) loses only the "Full e-mail" link, not the mail
+    # (#issues 2026-11-15: potluck@belfry.sh)
+    def refuse(svc, files):
+        raise RuntimeError("Blossom refused : 415")
+
+    monkeypatch.setattr(drops, "upload", refuse)
+    posted.clear()
+    code, _ = mail.deliver(m, message(frm="Ana <ana@x.org>", subject="Potluck"), *args)
+    assert code == 250
+    [(ch, text, partner, client, tags)] = posted
+    assert text.startswith("**Potluck**") and not any(t[0] == "mail-original" for t in tags)
 
 
 def test_dkim_aligned_with_from_marks_mail_verified():

@@ -34,6 +34,11 @@ storage:
       expiration: 1 year
     - type: "text/markdown"
       expiration: 1 year
+    # e-mail kept whole for "Full e-mail" and large DMs (Nostr Mail large MIME): AES-GCM blobs the
+    # belfry encrypts itself (mail.store_large, the chat's dm.ts). Refused before, which lost mail
+    # to channels (#issues 2026-11-15, potluck@).
+    - type: "application/octet-stream"
+      expiration: 1 year
     # websites published as nsites (NIP-5A; services/onboarding/belfry_onboarding/homepage.py):
     # kept for years, since the homepage serves them from its own cache and rarely reads them here.
     # The blob host serves everything sandboxed (proxy/Caddyfile), so HTML here runs nowhere.
