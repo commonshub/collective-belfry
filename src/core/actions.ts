@@ -2,9 +2,10 @@ import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, groups } from './model'
 import { enqueue, me, newId } from './sync'
 import { reading } from './guestmode'
+import { isAdmin } from './access'
 
 // Every user action is one or more nostr events queued in the outbox.
 
@@ -13,7 +14,23 @@ export function slug(name: string) {
   return s || 'channel-' + newId(3)
 }
 
-export async function createChannel(name: string, about: string, id = slug(name) + '-' + newId(2)) {
+/** 4 random letters or digits: the end of an address that isn't an admin's (#issues 2026-11-15). */
+export function randomEnd(): string {
+  const ALPHA = 'abcdefghijklmnopqrstuvwxyz0123456789'
+  return [...crypto.getRandomValues(new Uint8Array(4))].map((b) => ALPHA[b % 36]).join('')
+}
+/** May I pick an address (a channel's, a group's, a proposal's, an event's)? The belfry's admins
+ *  only; everyone else's gets 4 random characters at the end, so nobody squats a name. */
+export const mayPickAddress = () => isAdmin()
+/** A new id from NAME: the plain slug for an admin (with an end only if it is taken), with a
+ *  random end for anyone else. */
+export function addressFor(name: string, prefix = '', chosen = ''): string {
+  const base = prefix + (chosen ? slug(chosen) : slug(name)).slice(0, prefix ? 24 : 32)
+  if (!mayPickAddress()) return base + '-' + randomEnd()
+  return groups().some((g) => g.id === base) ? base + '-' + randomEnd() : base
+}
+
+export async function createChannel(name: string, about: string, id = addressFor(name)) {
   await enqueue('groups', { kind: 9007, tags: [['h', id]] })
   await enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })
   return id
@@ -33,7 +50,7 @@ const accessTags = (a: PodAccess) => [a.closed ? ['closed'] : ['open'], ...(a.cl
  *  own NIP-29 group, announced in its parent (channel or group), which is what links the two.
  *  Groups nest: a group can hold groups. Whoever creates it is its admin. */
 export async function createPod(name: string, about: string, parent = 'general', access: PodAccess = { closed: false, prompt: '' }) {
-  const id = 'pod-' + slug(name).slice(0, 24) + '-' + newId(2)
+  const id = addressFor(name, 'pod-')
   await enqueue('groups', { kind: 9007, tags: [['h', id]] })
   await enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
   await enqueue('groups', {
@@ -272,7 +289,7 @@ const proposalTags = (d: string, groupId: string, n: NewProposal, version: numbe
  *  the parent channel or pod. */
 export async function createProposal(n: NewProposal, parent = 'general') {
   const x = newId(3)
-  const groupId = 'prop-' + slug(n.title).slice(0, 24) + '-' + x
+  const groupId = addressFor(n.title, 'prop-')
   const d = 'proposal-' + x
   await createChannel(n.title, n.summary || 'Proposal', groupId)
   await enqueue('main', { kind: 30023, content: n.text, tags: proposalTags(d, groupId, n, 1, n.status) })

@@ -4,7 +4,7 @@ import { address, unreadTotal } from '../core/dm'
 import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { addTask, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
+import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
 import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
@@ -290,15 +290,21 @@ function NewThreadSheet({ groupId, onClose, onSent }: { groupId: string; onClose
 }
 
 function NewChannel({ onClose }: { onClose: () => void }) {
-  const [d, setD, clearDraft] = useFormDraft('channel', () => ({ name: '', about: '' }))
+  const [d, setD, clearDraft] = useFormDraft('channel', () => ({ name: '', about: '', address: '' }))
   const { name, about } = d
   const setName = (v: string) => setD((x) => ({ ...x, name: v }))
   const setAbout = (v: string) => setD((x) => ({ ...x, about: v }))
+  // its address (the channel's id, its mail and page): the belfry's admins pick it; anyone else's
+  // ends in 4 random characters (#issues 2026-11-15)
+  const pick = mayPickAddress()
+  const address = slug(d.address || name || 'channel')
+  const taken = pick && !!d.address && groups().some((g) => g.id === address)
   return (
     <Sheet title="New channel" onClose={onClose}>
       <Form onSubmit={async (e) => {
         e.preventDefault()
-        const id = await createChannel(name.trim(), about.trim())
+        if (taken) return
+        const id = await createChannel(name.trim(), about.trim(), addressFor(name.trim(), '', pick ? d.address : ''))
         clearDraft()
         onClose()
         go('c/' + id)
@@ -307,6 +313,11 @@ function NewChannel({ onClose }: { onClose: () => void }) {
           <input className="input" autoFocus placeholder="e.g. rust-hackers" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Description</span>
           <textarea className="input" rows={3} placeholder="What is this channel about?" value={about} onChange={(e) => setAbout(e.target.value)} /></label>
+        {pick ? <label className="field"><span>Address · its mail is {address}@{BELFRY.domain}</span>
+          <input className="input" aria-label="Channel address" placeholder={slug(name || 'channel')} value={d.address} autoCapitalize="none" spellCheck={false}
+            onChange={(e) => setD((x) => ({ ...x, address: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))} /></label>
+          : name.trim() && <p className="hint">Its address will be {slug(name)}-····, with 4 random characters (the belfry's admins choose plain ones).</p>}
+        {taken && <p className="error">#{address} exists already: pick another address.</p>}
         <p className="hint">🔒 New channels are for members only. Its admins can make it public later, in its settings.</p>
         <button className="btn" disabled={!name.trim()}>Create channel</button>
       </Form>

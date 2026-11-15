@@ -5,7 +5,7 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
-import { setInbox, setVisibility, setWebPage } from '../core/actions'
+import { mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
 import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
@@ -148,7 +148,7 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState<{ closed: boolean; prompt: string; vouches?: number }>({ closed: !!g?.closed, prompt: g?.prompt ?? '', vouches: g?.vouches ?? 0 })
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
-  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: slugify(g?.name ?? ''), visibility: 'members' })
+  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.name ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   const [moving, setMoving] = useState<ChannelVisibility | null>(null)
   if (!g) return null
@@ -198,8 +198,9 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
               <div className="web-page-fields">
                 <label className="field"><span>Address</span>
                   <span className="row" style={{ gap: 6, alignItems: 'center' }}><span className="hint" style={{ whiteSpace: 'nowrap' }}>{BELFRY.domain}/</span>
-                    <input className="input" aria-label="Page address" value={web.slug} onChange={(e) => { setWebError(''); setWeb({ ...web, slug: e.target.value.toLowerCase() }) }} /></span>
+                    <input className="input" aria-label="Page address" value={web.slug} readOnly={!mayPickAddress()} onChange={(e) => { setWebError(''); setWeb({ ...web, slug: e.target.value.toLowerCase() }) }} /></span>
                 </label>
+                {!mayPickAddress() && <p className="hint">The channel's own address: the belfry's admins choose plain ones.</p>}
                 {webError && <p className="error">{webError}</p>}
               </div>
             )}

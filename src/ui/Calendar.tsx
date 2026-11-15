@@ -2,7 +2,7 @@
 // work/events-design/PROTOCOL.md). The event's own screen is in Events.tsx.
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, THEME } from '../config'
-import { jitsiLink } from '../core/actions'
+import { jitsiLink, mayPickAddress, randomEnd } from '../core/actions'
 import { calendar, eventByCoord, eventLink, groups, type CalEvent, type Rsvp, type Visibility } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -180,7 +180,11 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
   const [error, setError] = useState('')
   const asked = useRef(0)
   // the custom URL: from the title until edited; checked as it is typed
-  useEffect(() => { if (!slugEdited && !edit) set({ slug: slugOf(n.title) }) }, [n.title]) // eslint-disable-line react-hooks/exhaustive-deps
+  // only the belfry's admins pick an event's address; anyone else's ends in 4 random characters
+  // (#issues 2026-11-15: no name squatting)
+  const pick = mayPickAddress()
+  const [slugEnd] = useState(randomEnd)
+  useEffect(() => { if (!slugEdited && !edit) set({ slug: pick ? slugOf(n.title) : (slugOf(n.title).slice(0, 35) || 'event') + '-' + slugEnd }) }, [n.title]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     const s = n.slug
     if (!s || (edit && s === edit.slug)) { setSlugState({}); return }
@@ -265,8 +269,9 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
         </div>
         <label className="field"><span>URL</span>
           <div className="url-field"><span className="pre">/events/</span>
-            <input className="input" value={n.slug} placeholder={edit?.d ?? 'garden-day'} maxLength={40} autoCapitalize="none" autoCorrect="off" spellCheck={false}
+            <input className="input" value={n.slug} placeholder={edit?.d ?? 'garden-day'} maxLength={40} autoCapitalize="none" autoCorrect="off" spellCheck={false} readOnly={!pick}
               onChange={(e) => { setSlugEdited(true); set({ slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }) }} /></div></label>
+        {!pick && <p className="hint" style={{ marginTop: -8 }}>From the title, with 4 random characters at the end: the belfry's admins choose plain addresses.</p>}
         {slugState.msg && <p className={'hint' + (slugState.free === false ? ' error' : '')} role="status" style={{ marginTop: -8 }}>{slugState.checking ? 'Checking…' : slugState.msg}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <button className="btn" disabled={!ok}>{edit ? 'Save' : 'Create the event'}</button>

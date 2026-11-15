@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me } from './sync'
+import { belfryAdminKeys, isAdmin as isAdminNow } from './access'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
 // recompute per render for a village-sized dataset.
@@ -451,7 +452,17 @@ export function mailLocal(g: Group): string {
   const plain = (x: Group) => [x.id.replace(/-[0-9a-z]{3,8}$/, ''), slugify(x.name)]
   const want = slugify(g.name) || g.id.replace(/-[0-9a-z]{3,8}$/, '')
   if (!want || want === g.id) return g.id
+  if (!madeByAdmin(g)) return g.id // a plain alias for an admin's channel only (#issues 2026-11-15; mail.channel_by_slug)
   return groups().filter((x) => plain(x).includes(want)).length === 1 ? want : g.id
+}
+
+/** Did a belfry admin (or the belfry's own key) make G? Not known (no 9007 here): yes, as before. */
+function madeByAdmin(g: Group): boolean {
+  const evs = all(me())
+  const make = evs.filter((e) => e.kind === 9007 && tag(e, 'h') === g.id).sort(byTime)[0]
+  if (!make) return true
+  const relayKey = evs.find((e) => e.kind === 39000 && tag(e, 'd') === g.id)?.pubkey
+  return make.pubkey === relayKey || belfryAdminKeys().includes(make.pubkey) || (make.pubkey === me() && isAdminNow())
 }
 
 export function webPage(g: Group | undefined): WebPage | undefined {
