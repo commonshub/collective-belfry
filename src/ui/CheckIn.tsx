@@ -62,21 +62,40 @@ function ResultCard({ r }: { r: Result }) {
   return <div className={'scan-result ' + r.kind} role="status">{r.kind === 'ok' ? '✓ ' : r.kind === 'already' ? '• ' : '✕ '}{r.text}</div>
 }
 
-/** A ticket's QR opened by someone who may check in: the check-in happens, the card says how it went. */
-export function TicketCard({ e, code, holders, onDone }: { e: CalEvent; code: string; holders: Map<string, string>; onDone: () => void }) {
-  const [r, setR] = useState<Result | null>(null)
+/** A ticket's QR opened by someone who may check in: who it is, their ticket and whether they are
+ *  in, and a "Check in" button (a link can be opened by accident or by a link preview: nothing
+ *  happens by itself). Then the green state, with Undo. */
+export function TicketCard({ e, code, holders, titles, onDone }: { e: CalEvent; code: string; holders: Map<string, string>; titles: Map<string, string>; onDone: () => void }) {
   const [person, setPerson] = useState<Attendee | null>(null)
+  const [state, setState] = useState<'looking' | 'out' | 'in' | 'just' | 'bad'>('looking')
+  const [error, setError] = useState<CheckError | ''>('')
   useEffect(() => {
     let gone = false
-    checkIn(e, { code }, false, holders).then((x) => { if (!gone) { setR(resultOf(x)); setPerson(x.person) } }, (x) => { if (!gone) setR(badResult(errorOf(x))) })
+    checkIn(e, { code }, false, holders, true).then(
+      (x) => { if (!gone) { setPerson(x.person); setState(x.person.checked_in ? 'in' : 'out') } },
+      (x) => { if (!gone) { setError(errorOf(x)); setState('bad') } })
     return () => { gone = true }
   }, [code])
+  const name = person ? person.name || displayName(person.pubkey) : ''
+  const ticket = person ? person.ticket_title || titles.get(person.ticket) || '' : ''
+  const kind = state === 'just' ? 'ok' : state === 'in' ? 'already' : state === 'bad' ? 'bad' : ''
+  const line = state === 'looking' ? 'Checking the ticket…'
+    : state === 'bad' ? (error === 'no_ticket' ? CHECK_ERRORS.no_ticket : CHECK_ERRORS[error || 'failed'])
+    : [name, ticket, state === 'just' ? 'checked in' : state === 'in' ? (person?.checked_in ? `already checked in at ${hhmm(person.checked_in)}` : 'already checked in') : 'not checked in yet'].filter(Boolean).join(' · ')
   return (
-    <div className={'ticket-check card ' + (r?.kind ?? '')} role="status">
-      <div className="t">{r ? r.text : 'Checking the ticket…'}</div>
+    <div className={'ticket-check card ' + kind} role="status">
+      {person && <Avatar pubkey={person.pubkey} size={32} />}
+      {person && state !== 'bad'
+        ? <div className="t two"><b>{name}</b><small>{[ticket, line.split(' · ').at(-1)].filter(Boolean).join(' · ')}</small></div>
+        : <div className="t">{line}</div>}
       <div className="row" style={{ gap: 8 }}>
-        {person && r?.kind === 'ok' && <Btn className="btn small ghost" onClick={async () => { try { await checkIn(e, { pubkey: person.pubkey }, true, holders); setR({ kind: 'bad', text: `${person.name || displayName(person.pubkey)}: check-in undone`, at: Date.now() }) } catch (x) { setR(badResult(errorOf(x))) } }}>Undo</Btn>}
-        <button className="btn small" onClick={onDone}>OK</button>
+        {person && state === 'out' && <Btn className="btn small" onClick={async () => {
+          try { const x = await checkIn(e, { pubkey: person.pubkey }, false, holders); setPerson({ ...person, checked_in: x.person.checked_in }); setState(x.already ? 'in' : 'just') } catch (y) { setError(errorOf(y)); setState('bad') }
+        }}>Check in</Btn>}
+        {person && state === 'just' && <Btn className="btn small ghost" onClick={async () => {
+          try { await checkIn(e, { pubkey: person.pubkey }, true, holders); setPerson({ ...person, checked_in: null }); setState('out') } catch (y) { setError(errorOf(y)); setState('bad') }
+        }}>Undo</Btn>}
+        <button className={'btn small' + (state === 'out' ? ' ghost' : '')} onClick={onDone}>{state === 'out' ? 'Not now' : 'OK'}</button>
       </div>
     </div>
   )

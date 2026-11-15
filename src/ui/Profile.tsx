@@ -4,8 +4,7 @@
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
 import { BELFRY, NAME } from '../config'
 import { useCommunityName } from './community'
-import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, setGroupRole, type GroupRole } from '../core/checkin'
-import { decline } from '../core/actions'
+import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, removeFromGroup, setGroupRole, type GroupRole } from '../core/checkin'
 import { canAdmin } from '../core/access'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
@@ -177,7 +176,7 @@ function GroupRoleCard({ groupId, pk }: { groupId: string; pk: string }) {
       {error && <div className="error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
       {may && pk !== me() && (removing
         ? <div className="row" style={{ gap: 8, marginTop: 10 }}>
-            <Btn className="btn small danger" onClick={async () => { await decline(groupId, pk); setRemoving(false) }}>Remove {displayName(pk)}</Btn>
+            <Btn className="btn small danger" onClick={async () => { setError(''); try { await removeFromGroup(groupId, pk); setRemoving(false) } catch (x) { setError(x instanceof CheckFailed ? x.message : CHECK_ERRORS.failed); setRemoving(false) } }}>Remove {displayName(pk)}</Btn>
             <button className="btn small ghost" onClick={() => setRemoving(false)}>Keep</button>
           </div>
         : <button type="button" className="pick-row danger remove-row" onClick={() => setRemoving(true)}><TrashIcon /><span>Remove from {name}</span></button>)}

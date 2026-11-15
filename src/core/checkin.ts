@@ -19,7 +19,7 @@ import { belfryAdminKeys, isAdmin } from './access'
 import { knownGroupsKey } from './dm'
 import { displayName, group, profiles, type CalEvent } from './model'
 import { addEvents, all, touch, type Ev } from './store'
-import { isLocalOnly, me, signedFetch } from './sync'
+import { enqueue, isLocalOnly, me, signedFetch } from './sync'
 
 export const ROLE_NS = 'belfry/group-role'
 export const TICKET_NS = 'belfry/ticket'
@@ -177,14 +177,16 @@ export async function attendees(e: CalEvent, holders: Map<string, string>, title
   return { people, going: people.filter((p) => p.rsvp === 'accepted').length, checked_in: people.filter((p) => p.checked_in).length }
 }
 
-export async function checkIn(e: CalEvent, who: { code: string } | { pubkey: string }, undo: boolean, holders: Map<string, string>): Promise<{ person: Attendee; already: boolean }> {
+/** Check in (or UNDO); PEEK: only who it is and whether they are in, nothing recorded. */
+export async function checkIn(e: CalEvent, who: { code: string } | { pubkey: string }, undo: boolean, holders: Map<string, string>, peek = false): Promise<{ person: Attendee; already: boolean }> {
   if (!isLocalOnly()) {
-    const d = await call(`/events/${e.d}/checkin`, { ...who, ...(undo ? { undo: true } : {}) })
+    const d = await call(`/events/${e.d}/checkin`, { ...who, ...(undo ? { undo: true } : {}), ...(peek ? { peek: true } : {}) })
     return { person: d.person as Attendee, already: !!d.already }
   }
   const pk = 'pubkey' in who ? who.pubkey : [...holders.keys()].find((k) => demoCode(e.d, k) === who.code)
   if (!pk || !holders.has(pk)) throw new CheckFailed('no_ticket')
   const before = checkedLive(e.groupId, pk) ?? null
+  if (peek) return { person: { pubkey: pk, name: profiles().get(pk)?.name || displayName(pk), ticket: holders.get(pk)!, ticket_title: '', rsvp: e.rsvps.get(pk) ?? 'accepted', checked_in: before, role: eventRoles(e, pk)[0] ?? 'member' }, already: before !== null }
   const already = undo ? before === null : before !== null
   if (!already) demoLabel(TICKET_NS, undo ? 'not-checked-in' : 'checked-in', pk, e.groupId)
   const at = already ? before : undo ? null : Math.floor(Date.now() / 1000)
@@ -218,3 +220,43 @@ function demoSetRole(groupId: string, pk: string, role: GroupRole): GroupRole {
 /** Demo only: someone checked in a while ago (by the groups key), for the browser tests. */
 export const demoCheckedIn = (groupId: string, pk: string, minutesAgo = 20) => demoLabel(TICKET_NS, 'checked-in', pk, groupId, Math.floor(Date.now() / 1000) - minutesAgo * 60)
 export const demoSteward = (groupId: string, pk: string) => demoLabel(ROLE_NS, 'steward', pk, groupId)
+
+// ---- what a co-host / admin by role can't publish on the relay: the belfry does it ----------
+// zooid takes moderation events (9000, 9001, 9002) only from the relay owner, the community's
+// admins and the group's creator. An admin by role goes through POST /group-roles ("removed") and
+// POST /group-meta; an older belfry without them (404) gets the direct event, as before.
+
+/** Whether PK can publish a group's moderation events itself (the relay's 39001, its creator, a
+ *  community admin). */
+export function relayAdmin(groupId: string, pk = me()): boolean {
+  if (pk === me() && isAdmin()) return true
+  const evs = all(me())
+  const list = evs.filter((e) => e.kind === 39001 && tag(e, 'd') === groupId).sort((a, b) => b.created_at - a.created_at)[0]
+  if (list?.tags.some((t) => t[0] === 'p' && t[1] === pk)) return true
+  const made = evs.filter((e) => e.kind === 9007 && tag(e, 'h') === groupId).sort((a, b) => a.created_at - b.created_at)[0]
+  return made?.pubkey === pk
+}
+
+async function viaBelfry(path: string, body: unknown): Promise<'done' | 'missing'> {
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}${path}`, 'POST', body) } catch { throw new CheckFailed('offline') }
+  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+  if (r.status === 404 && !d.error) return 'missing' // a belfry from before /group-roles removed, /group-meta
+  if (!r.ok) throw new CheckFailed((String(d.error) in CHECK_ERRORS ? d.error : 'failed') as CheckError)
+  return 'done'
+}
+
+/** Take PK out of a group (an event: their ticket too): through the belfry, else a direct 9001. */
+export async function removeFromGroup(groupId: string, pk: string): Promise<void> {
+  const direct = () => enqueue('groups', { kind: 9001, tags: [['h', groupId], ['p', pk]] })
+  if (isLocalOnly()) { await direct(); return }
+  if ((await viaBelfry('/group-roles', { channel: groupId, pubkey: pk, role: 'removed' })) === 'missing') await direct()
+}
+
+/** A group's new metadata: TAGS as a 9002 when I can publish one, else FIELDS through the belfry
+ *  (which keeps every other tag of the current metadata). */
+export async function editGroupMeta(groupId: string, tags: string[][], fields: { name?: string; about?: string; picture?: string; closed?: boolean; prompt?: string; vouches?: number }): Promise<void> {
+  const direct = () => enqueue('groups', { kind: 9002, tags: [['h', groupId], ...tags] })
+  if (isLocalOnly() || relayAdmin(groupId)) { await direct(); return }
+  if ((await viaBelfry('/group-meta', { channel: groupId, ...fields })) === 'missing') await direct()
+}

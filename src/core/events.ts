@@ -17,6 +17,7 @@ import { all, addEvents, touch, type Ev } from './store'
 import { currentSigner, enqueue, isLocalOnly, me, newId, signedFetch, uploadBlob } from './sync'
 import { isGuest } from './invite'
 import { isAdmin } from './access'
+import { editGroupMeta, relayAdmin, setGroupRole } from './checkin'
 
 const tag = (e: Ev, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 
@@ -294,7 +295,7 @@ export async function editEvent(e: CalEvent, n: EventForm, extra: string[][] = [
   await enqueue('main', { kind: v.kind, content: n.description, tags: v.tags })
   const g = group(e.groupId)
   if (g && (g.name !== n.title.trim() || (n.cover && g.picture !== n.cover)))
-    await enqueue('groups', { kind: 9002, tags: [['h', e.groupId], ['name', n.title.trim()], ['about', g.about], ...(n.cover ? [['picture', n.cover]] : [])] })
+    await editGroupMeta(e.groupId, [['name', n.title.trim()], ['about', g.about], ...(n.cover ? [['picture', n.cover]] : [])], { name: n.title.trim(), ...(n.cover ? { picture: n.cover } : {}) })
 }
 
 export function formOf(e: CalEvent): EventForm {
@@ -346,7 +347,7 @@ export async function saveTicket(e: CalEvent, t: TicketForm) {
   // any ticket that takes an application closes the event's group (NIP-29 `closed`)
   const closing = t.closed || tickets(e).some((x) => x.closed && x.id !== id)
   const g = group(e.groupId)
-  if (g && g.closed !== closing) await enqueue('groups', { kind: 9002, tags: [['h', e.groupId], ['name', g.name], ['about', g.about], closing ? ['closed'] : ['open']] })
+  if (g && g.closed !== closing) await editGroupMeta(e.groupId, [['name', g.name], ['about', g.about], closing ? ['closed'] : ['open']], { closed: closing })
 }
 export const deleteTicket = (e: CalEvent, t: Ticket) => t.ev && enqueue('main', { kind: 5, tags: [['a', `30402:${t.ev.pubkey}:${t.d}`], ['e', t.ev.id]] })
 
@@ -392,7 +393,8 @@ export const withdraw = (e: CalEvent) => enqueue('groups', { kind: 9022, tags: [
 /** A host approves an application (the ticket: a 9000 with `ticket`) or declines it. A guest
  *  co-host can't moderate on the relay: the belfry does it for them. */
 export async function decide(e: CalEvent, pubkey: string, action: 'approve' | 'decline', ticketD?: string, app?: Ev) {
-  if (amGuest()) {
+  // a guest co-host, or a co-host by role (zooid refuses their 9000 / 9001): through the belfry
+  if (amGuest() || (!isLocalOnly() && !relayAdmin(e.groupId))) {
     const r = await signedFetch(`${BELFRY.api}/events/${e.d}/decide`, 'POST', { pubkey, action, ticket: ticketD })
     if (!r.ok) throw new Error((await r.json().catch(() => ({}))).message || 'That did not work.')
     return
@@ -402,8 +404,10 @@ export async function decide(e: CalEvent, pubkey: string, action: 'approve' | 'd
 }
 
 /** Make a member a co-host: an admin of the event's group. */
-export const addCoHost = (e: CalEvent, pubkey: string) =>
-  enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'admin']] })
+export const addCoHost = async (e: CalEvent, pubkey: string) => {
+  if (isLocalOnly() || relayAdmin(e.groupId)) return enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'admin']] })
+  await setGroupRole(e.groupId, pubkey, 'admin') // a co-host by role: through the belfry
+}
 
 /** A co-host invitation link (a channel invite with role host, guests.py). */
 export async function coHostLink(e: CalEvent): Promise<string> {

@@ -1353,6 +1353,8 @@ div.settings-row { cursor: default; }
 .ticket-check { margin: 8px 12px 0; display: flex; align-items: center; gap: 10px; color: #fff; border: 0 !important; flex-wrap: wrap; }
 .ticket-check:not(.ok):not(.already):not(.bad) { background: var(--surface); color: var(--text); }
 .ticket-check .t { flex: 1 1 200px; font-weight: 600; }
+.ticket-check .t.two { display: flex; flex-direction: column; min-width: 0; }
+.ticket-check .t.two small { font-weight: 500; font-size: 14px; opacity: 0.85; }
 .ticket-check .btn.ghost { background: rgba(255, 255, 255, 0.18); color: inherit; border-color: transparent; }
 
 /* a profile: the belfry-wide role, the role in a group */

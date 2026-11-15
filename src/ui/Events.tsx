@@ -238,7 +238,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
         {g && <FollowButton channel={e.groupId} />}
         <button className="icon-btn" aria-label="More" onClick={() => setSheet('menu')}><MoreIcon /></button>
       </div>
-      {card && may && <TicketCard e={e} code={card} holders={holders} onDone={() => setCard('')} />}
+      {card && may && <TicketCard e={e} code={card} holders={holders} titles={titles} onDone={() => setCard('')} />}
       {header}
       {level < 2 && (inside && g ? <>
         <div className="seg ev-tabs" role="tablist" aria-label="The event">

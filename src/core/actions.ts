@@ -1,4 +1,5 @@
 import { nip19 } from 'nostr-tools'
+import { editGroupMeta } from './checkin'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
@@ -62,7 +63,7 @@ export async function createPod(name: string, about: string, parent = 'general',
 }
 
 export const editPod = (id: string, name: string, about: string, access: PodAccess) =>
-  enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about], ...accessTags(access)] })
+  editGroupMeta(id, [['name', name], ['about', about], ...accessTags(access)], { name, about, closed: access.closed, prompt: access.closed ? access.prompt.trim() || DEFAULT_PROMPT : '', vouches: access.closed ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
 
 /** NIP-29 join request: in an open group it lets you in; in a closed one it is your application,
  *  with your answer to the pod's question as its content. */
@@ -77,7 +78,7 @@ export const vouch = (id: string, request: { id: string; pubkey: string }, on = 
   enqueue('groups', { kind: 1985, tags: [['h', id], ['L', VOUCH_NS], ['l', on ? 'vouch' : 'withdrawn', VOUCH_NS], ['e', request.id], ['p', request.pubkey]] })
 
 export const editChannel = (id: string, name: string, about: string) =>
-  enqueue('groups', { kind: 9002, tags: [['h', id], ['name', name], ['about', about]] })
+  editGroupMeta(id, [['name', name], ['about', about]], { name, about })
 
 /** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a
  *  `t` tag too, without being written in the text, and so is `announcement` for an admin's

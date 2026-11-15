@@ -6,6 +6,7 @@
 //   - each group I'm an admin of (or a member of, when it accepts by vouches): who asks, their
 //     answer to its question, "1 of 2 vouches", Accept / Decline / Vouch.
 // Everything the askers wrote is shown as plain text.
+import { relayAdmin } from '../core/checkin'
 import { useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { NAME } from '../config'
@@ -113,7 +114,8 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
 export function GroupRequest({ g, a }: { g: Group; a: Application }) {
   useVersion()
   const [error, setError] = useState('')
-  const admin = canAdmin(g) // its admins, and the belfry's
+  // its admins, and the belfry's; an admin by role can't admit on the relay (docs/checkin.md): they vouch
+  const admin = canAdmin(g) && relayAdmin(g.id)
   const vouchers = groupVouches(g, a)
   const mine = vouchers.includes(me())
   const canVouch = g.vouches > 0 && g.members.has(me()) && a.pubkey !== me()

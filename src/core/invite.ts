@@ -4,6 +4,7 @@
 // need a guest link (the invite sheet's switch), not this.
 import { BELFRY } from '../config'
 import { agentOwner, canAdmin, loadAccessInfo } from './access'
+import { relayAdmin } from './checkin'
 import { admit } from './actions'
 import { sendDm } from './dm'
 import { group, groups, guestJoins, profiles, type Group } from './model'
@@ -39,7 +40,7 @@ export async function inviteMember(groupId: string, pubkey: string): Promise<'ad
   const name = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '# ' + g.name) : groupId
   let state: 'admitted' | 'asked' | 'sent' = 'sent'
   if (g?.closed && !g.members.has(pubkey)) {
-    if (canAdmin(g)) { await admit(groupId, pubkey); state = 'admitted' } else state = 'asked'
+    if (canAdmin(g) && relayAdmin(groupId)) { await admit(groupId, pubkey); state = 'admitted' } else state = 'asked'
   }
   const from = profiles().get(me())?.name || 'A member' // my own name as others read it (never "You")
   const text = state === 'asked'
