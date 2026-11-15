@@ -1238,3 +1238,10 @@ div.settings-row { cursor: default; }
 .dir-row .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dir-row.agent { padding-left: 46px; padding-top: 4px; }
 .role-badge { font-size: 11px; white-space: nowrap; }
+
+/* #/me/signin: sign-in methods (#issues 2026-11-15) */
+.sm-row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sm-row .ic { width: 32px; text-align: center; font-size: 20px; }
+.sm-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.sm-row .t small { color: var(--muted); font-size: 13px; }
+.sm-row .link.danger { color: var(--danger); }

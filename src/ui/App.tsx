@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
-import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, type Session } from '../core/auth'
+import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
@@ -16,6 +16,7 @@ import { Admin } from './Admin'
 import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
 import { MembersDirectory } from './Directory'
+import { SignInMethods } from './SignInMethods'
 import { RequestsScreen } from './Requests'
 import { GroupPage } from './GroupPage'
 import { demoRequests, startRequests } from '../core/requests'
@@ -230,6 +231,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
+  else if (section === 'me' && a === 'signin') view = <SignInMethods />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
@@ -355,6 +357,13 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </button>
         )}
         {(isAdmin() || (THEME === 'belfry' && isBelfryAdmin(me()))) && <DevModeRow />}
+        {!guestInfo() && <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/signin')}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Sign-in methods</div>
+            <div className="hint" style={{ fontSize: 14 }}>E-mail code and passkeys</div>
+          </div>
+          <span className="hint" aria-hidden="true">›</span>
+        </button>}
         <button className="card row" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/connections')}>
           <div>
             <div style={{ fontWeight: 600 }}>Connections</div>
