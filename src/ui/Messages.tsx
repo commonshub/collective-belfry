@@ -6,6 +6,7 @@ import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
+import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form } from './common'
 
@@ -98,7 +99,8 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const list = thread(conv)
   const mail = isMail(conv)
   const scroller = useRef<HTMLDivElement>(null)
-  useEffect(() => { markRead(conv) }, [conv, list.length])
+  const visible = useVisible()
+  useEffect(() => { if (visible) markRead(conv) }, [conv, list.length, visible])
   useEffect(() => { if (mail) void checkReports() }, [conv])
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [list.length])
   const addr = mail ? mailAddress(conv) : ''

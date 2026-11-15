@@ -21,6 +21,8 @@ import { newMentions, preview } from './Mentions'
 import { NewProposalSheet, ProposalCard, SiteBar } from './Proposals'
 import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
 import { knownGroupsKey } from '../core/dm'
+import { markRead } from '../core/readstate'
+import { channelNewest, channelUnread, threadNewest, threadUnread, useVisible } from '../core/unread'
 import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
@@ -91,13 +93,17 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
   const next = calendar().filter((e) => e.status !== 'cancelled' && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
   const fresh = newMentions()
   const waitingN = requestCount()
-  const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => (
-    <button className={'chan' + (g.id === current ? ' on' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
-      onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
-      <span className="hash">{channelIcon(g)}</span>
-      <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
-    </button>
-  )
+  const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => {
+    const n = g.id === current ? 0 : channelUnread(g.id)
+    return (
+      <button className={'chan' + (g.id === current ? ' on' : '') + (n ? ' unread' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
+        onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
+        <span className="hash">{channelIcon(g)}</span>
+        <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
+        {n > 0 && <span className="badge unread-n" aria-label={`${n} unread`}>{n > 99 ? '99+' : n}</span>}
+      </button>
+    )
+  }
   // groups nest under the channel or group they were posted in: a tree, as deep as it goes
   const Tree = ({ g, depth = 0, seen = new Set<string>() }: { g: Group; depth?: number; seen?: Set<string> }) => (
     <>
@@ -572,11 +578,16 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     }
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
+  // on screen at the newest message: read up to it (readstate.ts, shared with my other devices)
+  const visible = useVisible()
+  const newest = channelNewest(id)
+  const [atEnd, setAtEnd] = useState(stick.current)
+  useEffect(() => { if (visible && atEnd && !topic && newest) markRead('c', id, newest) }, [id, visible, atEnd, topic, newest])
 
   return (
     <>
       <div className="scroll" ref={scroller}
-        onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80 }}>
+        onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; if (stick.current !== atEnd) setAtEnd(stick.current) }}>
         <div className="messages">
           {list.length === 0 && (topic
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
@@ -663,6 +674,10 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
   const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [flow.length])
+  // on screen: its replies are read (readstate.ts), up to the newest (the message itself when none)
+  const visible = useVisible()
+  const newestReply = threadNewest(rootId) || root?.ev.created_at || 0
+  useEffect(() => { if (visible && newestReply) markRead('t', rootId, newestReply) }, [rootId, visible, newestReply])
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => up(`c/${encodeURIComponent(groupId)}`)
   const gkey = knownGroupsKey()
@@ -1239,6 +1254,7 @@ function ThreadLine({ groupId, rootId, thread, open, onClick }: { groupId: strin
     <button className={'thread-line' + (open ? ' open' : '')} onClick={onClick} aria-expanded={open}>
       <span className="faces">{thread.who.slice(0, 3).map((pk) => <Avatar key={pk} pubkey={pk} size={18} />)}</span>
       <span className="n">{open ? 'Hide replies' : `${thread.count} ${thread.count === 1 ? 'reply' : 'replies'}`}</span>
+      {!open && threadUnread(rootId) > 0 && <span className="badge lime new-n">{threadUnread(rootId)} new</span>}
       {!open && <time>{fmtTime(thread.last)}</time>}
       {!open && last && said && <span className="last"><b>{displayName(last.ev.pubkey)}</b>: {said}</span>}
       {!open && <span className="caret" aria-hidden="true"><ChevronRightIcon /></span>}

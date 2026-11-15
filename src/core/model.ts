@@ -12,7 +12,7 @@ import { belfryAdminKeys, isAdmin as isAdminNow } from './access'
 const tag = (e: Ev, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 const byTime = (a: Ev, b: Ev) => a.created_at - b.created_at || (a.id < b.id ? -1 : 1)
 
-function deleted(list: Ev[]) {
+export function deleted(list: Ev[]) {
   const out = new Set<string>()
   const authors = new Map(list.map((e) => [e.id, e.pubkey]))
   for (const e of list) {

@@ -31,6 +31,7 @@ import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
+import { startReadState } from '../core/readstate'
 import { demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
@@ -142,6 +143,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         await start(signer, { localOnly: session.backend === 'demo' && !TEST_RELAYS })
         // direct messages and e-mail (dm.ts); my address is my name@domain
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
+        void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
         void groupsKey()
         if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup })

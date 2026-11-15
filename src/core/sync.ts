@@ -389,6 +389,9 @@ export function recheckAccess() {
 }
 
 const subs: Partial<Record<Target, Subscription>> = {}
+const eoseListeners = new Set<(target: Target) => void>()
+/** Called each time a relay has sent what it stored for the live subscription (EOSE). */
+export function onEose(f: (target: Target) => void) { eoseListeners.add(f) }
 
 function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
@@ -405,6 +408,8 @@ function filters(target: Target): Filter[] {
   return [
     { kinds, since, limit: 2000 },
     { kinds: [30078], '#d': ['belfry:profile', 'belfry:channel-order'], since: extrasSince, limit: 2000 },
+    // my read state (readstate.ts): one replaceable event, always the exact d
+    { kinds: [30078], authors: [p], '#d': ['belfry:read'], limit: 5 },
     { kinds: [1059], '#p': [p], since: wrapsSince, limit: 1000 },
     { kinds: [4], '#p': [p], since: oldSince, limit: 500 },
     { kinds: [4], authors: [p], since: oldSince, limit: 500 },
@@ -418,6 +423,7 @@ function resubscribe(target: Target) {
   subs[target] = r.subscribe(filters(target), {
     onevent: (e) => addEvents([e]),
     oneose: () => {
+      eoseListeners.forEach((f) => f(target))
       if (target !== 'groups') return
       if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })
       void firstChannel()

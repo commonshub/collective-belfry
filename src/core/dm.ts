@@ -6,6 +6,7 @@ import { kvGet, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
+import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -51,7 +52,6 @@ const seen = new Set<string>() // event ids already read (gift wraps, kind 4)
 export interface DmReaction { rid: string; target: string; from: string; emoji: string; at: number; pending?: boolean }
 const dmReacts = new Map<string, DmReaction>()
 const reports = new Map<string, Report>() // by email-id
-let read: Record<string, number> = {}
 let myAddress = ''
 let bridgeKey: string | undefined
 let loaded = false
@@ -134,7 +134,7 @@ async function load() {
   for (const id of (await kvGet<string[]>('dm-seen')) ?? []) seen.add(id)
   for (const r of (await kvGet<DmReaction[]>('dm-reactions')) ?? []) dmReacts.set(r.rid, r)
   for (const [k, v] of Object.entries((await kvGet<Record<string, Report>>('dm-reports')) ?? {})) reports.set(k, v)
-  read = (await kvGet<Record<string, number>>('dm-read')) ?? {}
+  await readReady // read marks: readstate.ts (shared across my devices; seeded from the old 'dm-read')
   // mail stored before threads: one conversation per address → one per subject
   const waiting = new Set(outboxItems().map((o) => o.dm).filter(Boolean))
   for (const d of items.values()) if (d.pending && !waiting.has(d.rid)) d.pending = false
@@ -147,7 +147,7 @@ async function load() {
   for (const d of items.values()) {
     if (!isNewMail(d.conv)) continue
     const conv = mailThreadOf(mailAddress(d.conv), d.subject)
-    if (read[d.conv] && !read[conv]) read[conv] = read[d.conv]
+    if (ownMark('d', d.conv)) markReadState('d', conv, ownMark('d', d.conv))
     d.conv = conv
   }
 }
@@ -309,7 +309,7 @@ export function threads(): Thread[] {
   return [...by.entries()].map(([conv, list]) => {
     list.sort((a, b) => a.at - b.at)
     const last = list[list.length - 1]
-    return { conv, last, count: list.length, unread: list.filter((d) => !d.mine && d.at > (read[conv] ?? 0)).length }
+    return { conv, last, count: list.length, unread: list.filter((d) => !d.mine && d.at > readUpTo('d', conv)).length }
   }).sort((a, b) => b.last.at - a.last.at)
 }
 
@@ -330,12 +330,11 @@ export function convName(conv: Conv): string {
   return peers(conv).map((p) => displayName(p)).join(', ')
 }
 
+/** The conversation is on screen: read up to its newest message or e-mail (reactions are not
+ *  items: they never move the mark). Shared with my other devices (readstate.ts). */
 export function markRead(conv: Conv) {
   const last = thread(conv).at(-1)?.at ?? 0
-  if ((read[conv] ?? 0) >= last) return
-  read = { ...read, [conv]: last }
-  void kvSet('dm-read', read)
-  touch()
+  if (last) markReadState('d', conv, last)
 }
 
 // ---- sending ---------------------------------------------------------------------

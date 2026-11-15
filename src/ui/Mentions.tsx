@@ -1,13 +1,14 @@
+import { useEffect, useRef } from 'react'
 import { nip19 } from 'nostr-tools'
 import { displayName, group, plainRefs } from '../core/model'
 import { all, useVersion, type Ev } from '../core/store'
 import { me } from '../core/sync'
+import { markRead, readUpTo } from '../core/readstate'
 import { Avatar, fmtDay, fmtTime, go, up } from './common'
 import { closeDrawer } from './drawer'
 
 // #/mentions (Xavier, 2026-11-11): the latest messages that name you, from every channel; a tap
 // opens the message where it is (the channel at that message, or its thread).
-const SEEN = 'osv-mentions-seen'
 const tag = (e: Ev, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 
 /** Messages and thread replies that tag me (p) or name my npub, newest first. */
@@ -24,9 +25,14 @@ export function mentions(limit = 100): Ev[] {
     .slice(0, limit)
 }
 
-function seenAt(): number { try { return Number(localStorage.getItem(SEEN) || 0) } catch { return 0 } }
-/** How many mentions came since I last opened the list (the badge in the channel list). */
-export const newMentions = () => { const at = seenAt(); return mentions(99).filter((e) => e.created_at > at).length }
+/** A mention is new until I saw the list after it, or read its channel (a message) or its thread
+ *  (a reply) past it: readstate.ts, the same on all my devices (SPEC 19.27). */
+export function isNew(e: Ev, seen = readUpTo('m')): boolean {
+  const where = e.kind === 1111 ? readUpTo('t', tag(e, 'E') || tag(e, 'e') || '') : readUpTo('c', tag(e, 'h') || '')
+  return e.created_at > Math.max(seen, where)
+}
+/** How many mentions are new (the badge in the channel list). */
+export const newMentions = () => mentions(99).filter(isNew).length
 
 /** Text for a one-line preview: nostr:npub… as @Name, channel addresses as #name. */
 export function preview(text: string): string {
@@ -44,9 +50,11 @@ function where(e: Ev): string {
 export function MentionsScreen() {
   useVersion()
   const list = mentions()
-  const at = seenAt()
-  // opening the list marks them seen (next time)
-  try { localStorage.setItem(SEEN, String(Math.floor(Date.now() / 1000))) } catch { /* private mode */ }
+  const seenBefore = useRef(readUpTo('m')) // as it was when the list opened
+  const fresh = new Set(list.filter((e) => isNew(e, seenBefore.current)).map((e) => e.id))
+  // on screen: seen up to the newest (they stay marked new until next time)
+  const newest = list[0]?.created_at ?? 0
+  useEffect(() => { if (newest) markRead('m', '', newest) }, [newest])
   return (
     <div className="screen">
       <div className="topbar">
@@ -59,7 +67,7 @@ export function MentionsScreen() {
           const g = group(tag(e, 'h')!)
           const d = new Date(e.created_at * 1000)
           return (
-            <button key={e.id} className={'mention' + (e.created_at > at ? ' new' : '')} onClick={() => { closeDrawer(); go(where(e)) }}>
+            <button key={e.id} className={'mention' + (fresh.has(e.id) ? ' new' : '')} onClick={() => { closeDrawer(); go(where(e)) }}>
               <Avatar pubkey={e.pubkey} size={36} />
               <span className="t">
                 <span className="h"><b>{displayName(e.pubkey)}</b> in {g?.name ?? tag(e, 'h')}{e.kind === 1111 ? ' · thread' : ''}</span>

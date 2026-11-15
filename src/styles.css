@@ -98,6 +98,10 @@ a { color: var(--accent); }
 .chan .t { flex: 1; min-width: 0; }
 .chan .t b { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chan .t small { display: block; color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* something unread (readstate.ts: the same on all my devices) */
+.chan.unread .t b { font-weight: 750; color: var(--text); }
+.chan.unread .t small { color: var(--text); }
+.chan .badge.unread-n { flex: none; }
 
 /* ---- messages ---- */
 .messages { padding: 8px 0 12px; display: flex; flex-direction: column; }
@@ -959,6 +963,7 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .thread-line .faces { display: inline-flex; flex: none; }
 .thread-line .faces > * + * { margin-left: -6px; }
 .thread-line .n { flex: none; }
+.thread-line .new-n { flex: none; font-size: 11px; padding: 1px 7px; }
 .thread-line time { flex: none; font-weight: 400; color: var(--faint); font-size: 12px; }
 .thread-line .last { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--muted); }
 .thread-line .last b { font-weight: 600; color: var(--muted); }
