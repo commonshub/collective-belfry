@@ -68,7 +68,7 @@ def test_a_guest_of_one_channel_end_to_end(rsvc, published):
         "belfry.pass", inv["pass_id"], ["state", "tier", "date_end", "keycast_pubkey", "partner_id"]
     )
     assert p["state"] == "active" and p["tier"] == "guest"
-    assert p["date_end"] == (dt.date.today() + dt.timedelta(days=30)).isoformat()
+    assert p["date_end"] == (dt.datetime.now(dt.UTC).date() + dt.timedelta(days=30)).isoformat()
     # in the channel, with who invited them; on no other whitelist; no member in the console
     kind, tags = published[-1]
     assert kind == 9000 and ["h", "garden"] in tags and ["p", p["keycast_pubkey"], "member"] in tags
@@ -818,7 +818,7 @@ class OneMint:
 def test_a_guest_pass_brings_no_tokens(rsvc, published, authentik, keycast):
     """A guest's 30 days counted as 31 pass days of tokens when the belfry has a mint."""
     rsvc.mint = OneMint()
-    today = dt.date.today()
+    today = dt.datetime.now(dt.UTC).date()
     assert core.token_allowance(rsvc, "guest", None, today, today + dt.timedelta(days=30)) == 0
     reg = rsvc.odoo
     pid = reg.create("res.partner", {"name": "Gus Guest", "email": "gus@example.org"})
@@ -836,7 +836,7 @@ def test_passes_that_ended_are_closed_by_the_service_itself(rsvc, published, aut
 
     reg = rsvc.odoo
     pid = reg.create("res.partner", {"name": "Gus Guest"})
-    yesterday = (dt.date.today() - dt.timedelta(days=1)).isoformat()
+    yesterday = (dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)).isoformat()
     pass_id = reg.create(
         "belfry.pass",
         {

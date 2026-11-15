@@ -207,7 +207,7 @@ def test_guest_links_last_a_day_a_week_or_a_month(world):
         p = rsvc.odoo.search_read(
             "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["date_end"]
         )[0]
-        assert p["date_end"] == (dt.date.today() + dt.timedelta(days=7)).isoformat()
+        assert p["date_end"] == (dt.datetime.now(dt.UTC).date() + dt.timedelta(days=7)).isoformat()
         assert (
             call(c, ada, "/channel-invites", {"channel": "garden", "guest_days": 3}).status_code
             == 422
@@ -263,7 +263,8 @@ def test_a_member_link_makes_a_member_once_they_join_with_an_e_mail(world):
         ["tier", "date_end"],
     )
     assert [x["tier"] for x in full] == ["member"]  # the guest pass closed
-    assert full[0]["date_end"] == (dt.date.today() + dt.timedelta(days=365)).isoformat()
+    in_a_year = dt.datetime.now(dt.UTC).date() + dt.timedelta(days=365)
+    assert full[0]["date_end"] == in_a_year.isoformat()
     assert pk(me) in core.active_pubkeys(rsvc)
     assert roles.role_of(rsvc, pk(me)) == "host"
     told = [t for k, t in published if k == 1985]
@@ -328,7 +329,7 @@ def test_a_membership_with_an_end_closes_like_a_guest_pass(world, monkeypatch):
             "tier": "member",
             "state": "active",
             "keycast_pubkey": "d" * 64,
-            "date_end": (dt.date.today() - dt.timedelta(days=1)).isoformat(),
+            "date_end": (dt.datetime.now(dt.UTC).date() - dt.timedelta(days=1)).isoformat(),
         },
     )
     followers._expired_at = float("-inf")
