@@ -42,7 +42,7 @@ const GROUPS: { title: string; items: Section[] }[] = [
     { id: 'membership', label: 'Membership', icon: <KeyIcon />, sub: () => (membership().invite === 'members' ? 'Any member invites' : 'Admins invite') },
     { id: 'members', label: 'Members', icon: <PeopleIcon />, sub: () => (memberKeys().length ? String(memberKeys().length) : ''), href: '/members' },
     { id: 'invites', label: 'Invite links', icon: <LinkIcon />, to: 'admin/invites' },
-    { id: 'requests', label: 'Requests to join', icon: <InboxIcon />, to: 'requests', sub: () => (requestCount() ? String(requestCount()) : '') },
+    { id: 'requests', label: 'Requests to join', icon: <InboxIcon />, to: 'members', sub: () => (requestCount() ? String(requestCount()) : '') },
   ] },
   { title: 'Belfry', items: [
     { id: 'email', label: 'E-mail', icon: <MailIcon />, href: '/setup' },
@@ -243,7 +243,7 @@ function MembershipPanel({ wide = false }: { wide?: boolean }) {
         </div>
       )}
       {error && <div className="error" role="alert">{error}</div>}
-      <p className="hint" style={{ fontSize: 13 }}>People ask to join on <a href={`${BELFRY.pass}/apply`} target="_blank" rel="noreferrer">{BELFRY.pass.replace(/^https:\/\//, '')}/apply</a>; their requests show under <button className="link" onClick={() => go('requests')}>Requests</button>.</p>
+      <p className="hint" style={{ fontSize: 13 }}>People ask to join on <a href={`${BELFRY.pass}/apply`} target="_blank" rel="noreferrer">{BELFRY.pass.replace(/^https:\/\//, '')}/apply</a>; their requests show at the top of <button className="link" onClick={() => go('members')}>Members</button>.</p>
     </section>
   )
 }

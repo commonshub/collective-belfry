@@ -1,22 +1,22 @@
-// #/requests: what waits for someone to decide (Xavier, 2026-11-14). Opened from Requests at the
-// top of the channel list (its count is also on ☰). One list, by where the request goes:
+// What waits for someone to decide (Xavier, 2026-11-14), shown at the top of the members
+// directory (2026-11-15: "instead of requests top left it should be members directory and pending
+// requests should show up at the top of it"). One list, by where the request goes:
 //   - Agents asking to join (the belfry's admins): "Let it in as my agent" / Decline;
-//   - People asking to join the belfry (admins: Accept / Decline; while the belfry accepts by
-//     vouches, every member sees them and vouches);
+//   - People asking to join the belfry (admins: Accept / Decline; every member vouches);
 //   - each group I'm an admin of (or a member of, when it accepts by vouches): who asks, their
 //     answer to its question, "1 of 2 vouches", Accept / Decline / Vouch.
 // Everything the askers wrote is shown as plain text.
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { NAME } from '../config'
 import { canAdmin } from '../core/access'
 import { decline as declineInGroup, admit } from '../core/actions'
 import { displayName, type Application, type Group } from '../core/model'
 import { isBelfryAdmin } from '../core/people'
-import { agentRequests, belfryRequests, decideAgent, decidePerson, groupRequests, groupVouches, loadRequests, membership, RequestFailed, vouchInGroup, vouchPerson, type AgentRequest, type BelfryRequest } from '../core/requests'
+import { agentRequests, belfryRequests, decideAgent, decidePerson, groupRequests, groupVouches, membership, RequestFailed, vouchInGroup, vouchPerson, type AgentRequest, type BelfryRequest } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { Avatar, back, Btn, fmtTime, go } from './common'
+import { Avatar, Btn, fmtTime, go } from './common'
 import { useCommunityName } from './community'
 import { BotIcon, InboxIcon, PodShape, VouchIcon } from './icons'
 
@@ -26,43 +26,38 @@ const when = (s: string) => {
 }
 const vouchLine = (n: number, of: number) => `${n} of ${of} ${of === 1 ? 'vouch' : 'vouches'}`
 
-export function RequestsScreen() {
+/** What waits for someone to decide, by where the request goes; nothing when nothing waits.
+ *  Shown at the top of the members directory (#/members; #/requests opens the same screen). */
+export function RequestSections() {
   useVersion()
   const community = useCommunityName(NAME)
-  const [busy, setBusy] = useState(true)
-  useEffect(() => { void loadRequests().finally(() => setBusy(false)) }, [])
   const admin = isBelfryAdmin(me())
-  const agents = agentRequests()
+  const agents = admin ? agentRequests() : []
   const people = belfryRequests()
   const groups = groupRequests()
-  const nothing = agents.length === 0 && people.length === 0 && groups.length === 0
+  if (agents.length === 0 && people.length === 0 && groups.length === 0) return null
   return (
-    <div className="screen requests">
-      <div className="topbar">
-        <button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button>
-        <h1>Requests<small>Who asks to join, and where</small></h1>
-      </div>
-      <div className="scroll">
-        {nothing && <div className="empty">{busy ? 'Loading…' : 'Nothing is waiting for you.'}</div>}
-        {admin && agents.length > 0 && <>
-          <div className="section-title"><span className="lbl"><BotIcon /> Agents asking to join</span><span>{agents.length}</span></div>
-          {agents.map((a) => <AgentRow key={a.id} a={a} />)}
-        </>}
-        {people.length > 0 && <>
-          <div className="section-title"><span className="lbl"><InboxIcon /> Asking to join {community}</span><span>{people.length}</span></div>
-          {membership().accept === 'vouches' && <p className="hint pad-x req-rule">{membership().vouches === 1 ? 'One vouch' : `${membership().vouches} vouches`} from members let someone in{admin ? '; admins can still accept or decline' : ''}.</p>}
-          {people.map((p) => <PersonRow key={p.id} p={p} admin={admin} />)}
-        </>}
-        {groups.map(({ g, list }) => (
-          <div key={g.id} className="req-group">
-            <button type="button" className="section-title link-title" onClick={() => go(`c/${encodeURIComponent(g.id)}/group`)}>
-              <span className="lbl"><PodShape members={g.members.size} size={16} /> {g.name}</span><span>{list.length}</span>
-            </button>
-            {g.vouches > 0 && <p className="hint pad-x req-rule">{g.vouches === 1 ? 'One vouch' : `${g.vouches} vouches`} from its members let someone in.</p>}
-            {list.map((a) => <GroupRequest key={a.ev.id} g={g} a={a} />)}
-          </div>
-        ))}
-      </div>
+    <div className="requests">
+      {agents.length > 0 && <>
+        <div className="section-title"><span className="lbl"><BotIcon /> Agents asking to join</span><span>{agents.length}</span></div>
+        {agents.map((a) => <AgentRow key={a.id} a={a} />)}
+      </>}
+      {people.length > 0 && <>
+        <div className="section-title"><span className="lbl"><InboxIcon /> Asking to join {community}</span><span>{people.length}</span></div>
+        <p className="hint pad-x req-rule">{membership().accept === 'vouches'
+          ? `${membership().vouches === 1 ? 'One vouch' : `${membership().vouches} vouches`} from members let someone in${admin ? '; admins can still accept or decline' : ''}.`
+          : admin ? 'You decide; members vouch for the people they know.' : 'Vouch for the people you know: the admins decide, and they see who vouched.'}</p>
+        {people.map((p) => <PersonRow key={p.id} p={p} admin={admin} />)}
+      </>}
+      {groups.map(({ g, list }) => (
+        <div key={g.id} className="req-group">
+          <button type="button" className="section-title link-title" onClick={() => go(`c/${encodeURIComponent(g.id)}/group`)}>
+            <span className="lbl"><PodShape members={g.members.size} size={16} /> {g.name}</span><span>{list.length}</span>
+          </button>
+          {g.vouches > 0 && <p className="hint pad-x req-rule">{g.vouches === 1 ? 'One vouch' : `${g.vouches} vouches`} from its members let someone in.</p>}
+          {list.map((a) => <GroupRequest key={a.ev.id} g={g} a={a} />)}
+        </div>
+      ))}
     </div>
   )
 }

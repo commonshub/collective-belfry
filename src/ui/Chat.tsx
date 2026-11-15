@@ -41,7 +41,7 @@ import { inOrder, mayOrder, setChannelOrder } from '../core/order'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
-import { belfryRequests, requestCount, showRequests } from '../core/requests'
+import { requestCount } from '../core/requests'
 
 /** The `a` tags of the events a message's text links to (https://<domain>/events/<link>): the
  *  ones this device knows, or the belfry told it about. Receivers resolve the rest themselves. */
@@ -125,18 +125,11 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
       </div>
       <div className="scroll">
         {side && brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
-        {/* the members of the belfry (#issues 2026-11-15), with anyone asking to join first */}
+        {/* the members of the belfry, with whatever waits for me at its top (no Requests row) */}
         {!isGuest(me()) && (
-          <button className={'chan' + (section === 'members' ? ' on' : '')} onClick={() => closeDrawer('members')}>
+          <button className={'chan members-row' + (section === 'members' || section === 'requests' ? ' on' : '')} onClick={() => closeDrawer('members')}>
             <span className="hash"><PeopleIcon /></span>
-            <span className="t"><b>Members</b><small>{belfryRequests().length ? `${belfryRequests().length} asking to join · vouch` : `Everyone in ${community}`}</small></span>
-            {belfryRequests().some((p) => !p.vouched) && <span className="badge lime">{belfryRequests().filter((p) => !p.vouched).length}</span>}
-          </button>
-        )}
-        {showRequests() && (
-          <button className={'chan requests-row' + (section === 'requests' ? ' on' : '')} onClick={() => closeDrawer('requests')}>
-            <span className="hash"><InboxIcon /></span>
-            <span className="t"><b>Requests</b><small>{waitingN ? `${waitingN} waiting for you` : 'People and agents asking to join'}</small></span>
+            <span className="t"><b>Members</b><small>{waitingN ? `${waitingN} ${waitingN === 1 ? 'request' : 'requests'} waiting for you` : `Everyone in ${community}`}</small></span>
             {waitingN > 0 && <span className="badge lime">{waitingN}</span>}
           </button>
         )}
