@@ -19,6 +19,7 @@ const MENTIONS_SEEN = 'osv-mentions-seen' // the @Mentions list's old mark (loca
 let local: ReadState = empty()
 let remote: { at: number; id: string; state: ReadState } = { at: 0, id: '', state: empty() }
 let checked = false // the community relay answered this session (EOSE)
+let loaded = false // the stored state is in memory (nothing merges or publishes before)
 const done = new Set<string>() // belfry:read event ids merged already
 let lastPublish = 0
 let timer: ReturnType<typeof setTimeout> | undefined
@@ -38,6 +39,7 @@ export const ownMark = (sec: Section, key: string) => local[sec][key] ?? 0
 
 /** Read SEC/KEY up to AT (never backwards). */
 export function markRead(sec: Section | 'm', key: string, at: number) {
+  if (!loaded) return
   const next = mark(local, sec, key, at)
   if (next === local) return
   local = next
@@ -57,7 +59,7 @@ const shared = () => !reading() && !isGuest(me())
 // ---- publishing (debounced: 3 s after the last change, at most one every 10 s) -------------
 
 function schedule() {
-  if (!checked || !shared()) return
+  if (!loaded || !checked || !shared()) return
   if (covers(remote.state, local, nowS())) return
   clearTimeout(timer)
   const wait = Math.max(3000, lastPublish + 10_000 - Date.now())
@@ -89,6 +91,7 @@ function flushNow() { if (timer) void publish() }
 
 let scanning = false, rescan = false
 async function scan() {
+  if (!loaded) return
   if (scanning) { rescan = true; return }
   scanning = true
   try {
@@ -113,10 +116,22 @@ async function scan() {
 
 // ---- start -----------------------------------------------------------------------------
 
-let started = false
+let owner = '' // whose state is in memory (another account in the same page starts afresh)
+let listening = false
 export async function startReadState() {
-  if (started) return
-  started = true
+  if (owner === me()) return
+  owner = me()
+  local = empty(); remote = { at: 0, id: '', state: empty() }; checked = false; loaded = false; done.clear(); lastPublish = 0
+  clearTimeout(timer); timer = undefined
+  // (before any await: the relay's first EOSE may come while the stored state loads)
+  if (!listening) {
+    listening = true
+    onEose((target) => { if (target === 'main' && !checked) { checked = true; void scan().then(schedule) } })
+    let t: ReturnType<typeof setTimeout> | null = null
+    subscribe(() => { t ??= setTimeout(() => { t = null; void scan() }, 250) })
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow() })
+    window.addEventListener('pagehide', flushNow)
+  }
   try {
     const kept = await kvGet<string>(KV)
     if (kept) local = parse(kept)
@@ -127,15 +142,11 @@ export async function startReadState() {
       void kvSet(KV, serialize(local))
     }
   } finally {
+    loaded = true
     readyResolve()
   }
   // demo mode: no relay to wait for (its "publish" lands in the local log, like another device's)
   if (isLocalOnly()) checked = true
-  onEose((target) => { if (target === 'main' && !checked) { checked = true; void scan().then(schedule) } })
-  let t: ReturnType<typeof setTimeout> | null = null
-  subscribe(() => { t ??= setTimeout(() => { t = null; void scan() }, 250) })
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushNow() })
-  window.addEventListener('pagehide', flushNow)
   void scan().then(schedule)
 }
 
