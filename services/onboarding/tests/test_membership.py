@@ -99,7 +99,8 @@ def test_admins_list_accept_and_decline_requests(world):
     omar = apply_now(rsvc, "Omar", "omar@example.org")
     with TestClient(create_app(rsvc)) as c:
         r = call(c, bob, "/applications", {"list": True})
-        assert r.status_code == 403 and r.json()["error"] == "not_admin"
+        # a member sees who asks too (to vouch, #issues 2026-11-15), without the e-mail
+        assert r.status_code == 200 and all("email" not in a for a in r.json()["applications"])
         got = call(c, ada, "/applications", {"list": True}).json()
         assert [a["id"] for a in got["applications"]] == [omar, nora]
         row = got["applications"][1]
@@ -127,8 +128,13 @@ def test_vouches_accept_a_request_by_themselves(world):
     cat, _ = person(rsvc, "cat@belfry.test", "Cat")
     nora = apply_now(rsvc)
     with TestClient(create_app(rsvc)) as c:
+        # any member vouches and sees who asks, whatever the setting (#issues 2026-11-15); the
+        # vouch accepts nothing while the admins decide
+        got = call(c, bob, "/applications", {"list": True}).json()
+        assert got["applications"] and "email" not in got["applications"][0]
         r = call(c, bob, "/applications", {"vouch": nora})
-        assert r.status_code == 403 and r.json()["error"] == "not_vouching"
+        assert r.status_code == 200 and r.json()["accepted"] is False
+        call(c, bob, "/applications", {"vouch": nora, "on": False})
         call(c, ada, "/membership", {"accept": "vouches", "vouches": 2})
         # members see waiting requests now, without the e-mail address
         got = call(c, bob, "/applications", {"list": True}).json()
@@ -161,9 +167,9 @@ def test_lowering_the_number_accepts_and_leavers_stop_counting(world):
         call(c, bob, "/applications", {"vouch": nora})
         # a key that is no member any more doesn't count
         rsvc.odoo.write("belfry.application", [nora], {"vouched_by": [pk(bob), "e" * 64]})
-        assert call(c, ada, "/applications", {"list": True}).json()["applications"][0][
-            "vouches"
-        ] == 1
+        assert (
+            call(c, ada, "/applications", {"list": True}).json()["applications"][0]["vouches"] == 1
+        )
         assert membership.settle(rsvc) == []
         call(c, ada, "/membership", {"vouches": 1})
         row = rsvc.odoo.read_one("belfry.application", nora, ["state"])
@@ -261,3 +267,14 @@ def test_the_check_endpoint(world, monkeypatch):
         # the service's own round may have got there first: one 9000 either way
         assert r.json()["admitted"] in ([], ["c" * 64])
         assert len([e for e in relay.events if e["kind"] == 9000]) == 1
+
+
+def test_the_members_directory(world):
+    """#issues 2026-11-15: members see every member (and members' agents under their member)."""
+    rsvc, _p, _k, ada, _ada_id, _s = world
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    with TestClient(create_app(rsvc)) as c:
+        got = call(c, bob, "/whois", {"directory": True})
+        assert got.status_code == 200, got.text
+        keys = [m["pubkey"] for m in got.json()["members"]]
+        assert pk(bob) in keys and pk(ada) in keys

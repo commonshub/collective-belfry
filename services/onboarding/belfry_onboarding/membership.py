@@ -34,11 +34,11 @@ API (belfry.<domain>/api/v1/…, NIP-98):
 - ``POST /applications``:
   - ``{"list": true, "state"?: "new"|"all"}`` → ``{"applications": [{"id", "name",
     "motivation", "kind", "state", "created", "vouches", "vouched"}], "accept", "needed"}``.
-    Admins see every request (with ``email``); members see the ones waiting, without e-mail,
-    only while vouching is on (else 403 ``not_admin``).
+    Admins see every request (with ``email``); members see the ones waiting, without e-mail
+    (#issues 2026-11-15: any member can vouch, whatever the setting).
   - ``{"decide": <id>, "approve": true|false}`` (admins) → ``{"application"}``.
-  - ``{"vouch": <id>, "on"?: true|false}`` (members, while vouching is on; else 403
-    ``not_vouching``) → ``{"application", "accepted": bool}``.
+  - ``{"vouch": <id>, "on"?: true|false}`` (any member, #issues 2026-11-15; the vouches accept
+    the request only while vouching is on) → ``{"application", "accepted": bool}``.
 
 Errors (``{"error", "message"}``; clients show fixed words per code): 403 ``not_admin``, 403
 ``not_here``, 403 ``not_vouching``, 404 ``not_found``, 409 ``decided``, 422 ``invalid``, 409
@@ -269,7 +269,6 @@ def applications(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, 
     if not member:
         raise ApiError(403, "not_here", "Only members of this belfry can see its requests.")
     s = settings(svc)
-    vouching = s["accept"] == "vouches"
 
     if "decide" in data:
         if not admin:
@@ -288,8 +287,8 @@ def applications(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, 
         return {"application": _row(svc, _get(svc, r["id"]), caller, True)}
 
     if "vouch" in data:
-        if not vouching:
-            raise ApiError(403, "not_vouching", "Requests here are accepted by the admins.")
+        # any member vouches (#issues 2026-11-15); the vouches accept a request only while the
+        # belfry accepts by vouches, else they tell the admins who stands for whom
         on = data.get("on", True)
         if not isinstance(on, bool):
             raise ApiError(422, "invalid", "on: true or false.")
@@ -314,8 +313,7 @@ def applications(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, 
         accepted = r["id"] in settle(svc)
         return {"application": _row(svc, _get(svc, r["id"]), caller, admin), "accepted": accepted}
 
-    if not admin and not vouching:
-        raise ApiError(403, "not_admin", "Only the belfry's admins see requests to join.")
+    # every member sees who asks (to vouch); the e-mail stays the admins' (_row)
     domain = [] if data.get("state") == "all" and admin else [["state", "=", "new"]]
     rows = svc.odoo.search_read("belfry.application", domain, FIELDS, limit=100, order="id desc")
     return {

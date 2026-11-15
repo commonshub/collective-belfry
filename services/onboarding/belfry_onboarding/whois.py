@@ -10,6 +10,9 @@ event saying so unless a label was published). The register knows, so it answers
 - Anyone holding an active pass may ask (guests too: they see who joined their channel).
 - The answer also has ``"roles": {"<hex>": "<role id>"}`` for the members among the keys
   (roles.py; guests and agents have no role). Labels: ``GET /api/roles``.
+- ``{"directory": true}`` (members only, #issues 2026-11-15: the chat's Members directory) →
+  ``{"members": [{"pubkey", "name", "role"?}], "agents": {"<agent>": "<its member>"},
+  "names": {"<agent>": "<name>"}}``: everyone holding a member's pass, and members' own agents.
 """
 
 from __future__ import annotations
@@ -67,6 +70,34 @@ def answer(svc: Services, caller: str, keys: list[str]) -> dict[str, Any]:
     return out
 
 
+def directory(svc: Services, caller: str) -> dict[str, Any]:
+    """Every member of the belfry, and the members' own agents (their member's key)."""
+    from . import mentions, roles
+    from .holder_invites import ApiError
+
+    known = kinds(svc)
+    if known.get(caller) != "member":
+        raise ApiError(403, "not_member", "Only members see who the members are.")
+    members = sorted(k for k, v in known.items() if v == "member")
+    try:
+        owners = {a: o for a, o in svc.odoo.agent_owners().items() if known.get(a) == "agent"}
+    except Exception:  # noqa: BLE001
+        owners = {}
+    try:
+        held = roles.members(svc)
+    except Exception:  # noqa: BLE001
+        held = {}
+    names = mentions._names(svc, set(members) | set(owners))
+    return {
+        "members": [
+            {"pubkey": k, "name": names.get(k, ""), **({"role": held[k]} if k in held else {})}
+            for k in members
+        ],
+        "agents": owners,
+        "names": {a: names.get(a, "") for a in owners},
+    }
+
+
 def register(app: FastAPI) -> None:
     from .holder_invites import ApiError, authenticate
 
@@ -81,6 +112,9 @@ def register(app: FastAPI) -> None:
             data: Any = json.loads(body or b"{}")
         except ValueError:
             data = None
+        if isinstance(data, dict) and data.get("directory") is True:
+            got = await run_in_threadpool(directory, s, caller)
+            return JSONResponse(got, headers={"Cache-Control": "no-store"})
         keys = data.get("pubkeys") if isinstance(data, dict) else None
         if (
             not isinstance(keys, list)
