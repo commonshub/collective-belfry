@@ -194,6 +194,16 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
         slug = str(conf.get("slug") or "").lower()
         if not conf.get("on") or not SLUG.match(slug) or slug in RESERVED:
             continue
+        # a nice address (no random end, not the channel's own id) only from a belfry admin
+        # (#issues 2026-11-15: no squatting names)
+        if (
+            slug != ch
+            and not RANDOM_END.search(slug)
+            and e["pubkey"] not in belfry_admins
+            and e["pubkey"] != _groups_pubkey(svc)
+            and e.get("created_at", 0) >= SLUG_RULE_SINCE
+        ):
+            continue
         picked.append(
             (
                 e["created_at"],
@@ -222,6 +232,11 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
             "about": about,
         }
     return out
+
+
+RANDOM_END = re.compile(r"-[a-z0-9]{4}$")
+# settings made before the rule keep their address
+SLUG_RULE_SINCE = 1_794_740_000  # 2026-11-15
 
 
 def _members_only(conf: dict[str, Any]) -> bool:

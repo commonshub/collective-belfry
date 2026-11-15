@@ -568,3 +568,16 @@ def test_moving_a_channel_is_never_retroactive(world):
         assert c.get("/ideas/" + "2" * 64).status_code == 200
         assert c.get("/ideas/" + "1" * 64).status_code == 403
         assert c.get("/ideas/" + "3" * 64).status_code == 403
+
+
+def test_a_nice_page_address_is_for_belfry_admins(world):
+    """#issues 2026-11-15: a channel admin who is no belfry admin gets the channel's id or an
+    address with 4 random characters at the end; older settings keep theirs."""
+    svc, relay = world
+    new = webthreads.SLUG_RULE_SINCE + 10
+    setting(relay, MEMBER, slug="ideas", at=new)
+    assert "ideas" not in webthreads.sites(svc, fresh=True)
+    setting(relay, MEMBER, slug="ideas-x7k2", at=new + 1)
+    assert "ideas-x7k2" in webthreads.sites(svc, fresh=True)
+    setting(relay, ADMIN, slug="ideas", at=new + 2)
+    assert "ideas" in webthreads.sites(svc, fresh=True)

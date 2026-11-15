@@ -152,13 +152,55 @@ def _slug(name: str) -> str:
 def channel_by_slug(svc: Services, local: str) -> str | None:
     """The channel a plain address names (Xavier, 2026-11-12: bugs@ rather than bugs-c3e5@):
     the one channel whose id is LOCAL plus its random suffix, or whose name slugifies to LOCAL.
-    Two channels answering to it: neither (the full id still works)."""
+    Two channels answering to it: neither (the full id still works). Only a channel a belfry
+    admin made (or the belfry itself) gets a plain address: anyone else's keeps its full id, so
+    nobody squats a nice name (#issues 2026-11-15)."""
     hits = {
         cid
         for cid, name in _top_channels(svc)
         if _SUFFIX.sub("", cid) == local or _slug(name) == local
     }
-    return hits.pop() if len(hits) == 1 else None
+    if len(hits) != 1:
+        return None
+    cid = hits.pop()
+    return cid if _made_by_admin(svc, cid) else None
+
+
+def _made_by_admin(svc: Services, channel: str) -> bool:
+    """Was CHANNEL made (kind 9007) by a belfry admin or the belfry's own groups key? Not known
+    (the relay keeps no 9007 for it): yes, as before."""
+    from . import apps, webthreads
+
+    maker = _makers(svc).get(channel)
+    if maker is None:
+        return True
+    try:
+        own = webthreads._groups_pubkey(svc)
+    except Exception:  # noqa: BLE001
+        own = ""
+    return maker in set(apps.admin_pubkeys(svc)) or maker == own
+
+
+def _makers(svc: Services) -> dict[str, str]:
+    """channel → who made it (kind 9007), cached a minute."""
+    with _lock:
+        held = _cache.get("makers:")
+    if held and time.monotonic() - held[0] < 60:
+        return held[1]
+    got = followers._relay(svc)
+    found: dict[str, str] = {}
+    if got is not None:
+        relay, sign = got
+        for e in sorted(
+            relay.query([{"kinds": [9007], "limit": 2000}], sign) or [],
+            key=lambda x: x.get("created_at", 0),
+        ):
+            h = tag(e, "h")
+            if h and h not in found:
+                found[h] = e.get("pubkey", "")
+    with _lock:
+        _cache["makers:"] = (time.monotonic(), found)
+    return found
 
 
 def channel_id(svc: Services, local: str) -> str | None:

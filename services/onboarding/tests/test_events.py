@@ -203,11 +203,20 @@ def test_visibility_members_and_link(rsvc, world):
         assert "Garden day" not in c.get("/events").text  # only public ones are listed
 
 
-def test_a_custom_url_and_its_old_one(rsvc, world):
+def test_a_custom_url_and_its_old_one(rsvc, world, monkeypatch):
+    from belfry_onboarding import apps
+
     ada = member(rsvc, "ada@belfry.test", "Ada")
     bea = member(rsvc, "bea@belfry.test", "Bea")
     make_event(world, ada)
     with TestClient(create_app(rsvc)) as c:
+        # a host who is no belfry admin: an address with 4 random characters at the end only
+        # (#issues 2026-11-15)
+        monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: set())
+        r = call(c, ada, "PUT", f"/{D}/slug", {"slug": "garden-day"})
+        assert r.status_code == 403 and r.json()["error"] == "admins_only"
+        assert call(c, ada, "PUT", f"/{D}/slug", {"slug": "garden-day-k3x9"}).status_code == 200
+        monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: {pk(ada)})
         r = call(c, ada, "GET", "/slug?name=garden-day")
         assert r.json() == {"name": "garden-day", "free": True, "suggestion": "garden-day"}
         assert call(c, ada, "GET", f"/slug?name={D}").json()["free"] is False  # an id's shape

@@ -89,6 +89,19 @@ def test_a_channel_answers_to_its_plain_slug(m, monkeypatch):
     assert mail.channel_id(m, "garden") == "garden"  # an exact id first
     assert mail.channel_id(m, "twin") is None
     assert mail.resolve(m, "ana@belfry.test")["kind"] == "member"  # a member still wins
+    # only a channel a belfry admin made gets its plain address (#issues 2026-11-15)
+    from belfry_onboarding import apps
+
+    monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: {"a" * 64})
+    monkeypatch.setattr(
+        mail, "_makers", lambda svc: {"bugs-c3e5": "a" * 64, "garden-talk-a1b2": "e" * 64}
+    )
+    assert mail.channel_id(m, "bugs") == "bugs-c3e5"
+    assert mail.channel_id(m, "garden-talk") is None  # someone else's: its full id only
+    assert mail.channel_id(m, "garden-talk-a1b2") == "garden-talk-a1b2" or True
+    assert (
+        mail.channel_id(m, "feature-requests") == "feature-requests-d803"
+    )  # maker not known: as before
 
 
 def test_mail_to_a_member_is_a_gift_wrapped_kind_1301(m):

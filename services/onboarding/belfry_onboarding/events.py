@@ -1570,6 +1570,14 @@ def register(app: FastAPI) -> None:
         problem = slug_problem(slug)
         if problem:
             raise ApiError(422, "invalid", f"That URL can't be used: {problem}.")
+        # only the belfry's admins pick an address freely; anyone else's ends in 4 random
+        # characters, so nobody squats a name (#issues 2026-11-15)
+        from . import apps
+
+        if not re.search(r"-[a-z0-9]{4}$", slug) and caller not in apps.admin_pubkeys(s):
+            raise ApiError(
+                403, "admins_only", "Only the belfry's admins choose an event's address."
+            )
         if not store(s).claim(ev.d, slug):
             raise ApiError(409, "taken", "Another event has that URL.")
         return JSONResponse({"slug": slug, "url": f"{site(s)}/events/{slug}"})
