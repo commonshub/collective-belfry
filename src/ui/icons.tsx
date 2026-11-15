@@ -97,3 +97,8 @@ export function PodShape({ members, size = 20 }: { members: number; size?: numbe
   return <svg {...common}><polygon points={pts} /></svg>
 }
 export const PushPinIcon = () => <Svg><path d="M12 17v5M9 3h6l-1 6 3 3v2H7v-2l3-3z" /></Svg>
+export const TicketIcon = () => <Svg><path d="M3 8a2 2 0 0 0 0 4v0a2 2 0 0 1 0 4v2h18v-2a2 2 0 0 1 0-4 2 2 0 0 0 0-4V6H3z" /><path d="M14 6v12" strokeDasharray="2 2" /></Svg>
+export const ScanIcon = () => <Svg><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10" /></Svg>
+export const PersonPlusIcon = () => <Svg><circle cx="10" cy="8" r="4" /><path d="M3 21a7 7 0 0 1 14 0M19 8v6M16 11h6" /></Svg>
+export const ShareIcon = () => <Svg><path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" /></Svg>
+export const MessageIcon = () => <Svg><path d="M4 5h16v11H9l-5 4z" /></Svg>

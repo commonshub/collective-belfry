@@ -1,13 +1,17 @@
 // An event's own screen (#/events/<link>): the channel header's pattern (one line, pulled down
 // for the rest), the event's chat under it, RSVP or apply in one tap, the guest list for hosts.
 // And the screen someone with no account sees when they open an event's URL in the chat.
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY, NAME, type Backend } from '../config'
-import { calendar, displayName, eventByCoord, eventUrl, group, profiles, type CalEvent, type Rsvp } from '../core/model'
+import { calendar, displayName, eventByCoord, eventUrl, group, messages, profiles, type CalEvent, type Media, type Rsvp } from '../core/model'
 import { useVersion } from '../core/store'
-import { me } from '../core/sync'
-import { addCoHost, applyFor, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, myState, people, placesLeft, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { isLocalOnly, me } from '../core/sync'
+import { reading } from '../core/guestmode'
+import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
+import { postMessage } from '../core/actions'
+import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
+import { addCoHost, applyFor, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -15,13 +19,12 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { makeSigner, type Session } from '../core/auth'
 import { kvDel } from '../core/db'
-import { Avatar, back, fmtDay, go, Sheet, Btn, Form } from './common'
-import { ChannelHeader } from './ChannelHeader'
+import { Avatar, back, fmtDay, go, Lightbox, Sheet, Btn, Form, useMediaUrl } from './common'
 import { Conversation, useCommunityName } from './Chat'
 import { FollowButton } from './Follow'
 import { Markdown } from './markdown'
 import { openProfile } from './Profile'
-import { CalendarIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon } from './icons'
+import { CalendarIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
 import { addByName, attendance, checkIn, handOver } from '../core/meetings'
 import { guestJoins } from '../core/model'
@@ -33,7 +36,7 @@ const ended = (e: CalEvent) => +(e.end ?? e.start) < Date.now()
 const STATE_LINE: Record<string, string> = { ticket: 'You’re going', maybe: 'Maybe', cant: 'Can’t go', applied: 'Application sent: the hosts will answer', waitlist: 'On the waitlist: the hosts will tell you', declined: 'The hosts could not give you a place' }
 
 /** The event by its URL's last part, or (older ones) by coordinate. */
-export function EventScreen({ link, coord, activeThread }: { link?: string; coord?: string; activeThread?: string }) {
+export function EventScreen({ link, coord, activeThread, ticket }: { link?: string; coord?: string; activeThread?: string; ticket?: string }) {
   useVersion()
   const found = coord ? { e: eventByCoord(coord) } : eventByLink(link ?? '')
   const e = found.e
@@ -46,101 +49,211 @@ export function EventScreen({ link, coord, activeThread }: { link?: string; coor
       </div>
     )
   }
-  return <EventView e={e} api={'api' in found ? found.api : undefined} activeThread={activeThread} />
+  return <EventView e={e} api={'api' in found ? found.api : undefined} activeThread={activeThread} ticketCode={ticket && /^[a-z2-7]{16}$/.test(ticket) ? ticket : undefined} />
 }
 
-function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; activeThread?: string }) {
+type Level = 0 | 1 | 2
+type ETab = 'chat' | 'photos' | 'people'
+type ESheet = '' | 'menu' | 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'take' | 'delete' | 'ticket' | 'checkin'
+const TAB_KEY = 'belfry-event-tab'
+
+/** The event screen (docs/checkin.md §4): one header at three levels — 0 a bar (title, date, my
+ *  status), 1 half (opens here: cover, when, where, my RSVP or ticket, who comes), 2 full (also the
+ *  hosts, the lists, the description, the URL) — over Chat · Photos · People. Pull the header (or
+ *  its handle) down or up; on a laptop the chevron cycles half ↔ full; scrolling the content folds
+ *  it to the bar. */
+function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; api?: ApiEvent; activeThread?: string; ticketCode?: string }) {
+  useVersion()
   const community = useCommunityName(NAME)
-  const [sheet, setSheet] = useState<'' | 'menu' | 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'take' | 'delete'>('')
+  const [level, setLevel] = useState<Level>(1)
+  const [tab, setTabState] = useState<ETab>(() => { try { const t = sessionStorage.getItem(TAB_KEY + e.d); return t === 'photos' || t === 'people' ? t : 'chat' } catch { return 'chat' } })
+  const setTab = (t: ETab) => { setTabState(t); try { sessionStorage.setItem(TAB_KEY + e.d, t) } catch { /* private mode */ } }
+  const [sheet, setSheet] = useState<ESheet>('')
   const [ticketFor, setTicketFor] = useState<Ticket | null>(null)
+  const [card, setCard] = useState(ticketCode ?? '')
+  useEffect(() => { if (ticketCode) setCard(ticketCode) }, [ticketCode])
+  const link = eventLinkOf(e)
+  // what the belfry says about me (ticket code, roles): asked for local events too (cached a minute)
+  const api = given ?? (isLocalOnly() ? undefined : remoteEvent(link))
+  const v = api?.me ?? api?.viewer ?? undefined
   const p = people(e)
-  const tks = tickets(e, api)
-  const st = myState(e, p, api)
+  const tks = tickets(e, given)
+  const st = myState(e, p, given)
   const host = isHost(e)
   const g = group(e.groupId)
-  const inside = !!g && (!g.closed || g.members.has(me()) || g.admins.has(me()) || p.holders.has(me()))
-  const readOnly = !!g && g.closed && !g.members.has(me()) && !g.admins.has(me()) && !p.holders.has(me()) && !host
   const plain = tks.length === 1 && tks[0].implicit
+  // Chat · Photos · People once I'm in: in the group, holding a ticket, or (the plain RSVP) having
+  // answered; before that the header and the description only (docs/checkin.md §4)
+  const inside = !!g && (g.members.has(me()) || g.admins.has(me()) || p.holders.has(me()) || host || (plain && !g.closed && !!e.rsvps.get(me())))
+  const readOnly = !!g && g.closed && !g.members.has(me()) && !g.admins.has(me()) && !p.holders.has(me()) && !host
   const open = e.status !== 'cancelled' && !ended(e)
   const asking = host ? p.applications.length : 0
+  const going = goingList(e, p)
+  const maybe = [...e.rsvps].filter(([, s]) => s === 'tentative').map(([k]) => k)
+  // my ticket: the belfry's code; in demo mode one made here
+  const holds = p.holders.has(me()) || (plain && e.rsvps.get(me()) === 'accepted') || !!v?.ticket
+  const code = v?.ticket_code ?? (isLocalOnly() && holds ? demoCode(e.d, me()) : undefined)
+  const ticketUrl = v?.ticket_url ?? (code ? `https://chat.${BELFRY.domain}/events/${encodeURIComponent(link)}/t/${code}` : '')
+  const myTicket = tks.find((t) => t.d === (p.holders.get(me()) ?? v?.ticket ?? ''))
+  const checkedMine = checkedLive(e.groupId, me()) ?? v?.checked_in ?? null
+  const may = mayCheckIn(e, v?.may_check_in)
+  const holders = useMemo(() => {
+    const m = new Map(p.holders)
+    if (plain) for (const [k, s] of e.rsvps) if (s === 'accepted' && !m.has(k)) m.set(k, tks[0].d)
+    return m
+  }, [p.holders, e.rsvps, plain]) // eslint-disable-line react-hooks/exhaustive-deps
+  const titles = new Map(tks.map((t) => [t.d, t.title]))
   const pick = (t: Ticket) => { setTicketFor(t); setSheet('take') }
   const take = async () => {
     if (plain && !e.remote && !isGuest(me())) return rsvp(e, 'accepted')
     if (tks.length === 1) return pick(tks[0])
     setSheet('take'); setTicketFor(null)
   }
-  const line = ({ open: isOpen, onToggle, pull }: { open: boolean; onToggle: () => void; pull: object }) => {
-    let text: ReactNode = <><b>{day(e.start)}{at(e)}</b>{e.location ? ' · ' + e.location : e.links.length ? ' · online' : ''}</>
-    let pill: ReactNode = null
-    if (e.status === 'cancelled') text = <><b>Cancelled</b>{e.statusReason ? ' · ' + e.statusReason : ''}</>
-    else if (stillGoing(e)) {
-      text = <span title="The date or the place changed"><b>Changed</b> · still going?</span>
-      pill = <span className="line-pills"><Btn className="line-pill ask" onClick={() => rsvp(e, 'accepted', p.holders.get(me()))}>Yes</Btn><Btn className="line-pill" onClick={() => rsvp(e, 'declined', p.holders.get(me()))}>No</Btn></span>
-    } else if (asking) {
-      text = <><b>{asking} {asking === 1 ? 'person asks' : 'people ask'} to come</b> · {goingList(e, p).length} going</>
-      pill = <button className="line-pill ask" onClick={() => setSheet('guests')}>Review</button>
-    } else if (STATE_LINE[st]) {
-      text = <><b>{STATE_LINE[st]}</b> · {day(e.start)}{at(e)}</>
-    } else if (open && st === 'none') pill = <Btn className="line-pill ask" onClick={take}>RSVP</Btn>
-    return (
-      <div className={'chan-line' + (isOpen ? ' open' : '')} {...pull}>
-        <button className="line-main" onClick={onToggle} aria-expanded={isOpen}>
-          <span className="line-ico"><CalendarIcon /></span>
-          <span className="line-text">{text}</span>
-        </button>
-        {pill}
-        <button className="line-more" onClick={onToggle} aria-label={isOpen ? 'Close the event’s details' : 'Open the event’s details'}>
-          {e.meeting ? <span className="line-count" title="people"><PeopleIcon />{new Set([e.creator, ...e.invited]).size}</span> : <span className="line-count" title="going"><PeopleIcon />{goingList(e, p).length}</span>}
-          <span className="line-chev">{isOpen ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
-        </button>
-      </div>
-    )
+  // a ticket's QR opened here: the code leaves the address at once (never shown, never kept)
+  useEffect(() => { if (ticketCode) location.replace('#/events/' + encodeURIComponent(link)) }, [ticketCode])
+
+  // ---- pulling the header ----
+  const start = useRef<{ y: number; x: number; dragging: boolean } | null>(null)
+  const [drag, setDrag] = useState(0)
+  const onDown = (x: React.PointerEvent) => { if (x.pointerType === 'mouse' && x.button !== 0) return; start.current = { y: x.clientY, x: x.clientX, dragging: false } }
+  const onMove = (x: React.PointerEvent) => {
+    const s = start.current
+    if (!s) return
+    const dy = x.clientY - s.y, dx = x.clientX - s.x
+    if (!s.dragging) {
+      if (Math.abs(dy) < 10 || Math.abs(dy) < Math.abs(dx)) return
+      s.dragging = true
+      ;(x.currentTarget as HTMLElement).setPointerCapture(x.pointerId)
+    }
+    setDrag(dy)
   }
-  const peek = ({ more }: { close: () => void; more: (t: 'about' | 'tasks' | 'members' | 'files') => void }) => (
-    <div className="pull ev-pull">
-      {e.cover && <img className="ev-cover" src={e.cover} alt="" />}
-      <section>
-        <p className="ev-when"><b>{fmtDay(e.start)}</b> · {when(e)}{e.end && e.end.toDateString() !== e.start.toDateString() ? ` → ${fmtDay(e.end)}` : ''}</p>
-        {e.location && <p className="ev-where">📍 {e.location}</p>}
-        {e.links.map((l) => <a key={l} className="btn small" style={{ display: 'inline-flex', marginRight: 8, textDecoration: 'none' }} href={l} target="_blank" rel="noreferrer">🎥 Join online</a>)}
-        {!e.links.length && api?.online && <p className="hint">Online: the link shows once you have a place.</p>}
-      </section>
-      {e.meeting && <MeetingPeople e={e} host={host} />}
-      {open && <section><h3>Your RSVP</h3><RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} /></section>}
-      <section>
-        <h3>Hosts</h3>
-        <div className="ev-hosts">{[...e.hosts].map((h) => <button key={h} className="ev-host" onClick={() => openProfile(h)}><Avatar pubkey={h} size={24} /><span>{api?.hosts.find((x) => x.pubkey === h)?.name || displayName(h)}</span></button>)}</div>
-      </section>
-      {!plain && (
-        <section>
-          <h3>Tickets</h3>
-          {tks.map((t) => <TicketRow key={t.d} t={t} p={p} onPick={open && st === 'none' ? () => pick(t) : undefined} />)}
-        </section>
-      )}
-      {e.description && <section><Markdown className="ev-about" text={e.description} /></section>}
-      <section className="ev-url">
-        <code>{eventUrl(e)}</code>
-        <CopyButton text={eventUrl(e)} label="Copy URL" />
-        <button className="btn small ghost" onClick={() => setSheet('qr')}>QR code</button>
-      </section>
-      {host && <button className="pull-row" onClick={() => setSheet('guests')}><PeopleIcon /><span className="t">Guest list<small>{goingList(e, p).length} going{asking ? ` · ${asking} asking` : ''}</small></span></button>}
-      {g && <button className="pull-row pull-people" onClick={() => more('members')}><PeopleIcon /><span className="t">The event’s chat<small>Members, files, todos</small></span><ChevronDownIcon /></button>}
+  const onUp = () => {
+    const s = start.current
+    start.current = null
+    if (s?.dragging) {
+      if (drag > 40) setLevel((l) => (Math.min(2, l + 1) as Level))
+      else if (drag < -40) setLevel((l) => (Math.max(0, l - 1) as Level))
+    }
+    setDrag(0)
+  }
+  const swallow = (x: React.MouseEvent) => { if (start.current?.dragging) { x.stopPropagation(); x.preventDefault() } }
+  const pull = { onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp, onPointerCancel: onUp, onClickCapture: swallow }
+  const fold = () => { if (level === 1) setLevel(0) }
+  useEffect(() => {
+    const k = (x: KeyboardEvent) => { if (x.key === 'Escape' && level === 2 && !sheet) setLevel(1) }
+    addEventListener('keydown', k)
+    return () => removeEventListener('keydown', k)
+  }, [level, sheet])
+
+  const statusWord = e.status === 'cancelled' ? 'Cancelled' : st === 'ticket' ? 'Going' : st === 'maybe' ? 'Maybe' : st === 'cant' ? 'Can’t go' : st === 'applied' ? 'Applied' : st === 'waitlist' ? 'Waitlist' : st === 'declined' ? 'No place' : host ? 'Hosting' : ''
+  const tz = e.tz && e.tz !== localTz() && !e.allDay ? ` (${e.tz.split('/').pop()?.replace(/_/g, ' ')})` : ''
+  const mapsUrl = e.location ? `https://www.openstreetmap.org/search?query=${encodeURIComponent(e.location)}` : ''
+
+  const control = (
+    <div className="ev-control">
+      {e.status === 'cancelled' ? <p className="ev-state bad"><b>Cancelled</b>{e.statusReason ? ' · ' + e.statusReason : ''}</p>
+        : stillGoing(e) ? <div className="ev-still"><span>The date or the place changed. Still going?</span><Btn className="btn small" onClick={() => rsvp(e, 'accepted', p.holders.get(me()))}>Yes</Btn><Btn className="btn small ghost" onClick={() => rsvp(e, 'declined', p.holders.get(me()))}>No</Btn></div>
+        : st === 'applied' || st === 'waitlist' || st === 'declined' ? <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />
+        : !plain && !p.holders.has(me()) && !v?.ticket ? (open ? <Btn className="btn ev-main" onClick={take}><TicketIcon /> Get tickets</Btn> : null)
+        : !plain ? <>
+            {code && <button className="btn ev-main" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
+            {open && <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />}
+          </>
+        : <>
+            {open && <RsvpRow e={e} p={p} tks={tks} st={st} onPick={pick} onWithdraw={() => withdraw(e)} />}
+            {code && <button className="btn small ghost ev-ticket-link" onClick={() => setSheet('ticket')}><TicketIcon /> Show my ticket</button>}
+          </>}
+      {asking > 0 && <button className="btn small ghost ev-asking" onClick={() => setSheet('guests')}><PeopleIcon /> {asking} {asking === 1 ? 'person asks' : 'people ask'} to come · Review</button>}
+      {may && onTheDay(e) && e.status !== 'cancelled' && <button className="btn ev-checkin" onClick={() => setSheet('checkin')}><ScanIcon /> Check people in</button>}
     </div>
   )
+  const faces = (keys: string[]) => (
+    <span className="ev-faces">{keys.slice(0, 5).map((k) => <Avatar key={k} pubkey={k} size={24} />)}</span>
+  )
+  const hostKeys = [e.creator, ...[...e.hosts].filter((k) => k !== e.creator && eventRoles(e, k)[0] === 'cohost')]
+  const PersonRow = ({ k, sub }: { k: string; sub?: string }) => (
+    <button className="ev-person" onClick={() => openProfile(k, e.groupId)}><Avatar pubkey={k} size={32} /><span className="t"><b>{api?.hosts.find((x) => x.pubkey === k)?.name || displayName(k)}</b>{sub && <small>{sub}</small>}</span></button>
+  )
+
+  const header = (
+    <div className={'evh lvl' + level + (drag ? ' dragging' : '')} {...pull} style={drag ? { transform: `translateY(${Math.max(-30, Math.min(30, drag / 3))}px)` } : undefined}>
+      {level === 0 ? (
+        <button className="evh-bar" onClick={() => setLevel(1)} aria-expanded={false} aria-label="Show the event">
+          <span className="evh-date"><CalendarIcon /> {day(e.start)}{at(e)}</span>
+          {statusWord && <span className={'chip evh-chip' + (st === 'ticket' ? ' on' : '')}>{statusWord}</span>}
+          <ChevronDownIcon />
+        </button>
+      ) : (
+        <div className={'evh-body' + (level === 2 ? ' full' : '')}>
+          {e.cover && <Cover url={e.cover} />}
+          <div className="evh-main">
+            <p className="evh-when"><b>{fmtDay(e.start)}</b>{e.allDay ? '' : ' · ' + when(e)}{tz}{e.end && e.end.toDateString() !== e.start.toDateString() ? ` → ${fmtDay(e.end)}` : ''}</p>
+            {e.location && <a className="evh-where" href={mapsUrl} target="_blank" rel="noreferrer"><PinIcon /> {e.location}</a>}
+            {e.links.map((l) => <a key={l} className="evh-where" href={l} target="_blank" rel="noreferrer"><LinkIcon /> Join online</a>)}
+            {!e.links.length && api?.online && <p className="hint evh-online">Online: the link shows once you have a place.</p>}
+            {control}
+            {(going.length > 0 || maybe.length > 0) && (
+              <button className="evh-going" onClick={() => (inside ? setTab('people') : setLevel(2))}>
+                {faces(going.length ? going : maybe)}<span>{going.length} going{maybe.length ? ` · ${maybe.length} maybe` : ''}</span>
+              </button>
+            )}
+            {!inside && e.description && level === 1 && <Markdown className="ev-about evh-teaser" text={e.description} />}
+            {level === 2 && <>
+              <section><h3>Hosted by</h3>{hostKeys.map((k) => <PersonRow key={k} k={k} sub={k === e.creator ? 'Host' : 'Co-host'} />)}</section>
+              {going.length > 0 && <section><h3>Going · {going.length}</h3>{going.map((k) => <PersonRow key={k} k={k} sub={titles.get(p.holders.get(k) ?? '') && !plain ? titles.get(p.holders.get(k) ?? '') : undefined} />)}</section>}
+              {maybe.length > 0 && <section><h3>Maybe · {maybe.length}</h3>{maybe.map((k) => <PersonRow key={k} k={k} />)}</section>}
+              {!plain && <section><h3>Tickets</h3>{tks.map((t) => <TicketRow key={t.d} t={t} p={p} onPick={open && st === 'none' ? () => pick(t) : undefined} />)}</section>}
+              {e.description && <section><Markdown className="ev-about" text={e.description} /></section>}
+              <section className="ev-url">
+                <code>{eventUrl(e)}</code>
+                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                  <ShareButton url={eventUrl(e)} title={e.title} />
+                  <button className="btn small ghost" onClick={() => setSheet('qr')}>QR code</button>
+                </div>
+              </section>
+              {host && e.isNew && (
+                <section className="act-group evh-host">
+                  <button className="act" onClick={() => setSheet('edit')}><PencilIcon /><span>Edit the event</span></button>
+                  <button className="act" onClick={() => setSheet('cohost')}><PersonPlusIcon /><span>Invite a co-host</span></button>
+                  <button className="act" onClick={() => setSheet('guests')}><PeopleIcon /><span>Guest list{asking ? ` · ${asking} asking` : ''}</span></button>
+                </section>
+              )}
+            </>}
+          </div>
+        </div>
+      )}
+      {level > 0 && (
+        <button className="evh-handle" onClick={() => setLevel(level === 1 ? 2 : 1)} aria-label={level === 1 ? 'Show everything about the event' : 'Show less'}>
+          <span className="grip" />{level === 1 ? <ChevronDownIcon /> : <ChevronUpIcon />}
+        </button>
+      )}
+    </div>
+  )
+
   return (
-    <div className="screen">
-      <ChannelHeader id={e.groupId} onTopic={() => {}}
-        title={<>{e.title}<small>{e.meeting ? 'Meeting · members only' : 'Event · ' + community}</small></>}
-        left={<button className="icon-btn" aria-label="Back" onClick={() => back('events')}>‹</button>}
-        right={<>{g && <FollowButton channel={e.groupId} />}<button className="icon-btn" aria-label="More" onClick={() => setSheet('menu')}><MoreIcon /></button></>}
-        line={line} peek={peek} />
-      {inside && g ? <Conversation id={e.groupId} readOnly={readOnly || e.remote === true && !p.holders.has(me())} activeThread={activeThread} />
-        : <div className="scroll"><div className="empty ev-closed">
-            {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The event’s chat opens once you have a place.'}
-            {open && st === 'none' && <><div style={{ height: 12 }} /><Btn className="btn" onClick={take}>RSVP</Btn></>}
-          </div></div>}
-      {open && st === 'none' && inside && <div className="join-bar"><span>{plain ? 'Coming?' : 'Get a place to join in.'}</span><Btn className="btn small" onClick={take}>RSVP</Btn></div>}
-      {sheet === 'menu' && <EventMenu e={e} host={host} onClose={() => setSheet('')} open={(s) => setSheet(s)} />}
+    <div className="screen ev-screen">
+      <div className="topbar">
+        <button className="icon-btn" aria-label="Back" onClick={() => back('events')}>‹</button>
+        <h1 className="tap" onClick={() => setLevel(level === 0 ? 1 : 0)}>{e.title}<small>{e.meeting ? 'Meeting · members only' : 'Event · ' + community}</small></h1>
+        {g && <FollowButton channel={e.groupId} />}
+        <button className="icon-btn" aria-label="More" onClick={() => setSheet('menu')}><MoreIcon /></button>
+      </div>
+      {card && may && <TicketCard e={e} code={card} holders={holders} onDone={() => setCard('')} />}
+      {header}
+      {level < 2 && (inside && g ? <>
+        <div className="seg ev-tabs" role="tablist" aria-label="The event">
+          {([['chat', 'Chat'], ['photos', 'Photos'], ['people', 'People']] as [ETab, string][]).map(([k, l]) =>
+            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
+        </div>
+        <div className="ev-content" onWheel={fold} onTouchMove={fold}>
+          {tab === 'chat' && <Conversation id={e.groupId} readOnly={readOnly || e.remote === true && !p.holders.has(me())} activeThread={activeThread} />}
+          {tab === 'photos' && <EventPhotos groupId={e.groupId} readOnly={readOnly || reading()} />}
+          {tab === 'people' && <EventPeople e={e} p={p} holders={holders} titles={titles} may={may} plain={plain} onCheckIn={() => setSheet('checkin')} />}
+        </div>
+      </> : <div className="scroll"><div className="empty ev-closed">
+          {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The chat, photos and people open once you have a place.'}
+        </div></div>)}
+      {sheet === 'menu' && <EventMenu e={e} host={host} may={may} onClose={() => setSheet('')} open={(s) => setSheet(s)} />}
       {sheet === 'edit' && <EventFormSheet edit={e} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) location.replace('#/events/' + encodeURIComponent(l)) }} />}
       {sheet === 'tickets' && <TicketsSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'guests' && <GuestList e={e} onClose={() => setSheet('')} />}
@@ -149,6 +262,95 @@ function EventView({ e, api, activeThread }: { e: CalEvent; api?: ApiEvent; acti
       {sheet === 'cancel' && <CancelSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'delete' && <DeleteSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'take' && <TakeSheet e={e} tks={tks} p={p} t={ticketFor} onPick={setTicketFor} onClose={() => { setSheet(''); setTicketFor(null) }} />}
+      {sheet === 'ticket' && ticketUrl && <TicketScreen e={e} url={ticketUrl} ticketTitle={myTicket && !myTicket.implicit ? myTicket.title : ''} checkedIn={checkedMine} onClose={() => setSheet('')} />}
+      {sheet === 'checkin' && <CheckInScreen e={e} holders={holders} titles={titles} onClose={() => setSheet('')} />}
+    </div>
+  )
+}
+
+function Cover({ url }: { url: string }) {
+  const src = useMediaUrl(url)
+  return src ? <img className="evh-cover" src={src} alt="" draggable={false} /> : null
+}
+
+function ShareButton({ url, title }: { url: string; title: string }) {
+  const [done, setDone] = useState(false)
+  const share = async () => {
+    const nav = navigator as Navigator & { share?: (d: { url: string; title: string }) => Promise<void> }
+    if (nav.share) { try { await nav.share({ url, title }); return } catch { /* cancelled: nothing */ return } }
+    await copyText(url); setDone(true); setTimeout(() => setDone(false), 1500)
+  }
+  return <button className="btn small ghost" onClick={share}><ShareIcon /> {done ? 'Copied' : 'Share'}</button>
+}
+
+/** The event's photos, newest first; "Add photos" for everyone in the group. */
+function EventPhotos({ groupId, readOnly }: { groupId: string; readOnly: boolean }) {
+  useVersion()
+  const images = messages(groupId).flatMap((m) => m.media).filter((m) => m.mime.startsWith('image/')).reverse()
+  const [open, setOpen] = useState<number | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const picker = useRef<HTMLInputElement>(null)
+  const add = async (files: File[]) => {
+    if (!files.length) return
+    setBusy(true); setError('')
+    try { await postMessage(groupId, '', files) } catch { setError('The photos could not be added. Try again.') } finally { setBusy(false) }
+  }
+  return (
+    <div className="scroll ev-photos">
+      {!readOnly && (
+        <div className="pad-x ev-photos-add">
+          <button className="btn ghost" disabled={busy} aria-busy={busy} onClick={() => picker.current?.click()}><ImageIcon /> {busy ? 'Adding…' : 'Add photos'}</button>
+          <input ref={picker} type="file" accept="image/*" multiple hidden onChange={(x) => { const f = [...(x.target.files ?? [])]; x.target.value = ''; void add(f) }} />
+          {error && <p className="error" role="alert">{error}</p>}
+        </div>
+      )}
+      {images.length ? (
+        <div className="photo-grid">
+          {images.map((m, i) => <PhotoThumb key={m.url + i} m={m} onOpen={() => setOpen(i)} />)}
+        </div>
+      ) : <div className="empty">{readOnly ? 'No photos yet.' : 'Add the first photos.'}</div>}
+      {open !== null && <Lightbox images={images} start={open} onClose={() => setOpen(null)} />}
+    </div>
+  )
+}
+function PhotoThumb({ m, onOpen }: { m: Media; onOpen: () => void }) {
+  const src = useMediaUrl(m.url)
+  return <button className="photo-thumb" onClick={onOpen} aria-label="Open the photo">{src && <img src={src} alt="" loading="lazy" />}</button>
+}
+
+/** Hosts first (Host / Co-host / Steward under the name), then Going, then Maybe. Tap → the
+ *  profile; the message button opens a conversation. A check for who is in, for those who check in. */
+function EventPeople({ e, p, holders, titles, may, plain, onCheckIn }: { e: CalEvent; p: People; holders: Map<string, string>; titles: Map<string, string>; may: boolean; plain: boolean; onCheckIn: () => void }) {
+  useVersion()
+  const going = goingList(e, p)
+  const maybe = [...e.rsvps].filter(([, s]) => s === 'tentative').map(([k]) => k)
+  const g = group(e.groupId)
+  const staff = [e.creator, ...[...new Set([...(g?.admins ?? []), ...going, ...maybe, ...(g?.members ?? [])])].filter((k) => k !== e.creator && eventRoles(e, k).length > 0)]
+  const rest = (keys: string[]) => keys.filter((k) => !staff.includes(k))
+  const canDm = !reading()
+  const Row = ({ k, sub }: { k: string; sub?: string }) => {
+    const checked = may && holders.has(k) ? checkedLive(e.groupId, k) : undefined
+    return (
+      <div className="member ev-member">
+        <button className="member-open" onClick={() => openProfile(k, e.groupId)} aria-label={`${displayName(k)}: profile`}><Avatar pubkey={k} /></button>
+        <button className="member-name ev-member-name" onClick={() => openProfile(k, e.groupId)}>
+          <span>{displayName(k)}{checked ? <span className="in-mark" title="Checked in" aria-label="checked in"> ✓</span> : null}</span>
+          {sub && <small>{sub}</small>}
+        </button>
+        {canDm && k !== me() && <button className="icon-btn" aria-label={`Message ${displayName(k)}`} onClick={() => go('dm/' + encodeURIComponent('n:' + k))}><MessageIcon /></button>}
+      </div>
+    )
+  }
+  const ticketOf = (k: string) => (plain ? '' : titles.get(holders.get(k) ?? '') ?? '')
+  return (
+    <div className="scroll ev-people">
+      {may && <button className="pull-row ev-checkin-row" onClick={onCheckIn}><ScanIcon /><span className="t">Check people in<small>Scan tickets or pick from the list</small></span><ChevronRightIcon /></button>}
+      <div className="section-title">Hosts</div>
+      {staff.map((k) => <Row key={k} k={k} sub={roleWord(e.groupId, k, e) || undefined} />)}
+      <div className="section-title">Going <span>{rest(going).length}</span></div>
+      {rest(going).length ? rest(going).map((k) => <Row key={k} k={k} sub={ticketOf(k) || undefined} />) : <p className="hint pad-x">Nobody yet.</p>}
+      {rest(maybe).length > 0 && <><div className="section-title">Maybe <span>{rest(maybe).length}</span></div>{rest(maybe).map((k) => <Row key={k} k={k} />)}</>}
     </div>
   )
 }
@@ -269,7 +471,7 @@ function TakeSheet({ e, tks, p, t, onPick, onClose }: { e: CalEvent; tks: Ticket
   )
 }
 
-function EventMenu({ e, host, onClose, open }: { e: CalEvent; host: boolean; onClose: () => void; open: (s: 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'delete') => void }) {
+function EventMenu({ e, host, may, onClose, open }: { e: CalEvent; host: boolean; may: boolean; onClose: () => void; open: (s: 'edit' | 'tickets' | 'guests' | 'qr' | 'cohost' | 'cancel' | 'delete' | 'checkin') => void }) {
   const [copied, setCopied] = useState(false)
   const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
@@ -281,6 +483,7 @@ function EventMenu({ e, host, onClose, open }: { e: CalEvent; host: boolean; onC
         <Item icon={<GlobeIcon />} label="QR code" onClick={() => open('qr')} />
         {e.isNew && e.visibility !== 'members' && <Item icon={<LinkIcon />} label="Open the public page" onClick={() => { window.open(eventUrl(e), '_blank', 'noopener'); onClose() }} />}
       </div>
+      {may && <div className="act-group"><Item icon={<ScanIcon />} label="Check people in" onClick={() => open('checkin')} /></div>}
       {host && e.isNew && (
         <div className="act-group">
           <Item icon={<PencilIcon />} label="Edit the event" onClick={() => open('edit')} />

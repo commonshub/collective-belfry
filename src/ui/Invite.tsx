@@ -37,7 +37,7 @@ export function linkLine(link: LinkOpts): string {
 
 type View = 'main' | 'joins' | 'link'
 
-export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }) {
+export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () => void; /** 'member': opens on "Joins as: Member" (the members screen's invite) */ preset?: 'member' }) {
   useVersion()
   const g = group(id)
   const community = useCommunityName(NAME)
@@ -48,7 +48,7 @@ export function InviteSheet({ id, onClose }: { id: string; onClose: () => void }
   useEffect(() => { void loadMembership() }, [])
   useEffect(() => { if (members) void loadRoles() }, [members])
   const [view, setView] = useState<View>('main')
-  const [who, setWho] = useState<JoinsAs>({ as: 'guest', days: 1 })
+  const [who, setWho] = useState<JoinsAs>(preset === 'member' && members ? { as: 'member', role: defaultRole(), membership: 'permanent' } : { as: 'guest', days: 1 })
   const [link, setLink] = useState<LinkOpts>({ people: 1, linkDays: 1 })
   const [membership, setMembership] = useState<Membership>('permanent')
   // a member's own agent: the link is for one agent, which stays a member for as long as I am one

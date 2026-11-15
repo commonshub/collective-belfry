@@ -1,4 +1,5 @@
 import { roleBadge } from '../core/roles'
+import { roleWord } from '../core/checkin'
 import { lazy, Suspense, useState } from 'react'
 import { extras, placeLabel } from '../core/people'
 import { Markdown } from './markdown'
@@ -273,10 +274,7 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
 export function Members({ groupId }: { groupId: string }) {
   useVersion()
   const g = groups().find((x) => x.id === groupId)
-  const labels = memberLabels(groupId)
-  const [editing, setEditing] = useState<string | null>(null)
-  const members = [...new Set([...(g?.members ?? []), ...labels.keys(), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
-  const vocab = [...new Set([...labels.values()].flat())].sort()
+  const members = [...new Set([...(g?.members ?? []), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   // requests to join: its admins answer; while it accepts by vouches, its members vouch
   const reviewing = g?.isPod ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
   // guest mode: people who opened an invite link and have not joined are a number, not members
@@ -296,55 +294,21 @@ export function Members({ groupId }: { groupId: string }) {
           ? <MembersMap pubkeys={members} onOpen={openProfile} />
           : <p className="hint pad-x">Nobody here shares their city yet. {isMember ? <button className="link" onClick={() => openProfile(me())}>Add yours</button> : null}</p>}
       </Suspense></Guard>
-      {members.map((p) => (
-        <div key={p} className="member">
-          <button className="member-open" onClick={() => openProfile(p)} aria-label={`${displayName(p)}: profile`}><Avatar pubkey={p} /></button>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <button className="member-name" onClick={() => openProfile(p)}>{displayName(p)}{roleBadge(p) && <span className="role-tag">{roleBadge(p)}</span>}</button>
-            {ex.get(p)?.place && <div className="hint member-place">{placeLabel(ex.get(p)!.place)}</div>}
-            {invited.get(p) && (
-              <div className="hint invited-by">
-                <span className="chip">{invited.get(p)!.agent ? 'agent' : invited.get(p)!.unsaved ? 'guest · not saved' : 'guest'}</span>
-                {invited.get(p)!.by ? <>invited by <b>{displayName(invited.get(p)!.by!)}</b></> : null}
-              </div>
-            )}
-            <button className="member-labels" onClick={() => setEditing(p)} aria-label={`Labels for ${displayName(p)} in this channel`}>
-              {(labels.get(p) ?? []).map((l) => <span key={l} className="chip on">{l}</span>)}
-              {!(labels.get(p) ?? []).length && <span className="hint" style={{ fontSize: 13 }}>Add a label</span>}</button>
-          </div>
-        </div>
-      ))}
+      {/* a row: face, name, the role here when it isn't the default (no labels: docs/checkin.md §5);
+          a tap opens the profile, which shows the role here and lets this channel's admins change it */}
+      {members.map((p) => {
+        const role = roleWord(groupId, p) || roleBadge(p)
+        const inv = invited.get(p)
+        const sub = role || (inv ? `${inv.agent ? 'Agent' : inv.unsaved ? 'Guest · not saved' : 'Guest'}${inv.by ? ` · invited by ${displayName(inv.by)}` : ''}` : ex.get(p)?.place ? placeLabel(ex.get(p)!.place) : '')
+        return (
+          <button key={p} className="member member-row" onClick={() => openProfile(p, groupId)} aria-label={`${displayName(p)}: profile`}>
+            <Avatar pubkey={p} />
+            <span className="t"><b>{displayName(p)}</b>{sub && <small>{sub}</small>}</span>
+          </button>
+        )
+      })}
       {readingN > 0 && <p className="hint pad-x guests-reading">{readingN === 1 ? '1 guest is reading' : `${readingN} guests are reading`}: they opened an invite link and have not joined yet.</p>}
-      {editing && <LabelEditor groupId={groupId} pubkey={editing} current={labels.get(editing) ?? []} vocab={vocab} onClose={() => setEditing(null)} />}
     </div>
-  )
-}
-
-const SUGGESTED = ['organiser', 'speaker', 'volunteer', 'maintainer', 'host', 'newcomer']
-
-function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
-  groupId: string; pubkey: string; current: string[]; vocab: string[]; onClose: () => void
-}) {
-  const [sel, setSel] = useState(current)
-  const [extra, setExtra] = useState('')
-  const options = [...new Set([...vocab, ...SUGGESTED, ...sel])]
-  const flip = (l: string) => setSel(sel.includes(l) ? sel.filter((x) => x !== l) : [...sel, l])
-  return (
-    <Sheet title={`Labels for ${displayName(pubkey)}`} onClose={onClose}>
-      <div style={{ marginBottom: 14 }}>
-        {options.map((l) => <button key={l} className={'chip' + (sel.includes(l) ? ' on' : '')} onClick={() => flip(l)}>{l}</button>)}
-      </div>
-      <Form className="row" style={{ marginBottom: 14 }} onSubmit={(e) => {
-        e.preventDefault()
-        const l = extra.trim().toLowerCase().slice(0, 32)
-        if (l && !sel.includes(l)) setSel([...sel, l])
-        setExtra('')
-      }}>
-        <input className="input" placeholder="New label" value={extra} onChange={(e) => setExtra(e.target.value)} />
-        <button className="btn small ghost">Add</button>
-      </Form>
-      <Btn className="btn" onClick={async () => { await setMemberLabels(groupId, pubkey, sel); onClose() }}>Save labels</Btn>
-    </Sheet>
   )
 }
 
@@ -355,7 +319,7 @@ function LabelEditor({ groupId, pubkey, current, vocab, onClose }: {
 
 interface LogItem { ev: Ev; icon: string; text: string; detail?: string; go?: string }
 
-const LABEL_WORDS: Record<string, string> = { pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
+const LABEL_WORDS: Record<string, string> = { steward: 'made someone a steward', none: 'changed someone’s role', 'checked-in': 'checked someone in', 'not-checked-in': 'undid a check-in', pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
 const TASK_WORDS: Record<string, string> = { claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
 const short = (t: string, n = 80) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x }
 
@@ -523,7 +487,7 @@ function Summary({ id, tab, open }: { id: string; tab: Tab; open: (t: Tab) => vo
     return (
       <div className="summary pad-x">
         <div className="chead-people">
-          {all.slice(0, n).map((p) => <button key={p} className="face" onClick={() => openProfile(p)} aria-label={displayName(p)}><Avatar pubkey={p} size={28} /></button>)}
+          {all.slice(0, n).map((p) => <button key={p} className="face" onClick={() => openProfile(p, id)} aria-label={displayName(p)}><Avatar pubkey={p} size={28} /></button>)}
           {all.length > n && <span className="more">+{all.length - n}</span>}
           <span className="hint" style={{ fontSize: 13, marginLeft: 8 }}>{all.length} {all.length === 1 ? 'member' : 'members'}</span>
         </div>

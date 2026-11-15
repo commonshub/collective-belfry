@@ -2,10 +2,14 @@
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
-import { BELFRY } from '../config'
+import { BELFRY, NAME } from '../config'
+import { useCommunityName } from './community'
+import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, setGroupRole, type GroupRole } from '../core/checkin'
+import { decline } from '../core/actions'
+import { canAdmin } from '../core/access'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
-import { channelIcon, displayName, groups, guestJoins, profiles } from '../core/model'
+import { channelIcon, displayName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
 import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
@@ -15,10 +19,12 @@ import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
-import { ChevronRightIcon, PinIcon } from './icons'
+import { ChevronRightIcon, PencilIcon, PinIcon, TrashIcon } from './icons'
 
 export const profileHref = (pubkey: string) => 'u/' + nip19.npubEncode(pubkey)
-export const openProfile = (pubkey: string) => go(profileHref(pubkey))
+/** IN: the group it is opened from (a channel's or an event's people): the profile then shows the
+ *  person's role there (docs/checkin.md §5). */
+export const openProfile = (pubkey: string, inGroup?: string) => go(profileHref(pubkey) + (inGroup ? '/in/' + encodeURIComponent(inGroup) : ''))
 
 export function decodeProfileId(id?: string): string | undefined {
   if (!id) return undefined
@@ -26,7 +32,7 @@ export function decodeProfileId(id?: string): string | undefined {
   try { const d = nip19.decode(id); return d.type === 'npub' ? (d.data as string) : undefined } catch { return undefined }
 }
 
-export function ProfileView({ id }: { id?: string }) {
+export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) {
   useVersion()
   const pk = decodeProfileId(id)
   const [editing, setEditing] = useState(false)
@@ -56,6 +62,7 @@ export function ProfileView({ id }: { id?: string }) {
   const role = roleOf(pk) ?? (admin ? ADMIN : undefined)
   const badge = roleBadge(pk) || (admin ? roleById(ADMIN)?.label ?? 'Admin' : '')
   const canRole = isAdmin() && !mine && !owner
+  const community = useCommunityName(NAME)
   return (
     <div className="screen">
       <div className="topbar">
@@ -83,7 +90,7 @@ export function ProfileView({ id }: { id?: string }) {
         {!mine && !guest && <button className="btn" style={{ marginTop: 8 }} onClick={() => go('dm/' + encodeURIComponent('n:' + pk))}>Message</button>}
         {shared.length > 0 && (
           <div className="card" style={{ marginTop: 16 }}>
-            <div className="hint" style={{ marginBottom: 6 }}>{mine ? 'Your channels' : 'In'}</div>
+            <div className="hint" style={{ marginBottom: 6 }}>{mine ? 'Your channels' : 'Channels'}</div>
             {shared.map((g) => <button key={g.id} className="link profile-chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>{channelIcon(g)} {g.name}</button>)}
           </div>
         )}
@@ -107,21 +114,73 @@ export function ProfileView({ id }: { id?: string }) {
             {agentError && <div className="error" style={{ marginTop: 8 }}>{agentError}</div>}
           </div>
         )}
-        {canRole && (
-          <div className="card">
-            <button type="button" className="pick-row role-row" disabled={!!noAdmin && !role} onClick={() => { setError(''); setPicking(true) }}>
-              <span className="k">Role</span>
-              <span className="t"><b>{role ? roleById(role)?.label ?? role : guest ? (guest.agent ? 'Agent' : 'Guest') : '—'}</b>
-                <small>{noAdmin || (role ? roleById(role)?.description : 'A guest now: a role makes them a member of the belfry.')}</small></span>
-              <ChevronRightIcon />
-            </button>
+        {/* the belfry-wide role (docs/roles.md): everyone sees it, the belfry's admins change it */}
+        {(canRole || role) && !owner && (
+          <div className="card profile-role">
+            <div className="hint card-title">Role in {community}</div>
+            {canRole ? (
+              <button type="button" className="pick-row role-row" disabled={!!noAdmin && !role} onClick={() => { setError(''); setPicking(true) }}>
+                <span className="t"><b>{role ? roleById(role)?.label ?? role : guest ? (guest.agent ? 'Agent' : 'Guest') : '—'}</b>
+                  <small>{noAdmin || (role ? roleById(role)?.description : 'A guest now: a role makes them a member of the belfry.')}</small></span>
+                <ChevronRightIcon />
+              </button>
+            ) : (
+              <div className="pick-row role-row ro"><span className="t"><b>{roleById(role)?.label ?? 'Member'}</b>{roleById(role)?.description && <small>{roleById(role)!.description}</small>}</span></div>
+            )}
+            {isAdmin() && <button type="button" className="pick-row edit-roles" onClick={() => go('settings/roles')}><PencilIcon /><span>Edit roles…</span></button>}
             {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
           </div>
         )}
+        {inGroup && group(inGroup) && <GroupRoleCard groupId={inGroup} pk={pk} />}
       </div>
       {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}
         onPick={async (id) => { setBusy(true); try { await setMemberRole(pk, id) } finally { setBusy(false) } }} />}
       {editing && <EditProfile onClose={() => setEditing(false)} />}
+    </div>
+  )
+}
+
+/** "In <group>": the person's role in the channel, group or event the profile was opened from;
+ *  its admins (and the belfry's) pick it: Member / Admin, or for an event Attendee / Co-host /
+ *  Steward (POST /group-roles). Under it, "Remove from <group>" (a 9001). */
+function GroupRoleCard({ groupId, pk }: { groupId: string; pk: string }) {
+  useVersion()
+  const g = group(groupId)!
+  const ev = g.isEvent ? eventOfGroup(groupId) : undefined
+  const isEvent = g.isEvent && !!ev
+  const [error, setError] = useState('')
+  const [removing, setRemoving] = useState(false)
+  if (!g.members.has(pk) && !g.admins.has(pk) && !(ev && (ev.rsvps.has(pk) || ev.hosts.has(pk)))) return null
+  const now: GroupRole = groupRole(groupId, pk)
+  const creator = ev ? ev.creator : undefined
+  const er = ev ? eventRoles(ev, pk)[0] : undefined
+  const may = canAdmin(g) && pk !== creator
+  const options: [GroupRole, string, string][] = isEvent
+    ? [['member', 'Attendee', 'Comes to the event'], ['admin', 'Co-host', 'Edits the event, answers applications, checks people in'], ['steward', 'Steward', 'Checks people in at the door']]
+    : [['member', 'Member', 'Reads and writes here'], ['admin', 'Admin', 'Changes the channel, its members and their roles']]
+  const word = pk === creator ? 'Host' : isEvent ? (er === 'cohost' ? 'Co-host' : er === 'steward' ? 'Steward' : now === 'admin' ? 'Admin' : 'Attendee') : now === 'admin' ? 'Admin' : 'Member'
+  const name = isEvent ? ev!.title : `${channelIcon(g)}${g.isPod ? ' ' : ''}${g.name}`
+  return (
+    <div className="card group-role">
+      <div className="hint card-title">In {name}</div>
+      {may ? (
+        <div className="pick-group" role="radiogroup" aria-label={`Role in ${name}`}>
+          {options.map(([id, label, line]) => (
+            <Btn key={id} className={'pick-row' + (now === id ? ' on' : '')} role="radio" aria-checked={now === id}
+              onClick={async () => { if (now === id) return; setError(''); try { await setGroupRole(groupId, pk, id) } catch (x) { setError(x instanceof CheckFailed ? x.message : CHECK_ERRORS.failed) } }}>
+              <span className="radio" aria-hidden="true" />
+              <span className="t"><b>{label}</b><small>{line}</small></span>
+            </Btn>
+          ))}
+        </div>
+      ) : <div className="pick-row role-row ro"><span className="t"><b>{word}</b></span></div>}
+      {error && <div className="error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
+      {may && pk !== me() && (removing
+        ? <div className="row" style={{ gap: 8, marginTop: 10 }}>
+            <Btn className="btn small danger" onClick={async () => { await decline(groupId, pk); setRemoving(false) }}>Remove {displayName(pk)}</Btn>
+            <button className="btn small ghost" onClick={() => setRemoving(false)}>Keep</button>
+          </div>
+        : <button type="button" className="pick-row danger remove-row" onClick={() => setRemoving(true)}><TrashIcon /><span>Remove from {name}</span></button>)}
     </div>
   )
 }

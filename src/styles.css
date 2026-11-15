@@ -1250,3 +1250,116 @@ div.settings-row { cursor: default; }
 .sm-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .sm-row .t small { color: var(--muted); font-size: 13px; }
 .sm-row .link.danger { color: var(--danger); }
+
+/* ---- the event screen (docs/checkin.md §4): header at three levels over Chat · Photos · People ---- */
+.ev-screen { position: relative; }
+.evh { flex: none; position: relative; border-bottom: 1px solid var(--line); background: var(--bg); touch-action: pan-x; user-select: none; -webkit-user-select: none; transition: transform 160ms ease; }
+.evh.dragging { transition: none; }
+.evh.lvl2 { flex: 1; min-height: 0; display: flex; flex-direction: column; border-bottom: 0; }
+.evh-bar { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 16px; min-height: 44px; text-align: left; color: var(--text); font: inherit; font-size: 14px; }
+.evh-bar .evh-date { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.evh-bar .ico { color: var(--muted); flex: none; }
+.evh-chip { margin: 0; flex: none; }
+.evh-body { padding: 0 0 28px; }
+.evh-body.full { padding-bottom: 44px; flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y; }
+.evh-cover { -webkit-user-drag: none; pointer-events: none; display: block; width: 100%; max-height: 22vh; object-fit: cover; }
+.evh-body.full .evh-cover { max-height: 34vh; }
+.evh-main { padding: 10px 16px 0; display: flex; flex-direction: column; gap: 8px; }
+.evh-when { margin: 0; font-size: 15px; }
+.evh-where { display: inline-flex; align-items: center; gap: 6px; color: var(--text); font-size: 15px; text-decoration: none; min-width: 0; overflow-wrap: anywhere; }
+.evh-where .ico { color: var(--muted); flex: none; }
+.evh-online { margin: 0; font-size: 13px; }
+.ev-control { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+.ev-control .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.ev-control .ev-ticket-link, .ev-control .ev-asking { align-self: flex-start; }
+@media (min-width: 900px) { .ev-control { max-width: 440px; } .evh-cover, .evh-body.full .evh-cover { max-height: 220px; } }
+.ev-control .ev-state { margin: 0; }
+.ev-control .ev-state.bad { color: #dc2626; }
+.ev-still { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 14px; }
+.ev-still span { flex: 1 1 100%; }
+.evh-going { display: flex; align-items: center; gap: 10px; color: var(--muted); font: inherit; font-size: 14px; text-align: left; padding: 2px 0; }
+.ev-faces { display: inline-flex; padding-left: 6px; }
+.ev-faces .avatar { margin-left: -6px; border: 2px solid var(--bg); border-radius: 99px; }
+.evh-teaser { max-height: 4.4em; overflow: hidden; color: var(--muted); font-size: 14px; mask-image: linear-gradient(#000 60%, transparent); -webkit-mask-image: linear-gradient(#000 60%, transparent); }
+.evh-main section { margin-top: 10px; }
+.evh-main section h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+.ev-person { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 0; text-align: left; color: var(--text); font: inherit; }
+.ev-person .t { display: flex; flex-direction: column; min-width: 0; }
+.ev-person .t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-person .t small { font-size: 13px; color: var(--muted); }
+.evh-host { margin-top: 14px; }
+.evh-main .ev-url code { display: block; overflow-wrap: anywhere; font-size: 13px; margin-bottom: 8px; }
+.evh-main .ev-url .btn { display: inline-flex; align-items: center; gap: 6px; }
+.evh-handle { position: absolute; left: 50%; bottom: 2px; transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 0; width: 72px; height: 24px; color: var(--muted); }
+.evh-handle .grip { width: 36px; height: 4px; border-radius: 99px; background: var(--line); margin-top: 4px; }
+.evh-handle .ico { width: 16px; height: 16px; display: none; }
+@media (min-width: 900px) { .evh-handle .grip { display: none; } .evh-handle .ico { display: block; } }
+.ev-tabs { flex: none; margin: 8px 12px; }
+.ev-content { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.ev-content > .scroll, .ev-content > div { min-height: 0; }
+.ev-photos-add { padding-top: 4px; padding-bottom: 10px; }
+.ev-photos-add .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; padding: 0 2px 16px; }
+@media (min-width: 900px) { .photo-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); } }
+.photo-thumb { aspect-ratio: 1; padding: 0; border: 0; background: var(--surface); overflow: hidden; display: block; cursor: zoom-in; }
+.photo-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ev-people .ev-checkin-row { padding: 6px 16px; border-bottom: 1px solid var(--line); }
+.ev-member .ev-member-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ev-member .ev-member-name > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-member .ev-member-name small { font-size: 13px; color: var(--muted); font-weight: 400; }
+.in-mark { color: #16a34a; font-weight: 700; }
+.member-row { border: 0; background: none; color: var(--text); font: inherit; cursor: pointer; }
+.member-row .t { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.member-row .t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.member-row .t small { font-size: 13px; color: var(--muted); }
+.member-row:hover .t b { text-decoration: underline; }
+
+/* my ticket: the QR full screen on white */
+.ticket-screen { position: fixed; inset: 0; z-index: 60; background: #fff; color: #09090b; display: flex; align-items: center; justify-content: center; padding: 16px; overflow-y: auto; }
+.ticket-screen .ticket-close { position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px; color: #09090b; }
+.ticket-card { width: 100%; max-width: 380px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; }
+.ticket-qr { width: min(84vw, 340px); height: auto; image-rendering: pixelated; }
+.ticket-name { font-size: 22px; font-weight: 700; margin-top: 8px; }
+.ticket-type { font-size: 15px; font-weight: 600; padding: 2px 10px; border-radius: 99px; background: #f4f4f5; }
+.ticket-event { display: flex; flex-direction: column; font-size: 15px; color: #3f3f46; margin-top: 4px; }
+.ticket-in { margin-top: 10px; font-weight: 700; color: #15803d; font-size: 16px; }
+.ticket-hint { color: #71717a; font-size: 14px; margin: 10px 0 0; }
+
+/* checking people in */
+.checkin-screen { position: fixed; inset: 0; z-index: 55; background: var(--bg); display: flex; flex-direction: column; }
+@media (min-width: 900px) { .checkin-screen { left: 50%; transform: translateX(-50%); width: min(560px, 100%); border-left: 1px solid var(--line); border-right: 1px solid var(--line); } }
+.scan-box { position: relative; flex: none; height: 45vh; background: #09090b; overflow: hidden; display: grid; place-items: center; }
+.scan-box video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-box.off video, .scan-box.starting video { display: none; }
+.scan-box.off { height: 132px; }
+.scan-box.off .scan-result { position: static; margin: 0 12px; align-self: center; }
+.scan-note { position: relative; color: #e4e4e7; text-align: center; padding: 0 24px; font-size: 15px; }
+.scan-frame { position: relative; width: min(56vw, 240px); aspect-ratio: 1; border: 3px solid rgba(255, 255, 255, 0.85); border-radius: 18px; box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.25); }
+.scan-result { position: absolute; left: 12px; right: 12px; bottom: 12px; padding: 14px 16px; border-radius: 12px; font-weight: 600; font-size: 16px; color: #fff; text-align: left; }
+.scan-result.ok, .ticket-check.ok { background: #15803d; }
+.scan-result.already, .ticket-check.already { background: #b45309; }
+.scan-result.bad, .ticket-check.bad { background: #b91c1c; }
+.checkin-count { padding: 12px 16px 8px; font-size: 15px; color: var(--muted); }
+.checkin-count b { color: var(--text); }
+.checkin-list { padding-top: 6px; }
+.checkin-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 10px 16px; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; min-height: 56px; }
+.checkin-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.checkin-row .t b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.checkin-row .t small { font-size: 13px; color: var(--muted); }
+.checkin-row .check-mark { width: 28px; height: 28px; flex: none; border-radius: 99px; border: 2px solid var(--line); display: grid; place-items: center; font-weight: 800; }
+.checkin-row .check-mark.on { background: #16a34a; border-color: #16a34a; color: #fff; }
+.checkin-row.confirm { background: var(--surface); cursor: default; }
+.checkin-row[aria-busy='true'] { opacity: 0.6; }
+.ticket-check { margin: 8px 12px 0; display: flex; align-items: center; gap: 10px; color: #fff; border: 0 !important; flex-wrap: wrap; }
+.ticket-check:not(.ok):not(.already):not(.bad) { background: var(--surface); color: var(--text); }
+.ticket-check .t { flex: 1 1 200px; font-weight: 600; }
+.ticket-check .btn.ghost { background: rgba(255, 255, 255, 0.18); color: inherit; border-color: transparent; }
+
+/* a profile: the belfry-wide role, the role in a group */
+.card-title { margin-bottom: 8px; font-size: 13px; }
+.profile-role .pick-row, .group-role .pick-row { padding-left: 0; padding-right: 0; }
+.profile-role .pick-row.ro, .group-role .pick-row.ro { cursor: default; min-height: 0; }
+.group-role .pick-group .pick-row { padding: 11px 14px; }
+.group-role .remove-row { margin-top: 8px; color: #dc2626; gap: 10px; }
+.group-role .remove-row .ico { color: #dc2626; }
+.profile-role .edit-roles { gap: 10px; color: var(--muted); font-size: 14px; min-height: 40px; }

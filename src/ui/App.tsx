@@ -20,10 +20,12 @@ import { SignInMethods } from './SignInMethods'
 import { GroupPage } from './GroupPage'
 import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
+import { demoEvent } from '../core/demoevent'
+import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
-import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication } from '../core/events'
+import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication, ticketLinkFromUrl } from '../core/events'
 import { eventOfGroup } from '../core/model'
 import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
@@ -118,6 +120,11 @@ export function App() {
   if (phase.p === 'out' && pendingInvite() && !signInFirst && !phase.error)
     return <>{veil}<OpenInvite token={pendingInvite()} backend={backend} onSignIn={() => setSignInFirst(true)}
       onJoined={async (s) => { await wipe(); await enter(s) }} /></>
+  // a ticket's QR opened by someone who isn't signed in: the event's public page
+  if (phase.p === 'out' && ticketLinkFromUrl()) {
+    location.replace(`https://${BELFRY.domain}/events/${encodeURIComponent(ticketLinkFromUrl())}`)
+    return null
+  }
   // an event's URL opened in the chat by someone with no account: the event, RSVP or apply
   if (phase.p === 'out' && eventLinkFromUrl() && !signInFirst && !phase.error)
     return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); setSignInFirst(true) }}
@@ -145,7 +152,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -228,7 +235,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
   else if (section === 'mentions') view = <MentionsScreen />
-  else if (section === 'events' && a) view = <EventScreen key={a} link={a} />
+  else if (section === 'events' && a) view = <EventScreen key={a} link={a} ticket={b === 't' ? c : undefined} />
   else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
@@ -240,7 +247,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'members') view = <MembersDirectory />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
-  else if (section === 'u') view = <ProfileView id={a} />
+  else if (section === 'u') view = <ProfileView key={a + (b === 'in' ? c : '')} id={a} inGroup={b === 'in' ? c : undefined} />
   else {
     const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
     const evOf = eventOfGroup(id) // an event's chat opens as the event

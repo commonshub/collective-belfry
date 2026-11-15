@@ -243,7 +243,7 @@ export function PullDown({ id, topic, onTopic, more, full = false }: { id: strin
         <h3>Members <span>{f.members.length}</span></h3>
         <div className={full ? 'pull-faces big' : 'pull-faces'}>
           {f.members.slice(0, full ? 24 : 10).map((p) => (
-            <button key={p} className="face" onClick={() => openProfile(p)} aria-label={displayName(p)}>
+            <button key={p} className="face" onClick={() => openProfile(p, id)} aria-label={displayName(p)}>
               <Avatar pubkey={p} size={full ? 44 : 28} />{full && <small>{displayName(p)}</small>}
             </button>
           ))}

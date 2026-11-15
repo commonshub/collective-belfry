@@ -161,6 +161,9 @@ export const groups: () => Group[] = perLog((list) => {
   const map = new Map<string, Group & { metaAt: Record<string, number> }>()
   const applied = new Map<string, Ev>() // group id + pubkey → latest 9021
   const decided = new Map<string, number>() // group id + pubkey → latest 9000 / 9001
+  const made = new Map<string, string>() // group id → its creator (first 9007)
+  const listed = new Map<string, string[]>() // group id → the relay's latest 39001
+  const byRole = new Map<string, boolean>() // group id + pubkey → admin by role
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
@@ -197,8 +200,8 @@ export const groups: () => Group[] = perLog((list) => {
         g.metaAt.vouches = e.created_at
       }
     }
-    if (e.kind === 9007) g.admins.add(e.pubkey) // its creator administers it (Belfry's relay patch)
-    if (e.kind === 39001) for (const t of e.tags) if (t[0] === 'p') g.admins.add(t[1])
+    if (e.kind === 9007) made.set(id, made.get(id) ?? e.pubkey) // its creator administers it (Belfry's relay patch)
+    if (e.kind === 39001) listed.set(id, e.tags.filter((t) => t[0] === 'p' && t[1]).map((t) => t[1]))
     if (e.kind === 39002) g.members = new Set(e.tags.filter((t) => t[0] === 'p').map((t) => t[1]))
     // admitted (9000 put-user) or removed / declined (9001 remove-user) by an admin
     if (e.kind === 9000 || e.kind === 9001) {
@@ -209,8 +212,11 @@ export const groups: () => Group[] = perLog((list) => {
       // 9001 ends that
       if (p && e.kind === 9000 && tag(e, 'reading') === '1') g.reading.add(p)
       else if (p) g.reading.delete(p)
-      // a co-host (events): put in with the admin role; the relay's 39001 says the same
-      if (p && e.kind === 9000 && e.tags.some((t) => t[0] === 'p' && t[1] === p && t[2] === 'admin')) g.admins.add(p)
+      // an admin by role (co-hosts, POST /group-roles; docs/checkin.md): put in with ["p", k, "admin"];
+      // a 9000 tagged ["role", "member"] or a 9001 ends it (a ticket's 9000 does not). The relay's
+      // 39001 never lists them: zooid has no per-group admins.
+      if (p && e.kind === 9000 && e.tags.some((t) => t[0] === 'p' && t[1] === p && t[2] === 'admin')) byRole.set(id + p, true)
+      else if (p && (e.kind === 9001 || tag(e, 'role') === 'member')) byRole.set(id + p, false)
     }
     if (e.kind === 1985 && tag(e, 'L') === 'belfry/guest' && e.tags.some((t) => t[0] === 'l' && (t[1] === 'saved' || t[1] === 'member'))) {
       const p = tag(e, 'p')
@@ -236,6 +242,12 @@ export const groups: () => Group[] = perLog((list) => {
     if (g && h && h !== pod && !g.parent) g.parent = h
   }
   for (const g of map.values()) if ((g.isPod || g.isProposal) && !g.parent) g.parent = 'general'
+  for (const g of map.values()) {
+    const c = made.get(g.id)
+    if (c) g.admins.add(c)
+    for (const k of listed.get(g.id) ?? []) g.admins.add(k)
+  }
+  for (const [k, on] of byRole) if (on) map.get(k.slice(0, -64))?.admins.add(k.slice(-64))
   for (const [k, e] of applied) {
     const g = map.get(k.slice(0, -64))
     if (!g || g.members.has(e.pubkey) || (decided.get(k) ?? 0) >= e.created_at) continue

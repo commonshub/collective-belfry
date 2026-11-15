@@ -41,12 +41,20 @@ export const slugOf = (title: string) => title.toLowerCase().normalize('NFKD').r
 // ---- what the belfry's API answers (GET /api/v1/events/<link>) ---------------------------
 
 export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean }
+export interface ApiViewer {
+  host: boolean; ticket: string | null; applied: boolean; waitlist: boolean; declined: boolean; rsvp: Rsvp | null; member: boolean
+  /** check-in (docs/checkin.md): my ticket's code and the URL its QR holds, when I hold one */
+  ticket_code?: string | null; ticket_url?: string | null; checked_in?: number | null
+  roles?: ('host' | 'cohost' | 'steward')[]; may_check_in?: boolean
+}
 export interface ApiEvent {
   d: string; coord: string; kind: number; group: string; link: string; url: string; title: string; description: string
   all_day: boolean; start: string | null; end: string | null; tz: string; location: string; online: boolean; links: string[]
   cover: string | null; visibility: Visibility; status: 'scheduled' | 'cancelled'; status_reason: string
   hosts: { pubkey: string; name: string }[]; tickets: ApiTicket[]; going: number; community: string
-  me: { host: boolean; ticket: string | null; applied: boolean; waitlist: boolean; declined: boolean; rsvp: Rsvp | null; member: boolean } | null
+  me: ApiViewer | null
+  /** the same block as `me` (docs/checkin.md) */
+  viewer?: ApiViewer | null
 }
 
 const remote = new Map<string, { at: number; ev?: ApiEvent; error?: string }>()
@@ -423,6 +431,13 @@ export function eventLinkFromUrl(): string {
   const m = /^#\/events\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])$/.exec(location.hash)
   return m ? m[1] : ''
 }
+/** A ticket's QR opened in the chat (#/events/<link>/t/<code>): the event's link, else ''. */
+export function ticketLinkFromUrl(): string {
+  const m = /^#\/events\/([a-z0-9][a-z0-9-]{1,38}[a-z0-9])\/t\/[a-z2-7]{16}\/?$/.exec(location.hash)
+  return m ? m[1] : ''
+}
+/** Forget the cached answer for an event (after a check-in or a role change). */
+export const forgetRemote = (link: string) => { remote.delete(link); touch() }
 
 // ---- demo mode: what the belfry would publish ---------------------------------------------
 

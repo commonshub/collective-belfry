@@ -65,7 +65,7 @@ export function GroupPage({ id }: { id: string }) {
         <div className="section-title">Who’s in <span>{members.length}</span></div>
         {members.length === 0 && <p className="hint">Nobody yet.</p>}
         {members.map((p) => (
-          <button key={p} type="button" className="member member-open-row" onClick={() => openProfile(p)}>
+          <button key={p} type="button" className="member member-open-row" onClick={() => openProfile(p, id)}>
             <Avatar pubkey={p} size={32} /><span className="t">{displayName(p)}{g.admins.has(p) && <span className="role-tag">Admin</span>}</span>
           </button>
         ))}

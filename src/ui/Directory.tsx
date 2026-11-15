@@ -6,7 +6,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { NAME } from '../config'
 import { displayName, profiles } from '../core/model'
 import { roleBadge } from '../core/roles'
-import { directory, loadDirectory, loadRequests } from '../core/requests'
+import { directory, loadDirectory, loadMembership, loadRequests, mayInviteMembers } from '../core/requests'
+import { groups } from '../core/model'
+import { inOrder } from '../core/order'
+import { InviteSheet } from './Invite'
+import { PersonPlusIcon } from './icons'
 import { useVersion } from '../core/store'
 import { Avatar, back } from './common'
 import { useCommunityName } from './community'
@@ -18,6 +22,10 @@ export function MembersDirectory() {
   const community = useCommunityName(NAME)
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(true)
+  const [inviting, setInviting] = useState(false)
+  useEffect(() => { void loadMembership() }, [])
+  // the invite starts in # general, else the first open channel in the admins' order
+  const inviteIn = groups().find((g) => g.id === 'general')?.id ?? inOrder(groups().filter((g) => !g.isEvent && !g.isPod && !g.isProposal && !g.closed))[0]?.id
   useEffect(() => { void Promise.all([loadDirectory(), loadRequests()]).finally(() => setBusy(false)) }, [])
   const ps = profiles()
   const nameOf = (pk: string, fallback: string) => ps.get(pk)?.name || fallback || displayName(pk)
@@ -30,7 +38,9 @@ export function MembersDirectory() {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button>
         <h1>Members<small>{directory() ? `${directory()!.length} in ${community}` : community}</small></h1>
+        {mayInviteMembers() && inviteIn && <button className="icon-btn" aria-label="Invite someone" onClick={() => setInviting(true)}><PersonPlusIcon /></button>}
       </div>
+      {inviting && inviteIn && <InviteSheet id={inviteIn} preset="member" onClose={() => setInviting(false)} />}
       <div className="scroll">
         <RequestSections />
         <div className="pad-x dir-search"><input className="input" type="search" placeholder="Search members" aria-label="Search members" value={q} onChange={(e) => setQ(e.target.value)} /></div>
