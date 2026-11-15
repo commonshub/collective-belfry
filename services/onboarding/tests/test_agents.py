@@ -166,9 +166,17 @@ def test_a_guest_of_one_channel_is_brought_into_another(world):
         bot = guest_agent(c, rsvc, ada, ada_id, "garden")
         r = post(c, ada, "/api/channel-guests", {"channel": "android", "pubkey": pk(bot)})
         assert r.status_code == 200 and r.json()["added"] is True, r.text
-        kind, tags = published[-1]
-        assert kind == 9000 and ["h", "android"] in tags and ["agent", "1"] in tags
-        assert ["invited-by", pk(ada)] in tags
+        # the app's own background rounds (agents.mirror, watchers) may publish around this call:
+        # find the 9000 for the bot in android rather than trusting the last event
+        bot_pk = pk(bot)
+        adds = [
+            t
+            for k, t in published
+            if k == 9000 and ["h", "android"] in t and any(x[:2] == ["p", bot_pk] for x in t)
+        ]
+        assert adds, published[-3:]
+        tags = adds[-1]
+        assert ["agent", "1"] in tags and ["invited-by", pk(ada)] in tags
         time.sleep(1.1)
         r = post(c, ada, "/api/channel-guests", {"channel": "android", "pubkey": pk(bot)})
         assert r.json()["already"] is True
