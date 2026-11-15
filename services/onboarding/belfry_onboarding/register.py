@@ -52,6 +52,7 @@ M2O: dict[str, dict[str, str]] = {
     "belfry.follower": {"partner_id": "res.partner"},
     "belfry.key.code": {"partner_id": "res.partner"},
     "belfry.agent.request": {},
+    "belfry.passkey": {"partner_id": "res.partner"},
     "res.partner": {},
 }
 MODELS = set(M2O)

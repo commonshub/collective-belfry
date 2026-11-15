@@ -26,7 +26,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import claim, connect, mypass, setup, theme
+from . import claim, connect, mypass, passkeys, setup, theme
 from .connect import ConnectError
 from .core import Services
 
@@ -114,6 +114,7 @@ def page(svc: Services, f: dict[str, Any]) -> str:
 <form novalidate><label for="c-mail" style="font-weight:500;font-size:14px;display:block;margin-bottom:8px">E-mail</label>
 <input id="c-mail" type="email" name="email" autocomplete="email" placeholder="you@example.org" value="{to}">
 <p class="err" role="alert"></p><div class="actions"><button class="btn full" type="submit">Continue</button></div></form>
+{connect.PASSKEY_BUTTON}
 <a href="#" class="quiet center" data-go="other">Other ways to sign in</a></section>
 
 <section data-step="code" hidden>
@@ -182,6 +183,35 @@ def register(app: FastAPI) -> None:
         except ConnectError as exc:
             return fail(exc)
 
+    @app.post("/me/login/passkey/options")
+    async def login_passkey_options(request: Request):
+        try:
+            f, _ = await body_of(request)
+            return JSONResponse(
+                await run_in_threadpool(passkeys.sign_in_options, svc(request), "me:" + f["id"])
+            )
+        except passkeys.PasskeyError as exc:
+            return JSONResponse({"message": exc.message, "error": exc.code}, status_code=exc.status)
+        except ConnectError as exc:
+            return fail(exc)
+
+    @app.post("/me/login/passkey/verify")
+    async def login_passkey_verify(request: Request):
+        services = svc(request)
+        try:
+            f, body = await body_of(request)
+            partner = await run_in_threadpool(
+                passkeys.authenticate, services, "in:me:" + f["id"], body.get("credential")
+            )
+            member = await run_in_threadpool(passkeys.member_of_partner, services, partner)
+            if member is None:
+                raise ConnectError(409, "This passkey's account has no active membership here.")
+        except passkeys.PasskeyError as exc:
+            return JSONResponse({"message": exc.message, "error": exc.code}, status_code=exc.status)
+        except ConnectError as exc:
+            return fail(exc)
+        return signed_in(request, services, f, member)
+
     @app.post("/me/login/verify")
     async def login_verify(request: Request):
         services = svc(request)
@@ -191,6 +221,11 @@ def register(app: FastAPI) -> None:
             member = await run_in_threadpool(connect.verify_code, services, f, code)
         except ConnectError as exc:
             return fail(exc)
+        return signed_in(request, services, f, member)
+
+    def signed_in(
+        request: Request, services: Services, f: dict[str, Any], member: dict[str, Any]
+    ) -> JSONResponse:
         with _lock:
             FLOWS.pop(f["id"], None)
         days = services.settings.pass_page_session_days

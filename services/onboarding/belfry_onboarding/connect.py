@@ -38,7 +38,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, claim, community, console, device, mypass, nostr, setup, theme
+from . import apps, claim, community, console, device, mypass, nostr, passkeys, setup, theme
 from .clients.odoo import OdooError
 from .core import Services
 
@@ -245,6 +245,12 @@ APP_ICON = (
     'stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
 )
 
+# a passkey instead of the e-mail code (passkeys.py); shown only where the browser has them
+PASSKEY_BUTTON = (
+    '<div class="actions passkey-row" hidden><button type="button" class="btn ghost full" '
+    "data-passkey>Sign in with a passkey</button></div>"
+)
+
 JS = """<script>
 (() => {
   const W = document.getElementById('wiz'); if (!W) return;
@@ -307,6 +313,28 @@ JS = """<script>
     try { await post(base + '/send', { email: W.querySelector('input[name=email]').value.trim() }); again.textContent = 'A new code is on its way.'; }
     catch (x) { err('code', x.message); again.disabled = false; } });
   step('approve', async () => after(await post(base + '/approve', {})));
+  // a passkey (passkeys.py): the browser's own dialog, then the same as a right code
+  const pk = W.querySelector('[data-passkey]');
+  const u8 = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((s.length + 3) % 4)), (c) => c.charCodeAt(0));
+  const b64 = (b) => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  if (pk && window.PublicKeyCredential) {
+    pk.closest('.passkey-row').hidden = false;
+    pk.addEventListener('click', async () => {
+      if (pk.disabled) return; pk.disabled = true; err('email', '');
+      try {
+        const o = await post(base + '/passkey/options', {});
+        o.challenge = u8(o.challenge);
+        o.allowCredentials = (o.allowCredentials || []).map((c) => Object.assign({}, c, { id: u8(c.id) }));
+        const c = await navigator.credentials.get({ publicKey: o });
+        if (!c) throw new Error('No passkey was chosen.');
+        const r = c.response;
+        after(await post(base + '/passkey/verify', { credential: { id: c.id, rawId: b64(c.rawId), type: c.type,
+          response: { clientDataJSON: b64(r.clientDataJSON), authenticatorData: b64(r.authenticatorData), signature: b64(r.signature),
+            userHandle: r.userHandle ? b64(r.userHandle) : null }, clientExtensionResults: {}, authenticatorAttachment: c.authenticatorAttachment || null } }));
+      } catch (x) { err('email', x && x.name === 'NotAllowedError' ? 'The passkey was not used.' : (x.message || 'That did not work.')); }
+      finally { pk.disabled = false; }
+    });
+  }
   show(W.dataset.start);
 })();
 </script>"""
@@ -374,6 +402,7 @@ def page(svc: Services, f: dict[str, Any], known: dict[str, Any] | None) -> str:
 <form novalidate><label for="c-mail" style="font-weight:500;font-size:14px;display:block;margin-bottom:8px">E-mail</label>
 <input id="c-mail" type="email" name="email" autocomplete="email" placeholder="you@example.org">
 <p class="err" role="alert"></p><div class="actions"><button class="btn full" type="submit">Continue</button></div></form>
+{PASSKEY_BUTTON}
 <a href="#" class="quiet center" data-go="other">Other ways to sign in</a></section>
 
 <section data-step="code" hidden>
@@ -512,6 +541,41 @@ def register(app: FastAPI) -> None:
             code = "".join(c for c in str(body.get("code", "")) if c.isdigit())[:6]
             member = await run_in_threadpool(verify_code, services, f, code)
             result = await run_in_threadpool(outcome, services, f, member)
+        except ConnectError as exc:
+            return fail(exc)
+        except ValueError as exc:
+            return JSONResponse({"message": str(exc)}, status_code=409)
+        response = JSONResponse(result)
+        sign_in(response, request, member)
+        return response
+
+    @app.post("/console/connect/passkey/options")
+    async def connect_passkey_options(request: Request):
+        try:
+            f, _ = await body_of(request)
+            return JSONResponse(
+                await run_in_threadpool(passkeys.sign_in_options, svc(request), f["id"])
+            )
+        except passkeys.PasskeyError as exc:
+            return JSONResponse({"message": exc.message, "error": exc.code}, status_code=exc.status)
+        except ConnectError as exc:
+            return fail(exc)
+
+    @app.post("/console/connect/passkey/verify")
+    async def connect_passkey_verify(request: Request):
+        """A passkey in place of the e-mail code: what follows is the same as after a right code."""
+        services = svc(request)
+        try:
+            f, body = await body_of(request)
+            partner = await run_in_threadpool(
+                passkeys.authenticate, services, f"in:{f['id']}", body.get("credential")
+            )
+            member = await run_in_threadpool(passkeys.member_of_partner, services, partner)
+            if member is None:
+                raise ConnectError(409, "This passkey's account has no active membership here.")
+            result = await run_in_threadpool(outcome, services, f, member)
+        except passkeys.PasskeyError as exc:
+            return JSONResponse({"message": exc.message, "error": exc.code}, status_code=exc.status)
         except ConnectError as exc:
             return fail(exc)
         except ValueError as exc:
