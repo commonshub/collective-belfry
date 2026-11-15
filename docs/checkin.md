@@ -96,16 +96,58 @@ take it as a universal / app link (`/events/*` is already in apple-app-site-asso
   00:00 local on the first day to the end of the last day, and always in the People tab's menu
   for those who may.
 
-## 4. The web chat
+## 4. The web chat (as built: village-app branch `checkin`)
 
-See the chat's section in this file's history and `src/ui/EventScreen.tsx`. In short: the event
-screen has three levels (bar / half / full), a Chat · Photos · People switch, "Get tickets" /
-"Show my ticket" (full-screen QR), "Check people in" (camera with BarcodeDetector or a jsQR
-fallback, a result card for 2 s, the list with search, undo with confirmation). Profiles opened
-from a group show "In <group>" with the role picker for that group's admins; the belfry-wide
-"Role" section replaced the "Admin of the belfry" switch.
+Files: `src/ui/Events.tsx` (the event screen), `src/ui/CheckIn.tsx` (ticket, check-in, ticket
+card), `src/core/checkin.ts` (roles, labels, API calls, error words), `src/core/scan.ts` (QR from
+the camera), `src/core/demoevent.ts` (demo data). Browser test: `site/.shots/chat/checkin.cjs` in
+the belfry agent's workspace (58 checks, including a fake camera showing a ticket's QR).
+
+- **The event screen.** One header at three levels: bar (date + my status chip), half (where it
+  opens: cover, when — the time zone only when not mine —, where → OpenStreetMap / the online link,
+  my control, "N people ask to come · Review" for hosts, "Check people in" for host / co-host /
+  steward / admins from 00:00 on the first day to the end of the last, "N going · M maybe" with
+  faces) and full (also Hosted by, Going, Maybe, tickets, the description, URL + Share + QR, and
+  for hosts Edit / Invite a co-host / Guest list). Drag the header or its handle down / up; tap
+  the title to fold to the bar or open half; on ≥900 px the handle is a chevron (half ↔ full) and
+  a wheel or touch scroll in the content folds the header to the bar.
+- **My control.** No ticket types: Going / Maybe / Can't go (and "Show my ticket" as a small
+  button once going: the implicit ticket has a code too). Ticket types: "Get tickets" until I
+  hold one, then "Show my ticket" + the RSVP row. Applied / waitlist / declined: the state and
+  Withdraw.
+- **Chat · Photos · People** show once I'm in (in the group, holding a ticket, a host, or having
+  answered the plain RSVP); before that the header and the start of the description. Photos: the
+  group's images newest first (3 columns on a phone), tap → the viewer, "Add photos" (a kind 9 with
+  the images, as the composer sends them). People: Hosts (Host / Co-host / Steward), Going (ticket
+  type as the second line), Maybe; a ✓ for who is checked in, only for those who check in; a
+  message button per row; tap → the profile opened from the event.
+- **Show my ticket.** Full screen on white, QR of `ticket_url`, my name (none rather than "You"),
+  the ticket type, the event and its time, "Checked in at HH:MM" once done; screen kept on with
+  the Wake Lock API where the browser allows it (no web API raises the brightness).
+- **Check people in.** Camera on top (45 % of the height; a 132 px note when there is no camera);
+  a frame is read every 250 ms; a text that is a URL ending `/t/<16 base32>` sends only the code;
+  vibrate, result card for 2 s (green / amber / red), the same text ignored for 3 s; then
+  "N of M checked in", a search field, the ticket holders (name, ticket type, "in at", a check);
+  tap → check in (locks), tap a checked one → "Undo check-in?". The list follows the relay's
+  labels live, so every checker's phone updates.
+- **A ticket URL** (`chat.<domain>/events/<link>/t/<code>`): for those who may check in, the check-in
+  is done at once and a card says how it went (with Undo); the code leaves the address at once
+  (`location.replace`), never shows on screen. Signed in without the right: the event only. Not
+  signed in: `https://<domain>/events/<link>`.
+- **Profiles.** Opened from a group (`#/u/<npub>/in/<group>`): "In <group>" with the role there,
+  a radio list for that group's admins and the belfry's (Member / Admin, or Attendee / Co-host /
+  Steward for an event; the creator is "Host", read only) and "Remove from <group>" (a 9001,
+  confirmed). The belfry-wide "Role in <community>" now shows to members too (read only); admins
+  get the picker and "Edit roles…" (→ Belfry settings → Roles).
+- **People lists.** Channel members have no label chips any more: face, name, the role (or guest /
+  place) as the second line; tap → the profile with that channel. The Members screen has an
+  "Invite someone" button (person-plus) for whoever may invite members (`mayInviteMembers`),
+  opening the invite sheet on "Joins as: Member" in #general (else the first open channel in the
+  admins' order).
 
 ## Open
 
+- Removing someone from a group from a co-host's profile publishes the 9001 as the co-host, which
+  zooid refuses (co-hosts are not relay admins); it should go through the belfry like decisions.
 - A zooid patch (0005) letting per-group admins moderate on the relay and listing them in 39001
   would make clients that only read 39001 see co-hosts too. Not done: a relay rebuild on every box.
