@@ -365,6 +365,12 @@ chat.{$BELFRY_DOMAIN} {
 	}
 	# Android App Links: guest links (chat.<domain>/join/<token>) open in Belfry for Android
 	# (sh.belfry.app, release signing certificate of opencollective/belfry-android)
+	# iOS universal links for Belfry for iPhone (team 4MS4Y34UMJ): guest links and event addresses
+	handle /.well-known/apple-app-site-association {
+		header Content-Type application/json
+		header Cache-Control "public, max-age=3600"
+		respond `{"applinks":{"details":[{"appIDs":["4MS4Y34UMJ.sh.belfry.app"],"components":[{"/":"/join/*","comment":"guest links"},{"/":"/events/*","comment":"event addresses"}]}]}}` 200
+	}
 	handle /.well-known/assetlinks.json {
 		header Content-Type application/json
 		header Cache-Control "public, max-age=3600"
