@@ -46,7 +46,7 @@ import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
 import { amGuest, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
 import { GATES, SECTION_TITLE, sectionOf } from '../core/places'
-import { charter, remoteAgreements, toAgree } from '../core/charter'
+import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
 import { applyStatus } from '../core/apply'
 import { GateIcon, PlusIcon } from './icons'
 
@@ -109,7 +109,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
   const dnd = useChannelDrag([], life, true)
   const waitingN = requestCount()
   const rules = charter()
-  const showCharter = guest ? (remoteAgreements()?.length ?? rules.length) > 0 : rules.length > 0 || steward
+  const showCharter = guest ? (remoteAgreements()?.length ?? rules.length) > 0 : charterExists() || steward // the group exists, or a steward (to write the first)
   const fresh = rules.length ? toAgree().length : 0
   const members = group('general')?.members.size ?? 0
   const Row = ({ g }: { g: Group }) => {
@@ -157,7 +157,10 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
     <div className="screen town-list">
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
-        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} members` : ''}</small></h1>
+        {/* stewards: the belfry's name opens its settings, as in Discord */}
+        {steward
+          ? <h1 style={{ paddingLeft: drawer ? 0 : 8 }}><button type="button" className="belfry-name" aria-label={`${community} settings`} onClick={() => closeDrawer('settings')}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span>{community}</span><ChevronDownIcon /></button><small>{members ? `${members} members` : ''}</small></h1>
+          : <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} members` : ''}</small></h1>}
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}><PlusIcon /></button>
       </div>
       <div className="scroll">
