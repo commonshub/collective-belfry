@@ -20,6 +20,36 @@ if (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIn
   if (v && !/maximum-scale/.test(v.getAttribute('content') ?? '')) v.setAttribute('content', v.getAttribute('content') + ', maximum-scale=1')
 }
 
+// The on-screen keyboard. iOS Safari doesn't shrink the page for it (interactive-widget is
+// ignored there): it pans the page under a smaller visual viewport, so a composer at the bottom
+// ends up behind the keyboard or the page slides off the top (Xavier, 2026-11-16, an e-mail
+// reply). While the keyboard is up, the app is pinned to exactly the visible part (styles.css,
+// html.kb #root) and the page is kept from panning. Browsers that resize the page themselves
+// (Android Chrome with resizes-content) never see a gap, so nothing changes there.
+const vv = window.visualViewport
+if (vv) {
+  const root = document.documentElement
+  let frame = 0
+  const fit = () => {
+    frame = 0
+    const gap = window.innerHeight - vv.height
+    const up = gap > 120 && !!document.activeElement?.matches?.('textarea, input, [contenteditable]')
+    root.classList.toggle('kb', up)
+    if (up) {
+      root.style.setProperty('--app-h', `${Math.round(vv.height)}px`)
+      root.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+    } else {
+      root.style.removeProperty('--app-h')
+      root.style.removeProperty('--app-top')
+    }
+  }
+  const later = () => { if (!frame) frame = requestAnimationFrame(fit) }
+  vv.addEventListener('resize', later)
+  vv.addEventListener('scroll', later)
+  document.addEventListener('focusin', later)
+  document.addEventListener('focusout', () => setTimeout(later, 50))
+}
+
 // A second tap on the same button within 600 ms never reaches the app (double sends); the first
 // one is answered at once: the button shows it was pressed (styles.css, [data-tapped]).
 const tapped = new WeakMap<Element, number>()
