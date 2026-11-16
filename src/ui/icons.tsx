@@ -103,3 +103,12 @@ export const ScanIcon = () => <Svg><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 
 export const PersonPlusIcon = () => <Svg><circle cx="10" cy="8" r="4" /><path d="M3 21a7 7 0 0 1 14 0M19 8v6M16 11h6" /></Svg>
 export const ShareIcon = () => <Svg><path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" /></Svg>
 export const MessageIcon = () => <Svg><path d="M4 5h16v11H9l-5 4z" /></Svg>
+// the bottom bar (Home · Calendar · Create · Groups · Town)
+export const HomeIcon = () => <Svg><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z" /></Svg>
+export const PlusIcon = () => <Svg><path d="M12 5v14M5 12h14" /></Svg>
+/** The town: a belfry tower over roofs. */
+export const TownIcon = () => <Svg><path d="M9 21V8l3-4 3 4v13M4 21v-7l5-3M20 21v-7l-5-3M3 21h18M11 12h2M11 16h2" /></Svg>
+export const CheckCircleIcon = ({ on = false }: { on?: boolean }) => <Svg fill={on ? 'currentColor' : 'none'}><circle cx="12" cy="12" r="9" />{on ? <path d="m8 12 3 3 5-6" stroke="var(--bg)" /> : null}</Svg>
+export const ClockIcon = () => <Svg><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Svg>
+export const GripIcon = () => <Svg><path d="M5 9h14M5 15h14" /></Svg>
+export const GateIcon = () => <Svg><path d="M4 21V9a8 8 0 0 1 16 0v12M8 21v-9M12 21v-9M16 21v-9M3 21h18" /></Svg>

@@ -5,6 +5,7 @@ import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard } from './sync'
 import { belfryAdminKeys, isAdmin as isAdminNow } from './access'
+import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
 // recompute per render for a village-sized dataset.
@@ -78,7 +79,10 @@ export function displayName(pubkey: string, ps = profiles()) {
 
 export interface Group {
   id: string
+  /** The name to show: on-brand for the default places while their own name is the default (places.ts). */
   name: string
+  /** The group's own name as the relay has it (what an edit writes back). */
+  rawName: string
   about: string
   picture?: string
   createdAt: number
@@ -177,7 +181,7 @@ const groupSets: () => GroupSets = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
+      g = { id, name: id, rawName: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -281,10 +285,13 @@ const groupSets: () => GroupSets = perLog((list) => {
   }
   const gone = new Map<string, Group>()
   for (const [id, at] of goneAt) { const g = map.get(id); if (g && !((madeAt.get(id) ?? 0) > at)) gone.set(id, g) }
-  const every = [...map.values()]
-    .filter((g) => !gone.has(g.id))
+  // the on-brand names of the default places (display only; rawName is what the relay has)
+  for (const g of map.values()) { g.rawName = g.name; g.name = placeName(g.id, g.name) ?? g.name }
+  const kept = [...map.values()].filter((g) => !gone.has(g.id))
+  // the charter (19.32) is a group of the relay, never a channel or a group in any list
+  const every = kept.filter((g) => g.id !== CHARTER_ID)
     .sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.lastActivity - a.lastActivity))
-  return { every, live: every.filter((g) => !g.archived), archived: every.filter((g) => g.archived), byId: new Map(every.map((g) => [g.id, g])), gone }
+  return { every, live: every.filter((g) => !g.archived), archived: every.filter((g) => g.archived), byId: new Map(kept.map((g) => [g.id, g])), gone }
 })
 
 /** The groups people work in: every channel, group, event chat and proposal that is neither

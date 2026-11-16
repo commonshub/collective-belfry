@@ -39,6 +39,8 @@ import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from 
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
+import { ApplyScreen, CalendarPlace, GroupsScreen, HomeScreen, SidePlaces, TabBar, TodosScreen, demoApplyStatus, placeOf, placesOn, townPath } from './Places'
+import { CharterScreen, WelcomeFlow, demoCharter, welcomeDue } from './Charter'
 
 type Phase = { p: 'loading' } | { p: 'out'; error?: string } | { p: 'in'; s: Session }
 
@@ -153,7 +155,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -233,10 +235,21 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   if (status.access === 'denied')
     return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
 
-  const [section = 'c', a, b, c, d] = route
+  // the places (Places.tsx): the app starts on Home; #/town opens the town channel I was in
+  const places = placesOn()
+  if (places && route[0] === 'town') { location.replace('#/' + townPath()); return null }
+  if (places && welcomeDue() && route[0] !== 'welcome') { location.replace('#/welcome'); return null }
+  const [section = places ? 'home' : 'c', a, b, c, d] = route
   let view
   let pane // a large screen: an open thread in a third column, its channel stays in the middle
-  if (section === 'channels' && !wide) view = <ChannelList />
+  if (places && section === 'home') view = <HomeScreen />
+  else if (places && section === 'calendar') view = <CalendarPlace />
+  else if (places && section === 'groups') view = <GroupsScreen />
+  else if (places && section === 'todos') view = <TodosScreen />
+  else if (places && section === 'apply') view = <ApplyScreen />
+  else if (section === 'charter') view = <CharterScreen sub={a} id={b} />
+  else if (section === 'welcome') view = <WelcomeFlow />
+  else if (section === 'channels' && !wide) view = <ChannelList />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
   else if (section === 'mentions') view = <MentionsScreen />
@@ -271,10 +284,11 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
   const current = section === 'c' ? chanId : section === 'events' ? a : undefined
-  if (!wide) return <><Phone current={current} section={section} open={drawer}>{view}</Phone>{toast}</>
+  const place = places ? placeOf(route) : undefined
+  if (!wide) return <><Phone current={current} section={section} open={drawer} bar={place ? <TabBar place={place} /> : undefined}>{view}</Phone>{toast}</>
   return (
     <div className="layout wide">
-      <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} /></aside>
+      <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} top={places ? <SidePlaces place={place} /> : undefined} /></aside>
       <main className="main screen">{view}</main>
       {pane && <aside className="thread-pane" aria-label="Thread">{pane}</aside>}
       {toast}

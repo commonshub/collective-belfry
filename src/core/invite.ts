@@ -3,7 +3,7 @@
 // admits them, so the link opens straight away. Guests of other channels are not members: they
 // need a guest link (the invite sheet's switch), not this.
 import { BELFRY } from '../config'
-import { agentOwner, canAdmin, loadAccessInfo } from './access'
+import { agentOwner, agentOwners, canAdmin, demoSetAgents, isAdmin, loadAccessInfo } from './access'
 import { relayAdmin } from './checkin'
 import { admit } from './actions'
 import { sendDm } from './dm'
@@ -59,10 +59,19 @@ async function agentsCall(body: Record<string, unknown>): Promise<MyAgents> {
   if (!res.ok) throw new Error(out.message || 'Could not do that. Try again.')
   return { agents: Array.isArray(out.agents) ? out.agents : [], limit: Number(out.limit) || 0 }
 }
-/** My agents and how many I can have. */
-export const myAgents = () => agentsCall({})
+/** My agents and how many I can have (demo: my own agents as belfry.json says, one at most). */
+export const myAgents = (): Promise<MyAgents> => isLocalOnly()
+  ? Promise.resolve({ agents: Object.entries(agentOwners()).filter(([, o]) => o === me()).map(([pubkey]) => ({ pubkey, name: profiles().get(pubkey)?.name ?? 'Agent', since: '' })), limit: isAdmin() ? 99 : 1 })
+  : agentsCall({})
 /** Make a guest agent my own (it stays a member for as long as I am one), or remove my agent. */
 export async function setMyAgent(pubkey: string, mine: boolean): Promise<MyAgents> {
+  if (isLocalOnly()) { // demo: what the belfry would do to belfry.json "agents"
+    const map = agentOwners()
+    if (mine) map[pubkey] = me(); else delete map[pubkey]
+    demoSetAgents(map)
+    touch()
+    return myAgents()
+  }
   const out = await agentsCall({ pubkey, mine })
   await loadAccessInfo()
   touch()

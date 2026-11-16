@@ -354,7 +354,7 @@ export function Members({ groupId }: { groupId: string }) {
 
 interface LogItem { ev: Ev; icon: string; text: string; detail?: string; go?: string }
 
-const LABEL_WORDS: Record<string, string> = { steward: 'made someone a steward', none: 'changed someone’s role', 'checked-in': 'checked someone in', 'not-checked-in': 'undid a check-in', pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
+const LABEL_WORDS: Record<string, string> = { steward: 'put someone on the door', none: 'changed someone’s role', 'checked-in': 'checked someone in', 'not-checked-in': 'undid a check-in', pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
 const TASK_WORDS: Record<string, string> = { claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
 const short = (t: string, n = 80) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x }
 

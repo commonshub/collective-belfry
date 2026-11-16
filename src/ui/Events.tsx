@@ -320,7 +320,7 @@ function PhotoThumb({ m, onOpen }: { m: Media; onOpen: () => void }) {
   return <button className="photo-thumb" onClick={onOpen} aria-label="Open the photo">{src && <img src={src} alt="" loading="lazy" />}</button>
 }
 
-/** Hosts first (Host / Co-host / Steward under the name), then Going, then Maybe. Tap → the
+/** Hosts first (Host / Co-host / Door under the name), then Going, then Maybe. Tap → the
  *  profile; the message button opens a conversation. A check for who is in, for those who check in. */
 function EventPeople({ e, p, holders, titles, may, plain, onCheckIn }: { e: CalEvent; p: People; holders: Map<string, string>; titles: Map<string, string>; may: boolean; plain: boolean; onCheckIn: () => void }) {
   useVersion()

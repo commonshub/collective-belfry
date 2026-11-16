@@ -8,6 +8,7 @@ import { enqueue, me, newId } from './sync'
 import { all } from './store'
 import { reading } from './guestmode'
 import { isAdmin } from './access'
+import { wireName } from './places'
 
 // Every user action is one or more nostr events queued in the outbox.
 
@@ -73,7 +74,7 @@ export function metaTags(id: string, change: string[][]): string[][] {
   const g = group(id)
   const kept: string[][] = []
   if (g) {
-    kept.push(['name', g.name], ['about', g.about])
+    kept.push(['name', g.rawName], ['about', g.about])
     if (g.picture) kept.push(['picture', g.picture])
     if (g.closed) kept.push(['closed'], ...(g.prompt ? [['prompt', g.prompt]] : []), ...(g.vouches > 0 ? [['vouches', String(g.vouches)]] : []))
     else if (g.isPod || g.isEvent) kept.push(['open'])
@@ -92,7 +93,7 @@ export async function setArchived(id: string, on: boolean) {
   await archiveGroupMeta(id, metaTags(id, [['archived', on ? '1' : '0']]), on)
 }
 
-export const editPod = (id: string, name: string, about: string, access: PodAccess) =>
+export const editPod = (id: string, typed: string, about: string, access: PodAccess, name = wireName(id, typed)) =>
   editGroupMeta(id, metaTags(id, [['name', name], ['about', about], ...accessTags(access)]), { name, about, closed: access.closed, prompt: access.closed ? access.prompt.trim() || DEFAULT_PROMPT : '', vouches: access.closed ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
 
 /** NIP-29 join request: in an open group it lets you in; in a closed one it is your application,
@@ -107,7 +108,7 @@ export const decline = (id: string, pubkey: string) => enqueue('groups', { kind:
 export const vouch = (id: string, request: { id: string; pubkey: string }, on = true) =>
   enqueue('groups', { kind: 1985, tags: [['h', id], ['L', VOUCH_NS], ['l', on ? 'vouch' : 'withdrawn', VOUCH_NS], ['e', request.id], ['p', request.pubkey]] })
 
-export const editChannel = (id: string, name: string, about: string) =>
+export const editChannel = (id: string, typed: string, about: string, name = wireName(id, typed)) =>
   editGroupMeta(id, metaTags(id, [['name', name], ['about', about]]), { name, about })
 
 /** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a

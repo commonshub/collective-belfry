@@ -13,6 +13,7 @@
 //   POST /events/<d>/attendees {}                         → {people, going, checked_in}
 //   POST /events/<d>/checkin {code | pubkey, undo?}       → {person, already}
 // Errors are shown in fixed words by code, never the server's text.
+import { DOOR } from './places'
 import { sha256 } from '@noble/hashes/sha256'
 import { BELFRY } from '../config'
 import { belfryAdminKeys, isAdmin } from './access'
@@ -102,7 +103,7 @@ export function onTheDay(e: Pick<CalEvent, 'start' | 'end'>, now = new Date()): 
 
 /** The word for a role in a group's people lists ('' for the default one). */
 export function roleWord(groupId: string, pk: string, e?: Pick<CalEvent, 'creator' | 'groupId'>): string {
-  if (e) { const r = eventRoles(e, pk)[0]; return r === 'host' ? 'Host' : r === 'cohost' ? 'Co-host' : r === 'steward' ? 'Steward' : '' }
+  if (e) { const r = eventRoles(e, pk)[0]; return r === 'host' ? 'Host' : r === 'cohost' ? 'Co-host' : r === 'steward' ? DOOR : '' }
   const g = group(groupId)
   return g?.admins.has(pk) && !everywhere(groupId).has(pk) ? 'Admin' : ''
 }
@@ -118,7 +119,7 @@ export const CHECK_ERRORS: Record<CheckError, string> = {
   last_admin: 'A group keeps at least one admin.',
   guest_not_saved: 'This guest has no e-mail yet. Once they save their account, they can be an admin.',
   agent: 'An agent can’t be an admin.',
-  events_only: 'Stewards are for events.',
+  events_only: 'Door is for events.',
   always_admin: 'The host and the belfry’s admins stay admins.',
   no_ticket: 'Not a ticket for this event',
   not_found: 'This event isn’t there any more.',

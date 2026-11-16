@@ -11,7 +11,7 @@ import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLi
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
-import { Avatar, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
+import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { MeetingSheet } from './Meeting'
 import { RecorderSheet, RecordingBar } from './Recorder'
@@ -44,6 +44,19 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
+import { amGuest, isTownChannel, placesOn, takeCreate } from './Places'
+import { GATES, SECTION_TITLE, sectionOf } from '../core/places'
+import { charter, remoteAgreements, toAgree } from '../core/charter'
+import { applyStatus } from '../core/apply'
+import { GateIcon, PlusIcon } from './icons'
+
+/** A guest's line under their name: how long they stay. */
+function guestLine() {
+  const u = applyStatus()?.until
+  if (!u) return 'Guest'
+  const days = Math.max(0, Math.ceil((u * 1000 - Date.now()) / 86400e3))
+  return `Guest · ${days === 1 ? '1 day' : `${days} days`} left`
+}
 
 /** The `a` tags of the events a message's text links to (https://<domain>/events/<link>): the
  *  ones this device knows, or the belfry told it about. Receivers resolve the rest themselves. */
@@ -64,13 +77,120 @@ function SideUser() {
   return (
     <button className="side-user" onClick={() => closeDrawer('me')} aria-label="Me: your profile and settings">
       <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
-      <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{address()}</small></span>
+      <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{placesOn() && amGuest() ? guestLine() : address()}</small></span>
       <span className="hint"><GearIcon /></span>
     </button>
   )
 }
 
-export function ChannelList({ current, side = false, section, drawer = false }: { current?: string; side?: boolean; section?: string; drawer?: boolean }) {
+type ListProps = { current?: string; side?: boolean; section?: string; drawer?: boolean; /** a laptop: the places above the list (Places.tsx) */ top?: ReactNode }
+/** The channel list: the Town drawer (and the laptop's left column) in the Belfry look; the
+ *  older list (events, mentions, messages, every channel) in the OSV look. */
+export function ChannelList(props: ListProps) {
+  return placesOn() ? <TownList {...props} /> : <OldChannelList {...props} />
+}
+
+/** The Town's places (board iOS-Town; iOS SPEC 19.31): The town (the Square, the Gates, the
+ *  Charter), Community life (every other channel), Building together (proposals, the website);
+ *  the stewards' order holds inside each section. Groups have their own place, so they are not
+ *  here; nor are events, mentions and messages (Home holds those). A guest's drawer: Apply, the
+ *  channels they were invited to, what is open to everyone. */
+function TownList({ current, side = false, section, drawer = false, top }: ListProps) {
+  useVersion()
+  const community = useCommunityName(NAME)
+  const steward = THEME === 'belfry' && isBelfryAdmin(me())
+  const brand = useBranding()
+  const [creating, setCreating] = useState(false)
+  const guest = amGuest()
+  const town = groups().filter((g) => isTownChannel(g.id))
+  const square = town.find((g) => g.id === 'general')
+  const life = inOrder(town.filter((g) => sectionOf(g.id) === 'life'))
+  const building = inOrder(town.filter((g) => sectionOf(g.id) === 'building'))
+  const dnd = useChannelDrag([], life, true)
+  const waitingN = requestCount()
+  const rules = charter()
+  const showCharter = guest ? (remoteAgreements()?.length ?? rules.length) > 0 : rules.length > 0 || steward
+  const fresh = rules.length ? toAgree().length : 0
+  const members = group('general')?.members.size ?? 0
+  const Row = ({ g }: { g: Group }) => {
+    const n = g.id === current ? 0 : channelUnread(g.id)
+    return (
+      <button className={'chan town-chan' + (g.id === current ? ' on' : '') + (n ? ' unread' : '')} onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
+        <span className="hash">#</span>
+        <span className="t"><b>{g.name}{isPublicChannel(g) && <span className="pub" aria-label="public"><GlobeIcon /></span>}</b></span>
+        {n > 0 && <span className="badge unread-n" aria-label={`${n} unread`}>{n > 99 ? '99+' : n}</span>}
+      </button>
+    )
+  }
+  const Place = ({ to, on, icon, title, small, n, cls = '' }: { to: string; on: boolean; icon: ReactNode; title: string; small?: string; n?: number; cls?: string }) => (
+    <button className={'chan town-chan ' + cls + (on ? ' on' : '')} onClick={() => closeDrawer(to)}>
+      <span className="hash">{icon}</span>
+      <span className="t"><b>{title}{small && <small className="inline">{small}</small>}</b></span>
+      {n ? <span className="badge lime">{n}</span> : null}
+    </button>
+  )
+  if (guest) {
+    const mine = groups().filter((g) => !g.isEvent && (g.members.has(me()) || guestInfo()?.channel === g.id))
+    const open = ['issues', 'requests'].map((id) => group(id)).filter((g): g is Group => !!g && !mine.some((m) => m.id === g.id))
+    const st = applyStatus()
+    return (
+      <div className="screen town-list">
+        <div className="topbar">
+          {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
+          <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{st?.until ? `Guest until ${new Date(st.until * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'long' })}` : 'Guest'}</small></h1>
+        </div>
+        <div className="scroll">
+          {top}
+          {!(st?.application && st.application.state !== 'declined') && <div style={{ padding: '12px 16px 4px' }}><button className="btn" onClick={() => closeDrawer('apply')}>Apply to become a member</button></div>}
+          {mine.length > 0 && <div className="section-title">You were invited to</div>}
+          {mine.map((g) => <Row key={g.id} g={g} />)}
+          {(showCharter || open.length > 0) && <div className="section-title">Open to everyone</div>}
+          {showCharter && <Place to="charter" on={section === 'charter'} icon={<DocIcon />} title="Charter" />}
+          {open.map((g) => <Row key={g.id} g={g} />)}
+          <p className="hint" style={{ padding: '12px 16px' }}>Read-only for guests. Members also have the Square, the Fairground, the Assembly and the Gates.</p>
+        </div>
+        {side && <SideUser />}
+      </div>
+    )
+  }
+  return (
+    <div className="screen town-list">
+      <div className="topbar">
+        {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
+        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} members` : ''}</small></h1>
+        <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}><PlusIcon /></button>
+      </div>
+      <div className="scroll">
+        {top}
+        {brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
+        <button className="town-search" onClick={() => closeDrawer('search')}><SearchIcon /><span>Search the town</span></button>
+        <div className="section-title">{SECTION_TITLE.town}</div>
+        {square && <Row g={square} />}
+        <Place to="members" on={section === 'members' || section === 'requests'} icon={<GateIcon />} title={GATES} small="members" n={waitingN} cls="members-row" />
+        {showCharter && <Place to="charter" on={section === 'charter'} icon={<DocIcon />} title="Charter" n={fresh} />}
+        <div ref={dnd.ref} className={'chan-sections' + (dnd.drag ? ' sorting' : '')}>
+          {(life.length > 0 || dnd.may) && <div className="section-title" data-sec="mem">{SECTION_TITLE.life}</div>}
+          {life.map((g, i) => <div key={g.id} {...dnd.slot(g, 'mem', i)}><Row g={g} /></div>)}
+        </div>
+        {dnd.sheet}
+        {building.length > 0 && <div className="section-title">{SECTION_TITLE.building}</div>}
+        {building.map((g) => <Row key={g.id} g={g} />)}
+        {town.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
+        {archivedGroups().length > 0 && (
+          <button className={'chan archived-row' + (section === 'archived' ? ' on' : '')} onClick={() => closeDrawer('archived')}>
+            <span className="hash"><ArchiveIcon /></span>
+            <span className="t"><b>Archived</b></span>
+          </button>
+        )}
+      </div>
+      {steward && <button className={'chan settings-row' + (section === 'settings' ? ' on' : '')} onClick={() => closeDrawer('settings')}><span className="hash"><GearIcon /></span><span className="t"><b>Belfry settings</b></span></button>}
+      {side && <SideUser />}
+      {creating && <NewChannel onClose={() => setCreating(false)} />}
+    </div>
+  )
+}
+
+function OldChannelList({ current, side = false, section, drawer = false }: ListProps) {
   useVersion()
   const title = useCommunityName(side ? NAME : 'Channels')
   const community = useCommunityName(NAME)
@@ -200,7 +320,7 @@ function guestAgents(): Set<string> {
 /** The belfry's admins drag channels to reorder them (#issues, 2026-11-13); across the two sections
  *  it makes the channel public or members only, after the confirmation (VisibilitySheet). A mouse
  *  drags after a few pixels; a finger holds still for 0.4 s first, so the list still scrolls. */
-function useChannelDrag(pub: Group[], members: Group[]) {
+function useChannelDrag(pub: Group[], members: Group[], single = false) {
   const may = mayOrder()
   const ref = useRef<HTMLDivElement>(null)
   type Sec = 'pub' | 'mem'
@@ -220,7 +340,7 @@ function useChannelDrag(pub: Group[], members: Group[]) {
   const where = (y: number): { to: Sec; pos: number } => {
     const box = ref.current!
     const memTitle = box.querySelector('.section-title[data-sec="mem"]') as HTMLElement | null
-    const to: Sec = memTitle && y > memTitle.getBoundingClientRect().top ? 'mem' : 'pub'
+    const to: Sec = single || (memTitle && y > memTitle.getBoundingClientRect().top) ? 'mem' : 'pub' // one section: reorder only
     const slots = [...box.querySelectorAll(`.chan-slot[data-sec="${to}"]`)].filter((x) => (x as HTMLElement).dataset.chan !== st.current?.id) as HTMLElement[]
     return { to, pos: slots.filter((x) => { const r = x.getBoundingClientRect(); return r.top + r.height / 2 < y }).length }
   }
@@ -353,7 +473,7 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
   if (g?.archived) return (
     <div className="screen">
       <div className="topbar">
-        <MenuButton />
+        <LeftButton id={id} />
         <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/about`)}>{g.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g.name}<small>Archived</small></h1>
         <button className="icon-btn" aria-label={`Search ${g.name}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>
       </div>
@@ -364,7 +484,7 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
   return (
     <div className="screen">
       <ChannelHeader id={id} topic={topic} onTopic={openTopic}
-        left={<MenuButton />}
+        left={<LeftButton id={id} />}
         right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} />
           {/* the channel's admins: its settings, right of the bell (Xavier, #issues 2026-11-13) */}
           {g && canAdmin(g) && <button className="icon-btn" aria-label="Channel settings" onClick={() => setSettings(true)}><GearIcon /></button>}</>} />
@@ -518,8 +638,18 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
 }
 
 /** ☰: the channels drawer; the number of unread messages on it (like Discord's). */
+/** Left of a channel's name: ☰ (the Town drawer) in a town channel; ‹ back in a group, a
+ *  proposal or an event's chat, which open over the places (Groups, the Assembly, Calendar). */
+function LeftButton({ id }: { id: string }) {
+  if (!placesOn() || isTownChannel(id)) return <MenuButton />
+  const g = group(id)
+  const parent = g?.isPod ? 'groups' : g?.parent ? 'c/' + encodeURIComponent(g.parent) : 'home'
+  return <button className="icon-btn" aria-label="Back" onClick={() => back(parent)}>‹</button>
+}
+
 export function MenuButton() {
-  const unread = unreadTotal()
+  // the Town's ☰ counts the town's unread channels only (groups have their own place)
+  const unread = placesOn() ? groups().filter((g) => isTownChannel(g.id)).reduce((n, g) => n + (channelUnread(g.id) > 0 ? 1 : 0), 0) : unreadTotal()
   const asks = requestCount() // requests waiting for me (Requests at the top of the list)
   const n = unread + asks
   const said = [unread ? `${unread} unread messages` : '', asks ? `${asks} ${asks === 1 ? 'request' : 'requests'} waiting` : ''].filter(Boolean).join(', ')
@@ -547,6 +677,17 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [proposeSite, setProposeSite] = useState<Message | null>(null)
   const [newTodo, setNewTodo] = useState(false)
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
+  // Create (＋, Places.tsx) chose this channel: open its form here, or put the cursor in the composer
+  useEffect(() => {
+    const k = takeCreate(id)
+    if (!k) return
+    if (k === 'event') setNewEvent(true)
+    else if (k === 'meeting') setNewMeeting(true)
+    else if (k === 'todo') setNewTodo(true)
+    else if (k === 'group') setNewPod(true)
+    else if (k === 'proposal') setNewProp(true)
+    else setTimeout(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(), 50)
+  }, [id])
   useVersion()
   // guest mode: reading only; the composer's place says so, with Join (GuestJoin.tsx)
   useGuestMode()

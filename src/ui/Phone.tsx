@@ -6,7 +6,7 @@ import { useEffect, useRef, type ReactNode } from 'react'
 import { ChannelList } from './Chat'
 import { closeDrawer } from './drawer'
 
-export function Phone({ children, open, current, section }: { children: ReactNode; open: boolean; current?: string; section?: string }) {
+export function Phone({ children, open, current, section, bar }: { children: ReactNode; open: boolean; current?: string; section?: string; /** the bottom bar (Places.tsx), at a place's root */ bar?: ReactNode }) {
   const root = useRef<HTMLDivElement>(null)
   const drawerRef = useRef<HTMLElement>(null)
   const mainRef = useRef<HTMLDivElement>(null)
@@ -67,8 +67,8 @@ export function Phone({ children, open, current, section }: { children: ReactNod
       <aside ref={drawerRef} className="drawer" aria-label="Channels" aria-hidden={!open}>
         <ChannelList side drawer current={current} section={section} />
       </aside>
-      <div ref={mainRef} className="phone-main">
-        {children}
+      <div ref={mainRef} className={'phone-main' + (bar ? ' with-bar' : '')}>
+        {bar ? <><div className="phone-page">{children}</div>{bar}</> : children}
       </div>
       <div className="drawer-shade" onClick={() => closeDrawer()} aria-hidden="true" />
     </div>

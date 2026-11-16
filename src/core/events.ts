@@ -98,6 +98,25 @@ export function fromApi(a: ApiEvent): CalEvent {
   }
 }
 
+/** The belfry's public events (GET /api/v1/events?visibility=public, no auth; docs/events.md):
+ *  what a guest's Calendar lists next to their channels' events. Cached five minutes. */
+let publicList: { at: number; list: CalEvent[] } | null = null
+let publicAsking = false
+export function publicEvents(): CalEvent[] {
+  if (!isLocalOnly() && !publicAsking && (!publicList || Date.now() - publicList.at > 300_000)) {
+    publicAsking = true
+    const from = Math.floor(Date.now() / 1000) - 86400
+    void fetch(`${BELFRY.api}/events?visibility=public&from=${from}`)
+      .then((r) => (r.ok ? r.json() : { events: [] }))
+      .then((d: { events?: unknown }) => {
+        const list = (Array.isArray(d.events) ? d.events : []).filter((a): a is ApiEvent => !!a && typeof a === 'object' && typeof (a as ApiEvent).coord === 'string' && typeof (a as ApiEvent).d === 'string')
+        publicList = { at: Date.now(), list: list.map(fromApi) }
+      }, () => { publicList = { at: Date.now(), list: publicList?.list ?? [] } })
+      .finally(() => { publicAsking = false; touch() })
+  }
+  return publicList?.list ?? []
+}
+
 /** An event by its URL's last part: ours when the relay gave it to us, else the belfry's answer. */
 export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error?: string } {
   const e = eventByLinkLocal(link)
@@ -347,7 +366,7 @@ export async function saveTicket(e: CalEvent, t: TicketForm) {
   // any ticket that takes an application closes the event's group (NIP-29 `closed`)
   const closing = t.closed || tickets(e).some((x) => x.closed && x.id !== id)
   const g = group(e.groupId)
-  if (g && g.closed !== closing) await editGroupMeta(e.groupId, [['name', g.name], ['about', g.about], closing ? ['closed'] : ['open']], { closed: closing })
+  if (g && g.closed !== closing) await editGroupMeta(e.groupId, [['name', g.rawName], ['about', g.about], closing ? ['closed'] : ['open']], { closed: closing })
 }
 export const deleteTicket = (e: CalEvent, t: Ticket) => t.ev && enqueue('main', { kind: 5, tags: [['a', `30402:${t.ev.pubkey}:${t.d}`], ['e', t.ev.id]] })
 

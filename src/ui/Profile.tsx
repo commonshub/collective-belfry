@@ -2,7 +2,7 @@
 // Yours has Edit: name, about, picture, tags (suggested from every member's tags) and where you
 // are (a city from the belfry's list, one you add next to the nearest city, the country only,
 // or nothing). Belfry admins set another member's role here (the role picker, roles.ts).
-import { BELFRY, NAME } from '../config'
+import { BELFRY, NAME, THEME } from '../config'
 import { useCommunityName } from './community'
 import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, removeFromGroup, setGroupRole, type GroupRole } from '../core/checkin'
 import { canAdmin } from '../core/access'
@@ -12,13 +12,14 @@ import { allGroups, channelIcon, displayName, eventOfGroup, group, groups, guest
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
 import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
-import { agentOwner, isAdmin } from '../core/access'
-import { isGuest, setMyAgent } from '../core/invite'
+import { DOOR } from '../core/places'
+import { agentOwner, agentOwners, isAdmin } from '../core/access'
+import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, setMyAgent, type MyAgents } from '../core/invite'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
-import { ChevronRightIcon, PencilIcon, PinIcon, TrashIcon } from './icons'
+import { ChevronRightIcon, CopyIcon, PencilIcon, PinIcon, TrashIcon } from './icons'
 
 export const profileHref = (pubkey: string) => 'u/' + nip19.npubEncode(pubkey)
 /** IN: the group it is opened from (a channel's or an event's people): the profile then shows the
@@ -59,7 +60,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const admin = isBelfryAdmin(pk)
   // their role (roles.ts): admins change it here, through the one role picker
   const role = roleOf(pk) ?? (admin ? ADMIN : undefined)
-  const badge = roleBadge(pk) || (admin ? roleById(ADMIN)?.label ?? 'Admin' : '')
+  const badge = roleBadge(pk) || (admin ? roleById(ADMIN)?.label ?? 'Steward' : '')
   const canRole = isAdmin() && !mine && !owner
   const community = useCommunityName(NAME)
   return (
@@ -131,6 +132,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
           </div>
         )}
         {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
+        {mine && THEME === 'belfry' && !isGuest(me()) && !agentOwner(me()) && !isAgent(me()) && <MyAgentCard />}
       </div>
       {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}
         onPick={async (id) => { setBusy(true); try { await setMemberRole(pk, id) } finally { setBusy(false) } }} />}
@@ -155,9 +157,9 @@ function GroupRoleCard({ groupId, pk }: { groupId: string; pk: string }) {
   const er = ev ? eventRoles(ev, pk)[0] : undefined
   const may = canAdmin(g) && pk !== creator
   const options: [GroupRole, string, string][] = isEvent
-    ? [['member', 'Attendee', 'Comes to the event'], ['admin', 'Co-host', 'Edits the event, answers applications, checks people in'], ['steward', 'Steward', 'Checks people in at the door']]
+    ? [['member', 'Attendee', 'Comes to the event'], ['admin', 'Co-host', 'Edits the event, answers applications, checks people in'], ['steward', DOOR, 'Checks people in at the door']]
     : [['member', 'Member', 'Reads and writes here'], ['admin', 'Admin', 'Changes the channel, its members and their roles']]
-  const word = pk === creator ? 'Host' : isEvent ? (er === 'cohost' ? 'Co-host' : er === 'steward' ? 'Steward' : now === 'admin' ? 'Admin' : 'Attendee') : now === 'admin' ? 'Admin' : 'Member'
+  const word = pk === creator ? 'Host' : isEvent ? (er === 'cohost' ? 'Co-host' : er === 'steward' ? DOOR : now === 'admin' ? 'Admin' : 'Attendee') : now === 'admin' ? 'Admin' : 'Member'
   const name = isEvent ? ev!.title : `${channelIcon(g)}${g.isPod ? ' ' : ''}${g.name}`
   return (
     <div className="card group-role">
@@ -181,6 +183,71 @@ function GroupRoleCard({ groupId, pk }: { groupId: string; pk: string }) {
           </div>
         : <button type="button" className="pick-row danger remove-row" onClick={() => setRemoving(true)}><TrashIcon /><span>Remove from {name}</span></button>)}
     </div>
+  )
+}
+
+/** On my own profile (members; not guests, not agents): my agent, or "Add an agent" with a short
+ *  explanation (Xavier, 2026-11-16). The link is the invite sheet's "My own agent" one
+ *  (POST /channel-invites {"agent": true} in general); the member pastes one line to their AI,
+ *  which reads everything else from the link. With the agent there (one by default; stewards
+ *  have no limit), the card shows it with "Remove this agent…" instead. */
+function MyAgentCard() {
+  useVersion()
+  const community = useCommunityName(NAME)
+  const [mine, setMine] = useState<MyAgents | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [dropping, setDropping] = useState('')
+  const [error, setError] = useState('')
+  useEffect(() => { myAgents().then(setMine, () => setMine({ agents: [], limit: 1 })) }, [JSON.stringify(agentOwners())]) // eslint-disable-line react-hooks/exhaustive-deps
+  if (!mine) return null
+  const room = mine.limit - mine.agents.length
+  return (
+    <div className="card my-agent">
+      <div className="hint card-title">{mine.agents.length ? (mine.agents.length === 1 ? 'Your agent' : 'Your agents') : 'An agent for you'}</div>
+      {mine.agents.map((a) => (
+        <div key={a.pubkey} className="agent-row">
+          <button className="row link-row" onClick={() => openProfile(a.pubkey)}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>Your agent · everyone sees it is yours</small></span></button>
+          {dropping === a.pubkey
+            ? <div className="row" style={{ gap: 8, marginTop: 8 }}>
+                <Btn className="btn small danger" onClick={async () => { setError(''); try { setMine(await setMyAgent(a.pubkey, false)); setDropping('') } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }}>Remove {displayName(a.pubkey) || a.name}</Btn>
+                <button className="btn small ghost" onClick={() => setDropping('')}>Keep</button>
+              </div>
+            : <button className="btn small ghost" style={{ marginTop: 8 }} onClick={() => setDropping(a.pubkey)}>Remove this agent…</button>}
+        </div>
+      ))}
+      {!mine.agents.length && <p className="agent-why">An agent is an AI (ChatGPT, Claude or Grok) that follows conversations for you and posts as your agent. It is always clear to everyone that it is not you. Ask it to post something in the right place in {community}, or for a summary of what has been shared.</p>}
+      {room > 0 && <button className={'btn' + (mine.agents.length ? ' ghost small' : '')} style={{ marginTop: 8 }} onClick={() => setAdding(true)}>{mine.agents.length ? 'Add another agent' : 'Add an agent'}</button>}
+      {error && <div className="error" role="alert" style={{ marginTop: 8 }}>{error}</div>}
+      {adding && <AddAgentSheet community={community} onClose={() => setAdding(false)} />}
+    </div>
+  )
+}
+
+/** The link for my agent and the one line to paste to it. The URL comes from the belfry's answer
+ *  only (https), never from typed text. */
+function AddAgentSheet({ community, onClose }: { community: string; onClose: () => void }) {
+  const [line, setLine] = useState('')
+  const [error, setError] = useState('')
+  const [copied, setCopied] = useState(false)
+  const make = async () => {
+    setError(''); setLine('')
+    try {
+      const got = await makeInviteLink('general', { as: 'agent' }, { people: 1, linkDays: 1 })
+      if (!/^https:\/\/[^\s<>"]+$/.test(got.agentUrl)) throw new LinkFailed('failed')
+      setLine(`Join ${community} as my agent: read ${got.agentUrl} and follow it.`)
+    } catch (x) { setError(x instanceof LinkFailed ? x.message : LINK_ERRORS.failed) }
+  }
+  useEffect(() => { void make() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <Sheet title="Add an agent" onClose={onClose}>
+      <p className="hint">Paste this to your agent (ChatGPT, Claude, Grok…). The link holds everything else it needs: how to join, read and post, always as your agent. It works once, today.</p>
+      {line ? <>
+        <div className="agent-prompt" aria-label="What to paste to your agent">{line}</div>
+        <Btn className="btn" onClick={async () => { try { await navigator.clipboard.writeText(line); setCopied(true); setTimeout(() => setCopied(false), 2000) } catch { setError('Copy did not work: select the text and copy it.') } }}><CopyIcon /> {copied ? 'Copied' : 'Copy'}</Btn>
+        <p className="hint" style={{ marginTop: 10 }}>Once it has joined, it shows here on your profile, and next to its name everywhere: “{displayName(me())}’s agent”.</p>
+      </> : !error && <p className="hint">Making the link…</p>}
+      {error && <><div className="error" role="alert">{error}</div><Btn className="btn ghost" onClick={make}>Try again</Btn></>}
+    </Sheet>
   )
 }
 

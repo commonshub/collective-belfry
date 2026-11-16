@@ -13,6 +13,7 @@ import { agentOwner, demoSetAdmins, loadAccessInfo } from './access'
 import { isGuest } from './invite'
 import { groups } from './model'
 import { touch } from './store'
+import { placeNamesOn, STEWARD } from './places'
 import { isLocalOnly, me, signedFetch } from './sync'
 
 export interface Role { id: string; label: string; description: string; builtin: boolean; powers: boolean; default: boolean }
@@ -21,7 +22,7 @@ export const ADMIN = 'admin'
 
 const BUILTIN: Role[] = [
   { id: MEMBER, label: 'Member', description: 'Joins any open channel, invites guests, votes.', builtin: true, powers: false, default: true },
-  { id: ADMIN, label: 'Admin', description: 'Everything, plus settings and roles.', builtin: true, powers: true, default: false },
+  { id: ADMIN, label: placeNamesOn() ? STEWARD : 'Admin', description: 'Everything, plus settings and roles.', builtin: true, powers: true, default: false },
 ]
 
 let list: Role[] = BUILTIN.map((r) => ({ ...r }))
@@ -52,12 +53,12 @@ export const ROLE_ERRORS: Record<RoleError, string> = {
   unknown_role: 'That role doesn’t exist any more.',
   invalid: 'A label of 1 to 40 characters; a description of up to 200.',
   taken: 'There is a role with that label already.',
-  builtin: 'Member and Admin are built in: they can’t be deleted.',
-  admin_default: 'Admin can’t be the default role.',
+  builtin: 'Member and Steward are built in: they can’t be deleted.',
+  admin_default: 'Steward can’t be the default role.',
   not_member: 'Only members have a role.',
   guest_not_saved: 'This guest has no e-mail yet. Once they save their account, you can make them a member.',
   agent: 'An agent has no role.',
-  last_admin: 'A belfry needs at least one admin.',
+  last_admin: 'A belfry needs at least one steward.',
   too_many: 'A belfry has at most 50 roles.',
   unsupported: 'This belfry can’t keep roles yet.',
   offline: 'No connection to the belfry. Try again.',
@@ -78,7 +79,8 @@ const clean = (x: unknown): Role[] => (Array.isArray(x) ? x : [])
   .map((r) => ({ id: r.id, label: r.label, description: String(r.description ?? ''), builtin: !!r.builtin, powers: !!r.powers, default: !!r.default }))
 
 function take(d: Record<string, unknown>) {
-  const got = clean(d.roles)
+  // the built-in admin role reads Steward (iOS SPEC 19.31) unless the belfry gave it its own label
+  const got = clean(d.roles).map((r) => (r.id === ADMIN && r.label === 'Admin' && placeNamesOn() ? { ...r, label: STEWARD } : r))
   if (got.length) list = got
   if (d.members && typeof d.members === 'object') byKey = Object.fromEntries(Object.entries(d.members as Record<string, unknown>).filter(([k, v]) => /^[0-9a-f]{64}$/.test(k) && typeof v === 'string')) as Record<string, string>
   if (d.others && typeof d.others === 'object') others = d.others as { guest: number; agent: number }
