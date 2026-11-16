@@ -201,6 +201,10 @@ export function SidePlaces({ place }: { place?: Place }) {
         <span className="hash"><MessageIcon /></span><span className="t"><b>Messages</b></span>
         {unreadTotal() ? <span className="badge lime">{unreadTotal()}</span> : null}
       </button>
+      <button className={'chan side-place' + (route[0] === 'mentions' ? ' on' : '')} onClick={() => go('mentions')}>
+        <span className="hash"><AtIcon /></span><span className="t"><b>Mentions</b></span>
+        {mentionsNew() ? <span className="badge lime">{mentionsNew()}</span> : null}
+      </button>
       {!guest && <button className="btn small side-create" onClick={() => setCreating(true)}><PlusIcon /> Create</button>}
       {creating && <CreateSheet onClose={() => setCreating(false)} where={here} first={place === 'calendar' ? 'event' : place === 'groups' ? 'group' : undefined} />}
     </div>
@@ -364,6 +368,7 @@ export function HomeScreen() {
             <button className="btn ghost small" onClick={() => go(townPath())}><TownIcon /> Open the Square</button>
             <button className="btn ghost small" onClick={() => go('calendar')}><CalendarIcon /> What's on</button>
             <button className="btn ghost small" onClick={() => go('dm')}><MessageIcon /> Messages</button>
+            <button className="btn ghost small" onClick={() => go('mentions')}><AtIcon /> Mentions</button>
           </div>
         </div>
       </div>
