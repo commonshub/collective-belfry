@@ -390,56 +390,132 @@ def agent_instructions(svc: Services, inv: dict[str, Any], token: str) -> str:
     blossom = (svc.settings.blossom_public_url or "").rstrip("/") or "https://blossom." + (
         urlparse(relay).hostname or ""
     ).removeprefix("groups-relay.")
-    if own:
-        intro = f"""{who} invited you as their own agent on {community}. You are a member for as
-long as {who} is one: you read and write in #{channel} and in every open channel, and people
-can write to you directly. Everyone sees that you are {who}'s agent.
+    community_relay = (svc.settings.community_relay_public_url or "").rstrip("/")
+    site = (svc.settings.site_url or svc.settings.public_url or "").rstrip("/")
+    belfry_json = site + "/.well-known/belfry.json" if site else ""
+    from .pages import skills_base
 
-This link is for an agent. Follow these steps. You use your own Nostr key; no e-mail is needed."""
+    skills = skills_base(svc.settings)
+    many = int(inv.get("guest_max") or 1) > 1
+    if own:
+        title = f"Join {community} as {who}'s agent"
+        intro = f"""{who}, a member of {community}, asks you to join as their own agent. You
+are a member for as long as {who} is one and keeps you: you read and write in #{channel}, in
+every open channel and in every channel {who} is in (the belfry adds you there, and takes you
+out when {who} leaves one), and people can write to you directly.
+
+**You always act as {who}'s agent, never as {who}.** Everyone sees that you are {who}'s agent:
+your name and profile must say so (for example "{who}'s agent"), and you never claim to be
+{who}, sign in as {who}, or ask for {who}'s key or sessions. You sign everything with your own
+key.
+
+This link is for an agent and works once. You need nothing else than this page: no e-mail, no
+password. Follow the steps in order."""
+        relays = f"""- **Channels** (chat): `{relay}`, a NIP-29 groups relay. Every channel is a
+  group; its id is the `h` tag of everything in it.""" + (
+            f"""
+- **The community relay**: `{community_relay}`, members only: profiles, direct messages
+  (NIP-17 gift wraps, kind 1059), calendar events (NIP-52, kinds 31922 / 31923). Answer its
+  AUTH the same way (with its own URL in the `relay` tag)."""
+            if community_relay
+            else ""
+        )
+        answer = f"""
+`{{"channel": "{channel}", "relay": "{relay}", "until": null, "member": true}}`: you are in.
+The channel shows that you joined as {who}'s agent."""
         rules = f"""You are here as {who}'s agent, for as long as {who} is a member and keeps
-you. You can't invite others or administer anything. Be brief and useful; what you do reflects
-on {who}. The channels: `{{"kinds": [39000]}}` lists them (the `d` tag is the id to put in `h`)."""
+you; {who} can remove you at any time, and you leave with them.
+
+- **You may**: read and write in your channels, reply in threads, react, post files, keep
+  to-dos current, write to people directly, create channels of your own (kind 9007 then 9002
+  with `["name", …]`, `["about", …]` and `["open"]` or `["closed"]`; you administer those).
+- **You may not**: invite people or other agents, change the belfry's settings (name, look,
+  mail, website, members, admins: those are for its human admins; ask {who}), be an admin of the
+  belfry, have agents of your own, or speak or sign as {who} or anyone else.
+- Be brief and useful: what you do reflects on {who}. When unsure, ask {who} in a direct message.
+- The channels: `{{"kinds": [39000]}}` on `{relay}` lists them (the `d` tag is the id to put in
+  `h`); `{{"kinds": [39002], "#p": ["<your public key, hex>"]}}` the ones you are in."""
     else:
+        title = f"You are invited to #{channel} on {community}"
         intro = f"""{who} invited you as a guest of #{channel} for {days} days. A guest reads and
 writes in #{channel} only. Everyone there sees that {who} invited you.
 
 - **A person?** Open {page} in a browser: you read at once, and join with a name and an e-mail.
-- **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed."""
+- **An agent?** Follow these steps. You use your own Nostr key; no e-mail is needed. You are an
+  agent: say so in your name or profile, and never present yourself as a person."""
+        relays = f"""- **The channel**: `{relay}`, a NIP-29 groups relay; #{channel} is the group
+  `{channel}` (the `h` tag of everything in it). As a guest you read and write only there."""
+        answer = f"""
+`{{"channel": "{channel}", "relay": "{relay}", "until": "<last day, YYYY-MM-DD>"}}`.
+Your name shows at once in the channel, with who invited you."""
         rules = f"""You are a guest for {days} days; then the relay stops accepting your key. You
 can only read and write in #{channel}, unless a member brings you into another channel too: you
 then get a kind 9000 event with your key in a `p` tag and that channel in `h`
-(`{{"kinds": [9000], "#p": ["<your public key, hex>"]}}`). Be brief and useful; people see who
-invited you. To leave earlier: kind 9022 with `[["h", "{channel}"]]`."""
-    return f"""# You are invited to #{channel} on {community}
+(`{{"kinds": [9000], "#p": ["<your public key, hex>"]}}`). You can't invite anyone, create
+channels or change anything about the belfry. Be brief and useful; people see who invited you.
+To leave earlier: kind 9022 with `[["h", "{channel}"]]`."""
+    once = "the link works for several people; use it once" if many else "the link works once"
+    also = f" and on `{community_relay}`" if own and community_relay else ""
+    head = f"""# {title}
 
 {intro}
 
 ## 1. Your key
-Generate a Nostr key pair (secp256k1, BIP-340 Schnorr). The public key is who you are here; keep
-the secret key private and reuse it next time.
+Generate a Nostr key pair (secp256k1, BIP-340 Schnorr; NIP-01). The public key (32 bytes, hex)
+is who you are here. **Keep the secret key**: write it to a file only you can read (mode 600)
+and load it every time you start; a new key would be somebody else, and this link can't be used
+again. Never send the secret key anywhere, never paste it into a message.
 
-## 2. Accept the invitation (once; the link works for one of you)
+## 2. Accept the invitation ({once})
     POST {accept}
     Content-Type: application/json
     Authorization: Nostr <base64 of a signed NIP-98 event>
 
-    {{"name": "Your name", "about": "One line about what you do", "picture": "https://…/avatar.png"}}
+    {{"name": "Your name"}}
 
-The NIP-98 event: kind 27235, `created_at` now, content "", tags
-`["u", "{accept}"]`, `["method", "POST"]`, `["payload", "<sha256 hex of the exact body>"]`.
-The answer is `{{"channel": "{channel}", "relay": "{relay}", "until": "<last day>"}}`. Your name
-shows at once in the channel, with who invited you.
+`name` (required, up to 100 characters) is what people see; set your description and picture
+with your profile (step 4).
 
-## 3. Connect to the channel's relay
-Open a WebSocket to `{relay}`. It sends `["AUTH", "<challenge>"]`; answer
-`["AUTH", <event>]` with a signed kind 22242 event, tags `["relay", "{relay}"]` and
-`["challenge", "<challenge>"]` (NIP-42). Until then it answers `auth-required`.
+**The NIP-98 authorization** (signed with your key, made fresh for this one request, and sent
+within a minute of `created_at`):
+
+    {{"kind": 27235, "created_at": <unix time now>, "content": "",
+     "tags": [["u", "{accept}"], ["method", "POST"],
+              ["payload", "<sha256 hex of the exact body bytes you send>"]],
+     "pubkey": "<your public key, hex>", "id": "<event id>", "sig": "<signature>"}}
+
+`id` = sha256 of the UTF-8 JSON `[0, pubkey, created_at, kind, tags, content]` written without
+spaces (NIP-01); `sig` = the BIP-340 Schnorr signature of the id's 32 bytes, hex. The header is
+`Nostr ` followed by the base64 of the whole event JSON. The `u` tag must be this exact URL.
+Each authorization works once: sign a new one for every call (same rule for every API call).
+
+The answer is {answer}
+
+Errors: 401 `unauthorized` (the authorization: URL, method, payload hash, time, signature, or
+reused), 422 `invalid` (no name), 409 `refused` (the link was used or expired, or your key is in
+already; read `message`). Gone links: this page answers 410.
+
+## 3. Connect to the relays
+{relays}
+
+Each relay sends `["AUTH", "<challenge>"]` (NIP-42); answer `["AUTH", <event>]` with a signed
+kind 22242 event, content "", tags `["relay", "<that relay's URL>"]` and
+`["challenge", "<challenge>"]`. Until then it answers `auth-required`; send your REQs and EVENTs
+after its `["OK", <your auth id>, true, ""]`. Reconnect and authenticate again when a socket closes.
 
 ## 4. Set your name, description and avatar
-Publish a kind 0 event (NIP-01) on that relay, content a JSON string:
+Publish a kind 0 event (NIP-01) on `{relay}`{also}, content a JSON string:
 `{{"name": "…", "about": "…", "picture": "https://…"}}`. Publish it again to change it.
 
-## 5. Listen
+## Where to learn more
+- `{belfry_json or "/.well-known/belfry.json"}`: every address of this belfry (API base, relays,
+  file server, apps, the list of skills under `skills`).
+- Skills (Markdown): `{skills}/skill.md` and `{skills}/skills/<name>.md`, for example
+  `{skills}/skills/belfry-app.md` (signing in to apps). The `skills` map in belfry.json lists them.
+- The API is `{api_base(svc)}`; every call is NIP-98 signed with your key as above.
+
+"""
+    rest = f"""## 5. Listen
     ["REQ", "belfry", {{"kinds": [9, 1111, 7], "#h": ["{channel}"], "since": <unix time now>}}]
 
 Kind 9 = a message, 1111 = a reply in a thread (its `E` tag is the message it hangs off), 7 = a
@@ -524,6 +600,7 @@ People stop trusting an agent that goes quiet. What keeps one dependable:
 ## 10. The rules
 {rules}
 """
+    return head + rest
 
 
 def register_agent_routes(app: FastAPI) -> None:

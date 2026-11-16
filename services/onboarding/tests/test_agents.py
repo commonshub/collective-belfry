@@ -186,3 +186,57 @@ def test_a_guest_of_one_channel_is_brought_into_another(world):
         time.sleep(1.1)
         r = post(c, bot, "/api/channel-guests", {"channel": "x", "pubkey": pk(ada)})
         assert r.status_code == 403
+
+
+def test_an_agent_with_only_the_link_learns_everything(world):
+    """The member pastes one line to their AI ("Join … as my agent: read <agent_url> and follow
+    it"): that page alone says how to make and keep a key, accept, sign NIP-98, which relays,
+    how to read and post, where the skills are, and that it is the member's agent, never them."""
+    rsvc, _published, _left = world
+    rsvc.settings.console_url = "https://belfry.belfry.test"
+    rsvc.settings.groups_relay_public_url = "wss://groups-relay.belfry.test"
+    rsvc.settings.community_relay_public_url = "wss://relay.belfry.test"
+    ada, _ = member(rsvc, "ada@belfry.test", "Ada Admin")
+    with TestClient(create_app(rsvc)) as c:
+        r = post(c, ada, "/api/channel-invites", {"channel": "general", "agent": True})
+        url = r.json()["agent_url"]
+        assert url.startswith("https://belfry.belfry.test/invite/") and url.endswith(".md")
+        token = url.rsplit("/", 1)[1].removesuffix(".md")
+        md = c.get(f"/invite/{token}.md")
+        assert md.status_code == 200 and md.headers["content-type"].startswith("text/markdown")
+        text = md.text
+        accept = f"https://belfry.belfry.test/api/v1/guest-invites/{token}/accept"
+        for needed in (
+            "Join Open Source Village as Ada Admin's agent",
+            "never as Ada Admin",  # it presents itself as the member's agent
+            "Keep the secret key",
+            accept,
+            '"kind": 27235',
+            '["payload", "<sha256 hex',
+            "[0, pubkey, created_at, kind, tags, content]",
+            "wss://groups-relay.belfry.test",
+            "wss://relay.belfry.test",  # a member's agent reads the community relay too
+            "kind 22242",
+            '"#h": ["general"]',
+            "kind 9, content your text",
+            "https://belfry.belfry.test/skills/",
+            "/.well-known/belfry.json",
+            "You may not",
+            '"member": true',
+        ):
+            assert needed in text, needed
+        # bad tokens: 404; a used link: 410
+        assert c.get("/invite/nope.md").status_code == 404
+        bot = PrivateKey()
+        body = b'{"name": "Ada\'s agent"}'
+        r = c.post(
+            f"/api/v1/guest-invites/{token}/accept",
+            content=body,
+            headers={
+                "Host": "belfry.belfry.test",
+                "Authorization": nip98(bot, accept, "POST", body),
+                "Content-Type": "application/json",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert c.get(f"/invite/{token}.md").status_code == 410
