@@ -133,8 +133,26 @@ export function CreateSheet({ onClose, where, first }: { onClose: () => void; wh
 
 // ---- the bottom bar ----------------------------------------------------------------------
 
+/** A text field has the focus, or the on-screen keyboard is up (visualViewport): the bar steps
+ *  aside so it never sits on top of the keyboard, and the composer keeps the room. */
+function useTyping(): boolean {
+  const [typing, setTyping] = useState(false)
+  useEffect(() => {
+    const field = (el: EventTarget | null) => el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit|file|range|color)$/.test((el as HTMLInputElement).type)) || el.isContentEditable)
+    const vv = window.visualViewport
+    const check = () => setTyping(field(document.activeElement) || (!!vv && window.innerHeight - vv.height > 120))
+    const off = () => setTimeout(check, 0) // focus moving to another field: no blink
+    document.addEventListener('focusin', check)
+    document.addEventListener('focusout', off)
+    vv?.addEventListener('resize', check)
+    return () => { document.removeEventListener('focusin', check); document.removeEventListener('focusout', off); vv?.removeEventListener('resize', check) }
+  }, [])
+  return typing
+}
+
 export function TabBar({ place }: { place?: Place }) {
   useVersion()
+  const typing = useTyping()
   const route = useRoute()
   const [creating, setCreating] = useState(false)
   const guest = amGuest()
@@ -148,7 +166,7 @@ export function TabBar({ place }: { place?: Place }) {
     </button>
   )
   return (
-    <nav className={'tabbar' + (guest ? ' guest' : '')} aria-label="Places">
+    <nav className={'tabbar' + (guest ? ' guest' : '')} aria-label="Places" hidden={typing && !creating}>
       <Tab p="home" label="Home" icon={HomeIcon} to="home" n={homeN} />
       <Tab p="calendar" label="Calendar" icon={CalendarIcon} to="calendar" />
       {!guest && <button className="tab create" aria-label="Create" onClick={() => setCreating(true)}><span className="create-btn"><PlusIcon /></span></button>}
@@ -179,6 +197,10 @@ export function SidePlaces({ place }: { place?: Place }) {
       <Row p="calendar" label="Calendar" icon={CalendarIcon} to="calendar" />
       {!guest && <Row p="groups" label="Groups" icon={PeopleIcon} to="groups" />}
       <Row p="town" label="Town" icon={TownIcon} to={townPath()} />
+      <button className={'chan side-place' + (route[0] === 'dm' ? ' on' : '')} onClick={() => go('dm')}>
+        <span className="hash"><MessageIcon /></span><span className="t"><b>Messages</b></span>
+        {unreadTotal() ? <span className="badge lime">{unreadTotal()}</span> : null}
+      </button>
       {!guest && <button className="btn small side-create" onClick={() => setCreating(true)}><PlusIcon /> Create</button>}
       {creating && <CreateSheet onClose={() => setCreating(false)} where={here} first={place === 'calendar' ? 'event' : place === 'groups' ? 'group' : undefined} />}
     </div>
@@ -188,6 +210,8 @@ export function SidePlaces({ place }: { place?: Place }) {
 // ---- what needs me ------------------------------------------------------------------------
 
 const DAY = 86400e3
+/** A time short enough for a row: "18:30", or "2:00 PM" where the locale says so. */
+const hm = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 const startOfDay = (d = new Date()) => new Date(d.toDateString())
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
 
@@ -284,7 +308,7 @@ function EventLine({ e }: { e: CalEvent }) {
   return (
     <button className="home-row" onClick={() => go(eventPath(e))}>
       <DayChip d={e.start} />
-      <span className="t"><b>{e.title}</b><small>{[e.allDay ? 'All day' : fmtTime(+e.start / 1000), what, s].filter(Boolean).join(' · ')}</small></span>
+      <span className="t"><b>{e.title}</b><small>{[e.allDay ? 'All day' : hm(e.start), what, s].filter(Boolean).join(' · ')}</small></span>
       <ChevronRightIcon />
     </button>
   )
@@ -320,8 +344,8 @@ export function HomeScreen() {
   const dmNames = dms.slice(0, 2).map((t) => convName(t.conv).split(/[ @]/)[0])
   const soon = comingUp()
   const act = recentActivity()
-  const tiles = todos.mine.length + men.length + dmCount > 0
-  const calm = !asks && !fresh.length && !tiles && !soon.length && !act.length
+  const calm = !asks && !fresh.length && todos.mine.length + men.length + dmCount === 0 && !soon.length && !act.length
+  const tiles = !calm // To-dos, Mentions, Messages: always reachable from Home (zero is fine)
   const date = now.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
   const search = <button className="icon-btn round" aria-label="Search" onClick={() => go('search')}><SearchIcon /></button>
   if (calm) {
@@ -339,6 +363,7 @@ export function HomeScreen() {
           <div className="calm-actions">
             <button className="btn ghost small" onClick={() => go(townPath())}><TownIcon /> Open the Square</button>
             <button className="btn ghost small" onClick={() => go('calendar')}><CalendarIcon /> What's on</button>
+            <button className="btn ghost small" onClick={() => go('dm')}><MessageIcon /> Messages</button>
           </div>
         </div>
       </div>
@@ -413,6 +438,9 @@ function GuestHome() {
           <div className="place-section"><h3>You were invited to</h3></div>
           <div className="home-card">{mine.map((g) => <ActivityRow key={g.id} g={g} />)}</div>
         </>}
+        {threads().length > 0 && (
+          <div className="home-card"><button className="home-row" onClick={() => go('dm')}><span className="row-ico"><MessageIcon /></span><span className="t"><b>Messages</b><small>{unreadTotal() ? `${unreadTotal()} unread` : 'Direct messages and e-mail'}</small></span><ChevronRightIcon /></button></div>
+        )}
         {(rules.length > 0 || open.length > 0) && <>
           <div className="place-section"><h3>Open to everyone</h3></div>
           <div className="home-card">
@@ -544,7 +572,7 @@ function CalRow({ e }: { e: CalEvent }) {
   const where = e.meeting && e.links.length && !e.location ? 'Online meeting' : e.location
   return (
     <button className="cal-row" onClick={() => go(eventPath(e))}>
-      <span className="cal-time"><b>{e.allDay ? 'All day' : fmtTime(+e.start / 1000)}</b>{!e.allDay && e.end && <small>{fmtTime(+e.end / 1000)}</small>}</span>
+      <span className="cal-time"><b>{e.allDay ? 'All day' : hm(e.start)}</b>{!e.allDay && e.end && <small>{hm(e.end)}</small>}</span>
       <span className="cal-bar" style={{ background: `hsl(${hue(e.channels[0] ?? e.groupId)} 55% 45%)` }} />
       <span className="t"><b>{e.status === 'cancelled' && <span className="badge cancel">Cancelled</span>} {e.title}</b><small>{[where, ch, s ?? (e.visibility === 'public' ? 'open to all' : '')].filter(Boolean).join(' · ')}</small></span>
       <ChevronRightIcon />

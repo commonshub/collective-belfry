@@ -159,8 +159,8 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
         {/* stewards: the belfry's name opens its settings, as in Discord */}
         {steward
-          ? <h1 style={{ paddingLeft: drawer ? 0 : 8 }}><button type="button" className="belfry-name" aria-label={`${community} settings`} onClick={() => closeDrawer('settings')}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span>{community}</span><ChevronDownIcon /></button><small>{members ? `${members} members` : ''}</small></h1>
-          : <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} members` : ''}</small></h1>}
+          ? <h1 style={{ paddingLeft: drawer ? 0 : 8 }}><button type="button" className="belfry-name" aria-label={`${community} settings`} onClick={() => closeDrawer('settings')}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span>{community}</span><ChevronDownIcon /></button><small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>
+          : <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>}
         <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}><PlusIcon /></button>
       </div>
       <div className="scroll">

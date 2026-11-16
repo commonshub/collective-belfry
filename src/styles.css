@@ -1538,3 +1538,4 @@ div.settings-row { cursor: default; }
 .cal-time { width: 64px; white-space: nowrap; font-size: 13px; }
 .layout.wide .main .place .scroll > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .layout.wide .main .place .home-card, .layout.wide .main .place .home-tiles, .layout.wide .main .place .seg { max-width: 736px; }
+.tabbar[hidden] { display: none; }

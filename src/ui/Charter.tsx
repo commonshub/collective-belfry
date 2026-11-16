@@ -308,6 +308,8 @@ export function demoCharter(opts: { steward?: boolean; rules?: number; agreedByM
     { id: hex(32), pubkey: author, sig: hex(64), kind: 9002, created_at: now - 9000, tags: [['h', CHARTER_ID], ['name', 'Charter'], ['open']], content: '' },
     { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 39000, created_at: now - 8990, tags: [['d', CHARTER_ID], ['name', 'Charter']], content: '' },
   ]
+  // seeding again replaces the charter: every agreement there is removed by a steward first
+  for (const r of charter()) evs.push({ id: hex(32), pubkey: r.author, sig: hex(64), kind: 2101, created_at: now, tags: [['e', r.id], ['action', 'delete'], ...t], content: '' })
   const ids: string[] = []
   const folks = Array.from({ length: others }, () => getPublicKey(generateSecretKey()))
   folks.forEach((pk, i) => evs.push(
