@@ -516,8 +516,8 @@ export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(
  *  than bugs-c3e5@, when no other channel answers to it; the server resolves it the same way
  *  (mail.channel_by_slug) and keeps taking the full id. */
 export function mailLocal(g: Group): string {
-  const plain = (x: Group) => [x.id.replace(/-[0-9a-z]{3,8}$/, ''), slugify(x.name)]
-  const want = slugify(g.name) || g.id.replace(/-[0-9a-z]{3,8}$/, '')
+  const plain = (x: Group) => [x.id.replace(/-[0-9a-z]{3,8}$/, ''), slugify(x.rawName)]
+  const want = slugify(g.rawName) || g.id.replace(/-[0-9a-z]{3,8}$/, '')
   if (!want || want === g.id) return g.id
   if (!madeByAdmin(g)) return g.id // a plain alias for an admin's channel only (#issues 2026-11-15; mail.channel_by_slug)
   return allGroups().filter((x) => plain(x).includes(want)).length === 1 ? want : g.id

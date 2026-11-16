@@ -136,7 +136,7 @@ export function About({ id, compact = false }: { id: string; compact?: boolean }
 export function VisibilitySheet({ g, to, onClose, onDone }: { g: Group; to: ChannelVisibility; onClose: () => void; onDone: (page: WebPage) => void }) {
   const n = messages(g.id).length
   const w = webPage(g)
-  const slug = w?.slug || slugify(g.name)
+  const slug = w?.slug || slugify(g.rawName)
   const wasPublic = publicPeriods(g).length > 0
   const where = <b>{BELFRY.domain}/{slug}</b>
   const mail = <b>{mailLocal(g)}@{BELFRY.domain}</b>
