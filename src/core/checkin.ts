@@ -109,8 +109,10 @@ export function roleWord(groupId: string, pk: string, e?: Pick<CalEvent, 'creato
 
 // ---- errors ----------------------------------------------------------------------------------
 
-export type CheckError = 'not_allowed' | 'not_in_group' | 'last_admin' | 'guest_not_saved' | 'agent' | 'events_only' | 'always_admin' | 'no_ticket' | 'not_found' | 'invalid' | 'relay' | 'offline' | 'failed'
+export type CheckError = 'archived' | 'always_open' | 'not_allowed' | 'not_in_group' | 'last_admin' | 'guest_not_saved' | 'agent' | 'events_only' | 'always_admin' | 'no_ticket' | 'not_found' | 'invalid' | 'relay' | 'offline' | 'failed'
 export const CHECK_ERRORS: Record<CheckError, string> = {
+  archived: 'This group is archived. Unarchive it first.',
+  always_open: 'This channel can’t be archived.',
   not_allowed: 'Only the admins can change this.',
   not_in_group: 'This person isn’t in the group.',
   last_admin: 'A group keeps at least one admin.',
@@ -251,6 +253,20 @@ export async function removeFromGroup(groupId: string, pk: string): Promise<void
   const direct = () => enqueue('groups', { kind: 9001, tags: [['h', groupId], ['p', pk]] })
   if (isLocalOnly()) { await direct(); return }
   if ((await viaBelfry('/group-roles', { channel: groupId, pubkey: pk, role: 'removed' })) === 'missing') await direct()
+}
+
+/** Archive (ON) or unarchive a group: TAGS (all of its settings, with ["archived", "1" | "0"]) as
+ *  a 9002 when I can publish one, else through the belfry (POST /group-meta {"archived"}), which
+ *  keeps the rest itself. A belfry from before archiving answers without the field: say so. */
+export async function archiveGroupMeta(groupId: string, tags: string[][], on: boolean): Promise<void> {
+  const direct = () => enqueue('groups', { kind: 9002, tags: [['h', groupId], ...tags] })
+  if (isLocalOnly() || relayAdmin(groupId)) { await direct(); return }
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}/group-meta`, 'POST', { channel: groupId, archived: on }) } catch { throw new CheckFailed('offline') }
+  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+  if (r.status === 404 && !d.error) { await direct(); return }
+  if (!r.ok) throw new CheckFailed((String(d.error) in CHECK_ERRORS ? d.error : 'failed') as CheckError)
+  if (d.archived !== on) throw new CheckFailed('failed')
 }
 
 /** A group's new metadata: TAGS as a 9002 when I can publish one, else FIELDS through the belfry

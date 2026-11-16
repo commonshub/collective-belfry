@@ -3,8 +3,10 @@
 // e-mail, the bell), and Join (open) / Apply to join (closed) / Pending / You're in. A group is
 // not membership of the belfry: whoever created it is its admin and lets people in.
 import { useState } from 'react'
-import { DEFAULT_PROMPT, joinGroup } from '../core/actions'
-import { channelIcon, displayName, group } from '../core/model'
+import { DEFAULT_PROMPT, joinGroup, setArchived } from '../core/actions'
+import { canAdmin } from '../core/access'
+import { useGroupState } from '../core/groupstate'
+import { archivedGroups, channelIcon, displayName, group, type Group } from '../core/model'
 import { groupRequestsFor, groupVouches } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -15,18 +17,72 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 import { GroupRequest } from './Requests'
 
+/** Any link to a deleted channel or group lands here: it says so, with a way back. Nothing else
+ *  (no composer, no pull-down, no settings). Fixed words only: nothing from the address. */
+export function DeletedGroup() {
+  return (
+    <div className="screen group-deleted">
+      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Group</h1></div>
+      <div className="empty">
+        <b>This group has been deleted</b>
+        <p><button className="btn ghost" onClick={() => back('c')}>Back</button></p>
+      </div>
+    </div>
+  )
+}
+
+/** Under an archived group's header: "Archived · read only", and Unarchive for who may. */
+export function ArchivedBar({ g }: { g: Group }) {
+  const [error, setError] = useState('')
+  return (
+    <div className="archived-bar" role="status">
+      <span><b>Archived</b> · read only</span>
+      {canAdmin(g) && <Btn className="btn small" onClick={async () => { setError(''); try { await setArchived(g.id, false) } catch (e) { setError(e instanceof Error ? e.message : 'That did not work. Try again.') } }}>Unarchive</Btn>}
+      {error && <span className="error" role="alert">{error}</span>}
+    </div>
+  )
+}
+
+/** #/archived: the archived channels and groups (the row at the bottom of the channel list). A
+ *  tap opens one, read only; Unarchive is there. */
+export function ArchivedScreen() {
+  useVersion()
+  const list = archivedGroups()
+  return (
+    <div className="screen">
+      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Archived</h1></div>
+      <div className="scroll">
+        {list.length === 0 && <div className="empty">Nothing is archived.</div>}
+        {list.length > 0 && <p className="hint pad-x" style={{ marginTop: 12 }}>Out of the channel list and read only. Open one to read it; its admins can unarchive it there.</p>}
+        {list.map((g) => {
+          const parent = g.parent ? group(g.parent) : undefined
+          return (
+            <button key={g.id} className="chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>
+              <span className="hash">{g.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)}</span>
+              <span className="t"><b>{g.name}</b><small>{g.isPod ? `Group${parent ? ` in ${parent.isPod ? '' : '# '}${parent.name}` : ''}` : 'Channel'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}</small></span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function GroupPage({ id }: { id: string }) {
   useVersion()
+  const state = useGroupState(id)
   const g = group(id)
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState('')
   const parent = g?.parent ? group(g.parent) : undefined
   const open = () => go('c/' + encodeURIComponent(id))
+  if (state === 'deleted') return <DeletedGroup />
   if (!g) {
+    // nothing of it on this device and the relay has not answered (first load, offline): no guess
     return (
       <div className="screen">
         <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Group</h1></div>
-        <div className="empty">This group isn’t here (yet). It shows once the relay sends it.</div>
+        <div className="empty">This group isn’t on this device.</div>
       </div>
     )
   }
@@ -41,12 +97,13 @@ export function GroupPage({ id }: { id: string }) {
         <button className="icon-btn" aria-label="Back" onClick={() => back(parent ? 'c/' + encodeURIComponent(parent.id) : 'c')}>‹</button>
         <h1><span className="gp-title"><PodShape members={g.members.size} size={18} /> {g.name}</span>
           <small>Group{parent ? ` in ${parent.isPod ? '' : '# '}${parent.name}` : ''} · {g.closed ? 'by request' : 'open to members'}</small></h1>
-        <FollowButton channel={id} />
+        {!g.archived && <FollowButton channel={id} />}
       </div>
+      {g.archived && <ArchivedBar g={g} />}
       <div className="scroll pad">
         {g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint">No description yet.</p>}
         <div className="gp-action">
-          {inIt ? <>
+          {g.archived ? <button className="btn" onClick={open}>Read {g.name}</button> : inIt ? <>
             <span className="badge lime">You’re in</span>
             <button className="btn" onClick={open}>Open {g.name}</button>
           </> : mine ? <>
@@ -60,7 +117,7 @@ export function GroupPage({ id }: { id: string }) {
             <button className="btn ghost" onClick={open}>Have a look</button>
           </>}
         </div>
-        <p className="hint gp-follow">The bell above: get its announcements by e-mail, whether you’re in or not.</p>
+        {!g.archived && <p className="hint gp-follow">The bell above: get its announcements by e-mail, whether you’re in or not.</p>}
 
         <div className="section-title">Who’s in <span>{members.length}</span></div>
         {members.length === 0 && <p className="hint">Nobody yet.</p>}
@@ -71,7 +128,7 @@ export function GroupPage({ id }: { id: string }) {
         ))}
         {admins.some((a) => !g.members.has(a)) && <p className="hint">Also run by {admins.filter((a) => !g.members.has(a)).map((a) => displayName(a)).join(', ')}.</p>}
 
-        {waiting.length > 0 && <>
+        {waiting.length > 0 && !g.archived && <>
           <div className="section-title"><span className="lbl"><VouchIcon /> Asking to join</span><span>{waiting.length}</span></div>
           {waiting.map((a) => <GroupRequest key={a.ev.id} g={g} a={a} />)}
         </>}

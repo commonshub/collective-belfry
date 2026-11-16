@@ -1,10 +1,11 @@
 import { nip19 } from 'nostr-tools'
-import { editGroupMeta } from './checkin'
+import { archiveGroupMeta, editGroupMeta } from './checkin'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, groups } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable } from './model'
 import { enqueue, me, newId } from './sync'
+import { all } from './store'
 import { reading } from './guestmode'
 import { isAdmin } from './access'
 
@@ -28,7 +29,7 @@ export const mayPickAddress = () => isAdmin()
 export function addressFor(name: string, prefix = '', chosen = ''): string {
   const base = prefix + (chosen ? slug(chosen) : slug(name)).slice(0, prefix ? 24 : 32)
   if (!mayPickAddress()) return base + '-' + randomEnd()
-  return groups().some((g) => g.id === base) ? base + '-' + randomEnd() : base
+  return allGroups().some((g) => g.id === base) || deletedGroup(base) ? base + '-' + randomEnd() : base
 }
 
 export async function createChannel(name: string, about: string, id = addressFor(name)) {
@@ -62,8 +63,37 @@ export async function createPod(name: string, about: string, parent = 'general',
   return id
 }
 
+/** Every setting of group ID as 9002 tags, with CHANGE over them: zooid replaces the whole
+ *  metadata with each 9002, so an edit that leaves a setting out would drop it from the relay's
+ *  copy (name, about, picture, open / closed with its question and vouches; what the relay's copy
+ *  holds that this app doesn't model is kept as it is). `archived` is only ever in CHANGE. */
+const META_KNOWN = new Set(['d', 'h', '-', 'name', 'about', 'picture', 'open', 'closed', 'prompt', 'vouches', 'archived', 'client'])
+const ACCESS_TAGS = ['open', 'closed', 'prompt', 'vouches']
+export function metaTags(id: string, change: string[][]): string[][] {
+  const g = group(id)
+  const kept: string[][] = []
+  if (g) {
+    kept.push(['name', g.name], ['about', g.about])
+    if (g.picture) kept.push(['picture', g.picture])
+    if (g.closed) kept.push(['closed'], ...(g.prompt ? [['prompt', g.prompt]] : []), ...(g.vouches > 0 ? [['vouches', String(g.vouches)]] : []))
+    else if (g.isPod || g.isEvent) kept.push(['open'])
+    const copy = all(me()).filter((e) => e.kind === 39000 && e.tags.some((t) => t[0] === 'd' && t[1] === id)).sort((a, b) => b.created_at - a.created_at)[0]
+    for (const t of copy?.tags ?? []) if (t[0] && !META_KNOWN.has(t[0])) kept.push(t)
+  }
+  const said = new Set(change.map((t) => t[0]))
+  if (ACCESS_TAGS.some((k) => said.has(k))) for (const k of ACCESS_TAGS) said.add(k) // the access tags go together
+  return [...kept.filter((t) => !said.has(t[0])), ...change]
+}
+
+/** Archive a group (or bring it back): out of every list and read only, by its admins. A softer
+ *  way to delete: nothing is lost, and unarchiving undoes it. Not for #general, events, proposals. */
+export async function setArchived(id: string, on: boolean) {
+  if (on && !archivable(id)) throw new Error('This one can’t be archived.')
+  await archiveGroupMeta(id, metaTags(id, [['archived', on ? '1' : '0']]), on)
+}
+
 export const editPod = (id: string, name: string, about: string, access: PodAccess) =>
-  editGroupMeta(id, [['name', name], ['about', about], ...accessTags(access)], { name, about, closed: access.closed, prompt: access.closed ? access.prompt.trim() || DEFAULT_PROMPT : '', vouches: access.closed ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
+  editGroupMeta(id, metaTags(id, [['name', name], ['about', about], ...accessTags(access)]), { name, about, closed: access.closed, prompt: access.closed ? access.prompt.trim() || DEFAULT_PROMPT : '', vouches: access.closed ? Math.min(5, Math.max(0, access.vouches ?? 0)) : 0 })
 
 /** NIP-29 join request: in an open group it lets you in; in a closed one it is your application,
  *  with your answer to the pod's question as its content. */
@@ -78,7 +108,7 @@ export const vouch = (id: string, request: { id: string; pubkey: string }, on = 
   enqueue('groups', { kind: 1985, tags: [['h', id], ['L', VOUCH_NS], ['l', on ? 'vouch' : 'withdrawn', VOUCH_NS], ['e', request.id], ['p', request.pubkey]] })
 
 export const editChannel = (id: string, name: string, about: string) =>
-  editGroupMeta(id, [['name', name], ['about', about]], { name, about })
+  editGroupMeta(id, metaTags(id, [['name', name], ['about', about]]), { name, about })
 
 /** A chat message. Its hashtags become `t` tags (NIP-24); `topic` (the open topic) is added as a
  *  `t` tag too, without being written in the text, and so is `announcement` for an admin's
@@ -359,6 +389,7 @@ export const endDropLink = (groupId: string, ev: { id: string; pubkey: string },
 const seenSent = new Map<string, number>()
 export function markSeen(groupId: string) {
   if (reading()) return // guest mode: reading leaves no trace
+  if (group(groupId)?.archived) return // an archived group takes nothing, not even this
   const now = Date.now() / 1000
   const last = Math.max(mySeen(groupId), seenSent.get(groupId) ?? 0)
   if (now - last < 6 * 3600) return

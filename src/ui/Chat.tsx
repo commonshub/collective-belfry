@@ -4,8 +4,10 @@ import { address, unreadTotal } from '../core/dm'
 import { useBranding } from '../core/branding'
 import type React from 'react'
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useGroupState } from '../core/groupstate'
+import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -27,7 +29,7 @@ import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
 const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
-import { AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -167,6 +169,13 @@ export function ChannelList({ current, side = false, section, drawer = false }: 
         <div style={{ padding: 16 }}>
           <button className="btn ghost" onClick={() => setCreating(true)}>＋ Create a channel</button>
         </div>
+        {/* archived channels and groups: out of the list, found again here (only when there are any) */}
+        {archivedGroups().length > 0 && (
+          <button className={'chan archived-row' + (section === 'archived' ? ' on' : '')} onClick={() => closeDrawer('archived')}>
+            <span className="hash"><ArchiveIcon /></span>
+            <span className="t"><b>Archived</b><small>{archivedGroups().length === 1 ? '1 channel or group, read only' : `${archivedGroups().length} channels and groups, read only`}</small></span>
+          </button>
+        )}
       </div>
       {side && <SideUser />}
       {creating && <NewChannel onClose={() => setCreating(false)} />}
@@ -184,7 +193,7 @@ function AgentTag({ pk }: { pk: string }) {
 // channels' guest agents, worked out at most once a second (every row asks)
 let agentsAt = 0, agentsSet = new Set<string>()
 function guestAgents(): Set<string> {
-  if (Date.now() - agentsAt > 1000) { agentsAt = Date.now(); agentsSet = new Set(groups().flatMap((g) => guestJoins(g.id).filter((j) => j.agent).map((j) => j.pubkey))) }
+  if (Date.now() - agentsAt > 1000) { agentsAt = Date.now(); agentsSet = new Set(allGroups().flatMap((g) => guestJoins(g.id).filter((j) => j.agent).map((j) => j.pubkey))) }
   return agentsSet
 }
 
@@ -337,10 +346,21 @@ function NewChannel({ onClose }: { onClose: () => void }) {
 export function ChannelView({ id, topic, focus, activeThread }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string }) {
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
-  const all = groups()
-  const g = all.find((x) => x.id === id)
+  const g = group(id)
   const [settings, setSettings] = useState(false)
   useEffect(() => setSettings(false), [id])
+  // archived: read only. A plain header (no pull-down: it is all actions), the banner, the messages.
+  if (g?.archived) return (
+    <div className="screen">
+      <div className="topbar">
+        <MenuButton />
+        <h1 className="tap" onClick={() => go(`c/${encodeURIComponent(id)}/about`)}>{g.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g.name}<small>Archived</small></h1>
+        <button className="icon-btn" aria-label={`Search ${g.name}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>
+      </div>
+      <ArchivedBar g={g} />
+      <Conversation id={id} topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly />
+    </div>
+  )
   return (
     <div className="screen">
       <ChannelHeader id={id} topic={topic} onTopic={openTopic}
@@ -360,7 +380,7 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
 function JoinBar({ g }: { g: Group }) {
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState('')
-  const applied = groups().find((x) => x.id === g.id)?.applications.some((a) => a.pubkey === me())
+  const applied = group(g.id)?.applications.some((a) => a.pubkey === me())
   if (!g.closed)
     return (
       <div className="join-bar">
@@ -391,8 +411,27 @@ function JoinBar({ g }: { g: Group }) {
 
 /** The post a group leaves in its parent: a card that opens the group's page (GroupPage.tsx). */
 function PodCard({ id, fallback }: { id: string; fallback: string }) {
-  const g = groups().find((x) => x.id === id)
+  const state = useGroupState(id)
+  const g = group(id)
+  // deleted: the card stays (it is how people learn the group is gone), greyed, and opens nothing
+  if (state === 'deleted') {
+    const was = deletedGroup(id)?.name
+    return (
+      <div className="ev-card pod-card gone" aria-disabled="true">
+        <div className="date pod-ic"><PodShape members={0} size={26} /></div>
+        <span className="info"><b>{was && was !== id ? was : nameInCard(fallback)}</b><small>This group has been deleted</small></span>
+      </div>
+    )
+  }
+  // nothing known of it yet (first load, offline): the post as it was written, no guess
   if (!g) return <div className="text">{fallback}</div>
+  // archived: greyed, still opens (read only)
+  if (g.archived) return (
+    <div className="ev-card pod-card archived" role="button" tabIndex={0} aria-label={`Group ${g.name}: archived, read only`} onClick={() => go(`c/${encodeURIComponent(id)}`)} onKeyDown={(e) => { if (e.key === 'Enter') go(`c/${encodeURIComponent(id)}`) }}>
+      <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
+      <span className="info"><b>{g.name}</b><small>Archived</small></span>
+    </div>
+  )
   const inIt = g.members.has(me())
   const pending = g.applications.some((a) => a.pubkey === me())
   return (
@@ -408,6 +447,14 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
       {!inIt && pending && <span className="badge">Pending</span>}
     </div>
   )
+}
+
+/** A group's name from the text of the post that announced it ("⬡ New group: Canal · about"),
+ *  when the group itself is gone. */
+export function nameInCard(text: string): string {
+  const m = /New (?:group|pod):\s*(.+)$/.exec(text.split('\n')[0] ?? '')
+  const name = (m?.[1] ?? '').split(' · ')[0].trim()
+  return name ? name.slice(0, 100) : 'A group'
 }
 
 type Access = { closed: boolean; prompt: string; vouches?: number }
@@ -449,7 +496,7 @@ function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
   const [access, setAccess] = useState<Access>({ closed: false, prompt: '', vouches: 0 })
-  const where = groups().find((g) => g.id === parent)
+  const where = group(parent)
   return (
     <Sheet title="New group" onClose={onClose}>
       <Form onSubmit={async (e) => {
@@ -506,7 +553,9 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const guestReading = reading()
   if (guestReading) readOnly = true
   const g = group(id)
-  const admin = canAdmin(g)
+  const frozen = !!g?.archived // archived: nothing is written, reacted to, edited or pinned
+  if (frozen) readOnly = true
+  const admin = canAdmin(g) && !frozen
   const list = messages(id).filter((m) => !topic || (topic === ANNOUNCE ? isAnnouncement(m, g) : m.topics.includes(topic)))
   const ps = profiles()
   const rx = reactions(id)
@@ -584,7 +633,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         <div className="messages">
           {list.length === 0 && (topic
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
-            : guestReading ? <div className="empty">No messages here yet.</div> : <div className="empty-start">
+            : guestReading || frozen ? <div className="empty">No messages here{frozen ? '' : ' yet'}.</div> : <div className="empty-start">
                 <b>{g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : id} is new</b>
                 <p>No messages yet. Bring the people who belong here, then say hi.</p>
                 <button className="btn" onClick={() => setInviting(true)}>Invite people</button>
@@ -604,7 +653,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             return <Fragment key={key}>
               <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
-                reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
+                reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
                 thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
             </Fragment>
           })}
@@ -674,7 +723,8 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => up(`c/${encodeURIComponent(groupId)}`)
   const gkey = knownGroupsKey()
-  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: canAdmin(g), name: g?.name ?? groupId }
+  const frozen = !!g?.archived
+  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: canAdmin(g) && !frozen, name: g?.name ?? groupId }
   const card = root ? cardOf(root.ev, gkey) : null
   return (
     <div className="screen">
@@ -686,17 +736,18 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
       {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
+          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
           {flow.map((x) => x.m
             ? <Row key={x.m.ev.id} m={x.m} prev={replies[x.i! - 1]} head={x.i === 0} name={nameOf(x.m)} groupId={groupId}
-              reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.m!) }} announce={false} />
+              reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.m!) }} announce={false} />
             : <TodoStepLine key={x.g!.t.id + x.g!.at + x.g!.what.join()} g={x.g!} />)}
         </div>
       </div>
-      {root && reading() && <GuestBar groupId={groupId} />}
-      {root && !reading() && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {frozen && g && <ArchivedBar g={g} />}
+      {root && reading() && !frozen && <GuestBar groupId={groupId} />}
+      {root && !reading() && !frozen && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
@@ -756,13 +807,14 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
     }
   }
   const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
+  const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
-  const hold = useHold(() => onAct(), !!p)
+  const hold = useHold(() => onAct(), !!p || frozen)
   if (card || sent) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
       <div className="msg first card-row" id={'m-' + m.ev.id}>
-        {card ? <InboxCardView m={m} card={card} groupId={groupId} channelName={inbox!.name} state={inbox!.states.get(m.ev.id)} canSend={inbox!.canSend}
+        {card ? <InboxCardView m={m} card={card} groupId={groupId} channelName={inbox!.name} state={inbox!.states.get(m.ev.id)} canSend={inbox!.canSend && !frozen}
           thread={thread} onThread={onThread ?? (() => {})} />
           : <SentCardView m={m} sent={sent!} groupId={groupId} />}
       </div>
@@ -786,9 +838,9 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           <MediaGrid media={m.media} />
           {/* no to-do mark here any more (Xavier, 2026-11-12): the ⏳ / ☑️ reactions say it */}
           {/* the add button where the reactions are (#issues 2026-11-15), on hover when there are none */}
-          <ReactionChips chips={rx.map((r) => ({ emoji: r.emoji, who: r.at, mine: !!r.mine }))} disabled={!!p}
-            onToggle={(emoji) => { const r = rx.find((x) => x.emoji === emoji); void react(groupId, m.ev, emoji, r?.mine) }}
-            onAdd={p ? undefined : () => onAct(true)} />
+          <ReactionChips chips={rx.map((r) => ({ emoji: r.emoji, who: r.at, mine: !!r.mine }))} disabled={!!p || frozen}
+            onToggle={(emoji) => { if (frozen) return; const r = rx.find((x) => x.emoji === emoji); void react(groupId, m.ev, emoji, r?.mine) }}
+            onAdd={p || frozen ? undefined : () => onAct(true)} />
           {!first && !announce && !mail && !isCard && m.edited && <span className="edited below">edited</span>}
           {thread && thread.count > 0 && thread.last > 0 && (onOpenThread || onThread) && (
             <ThreadLine groupId={groupId} rootId={m.ev.id} thread={thread} open={threadOpen} onClick={onThread ?? onOpenThread!} />
@@ -798,7 +850,7 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           )}
           {p && p.status === 'queued' && <div className="state">{p.tries && !relaysUp() ? 'Waiting for connection…' : p.tries ? 'Sending again…' : 'Sending…'}</div>}
         </div>
-        {!p && (
+        {!p && !frozen && (
           <div className="msg-tools" role="toolbar" aria-label="Message actions">
             <button aria-label="More" title="More" onClick={() => onAct()}><MoreIcon /></button>
           </div>
@@ -1134,7 +1186,7 @@ function InlineThread({ groupId, root, focus, onHide, onOpen, onAct }: { groupId
     <div className="inline-thread" role="region" aria-label="Thread">
       {hidden > 0 && <button className="link thread-more" onClick={() => setAll(true)}>Show {hidden} earlier {hidden === 1 ? 'reply' : 'replies'}</button>}
       {shown.map((r) => <InlineReply key={r.ev.id} r={r} groupId={groupId} onAct={() => onAct(r)} />)}
-      {!reading() && <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
+      {!reading() && !group(groupId)?.archived && <Composer groupId={groupId} draft={'t:' + root.ev.id} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} autoFocus={focus} compact
         onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
       <div className="thread-foot">
         <button className="link thread-hide" onClick={onHide}>Hide</button>

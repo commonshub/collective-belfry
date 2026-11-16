@@ -8,7 +8,7 @@ import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, removeFromGroup, setG
 import { canAdmin } from '../core/access'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
-import { channelIcon, displayName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
+import { allGroups, channelIcon, displayName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
 import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
@@ -46,7 +46,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const p = profiles().get(pk)
   const x = extras().get(pk)
   const about = aboutOf(pk)
-  const joins = groups().flatMap((g) => guestJoins(g.id)).filter((j) => j.pubkey === pk && !j.member)
+  const joins = allGroups().flatMap((g) => guestJoins(g.id)).filter((j) => j.pubkey === pk && !j.member)
   const guest = joins[0]
   // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
   const noAdmin = joins.some((j) => j.agent) ? 'An agent has no role.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them a member.' : ''
@@ -130,7 +130,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
             {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
           </div>
         )}
-        {inGroup && group(inGroup) && <GroupRoleCard groupId={inGroup} pk={pk} />}
+        {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
       </div>
       {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}
         onPick={async (id) => { setBusy(true); try { await setMemberRole(pk, id) } finally { setBusy(false) } }} />}

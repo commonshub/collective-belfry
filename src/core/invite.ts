@@ -7,14 +7,14 @@ import { agentOwner, canAdmin, loadAccessInfo } from './access'
 import { relayAdmin } from './checkin'
 import { admit } from './actions'
 import { sendDm } from './dm'
-import { group, groups, guestJoins, profiles, type Group } from './model'
+import { allGroups, group, groups, guestJoins, profiles, type Group } from './model'
 import { isLocalOnly, me, signedFetch } from './sync'
 import { touch } from './store'
 
 /** Someone who is in this belfry only as a channel's guest (a person or an agent). */
-export const isGuest = (pubkey: string) => !agentOwner(pubkey) && groups().some((g) => guestJoins(g.id).some((j) => j.pubkey === pubkey && !j.member))
+export const isGuest = (pubkey: string) => !agentOwner(pubkey) && allGroups().some((g) => guestJoins(g.id).some((j) => j.pubkey === pubkey && !j.member))
 /** An agent (a channel's guest, or a member's own), not a person. */
-export const isAgent = (pubkey: string) => !!agentOwner(pubkey) || groups().some((g) => guestJoins(g.id).some((j) => j.pubkey === pubkey && j.agent))
+export const isAgent = (pubkey: string) => !!agentOwner(pubkey) || allGroups().some((g) => guestJoins(g.id).some((j) => j.pubkey === pubkey && j.agent))
 
 /** Whether PUBKEY can read CHANNEL: an open channel is every member's (and its own guests');
  *  a closed one (a pod by application) only its members' and admins'. */

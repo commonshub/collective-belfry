@@ -40,6 +40,11 @@ export function newId(bytes = 8) {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(bytes)))
 }
 
+/** A rule every event to the groups relay passes first (model.ts: archived groups take nothing):
+ *  it returns why not, or nothing. */
+let writeGuard: ((t: { kind: number; tags: string[][] }) => string | undefined) | undefined
+export function setWriteGuard(f: typeof writeGuard) { writeGuard = f }
+
 export async function enqueue(
   target: Target,
   t: { kind: number; content?: string; tags: string[][] },
@@ -47,6 +52,8 @@ export async function enqueue(
 ) {
   // guest mode: nothing is sent before joining; the Join sheet opens instead
   if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  const refused = target === 'groups' ? writeGuard?.(t) : undefined
+  if (refused) throw new Error(refused)
   return put(target, t, files)
 }
 
@@ -377,6 +384,28 @@ export async function queryOnce(target: Target, filter: Filter, timeoutMs = 8000
     const done = () => { clearTimeout(timer); sub.close(); resolve(out) }
     const timer = setTimeout(done, timeoutMs)
     const sub = r.subscribe([filter], { onevent: (e) => out.push(e), oneose: done, onclose: () => resolve(out) })
+  })
+}
+
+/** What the relay has for FILTERS, once it said that was all (EOSE). `null` when it never said
+ *  so (no connection, a timeout, the subscription closed): then nothing is known, and an empty
+ *  list would be a guess. */
+export async function queryComplete(target: Target, filters: Filter[], timeoutMs = 8000): Promise<NostrEvent[] | null> {
+  if (localOnly || !signer) return null
+  let r: Relay
+  try { r = await within(relay(target), timeoutMs, 'no connection to the relay') } catch { return null }
+  return new Promise((resolve) => {
+    const out: NostrEvent[] = []
+    let over = false
+    const end = (v: NostrEvent[] | null) => {
+      if (over) return
+      over = true
+      clearTimeout(timer)
+      setTimeout(() => { try { sub.close() } catch { /* closed */ } }, 0)
+      resolve(v)
+    }
+    const timer = setTimeout(() => end(null), timeoutMs)
+    const sub = r.subscribe(filters, { onevent: (e) => out.push(e), oneose: () => end(out), onclose: () => end(null) })
   })
 }
 

@@ -1365,3 +1365,17 @@ div.settings-row { cursor: default; }
 .group-role .remove-row { margin-top: 8px; color: #dc2626; gap: 10px; }
 .group-role .remove-row .ico { color: #dc2626; }
 .profile-role .edit-roles { gap: 10px; color: var(--muted); font-size: 14px; min-height: 40px; }
+
+/* ---- deleted and archived groups (2026-11-16) ---- */
+/* a deleted group's card stays in its parent, greyed, and opens nothing */
+.pod-card.gone { cursor: default; opacity: .55; filter: grayscale(1); background: transparent; border-style: dashed; }
+.pod-card.gone:hover { background: transparent; }
+.pod-card.archived { opacity: .7; filter: grayscale(1); }
+.group-deleted .empty b { display: block; color: var(--text); font-size: 17px; margin-bottom: 14px; }
+.group-deleted .empty .btn { width: auto; display: inline-flex; }
+.archived-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface); color: var(--muted); font-size: 14px; }
+.archived-bar .btn.small { width: auto; flex: none; }
+.archived-bar .error { flex-basis: 100%; margin: 0; }
+.chan.archived-row { color: var(--muted); margin-bottom: 12px; }
+.archive-link { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; }
+.archive-link svg { width: 18px; height: 18px; }

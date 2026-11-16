@@ -6,11 +6,11 @@ import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
-import { mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
+import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
 import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
-import { ACTIVE_DAYS, channelIcon, displayName, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
+import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
@@ -22,7 +22,8 @@ import { isAdmin } from '../core/access'
 import { AccessFields } from './Chat'
 import { GroupRequest } from './Requests'
 import { groupRequestsFor } from '../core/requests'
-import { GearIcon } from './icons'
+import { ArchiveIcon, GearIcon } from './icons'
+import { ArchivedBar } from './GroupPage'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
 
@@ -30,15 +31,17 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
   useVersion()
   const [tab, setTab] = useState<Tab>(initial)
   const [settings, setSettings] = useState(false)
-  const g = groups().find((x) => x.id === id)
+  const g = group(id)
   return (
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + id)}>‹</button>
         <h1>{channelIcon(g)} {g?.name ?? id}</h1>
-        {g && canAdmin(g) && <button className="icon-btn" aria-label="Settings" onClick={() => setSettings(true)}><GearIcon /></button>}
+        {g && canAdmin(g) && !g.archived && <button className="icon-btn" aria-label="Settings" onClick={() => setSettings(true)}><GearIcon /></button>}
       </div>
-      <ChannelInfoBody id={id} tab={tab} setTab={setTab} />
+      {g?.archived && <ArchivedBar g={g} />}
+      {/* archived: what there is to read (no to-dos to tick) */}
+      <ChannelInfoBody id={id} tab={g?.archived && tab === 'tasks' ? 'about' : tab} setTab={setTab} tabs={g?.archived ? [['about', 'About'], ['members', 'Members'], ['files', 'Files'], ['log', 'Log']] : undefined} />
       {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
     </div>
   )
@@ -77,12 +80,26 @@ export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: 
  *  members and photos itself. */
 export function About({ id, compact = false }: { id: string; compact?: boolean }) {
   useVersion()
-  const g = groups().find((x) => x.id === id)
+  const g = group(id)
   const [inviting, setInviting] = useState(false)
   const [settings, setSettings] = useState(false)
   if (!g) return null
   const active = recentlyActive(id)
-  const parent = groups().find((x) => x.id === g.parent)
+  const parent = g.parent ? group(g.parent) : undefined
+  // archived: its description and who was in it; nothing to invite to, join, leave or write to
+  if (g.archived) return (
+    <div className="pad about">
+      {g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint">No description yet.</p>}
+      <div className="about-line">
+        <button className="about-faces" onClick={() => go(`c/${encodeURIComponent(id)}/members`)} aria-label="See the members">
+          {[...g.members].slice(0, 6).map((p) => <Avatar key={p} pubkey={p} size={24} />)}
+          <span><b>{g.members.size}</b> {g.members.size === 1 ? 'member' : 'members'}</span>
+        </button>
+      </div>
+      {g.isPod && parent && <p className="about-line">Group in <button className="link" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{channelIcon(parent)} {parent.name}</button></p>}
+      <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
+    </div>
+  )
   return (
     <div className="pad about">
       {!compact && (g.about ? <Markdown text={g.about} className="chead-about" /> : <p className="hint">No description yet.</p>)}
@@ -144,7 +161,7 @@ export function VisibilitySheet({ g, to, onClose, onDone }: { g: Group; to: Chan
 
 /** A channel's settings (its admins): name, description, visibility, mail, its web page. */
 export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
-  const g = groups().find((x) => x.id === id)
+  const g = group(id)
   const [name, setName] = useState(g?.name ?? '')
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState<{ closed: boolean; prompt: string; vouches?: number }>({ closed: !!g?.closed, prompt: g?.prompt ?? '', vouches: g?.vouches ?? 0 })
@@ -152,7 +169,23 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.name ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   const [moving, setMoving] = useState<ChannelVisibility | null>(null)
-  if (!g) return null
+  const [archiving, setArchiving] = useState(false)
+  const [archiveError, setArchiveError] = useState('')
+  if (!g || g.archived) return null
+  // archiving: asked here, in the app (never the browser's confirm)
+  if (archiving) return (
+    <Sheet title={`Archive ${g.name}?`} onClose={onClose} hideTitle>
+      <div className="confirm-box" role="alertdialog" aria-label={`Archive ${g.name}`}>
+        <b>Archive {g.name}?</b>
+        <p>It leaves the channel list and nobody can post in it. You can unarchive it later.</p>
+        {archiveError && <div className="error" role="alert">{archiveError}</div>}
+        <div className="row-btns two">
+          <button type="button" className="btn ghost" onClick={() => { setArchiving(false); setArchiveError('') }}>Keep it</button>
+          <Btn className="btn danger" onClick={async () => { setArchiveError(''); try { await setArchived(id, true); onClose() } catch (e) { setArchiveError(e instanceof Error ? e.message : 'That did not work. Try again.') } }}>Archive</Btn>
+        </div>
+      </div>
+    </Sheet>
+  )
   return (
     <Sheet title={`${g.isPod ? 'Group' : 'Channel'} settings`} onClose={onClose}>
           <Form onSubmit={async (e) => {
@@ -206,6 +239,8 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
               </div>
             )}
             <button className="btn" disabled={!name.trim()}>Save</button>
+            {/* a softer way to delete: out of the list and read only, until someone unarchives it */}
+            {archivable(id) && <button type="button" className="link danger archive-link" onClick={() => setArchiving(true)}><ArchiveIcon /> Archive this {g.isPod ? 'group' : 'channel'}…</button>}
           </Form>
     </Sheet>
   )
@@ -273,17 +308,17 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
 
 export function Members({ groupId }: { groupId: string }) {
   useVersion()
-  const g = groups().find((x) => x.id === groupId)
+  const g = group(groupId)
   const members = [...new Set([...(g?.members ?? []), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   // requests to join: its admins answer; while it accepts by vouches, its members vouch
-  const reviewing = g?.isPod ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
+  const reviewing = g?.isPod && !g.archived ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
   // guest mode: people who opened an invite link and have not joined are a number, not members
   const readingN = g ? [...g.reading].filter((p) => p !== me()).length : 0
   // guests (people or agents) and who brought them in: whose agent it is
   const invited = new Map(guestJoins(groupId).filter((j) => !j.member).map((j) => [j.pubkey, j]))
   const ex = extras()
   const mapped = members.filter((p) => ex.get(p)?.place?.lat !== undefined)
-  const isMember = !groups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me() && !j.member)
+  const isMember = !allGroups().flatMap((x) => guestJoins(x.id)).some((j) => j.pubkey === me() && !j.member)
   return (
     <div>
       {reviewing.length > 0 && <div className="section-title">Asking to join <span>{reviewing.length}</span></div>}
@@ -371,7 +406,7 @@ export function Log({ groupId }: { groupId: string }) {
   useVersion()
   const [open, setOpen] = useState<string | null>(null)
   const [raw, setRaw] = useState<Ev | null>(null)
-  const g = groups().find((x) => x.id === groupId)
+  const g = group(groupId)
   const dev = devMode() && ((g && canAdmin(g)) || isAdmin())
   const evs = all(me()).filter((e) => e.tags.some((x) => x[0] === 'h' && x[1] === groupId))
   const titles = new Map(tasklist(groupId).tasks.map((t) => [t.id, t.title]))
@@ -430,7 +465,7 @@ export function Files({ groupId }: { groupId: string }) {
   const media = messages(groupId).flatMap((m) => m.media).reverse()
   return (
     <div className="pad">
-      <DropBox groupId={groupId} />
+      {!group(groupId)?.archived && <DropBox groupId={groupId} />}
       {media.length ? <MediaGrid media={media} /> : <div className="empty">Photos and files posted in this channel show up here.</div>}
     </div>
   )
@@ -463,7 +498,7 @@ function ActiveCard({ id }: { id: string }) {
 
 function Summary({ id, tab, open }: { id: string; tab: Tab; open: (t: Tab) => void }) {
   useVersion()
-  const g = groups().find((x) => x.id === id)
+  const g = group(id)
   if (!g) return null
   const media = messages(id).flatMap((m) => m.media).reverse()
   const photos = media.filter((m) => m.mime.startsWith('image/'))

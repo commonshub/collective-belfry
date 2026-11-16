@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, THEME } from '../config'
 import { jitsiLink, mayPickAddress, randomEnd } from '../core/actions'
-import { calendar, eventByCoord, eventLink, groups, type CalEvent, type Rsvp, type Visibility } from '../core/model'
+import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, type Visibility } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { claimSlug, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
@@ -55,7 +55,7 @@ export function EventsScreen({ channel }: { channel?: string }) {
   useVersion()
   const [creating, setCreating] = useState(false)
   const [tab, setTab] = useState<Tab>('upcoming')
-  const g = channel ? groups().find((x) => x.id === channel) : undefined
+  const g = channel ? group(channel) : undefined
   const list = calendar().filter((e) => !channel || e.channels.includes(channel))
   const mine = (e: CalEvent) => { const s = myState(e); return s !== 'none' && s !== 'declined' && s !== 'cant' }
   const shown = tab === 'past' ? list.filter(isPast).reverse()

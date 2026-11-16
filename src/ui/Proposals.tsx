@@ -1,7 +1,7 @@
 import { BELFRY } from '../config'
 import { useState } from 'react'
 import { createProposal, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
-import { canDecide, displayName, groups, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
+import { canDecide, displayName, group, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { go, Sheet, Form, useFormDraft } from './common'
@@ -110,7 +110,7 @@ export function NewProposalSheet({ parent, onClose, from, onMade, website }: { p
     ? { title: 'A new version of the website', summary: `By ${website.by}`, text: `Preview it: ${previewLink(website.ref)}\n\nWhat changes:\n- `, status: 'feedback', website: website.ref }
     : { title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' })
   const set = (patch: Partial<NewProposal>) => setN((x) => ({ ...x, ...patch }))
-  const where = groups().find((g) => g.id === parent)
+  const where = group(parent)
   return (
     <Sheet title="New proposal" onClose={onClose}>
       <Form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); clearDraft(); onMade?.(id, n.title); onClose(); go('c/' + encodeURIComponent(id)) }}>

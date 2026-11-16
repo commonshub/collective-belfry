@@ -8,7 +8,7 @@ import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../cor
 import { GuestJoinHost, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
-import { groups, profiles } from '../core/model'
+import { archivedGroups, deletedGroup, group, groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
@@ -17,7 +17,8 @@ import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
 import { MembersDirectory } from './Directory'
 import { SignInMethods } from './SignInMethods'
-import { GroupPage } from './GroupPage'
+import { ArchivedScreen, DeletedGroup, GroupPage } from './GroupPage'
+import { useGroupState } from '../core/groupstate'
 import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
@@ -184,6 +185,10 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   const drawer = useDrawer()
   useEffect(() => { if (wide) closeDrawer() }, [wide])
   useVersion()
+  // the channel or group the address names (c/<id>/…), and whether it is still there: a deleted
+  // one shows that, whatever the link was to (groupstate.ts asks the relay when nothing is known)
+  const chanId = route[1] ?? lastChannel() ?? groups()[0]?.id ?? 'general'
+  const chanState = useGroupState((route[0] ?? 'c') === 'c' && route[1] ? chanId : undefined)
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   // a guest link opened while signed in (or kept while signing in): this account gets the channel
   const [joined, setJoined] = useState('')
@@ -194,7 +199,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     setPendingInvite('')
     if (session.backend === 'demo') { setJoined('You joined # general'); go('c/general'); return }
     joinWithAccount(token).then(
-      ({ channel, already }) => { go('c/' + encodeURIComponent(channel)); setJoined(already ? '' : `You joined # ${groups().find((x) => x.id === channel)?.name ?? channel}`) },
+      ({ channel, already }) => { go('c/' + encodeURIComponent(channel)); setJoined(already ? '' : `You joined # ${group(channel)?.name ?? channel}`) },
       (e) => setJoined(e instanceof Error ? e.message : String(e)),
     )
   }, [ready, route.join('/')])
@@ -243,15 +248,19 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
+  else if (section === 'archived') view = <ArchivedScreen />
   else if (section === 'requests') view = <MembersDirectory />
   else if (section === 'members') view = <MembersDirectory />
   else if (section === 'admin') view = <Admin sub={a} id={b} />
   else if (section === 'search') view = <SearchView channel={a} />
   else if (section === 'u') view = <ProfileView key={a + (b === 'in' ? c : '')} id={a} inGroup={b === 'in' ? c : undefined} />
+  else if (chanState === 'deleted' && !eventOfGroup(chanId)) view = <DeletedGroup /> // whatever the link was to: its chat, page, a thread, a message
   else {
-    const id = a ?? lastChannel() ?? groups()[0]?.id ?? 'general'
+    const id = chanId
     const evOf = eventOfGroup(id) // an event's chat opens as the event
-    if (evOf && (!b || b === 'm' || (b === 'thread' && wide && three && c))) {
+    if (group(id)?.archived && b && ARCHIVED_READS.has(b)) view = <ChannelInfo key={b} id={id} initial={b === 'info' ? (c === 'members' ? 'members' : 'about') : INFO_PAGES[b] === 'tasks' ? 'about' : INFO_PAGES[b]} />
+    else if (group(id)?.archived && b && b !== 'm' && b !== 't' && b !== 'thread' && b !== 'group') view = <ChannelView id={id} /> // its to-dos, its events: the channel itself, read only
+    else if (evOf && (!b || b === 'm' || (b === 'thread' && wide && three && c))) {
       view = <EventScreen key={id} coord={evOf.coord} activeThread={b === 'thread' ? c : undefined} />
       if (b === 'thread' && c) pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
     } else if (wide && three && b === 'thread' && c) {
@@ -261,7 +270,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
-  const current = section === 'c' ? (a ?? lastChannel() ?? groups()[0]?.id ?? 'general') : section === 'events' ? a : undefined
+  const current = section === 'c' ? chanId : section === 'events' ? a : undefined
   if (!wide) return <><Phone current={current} section={section} open={drawer}>{view}</Phone>{toast}</>
   return (
     <div className="layout wide">
@@ -274,6 +283,8 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
 }
 
 /** c/<id>/members, /photos, /files, /todos, /log: a channel's full lists (Xavier, 2026-11-12). */
+/** What of an archived group's pages stays open: reading. */
+const ARCHIVED_READS = new Set(['info', 'about', 'members', 'images', 'photos', 'files', 'log'])
 const INFO_PAGES: Record<string, 'members' | 'files' | 'tasks' | 'log' | 'about'> = { members: 'members', images: 'files', photos: 'files', files: 'files', todos: 'tasks', log: 'log', about: 'about' }
 
 const EVENT_KEY = 'belfry-event-open'
@@ -293,7 +304,9 @@ function DevModeRow() {
 
 function lastChannel() {
   const m = /#\/c\/([^/]+)/.exec(sessionStorage.getItem('osv-last-channel') ?? '')
-  return m ? decodeURIComponent(m[1]) : undefined
+  const id = m ? decodeURIComponent(m[1]) : undefined
+  // the app opens where you were, unless that was deleted or archived since
+  return id && (deletedGroup(id) || group(id)?.archived) ? undefined : id
 }
 addEventListener('hashchange', () => {
   if (location.hash.startsWith('#/c/')) try { sessionStorage.setItem('osv-last-channel', location.hash) } catch { /* ignore */ }
@@ -411,7 +424,7 @@ function demoGuestReading(channel: string, pubkey?: string, name?: string) {
   const pk = pubkey ?? hex(32)
   const now = Math.floor(Date.now() / 1000)
   const base = { pubkey: hex(32), sig: hex(64), content: '' }
-  const members = [...(groups().find((g) => g.id === channel)?.members ?? []), ...(groups().find((g) => g.id === channel)?.reading ?? []), pk]
+  const members = [...(group(channel)?.members ?? []), ...(group(channel)?.reading ?? []), pk]
   addEvents(name
     ? [{ ...base, id: hex(32), kind: 9000, created_at: now + 1, tags: [['h', channel], ['p', pk, 'member'], ['guest', ''], ['invited-by', me()], ['name', name]] },
        { ...base, id: hex(32), kind: 1985, created_at: now + 2, tags: [['h', channel], ['L', 'belfry/guest'], ['l', 'saved', 'belfry/guest'], ['p', pk]] }]

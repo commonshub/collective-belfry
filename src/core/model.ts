@@ -3,7 +3,7 @@ import { bytesToHex } from '@noble/hashes/utils'
 import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
-import { me } from './sync'
+import { me, setWriteGuard } from './sync'
 import { belfryAdminKeys, isAdmin as isAdminNow } from './access'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -105,6 +105,12 @@ export interface Group {
   /** Open applications to a closed group: the latest 9021 of someone not admitted nor declined. */
   applications: Application[]
   pending: boolean
+  /** Archived (our `archived` tag on the group's 9002: "1", and "0" to unarchive; the latest 9002
+   *  that says anything about it wins): out of every list, read only, until it is unarchived.
+   *  Never for `general`, events or proposals. The relay enforces none of it. */
+  archived: boolean
+  /** Its own metadata is here (a 9007, 9002 or 39000): the group exists, or did. */
+  known: boolean
 }
 
 export interface Application { pubkey: string; answer: string; at: number; ev: Ev }
@@ -141,7 +147,7 @@ export function channelOfNaddr(naddr: string): string | undefined {
 export function plainRefs(text: string, npub = '@…'): string {
   return text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub).replace(NADDR, (all, a: string) => {
     const id = channelOfNaddr(a)
-    return id ? '#' + (groups().find((g) => g.id === id)?.name ?? id) : all
+    return id ? '#' + (group(id)?.name ?? id) : all
   })
 }
 export const isPodId = (id: string) => id.startsWith('pod-')
@@ -157,7 +163,11 @@ export const proposalOf = (e: Ev) => {
   return v && isProposalId(v) ? v : undefined
 }
 
-export const groups: () => Group[] = perLog((list) => {
+/** Can this group be archived at all? Channels and groups; not `general`, events or proposals. */
+export const archivable = (id: string) => id !== 'general' && !id.startsWith('ws-') && !id.startsWith('ev-') && !isProposalId(id)
+
+interface GroupSets { live: Group[]; archived: Group[]; every: Group[]; byId: Map<string, Group>; gone: Map<string, Group> }
+const groupSets: () => GroupSets = perLog((list) => {
   const map = new Map<string, Group & { metaAt: Record<string, number> }>()
   const applied = new Map<string, Ev>() // group id + pubkey → latest 9021
   const decided = new Map<string, number>() // group id + pubkey → latest 9000 / 9001
@@ -167,7 +177,7 @@ export const groups: () => Group[] = perLog((list) => {
   const get = (id: string, at: number) => {
     let g = map.get(id)
     if (!g) {
-      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, metaAt: {} }
+      g = { id, name: id, about: '', createdAt: at, lastActivity: at, members: new Set(), reading: new Set(), isEvent: id.startsWith('ws-') || id.startsWith('ev-'), isPod: isPodId(id), isProposal: isProposalId(id), closed: false, vouches: 0, admins: new Set(), applications: [], pending: false, archived: false, known: false, metaAt: {} }
       map.set(id, g)
     }
     return g
@@ -189,6 +199,10 @@ export const groups: () => Group[] = perLog((list) => {
       }
     }
     if (e.kind === 9007 || e.kind === 9002 || e.kind === 39000) {
+      g.known = true
+      // archived or not: the latest of them that says so ("1" / "0"); an edit without the tag changes nothing
+      const arch = tag(e, 'archived')
+      if (arch !== undefined && archivable(id) && (g.metaAt.archived ?? 0) <= e.created_at) { g.archived = arch === '1'; g.metaAt.archived = e.created_at }
       const access = e.tags.some((t) => t[0] === 'closed') ? true : e.tags.some((t) => t[0] === 'open') ? false : undefined
       if (access !== undefined && (g.metaAt.closed ?? 0) <= e.created_at) { g.closed = access; g.metaAt.closed = e.created_at }
       const prompt = tag(e, 'prompt')
@@ -256,11 +270,32 @@ export const groups: () => Group[] = perLog((list) => {
   // … and until then they are in no member list or count (the relay's 39002 has their key)
   const self = me()
   for (const g of map.values()) for (const p of g.reading) if (p !== self) g.members.delete(p)
-  const gone = new Set([...map.values()].filter((g) => list.some((e) => e.kind === 9008 && tag(e, 'h') === g.id)).map((g) => g.id))
-  return [...map.values()]
+  // deleted: a 9008 for it (the relay then drops everything of the group but that 9008), unless the
+  // group was made again since (a 9007 after it: the relay takes one for an id that is free again)
+  const goneAt = new Map<string, number>(), madeAt = new Map<string, number>()
+  for (const e of list) {
+    const h = e.kind === 9008 || e.kind === 9007 ? tag(e, 'h') : undefined
+    if (!h) continue
+    const m = e.kind === 9008 ? goneAt : madeAt
+    m.set(h, Math.max(m.get(h) ?? 0, e.created_at))
+  }
+  const gone = new Map<string, Group>()
+  for (const [id, at] of goneAt) { const g = map.get(id); if (g && !((madeAt.get(id) ?? 0) > at)) gone.set(id, g) }
+  const every = [...map.values()]
     .filter((g) => !gone.has(g.id))
     .sort((a, b) => (a.id === 'general' ? -1 : b.id === 'general' ? 1 : b.lastActivity - a.lastActivity))
+  return { every, live: every.filter((g) => !g.archived), archived: every.filter((g) => g.archived), byId: new Map(every.map((g) => [g.id, g])), gone }
 })
+
+/** The groups people work in: every channel, group, event chat and proposal that is neither
+ *  deleted nor archived. Every list is made of these (the channel list, pickers, counts). */
+export const groups = (): Group[] => groupSets().live
+/** The archived ones (readable from their card, a link or the Archived screen; never listed). */
+export const archivedGroups = (): Group[] => groupSets().archived
+/** Live and archived together: for looking things up (who is a guest where, an event's channel). */
+export const allGroups = (): Group[] => groupSets().every
+/** A deleted group, as this device still remembers it (its name for the card). */
+export const deletedGroup = (id: string): Group | undefined => groupSets().gone.get(id)
 
 /** Vouches for requests to join a group (NIP-32 kind 1985, `L belfry/vouch`, `l vouch|withdrawn`,
  *  `e` = the 9021, `p` = the applicant, `h` = the group): request id → author → latest value. */
@@ -310,7 +345,20 @@ export function dropLinks(groupId: string): DropLink[] {
   return out.sort((a, b) => b.ev.created_at - a.ev.created_at)
 }
 
-export const group = (id: string) => groups().find((g) => g.id === id)
+/** A group by id, archived or not (never a deleted one). */
+export const group = (id: string): Group | undefined => groupSets().byId.get(id)
+
+// nothing is posted or changed in an archived group (the relay would take it: this is the app's
+// own rule, whatever screen asks): only unarchiving it, leaving it, or deleting it
+setWriteGuard((t) => {
+  const of = (k: string) => t.tags.find((x) => x[0] === k)?.[1]
+  const h = of('h')
+  if (!h || !group(h)?.archived) return undefined
+  if (t.kind === 9002 && t.tags.some((x) => x[0] === 'archived' && x[1] === '0')) return undefined
+  if (t.kind === 9022 || t.kind === 9008) return undefined
+  if (t.kind === 30078 && (of('d') ?? '').startsWith('seen:')) return undefined
+  return 'This group is archived: nothing can be posted or changed in it.'
+})
 
 // ---- messages -----------------------------------------------------------------
 
@@ -465,7 +513,7 @@ export function mailLocal(g: Group): string {
   const want = slugify(g.name) || g.id.replace(/-[0-9a-z]{3,8}$/, '')
   if (!want || want === g.id) return g.id
   if (!madeByAdmin(g)) return g.id // a plain alias for an admin's channel only (#issues 2026-11-15; mail.channel_by_slug)
-  return groups().filter((x) => plain(x).includes(want)).length === 1 ? want : g.id
+  return allGroups().filter((x) => plain(x).includes(want)).length === 1 ? want : g.id
 }
 
 /** Did a belfry admin (or the belfry's own key) make G? Not known (no 9007 here): yes, as before. */
@@ -734,7 +782,7 @@ export const eventCoordsOf = (e: Ev) =>
 
 export const calendar: () => CalEvent[] = perLog((list) => {
   const del = deleted(list)
-  const gs = new Map(groups().map((g) => [g.id, g]))
+  const gs = new Map(allGroups().map((g) => [g.id, g]))
   const creators = new Map<string, string>() // group id → its creator (first 9007)
   for (const e of [...list].sort(byTime)) if (e.kind === 9007) { const h = tag(e, 'h'); if (h && !creators.has(h)) creators.set(h, e.pubkey) }
   // versions: by d for Belfry events (any host may write one), by coordinate for the older ones
@@ -873,7 +921,7 @@ export function proposals(): Proposal[] {
     const prev = latest.get(coord)
     if (!prev || byTime(prev, e) < 0) latest.set(coord, e)
   }
-  const gs = new Map(groups().map((g) => [g.id, g]))
+  const gs = new Map(allGroups().map((g) => [g.id, g]))
   const out: Proposal[] = []
   for (const [coord, e] of latest) {
     if (del.has(coord)) continue
@@ -915,7 +963,7 @@ export const proposalFor = (groupId: string) => proposals().find((p) => p.groupI
 
 /** Who may change a proposal's status: its author and the admins of its chat or its parent. */
 export function canDecide(p: Proposal) {
-  const gs = groups()
+  const gs = allGroups()
   const g = gs.find((x) => x.id === p.groupId)
   const parent = gs.find((x) => x.id === g?.parent)
   const k = me()
