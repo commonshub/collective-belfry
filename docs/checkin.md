@@ -184,6 +184,16 @@ the belfry agent's workspace (58 checks, including a fake camera showing a ticke
   opening the invite sheet on "Joins as: Member" in #general (else the first open channel in the
   admins' order).
 
+## Public events for guests
+
+`GET https://belfry.<domain>/api/v1/events?visibility=public&from=<unix>&cancelled=1` (no auth;
+2026-11-16) → `{"events": [...]}`, each exactly what `GET /api/v1/events/<link>` answers an
+anonymous viewer (`me` null). Only `visibility` public (another value: 422 `invalid`), start or
+end at or after `from` (default now − 1 day; not a number: 422 `invalid`), cancelled ones only
+with `cancelled=1`, soonest first, at most 100; 503 `unavailable` when the community relay
+can't be read. The same query as the apex `/events` page (events of the last 400 days). CORS as
+for every `/api/*` (the chat's origin is allowed). Cached 60 s by clients.
+
 ## Open
 
 - A zooid patch (0005) letting per-group admins moderate on the relay and listing them in 39001
