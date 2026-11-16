@@ -20,7 +20,7 @@ import { threads, unreadTotal, convName } from '../core/dm'
 import { myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
-import { allGroups, archivedGroups, calendar, channelIcon, displayName, group, groups, guestJoins, messages, tasklist, type CalEvent, type Group } from '../core/model'
+import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, type CalEvent, type Group } from '../core/model'
 import { CHARTER_ID, GATES } from '../core/places'
 import { agentRequests, belfryRequests, groupRequests, requestCount, startRequests } from '../core/requests'
 import { useVersion } from '../core/store'
@@ -391,7 +391,7 @@ export function HomeScreen() {
 const untilWords = (until?: number) => until ? new Date(until * 1000).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'long' }) : ''
 
 /** Channels I'm in as a guest. */
-const myGuestChannels = () => allGroups().filter((g) => !g.archived && (g.members.has(me()) || guestInfo()?.channel === g.id) && !g.isEvent && g.id !== CHARTER_ID)
+export const myGuestChannels = () => allGroups().filter((g) => !g.archived && (guestJoins(g.id).some((j) => j.pubkey === me() && !j.member) || guestInfo()?.channel === g.id) && !g.isEvent && g.id !== CHARTER_ID)
 /** Open to everyone, read-only for guests: the charter and #issues / #requests, each only if it exists. */
 const OPEN_IDS = ['issues', 'requests']
 
@@ -400,7 +400,7 @@ function GuestHome() {
   const community = useCommunityName(NAME)
   useEffect(() => { void loadApplyStatus(); void loadRemoteCharter() }, [])
   const st = applyStatus()
-  const name = displayName(me())
+  const name = realName(me()) || 'guest'
   const mine = myGuestChannels()
   const rules = remoteAgreements() ?? (charter().length ? charter() : [])
   const open = OPEN_IDS.map((id) => group(id)).filter((g): g is Group => !!g && !mine.some((m) => m.id === g.id))

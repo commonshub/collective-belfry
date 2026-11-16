@@ -8,7 +8,7 @@ import { CHECK_ERRORS, CheckFailed, eventRoles, groupRole, removeFromGroup, setG
 import { canAdmin } from '../core/access'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
-import { allGroups, channelIcon, displayName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
+import { allGroups, channelIcon, displayName, realName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
 import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
@@ -244,7 +244,7 @@ function AddAgentSheet({ community, onClose }: { community: string; onClose: () 
       {line ? <>
         <div className="agent-prompt" aria-label="What to paste to your agent">{line}</div>
         <Btn className="btn" onClick={async () => { try { await navigator.clipboard.writeText(line); setCopied(true); setTimeout(() => setCopied(false), 2000) } catch { setError('Copy did not work: select the text and copy it.') } }}><CopyIcon /> {copied ? 'Copied' : 'Copy'}</Btn>
-        <p className="hint" style={{ marginTop: 10 }}>Once it has joined, it shows here on your profile, and next to its name everywhere: “{displayName(me())}’s agent”.</p>
+        <p className="hint" style={{ marginTop: 10 }}>Once it has joined, it shows here on your profile, and next to its name everywhere: “{realName(me()) || 'your name'}’s agent”.</p>
       </> : !error && <p className="hint">Making the link…</p>}
       {error && <><div className="error" role="alert">{error}</div><Btn className="btn ghost" onClick={make}>Try again</Btn></>}
     </Sheet>

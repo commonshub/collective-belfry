@@ -44,7 +44,7 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
-import { amGuest, isTownChannel, placesOn, takeCreate } from './Places'
+import { amGuest, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
 import { GATES, SECTION_TITLE, sectionOf } from '../core/places'
 import { charter, remoteAgreements, toAgree } from '../core/charter'
 import { applyStatus } from '../core/apply'
@@ -130,7 +130,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
     </button>
   )
   if (guest) {
-    const mine = groups().filter((g) => !g.isEvent && (g.members.has(me()) || guestInfo()?.channel === g.id))
+    const mine = myGuestChannels()
     const open = ['issues', 'requests'].map((id) => group(id)).filter((g): g is Group => !!g && !mine.some((m) => m.id === g.id))
     const st = applyStatus()
     return (

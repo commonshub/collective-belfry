@@ -155,7 +155,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, __demoMe: () => me() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()

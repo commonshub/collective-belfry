@@ -141,7 +141,7 @@ export interface RemoteAgreement { id: string; title: string; about: string; ord
 /** Guests and applicants read the charter from the belfry (GET /api/v1/charter: it reads the group
  *  for them). Demo: the device's own. */
 export async function loadRemoteCharter(): Promise<RemoteAgreement[]> {
-  if (isLocalOnly()) return charter().map((r) => ({ id: r.id, title: r.title, about: r.about, order: r.order }))
+  if (isLocalOnly()) { remoteCharter = { agreements: charter().map((r) => ({ id: r.id, title: r.title, about: r.about, order: r.order })) }; touch(); return remoteCharter.agreements }
   try {
     const r = await fetch(`${BELFRY.api}/charter`)
     if (!r.ok) return remoteCharter?.agreements ?? []
