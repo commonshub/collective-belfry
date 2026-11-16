@@ -12,7 +12,7 @@ import { nip19 } from 'nostr-tools'
 import { NAME } from '../config'
 import { canAdmin } from '../core/access'
 import { decline as declineInGroup, admit } from '../core/actions'
-import { displayName, type Application, type Group } from '../core/model'
+import { displayName, group, type Application, type Group } from '../core/model'
 import { isBelfryAdmin } from '../core/people'
 import { agentRequests, belfryRequests, decideAgent, decidePerson, groupRequests, groupVouches, membership, RequestFailed, vouchInGroup, vouchPerson, type AgentRequest, type BelfryRequest } from '../core/requests'
 import { useVersion } from '../core/store'
@@ -90,7 +90,8 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
   return (
     <div className="appl req-row">
       <div className="who"><span className="req-ic initial" aria-hidden="true">{(p.name.trim()[0] ?? '?').toUpperCase()}</span>
-        <span className="t">{p.name || 'Someone'}<small>{admin && p.email ? `${p.email} · ` : ''}{when(p.created)}</small></span></div>
+        <span className="t">{p.name || 'Someone'}<small>{admin && p.email ? `${p.email} · ` : ''}{when(p.created)}</small>
+          {p.guest && <small className="guest-line">Guest in {p.guest.channels.map((c) => group(c)?.name ?? c).join(', ') || 'a channel'}{p.guest.since ? ` since ${when(p.guest.since)}` : ''}{p.guest.inviter ? `, invited by ${p.guest.inviter}` : ''}</small>}</span></div>
       {p.motivation && <blockquote>{p.motivation}</blockquote>}
       {/* anyone vouches (#issues 2026-11-15); while the admins decide, vouches tell them who stands for whom */}
       <div className="hint vouch-line"><VouchIcon /> {vouching ? vouchLine(p.vouches, m.vouches) : `${p.vouches} ${p.vouches === 1 ? 'vouch' : 'vouches'} · the admins decide`}{p.vouched ? ' · you vouched' : ''}</div>
@@ -101,7 +102,7 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
           {admin && <Btn className="btn small ghost" onClick={() => decidePerson(p.id, false).catch((e) => setError(fixed(e)))}>Decline</Btn>}
           {(
             <Btn className={'btn small' + (p.vouched ? ' ghost' : '')} aria-pressed={p.vouched}
-              onClick={() => vouchPerson(p.id, !p.vouched).then((inNow) => { if (inNow) setDone('Accepted: they get an invite by e-mail.') }, (e) => setError(fixed(e)))}>
+              onClick={() => vouchPerson(p.id, !p.vouched).then((inNow) => { if (inNow) setDone(p.guest ? 'Accepted: they are a member now.' : 'Accepted: they get an invite by e-mail.') }, (e) => setError(fixed(e)))}>
               {p.vouched ? 'Take back my vouch' : 'Vouch'}</Btn>
           )}
         </div>

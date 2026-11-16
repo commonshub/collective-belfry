@@ -23,7 +23,7 @@ import { isLocalOnly, me, signedFetch } from './sync'
 import { vouch } from './actions'
 
 export interface Membership { invite: 'admins' | 'members'; accept: 'admins' | 'vouches'; vouches: number; mayInviteMembers: boolean }
-export interface BelfryRequest { id: number; name: string; motivation: string; created: string; vouches: number; vouched: boolean; email?: string }
+export interface BelfryRequest { id: number; name: string; motivation: string; created: string; vouches: number; vouched: boolean; email?: string; /** a guest asking from the app (docs/membership.md): their key, channels, who invited them, since when */ guest?: { pubkey?: string; channels: string[]; inviter: string; since: string } }
 export interface AgentRequest { id: number; pubkey: string; name: string; about: string; created: string; forMe: boolean }
 
 export type RequestError = 'not_admin' | 'not_here' | 'not_vouching' | 'not_found' | 'decided' | 'invalid' | 'unsupported' | 'limit' | 'offline' | 'failed'
@@ -75,6 +75,7 @@ const takeSettings = (d: Record<string, unknown>) => {
 }
 const cleanPeople = (x: unknown): BelfryRequest[] => (Array.isArray(x) ? x : []).filter((r) => r && typeof r.id === 'number').map((r) => ({
   id: r.id, name: str(r.name), motivation: str(r.motivation), created: str(r.created), vouches: Number(r.vouches) || 0, vouched: !!r.vouched, ...(typeof r.email === 'string' ? { email: r.email } : {}),
+  ...(r.kind === 'guest' ? { guest: { pubkey: /^[0-9a-f]{64}$/.test(r.pubkey) ? r.pubkey : undefined, channels: (Array.isArray(r.channels) ? r.channels : []).filter((c: unknown): c is string => typeof c === 'string'), inviter: str(r.inviter), since: str(r.since) } } : {}),
 }))
 const cleanAgents = (x: unknown): AgentRequest[] => (Array.isArray(x) ? x : []).filter((r) => r && typeof r.id === 'number' && /^[0-9a-f]{64}$/.test(r.pubkey)).map((r) => ({
   id: r.id, pubkey: r.pubkey, name: str(r.name), about: str(r.about), created: str(r.created), forMe: !!r.for_me,
