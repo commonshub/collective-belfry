@@ -312,7 +312,7 @@ export function demoCharter(opts: { steward?: boolean; rules?: number; agreedByM
   const folks = Array.from({ length: others }, () => getPublicKey(generateSecretKey()))
   folks.forEach((pk, i) => evs.push(
     { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now - 9000, tags: [], content: JSON.stringify({ name: ['Chloé', 'Lou', 'Hana', 'Ben', 'Dev'][i % 5] }) },
-    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, created_at: now - 9000, tags: [['h', 'general'], ['p', pk, 'member']], content: '' }))
+    { id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, created_at: now, tags: [['h', 'general'], ['p', pk, 'member']], content: '' }))
   for (let i = 0; i < rules; i++) {
     const [title, about] = titles[i % titles.length]
     const id = hex(32)
