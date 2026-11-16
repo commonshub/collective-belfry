@@ -220,6 +220,13 @@ def register(app: FastAPI) -> None:
                     500,
                 )
             log.info("invite %s: pass %s %s", inv["id"], inv["pass_id"], result)
+            if not inv.get("guest_channel"):  # agreements ticked on /apply (guestapply.py)
+                from . import guestapply
+
+                try:
+                    await run_in_threadpool(guestapply.after_invite, services, inv["id"])
+                except Exception:  # noqa: BLE001 — they can tick them in the app
+                    log.exception("invite %s: charter ticks not published", inv["id"])
             row = await run_in_threadpool(
                 reg.read_one, "belfry.pass", inv["pass_id"], ["state", "login_setup_url"]
             )

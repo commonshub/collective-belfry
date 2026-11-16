@@ -106,3 +106,40 @@ join the belfry, and the requests of every group the person runs (or is in, when
 vouches). A new group's card in its parent opens the group's page (`#/c/<id>/group`): its
 description, who's in, its admins, Follow (the bell: its announcements by e-mail) and Join /
 Apply to join / Pending / You're in. Belfry settings → Membership holds the two settings.
+
+## A guest asks to become a member (2026-11-16)
+
+A guest (docs/guests.md) has an account, a saved e-mail and a key already, so they ask from the
+app and stay that person. Code: `services/onboarding/belfry_onboarding/guestapply.py` (its
+docstring is the reference). Same endpoint, NIP-98 by the guest's own key:
+
+| Body | Answer |
+|---|---|
+| `{"apply": {"answer": "<≤ 2000>", "agreed"?: ["<2100 id>", …]}}` | 200 `{"application": {"id", "state", "vouches", "needed", "vouched_by": [{"pubkey", "name"}]}, "until": <unix>, "accept": "admins"\|"vouches"}` |
+| `{"apply": "status"}` | the same, `application` = their latest request or `null`, plus `agreed` |
+
+- Who: an active guest pass (not an agent's) whose contact has an e-mail. Else 403 `not_guest`
+  (members, agents, unknown keys) or 409 `guest_not_saved` (a guest who hasn't joined with an
+  e-mail yet). 422 `invalid` (empty or too long answer, `agreed` not a list of event ids), 409
+  `unsupported` (Odoo). `status` answers anyone who has a request on record, members too.
+- One open request per guest: another answers 409 `pending` with the same body (and `error`).
+- `until`: when their latest guest pass ends (end of its last day, UTC; after a decline, the
+  grace time below).
+- States: `new` → `accepted` (now a member) | `declined`. A declined guest may ask again.
+- Stored as a `belfry.application` of kind `guest` with `pubkey`, `guest_partner`, `channels`,
+  `inviter` (key), `since` (first guest day), `agreed`. The admins' list rows gain `channels`,
+  `inviter` (name) and, for guest rows, `pubkey` and `since`.
+- The admins get a mail ("a guest asks to become a member") and a push notification of type
+  `membership_request` (url `https://chat.<domain>/#/requests`).
+- **Accepting** (an admin's `decide`, or enough vouches) mails no invite: the guest becomes a
+  member on the same key with the default role, as when an admin makes a guest a member
+  (roles.make_member: a membership pass, guest passes closed, the label `member` in their
+  channels). 409 `gone` when they are no longer a guest here. Then the agreements they ticked are
+  signed for them (docs/charter.md).
+- **While a request is open** their guest passes don't expire. **Declined**: they stay a guest;
+  a pass whose last day passed meanwhile gets 24 hours from the decline (`guest_grace_until`;
+  the decline mail tells them they stay a guest).
+
+The web form `/apply` lists the charter's agreements with a checkbox each when there is one
+and takes the request only with all ticked (`agreed` on the application, own register only);
+when the applicant takes the invite and their membership opens, their ticks are signed for them.

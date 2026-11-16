@@ -1649,6 +1649,11 @@ class Register(OdooApi):
             raise _user_error("Please enter your name and a few words about why you want to join.")
         if not EMAIL.match(data["email"]):
             raise _user_error("Please enter a valid e-mail address.")
+        # the charter's agreements they ticked on the form (charter.py): signed for them once
+        # they are a member (guestapply.after_invite)
+        agreed = [
+            a for a in (vals or {}).get("agreed") or [] if isinstance(a, str) and HEX64.match(a)
+        ][:100]
         app_id = self._create(
             "belfry.application",
             {
@@ -1659,6 +1664,7 @@ class Register(OdooApi):
                 "state": "new",
                 "handled_by": False,
                 "duplicate_note": False,
+                "agreed": agreed,
             },
         )
         self.mailer.send(
@@ -1722,15 +1728,20 @@ class Register(OdooApi):
             [row["id"]],
             {"state": "declined", "handled_by": steward_email, "handled_at": stamp()},
         )
-        self.mailer.send(
-            row["email"],
-            f"Your request to join {self.mailer.name}",
-            [
+        if row.get("kind") == "guest":  # a guest's request from the app (guestapply.py)
+            lines = [
+                f"Hello {row['name']},",
+                f"Thank you for asking to become a member of {self.mailer.name}. The admins "
+                "can't offer you a membership this time. You stay a guest for as long as your "
+                "invitation lasts.",
+            ]
+        else:
+            lines = [
                 f"Hello {row['name']},",
                 f"Thank you for your interest in {self.mailer.name}. We cannot offer "
                 "you a place this time. If you know a member, they can invite you.",
-            ],
-        )
+            ]
+        self.mailer.send(row["email"], f"Your request to join {self.mailer.name}", lines)
         return "declined"
 
     # ── e-mail codes for an app's key ────────────────────────────────────────────────────────

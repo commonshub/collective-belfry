@@ -5,6 +5,11 @@ they want to volunteer. Stored in Odoo (``belfry.application``), confirmed to th
 mailed to every steward; stewards answer on the steward pages with an invite (mailed to the
 applicant, who then picks and pays a pass) or a friendly no. Honeypot and the proxy's rate limit
 like the feedback form.
+
+When the belfry has a charter (charter.py), the form lists its agreements with a checkbox each
+and takes the request only with every one ticked; the ticked ids are kept on the application
+(``agreed``, the belfry's own register only) and signed for the person once they are a member
+(guestapply.after_invite).
 """
 
 from __future__ import annotations
@@ -35,6 +40,8 @@ def form_page(
     values: dict[str, str] | None = None,
     community: str = "",
     volunteers: bool = True,
+    agreements: list[dict[str, Any]] | None = None,
+    ticked: list[str] | None = None,
 ) -> str:
     name = E(community or "this community")
     v = values or {}
@@ -48,6 +55,20 @@ def form_page(
         if volunteers
         else ""
     )
+    ticked = ticked or []
+    rules = "".join(
+        f'<label class="check"><input type="checkbox" name="agreed" value="{E(r["id"])}" required'
+        f"{' checked' if r['id'] in ticked else ''}><span><b>{E(r['title'])}</b>"
+        + (f'<br><span class="muted">{E(r["about"])}</span>' if r.get("about") else "")
+        + "</span></label>"
+        for r in agreements or []
+    )
+    charter = (
+        f'<fieldset class="charter"><legend>Our charter: tick each agreement</legend>{rules}'
+        "</fieldset>"
+        if rules
+        else ""
+    )
     body = f"""<div class="card">
 <h1>Apply to join</h1>
 <p class="muted">{name} grows through people who know each other. No invite yet? Tell its members
@@ -59,6 +80,7 @@ say yes.</p>
 <label>Your e-mail <input type="email" name="email" maxlength="200" required value="{E(v.get("email", ""))}"></label>
 <label>Why would you like to join? <textarea name="motivation" rows="6" maxlength="4000" required>{E(v.get("motivation", ""))}</textarea></label>
 {shifts}
+{charter}
 <label class="hp" aria-hidden="true">Leave this empty <input type="text" name="website" tabindex="-1" autocomplete="off"></label>
 <p class="muted small">The admins (and, when the community accepts people by vouching, its
 members) see your name and what you write here; your e-mail address only the admins.
@@ -73,6 +95,7 @@ See <a href="/privacy">privacy</a>.</p>
  .fb textarea, .fb input[type=text], .fb input[type=email] {{ box-sizing: border-box; width: 100%; max-width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--osv-border-strong); background: var(--osv-surface-deep); color: var(--osv-foreground); font: inherit; }}
  .fb input[type=checkbox] {{ margin-top: 4px; }}
  .fb button {{ border: 0; font: inherit; font-weight: 600; cursor: pointer; justify-self: start; }}
+ .fb fieldset.charter {{ display: grid; gap: 10px; border: 1px solid var(--osv-border-strong); border-radius: 8px; padding: 12px 14px; margin: 0; }}
  .hp {{ position: absolute; left: -9999px; }} .small {{ font-size: 0.85rem; }}
 </style>"""
     return page(f"Apply to join {community or 'this community'}", body)
@@ -84,7 +107,7 @@ def thanks_page() -> str:
     return page("Application sent", body)
 
 
-def submit(svc: Services, vals: dict[str, str]) -> int:
+def submit(svc: Services, vals: dict[str, Any]) -> int:
     try:
         from . import console
 
@@ -101,10 +124,29 @@ def submit(svc: Services, vals: dict[str, str]) -> int:
     return int(app_id)
 
 
-def _ctx(svc: Services) -> dict[str, Any]:
+def _agreements(svc: Services) -> list[dict[str, Any]]:
+    """The charter's agreements, or none when the relay can't say (the form works without)."""
+    from . import charter
+
+    try:
+        return charter.agreements(svc)
+    except Exception as exc:  # noqa: BLE001
+        log.info("apply: charter not readable: %s", exc)
+        return []
+
+
+def _ctx(svc: Services, agreements: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     from . import invite
 
-    return {"community": svc.settings.community_name or "", "volunteers": not invite.own(svc)}
+    return {
+        "community": svc.settings.community_name or "",
+        "volunteers": not invite.own(svc),
+        "agreements": agreements or [],
+    }
+
+
+MISSING = "Please fill in your name, e-mail and motivation."
+UNTICKED = "Please tick each agreement of the charter: joining means agreeing to them."
 
 
 def register(app: FastAPI) -> None:
@@ -115,12 +157,17 @@ def register(app: FastAPI) -> None:
 
     @app.get("/apply", response_class=HTMLResponse)
     async def apply_form(request: Request):
-        return HTMLResponse(form_page(**_ctx(svc(request))))
+        s = svc(request)
+        rules = await run_in_threadpool(_agreements, s)
+        return HTMLResponse(form_page(**_ctx(s, rules)))
 
     @app.post("/apply", response_class=HTMLResponse)
     async def apply_submit(request: Request):
+        from . import invite
+
         form = await request.form()
         text = {k: str(form.get(k) or "") for k in ("name", "email", "motivation", "website")}
+        ticked = [str(v) for v in form.getlist("agreed")][:100]
         if text["website"]:  # the hidden field: only bots fill it in
             log.info("apply: honeypot filled, dropped")
             return HTMLResponse(thanks_page())
@@ -130,18 +177,19 @@ def register(app: FastAPI) -> None:
             "motivation": text["motivation"].strip(),
             "kind": "volunteer" if form.get("kind") == "volunteer" else "visitor",
         }
+        s = svc(request)
+        rules = await run_in_threadpool(_agreements, s)
+        ctx = {**_ctx(s, rules), "ticked": ticked}
         if not vals["name"] or not vals["email"] or not vals["motivation"]:
-            return HTMLResponse(
-                form_page(
-                    "Please fill in your name, e-mail and motivation.", vals, **_ctx(svc(request))
-                ),
-                status_code=400,
-            )
+            return HTMLResponse(form_page(MISSING, vals, **ctx), status_code=400)
+        if {r["id"] for r in rules} - set(ticked):
+            return HTMLResponse(form_page(UNTICKED, vals, **ctx), status_code=400)
+        sent: dict[str, Any] = dict(vals)
+        if rules and invite.own(s):  # Odoo's add-on keeps no ticks
+            known = {r["id"] for r in rules}
+            sent["agreed"] = [t for t in ticked if t in known]
         try:
-            await run_in_threadpool(submit, svc(request), vals)
+            await run_in_threadpool(submit, s, sent)
         except ApplyError as exc:
-            return HTMLResponse(
-                form_page(str(exc), vals, **_ctx(svc(request))),
-                status_code=400,
-            )
+            return HTMLResponse(form_page(str(exc), vals, **ctx), status_code=400)
         return HTMLResponse(thanks_page())

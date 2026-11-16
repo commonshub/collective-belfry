@@ -39,10 +39,15 @@ API (belfry.<domain>/api/v1/…, NIP-98):
   - ``{"decide": <id>, "approve": true|false}`` (admins) → ``{"application"}``.
   - ``{"vouch": <id>, "on"?: true|false}`` (any member, #issues 2026-11-15; the vouches accept
     the request only while vouching is on) → ``{"application", "accepted": bool}``.
+  - ``{"apply": {...}}`` / ``{"apply": "status"}`` (a guest, 2026-11-16): a guest asks to become
+    a member from the app, on their own key (guestapply.py has the contract). List rows carry
+    ``channels``, ``inviter`` (name) and, for a guest's request, ``pubkey`` and ``since``;
+    accepting one makes the guest a member at once (state ``accepted``, no invite mail).
 
 Errors (``{"error", "message"}``; clients show fixed words per code): 403 ``not_admin``, 403
 ``not_here``, 403 ``not_vouching``, 404 ``not_found``, 409 ``decided``, 422 ``invalid``, 409
-``unsupported``.
+``unsupported``; for ``apply``: 403 ``not_guest``, 409 ``guest_not_saved``, 409 ``pending``; on
+accepting a guest's request: 409 ``gone``.
 """
 
 from __future__ import annotations
@@ -158,7 +163,22 @@ def read(svc: Services, caller: str) -> dict[str, Any]:
 
 
 # ── requests to join the belfry (applications) ─────────────────────────────────────────────
-FIELDS = ["name", "email", "motivation", "kind", "state", "create_date", "vouched_by"]
+FIELDS = [
+    "name",
+    "email",
+    "motivation",
+    "kind",
+    "state",
+    "create_date",
+    "vouched_by",
+    # a guest's request from the app (guestapply.py)
+    "pubkey",
+    "guest_partner",
+    "channels",
+    "inviter",
+    "since",
+    "agreed",
+]
 
 
 def _counted(svc: Services, keys: Any) -> list[str]:
@@ -184,10 +204,24 @@ def _row(svc: Services, r: dict[str, Any], caller: str, admin: bool) -> dict[str
         "created": r.get("create_date") or "",
         "vouches": len(vouched),
         "vouched": caller in vouched,
+        # the stewards' card: "Guest in #garden since …, invited by Ana" (guestapply.py)
+        "channels": [c for c in r.get("channels") or [] if isinstance(c, str)],
+        "inviter": _inviter_name(svc, r.get("inviter")),
     }
+    if r.get("kind") == "guest":
+        out["pubkey"] = r.get("pubkey") or ""
+        out["since"] = r.get("since") or ""
     if admin:
         out["email"] = r.get("email") or ""
     return out
+
+
+def _inviter_name(svc: Services, key: Any) -> str:
+    from . import guestapply
+
+    if not isinstance(key, str) or not key:
+        return ""
+    return guestapply.names(svc, [key]).get(key, "")
 
 
 def _get(svc: Services, aid: Any) -> dict[str, Any]:
@@ -212,9 +246,18 @@ def _admin_email(svc: Services, caller: str) -> tuple[str, str]:
 
 
 def accept(svc: Services, aid: int, by_email: str, by_name: str = "") -> None:
-    """Accept an application as an admin would: an invite mailed to the applicant."""
+    """Accept an application as an admin would: an invite mailed to the applicant; a guest's
+    request (guestapply.py) makes them a member on their own key instead, no mail."""
+    from . import guestapply
     from .holder_invites import ApiError
 
+    with _lock:
+        row = _get(svc, aid)
+        if row.get("kind") == guestapply.KIND:
+            if row.get("state") != "new":
+                raise ApiError(409, "decided", "This request was answered already.")
+            guestapply.accept(svc, row, by_email)
+            return
     try:
         svc.odoo.call(
             "belfry.application",
@@ -226,12 +269,16 @@ def accept(svc: Services, aid: int, by_email: str, by_name: str = "") -> None:
 
 
 def decline(svc: Services, aid: int, by_email: str) -> None:
+    from . import guestapply
     from .holder_invites import ApiError
 
     try:
         svc.odoo.call("belfry.application", "belfry_application_decline", [[aid], by_email])
     except OdooError as exc:
         raise ApiError(409, "decided", "This request was answered already.") from exc
+    row = _get(svc, aid)
+    if row.get("kind") == guestapply.KIND:  # they stay a guest, their days run again
+        guestapply.declined(svc, row)
 
 
 def settle(svc: Services) -> list[int]:
@@ -262,6 +309,10 @@ def settle(svc: Services) -> list[int]:
 def applications(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
     from .holder_invites import ApiError
 
+    if "apply" in data:  # a guest asks to become a member (guestapply.py)
+        from . import guestapply
+
+        return guestapply.apply(svc, caller, data["apply"])
     if not own(svc):
         raise ApiError(409, "unsupported", "Requests need the belfry's own register.")
     admin = is_admin(svc, caller)
@@ -369,5 +420,14 @@ def register(app: FastAPI) -> None:
         body = await request.body()
         caller = caller_of(request, "POST", "/api/applications", body)
         data = body_of(body)
-        out = await run_in_threadpool(applications, s, caller, data)
+        from .guestapply import Pending
+
+        try:
+            out = await run_in_threadpool(applications, s, caller, data)
+        except Pending as exc:  # one open request per guest: the one that waits
+            return JSONResponse(
+                {"error": "pending", "message": "Your request is waiting.", **exc.body},
+                status_code=409,
+                headers=NO_STORE,
+            )
         return JSONResponse(out, headers=NO_STORE)

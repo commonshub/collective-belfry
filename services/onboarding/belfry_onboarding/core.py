@@ -1312,6 +1312,25 @@ def expire(svc: Services) -> dict[str, Any]:
         [["state", "=", "active"], ["date_end", "<", today().isoformat()]],
         PASS_FIELDS,
     )
+    from . import guestapply, invite
+
+    if invite.own(svc):
+        # a guest who asks to become a member keeps their pass while the request is open; after
+        # a decline, 24 hours from then (guestapply.py)
+        rows = [r for r in rows if not guestapply.holds(svc, r)]
+        stamp_now = dt.datetime.now(dt.UTC).strftime("%Y-%m-%d %H:%M:%S")
+        ids = {r["id"] for r in rows}
+        rows += [
+            r
+            for r in svc.odoo.search_read(
+                "belfry.pass",
+                [["state", "=", "active"], ["guest_grace_until", "!=", False]],
+                PASS_FIELDS + ["guest_grace_until"],
+            )
+            if r["id"] not in ids
+            and str(r.get("guest_grace_until")) <= stamp_now
+            and not guestapply.holds(svc, r)
+        ]
     expired: list[int] = []
     for pass_row in rows:
         try:
