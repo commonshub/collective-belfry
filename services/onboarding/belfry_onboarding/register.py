@@ -1700,6 +1700,8 @@ class Register(OdooApi):
         self, model, ids, steward_email, steward_name=False, note=False, *_a, **_k
     ):
         row = self._application(ids)
+        if row.get("kind") == "guest":  # a guest becomes a member on their key (guestapply.py)
+            raise _user_error("A guest's request is answered in the chat (Members).")
         created = self._m_belfry_steward_create(
             model, steward_email, note or f"Application: {row['name']}"[:200], steward_name
         )
