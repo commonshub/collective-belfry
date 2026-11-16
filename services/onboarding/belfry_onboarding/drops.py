@@ -163,14 +163,16 @@ def post(
     imeta: list[list[str]],
     partner: int | None,
     client: str = "belfry-drop",
+    kind: int = 9,
 ) -> dict[str, Any]:
-    """The upload as a message in CHANNEL: signed by the member, else by the groups API key."""
+    """The upload as a message in CHANNEL: signed by the member, else by the groups API key.
+    KIND 1111: a reply in a thread (NIP-22; its E/K/P/e/k/p tags come in IMETA)."""
     got = followers._relay(svc)
     if got is None:
         raise RuntimeError("no groups relay")
     relay, api_sign = got
     template = {
-        "kind": 9,
+        "kind": kind,
         "created_at": int(time.time()),
         "content": (text + "\n" + _urls(imeta)).strip(),
         "tags": [["h", channel], *imeta, ["client", client]],
