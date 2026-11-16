@@ -563,3 +563,51 @@ def test_the_chat_may_put_a_custom_url():
     assert (
         "PUT" in discovery.cors_headers("https://chat.belfry.test")["Access-Control-Allow-Methods"]
     )
+
+
+def test_the_public_list_for_guests(rsvc, world):
+    """``GET /api/events?visibility=public`` (no auth): what the apex page lists, as JSON."""
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    make_event(world, ada)
+    soon = int(time.time()) + 3600
+    other = "2026-abc123"
+    world.put(
+        ada,
+        31923,
+        [
+            ["d", other],
+            ["title", "Members' supper"],
+            ["start", str(soon)],
+            ["visibility", "members"],
+        ],
+    )
+    early = "2026-early1"
+    world.put(
+        ada,
+        31923,
+        [["d", early], ["title", "Coffee"], ["start", str(soon)], ["visibility", "public"]],
+    )
+    with TestClient(create_app(rsvc)) as c:
+        r = c.get("/api/v1/events?visibility=public", headers=HOST)
+        assert r.status_code == 200, r.text
+        got = r.json()["events"]
+        assert [e["d"] for e in got] == [early, D]  # soonest first; members-only left out
+        one = c.get(f"/api/v1/events/{D}", headers=HOST).json()
+        assert got[1] == one and got[1]["me"] is None  # the same JSON, as an anonymous viewer
+        later = int(time.time()) + 2 * 86400
+        r = c.get(f"/api/v1/events?visibility=public&from={later}", headers=HOST)
+        assert [e["d"] for e in r.json()["events"]] == [D]
+        assert c.get("/api/v1/events?visibility=members", headers=HOST).status_code == 422
+        assert c.get("/api/v1/events?from=soon", headers=HOST).json()["error"] == "invalid"
+        # CORS for the chat, like the other events routes
+        r = c.get("/api/v1/events", headers={**HOST, "Origin": "https://chat.belfry.test"})
+        assert r.headers["access-control-allow-origin"] == "https://chat.belfry.test"
+        world.put(
+            ada,
+            1985,
+            [["h", GROUP], ["L", events.STATUS_NS], ["l", "cancelled", events.STATUS_NS]],
+            "Rain",
+        )
+        assert [e["d"] for e in c.get("/api/v1/events", headers=HOST).json()["events"]] == [early]
+        r = c.get("/api/v1/events?cancelled=1", headers=HOST)
+        assert [e["d"] for e in r.json()["events"]] == [early, D]

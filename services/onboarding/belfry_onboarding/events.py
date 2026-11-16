@@ -1340,10 +1340,44 @@ def event_page(svc: Services, ev: Event) -> str:
     return _page(ev.title, body, head)
 
 
-def list_page(svc: Services) -> str:
+def public_events(svc: Services) -> list[Event]:
+    """Every public event of the last 400 days (the /events page and ``GET /api/events``)."""
     found = community(svc, [{"kinds": list(KINDS), "since": int(time.time()) - 400 * 86400}])
     ds = sorted({tag(e, "d") or "" for e in found if D_RE.match(tag(e, "d") or "")})
-    evs = [ev for ev in (load(svc, d) for d in ds) if ev and ev.visibility == "public"]
+    return [ev for ev in (load(svc, d) for d in ds) if ev and ev.visibility == "public"]
+
+
+def _unix(x: dt.datetime | dt.date | None, end: bool = False) -> float | None:
+    """X as unix time; a day counts until its end when END."""
+    if x is None:
+        return None
+    if isinstance(x, dt.datetime):
+        return (x if x.tzinfo else x.replace(tzinfo=dt.UTC)).timestamp()
+    day = x + dt.timedelta(days=1) if end else x
+    return dt.datetime(day.year, day.month, day.day, tzinfo=dt.UTC).timestamp()
+
+
+LIST_MAX = 100
+
+
+def listing(svc: Services, frm: int, cancelled: bool = False) -> list[dict[str, Any]]:
+    """``GET /api/events?visibility=public``: the public events whose start or end is at or
+    after FRM, soonest first, at most LIST_MAX, each as an anonymous viewer sees it."""
+    out = []
+    for ev in public_events(svc):
+        if ev.status == "cancelled" and not cancelled:
+            continue
+        last = _unix(ev.end, True) if ev.end is not None else _unix(ev.start, True)
+        first = _unix(ev.start)
+        if max(x for x in (first, last, float("-inf")) if x is not None) < frm:
+            continue
+        out.append(ev)
+    out.sort(key=lambda e: (_unix(e.start) or 0.0, e.d))
+    return [public_json(svc, ev, None) for ev in out[:LIST_MAX]]
+
+
+def list_page(svc: Services) -> str:
+    evs = public_events(svc)
     soon = sorted((e for e in evs if not e.ended()), key=lambda e: str(_iso(e.start)))
     rows = "".join(
         f'<li><a href="{E(url_of(svc, e))}"><b>{E(e.title)}</b><small>{E(when_text(e))}</small>'
@@ -1556,6 +1590,29 @@ def register(app: FastAPI) -> None:
         if problem:
             out["problem"] = problem
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.get(API)
+    async def events_json(request: Request) -> JSONResponse:
+        """``?visibility=public&from=<unix>&cancelled=1`` (no auth) → ``{"events": [...]}``: the
+        public events (only those; other visibilities answer 422), start or end at or after
+        ``from`` (default: a day ago), soonest first, at most 100; cancelled ones only with
+        ``cancelled=1``. For guests, who can't read the community relay."""
+        q = request.query_params
+        if (q.get("visibility") or "public") != "public":
+            raise ApiError(422, "invalid", 'visibility: "public" only')
+        raw = q.get("from")
+        try:
+            frm = int(raw) if raw not in (None, "") else int(time.time()) - 86400
+        except ValueError:
+            raise ApiError(422, "invalid", "from: a unix time") from None
+        cancelled = q.get("cancelled") in ("1", "true")
+        s = request.app.state.services
+        try:
+            found = await run_in_threadpool(listing, s, frm, cancelled)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("events api list: %s", exc)
+            raise ApiError(503, "unavailable", "The events can't be read just now.") from exc
+        return JSONResponse({"events": found}, headers={"Cache-Control": "public, max-age=60"})
 
     @app.get(API + "/{link}")
     async def event_json(request: Request, link: str) -> JSONResponse:
