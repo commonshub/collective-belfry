@@ -377,6 +377,7 @@ def test_group_meta_keeps_the_other_tags(rsvc, cw):
             "name": "Roof garden",
             "about": "New",
             "closed": True,
+            "archived": False,
         }
         e = cw.grp.events[-1]
         assert e["kind"] == 9002 and e["pubkey"] == pk(cw.gkey)

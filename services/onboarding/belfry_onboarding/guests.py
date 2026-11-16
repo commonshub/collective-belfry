@@ -257,7 +257,7 @@ def register(app: FastAPI) -> None:
     @app.post(API)
     async def channel_invite(request: Request) -> JSONResponse:
         """A guest link for a channel: ``{"channel"}`` → ``{"url", "days", "expires_at"}``."""
-        from . import followers, invite, mail
+        from . import checkin, followers, invite, mail
         from .holder_invites import ApiError, authenticate, holder
 
         s = request.app.state.services
@@ -286,6 +286,8 @@ def register(app: FastAPI) -> None:
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
             raise ApiError(403, "not_allowed", "You can't invite guests here.")
+        # an archived group takes nobody new (docs/archive.md)
+        await run_in_threadpool(checkin.refuse_archived, s, channel)
         # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>);
         # on a member link ("as": "member") "role" is the member's role instead (roles.py)
         as_member = isinstance(data, dict) and data.get("as") == "member"
@@ -599,7 +601,7 @@ def register_add_route(app: FastAPI) -> None:
         (a person or an agent) becomes this one's guest too, for 30 days, without a link →
         ``{"added": true}``; ``{"already": true}`` when they are in it; ``{"member": true}``
         for a member, who needs no guest pass."""
-        from . import followers, invite, mail
+        from . import checkin, followers, invite, mail
         from .holder_invites import ApiError, authenticate, holder
 
         s = request.app.state.services
@@ -629,6 +631,7 @@ def register_add_route(app: FastAPI) -> None:
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, caller, channel, bool(who.get("steward"))):
             raise ApiError(403, "not_allowed", "You can't invite guests here.")
+        await run_in_threadpool(checkin.refuse_archived, s, channel)
         got = await run_in_threadpool(s.odoo.add_guest_channel, target, channel, caller, DAYS)
         if got is None:
             raise ApiError(404, "unknown", "Nobody here has that key.")
@@ -1048,7 +1051,7 @@ def register_join_routes(app: FastAPI) -> None:
         one that will hold the session. With ``{"name"}`` they join by that name at once
         (``"reading": false``); without, they are in guest mode (``"reading": true``) until they
         join with a name and an e-mail (``/api/guest/save``)."""
-        from . import invite
+        from . import checkin, invite
         from .holder_invites import ApiError, authenticate
 
         s = request.app.state.services
@@ -1072,6 +1075,9 @@ def register_join_routes(app: FastAPI) -> None:
         inv = await run_in_threadpool(s.odoo.invite_by_token, token)
         if inv and inv.get("agent_owner"):
             raise ApiError(410, "for_agent", "This link is for an agent, not a person.")
+        if inv and inv.get("guest_channel"):
+            # a link made before its group was archived brings nobody in
+            await run_in_threadpool(checkin.refuse_archived, s, str(inv["guest_channel"]))
         try:
             out = await run_in_threadpool(join_account, s, token, pubkey)
             if out is None:

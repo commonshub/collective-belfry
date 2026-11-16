@@ -208,6 +208,47 @@ def may_check_in(svc: Services, st: GroupState, pubkey: str, creator: str | None
     )
 
 
+# ── archived groups (docs/archive.md) ────────────────────────────────────────────────────────
+ARCHIVED = "archived"
+ALWAYS_OPEN = "general"  # the one channel every belfry keeps open
+
+
+def archivable(group: str) -> bool:
+    """Channels and groups (``pod-…``). Events and proposals have their own cancel / status."""
+    return not group.startswith(("ev-", "ws-", "prop-"))
+
+
+def is_archived(svc: Services, group: str) -> bool:
+    """Whether GROUP is archived: the latest of its 9002s (and the relay's 39000 mirror of the
+    last one) that carries an ``archived`` tag says ``"1"``. The clients read it the same way, so
+    an edit by a client that doesn't know the tag (its 9002 has none) changes nothing. False when
+    the relay can't be asked: nothing is refused on a guess."""
+    try:
+        found = events.groups(
+            svc,
+            [{"kinds": [39000], "#d": [group]}, {"kinds": [9007, 9002], "#h": [group]}],
+        )
+    except Exception:  # noqa: BLE001 — the relay not answering
+        return False
+    value = None
+    for e in sorted(found, key=lambda e: (e.get("created_at", 0), e.get("id", ""))):
+        k = e.get("kind")
+        if events.tag(e, "d" if k == 39000 else "h") != group or k not in (39000, 9007, 9002):
+            continue
+        v = events.tag(e, ARCHIVED)
+        if v is not None:
+            value = v
+    return value == "1"
+
+
+def refuse_archived(svc: Services, group: str) -> None:
+    """409 ``archived``: nothing changes in an archived group but unarchiving it."""
+    from .holder_invites import ApiError
+
+    if is_archived(svc, group):
+        raise ApiError(409, "archived", "This group is archived. Unarchive it first.")
+
+
 # ── changing a role ─────────────────────────────────────────────────────────────────────────
 def _label(svc: Services, ns: str, value: str, pubkey: str, group: str, caller: str) -> bool:
     return events.publish(
@@ -234,6 +275,7 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
     belfry_admins = _belfry_admins(svc)
     if caller not in st.admins and caller not in belfry_admins:
         raise ApiError(403, "not_allowed", "Only the group's admins change roles.")
+    refuse_archived(svc, group)
     if role == "steward" and not is_event_group(group):
         raise ApiError(409, "events_only", "Stewards are for events.")
     inside = target in st.members or target in st.admins
@@ -314,20 +356,34 @@ def current_meta(svc: Services, group: str) -> list[list[str]] | None:
 
 
 def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
-    """``{"channel", "name"?, "about"?, "picture"?, "closed"?, "prompt"?, "vouches"?}``: a new
-    9002 by the groups key with every other tag of the current metadata kept (zooid replaces the
-    whole metadata with each 9002). For admins by role, whose own 9002 the relay refuses."""
+    """``{"channel", "name"?, "about"?, "picture"?, "closed"?, "prompt"?, "vouches"?,
+    "archived"?}``: a new 9002 by the groups key with every other tag of the current metadata kept
+    (zooid replaces the whole metadata with each 9002). For admins by role, whose own 9002 the
+    relay refuses. ``archived`` (true / false) archives or unarchives the group (docs/archive.md):
+    while it is archived only ``{"channel", "archived": false}`` passes, anything else is
+    ``409 archived``; ``general`` is never archived (``409 always_open``)."""
     from .holder_invites import ApiError
 
     group = str(data.get("channel") or "").strip()
     if not GROUP_RE.match(group):
         raise ApiError(422, "invalid", 'Send {"channel", "name"?, "about"?}.')
+    if ARCHIVED in data and not isinstance(data[ARCHIVED], bool):
+        raise ApiError(422, "invalid", "archived: true or false.")
     st = group_state(svc, group)
     if caller not in st.admins and caller not in _belfry_admins(svc):
         raise ApiError(403, "not_allowed", "Only the group's admins change it.")
     tags = current_meta(svc, group)
     if tags is None:
         raise ApiError(404, "not_found", "No such group.")
+    if data.get(ARCHIVED) is True:
+        if group == ALWAYS_OPEN:
+            raise ApiError(409, "always_open", "This channel can't be archived.")
+        if not archivable(group):
+            raise ApiError(422, "invalid", "Events and proposals can't be archived.")
+    was_archived = is_archived(svc, group)
+    others = [k for k in ("name", "about", "picture", "closed", "prompt", "vouches") if k in data]
+    if was_archived and (others or data.get(ARCHIVED) is not False):
+        raise ApiError(409, "archived", "This group is archived. Unarchive it first.")
 
     def put(name: str, value: str | None) -> None:
         nonlocal tags
@@ -362,6 +418,10 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         if not 0 <= n <= 5:
             raise ApiError(422, "invalid", "vouches: 0 to 5.")
         put("vouches", str(n) if n else None)
+    if ARCHIVED in data:
+        # always said, "0" too: the latest 9002 that says anything about it wins
+        put(ARCHIVED, "1" if data[ARCHIVED] else "0")
+    archived = data[ARCHIVED] if ARCHIVED in data else was_archived
     if not events.publish(svc, 9002, [["h", group], *tags]):
         raise ApiError(503, "relay", "The group could not be reached. Try again.")
     meta = {t[0]: (t[1] if len(t) > 1 else True) for t in tags}
@@ -370,6 +430,7 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
         "name": meta.get("name", ""),
         "about": meta.get("about", ""),
         "closed": "closed" in meta,
+        "archived": archived,
     }
 
 
@@ -554,4 +615,14 @@ def register(app: FastAPI) -> None:
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
-__all__ = ["register", "set_role", "set_meta", "attendees", "checkin", "ticket_code", "group_state"]
+__all__ = [
+    "register",
+    "set_role",
+    "set_meta",
+    "attendees",
+    "checkin",
+    "ticket_code",
+    "group_state",
+    "is_archived",
+    "refuse_archived",
+]

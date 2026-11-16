@@ -382,6 +382,7 @@ class Watcher:
         self._seen: OrderedDict[str, None] = OrderedDict()
         self._events: OrderedDict[str, dict[str, Any]] = OrderedDict()  # recent 9/1111 by id
         self._groups: dict[str, tuple[float, set[str], set[str]]] = {}  # h → (at, admins, members)
+        self._archived: set[str] = set()  # archived groups (docs/archive.md), as fresh as _groups
         self._people: tuple[float, dict[str, str]] = (0.0, {})
         self._names: dict[str, tuple[float, str]] = {}
 
@@ -428,15 +429,30 @@ class Watcher:
         if held and self.clock() - held[0] < CACHE_SECONDS:
             return held[1], held[2]
         found = self.groups_query(
-            [{"kinds": [39001, 39002], "#d": [h]}, {"kinds": [9007], "#h": [h], "limit": 5}]
+            [
+                {"kinds": [39001, 39002], "#d": [h]},
+                {"kinds": [9007], "#h": [h], "limit": 5},
+                # archived or not: the latest 9002 (or its 39000 mirror) that says so
+                {"kinds": [39000], "#d": [h]},
+                {"kinds": [9002], "#h": [h]},
+            ]
         )
         latest: dict[int, dict[str, Any]] = {}
         admins: set[str] = set()
+        said: tuple[int, str] = (-1, "")
         for e in found:
+            if e["kind"] in (39000, 9002, 9007) and _tag(e, "archived"):
+                said = max(said, (e["created_at"], _tag(e, "archived")))
             if e["kind"] == 9007:
                 admins.add(e["pubkey"])
+            elif e["kind"] in (39000, 9002):
+                continue
             elif e["created_at"] >= latest.get(e["kind"], {"created_at": -1})["created_at"]:
                 latest[e["kind"]] = e
+        if said[1] == "1":
+            self._archived.add(h)
+        else:
+            self._archived.discard(h)
         admins |= {t[1] for t in _tags(latest.get(39001, {}), "p")}
         members = {t[1] for t in _tags(latest.get(39002, {}), "p")}
         self._groups[h] = (self.clock(), admins, members)
@@ -501,6 +517,8 @@ class Watcher:
         with contextlib.suppress(Exception):
             admins_here = {k for k in apps.admin_pubkeys(self.svc) if people.get(k) != "guest"}
         _admins, members = self.group(h)
+        if h in self._archived:  # an old client still wrote there: nobody is told
+            return {}
         out: dict[str, list[dict[str, Any]]] = {}
         for d in devs:
             k = d["pubkey"]

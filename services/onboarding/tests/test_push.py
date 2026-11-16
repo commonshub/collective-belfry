@@ -289,6 +289,23 @@ def test_a_message_reaches_members_at_level_all_only(scene):
     )
 
 
+def test_no_notifications_from_an_archived_group(scene):
+    rsvc, keys, devkeys, relay, gw, w = scene
+    bob = rsvc.odoo.push_devices([pk(keys["Bob"])])[0]["partner_id"]
+    push.set_settings(rsvc, bob, {"channels": {"garden": "all"}})
+    relay.append(ev(keys["Ada"], 9002, [["h", "garden"], ["name", "Garden"], ["archived", "1"]]))
+    # an old client still writes there: nobody is told
+    assert w.handle(ev(keys["Ada"], 9, [["h", "garden"]], "anyone?"), "groups") == []
+    assert gw.sent == []
+    # unarchived (the watcher's view of a group is a minute old at most)
+    relay.append(
+        ev(keys["Ada"], 9002, [["h", "garden"], ["archived", "0"]], at=int(time.time()) + 5)
+    )
+    w._groups.clear()
+    e = ev(keys["Ada"], 9, [["h", "garden"]], "back")
+    assert w.handle(e, "groups") == [(pk(keys["Bob"]), "message")]
+
+
 def test_mentions_replies_threads_announcements(scene):
     rsvc, keys, devkeys, relay, gw, w = scene
     bob, cy, dee = pk(keys["Bob"]), pk(keys["Cy"]), pk(keys["Dee"])

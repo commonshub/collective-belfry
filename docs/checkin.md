@@ -75,8 +75,13 @@ an admin of the group (any kind, including by role) or a belfry admin. The serve
 group's current metadata (the relay's latest 39000, without `d`), replaces only the fields sent
 (`name` 1–100 characters, `about` up to 2000, `picture` an https:// URL or "" to remove,
 `closed` true/false → `closed` / `open`, `prompt` "" to remove, `vouches` 0–5, 0 removes) and
-publishes it as a 9002 by the groups key. Answer `{"channel", "name", "about", "closed"}`.
+publishes it as a 9002 by the groups key. Answer `{"channel", "name", "about", "closed",
+"archived"}`.
 Errors: 403 `not_allowed`, 404 `not_found` (no metadata), 422 `invalid`, 503 `relay`.
+
+Since 2026-11-16 it also takes `"archived": true | false` (docs/archive.md): an archived group
+refuses every other change here, and `/group-roles`, with 409 `archived`; `general` is never
+archived (409 `always_open`).
 
 Clients publish their own 9002 when they can (the relay's 39001, the creator, a community admin)
 and use this call otherwise: the web chat's channel / group settings, an event's edit (name,
