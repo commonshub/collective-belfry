@@ -7,7 +7,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, inboxStates, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type CardState, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -21,7 +21,8 @@ import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
 import { newMentions, preview } from './Mentions'
 import { NewProposalSheet, ProposalCard, SiteBar } from './Proposals'
-import { cardOf, FullMail, InboxCardView, mailOf, mailText, SentCardView, sentOf, ViaMail } from './MailPost'
+import { cardOf, FullMail, MailFrame, MailRow, MailThreadHead, mailOf, mailText, sentOf, UNDONE, useMailReply, ViaMail } from './MailPost'
+import { mailThreads, type MailThread } from '../core/mailthreads'
 import { knownGroupsKey } from '../core/dm'
 import { markRead } from '../core/readstate'
 import { channelNewest, channelUnread, threadNewest, threadUnread, useVisible } from '../core/unread'
@@ -718,13 +719,18 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     if (on) n.add(key); else n.delete(key)
     return n
   })
-  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number }
+  // a shared inbox's e-mails: one row per e-mail thread, where its latest activity is (mailthreads.ts)
+  const gkey = knownGroupsKey()
+  const mt = mailThreads(id, gkey)
+  type Item = { t: 'msg'; m: Message; at: number } | { t: 'join'; j: GuestJoin; at: number } | { t: 'act'; root: Message; last: Message; at: number } | { t: 'mail'; th: MailThread; at: number }
   const items: Item[] = []
-  for (const m of list) items.push({ t: 'msg', m, at: m.ev.created_at })
+  for (const m of list) if (!mt.of.has(m.ev.id)) items.push({ t: 'msg', m, at: m.ev.created_at })
+  if (!topic) for (const x of mt.list) items.push({ t: 'mail', th: x, at: x.last })
   for (const j of joins) items.push({ t: 'join', j, at: j.at })
   if (!topic) {
     // an old thread resurfaces where its latest reply came, once other messages followed it
     for (const [rootId, info] of th) {
+      if (mt.of.has(rootId)) continue // an e-mail thread's row moves itself
       const root = list.find((m) => m.ev.id === rootId)
       if (!root) continue
       const later = list.some((m) => m.ev.created_at > root.ev.created_at && m.ev.created_at < info.last)
@@ -734,8 +740,6 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     }
   }
   items.sort((a, b) => a.at - b.at || (a.t === 'msg' ? -1 : 1))
-  const gkey = knownGroupsKey()
-  const inbox = { states: inboxStates(id, gkey), key: gkey, canSend: admin, name: g?.name ?? id }
   // with a thread already in the third column, another one replaces it (no history entry per thread)
   // Reply opens the thread's own view (or the third column), with its reply box focused: no second box in the channel (Xavier, #bugs 2026-11-10)
   const openThread = (m: Message, reply = false) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}` + (reply ? '/reply' : ''); if (activeThread) location.replace('#/' + to); else go(to) }
@@ -752,7 +756,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     const el = scroller.current
     // opened on one message (a search result): bring it to the middle and flash it, once
     if (el && focus && focused.current !== focus) {
-      const m = el.querySelector<HTMLElement>(`[id="m-${CSS.escape(focus)}"]`)
+      const m = el.querySelector<HTMLElement>(`[id="m-${CSS.escape(mt.of.get(focus)?.id ?? focus)}"]`)
       if (m) {
         focused.current = focus
         stick.current = false
@@ -785,6 +789,15 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
           {inviting && <InviteSheet id={id} onClose={() => setInviting(false)} />}
           {items.map((it, i) => {
             if (it.t === 'join') return <JoinLine key={'j' + it.j.id} j={it.j} />
+            if (it.t === 'mail') {
+              const prevAt = items[i - 1]?.at
+              const d = new Date(it.at * 1000)
+              const newDay = !prevAt || new Date(prevAt * 1000).toDateString() !== d.toDateString()
+              return <Fragment key={'mail:' + it.th.id}>
+                {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
+                <MailRow t={it.th} open={activeThread === it.th.id} unread={[...it.th.ids].reduce((n, x) => n + threadUnread(x), 0)} onOpen={() => openThread(it.th.mails[0].m)} />
+              </Fragment>
+            }
             if (it.t === 'act') {
               const key = 'act:' + it.root.ev.id
               return <Fragment key={key}>
@@ -795,10 +808,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             const prevItem = items[i - 1]
             const key = m.ev.id
             return <Fragment key={key}>
-              <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} groupId={id}
+              <Row m={m} prev={prevItem?.t === 'msg' && !openThreads.has(prevItem.m.ev.id) ? prevItem.m : undefined} prevAt={prevItem?.at} groupId={id}
                 name={!ps.get(m.ev.pubkey)?.name && m.ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-drop') ? 'Drop box' : displayName(m.ev.pubkey, ps)}
                 reactions={rx.get(m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(m) }} topic={topic} onTopic={onTopic} announce={isAnnouncement(m, g)}
-                thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} inbox={inbox} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
+                thread={th.get(m.ev.id)} onThread={() => openThread(m)} onOpenThread={() => openThread(m)} threadOpen={false} todo={todoOf.get(m.ev.id)} active={activeThread === m.ev.id} />
             </Fragment>
           })}
         </div>
@@ -840,20 +853,26 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
 }
 
 /** A thread: the message it hangs off, then the replies (#/c/<id>/thread/<message id>). */
-export function ThreadView({ groupId, rootId, pane = false, replying = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean; /** opened from Reply: the reply box gets the focus */ replying?: boolean }) {
+export function ThreadView({ groupId, rootId: asked, pane = false, replying = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean; /** opened from Reply: the reply box gets the focus */ replying?: boolean }) {
   useVersion()
   const g = group(groupId)
   const ps = profiles()
   const rx = reactions(groupId)
+  const gkey = knownGroupsKey()
+  // an e-mail thread: its first e-mail is the root, whichever of its e-mails was asked for
+  const mailT = mailThreads(groupId, gkey).of.get(asked)
+  const rootId = mailT?.id ?? asked
   const root = messages(groupId).find((m) => m.ev.id === rootId)
-  const replies = threadReplies(groupId, rootId)
+  // replies under any of its e-mails (older clients hung them under the one they were on)
+  const replies = mailT ? [...mailT.ids].flatMap((x) => threadReplies(groupId, x)).sort((a, b) => a.ev.created_at - b.ev.created_at) : threadReplies(groupId, rootId)
   // to-dos made from this thread's messages: each step (made, claimed, working, done…) is a line in it
   const ids = new Set([rootId, ...replies.map((m) => m.ev.id)])
   const steps = stepGroups(tasklist(groupId).tasks.filter((t) => t.source && ids.has(t.source)))
-  type Flow = { at: number; m?: Message; i?: number; g?: StepGroup }
+  type Flow = { at: number; m?: Message; i?: number; g?: StepGroup; mail?: MailThread['mails'][number] }
   const flow: Flow[] = [
     ...replies.map((m, i): Flow => ({ at: m.ev.created_at, m, i })),
     ...steps.map((g): Flow => ({ at: g.at, g })),
+    ...(mailT ? mailT.mails.slice(1).map((mail): Flow => ({ at: mail.m.ev.created_at, mail })) : []),
   ].sort((a, b) => a.at - b.at || (a.m ? -1 : 0) - (b.m ? -1 : 0))
   const [acting, setActing] = useState<Message | null>(null)
   const [editing, setEditing] = useState<Message | null>(null)
@@ -863,39 +882,71 @@ export function ThreadView({ groupId, rootId, pane = false, replying = false }: 
   // on screen: its replies are read (readstate.ts), up to the newest (the message itself when none)
   const visible = useVisible()
   const newestReply = threadNewest(rootId) || root?.ev.created_at || 0
-  useEffect(() => { if (visible && newestReply) markRead('t', rootId, newestReply) }, [rootId, visible, newestReply])
+  useEffect(() => {
+    if (!visible) return
+    if (newestReply) markRead('t', rootId, newestReply)
+    // an e-mail thread: replies an older client hung under one of its later e-mails too
+    for (const x of mailT?.ids ?? []) if (x !== rootId && threadNewest(x)) markRead('t', x, threadNewest(x))
+  }, [rootId, visible, newestReply, mailT?.ids.size, replies.length]) // eslint-disable-line react-hooks/exhaustive-deps
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => up(`c/${encodeURIComponent(groupId)}`)
-  const gkey = knownGroupsKey()
   const frozen = !!g?.archived
-  const inbox = { states: inboxStates(groupId, gkey), key: gkey, canSend: canAdmin(g) && !frozen, name: g?.name ?? groupId }
-  const card = root ? cardOf(root.ev, gkey) : null
+  const address = mailAddressOf(groupId)
   return (
     <div className="screen">
       <div className="topbar">
         {!pane && <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>}
-        <h1>Thread<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
+        <h1>{mailT ? mailT.subject || '(no subject)' : 'Thread'}<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
         {pane && <button className="icon-btn" aria-label="Close the thread" onClick={back}><CloseIcon /></button>}
       </div>
-      {card && <div className="thread-private">Team only. {card.name || card.from} never sees this thread.</div>}
+      {mailT && <MailThreadHead t={mailT} groupId={groupId} canAct={!frozen && !reading() && !guestInfo()} />}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} inbox={inbox} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
+          {root && mailT ? <div className="msg first card-row"><MailFrame it={mailT.mails[0]} address={address} /></div>
+            : root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
-          <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>
-          {flow.map((x) => x.m
-            ? <Row key={x.m.ev.id} m={x.m} prev={replies[x.i! - 1]} head={x.i === 0} name={nameOf(x.m)} groupId={groupId}
+          {!mailT && <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>}
+          {flow.map((x, j) => x.mail
+            ? <div key={x.mail.m.ev.id} className="msg first card-row"><MailFrame it={x.mail} address={address} /></div>
+            : x.m
+            ? <Row key={x.m.ev.id} m={x.m} prev={flow[j - 1]?.m} head={!flow[j - 1]?.m} name={nameOf(x.m)} groupId={groupId}
               reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.m!) }} announce={false} />
             : <TodoStepLine key={x.g!.t.id + x.g!.at + x.g!.what.join()} g={x.g!} />)}
         </div>
       </div>
       {frozen && g && <ArchivedBar g={g} />}
       {root && reading() && !frozen && <GuestBar groupId={groupId} />}
-      {root && !reading() && !frozen && <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />}
+      {root && !reading() && !frozen && (mailT
+        ? <MailThreadComposer t={mailT} groupId={groupId} root={root} autoFocus={replying} />
+        : <Composer groupId={groupId} draft={'t:' + rootId} autoFocus={replying} placeholder={replies.length ? 'Reply in the thread' : 'Reply (starts a thread)'} onSend={(text, files) => postThreadReply(groupId, root.ev, text, files)} />)}
       {acting && <MessageActions emojiOnly={picking} m={acting} groupId={groupId} mine={rx.get(acting.ev.id) ?? []} onClose={() => setActing(null)} onEdit={() => setEditing(acting)} />}
       {editing && <EditSheet m={editing} groupId={groupId} onClose={() => setEditing(null)} />}
     </div>
   )
+}
+
+/** An e-mail thread's one composer: in the thread (the team only) by default, or by e-mail to the
+ *  sender as the channel, after "Reply by e-mail instead" (those who may answer as the channel:
+ *  its admins, when its shared inbox is on; the bridge checks it again). Back to the thread after
+ *  each e-mail. */
+function MailThreadComposer({ t, groupId, root, autoFocus }: { t: MailThread; groupId: string; root: Message; autoFocus: boolean }) {
+  const g = group(groupId)
+  const canMail = !!g && canAdmin(g) && !g.archived && isInbox(g) && !guestInfo()
+  const r = useMailReply({ t, g, groupId, local: g ? mailLocal(g) : groupId, canMail })
+  return (
+    <>
+      <Composer groupId={groupId} draft={'t:' + t.id} autoFocus={autoFocus} placeholder={r.placeholder} above={r.line}
+        className={r.mail ? 'mail-mode' : undefined} plain={r.mail}
+        onSend={(text, files) => (r.mail ? r.send(text) : postThreadReply(groupId, root.ev, text, files))} />
+      {r.toast}
+    </>
+  )
+}
+
+/** The channel's e-mail address: its plain alias when it has one (hello@, not hello-79f0@). */
+function mailAddressOf(groupId: string): string {
+  const g = group(groupId)
+  return `${g ? mailLocal(g) : groupId}@${BELFRY.domain}`
 }
 
 /** Press and hold (phones) or right-click opens a message's menu. A finger may wobble a little;
@@ -918,18 +969,19 @@ function useHold(open: () => void, off = false) {
   }
 }
 
-function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, inbox, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; inbox?: { states: Map<string, CardState>; key?: string; canSend: boolean; name: string }; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; /** when the item above it in the feed came (a row that is not a message: an e-mail thread, a join) */ prevAt?: number; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
   const d = new Date(m.ev.created_at * 1000)
-  const newDay = !head && (!prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString())
-  const first = head || newDay || prev!.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev!.ev.created_at > 300
+  const newDay = !head && (prevAt !== undefined ? new Date(prevAt * 1000).toDateString() !== d.toDateString() : !prev || new Date(prev.ev.created_at * 1000).toDateString() !== d.toDateString())
+  const first = head || newDay || !prev || prev.ev.pubkey !== m.ev.pubkey || m.ev.created_at - prev.ev.created_at > 300
   const p = m.ev.pending
-  const card = inbox ? cardOf(m.ev, inbox.key) : null
-  const sent = inbox && !card ? sentOf(m.ev, inbox.key) : null
-  const mail = card || sent ? null : mailOf(m.ev)
-  const [fullMail, setFullMail] = useState(false)
+  // an e-mail from outside or what went out (an e-mail thread shows them in frames; here only
+  // when one is reached on its own)
+  const gk = knownGroupsKey()
+  const inMail = cardOf(m.ev, gk) ?? sentOf(m.ev, gk)
+  const mail = inMail ? null : mailOf(m.ev)
   // events: a message carrying an event's URL (or its `a` tag) shows its card under the text, at
   // most three; the older automatic post ("📅 …", the `a` tag only) is the card alone
   const links = eventLinksIn(m.text)
@@ -954,14 +1006,10 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
   const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
   const hold = useHold(() => onAct(), !!p || frozen)
-  if (card || sent) return (
+  if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
-      <div className="msg first card-row" id={'m-' + m.ev.id}>
-        {card ? <InboxCardView m={m} card={card} groupId={groupId} channelName={inbox!.name} state={inbox!.states.get(m.ev.id)} canSend={inbox!.canSend && !frozen}
-          thread={thread} onThread={onThread ?? (() => {})} />
-          : <SentCardView m={m} sent={sent!} groupId={groupId} />}
-      </div>
+      <div className="msg first card-row"><MailFrame it={inMail} address={mailAddressOf(groupId)} /></div>
     </>
   )
   return (
@@ -976,8 +1024,6 @@ function Row({ m, prev, name, groupId, reactions: rx, onAct, topic, onTopic, ann
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
           {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
-          {mail?.original && <button className="link full-mail-btn" onClick={() => setFullMail(true)}>Full e-mail</button>}
-          {fullMail && mail && <FullMail mail={mail} onClose={() => setFullMail(false)} />}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
           {/* no to-do mark here any more (Xavier, 2026-11-12): the ⏳ / ☑️ reactions say it */}
@@ -1017,6 +1063,8 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const isTodo = tasklist(groupId).tasks.some((t) => t.source === m.ev.id)
   const todoTitle = plainRefs(m.text, '').replace(/\s+/g, ' ').trim().slice(0, 300)
   const [copied, setCopied] = useState('')
+  const mail = mailOf(m.ev)
+  const [fullMail, setFullMail] = useState(false)
   const pick = (emoji: string) => {
     void react(groupId, m.ev, emoji, mine.find((r) => r.emoji === emoji)?.mine)
     onClose()
@@ -1029,6 +1077,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
   )
+  if (fullMail && mail) return <FullMail mail={mail} onClose={onClose} />
   if (confirming) return (
     <Sheet title="Delete this message?" onClose={onClose}>
       <blockquote className="delete-preview">
@@ -1062,6 +1111,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
             {m.ev.pubkey !== me() && <Item icon={<AtIcon />} label={`Message ${displayName(m.ev.pubkey)}`} onClick={() => { onClose(); go('dm/' + encodeURIComponent('n:' + m.ev.pubkey)) }} />}
           </div>
           <div className="act-group">
+            {mail?.original && <Item icon={<MailIcon />} label="Full e-mail" onClick={() => setFullMail(true)} />}
             {m.text && <Item icon={<CopyIcon />} label={copied === 'text' ? 'Copied' : 'Copy text'} onClick={() => void copy('text', m.text)} />}
             <Item icon={<LinkIcon />} label={copied === 'link' ? 'Copied' : 'Copy link'} onClick={() => void copy('link', link)} />
             {onPropose && !m.ev.pending && <Item icon={<DocIcon />} label="Turn into a proposal" onClick={() => { onClose(); onPropose() }} />}
@@ -1082,7 +1132,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
 
 // ---- composer --------------------------------------------------------------------
 
-export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft }: { /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
+export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onProposal, onTodo, groupId, placeholder = 'Message', canAnnounce = false, announcing = false, autoFocus = false, compact = false, prefill, draft, above, className, plain = false }: { /** a line above the text field (who receives it: an e-mail thread) */ above?: ReactNode; /** an extra class (mail-mode: going out by e-mail) */ className?: string; /** plain text only: no files, no @people or #channels (an e-mail) */ plain?: boolean; /** where its unsent text is kept on this device (a channel, a thread): switching away and back brings it back */ draft?: string; prefill?: string; onSend: (text: string, files: File[], announce: boolean) => Promise<unknown>; onEvent?: () => void; /** a members-only meeting (Meeting.tsx) */ onMeeting?: () => void; /** an audio recording (Recorder.tsx) */ onRecord?: () => void; onPod?: () => void; onProposal?: () => void; onTodo?: () => void; /** the channel written in: mentions of people who are not in it are pointed out */ groupId?: string; placeholder?: string; canAnnounce?: boolean; announcing?: boolean; autoFocus?: boolean; compact?: boolean }) {
   const [text, setText] = useState('')
   const [ann, setAnn] = useState(announcing)
   useEffect(() => setAnn(announcing), [announcing])
@@ -1117,7 +1167,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
   // @mentions: "@" and a few letters suggest people; a pick writes "@Name", sent as nostr:npub…
   const picked = useRef(new Map<string, string>()) // name → pubkey
   const [caret, setCaret] = useState(0)
-  const query = /(^|\s)@([\p{L}\p{N}_.-]{0,30})$/u.exec(text.slice(0, caret))
+  const query = plain ? null : /(^|\s)@([\p{L}\p{N}_.-]{0,30})$/u.exec(text.slice(0, caret))
   const people = useMemo(() => {
     if (!query) return []
     const q = query[2].toLowerCase()
@@ -1139,7 +1189,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     pickedChans.current = new Map(d?.chans ?? [])
     setText(d?.text ?? '')
   }, [draft])
-  const chanQuery = query ? null : /(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_-]{0,30})$/u.exec(text.slice(0, caret))
+  const chanQuery = query || plain ? null : /(^|[^\p{L}\p{N}_&/])#([\p{L}\p{N}_-]{0,30})$/u.exec(text.slice(0, caret))
   const chans = useMemo(() => {
     if (!chanQuery) return []
     const q = chanQuery[2].toLowerCase()
@@ -1185,8 +1235,10 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     return out
   }
 
+  // locked while the send runs (an e-mail waits out its Undo): one tap, one message
+  const [busy, setBusy] = useState(false)
   const send = async () => {
-    if (!text.trim() && !files.length) return
+    if (busy || (!text.trim() && !files.length)) return
     const mentioned = new Map(picked.current)
     const chansPicked = new Map(pickedChans.current)
     const t = withMentions(text.trim())
@@ -1196,19 +1248,23 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     setFiles([])
     setError('')
     if (!announcing) setAnn(false)
+    setBusy(true)
     try { await onSend(t, f, a) } catch (e) {
-      // not saved on this device (storage full or refused): the text and files come back
+      // not saved on this device (storage full or refused), or an e-mail undone: the text and files come back
       setText((now) => now || text)
       for (const [name, pk] of mentioned) picked.current.set(name, pk)
       for (const [label, ref] of chansPicked) pickedChans.current.set(label, ref)
       setFiles((now) => (now.length ? now : f))
       if (a) setAnn(true)
-      setError(`Not saved: ${(e instanceof Error ? e.message : String(e)).replace(/\.$/, "")}. Try again.`)
-    }
+      const why = e instanceof Error ? e.message : String(e)
+      if (why !== UNDONE) setError(`Not ${plain ? 'sent' : 'saved'}: ${why.replace(/\.$/, "")}. Try again.`)
+      else requestAnimationFrame(() => ta.current?.focus())
+    } finally { setBusy(false) }
   }
 
   return (
-    <div className={'composer' + (compact ? ' compact' : '')}>
+    <div className={'composer' + (compact ? ' compact' : '') + (className ? ' ' + className : '')}>
+      {above}
       {canAnnounce && ann && (
         <div className="announce-mode">
           <span>📣 Announcement: sent to the channel and e-mailed to its followers</span>
@@ -1237,8 +1293,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
         </div>
       ))}
       <div className="bar">
-        <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a group' : 'Add photos or files'}
-          onClick={() => (onEvent || canAnnounce || onRecord ? setMenu(true) : picker.current?.click())}>＋</button>
+        {!plain && <button className="icon-btn" aria-label={onEvent ? 'Add photos, files, an event, a proposal or a group' : 'Add photos or files'}
+          onClick={() => (onEvent || canAnnounce || onRecord ? setMenu(true) : picker.current?.click())}>＋</button>}
         <input ref={picker} type="file" multiple hidden
           onChange={(e) => { setFiles([...files, ...Array.from(e.target.files ?? [])]); e.target.value = '' }} />
         {people.length > 0 && (
@@ -1269,7 +1325,7 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
             // Enter sends on a keyboard; on phones the return key adds a line
             if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() }
           }} />
-        <button className="send" aria-label="Send" disabled={!text.trim() && !files.length} onClick={() => void send()}>↑</button>
+        <button className="send" aria-label={plain ? 'Send e-mail' : 'Send'} aria-busy={busy || undefined} disabled={busy || (!text.trim() && !(files.length && !plain))} onClick={() => void send()}>↑</button>
       </div>
       {menu && (onEvent || canAnnounce || onRecord) && (
         <Sheet title="Add to the conversation" hideTitle onClose={() => setMenu(false)}>

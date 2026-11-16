@@ -1,13 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { finalizeEvent, generateSecretKey, type NostrEvent } from 'nostr-tools'
-import { addEvents } from '../core/store'
+import { addEvents, all } from '../core/store'
 import { isLocalOnly, me } from '../core/sync'
-import { DEMO_GROUPS, fetchLarge, report, sendAsChannel } from '../core/dm'
+import { baseSubject, channelSignature, DEMO_GROUPS, fetchLarge, report, sendAsChannel } from '../core/dm'
 import { hexToBytes } from '@noble/hashes/utils'
-import { assignCard, setCardStatus } from '../core/actions'
-import { displayName, realName, type CardState, type Message, type ThreadInfo } from '../core/model'
+import { assignCard, createChannel, setCardStatus, setInbox } from '../core/actions'
+import { displayName, plainRefs, type CardState, type Group } from '../core/model'
 import { BELFRY } from '../config'
 import { parseMail, type Mail } from '../core/mime'
+import { mailIn, mailOut, type MailItem, type MailThread } from '../core/mailthreads'
 import { fmtTime, MediaGrid, Sheet, Btn } from './common'
 
 // A channel message a member sent by e-mail (posted by the belfry's mail bridge as them):
@@ -30,13 +31,10 @@ export function mailText(text: string, mail: MailPost): string {
   return mail.subject && text.startsWith(head) ? text.slice(head.length).trimStart() : text
 }
 
+/** On the time line of a member's message that came by e-mail: small, like the time (Xavier,
+ *  2026-11-16). The whole e-mail is in the message's menu. */
 export function ViaMail() {
-  return (
-    <span className="via-mail" title="Sent by e-mail">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
-      via e-mail
-    </span>
-  )
+  return <span className="via-mail" title="Sent by e-mail">via e-mail</span>
 }
 
 export function FullMail({ mail, onClose }: { mail: MailPost; onClose: () => void }) {
@@ -66,150 +64,193 @@ export function FullMail({ mail, onClose }: { mail: MailPost; onClose: () => voi
   )
 }
 
-/** Demo mode only (tests): a member's e-mail lands in CHANNEL, as the bridge would post it. */
-export function demoMailPost(channel: string, name: string, subject: string, text: string) {
+/** Demo mode only (tests): a member's e-mail lands in CHANNEL, as the bridge would post it.
+ *  ROOT: it answered something in the channel, so the bridge put it in that thread (kind 1111). */
+export function demoMailPost(channel: string, name: string, subject: string, text: string, root?: string) {
   if (!isLocalOnly()) return
   const sk = generateSecretKey()
+  const under = root ? all(me()).find((e) => e.id === root) : undefined
   addEvents([
     finalizeEvent({ kind: 0, created_at: Math.floor(Date.now() / 1000) - 60, tags: [], content: JSON.stringify({ name }) }, sk),
     finalizeEvent({
-      kind: 9, created_at: Math.floor(Date.now() / 1000), content: `**${subject}**\n\n${text}`,
-      tags: [['h', channel], ['subject', subject], ['mail-original', 'https://blossom.invalid/demo', 'AAAA', 'AAAA'], ['client', 'belfry-mail']],
+      kind: under ? 1111 : 9, created_at: Math.floor(Date.now() / 1000), content: `**${subject}**\n\n${text}`,
+      tags: [['h', channel], ...(under ? [['E', under.id, '', under.pubkey], ['K', String(under.kind)], ['P', under.pubkey], ['e', under.id, '', under.pubkey], ['k', String(under.kind)], ['p', under.pubkey]] : []),
+        ['subject', subject], ['mail-original', 'https://blossom.invalid/demo', 'AAAA', 'AAAA'], ['message-id', `<${crypto.randomUUID()}@example.org>`], ['client', 'belfry-mail']],
     }, sk),
   ])
 }
 
-// ---- shared inboxes: e-mail cards (posted by the groups key) and what went out ----------
-
-export interface InboxCard { from: string; name: string; subject: string; messageId?: string; verified: boolean; post: MailPost }
-
-const tagv = (ev: NostrEvent, k: string) => ev.tags.find((t) => t[0] === k)?.[1]
-
-/** An e-mail from outside to a shared inbox, if KEY (the groups key) posted it. */
-export function cardOf(ev: NostrEvent, key?: string): InboxCard | null {
-  if (!key || ev.pubkey !== key || !tagv(ev, 'mail-from')) return null
-  const post = mailOf(ev)
-  if (!post) return null
-  return { from: tagv(ev, 'mail-from')!, name: tagv(ev, 'mail-name') ?? '', subject: post.subject, messageId: tagv(ev, 'message-id'), verified: tagv(ev, 'belfry-auth') === 'pass', post }
+/** Demo mode only (tests): a channel NAME of my own with its shared inbox on; its id. */
+export async function demoInboxChannel(name: string): Promise<string | undefined> {
+  if (!isLocalOnly()) return
+  const id = await createChannel(name, '')
+  await setInbox(id, true)
+  return id
 }
 
-/** An answer that went out as the channel (only the bridge posts these, with the groups key). */
-export function sentOf(ev: NostrEvent, key?: string): { to: string; subject: string; by: string } | null {
-  if (!key || ev.pubkey !== key || !ev.tags.some((t) => t[0] === 'client' && t[1] === 'belfry-mail-out')) return null
-  return { to: tagv(ev, 'mail-to') ?? '', subject: tagv(ev, 'subject') ?? '', by: tagv(ev, 'sent-by') ?? '' }
+// ---- shared inboxes: e-mail threads (core/mailthreads.ts) ---------------------------------
+// One row per e-mail thread in the channel; in the thread, each e-mail in its own frame
+// (received / sent), the team's replies between them, and one composer that says who gets it.
+
+/** Still used by the message menu (no editing an e-mail): an e-mail from outside, as before. */
+export function cardOf(ev: NostrEvent, key?: string) {
+  return mailIn({ ev, text: ev.content, media: [], topics: [] }, key)
+}
+export function sentOf(ev: NostrEvent, key?: string) {
+  return mailOut({ ev, text: ev.content, media: [], topics: [] }, key)
 }
 
-const Envelope = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
+const Envelope = ({ size = 14 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
 )
 const STATUS: Record<CardState['status'], string> = { open: 'Open', waiting: 'Answered', closed: 'Closed' }
 const UNDO_SECONDS = 8
+const who = (t: { name: string; address: string }) => t.name || t.address
+const first = (t: { name: string; address: string }) => t.name.split(' ')[0] || t.address
+const snippet = (it: MailItem) => plainRefs(mailText(it.m.text, { subject: it.subject }) || (it.m.media.length ? 'a photo or file' : ''), '').replace(/\s+/g, ' ').trim().slice(0, 140)
 
-export function InboxCardView({ m, card, groupId, channelName, state, canSend, thread, onThread }: {
-  m: Message; card: InboxCard; groupId: string; channelName: string; state?: CardState; canSend: boolean; thread?: ThreadInfo; onThread: () => void
-}) {
+/** In the channel's feed: one line per e-mail thread, where its latest activity is. */
+export function MailRow({ t, open, unread, onOpen }: { t: MailThread; open: boolean; unread: number; onOpen: () => void }) {
+  const latest = t.mails.at(-1)!
+  const n = t.mails.length
+  return (
+    <button className={'mail-row' + (open ? ' open' : '')} id={'m-' + t.id} onClick={onOpen} aria-label={`E-mail from ${who(t)}: ${t.subject || '(no subject)'}`}>
+      <span className="mr-ico"><Envelope size={18} /></span>
+      <span className="mr-main">
+        <span className="mr-top">
+          <b className="mr-from">{who(t)}</b>
+          <span className={'mc-pill ' + t.state.status}>{STATUS[t.state.status]}</span>
+          <time>{fmtTime(t.last)}</time>
+        </span>
+        <span className="mr-subject">{t.subject || '(no subject)'}</span>
+        <span className="mr-snip">{latest.dir === 'out' ? 'Sent: ' : ''}{snippet(latest)}</span>
+        <span className="mr-meta">
+          {n} {n === 1 ? 'e-mail' : 'e-mails'}{t.replies ? ` · ${t.replies} ${t.replies === 1 ? 'reply' : 'replies'} in the team` : ''}
+          {t.state.assignee ? ` · ${t.state.assignee === me() ? 'you have it' : displayName(t.state.assignee) + ' has it'}` : ''}
+          {unread > 0 && <span className="badge lime new-n">{unread} new</span>}
+        </span>
+      </span>
+    </button>
+  )
+}
+
+/** In the thread: one e-mail, framed (received or sent). */
+export function MailFrame({ it, address }: { it: MailItem; /** the channel's own address (sent ones) */ address: string }) {
   const [full, setFull] = useState(false)
-  const [writing, setWriting] = useState(false)
-  const [draft, setDraft] = useState('')
+  const t = it.m.ev.created_at
+  return (
+    <div className={'mail-frame ' + it.dir} id={'m-' + it.m.ev.id}>
+      <div className="mf-head">
+        <Envelope />
+        <span>{it.dir === 'in' ? 'E-mail received' : `E-mail sent by ${it.by ? displayName(it.by) : 'a member'}`}</span>
+        <time>{fmtTime(t)}</time>
+      </div>
+      <div className="mf-body">
+        <div className="mf-addr">
+          {it.dir === 'in' ? <>From {it.name ? `${it.name} <${it.address}>` : it.address}</> : <>From {address} · to {it.address}</>}
+          {it.dir === 'in' && !it.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
+        </div>
+        {it.subject && <b className="mf-subject">{it.subject}</b>}
+        <p className="mf-text">{mailText(it.m.text, { subject: it.subject }) || '(empty)'}</p>
+        <MediaGrid media={it.m.media} />
+        {it.original && <button className="link full-mail-btn" onClick={() => setFull(true)}>Full e-mail</button>}
+      </div>
+      {full && it.original && <FullMail mail={{ subject: it.subject, original: it.original }} onClose={() => setFull(false)} />}
+    </div>
+  )
+}
+
+/** Under the thread's title: who wrote, its state, who has it. */
+export function MailThreadHead({ t, groupId, canAct }: { t: MailThread; groupId: string; canAct: boolean }) {
+  const s = t.state
+  return (
+    <div className="mail-head">
+      <div className="mh-from"><Envelope /> {t.name ? <>{t.name} <span className="muted">&lt;{t.address}&gt;</span></> : t.address}
+        {t.lastIn && !t.lastIn.verified && <span className="dm-warn">unverified sender</span>}</div>
+      <div className="mh-acts">
+        <span className={'mc-pill ' + s.status}>{STATUS[s.status]}</span>
+        {canAct ? <Btn className="mc-who" onClick={() => assignCard(groupId, t.id, s.assignee === me() ? '' : me())}
+          title={s.assignee === me() ? 'Tap to let it go' : 'Tap to take it'}>
+          {s.assignee ? (s.assignee === me() ? 'You have it' : `${displayName(s.assignee)} has it`) : 'Nobody yet · take it'}
+        </Btn> : <span className="mc-who static">{s.assignee ? `${displayName(s.assignee)} has it` : 'Nobody has it yet'}</span>}
+        {canAct && <Btn className="btn ghost small mh-close" onClick={() => setCardStatus(groupId, t.id, s.status === 'closed' ? 'open' : 'closed')}>{s.status === 'closed' ? 'Reopen' : 'Close'}</Btn>}
+      </div>
+      <div className="mh-note">Team only: {who(t)} sees only what is sent by e-mail.</div>
+    </div>
+  )
+}
+
+/** Rejected by a send that was undone: the composer takes the text back without an error. */
+export const UNDONE = 'undone'
+
+/** The thread's composer, for an e-mail thread: which way it goes (the thread, or by e-mail as
+ *  the channel), the line that says so above the text, the 8-second Undo and the report. */
+export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread; g?: Group; groupId: string; local: string; canMail: boolean }) {
+  const [mode, setMode] = useState<'thread' | 'mail'>('thread')
   const [countdown, setCountdown] = useState(0)
   const [sentId, setSentId] = useState('')
-  const [error, setError] = useState('')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
-  const pending = useRef<(() => void) | null>(null)
-  const status = state?.status ?? 'open'
-  const who = card.name ? `${card.name} <${card.from}>` : card.from
-  const first = card.name.split(' ')[0] || card.from
-  const subject = /^re:/i.test(card.subject) ? card.subject : `Re: ${card.subject || '(no subject)'}`
+  const pending = useRef<{ go: () => void; undo: () => void } | null>(null)
+  const to = t.lastIn
+  // Re: the e-mail it answers (the latest one received), as mail programs do
+  const subject = `Re: ${baseSubject(to?.subject) || t.subject || '(no subject)'}`
+  const address = `${local}@${BELFRY.domain}`
   const r = report(sentId)
+  const mail = mode === 'mail' && canMail && !!to
+  // leaving the thread during the countdown sends at once: nobody should believe it went when it didn't
+  useEffect(() => () => { if (timer.current) { clearInterval(timer.current); pending.current?.go() } }, [])
+  useEffect(() => { if (r?.status === 'delivered') { const x = setTimeout(() => setSentId(''), 4000); return () => clearTimeout(x) } }, [r?.status])
+  useEffect(() => { if (!canMail) setMode('thread') }, [canMail])
 
-  // leaving the screen during the countdown sends at once: nobody should believe it went when it didn't
-  useEffect(() => () => { if (timer.current) { clearInterval(timer.current); pending.current?.() } }, [])
-  useEffect(() => { if (r?.status === 'delivered') { const t = setTimeout(() => setSentId(''), 4000); return () => clearTimeout(t) } }, [r?.status])
-
-  const send = (text: string) => {
-    setWriting(false); setError('')
-    setCountdown(UNDO_SECONDS)
+  /** Send TEXT by e-mail after the countdown; resolves once it left this device. */
+  const send = (text: string) => new Promise<void>((resolve, reject) => {
+    const refs = to?.messageId ? t.refs.filter((x) => x !== to.messageId) : t.refs
+    const go = () => sendAsChannel({ channel: groupId, local, channelName: g?.name ?? groupId, to: to!.address, subject, text, inReplyTo: to!.messageId, references: refs.slice(-10).join(' ') || undefined, cardId: to!.m.ev.id })
     let left = UNDO_SECONDS
-    const go = () => sendAsChannel({ channel: groupId, channelName, to: card.from, subject, text, inReplyTo: card.messageId, cardId: m.ev.id })
-    pending.current = () => void go()
+    setCountdown(left)
+    const stop = () => { if (timer.current) clearInterval(timer.current); timer.current = null; pending.current = null; setCountdown(0) }
+    pending.current = { go: () => void go(), undo: () => { stop(); reject(new Error(UNDONE)) } }
     timer.current = setInterval(() => {
       left--
       setCountdown(left)
       if (left > 0) return
-      clearInterval(timer.current!); timer.current = null; pending.current = null
-      go().then((id) => { setSentId(id); setDraft('') }, (e) => { setError(e instanceof Error ? e.message : String(e)); setWriting(true) })
+      stop()
+      go().then((id) => { setSentId(id); setMode('thread'); resolve() }, reject)
     }, 1000)
-  }
-  const undo = () => { if (timer.current) clearInterval(timer.current); timer.current = null; pending.current = null; setCountdown(0); setWriting(true) }
+  })
 
-  return (
-    <div className="mailcard">
-      <div className="mc-head"><Envelope />E-mail received · {fmtTime(m.ev.created_at)}</div>
-      <div className="mc-body">
-        <div className="mc-from">{who}{!card.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}</div>
-        {card.subject && <b className="mc-subject">{card.subject}</b>}
-        <p className="mc-text">{mailText(m.text, card.post) || '(empty)'}</p>
-        <MediaGrid media={m.media} />
-        {card.post.original && <button className="link full-mail-btn" onClick={() => setFull(true)}>Full e-mail</button>}
-      </div>
-      <div className="mc-foot">
-        <span className={'mc-pill ' + status}>{STATUS[status]}</span>
-        <button className="mc-who" onClick={() => void assignCard(groupId, m.ev.id, state?.assignee === me() ? '' : me())}
-          title={state?.assignee === me() ? 'Tap to let it go' : 'Tap to take it'}>
-          {state?.assignee ? displayName(state.assignee) : 'Nobody yet · take it'}
-        </button>
-        <button className="thread-chip" onClick={onThread}>{thread?.count ? `Thread · ${thread.count}` : 'Start a thread'}</button>
-      </div>
-      <div className="mc-acts">
-        {canSend && <button className="mc-reply" onClick={() => setWriting(true)}>Reply by e-mail</button>}
-        <Btn className="btn ghost mc-sec" onClick={() => setCardStatus(groupId, m.ev.id, status === 'closed' ? 'open' : 'closed')}>{status === 'closed' ? 'Reopen' : 'Close'}</Btn>
-      </div>
-      {full && <FullMail mail={card.post} onClose={() => setFull(false)} />}
-      {writing && (
-        <Sheet title={`E-mail to ${first}`} onClose={() => setWriting(false)}>
-          <div className="mail-sheet">
-            <dl>
-              <dt>To</dt><dd>{who}</dd>
-              <dt>From</dt><dd>{groupId}@{BELFRY.domain}<small>Signed “{realName(me()) ? `${realName(me())} for ${channelName}` : channelName}”</small></dd>
-              <dt>Subject</dt><dd>{subject}</dd>
-            </dl>
-            <textarea className="input" rows={8} autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={`Write to ${first}…`} />
-            {error && <div className="error">{error}</div>}
-            <div className="mail-warn">{first} will receive exactly this. The thread stays inside the belfry.</div>
-            <button className="btn mail-send" disabled={!draft.trim()} onClick={() => send(draft.trim())}>Send e-mail</button>
-          </div>
-        </Sheet>
-      )}
-      {countdown > 0 && <div className="toast" role="status"><span>Sending to {first} in {countdown} s</span><button onClick={undo}>Undo</button></div>}
-      {!countdown && sentId && (
-        <div className="toast" role="status">
-          <span>{r?.status === 'delivered' ? `E-mail sent to ${first}` : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, the provider retries' : 'Sending…'}</span>
-          {r?.status !== 'queued' && <button onClick={() => setSentId('')}>OK</button>}
-        </div>
-      )}
+  const line: ReactNode = mail ? (
+    <div className="send-to mail" role="status">
+      <span className="st-what"><Envelope /><span>This will be sent to <b>{who(to!)}</b> by e-mail</span></span>
+      <button type="button" className="link st-switch" onClick={() => setMode('thread')}>Only send in this thread instead</button>
+      <small className="st-from">From {address} · {subject}</small>
+    </div>
+  ) : (
+    <div className="send-to" role="status">
+      <span className="st-what">Message will be sent in this thread</span>
+      {canMail && to && <button type="button" className="link st-switch" onClick={() => setMode('mail')}>Reply by e-mail instead</button>}
     </div>
   )
-}
-
-export function SentCardView({ m, sent, groupId }: { m: Message; sent: { to: string; subject: string; by: string }; groupId: string }) {
-  return (
-    <div className="mailcard out">
-      <div className="mc-head out"><Envelope />E-mail sent by {sent.by ? displayName(sent.by) : 'a member'} as {groupId}@ · {fmtTime(m.ev.created_at)}</div>
-      <div className="mc-body">
-        <div className="mc-from">To {sent.to}</div>
-        {sent.subject && <b className="mc-subject">{sent.subject}</b>}
-        <p className="mc-text">{m.text}</p>
+  const toast: ReactNode = countdown > 0
+    ? <div className="toast" role="status"><span>Sending to {first(to!)} in {countdown} s</span><button onClick={() => pending.current?.undo()}>Undo</button></div>
+    : sentId ? (
+      <div className="toast" role="status">
+        <span>{r?.status === 'delivered' ? `E-mail sent to ${first(to!)}` : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, the provider retries' : 'Sending…'}</span>
+        {r?.status !== 'queued' && <button onClick={() => setSentId('')}>OK</button>}
       </div>
-    </div>
-  )
+    ) : null
+  return { mail, line, toast, send, sending: countdown > 0, placeholder: mail ? `E-mail to ${first(to!)}…` : 'Reply in the thread', signature: channelSignature(g?.name ?? groupId) }
 }
 
-/** Demo mode only (tests): an e-mail from outside lands in the shared inbox CHANNEL. */
-export function demoInboxMail(channel: string, from: string, name: string, subject: string, text: string) {
+/** Demo mode only (tests): an e-mail from outside lands in the shared inbox CHANNEL. IN_REPLY_TO:
+ *  the Message-ID it answers (a follow-up). Resolves with its own Message-ID. */
+export function demoInboxMail(channel: string, from: string, name: string, subject: string, text: string, inReplyTo?: string): string | undefined {
   if (!isLocalOnly()) return
+  const mid = `<${crypto.randomUUID()}@example.org>`
   addEvents([finalizeEvent({
     kind: 9, created_at: Math.floor(Date.now() / 1000), content: `**${subject}**\n\n${text}`,
     tags: [['h', channel], ['subject', subject], ['mail-original', 'https://blossom.invalid/demo', 'AAAA', 'AAAA'], ['mail-from', from], ['mail-name', name],
-      ['message-id', `<${crypto.randomUUID()}@example.org>`], ['belfry-auth', 'pass'], ['client', 'belfry-mail']],
+      ['message-id', mid], ...(inReplyTo ? [['in-reply-to', inReplyTo], ['references', inReplyTo]] : []), ['belfry-auth', 'pass'], ['client', 'belfry-mail']],
   }, hexToBytes(DEMO_GROUPS))])
+  return mid
 }

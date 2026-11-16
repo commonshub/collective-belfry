@@ -416,9 +416,7 @@ a.chip { text-decoration: none; color: inherit; }
 .dm-list > div { display: flex; flex-direction: column; min-width: 0; }
 
 /* a member's message that came by e-mail */
-.via-mail { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; padding: 1px 6px; border-radius: 5px;
-  font-size: 11px; font-weight: 600; background: color-mix(in srgb, #a4532b 12%, transparent); color: #8a4322; vertical-align: 1px; }
-@media (prefers-color-scheme: dark) { .via-mail { color: #f0a77f; } }
+.via-mail { margin-left: 6px; font-size: 12px; font-weight: 400; color: var(--faint); }
 .mail-subject { font-weight: 600; font-size: 14px; margin: 1px 0 2px; }
 .full-mail-btn { font-size: 12px; color: var(--faint); padding: 4px 0 0; }
 .full-mail dl { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin: 0 0 12px; font-size: 13px; }
@@ -437,38 +435,15 @@ a.chip { text-decoration: none; color: inherit; }
 
 /* shared inbox: e-mail cards (bronze = it came from, or went to, outside the belfry) */
 .card-row { display: block; }
-.mailcard { border: 1px solid color-mix(in srgb, #a4532b 30%, var(--line)); border-radius: 12px; overflow: hidden; background: var(--bg); }
-.mc-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; font-weight: 650;
-  background: color-mix(in srgb, #a4532b 10%, transparent); color: #8a4322; }
-.mc-head.out { background: #a4532b; color: #fff; }
-@media (prefers-color-scheme: dark) { .mc-head:not(.out) { color: #f0a77f; } }
-.mc-body { padding: 10px 12px 4px; }
-.mc-from { font-size: 12px; color: var(--faint); margin-bottom: 4px; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.mc-subject { display: block; font-size: 15px; margin-bottom: 2px; }
-.mc-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.mc-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 12px 0; }
-.mc-foot .thread-chip { margin: 0 0 0 auto; }
 .mc-pill { font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; }
 .mc-pill.open { background: #e0f2fe; color: #075985; }
 .mc-pill.waiting { background: #fef3c7; color: #92400e; }
 .mc-pill.closed { background: rgba(127,127,127,.15); color: var(--faint); }
 .mc-who { border: 0; background: none; padding: 6px 2px; font-size: 12px; color: inherit; cursor: pointer; text-decoration: underline dotted; }
-.mc-acts { display: flex; gap: 8px; padding: 10px 12px 12px; flex-wrap: wrap; }
-.mc-reply { border: 0; border-radius: 9px; padding: 10px 14px; font-weight: 650; background: #a4532b; color: #fff; cursor: pointer; }
-.mc-sec { width: auto; padding: 9px 14px; margin: 0; }
-.mail-sheet dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 12px; font-size: 13px; }
-.mail-sheet dt { color: var(--faint); }
-.mail-sheet dd { margin: 0; overflow-wrap: anywhere; }
-.mail-sheet dd small { display: block; color: var(--faint); }
-.mail-sheet textarea { width: 100%; box-sizing: border-box; }
-.mail-warn { margin: 10px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px; background: color-mix(in srgb, #a4532b 10%, transparent); color: #8a4322; }
-@media (prefers-color-scheme: dark) { .mail-warn { color: #f0a77f; } }
-.mail-send { background: #a4532b !important; color: #fff !important; }
 .toast { position: fixed; left: 12px; right: 12px; bottom: 84px; z-index: 50; display: flex; align-items: center; gap: 10px; max-width: 520px; margin: 0 auto;
   background: #18181b; color: #fff; border-radius: 12px; padding: 10px 8px 10px 14px; font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
 .toast span { flex: 1; }
 .toast button { border: 0; background: none; color: #fdba74; font-weight: 650; font-size: 14px; padding: 8px 10px; cursor: pointer; }
-.thread-private { padding: 8px 14px; font-size: 12px; font-weight: 500; background: rgba(127,127,127,.12); }
 
 /* ---- laptop: channel list always on the left, you at its bottom ---- */
 .layout.wide { height: 100%; display: flex; }
@@ -1539,3 +1514,60 @@ div.settings-row { cursor: default; }
 .layout.wide .main .place .scroll > * { max-width: 760px; margin-left: auto; margin-right: auto; }
 .layout.wide .main .place .home-card, .layout.wide .main .place .home-tiles, .layout.wide .main .place .seg { max-width: 736px; }
 .tabbar[hidden] { display: none; }
+
+
+/* ---- shared inboxes: e-mail threads (MailPost.tsx, 2026-11-16) ----
+   E-mail has one colour, bell bronze: the row in the feed, the frames in the thread, and the
+   composer when what you write goes out by e-mail. */
+:root { --mail: #a4532b; --mail-ink: #8a4322; --mail-soft: color-mix(in srgb, #a4532b 9%, var(--bg)); --mail-line: color-mix(in srgb, #a4532b 35%, var(--line)); }
+@media (prefers-color-scheme: dark) { :root { --mail-ink: #f0a77f; --mail-soft: color-mix(in srgb, #a4532b 16%, var(--bg)); } }
+.mail-row { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 6px 12px; padding: 10px 12px; text-align: left;
+  border: 1px solid var(--mail-line); border-radius: 12px; background: var(--mail-soft); color: var(--text); cursor: pointer; font: inherit; }
+.mail-row:hover, .mail-row.open { border-color: var(--mail); }
+.mail-row .mr-ico { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--mail); color: #fff; }
+.mail-row .mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.mail-row .mr-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.mail-row .mr-from { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.mail-row .mr-top time { margin-left: auto; flex: none; font-size: 12px; color: var(--faint); }
+.mail-row .mr-subject { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-row .mr-snip { font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mail-row .mr-meta { font-size: 12px; color: var(--mail-ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.mail-row .new-n { font-size: 11px; padding: 1px 7px; }
+.mc-pill { flex: none; font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; }
+.mc-pill.open { background: #e0f2fe; color: #075985; }
+.mc-pill.waiting { background: #fef3c7; color: #92400e; }
+.mc-pill.closed { background: rgba(127,127,127,.15); color: var(--faint); }
+.mc-who { border: 0; background: none; padding: 6px 2px; font-size: 13px; color: inherit; cursor: pointer; text-decoration: underline dotted; }
+.mc-who.static { cursor: default; text-decoration: none; color: var(--muted); }
+.mail-frame { width: 100%; border: 1px solid var(--mail-line); border-radius: 12px; overflow: hidden; background: var(--bg); }
+.mail-frame .mf-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 650; background: var(--mail-soft); color: var(--mail-ink); }
+.mail-frame .mf-head time { margin-left: auto; font-weight: 400; color: var(--faint); }
+.mail-frame.out { border-color: var(--mail); }
+.mail-frame.out .mf-head { background: var(--mail); color: #fff; }
+.mail-frame.out .mf-head time { color: rgba(255,255,255,.8); }
+.mail-frame .mf-body { padding: 9px 12px 10px; }
+.mail-frame .mf-addr { font-size: 12px; color: var(--faint); margin-bottom: 4px; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.mail-frame .mf-subject { display: block; font-size: 15px; margin-bottom: 2px; }
+.mail-frame .mf-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.mail-head { padding: 8px 14px 9px; border-bottom: 1px solid var(--line); background: var(--mail-soft); font-size: 13px; }
+.mail-head .mh-from { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; font-weight: 600; color: var(--mail-ink); }
+.mail-head .mh-from .muted { font-weight: 400; }
+.mail-head .mh-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.mail-head .mh-close { width: auto; margin: 0 0 0 auto; padding: 6px 12px; }
+.mail-head .mh-note { margin-top: 2px; font-size: 12px; color: var(--faint); }
+.send-to { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 10px; padding: 0 6px 7px; font-size: 13px; color: var(--muted); }
+.send-to .st-what { display: inline-flex; align-items: center; gap: 6px; }
+.send-to .st-switch { font-size: 13px; font-weight: 600; padding: 4px 0; color: var(--mail-ink); }
+.send-to .st-from { flex-basis: 100%; font-size: 12px; color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.send-to.mail { color: var(--mail-ink); }
+.send-to.mail .st-switch { color: var(--muted); }
+.composer.mail-mode { background: var(--mail-soft); border-top: 2px solid var(--mail); }
+.composer.mail-mode textarea { border-color: var(--mail); background: var(--bg); }
+.composer.mail-mode .send { background: var(--mail); color: #fff; }
+.send[aria-busy] { opacity: .55; }
+html.kb .mail-head .mh-note { display: none; } /* typing: the room goes to the thread */
+
+/* The on-screen keyboard (iOS Safari leaves the layout viewport as it is and pans): the app
+   fills the visible part only, so the composer sits just above the keyboard (main.tsx sets
+   --app-h / --app-top from visualViewport). */
+html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h, 100%); transform: translateY(var(--app-top, 0px)); }

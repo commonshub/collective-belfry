@@ -32,9 +32,9 @@ import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { MessagesList, MessageThread } from './Messages'
-import { demoMail, groupsKey, setMyAddress, startDms } from '../core/dm'
+import { demoMail, groupsKey, lastChannelMail, setMyAddress, startDms } from '../core/dm'
 import { startReadState } from '../core/readstate'
-import { demoInboxMail, demoMailPost } from './MailPost'
+import { demoInboxChannel, demoInboxMail, demoMailPost } from './MailPost'
 import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
@@ -155,7 +155,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, __demoMe: () => me() })
+        if (session.backend === 'demo') Object.assign(window, { demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, __demoMe: () => me() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
