@@ -1,0 +1,658 @@
+{
+ "about": "The charter (SPEC 19.32): agreements = kind 2100 in group `charter` (t = list id of 'charter', h = charter) with ['each','1'] by a belfry admin; 2101 action edit (content = title, about, order; latest wins; a changed title/about sets textAt) / delete by a belfry admin; done / undone per author (latest wins); agreed = latest tick done with created_at >= textAt; stale = done before textAt. Order: order tag, then created_at, then id.",
+ "generated_by": "belfry-ios tools (hand-written, 2026-11-16)",
+ "list_id": "d93ecde52eff27c7",
+ "admins": [
+  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+ ],
+ "events": [
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f91",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 100,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "about",
+     "Kind words, good faith."
+    ],
+    [
+     "order",
+     "1"
+    ]
+   ],
+   "content": "We look after each other"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f92",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 110,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "order",
+     "2"
+    ]
+   ],
+   "content": "Quiet hours after 22:00"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f93",
+   "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "created_at": 120,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "order",
+     "0"
+    ]
+   ],
+   "content": "Shared things come back"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f94",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 125,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "order",
+     "3"
+    ]
+   ],
+   "content": "An ordinary to-do, not an agreement"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f95",
+   "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "created_at": 126,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "order",
+     "0"
+    ]
+   ],
+   "content": "Not a steward's rule"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f96",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 127,
+   "kind": 2100,
+   "tags": [
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "order",
+     "9"
+    ]
+   ],
+   "content": "Removed later"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f97",
+   "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "created_at": 200,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f91"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f98",
+   "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "created_at": 201,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f91"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f99",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 202,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f91"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9a",
+   "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "created_at": 203,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9b",
+   "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "created_at": 204,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9c",
+   "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+   "created_at": 205,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "undone"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9d",
+   "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "created_at": 206,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f93"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9e",
+   "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "created_at": 300,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f91"
+    ],
+    [
+     "action",
+     "edit"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "about",
+     "Kind words, good faith."
+    ],
+    [
+     "order",
+     "5"
+    ]
+   ],
+   "content": "We look after each other"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f9f",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 310,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "edit"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "about",
+     "In the hall and the garden."
+    ],
+    [
+     "order",
+     "2"
+    ]
+   ],
+   "content": "Quiet hours after 22:00"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa0",
+   "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "created_at": 320,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa1",
+   "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "created_at": 330,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f93"
+    ],
+    [
+     "action",
+     "edit"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ],
+    [
+     "order",
+     "99"
+    ]
+   ],
+   "content": "Hijacked"
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa2",
+   "pubkey": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+   "created_at": 331,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f93"
+    ],
+    [
+     "action",
+     "delete"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa3",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 340,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f96"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa4",
+   "pubkey": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+   "created_at": 341,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f96"
+    ],
+    [
+     "action",
+     "delete"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015fa5",
+   "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "created_at": 211,
+   "kind": 2101,
+   "tags": [
+    [
+     "e",
+     "0000000000000000000000000000000000000000000000000000000000015f92"
+    ],
+    [
+     "action",
+     "done"
+    ],
+    [
+     "t",
+     "d93ecde52eff27c7"
+    ],
+    [
+     "h",
+     "charter"
+    ],
+    [
+     "each",
+     "1"
+    ]
+   ],
+   "content": ""
+  }
+ ],
+ "expected": [
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f93",
+   "title": "Shared things come back",
+   "about": "",
+   "order": 0,
+   "textAt": 120,
+   "agreed": {
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 206
+   },
+   "stale": []
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f92",
+   "title": "Quiet hours after 22:00",
+   "about": "In the hall and the garden.",
+   "order": 2,
+   "textAt": 310,
+   "agreed": {
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 320
+   },
+   "stale": [
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   ]
+  },
+  {
+   "id": "0000000000000000000000000000000000000000000000000000000000015f91",
+   "title": "We look after each other",
+   "about": "Kind words, good faith.",
+   "order": 5,
+   "textAt": 100,
+   "agreed": {
+    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": 200,
+    "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc": 201,
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": 202
+   },
+   "stale": []
+  }
+ ],
+ "me": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+ "me_to_agree": [],
+ "me_agreed_at": 320
+}

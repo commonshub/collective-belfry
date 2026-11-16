@@ -35,6 +35,7 @@ from . import (
     blossom,
     branding,
     bridge,
+    charter,
     checkin,
     claim,
     community,
@@ -256,6 +257,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     whois.register(app)  # /api/whois: member, agent or guest, per key (whois.py)
     passkeys.register(app)  # /api/passkeys: members' passkeys (passkeys.py)
     membership.register(app)  # /api/membership, /api/applications (membership.py)
+    charter.register(app)  # /api/charter: the belfry's agreements, for guests (charter.py)
     vouches.register(app)  # /api/group-requests/check: groups accept by vouches (vouches.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website

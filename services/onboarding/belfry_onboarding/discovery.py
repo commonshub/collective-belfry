@@ -330,6 +330,16 @@ def register(app: FastAPI) -> None:
                 doc["branding"] = brand
         except Exception as exc:  # noqa: BLE001
             log.warning("belfry.json: branding unknown: %s", exc)
+        # the charter (charter.py): whether it has agreements, so a phone that can't read the
+        # group knows whether joining has that step; left out while the relay can't say
+        try:
+            from . import charter
+
+            has = await run_in_threadpool(charter.known, services)
+            if has is not None:
+                doc["charter"] = has
+        except Exception as exc:  # noqa: BLE001
+            log.warning("belfry.json: charter unknown: %s", exc)
         # members' own agents (agents.py): agent key → its member's key
         owners = getattr(services.odoo, "agent_owners", None)
         if owners is not None:
