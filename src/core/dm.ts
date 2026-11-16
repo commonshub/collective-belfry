@@ -98,27 +98,36 @@ const channelSends = new Set<string>() // email-ids sent as a shared inbox, stil
 
 /** Answer an e-mail card as the shared inbox CHANNEL (only its admins can: the bridge checks).
  *  Resolves with the email-id; `report(id)` then follows its delivery. */
-export async function sendAsChannel(m: { channel: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; cardId: string }): Promise<string> {
+export async function sendAsChannel(m: { channel: string; /** the channel's address before the @: its plain alias when it has one (model.mailLocal), else its id */ local: string; channelName: string; to: string; subject: string; text: string; inReplyTo?: string; /** the thread's Message-IDs before In-Reply-To, oldest first */ references?: string; cardId: string }): Promise<string> {
   const b = await bridge()
   if (!b) throw new Error('This belfry does not send e-mail yet.')
-  const from = `${m.channel}@${BELFRY.domain}`
-  const { raw } = buildMail({ fromName: realName(me()) ? `${realName(me())} for ${m.channelName}` : m.channelName, from, to: m.to, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo, domain: BELFRY.domain })
+  // envelope (mail-from) and From header alike: the bridge checks they match (mail.outgoing)
+  const from = `${m.local || m.channel}@${BELFRY.domain}`
+  const { raw, messageId } = buildMail({ fromName: channelSignature(m.channelName), from, to: m.to, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo, references: m.references, domain: BELFRY.domain })
   const emailId = crypto.randomUUID()
   const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', from], ['rcpt-to', m.to], ['subject', m.subject], ['e', m.cardId]], raw)
   reports.set(emailId, { status: 'queued', details: 'Sending…' })
   channelSends.add(emailId)
   touch()
-  if (isLocalOnly()) { demoSent(m, emailId); return emailId }
+  lastRaw = raw
+  if (isLocalOnly()) { demoSent({ ...m, messageId }, emailId); return emailId }
   await deliver(rumor, [b], false)
   for (const wait of [2000, 5000, 10000, 30000]) setTimeout(() => void checkReports(), wait)
   return emailId
 }
 
-function demoSent(m: { channel: string; to: string; subject: string; text: string; cardId: string }, emailId: string) {
+/** How an answer from a shared inbox is signed: "<my name> for <channel>". */
+export const channelSignature = (channelName: string) => (realName(me()) ? `${realName(me())} for ${channelName}` : channelName)
+
+/** Demo mode and tests: the RFC 2822 text of the last answer sent as a channel. */
+let lastRaw = ''
+export const lastChannelMail = () => lastRaw
+
+function demoSent(m: { channel: string; to: string; subject: string; text: string; cardId: string; messageId: string }, emailId: string) {
   const sk = hexToBytes(DEMO_GROUPS)
   setTimeout(() => {
     addEvents([finalizeEvent({ kind: 9, created_at: Math.floor(Date.now() / 1000), content: m.text,
-      tags: [['h', m.channel], ['subject', m.subject], ['mail-to', m.to], ['sent-by', me()], ['e', m.cardId, '', 'reply'], ['client', 'belfry-mail-out']] }, sk)])
+      tags: [['h', m.channel], ['subject', m.subject], ['mail-to', m.to], ['sent-by', me()], ['message-id', m.messageId], ['e', m.cardId, '', 'reply'], ['client', 'belfry-mail-out']] }, sk)])
     reports.set(emailId, { status: 'delivered', details: '' })
     channelSends.delete(emailId)
     touch()
@@ -178,7 +187,7 @@ const subjectKey = (s?: string) => encodeURIComponent(baseSubject(s).toLowerCase
 export const mailAddress = (conv: Conv) => conv.slice(2).split('|')[0]
 export const mailThreadOf = (address: string, subject?: string): Conv => `m:${address.toLowerCase()}|${subjectKey(subject)}`
 export const isNewMail = (conv: Conv) => conv.startsWith('m:') && !conv.includes('|')
-const msgIds = (v?: string) => (v ?? '').match(/<[^<>\s]+>/g) ?? []
+export const msgIds = (v?: string) => (v ?? '').match(/<[^<>\s]+>/g) ?? []
 
 /** The thread an e-mail belongs to: the one its In-Reply-To/References point at, else its subject's. */
 function mailConv(address: string, subject: string | undefined, refs: string[]): Conv {
