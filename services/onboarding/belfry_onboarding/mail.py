@@ -551,11 +551,85 @@ def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender:
 
 
 # ── in: a channel's mail ────────────────────────────────────────────────────────────────────
+_MSGID = re.compile(r"<[^<>\s]{1,250}>")
+
+
+def message_refs(msg: EmailMessage) -> list[str]:
+    """The Message-IDs a mail answers: In-Reply-To, then References (newest last), at most 10."""
+    found: list[str] = []
+    for h in ("References", "In-Reply-To"):
+        for mid in _MSGID.findall(str(msg[h] or "")):
+            if mid not in found:
+                found.append(mid)
+    return found[-10:]
+
+
+def _mail_tags(msg: EmailMessage) -> list[list[str]]:
+    """message-id, in-reply-to and references: what lets a later reply find its thread."""
+    out = [["message-id", str(msg["Message-ID"] or "").strip()[:300]]]
+    if msg["In-Reply-To"]:
+        out.append(["in-reply-to", str(msg["In-Reply-To"]).strip()[:300]])
+    refs = message_refs(msg)
+    if refs:
+        out.append(["references", " ".join(refs)[:1000]])
+    return out
+
+
+def thread_of(svc: Services, channel: str, refs: list[str]) -> dict[str, Any] | None:
+    """The message in CHANNEL a reply belongs under: the newest one whose ``message-id`` is in
+    REFS (an e-mail card, what went out, a member's mail), or, when that is itself a thread
+    reply, the message its thread hangs off. None: not an answer to anything here."""
+    if not refs:
+        return None
+    got = followers._relay(svc)
+    if got is None:
+        return None
+    relay, sign = got
+    try:
+        found = relay.query([{"kinds": [9, 1111], "#h": [channel], "limit": 1000}], sign) or []
+    except Exception as exc:  # noqa: BLE001 — not threaded is better than not delivered
+        log.info("mail: thread lookup in %s failed: %r", channel, exc)
+        return None
+    wanted = set(refs)
+    hits = [e for e in found if tag(e, "message-id") in wanted]
+    if not hits:
+        return None
+    hit = max(hits, key=lambda e: refs.index(tag(e, "message-id")))  # the newest it names
+    if hit.get("kind") == 1111:
+        root_id = tag(hit, "E")
+        root = next((e for e in found if e.get("id") == root_id), None)
+        return root
+    return hit
+
+
+def thread_tags(root: dict[str, Any]) -> list[list[str]]:
+    """A NIP-22 reply's tags under ROOT (the chat's postThreadReply)."""
+    rid, pk, kind = root["id"], root.get("pubkey", ""), str(root.get("kind", 9))
+    return [
+        ["E", rid, "", pk],
+        ["K", kind],
+        ["P", pk],
+        ["e", rid, "", pk],
+        ["k", kind],
+        ["p", pk],
+    ]
+
+
 def to_channel(
     svc: Services, channel: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict
 ) -> None:
     member = apps.member_by_email(svc, sender)
     if not (member and auth.get("aligned")) and inbox_on(svc, channel):
+        # a member whose provider did not prove the address is treated as anyone else (it could
+        # be forged); say which of the two it was, never the address (Xavier's card, 2026-11-16)
+        log.info(
+            "mail: to the inbox of %s (sender is a member: %s, aligned: %s, dkim: %s, spf: %s)",
+            channel,
+            bool(member),
+            bool(auth.get("aligned")),
+            auth.get("dkim") or "none",
+            auth.get("spf") or "none",
+        )
         return to_inbox(svc, channel, raw, msg, sender, auth)
     if member is None:
         raise MailError(550, f"5.7.1 Only members of {domain(svc)} can post to channels by e-mail.")
@@ -574,9 +648,23 @@ def to_channel(
     if community.member_signer(svc, member["partner"]) is None:
         text = f"✉️ From {member['name']}\n\n{text}"  # their own key: posted by the belfry
     # the whole e-mail, encrypted on Blossom; the key travels in the (members-only) message
-    extra = [["subject", subject[:300]], *_original(svc, raw)]
+    extra = [["subject", subject[:300]], *_original(svc, raw), *_mail_tags(msg)]
+    # an answer to something in the channel (an e-mail card, what went out, a member's mail):
+    # a reply in that message's thread, not a new message in the channel
+    root = thread_of(svc, channel, message_refs(msg))
     try:
-        drops.post(svc, channel, text, imeta + extra, member["partner"], client="belfry-mail")
+        if root is not None:
+            drops.post(
+                svc,
+                channel,
+                text,
+                imeta + thread_tags(root) + extra,
+                member["partner"],
+                client="belfry-mail",
+                kind=1111,
+            )
+        else:
+            drops.post(svc, channel, text, imeta + extra, member["partner"], client="belfry-mail")
     except Exception as exc:  # noqa: BLE001 — the relay refuses non-members of closed channels
         log.info("mail: post to %s refused: %s", channel, exc)
         raise MailError(550, f"5.7.1 You cannot post in {channel}.") from exc
@@ -633,11 +721,9 @@ def to_inbox(
         *_original(svc, raw),
         ["mail-from", sender],
         ["mail-name", name[:100]],
-        ["message-id", str(msg["Message-ID"] or "").strip()[:300]],
+        *_mail_tags(msg),
         ["belfry-auth", "pass" if auth.get("aligned") else "none"],
     ]
-    if msg["In-Reply-To"]:
-        extra.append(["in-reply-to", str(msg["In-Reply-To"]).strip()[:300]])
     drops.post(svc, channel, text or "(empty)", imeta + extra, None, client="belfry-mail")
 
 

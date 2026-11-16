@@ -349,6 +349,101 @@ def test_an_admin_answers_as_the_inbox_and_the_answer_shows_in_the_channel(m, in
     assert found["e"][0] == card
 
 
+def test_an_inbox_answers_as_its_plain_address(m, inbox, monkeypatch):
+    """hello@ for hello-79f0 (Xavier, 2026-11-16: the reply came from hello-79f0@): the plain
+    address is accepted as the channel's, From header and envelope both, and the copy of what
+    went out lands in the channel itself."""
+    sent = []
+    monkeypatch.setattr(
+        mail, "smtp_send", lambda svc, frm, rcpts, data: sent.append((frm, data)) or (250, "OK")
+    )
+    monkeypatch.setattr(mail, "channel_exists", lambda svc, ch: ch == "hello-79f0")
+    monkeypatch.setattr(mail, "_top_channels", lambda svc: [("hello-79f0", "Hello")])
+    monkeypatch.setattr(mail, "_makers", lambda svc: {})
+    monkeypatch.setattr(mail, "inbox_on", lambda svc, ch: ch == "hello-79f0")
+    monkeypatch.setattr(mail, "group_admins", lambda svc, ch: {ANA_PUB})
+    mail.handle_wrap(
+        m,
+        outgoing_wrap(
+            "hello@belfry.test", "Ana for Hello <hello@belfry.test>", "h1", [["e", "c" * 64]]
+        ),
+    )
+    [(frm, data)] = sent
+    assert frm == "hello@belfry.test" and b"From: Ana for Hello <hello@belfry.test>" in data
+    assert dsn_of(m, "h1")["status"] == "delivered"
+    [out] = inbox
+    assert out["channel"] == "hello-79f0" and out["client"] == "belfry-mail-out"
+    # and mail to either address reaches the channel
+    assert mail.resolve(m, "hello@belfry.test") == {"kind": "channel", "channel": "hello-79f0"}
+    assert mail.resolve(m, "hello-79f0@belfry.test")["channel"] == "hello-79f0"
+
+
+REFS_OUT2 = "In-Reply-To: <out2@belfry.test>\r\nReferences: <m0@example.org> <out2@belfry.test>\r\n"
+
+
+def test_a_follow_up_card_names_what_it_answers(m, inbox):
+    raw = message(
+        frm="Marie <marie@example.org>",
+        subject="Re: Renting the hall",
+        to="garden@belfry.test",
+        extra=REFS_OUT2,
+    )
+    assert mail.deliver(m, raw, "203.0.113.5", "h", "", ["garden@belfry.test"])[0] == 250
+    found = {t[0]: t[1:] for t in inbox[0]["tags"]}
+    assert found["in-reply-to"] == ["<out2@belfry.test>"]
+    assert found["references"] == ["<m0@example.org> <out2@belfry.test>"]
+
+
+def test_a_member_answering_by_e_mail_lands_in_the_thread(m, monkeypatch):
+    """A member's mail that answers something in the channel (In-Reply-To / References naming
+    its message-id) is a reply in that message's thread (kind 1111), not a new message."""
+    posted = []
+    monkeypatch.setattr(
+        drops,
+        "post",
+        lambda svc, ch, text, imeta, partner, client="", kind=9: posted.append(
+            {"text": text, "tags": imeta, "kind": kind}
+        ),
+    )
+    monkeypatch.setattr(drops, "upload", lambda svc, files: [["imeta", "url https://b.test/x"]])
+    monkeypatch.setattr(community, "member_signer", lambda svc, p: ("b" * 64, None))
+    monkeypatch.setattr(
+        apps, "member_by_email", lambda svc, e: {"partner": 7, "name": "Ana", "email": e}
+    )
+    monkeypatch.setattr(mail, "authenticate", lambda *a: {"aligned": True, "dkim": "x.org"})
+    monkeypatch.setattr(mail, "inbox_on", lambda svc, ch: True)
+    card = {
+        "id": "c" * 64,
+        "pubkey": "f" * 64,
+        "kind": 9,
+        "tags": [["h", "garden"], ["message-id", "<m0@example.org>"]],
+    }
+    reply = {
+        "id": "d" * 64,
+        "pubkey": "a" * 64,
+        "kind": 1111,
+        "tags": [["h", "garden"], ["E", "c" * 64], ["message-id", "<r1@x.org>"]],
+    }
+
+    class Relay:
+        def query(self, filters, sign):
+            return [card, reply]
+
+    monkeypatch.setattr(mail.followers, "_relay", lambda svc: (Relay(), None))
+    args = ("203.0.113.5", "h", "", ["garden@belfry.test"])
+    raw = message(frm="Ana <ana@x.org>", subject="Re: Hall", extra="In-Reply-To: <r1@x.org>\r\n")
+    assert mail.deliver(m, raw, *args)[0] == 250
+    [p] = posted
+    found = {t[0]: t[1:] for t in p["tags"]}
+    assert p["kind"] == 1111 and found["E"][0] == "c" * 64 and found["K"] == ["9"]
+    assert found["message-id"] == ["<m1@example.org>"] and found["in-reply-to"] == ["<r1@x.org>"]
+    # not an answer to anything here: an ordinary message, still carrying its message-id
+    posted.clear()
+    assert mail.deliver(m, message(frm="Ana <ana@x.org>", subject="New"), *args)[0] == 250
+    [p] = posted
+    assert p["kind"] == 9 and ["message-id", "<m1@example.org>"] in p["tags"]
+
+
 def test_only_the_inbox_admins_answer_as_it(m, inbox, monkeypatch):
     monkeypatch.setattr(mail, "group_admins", lambda svc, ch: set())
     monkeypatch.setattr(mail, "smtp_send", lambda *a: pytest.fail("must not send"))
