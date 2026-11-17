@@ -370,17 +370,22 @@ def test_an_account_for_the_author_from_the_web(world, monkeypatch):
 def test_default_channels(world, monkeypatch):
     """Xavier, 2026-11-11: the channel says who sees it. 🌐 #events is public (the events page at
     <domain>/events), #proposals is for members; each takes its own type of post. The relay's own
-    key sets them up. Since 2026-11-14 no #bookings and no #requests on new belfries."""
+    key sets them up. Since 2026-11-14 no #bookings and no #requests on new belfries; since
+    2026-11-17 (Xavier: "by default don't add fairground, scriptorium, assembly") #general alone:
+    no #events, #proposals or #website. A belfry that has them keeps them."""
     svc, relay = world
     monkeypatch.setattr(followers, "_relay", lambda svc: (relay, lambda t: relay.sign(t)))
     relay.events = [e for e in relay.events if e["kind"] != 39000]
     made = followers.ensure_channels(svc)["made"]
-    assert made == ["general", "events", "proposals"]
+    assert made == ["general"]
     assert not [
         e
         for e in relay.events
         if e["kind"] in (9002, 9007, 30078)
-        and any(t[:2] in (["h", "bookings"], ["h", "requests"]) for t in e["tags"])
+        and any(
+            t[:2] in (["h", c] for c in ("bookings", "requests", "events", "proposals", "website"))
+            for t in e["tags"]
+        )
     ]
     for cid in made:  # the relay publishes 39000 for them, signed by its key
         relay.events.append(

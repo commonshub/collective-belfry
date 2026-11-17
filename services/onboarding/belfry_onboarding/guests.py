@@ -257,8 +257,7 @@ def register(app: FastAPI) -> None:
     @app.post(API)
     async def channel_invite(request: Request) -> JSONResponse:
         """A guest link for a channel: ``{"channel"}`` → ``{"url", "days", "expires_at"}``."""
-        from . import checkin, followers, invite, mail
-        from .holder_invites import ApiError, authenticate, holder
+        from .holder_invites import authenticate, holder
 
         s = request.app.state.services
         body = await request.body()
@@ -270,96 +269,102 @@ def register(app: FastAPI) -> None:
             data = json.loads(body or b"{}")
         except ValueError:
             data = None
-        channel = str((data or {}).get("channel") or "") if isinstance(data, dict) else ""
-        if not followers.CHANNEL.match(channel):
-            raise ApiError(422, "invalid", "channel: a group id")
-        if not invite.own(s):
-            raise ApiError(409, "unsupported", "Guests need the belfry's own register.")
-        rows = await run_in_threadpool(
-            s.odoo.search_read,
-            "belfry.pass",
-            [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
-            ["tier"],
-        )
-        _inviter(rows)
-        if not await run_in_threadpool(mail.channel_exists, s, channel):
-            raise ApiError(404, "no_channel", "No such channel.")
-        if not await run_in_threadpool(may_invite, s, pubkey, channel, bool(who.get("steward"))):
-            raise ApiError(403, "not_allowed", "You can't invite guests here.")
-        # an archived group takes nobody new (docs/archive.md)
-        await run_in_threadpool(checkin.refuse_archived, s, channel)
-        # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>);
-        # on a member link ("as": "member") "role" is the member's role instead (roles.py)
-        as_member = isinstance(data, dict) and data.get("as") == "member"
-        role = str(data.get("role") or "") if isinstance(data, dict) and not as_member else ""
-        if role not in ("", "host"):
-            raise ApiError(422, "invalid", 'role: "host" or nothing')
-        if role == "host":
-            from . import apps
-
-            if not channel.startswith("ev-"):
-                raise ApiError(422, "invalid", "A co-host link is for an event's group.")
-            admins = await run_in_threadpool(mail.group_admins, s, channel)
-            if (
-                pubkey not in admins
-                and not who.get("steward")
-                and pubkey not in apps.admin_pubkeys(s)
-            ):
-                raise ApiError(403, "not_host", "Only the event's hosts add co-hosts.")
-        people, link_days = (
-            _option(data, "people", 1, (1, 50)),
-            _option(data, "link_days", 1, (1, 7, 30)),
-        )
-        # how long a guest stays: a day, a week or a month (the chat sends it); a request
-        # without it (older clients, the phone apps) keeps the 30 days it always had
-        days = _option(data, "guest_days", DAYS, GUEST_DAYS)
-        # "agent": the link is for one agent, which becomes the member's own (agents.py)
-        own_agent = isinstance(data, dict) and data.get("agent") is True
-        # "as": "member": the link makes its user a member of the belfry (roles.py), with a role
-        # and a length of membership; only the belfry's admins make such links
-        member = await run_in_threadpool(_member_link, s, pubkey, who, data, own_agent, role)
-        if member:
-            days = link_days  # reading until they join: as long as the link can be opened
-            if member["role"] == roles.ADMIN:
-                people = 1  # an admin link is for one person
-        # an admin may have as many agents as they wish
-        unlimited = own_agent and pubkey in await run_in_threadpool(apps_admins, s)
-        try:
-            row = await run_in_threadpool(
-                s.odoo.create_guest_invite,
-                who["partner_id"],
-                pubkey,
-                channel,
-                days,
-                1 if own_agent else people,
-                link_days,
-                own_agent,
-                role,
-                member["role"] if member else "",
-                member["membership"] if member else "",
-                unlimited,
-            )
-        except OdooError as exc:
-            raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
-        token = str(row["url"]).rsplit("/", 1)[-1]
-        out = {
-            "url": join_url(s, token),
-            # what an agent reads: how to join with its own key
-            "agent_url": row["url"] + ".md",
-            "days": 0 if own_agent or member else days,
-            "own_agent": own_agent,
-            "people": 1 if own_agent else people,
-            "link_days": link_days,
-            "role": role or None,
-            "expires_at": row.get("expires_at") or None,
-            "as": "member" if member else "guest",
-        }
-        if member:
-            out.update(member_role=member["role"], membership=member["membership"])
+        out = await run_in_threadpool(make_channel_invite, s, pubkey, who, data)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
 
+def make_channel_invite(s: Services, pubkey: str, who: dict[str, Any], data: Any) -> dict[str, Any]:
+    """A channel's invite link for the holder of PUBKEY (``who`` = holder_invites.holder): what
+    POST /api/channel-invites answers. The console's members page makes its links here too."""
+    from . import checkin, followers, invite, mail
+    from .holder_invites import ApiError
+
+    channel = str((data or {}).get("channel") or "") if isinstance(data, dict) else ""
+    if not followers.CHANNEL.match(channel):
+        raise ApiError(422, "invalid", "channel: a group id")
+    if not invite.own(s):
+        raise ApiError(409, "unsupported", "Guests need the belfry's own register.")
+    rows = s.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        ["tier"],
+    )
+    _inviter(rows)
+    if not mail.channel_exists(s, channel):
+        raise ApiError(404, "no_channel", "No such channel.")
+    if not may_invite(s, pubkey, channel, bool(who.get("steward"))):
+        raise ApiError(403, "not_allowed", "You can't invite guests here.")
+    # an archived group takes nobody new (docs/archive.md)
+    checkin.refuse_archived(s, channel)
+    # "role": "host": the link makes its user a co-host of an event (an admin of ev-<d>);
+    # on a member link ("as": "member") "role" is the member's role instead (roles.py)
+    as_member = isinstance(data, dict) and data.get("as") == "member"
+    role = str(data.get("role") or "") if isinstance(data, dict) and not as_member else ""
+    if role not in ("", "host"):
+        raise ApiError(422, "invalid", 'role: "host" or nothing')
+    if role == "host":
+        from . import apps
+
+        if not channel.startswith("ev-"):
+            raise ApiError(422, "invalid", "A co-host link is for an event's group.")
+        admins = mail.group_admins(s, channel)
+        if pubkey not in admins and not who.get("steward") and pubkey not in apps.admin_pubkeys(s):
+            raise ApiError(403, "not_host", "Only the event's hosts add co-hosts.")
+    people, link_days = (
+        _option(data, "people", 1, (1, 50)),
+        _option(data, "link_days", 1, (1, 7, 30)),
+    )
+    # how long a guest stays: a day, a week or a month (the chat sends it); a request
+    # without it (older clients, the phone apps) keeps the 30 days it always had
+    days = _option(data, "guest_days", DAYS, GUEST_DAYS)
+    # "agent": the link is for one agent, which becomes the member's own (agents.py)
+    own_agent = isinstance(data, dict) and data.get("agent") is True
+    # "as": "member": the link makes its user a member of the belfry (roles.py), with a role
+    # and a length of membership; only the belfry's admins make such links
+    member = _member_link(s, pubkey, who, data, own_agent, role)
+    if member:
+        days = link_days  # reading until they join: as long as the link can be opened
+        if member["role"] == roles.ADMIN:
+            people = 1  # an admin link is for one person
+    # an admin may have as many agents as they wish
+    unlimited = own_agent and pubkey in apps_admins(s)
+    try:
+        row = s.odoo.create_guest_invite(
+            who["partner_id"],
+            pubkey,
+            channel,
+            days,
+            1 if own_agent else people,
+            link_days,
+            own_agent,
+            role,
+            member["role"] if member else "",
+            member["membership"] if member else "",
+            unlimited,
+        )
+    except OdooError as exc:
+        raise ApiError(409, "refused", str(exc.message or "Refused.")) from exc
+    token = str(row["url"]).rsplit("/", 1)[-1]
+    out = {
+        "url": join_url(s, token),
+        # what an agent reads: how to join with its own key
+        "agent_url": row["url"] + ".md",
+        "days": 0 if own_agent or member else days,
+        "own_agent": own_agent,
+        "people": 1 if own_agent else people,
+        "link_days": link_days,
+        "role": role or None,
+        "expires_at": row.get("expires_at") or None,
+        "as": "member" if member else "guest",
+    }
+    if member:
+        out.update(member_role=member["role"], membership=member["membership"])
+    return out
+
+
 # ── agents as guests: their own key, no e-mail ──────────────────────────────────────────────
+
+
 def accept_path(token: str) -> str:
     return f"/api/guest-invites/{token}/accept"
 

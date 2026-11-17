@@ -35,6 +35,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass, field
@@ -434,6 +435,47 @@ def set_meta(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
     }
 
 
+# ── deleting an empty channel (Xavier, 2026-11-17: Settings → Channels deletes a channel nobody
+# wrote in, archives one with messages) ─────────────────────────────────────────────────────────
+DELETE_PATH = "/api/group-delete"
+# what people post in a group: an empty group has none of these (its own metadata, roles, web
+# setting, labels and reactions don't count)
+CONTENT_KINDS = [9, 10, 11, 12, 20, 1063, 1068, 1111, 9802, 30023, 31922, 31923]
+
+
+def is_empty(svc: Services, group: str) -> bool:
+    """Whether nobody posted in GROUP. A relay that does not answer raises: nothing is deleted on
+    a guess (and without a relay the 9008 can't be published either)."""
+    found = events.groups(svc, [{"kinds": CONTENT_KINDS, "#h": [group], "limit": 1}])
+    return not any(events.tag(e, "h") == group for e in found)
+
+
+def delete_group(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
+    """``{"channel"}``: a 9008 by the groups key, for the group's admins and the belfry's. Only an
+    empty channel (409 ``not_empty``: archive it instead); never #general (409 ``always_open``),
+    nor events and proposals."""
+    from .holder_invites import ApiError
+
+    group = str(data.get("channel") or "").strip()
+    if not GROUP_RE.match(group):
+        raise ApiError(422, "invalid", 'Send {"channel"}.')
+    if group == ALWAYS_OPEN:
+        raise ApiError(409, "always_open", "This channel can't be deleted.")
+    if not archivable(group):
+        raise ApiError(422, "invalid", "Events and proposals can't be deleted here.")
+    st = group_state(svc, group)
+    if caller not in st.admins and caller not in _belfry_admins(svc):
+        raise ApiError(403, "not_allowed", "Only the group's admins delete it.")
+    if current_meta(svc, group) is None:
+        raise ApiError(404, "not_found", "No such group.")
+    if not is_empty(svc, group):
+        raise ApiError(409, "not_empty", "People wrote in this channel: archive it instead.")
+    if not events.publish(svc, 9008, [["h", group]]):
+        raise ApiError(503, "relay", "The group could not be reached. Try again.")
+    logging.getLogger(__name__).info("group-delete: %s deleted by %s", group, caller[:12])
+    return {"channel": group, "deleted": True}
+
+
 # ── tickets ─────────────────────────────────────────────────────────────────────────────────
 def ticket_code(svc: Services, d: str, pubkey: str) -> str:
     secret = (svc.settings.pass_page_secret or svc.settings.hook_token or "").encode()
@@ -598,6 +640,12 @@ def register(app: FastAPI) -> None:
     async def group_meta(request: Request) -> JSONResponse:
         s, caller, data = await signed(request, META_PATH)
         out = await run_in_threadpool(set_meta, s, caller, data)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.post(DELETE_PATH)
+    async def group_delete(request: Request) -> JSONResponse:
+        s, caller, data = await signed(request, DELETE_PATH)
+        out = await run_in_threadpool(delete_group, s, caller, data)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     @app.post(events.API + "/{d}/attendees")

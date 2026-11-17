@@ -1,7 +1,7 @@
 """The website as a conversation: the #website channel, previews, and publishing from the chat.
 
-- ``ensure_channel``: the belfry creates ``#website`` (like ``#general``), described with a link
-  to the site and how to propose a version. Anyone chats there; anyone (or their agent, invited
+- ``ensure_channel``: the belfry creates ``#website`` the first time it posts there (``changelog``),
+  described with a link to the site and how to propose a version. Anyone chats there; anyone (or their agent, invited
   as a guest) publishes a version as an nsite (NIP-5A) with their own key and shares its preview.
 - Previews: ``https://preview.<domain>/p/<npub>[@<name>]`` remembers that site for the browser
   (a cookie) and serves it at the root of ``preview.<domain>``, so the site's own absolute links
@@ -119,9 +119,14 @@ def ensure_channel(svc: Services) -> dict[str, Any]:
 
 
 def changelog(svc: Services, text: str) -> None:
-    """A line in #website, posted by the groups key; best effort."""
+    """A line in #website, posted by the groups key; best effort. #website is made then, the first
+    time there is something to say (no longer on every round: Xavier, 2026-11-17)."""
     from . import followers
 
+    try:
+        ensure_channel(svc)
+    except Exception as exc:  # noqa: BLE001 — the line is still worth trying
+        log.warning("website: #%s not made: %s", CHANNEL, exc)
     got = followers._relay(svc)
     if got is None:
         return

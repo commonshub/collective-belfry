@@ -150,7 +150,9 @@ def test_every_console_page_has_the_side_menu(web, belfry, odoo, authentik, path
     assert f'<a href="{current}" aria-current="page">' in side
     for section in ("Community", "People", "Belfry"):
         assert f'<p class="sec">{section}</p>' in side
-    assert "Alice" in side and "Admin · alice@example.org" in side and 'href="/logout"' in side
+    assert "Alice" in side and "Admin · alice@example.org" in side
+    # Xavier, 2026-11-17: no Log out at the bottom left; my name opens my profile, which has it
+    assert 'href="/profile"' in side and 'href="/logout"' not in side
     # the phone bar: ☰ opens the same menu
     assert 'class="icon-btn menu-btn"' in page and 'for="nav-open"' in page
     assert 'class="manage"' not in page  # the old tab row is gone
@@ -253,10 +255,90 @@ def test_members_list_is_for_members_and_emails_for_admins(web, belfry, odoo, au
     assert "2 members" in r.text and "Bob" not in r.text
     sign_in(web, belfry, alice)
     r = web.get("/members", headers=CONSOLE)
-    assert "Bob" in r.text and "bob@example.org" not in r.text and "Add a member" not in r.text
+    assert "Bob" in r.text and "bob@example.org" not in r.text and "Add people" not in r.text
     make_admin(authentik, "alice@example.org")
     r = web.get("/members", headers=CONSOLE)
-    assert "bob@example.org" in r.text and "Add a member" in r.text
+    assert "bob@example.org" in r.text
+    # Xavier, 2026-11-17: Add people is a + at the right of the list, opening a modal with the
+    # invite link and the e-mail form
+    assert 'id="add-open" aria-label="Add people"' in r.text and '<dialog class="add-dlg"' in r.text
+    assert 'action="/members/link"' in r.text and 'action="/members/add"' in r.text
+    assert r.text.index('id="add-open"') > r.text.index("<h2>Everyone</h2>")
+
+
+def test_profile_page_edits_my_name_lists_devices_and_logs_out(
+    web, belfry, odoo, authentik, monkeypatch
+):
+    alice = member(odoo, "Alice")
+    assert web.get("/profile", headers=CONSOLE, follow_redirects=False).status_code == 303
+    csrf = sign_in(web, belfry, alice)
+    sessions = [
+        {
+            "application_name": "Chat · Safari on iPhone",
+            "redirect_origin": "https://chat.example.org",
+            "bunker_pubkey": "b" * 64,
+            "last_activity": "2026-11-16T10:00:00Z",
+        }
+    ]
+    revoked = []
+    monkeypatch.setattr(console.community, "member_token", lambda svc, pid: ("a" * 64, "tok"))
+    monkeypatch.setattr(belfry.keycast, "list_sessions", lambda tok: sessions, raising=False)
+    monkeypatch.setattr(
+        belfry.keycast, "revoke_session", lambda tok, b: revoked.append(b), raising=False
+    )
+    page = web.get("/profile", headers=CONSOLE).text
+    assert 'value="Alice"' in page and "Devices · 1" in page and "Chat · Safari on iPhone" in page
+    assert '<details class="menu">' in page  # the devices behind a menu
+    assert page.index('class="logout" href="/logout"') > page.index("Devices · 1")  # last
+    assert 'aria-current="page"' in menu_of(page).split('href="/profile"', 1)[1][:40]
+    r = web.post(
+        "/profile", headers=CONSOLE, data={"csrf": csrf, "name": "Alice B."}, follow_redirects=False
+    )
+    assert r.status_code == 303 and flash_of(r) == "Saved."
+    assert odoo.tables["res.partner"][alice]["name"] == "Alice B."
+    r = web.post(
+        "/profile/devices/revoke",
+        headers=CONSOLE,
+        data={"csrf": csrf, "bunker": "b" * 64},
+        follow_redirects=False,
+    )
+    assert r.status_code == 303 and revoked == ["b" * 64]
+    r = web.post(
+        "/profile", headers=CONSOLE, data={"csrf": "wrong", "name": "X"}, follow_redirects=False
+    )
+    assert odoo.tables["res.partner"][alice]["name"] == "Alice B."
+
+
+def test_invite_link_from_the_members_page(web, belfry, odoo, authentik, monkeypatch):
+    from belfry_onboarding import guests
+
+    alice = member(odoo, "Alice")
+    csrf = sign_in(web, belfry, alice)
+    r = web.post("/members/link", headers=CONSOLE, data={"csrf": csrf, "as": "member"})
+    assert r.status_code == 403  # admins only
+    make_admin(authentik, "alice@example.org")
+    for p in odoo.tables["belfry.pass"].values():
+        p.setdefault("keycast_pubkey", "c" * 64)
+    asked = []
+
+    def fake(svc, pubkey, who, data):
+        asked.append(data)
+        return {"url": "https://chat.example.org/join/tok"}
+
+    monkeypatch.setattr(guests, "make_channel_invite", fake)
+    monkeypatch.setattr(
+        "belfry_onboarding.holder_invites.holder", lambda svc, pk: {"partner_id": alice}
+    )
+    for kind, days in (("admin", 7), ("member", 7), ("guest", 30)):
+        r = web.post(
+            "/members/link", headers=CONSOLE, data={"csrf": csrf, "as": kind, "days": str(days)}
+        )
+        assert r.json() == {"url": "https://chat.example.org/join/tok"}
+    assert asked[0]["as"] == "member" and asked[0]["role"] == "admin"
+    assert asked[1]["as"] == "member" and asked[1]["role"] == "member"
+    assert asked[2] == {"channel": "general", "people": 1, "link_days": 7, "guest_days": 30}
+    r = web.post("/members/link", headers=CONSOLE, data={"csrf": csrf, "as": "guest", "days": "3"})
+    assert r.status_code == 409 and "a day, a week or a month" in r.json()["message"]
 
 
 def test_admin_adds_edits_and_removes_members(web, belfry, odoo, authentik):

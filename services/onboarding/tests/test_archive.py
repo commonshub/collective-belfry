@@ -164,3 +164,43 @@ def test_no_guest_links_or_guests_for_an_archived_group(services, tmp_path, sett
         # another group is untouched
         time.sleep(1.1)
         assert post(c, key, guests.API, {"channel": "kitchen"}).status_code == 200
+
+
+def delete_post(c, key, data):
+    import json
+
+    from .test_checkin import HOST, nip98  # noqa: F401
+
+    body = json.dumps(data).encode()
+    time.sleep(1.05)
+    url = "https://belfry.belfry.test/api/v1/group-delete"
+    return c.post(
+        "/api/v1/group-delete",
+        content=body,
+        headers={**HOST, "Authorization": nip98(key, url, "POST", body)},
+    )
+
+
+def test_delete_an_empty_channel_archive_one_with_messages(rsvc, cw, keycast):
+    """Xavier, 2026-11-17: Settings → Channels deletes an empty channel, archives the others."""
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    cy = member(rsvc, "cy@belfry.test", "Cy")
+    garden(cw, ada, bea, cy)
+    with TestClient(create_app(rsvc)) as c:
+        assert checkin.is_empty(rsvc, POD) is True
+        r = delete_post(c, cy, {"channel": POD})
+        assert r.status_code == 403 and r.json()["error"] == "not_allowed"
+        assert delete_post(c, bea, {"channel": "general"}).json()["error"] == "always_open"
+        # somebody wrote: not empty, archive it instead
+        cw.put(cy, 9, [["h", POD]], "hello")
+        assert checkin.is_empty(rsvc, POD) is False
+        r = delete_post(c, bea, {"channel": POD})
+        assert r.status_code == 409 and r.json()["error"] == "not_empty"
+        assert not any(e["kind"] == 9008 for e in cw.grp.events)
+        # an empty one goes: a 9008 by the groups key
+        garden(cw, ada, bea, cy, "pod-empty")
+        r = delete_post(c, bea, {"channel": "pod-empty"})
+        assert r.status_code == 200 and r.json() == {"channel": "pod-empty", "deleted": True}
+        e = cw.grp.events[-1]
+        assert e["kind"] == 9008 and e["pubkey"] == pk(cw.gkey) and ["h", "pod-empty"] in e["tags"]

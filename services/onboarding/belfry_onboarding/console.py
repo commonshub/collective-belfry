@@ -365,6 +365,60 @@ def remove_member(svc: Services, partner: int) -> None:
         set_admin(svc, email, False)
 
 
+def my_devices(svc: Services, partner: int) -> list[dict[str, Any]] | None:
+    """The member's sessions in the signer (discovery.py's /api/me/sessions, read server side);
+    None when their key is their own (no sessions here), [] when unknown."""
+    found = community.member_token(svc, partner)
+    if found is None:
+        return None
+    try:
+        return list(svc.keycast.list_sessions(found[1]))
+    except Exception as exc:  # noqa: BLE001 — the page still opens
+        log.warning("console: sessions of partner %s unknown: %s", partner, exc)
+        return []
+
+
+def revoke_device(svc: Services, partner: int, bunker: str) -> None:
+    import re
+
+    if not re.fullmatch(r"[0-9a-f]{64}", bunker or ""):
+        raise ValueError("That device is not known.")
+    found = community.member_token(svc, partner)
+    if found is None:
+        raise ValueError("Your key is your own: sign devices out in your signer.")
+    svc.keycast.revoke_session(found[1], bunker)
+
+
+def invite_link(svc: Services, partner: int, kind: str, days: int) -> str:
+    """A link that brings one person into the belfry, made by PARTNER (an admin) as the chat's
+    invite sheet makes it (guests.make_channel_invite, #general): an admin or a member (the
+    default role, for good), or a guest of #general for a day, a week or a month. It can be
+    opened for a week."""
+    from . import guests, roles
+    from .holder_invites import holder
+
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["partner_id", "=", partner]],
+        ["keycast_pubkey"],
+        limit=1,
+    )
+    pubkey = (rows[0].get("keycast_pubkey") or "") if rows else ""
+    if not pubkey:
+        raise ValueError("Your pass has no key yet: sign in to the chat once, then try again.")
+    data: dict[str, Any] = {"channel": "general", "people": 1, "link_days": 7}
+    if kind == "guest":
+        if days not in guests.GUEST_DAYS:
+            raise ValueError("A guest comes for a day, a week or a month.")
+        data["guest_days"] = days
+    elif kind in ("admin", "member"):
+        role = roles.ADMIN if kind == "admin" else roles.default_role(svc)
+        data.update({"as": "member", "role": role, "membership": "permanent"})
+    else:
+        raise ValueError("Pick admin, member or guest.")
+    return str(guests.make_channel_invite(svc, pubkey, holder(svc, pubkey), data)["url"])
+
+
 # ── website ─────────────────────────────────────────────────────────────────────────────────
 def site_ref(e: dict[str, Any]) -> tuple[str, str, str] | None:
     """(kind, pubkey, d) of the nsite a website proposal names."""
@@ -556,6 +610,7 @@ ICONS = {
     "setup": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
+    "plus": '<path d="M12 5v14M5 12h14"/>',
     "signout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
 }
 
@@ -663,9 +718,8 @@ def side_menu(current: str, who: dict[str, Any]) -> str:
 <div class="side-top"><a class="side-brand" href="/">{logo_img()}<span>{E(name)}</span></a>
 <label for="nav-open" class="icon-btn close" aria-label="Close the menu" tabindex="0" role="button">{icon("close")}</label></div>
 <nav class="side-nav" aria-label="Manage">{groups}</nav>
-<div class="side-me"><span class="av" aria-hidden="true">{E(initial(who.get("name", "")))}</span>
-<span class="me-name"><b>{E(who.get("name", ""))}</b><small title="{E(who.get("email", ""))}">{role}{E(who.get("email", ""))}</small></span>
-<a href="/logout" class="icon-btn" title="Sign out" aria-label="Sign out">{icon("signout")}</a></div>
+<a class="side-me" href="/profile"{' aria-current="page"' if current == "/profile" else ""} aria-label="Your profile"><span class="av" aria-hidden="true">{E(initial(who.get("name", "")))}</span>
+<span class="me-name"><b>{E(who.get("name", ""))}</b><small title="{E(who.get("email", ""))}">{role}{E(who.get("email", ""))}</small></span></a>
 </aside>"""
 
 
@@ -693,7 +747,9 @@ box-shadow:inset 3px 0 0 var(--accent)}
 .side-nav .lbl{flex:1}
 .badge{font-size:.75rem;font-weight:600;color:#fff;background:var(--accent-2,#b91c1c);border-radius:99px;
 padding:1px 7px;line-height:1.4}
-.side-me{display:flex;align-items:center;gap:10px;padding:12px 6px 4px;margin-top:12px;border-top:1px solid var(--border)}
+.side-me{display:flex;align-items:center;gap:10px;padding:12px 6px 8px;margin-top:12px;border-top:1px solid var(--border);
+text-decoration:none;color:var(--fg);border-radius:0 0 8px 8px}
+.side-me:hover,.side-me[aria-current=page]{background:var(--surface-deep)}
 .side-me .me-name{flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.25}
 .side-me b{font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .side-me small{font-size:.8rem;color:var(--fg-faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -969,6 +1025,110 @@ All changes: <a href="/changelog">changelog</a>. Machine-readable: <a href="/sta
     )
 
 
+def _ago(value: Any) -> str:
+    """A signer timestamp (ISO text or seconds) as a date, or ""."""
+    import datetime as dt
+
+    try:
+        if isinstance(value, int | float):
+            t = dt.datetime.fromtimestamp(float(value), dt.UTC)
+        else:
+            t = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return t.strftime("%-d %b %Y")
+    except (TypeError, ValueError, OverflowError):
+        return ""
+
+
+def profile_html(
+    who: dict[str, Any], devices: list[dict[str, Any]] | None, msg: str, err: str
+) -> str:
+    """My profile (Xavier, 2026-11-17: the name at the bottom left opens it): my name to edit,
+    my devices behind a menu (the signer's sessions, as the chat's /api/me/sessions lists them,
+    each with Sign out) and, last, a red Log out."""
+    csrf = E(who["csrf"])
+    note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
+        f'<p class="bad">{E(err)}</p>' if err else ""
+    )
+    if devices is None:
+        listing = '<p class="meta">Your key is your own: your devices are in your own signer.</p>'
+        count = ""
+    elif not devices:
+        listing = '<p class="meta">No device is signed in.</p>'
+        count = " · 0"
+    else:
+        rows = ""
+        for d in devices:
+            seen = _ago(d.get("last_activity") or d.get("created_at"))
+            rows += f"""<li><span class="dv"><b>{E(d.get("application_name") or "An app")}</b>
+<small>{E(d.get("redirect_origin") or "")}{" · last used " + E(seen) if seen else ""}</small></span>
+<form method="post" action="/profile/devices/revoke"><input type="hidden" name="csrf" value="{csrf}">
+<input type="hidden" name="bunker" value="{E(d.get("bunker_pubkey") or "")}"><button type="submit" class="btn ghost small">Sign out</button></form></li>"""
+        listing = f'<ul class="devices">{rows}</ul>'
+        count = f" · {len(devices)}"
+    role = "Admin" if who.get("admin") else "Member"
+    return frame(
+        "Profile",
+        "/profile",
+        who,
+        f"""<style>
+.prof-head{{display:flex;align-items:center;gap:14px;margin-bottom:8px}}
+.prof-head .av{{width:56px;height:56px;font-size:1.4rem}}
+.prof-head h1{{margin:0}}
+details.menu{{border:1px solid var(--border);border-radius:10px;margin:18px 0}}
+details.menu>summary{{padding:12px 14px;cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between}}
+details.menu>summary::after{{content:"›";transition:transform .15s}}
+details.menu[open]>summary::after{{transform:rotate(90deg)}}
+details.menu>div{{padding:0 14px 12px}}
+ul.devices{{list-style:none;margin:0;padding:0}}
+ul.devices li{{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--border)}}
+ul.devices .dv{{flex:1;min-width:0;display:flex;flex-direction:column}}
+ul.devices small{{color:var(--fg-faint);overflow-wrap:anywhere}}
+a.logout{{display:inline-block;margin-top:28px;color:#c62828;font-weight:600}}
+</style>
+<div class="prof-head"><span class="av" aria-hidden="true">{E(initial(who.get("name", "")))}</span>
+<div><h1>{E(who.get("name", "") or "Your profile")}</h1><p class="muted" style="margin:2px 0 0">{role} · {E(who.get("email", ""))}</p></div></div>{note}
+<form method="post" action="/profile"><input type="hidden" name="csrf" value="{csrf}">
+<p><label>Name<br><input type="text" name="name" value="{E(who.get("name", ""))}" required maxlength="80"></label></p>
+<p><button class="btn" type="submit">Save</button></p></form>
+<details class="menu"><summary>Devices{count}</summary><div>
+<p class="meta">Where you are signed in. Signing a device out ends its session at once.</p>{listing}</div></details>
+<a class="logout" href="/logout">Log out</a>""",
+    )
+
+
+ADD_SCRIPT = """<style>
+.list-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.list-head h2{margin:0}
+.add-dlg{border:1px solid var(--border);border-radius:14px;padding:0;width:min(480px,calc(100vw - 32px));
+background:var(--surface);color:var(--fg)}
+.add-dlg::backdrop{background:rgba(0,0,0,.35)}
+.add-dlg .dlg-head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px 0}
+.add-dlg .dlg-head h2{margin:0}
+.add-dlg section{padding:4px 16px 12px}.add-dlg section+section{border-top:1px solid var(--border)}
+.add-dlg .pick{display:flex;gap:16px;flex-wrap:wrap}
+.add-dlg .link-out{display:flex;gap:8px}.add-dlg [hidden]{display:none}.add-dlg .link-out input{flex:1;min-width:0}
+</style><script>
+(function(){var d=document.getElementById('add-dlg'),o=document.getElementById('add-open');if(!d||!o)return;
+o.addEventListener('click',function(){d.showModal();});
+document.getElementById('add-close').addEventListener('click',function(){d.close();o.focus();});
+d.addEventListener('click',function(e){if(e.target===d)d.close();});
+var f=document.getElementById('link-form'),days=f.querySelector('.guest-days'),out=f.querySelector('.link-out'),
+inp=out.querySelector('input'),err=f.querySelector('.link-err'),btn=f.querySelector('button[type=submit]');
+f.addEventListener('change',function(){days.hidden=f.as.value!=='guest';out.hidden=true;});
+f.addEventListener('submit',function(e){e.preventDefault();if(btn.disabled)return;btn.disabled=true;
+var t=btn.textContent;btn.textContent='Making the link\u2026';err.hidden=true;
+fetch(f.action,{method:'POST',body:new FormData(f),headers:{'Accept':'application/json'}})
+.then(function(r){return r.json().catch(function(){return {};});})
+.then(function(j){if(j.url){inp.value=j.url;out.hidden=false;inp.select();}
+else{err.textContent=j.message||'The link could not be made. Try again.';err.hidden=false;}})
+.catch(function(){err.textContent='No connection. Try again.';err.hidden=false;})
+.finally(function(){btn.disabled=false;btn.textContent=t;});});
+document.getElementById('link-copy').addEventListener('click',function(){var b=this;
+navigator.clipboard.writeText(inp.value).then(function(){b.textContent='Copied';setTimeout(function(){b.textContent='Copy';},1500);});});
+})();
+</script>"""
+
+
 def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str, err: str) -> str:
     if who is None:
         return frame(
@@ -1004,14 +1164,34 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
         + ("<th></th>" if admin else "")
         + "</tr>"
     )
-    add = ""
+    add = plus = ""
     if admin:
-        add = f"""<h2>Add a member</h2><form method="post" action="/members/add"><input type="hidden" name="csrf" value="{csrf}">
-<p><input type="text" name="email" placeholder="e-mail address" required></p>
-<p><input type="text" name="name" placeholder="name (optional)"></p>
+        # Add people (Xavier, 2026-11-17): behind a + at the right of the list, in a modal: an
+        # invite link to copy (admin, member, or a guest for a day, a week or a month: the chat's
+        # invite sheet, guests.make_channel_invite) and the e-mail form
+        plus = (
+            '<button type="button" class="icon-btn plus" id="add-open" aria-label="Add people" '
+            f'aria-haspopup="dialog" title="Add people">{icon("plus")}</button>'
+        )
+        add = f"""<dialog class="add-dlg" id="add-dlg" aria-labelledby="add-title">
+<div class="dlg-head"><h2 id="add-title">Add people</h2><button type="button" class="icon-btn" id="add-close" aria-label="Close">{icon("close")}</button></div>
+<section><h3>Invite link</h3><p class="meta">A link to send. It works once, for a week.</p>
+<form id="link-form" method="post" action="/members/link"><input type="hidden" name="csrf" value="{csrf}">
+<div class="pick" role="radiogroup" aria-label="Joins as">
+<label><input type="radio" name="as" value="member" checked> Member</label>
+<label><input type="radio" name="as" value="admin"> Admin</label>
+<label><input type="radio" name="as" value="guest"> Guest</label></div>
+<p class="guest-days" hidden><label>For <select name="days"><option value="1">a day</option><option value="7">a week</option><option value="30">a month</option></select></label></p>
+<p><button class="btn" type="submit">Make the link</button></p>
+<p class="link-out" hidden><input type="text" readonly aria-label="The invite link"><button type="button" class="btn ghost" id="link-copy">Copy</button></p>
+<p class="bad link-err" role="alert" hidden></p></form></section>
+<section><h3>Add by e-mail</h3><form method="post" action="/members/add"><input type="hidden" name="csrf" value="{csrf}">
+<p><input type="text" inputmode="email" autocomplete="email" name="email" placeholder="e-mail address" required aria-label="E-mail address"></p>
+<p><input type="text" name="name" placeholder="name (optional)" aria-label="Name"></p>
 <p><label><input type="checkbox" name="admin" value="1"> admin (can add and remove members, approve the website)</label></p>
 <p><button class="btn" type="submit">Add</button></p>
-<p class="meta">They get a pass at once and an e-mail with a sign-in link. Removing someone ends their pass; their Nostr key stays theirs.</p></form>"""
+<p class="meta">They get a pass at once and an e-mail with a sign-in link. Removing someone ends their pass; their Nostr key stays theirs.</p></form></section>
+</dialog>{ADD_SCRIPT}"""
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""
     )
@@ -1019,8 +1199,8 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
         "Members",
         "/members",
         who,
-        f"""<h1>Members</h1><p class="muted">{len(mem)} members with an active pass.</p>{note}{add}
-<h2>Everyone</h2><table class="list">{head}{"".join(rows)}</table>""",
+        f"""<h1>Members</h1><p class="muted">{len(mem)} members with an active pass.</p>{note}
+<div class="list-head"><h2>Everyone</h2>{plus}</div><table class="list">{head}{"".join(rows)}</table>{add}""",
     )
 
 
@@ -1322,6 +1502,47 @@ def register(app: FastAPI) -> None:
             svc(request).settings.public_url.rstrip("/") + "/changelog", status_code=302
         )
 
+    @app.get("/console/profile", response_class=HTMLResponse)
+    async def profile_page(request: Request):
+        services = svc(request)
+        me = await who(request)
+        if me is None:
+            return RedirectResponse("/login?to=/profile", status_code=303)
+        msg, err = flash.peek(request, services)
+        devices = await run_in_threadpool(my_devices, services, me["partner"])
+        return flash.clear(
+            HTMLResponse(
+                profile_html(me, devices, msg, err), headers={"Cache-Control": "no-store"}
+            ),
+            request,
+        )
+
+    @app.post("/console/profile")
+    async def profile_save(request: Request, csrf: str = Form(""), name: str = Form("")):
+        me = await who(request)
+        if me is None or not secrets.compare_digest(csrf or "", me["csrf"]):
+            return back("/profile", err="Sign in again, then save.")
+        if not name.strip():
+            return back("/profile", err="Your name can't be empty.")
+        await run_in_threadpool(
+            edit_member, svc(request), me["partner"], name.strip()[:80], me["admin"]
+        )
+        return back("/profile", msg="Saved.")
+
+    @app.post("/console/profile/devices/revoke")
+    async def profile_revoke(request: Request, csrf: str = Form(""), bunker: str = Form("")):
+        me = await who(request)
+        if me is None or not secrets.compare_digest(csrf or "", me["csrf"]):
+            return back("/profile", err="Sign in again, then try.")
+        try:
+            await run_in_threadpool(revoke_device, svc(request), me["partner"], bunker)
+        except ValueError as exc:
+            return back("/profile", err=str(exc))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("console: revoke a device of %s failed: %s", me["email"], exc)
+            return back("/profile", err="The signer did not answer. Try again.")
+        return back("/profile", msg="That device is signed out.")
+
     @app.get("/console/members", response_class=HTMLResponse)
     async def members_page(request: Request):
         services = svc(request)
@@ -1358,6 +1579,33 @@ def register(app: FastAPI) -> None:
             )
         log.info("console: %s added %s (admin=%s)", me["email"], added, admin == "1")
         return back("/members", msg=f"{added} is a member now and got a sign-in link.")
+
+    @app.post("/console/members/link")
+    async def members_link(
+        request: Request,
+        csrf: str = Form(""),
+        as_: str = Form("member", alias="as"),
+        days: int = Form(7),
+    ):
+        """An invite link to copy (the Add people modal): JSON ``{"url"}`` or ``{"message"}``."""
+        me = await admin_form(request, csrf)
+        if me is None:
+            return JSONResponse(
+                {"message": "Only admins make invite links here. Sign in again if you are one."},
+                status_code=403,
+            )
+        try:
+            url = await run_in_threadpool(invite_link, svc(request), me["partner"], as_, days)
+        except Exception as exc:  # noqa: BLE001 — the modal says why
+            message = getattr(exc, "message", "") or (
+                str(exc)
+                if isinstance(exc, ValueError)
+                else "The link could not be made. Try again."
+            )
+            log.warning("console: link (%s) by %s failed: %s", as_, me["email"], exc)
+            return JSONResponse({"message": str(message)[:200]}, status_code=409)
+        log.info("console: %s made a %s invite link", me["email"], as_)
+        return JSONResponse({"url": url}, headers={"Cache-Control": "no-store"})
 
     @app.post("/console/members/{partner}/edit")
     async def members_edit(

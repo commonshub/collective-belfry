@@ -133,6 +133,11 @@ DEFAULTS: list[dict[str, Any]] = [
         "web": {"on": False, "slug": "proposals", "visibility": "members", "posts": "proposal"},
     },
 ]
+# the ones a new belfry gets: #general alone (Xavier, 2026-11-17: "by default don't add
+# fairground, scriptorium, assembly", i.e. #events, #website, #proposals). Belfries that have the
+# others keep them (and their descriptions and web settings stay up to date below); an admin can
+# delete them when empty or archive them (checkin.delete_group, /group-meta archived).
+MADE = {GENERAL}
 # descriptions an earlier version wrote: replaced by today's when nobody changed them since
 _OLD_ABOUT = {
     "proposals": "Proposals for {domain}: one per thread, discussed and voted on.",
@@ -192,6 +197,8 @@ def ensure_channels(svc: Services) -> dict[str, Any]:
                 if last and last["pubkey"] == mine and conf in _EARLIER[cid]:
                     _web_setting(relay, sign, cid, ch["web"])
                     log.info("announcements: %s brought to today's defaults", cid)
+            continue
+        if cid not in MADE:  # kept up to date where it exists, never made any more
             continue
         _publish(relay, sign, 9007, [["h", cid]])
         _publish(
@@ -518,12 +525,10 @@ def membership_round(svc: Services) -> None:
 def tick(svc: Services) -> None:
     from .drops import ensure_profile
     from .events import watch as events_watch
-    from .website import ensure_channel as ensure_website
 
     for job in (
         expire_passes,
         ensure_channels,
-        ensure_website,
         ensure_profile,
         soon,
         morning,
