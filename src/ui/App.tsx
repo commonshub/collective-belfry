@@ -32,6 +32,7 @@ import { ChannelInfo } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { orderContent } from '../core/order'
+import { ChannelPage, CHANNEL_PAGES } from './ChannelMenu'
 import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, lastChannelMail, setMyAddress, startDms } from '../core/dm'
 import { startReadState } from '../core/readstate'
@@ -280,7 +281,13 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     } else if (wide && three && b === 'thread' && c) {
       view = <ChannelView id={id} activeThread={c} />
       pane = <ThreadView key={c} groupId={id} rootId={c} pane replying={d === 'reply'} />
-    } else view = b === 'group' ? <GroupPage key={id} id={id} /> : b === 'info' ? <ChannelInfo id={id} initial={c === 'members' ? 'members' : 'about'} /> : b && Object.hasOwn(INFO_PAGES, b) ? <ChannelInfo key={b} id={id} initial={INFO_PAGES[b]} /> : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+    } else view = b === 'group' ? <GroupPage key={id} id={id} />
+      // the header's menu (ChannelMenu.tsx); old links to the channel's info land on its screens
+      : (b === 'info' || b === 'about') && c !== 'members' ? <ChannelView id={id} menu />
+      : b === 'info' ? <ChannelPage key="members" id={id} page="members" />
+      : b && OLD_PAGES[b] ? <ChannelPage key={OLD_PAGES[b]} id={id} page={OLD_PAGES[b]} />
+      : b && CHANNEL_PAGES.has(b) ? <ChannelPage key={b} id={id} page={b} />
+      : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
@@ -300,6 +307,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
 /** c/<id>/members, /photos, /files, /todos, /log: a channel's full lists (Xavier, 2026-11-12). */
 /** What of an archived group's pages stays open: reading. */
 const ARCHIVED_READS = new Set(['info', 'about', 'members', 'images', 'photos', 'files', 'log'])
+const OLD_PAGES: Record<string, string> = { images: 'photos' }
 const INFO_PAGES: Record<string, 'members' | 'files' | 'tasks' | 'log' | 'about'> = { members: 'members', images: 'files', photos: 'files', files: 'files', todos: 'tasks', log: 'log', about: 'about' }
 
 const EVENT_KEY = 'belfry-event-open'

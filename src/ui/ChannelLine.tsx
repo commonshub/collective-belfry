@@ -1,19 +1,10 @@
-// Under a channel's name there is exactly one line. It says the most useful thing about the
-// channel right now, picked in this order:
-//   1. what needs you: a vote you have not cast, an event you have not answered, people asking
-//      to join a pod you administer;
-//   2. a pinned message (its notice);
-//   3. the next event;
-//   4. an open proposal;
-//   5. how many members it has.
-// Everything else shows as small counts on the right (events, proposals, pods, photos, then the
-// to-dos last). Pulling the line down (ChannelHeader) shows the same things in full: PullDown
-// below, with the description at the top, the latest photos and the members (Xavier, 2026-11-12).
+// What the channel header knows (channelFacts), and the one line under it, which shows only when
+// something must catch the eye (SummaryLine). The pulled-down menu is in ChannelMenu.tsx.
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
 import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus } from '../core/model'
-import { all, useVersion } from '../core/store'
+import { all, touch, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, Btn, Form, fmtDay, go, Lightbox, useMediaUrl, useNow, WorkRing } from './common'
 import { openProfile } from './Profile'
@@ -26,8 +17,8 @@ import { Markdown } from './markdown'
 import { visibilityText } from './ChannelHeader'
 
 const HIDDEN = 'belfry-pins-hidden'
-const hiddenPins = (): string[] => { try { return JSON.parse(localStorage.getItem(HIDDEN) ?? '[]') } catch { return [] } }
-const hidePin = (id: string) => { try { localStorage.setItem(HIDDEN, JSON.stringify([...new Set([...hiddenPins(), id])].slice(-200))) } catch { /* private mode */ } }
+export const hiddenPins = (): string[] => { try { return JSON.parse(localStorage.getItem(HIDDEN) ?? '[]') } catch { return [] } }
+export const hidePin = (id: string) => { try { localStorage.setItem(HIDDEN, JSON.stringify([...new Set([...hiddenPins(), id])].slice(-200))) } catch { /* private mode */ } touch() }
 
 /** Who may pin in GROUP: its admins and the community's. */
 export const mayPin = (g?: Group) => (pubkey: string) => !!g && (g.admins.has(pubkey) || belfryAdminKeys().includes(pubkey) || !!accessInfo()?.admins.includes(pubkey))
@@ -57,209 +48,56 @@ export function channelFacts(id: string) {
 }
 
 /** The one line. `topic`: the feed is filtered on it, which the line says first of all. */
+/** The line under the header, only when something must catch the eye (the owner, 2026-11-17):
+ *  a topic filter in force (with Show all), a vote I haven't cast, people asking to join a group I
+ *  run, an event I haven't answered within 7 days, a pinned message I haven't hidden, to-dos on
+ *  me, to-dos nobody took. Otherwise nothing: the counts live in the subtitle (ChannelMenu.tsx). */
 export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: string; open: boolean; onToggle: () => void; topic?: string; onTopic: (t?: string) => void; pull?: object }) {
   useVersion()
-  const [, redraw] = useState(0)
   const f = channelFacts(id)
   const g = f.g
   const hidden = hiddenPins()
   const pin = f.pins.find((m) => !hidden.includes(m.ev.id))
-  const next = f.events[0]
   const unanswered = f.events.find((e) => !stateLabel(e) && e.status !== 'cancelled')
   const toVote = f.proposals.find(f.needsVote)
-  const n = f.members.length
-  const people = `${n} ${n === 1 ? 'member' : 'members'}`
+  const mine = f.todos.filter((t) => t.assignee === me())
+  const nobody = f.todos.filter((t) => !t.assignee)
 
-  let icon: ReactNode = <PeopleIcon />
-  let text: ReactNode = people
+  let icon: ReactNode = null
+  let text: ReactNode = null
   let pill: ReactNode = null
-  let quiet = true
-  let shown: 'event' | 'proposal' | 'pin' | '' = ''
-  const say = (i: ReactNode, t: ReactNode, p: ReactNode = null, s: typeof shown = '') => { icon = i; text = t; pill = p; quiet = false; shown = s }
+  const say = (i: ReactNode, t: ReactNode, p: ReactNode = null) => { icon = i; text = t; pill = p }
   const ask = (label: string, onClick: () => void) => <button className="line-pill ask" onClick={onClick}>{label}</button>
-  const mineIs = (label: string) => <span className="line-pill">{label}</span>
 
   if (topic) {
     say(<span className="line-hash">#</span>, <>Showing <b>{topic === ANNOUNCE ? 'announcements' : '#' + topic}</b> only</>, ask('Show all', () => onTopic(undefined)))
-  } else if (g?.isProposal) {
-    const p = f.own
-    if (p) {
-      const votes = [...(p.poll?.votes.values() ?? [])]
-      const count = (v: string) => votes.filter((x) => x === v).length
-      const voting = p.status === 'voting' && !!p.poll && p.poll.version === p.version
-      const mine = p.poll?.votes.get(me())
-      say(<DocIcon />, voting ? <><b>Voting</b> · {count('yes')} yes · {count('no')} no</> : <><b>{p.status[0].toUpperCase() + p.status.slice(1)}</b> · version {p.version} · by {displayName(p.author)}</>,
-        voting ? (mine ? mineIs(mine[0].toUpperCase() + mine.slice(1)) : ask('Vote', onToggle)) : null)
-    }
+  } else if (g?.isProposal && f.own && f.needsVote(f.own)) {
+    say(<DocIcon />, <><b>Voting</b> · version {f.own.version}</>, ask('Vote', onToggle))
   } else if (g?.isPod && canAdmin(g) && g.applications.length > 0) {
     const k = g.applications.length
-    say(<PodShape members={g.members.size} size={18} />, <><b>{k} {k === 1 ? 'person asks' : 'people ask'} to join</b> · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}</>, ask('Review', () => go(`c/${encodeURIComponent(id)}/info/members`)))
+    say(<PodShape members={g.members.size} size={18} />, <b>{k} {k === 1 ? 'person asks' : 'people ask'} to join</b>, ask('Review', () => go(`c/${encodeURIComponent(id)}/members`)))
   } else if (toVote) {
-    say(<DocIcon />, <b>{toVote.title}</b>, ask('Vote', () => go('c/' + encodeURIComponent(toVote.groupId))), 'proposal')
+    say(<DocIcon />, <b>{toVote.title}</b>, ask('Vote', () => go('c/' + encodeURIComponent(toVote.groupId))))
   } else if (unanswered && +unanswered.start - Date.now() < 7 * 86400e3) {
-    say(<CalendarIcon />, <><b>{day(unanswered.start)}{at(unanswered)}</b> · {unanswered.title}</>, ask('RSVP', () => openEvent(unanswered)), 'event')
+    say(<CalendarIcon />, <><b>{day(unanswered.start)}{at(unanswered)}</b> · {unanswered.title}</>, ask('RSVP', () => openEvent(unanswered)))
   } else if (pin) {
-    say(<PinIcon />, plain(pin), null, 'pin')
-  } else if (next) {
-    const mine = stateLabel(next)
-    say(<CalendarIcon />, <><b>{day(next.start)}{at(next)}</b> · {next.title}</>, mine ? mineIs(mine) : ask('RSVP', () => openEvent(next)), 'event')
-  } else if (f.proposals[0]) {
-    say(<DocIcon />, <><b>{f.proposals[0].title}</b> · {f.proposals[0].status}</>, null, 'proposal')
-  } else if (g?.isPod) {
-    say(<PodShape members={g.members.size} size={18} />, <>{g.members.size} {g.members.size === 1 ? 'member' : 'members'} · {g.closed ? 'by request' : 'open to join'}</>)
-    quiet = true
+    say(<PinIcon />, plain(pin))
+  } else if (mine.length) {
+    say(<TodoIcon />, mine.length === 1 ? <><b>On you:</b> {mine[0].title}</> : <><b>{mine.length} to-dos on you</b> · {mine[0].title}</>, ask('To-dos', () => go(`c/${encodeURIComponent(id)}/todos`)))
+  } else if (nobody.length) {
+    say(<TodoIcon />, nobody.length === 1 ? <><b>Nobody on it:</b> {nobody[0].title}</> : <><b>{nobody.length} to-dos nobody took</b> · {nobody[0].title}</>, ask('To-dos', () => go(`c/${encodeURIComponent(id)}/todos`)))
   }
-  void redraw
-  const shownNow = shown as string
-
-  const counts: [string, ReactNode, number, string][] = [
-    ['events', <CalendarIcon />, f.events.length - (shownNow === 'event' ? 1 : 0), 'more events'],
-    ['proposals', <DocIcon />, f.proposals.length - (shownNow === 'proposal' ? 1 : 0), 'more open proposals'],
-    ['pods', <PodShape members={6} size={13} />, f.pods.length, 'groups'],
-    ['photos', <ImageIcon />, f.photos.length, 'photos'],
-    ['todos', <TodoIcon />, f.tally.total, 'todos'],
-  ]
+  if (!text) return null
   return (
-    <div className={'chan-line' + (quiet ? ' quiet' : '') + (open ? ' open' : '')} {...pull}>
+    <div className={'chan-line' + (open ? ' open' : '')} {...pull}>
       <button className="line-main" onClick={onToggle} aria-expanded={open}>
         <span className="line-ico">{icon}</span>
         <span className="line-text">{text}</span>
       </button>
       {pill}
-      <button className="line-more" onClick={onToggle} aria-label={open ? 'Close the channel summary' : 'Open the channel summary'}>
-        {!topic && counts.filter((c) => c[2] > 0).map(([k, ico, num, label]) => k === 'todos'
-          ? <span key={k} className="line-count" title={`${f.tally.done} of the latest ${f.tally.total} todos done`}>{ico}{f.tally.done}/{f.tally.total}</span>
-          : <span key={k} className="line-count" title={`${num} ${label}`}>{ico}{(k === 'events' && shownNow === 'event') || (k === 'proposals' && shownNow === 'proposal') ? '+' : ''}{num}</span>)}
+      <button className="line-more" onClick={onToggle} aria-label={open ? 'Close the channel menu' : 'Open the channel menu'}>
         <span className="line-chev">{open ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
       </button>
-    </div>
-  )
-}
-
-/** The line pulled down: everything it summarises, in the same order. */
-export function PullDown({ id, topic, onTopic, more, full = false }: { id: string; topic?: string; onTopic: (t?: string) => void; more: (tab: 'about' | 'tasks' | 'members' | 'files') => void; /** the header pulled all the way: the same summary, showing more */ full?: boolean }) {
-  useVersion()
-  const now = useNow()
-  const [, redraw] = useState(0)
-  const f = channelFacts(id)
-  const g = f.g
-  if (!g) return null
-  const parent = g.parent ? group(g.parent) : undefined
-  const hidden = hiddenPins()
-  const path = (p: string) => go(`c/${encodeURIComponent(id)}/${p}`)
-  return (
-    <div className={'pull' + (full ? ' full' : '')}>
-      {/* the same at both levels, so nothing jumps when it opens all the way; the whole text is under it */}
-      {/* the whole description, then who reads it and who can write (#issues 2026-11-15) */}
-      {g.about && <Markdown className="pull-about" text={g.about} />}
-      {!g.isPod && !g.isProposal && !g.isEvent && (() => { const v = visibilityText(g); return (
-        <div className="pull-vis"><b>{v.title}</b>{v.lines.map((l) => <span key={l}>{l}</span>)}</div>
-      ) })()}
-      {(g.isPod || g.isProposal) && parent && (
-        <button className="link pull-parent" onClick={() => go('c/' + encodeURIComponent(parent.id))}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}</button>
-      )}
-      {g.isProposal && <ProposalHeader groupId={id} />}
-      {g.isPod && canAdmin(g) && g.applications.length > 0 && (
-        <section>
-          <h3>Asking to join <span>{g.applications.length}</span></h3>
-          <button className="pull-row" onClick={() => go(`c/${encodeURIComponent(id)}/info/members`)}>
-            <span className="t">{g.applications.slice(0, 3).map((a) => displayName(a.pubkey)).join(', ')}{g.applications.length > 3 ? '…' : ''}</span>
-            <span className="line-pill ask">Review</span>
-          </button>
-        </section>
-      )}
-      {f.pins.length > 0 && (
-        <section>
-          <h3>Pinned</h3>
-          {f.pins.map((m) => (
-            <div key={m.ev.id} className="pull-pin">
-              <PinIcon />
-              <div>
-                <RichText text={m.text} groupId={id} />
-                <small>{displayName(m.ev.pubkey)} · {fmtDay(new Date(m.ev.created_at * 1000))} · <button className="link" onClick={() => go(`c/${encodeURIComponent(id)}/m/${m.ev.id}`)}>Show in the channel</button>
-                  {!hidden.includes(m.ev.id) && <> · <button className="link" onClick={() => { hidePin(m.ev.id); redraw((x) => x + 1) }}>Got it, hide</button></>}</small>
-              </div>
-            </div>
-          ))}
-        </section>
-      )}
-      {f.events.length > 0 && (
-        <section>
-          <h3>Coming up</h3>
-          {f.events.slice(0, 3).map((e) => {
-            const mine = stateLabel(e)
-            return (
-              <button key={e.coord} className="pull-row" onClick={() => openEvent(e)}>
-                <b className="when">{day(e.start)}<small>{when(e)}</small></b>
-                <span className="t">{e.title}<small>{e.status === 'cancelled' ? 'Cancelled' : `${going(e)} going`}</small></span>
-                <span className={'line-pill' + (mine ? '' : ' ask')}>{mine || 'RSVP'}</span>
-              </button>
-            )
-          })}
-          {f.events.length > 3 && <button className="link pull-all" onClick={() => go(`c/${encodeURIComponent(id)}/events`)}>All {f.events.length} events</button>}
-        </section>
-      )}
-      {f.proposals.length > 0 && (
-        <section>
-          <h3>To decide</h3>
-          {f.proposals.map((p) => (
-            <button key={p.groupId} className="pull-row" onClick={() => go('c/' + encodeURIComponent(p.groupId))}>
-              <span className="t">{p.title}<small>{p.status[0].toUpperCase() + p.status.slice(1)} · version {p.version}</small></span>
-              {f.needsVote(p) ? <span className="line-pill ask">Vote</span> : p.poll?.votes.get(me()) && p.status === 'voting' ? <span className="line-pill">Voted</span> : null}
-            </button>
-          ))}
-        </section>
-      )}
-      {f.allTasks.length > 0 && (
-        <section className="pull-todos">
-          <h3>To do <span>{f.tally.done}/{f.tally.total}</span></h3>
-          {(full ? latestTasks(f.allTasks) : f.todos.slice(0, 4)).map((t) => { const busy = isWorking(t, now); return (
-            <div key={t.id} className={'pull-row todo' + (t.done ? ' done' : '')} style={{ opacity: t.pending ? 0.6 : 1 }}>
-              <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? `Reopen "${t.title}"` : `Mark "${t.title}" as done`}
-                onClick={() => void taskAction(id, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}</button>
-              <button className="t" onClick={() => { const th = t.source && threadOfMessage(id, t.source); if (th) go(`c/${encodeURIComponent(id)}/thread/${th}`); else if (!full) more('tasks') }}>
-                <span className="tt">{t.title}</span><small>{t.done ? 'Done' : t.assignee ? (t.assignee === me() ? (busy ? `You are working on it · ${mins(now - (workingSince(t) ?? now))}` : 'You are on it') : busy ? `${displayName(t.assignee)} is working on it · ${mins(now - (workingSince(t) ?? now))}` : `${displayName(t.assignee)} is on it`) : 'Nobody on it yet'}{t.source ? ' · thread' : ''}</small>
-              </button>
-            </div>
-          ) })}
-          {!full && f.allTasks.length > Math.min(4, f.todos.length) && <button className="link pull-all" onClick={() => more('tasks')}>{f.todos.length ? 'All todos' : 'Nothing left to do · show the done ones'}</button>}
-          {full && <NewTodo groupId={id} />}
-        </section>
-      )}
-      {f.pods.length > 0 && (
-        <section>
-          <h3>Groups</h3>
-          <div className="pull-pods">
-            {f.pods.map((p) => (
-              <button key={p.id} onClick={() => go('c/' + encodeURIComponent(p.id))}>
-                <PodShape members={p.members.size} size={18} /><span>{p.name}</span><small>{p.members.size}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
-      {f.photos.length > 0 && <Photos photos={f.photos} full={full} all={() => path('photos')} />}
-      <section className="pull-members">
-        <h3>Members <span>{f.members.length}</span></h3>
-        <div className={full ? 'pull-faces big' : 'pull-faces'}>
-          {f.members.slice(0, full ? 24 : 10).map((p) => (
-            <button key={p} className="face" onClick={() => openProfile(p, id)} aria-label={displayName(p)}>
-              <Avatar pubkey={p} size={full ? 44 : 28} />{full && <small>{displayName(p)}</small>}
-            </button>
-          ))}
-          {!full && f.members.length > 10 && <span className="more">+{f.members.length - 10}</span>}
-        </div>
-        <div className="pull-links">
-          <button className="link" onClick={() => path('members')}>All members</button>
-          {f.files > 0 && <button className="link" onClick={() => path('files')}>{f.files} {f.files === 1 ? 'file' : 'files'}</button>}
-          {f.allTasks.length > 0 && <button className="link" onClick={() => path('todos')}>Todos</button>}
-          {f.allTasks.length > 0 && <button className="link" onClick={() => path('log')}>Log</button>}
-          {!full && <button className="link" onClick={() => more('about')}>More</button>}
-        </div>
-      </section>
-      <section className="pull-topics">
-        <TopicsBar groupId={id} active={topic} onOpen={onTopic} titled />
-      </section>
     </div>
   )
 }

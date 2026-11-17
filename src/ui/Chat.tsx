@@ -1,5 +1,4 @@
 import { nip19 } from 'nostr-tools'
-import { FollowButton } from './Follow'
 import { address, unreadTotal } from '../core/dm'
 import { useBranding } from '../core/branding'
 import type React from 'react'
@@ -38,7 +37,7 @@ import { coHostToken, guestInfo } from '../core/auth'
 import { askToJoin, reading, useGuestMode } from '../core/guestmode'
 import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
-import { ChannelSettingsSheet, VisibilitySheet } from './ChannelInfo'
+import { VisibilitySheet } from './ChannelInfo'
 import { MORE_EMOJIS, ReactionChips } from './Reactions'
 import { inOrder, mayOrder, setChannelOrder, shownCategories, LIFE } from '../core/order'
 import { mayPin } from './ChannelLine'
@@ -474,12 +473,10 @@ function NewChannel({ onClose, category }: { onClose: () => void; /** made from 
 
 // ---- a channel's messages ------------------------------------------------------
 
-export function ChannelView({ id, topic, focus, activeThread }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string }) {
+export function ChannelView({ id, topic, focus, activeThread, menu = false }: { id: string; topic?: string; focus?: string; /** a large screen: the thread open in the third column */ activeThread?: string; /** an old link to its info: the header's menu open */ menu?: boolean }) {
   const openTopic = (t?: string) => go(`c/${encodeURIComponent(id)}` + (t ? `/t/${encodeURIComponent(t)}` : ''))
   useVersion()
   const g = group(id)
-  const [settings, setSettings] = useState(false)
-  useEffect(() => setSettings(false), [id])
   // archived: read only. A plain header (no pull-down: it is all actions), the banner, the messages.
   if (g?.archived) return (
     <div className="screen">
@@ -494,12 +491,10 @@ export function ChannelView({ id, topic, focus, activeThread }: { id: string; to
   )
   return (
     <div className="screen">
-      <ChannelHeader id={id} topic={topic} onTopic={openTopic}
+      {/* ☰ · the name and its subtitle · search; notifications and settings are rows of its menu (2026-11-17) */}
+      <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu}
         left={<LeftButton id={id} />}
-        right={<><button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button><FollowButton channel={id} />
-          {/* the channel's admins: its settings, right of the bell (Xavier, #issues 2026-11-13) */}
-          {g && canAdmin(g) && <button className="icon-btn" aria-label="Channel settings" onClick={() => setSettings(true)}><GearIcon /></button>}</>} />
-      {settings && <ChannelSettingsSheet id={id} onClose={() => setSettings(false)} />}
+        right={<button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
       {g?.isProposal && <SiteBar groupId={id} />}
       <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
       {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
@@ -1339,6 +1334,8 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
           <div className="act-group">
             <button className="act" onClick={() => { setMenu(false); picker.current?.click() }}><ImageIcon /><span>Photos or files</span></button>
             {onRecord && <button className="act" onClick={() => { setMenu(false); onRecord() }}><MicIcon /><span>Audio recording<small>Kept on this device until it is sent</small></span></button>}
+            {/* drop-box links live on the Files screen, which the header's menu lists only once there is something */}
+            {groupId && onTodo && <button className="act" onClick={() => { setMenu(false); go(`c/${encodeURIComponent(groupId)}/files`) }}><LinkIcon /><span>Drop-box link<small>A link anyone can send photos and files to</small></span></button>}
           </div>
           <div className="act-group">
             {canAnnounce && <button className="act" onClick={() => { setMenu(false); setAnn(true); ta.current?.focus() }}><MegaphoneIcon /><span>Announcement<small>Stands out; followers get it by e-mail</small></span></button>}

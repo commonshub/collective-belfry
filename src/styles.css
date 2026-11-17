@@ -1588,3 +1588,28 @@ html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h,
 .settings-cats .chan-row > .ico:last-child { color: var(--faint); }
 .add-cat { margin-top: 16px; width: 100%; display: inline-flex; justify-content: center; align-items: center; gap: 6px; }
 .cat-rename { display: flex; flex-direction: column; gap: 8px; }
+
+/* r3: the channel header's subtitle, its menu, and the menu's screens */
+.chan-sub { display: flex !important; align-items: center; gap: 8px; }
+.chan-sub .ico { width: 13px; height: 13px; vertical-align: -2px; }
+.chan-sub .sub-vis { display: inline-flex; color: var(--muted); }
+.chan-sub .sub-count { display: inline-flex; align-items: center; gap: 3px; }
+.cmenu { padding: 0 12px; }
+.cmenu .pull-about, .cmenu .pull-vis, .cmenu .pull-parent, .cmenu .pull-prompt { margin-left: 4px; margin-right: 4px; }
+.cmenu-rows { margin: 10px 0 4px; }
+.cmenu-row { width: 100%; }
+.cmenu-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.cmenu-row .t b { font-weight: 500; }
+.cmenu-row .v { color: var(--muted); font-size: 14px; }
+.cmenu-row > .ico:last-child { width: 16px; height: 16px; color: var(--faint); }
+.cmenu-ico { width: 24px; display: inline-grid; place-items: center; color: var(--muted); flex: none; }
+.cmenu-foot { display: flex; gap: 14px; padding: 6px 6px 0; font-size: 14px; }
+.pull-pin.first { margin: 10px 4px 0; }
+.chan-page .topbar .invite-btn { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.page-rows { margin: 12px; }
+.page-row { width: 100%; }
+.page-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.active-line { padding-top: 12px; }
+@keyframes page-in { from { transform: translateX(100%); } to { transform: none; } }
+.screen.slide-in { animation: page-in 220ms cubic-bezier(0, 0, 0.2, 1); }
+@media (prefers-reduced-motion: reduce) { .screen.slide-in { animation: none; } }
