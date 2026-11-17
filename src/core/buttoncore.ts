@@ -14,7 +14,7 @@ export const RESULT_NS = 'belfry/action-result'
 export const MAX_BUTTONS = 4
 export const ANSWER_TIMEOUT = 20 // seconds before "No answer yet."
 /** The belfry: actions this app knows (docs/actions.md §4). */
-export const KNOWN_ACTIONS = ['belfry:website-publish']
+export const KNOWN_ACTIONS = ['belfry:website-publish', 'belfry:offer-decide']
 
 const ID = /^[a-z0-9-]{1,32}$/
 const STYLES: ButtonStyle[] = ['', 'primary', 'danger']
@@ -67,6 +67,7 @@ export const FIXED: Record<string, string> = {
   timeout: 'No answer yet.',
   unknown_belfry_action: 'Update the app to use this.',
   'confirm:belfry:website-publish': 'Publish this version as the website? Everyone will see it at https://<domain>.',
+  'confirm:belfry:offer-decide': 'Answer this offer? The answer is public in the thread; the code goes privately to them.',
 }
 
 /** The sentence for an error answer: its content, else the code's fixed sentence. */

@@ -1019,7 +1019,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
-      <div className="msg first card-row"><MailFrame it={inMail} address={mailAddressOf(groupId)} /></div>
+      <div className="msg first card-row"><MailFrame it={inMail} address={mailAddressOf(groupId)} /><MessageButtons ev={m.ev} groupId={groupId} disabled={frozen} /></div>
     </>
   )
   return (

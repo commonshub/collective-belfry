@@ -10,7 +10,13 @@ import { Btn, Sheet } from './common'
 // answers. All of a message's buttons lock while a press waits for its answer (at most 20 s).
 
 /** The client's own words before a belfry: action (never the button's label alone). */
-function confirmText(action: string): { text: string; yes: string } | undefined {
+function confirmText(action: string, id = ''): { text: string; yes: string } | undefined {
+  if (action === 'belfry:offer-decide') {
+    // what the answer is comes from the button's id, in the app's own words
+    const pct = /^offer-(\d{1,3})$/.exec(id)?.[1]
+    const what = id === 'offer-no' ? 'Decline this request?' : pct ? `Give ${pct}% off?` : 'Answer this offer?'
+    return { text: `${what} ${FIXED['confirm:belfry:offer-decide'].replace(/^Answer this offer\? /, '')}`, yes: id === 'offer-no' ? 'Decline' : pct ? `Give ${pct}% off` : 'Answer' }
+  }
   if (action === 'belfry:website-publish') return { text: FIXED['confirm:belfry:website-publish'].replace('<domain>', BELFRY.domain), yes: 'Publish' }
   return undefined
 }
@@ -54,7 +60,7 @@ export function MessageButtons({ ev, groupId, disabled = false }: { ev: NostrEve
     : st.press ? { cls: 'muted', text: FIXED.timeout }
     : null
   const unknown = buttons.some((b) => !knownAction(b.action))
-  const ask = asking ? (isBelfryAction(asking.action) ? confirmText(asking.action) : { text: `${asking.label}?`, yes: asking.label }) : undefined
+  const ask = asking ? (isBelfryAction(asking.action) ? confirmText(asking.action, asking.id) : { text: `${asking.label}?`, yes: asking.label }) : undefined
   return (
     <div className="msg-buttons" onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => e.stopPropagation()}>
       <div className="mb-row">
