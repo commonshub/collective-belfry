@@ -698,7 +698,6 @@ def _owner(svc: Services, root: dict[str, Any] | None) -> str:
 def submit(
     svc: Services, slug: str, site: dict[str, Any], form: dict[str, str], ip: str
 ) -> HTMLResponse:
-    from . import mail
 
     if site.get("posts") in ("proposal", "event"):  # one type of post, made in the chat
         return _page("Not here", "<h1>This page takes no threads</h1>", 403)
@@ -710,37 +709,71 @@ def submit(
         return list_page(svc, slug, site, "Fill in every field.", values)
     if not EMAIL.match(email):
         return list_page(svc, slug, site, "That e-mail address does not look right.", values)
-    if mail._limited("web-ip:" + ip, 10, 3600) or mail._limited("web-mail:" + email, 5, 3600):
+    if start_thread(svc, slug, site, values["title"], values["text"], values["name"], email, ip) is None:
         return list_page(
             svc, slug, site, "Too many threads in a short time: try again in an hour.", values
         )
-    token = secrets.token_urlsafe(18)
-    pending = {
-        "slug": slug,
-        "channel": site["channel"],
-        "title": values["title"][:200],
-        "text": values["text"][:8000],
-        "name": values["name"][:100],
-        "email": email,
-        "at": int(time.time()),
-    }
-    _set_param(svc, "belfry.web.pending." + token, json.dumps(pending))
-    link = f"{_public_base(svc)}/{slug}/confirm/{token}"
-    _mailer(svc).send(
-        email,
-        f"Confirm your thread: {values['title'][:120]}",
-        [
-            f"Hello {values['name']},",
-            f"To open your thread “{values['title']}” in {site['name']}, confirm it is your address:",
-        ],
-        (link, "Confirm and open the thread"),
-        "If you did not ask for this, ignore this mail: nothing is posted without your confirmation.",
-    )
     return _page(
         "Check your e-mail",
         f"<h1>Check your e-mail</h1><p>We sent a link to <b>{E(email)}</b>. "
         "Your thread opens when you click it.</p>",
     )
+
+
+def start_thread(
+    svc: Services,
+    slug: str,
+    site: dict[str, Any],
+    title: str,
+    text: str,
+    name: str,
+    email: str,
+    ip: str,
+    extra: list[list[str]] | None = None,
+    hook: dict[str, str] | None = None,
+    public_note: bool = False,
+) -> str | None:
+    """A thread from outside, waiting for its author's address: the confirmation link is mailed;
+    nothing is posted before it is pressed. EXTRA: more tags on the message (sales.py's offers);
+    HOOK ``{"kind": "offer", "id"}``: told when the thread is posted. PUBLIC_NOTE: the mail says
+    the thread and the name will be public, the address never. Returns the token, or None when
+    the limits say no."""
+    from . import mail
+
+    email = email.strip().lower()
+    if mail._limited("web-ip:" + ip, 10, 3600) or mail._limited("web-mail:" + email, 5, 3600):
+        return None
+    token = secrets.token_urlsafe(18)
+    pending = {
+        "slug": slug,
+        "channel": site["channel"],
+        "title": title[:200],
+        "text": text[:8000],
+        "name": name[:100],
+        "email": email,
+        "at": int(time.time()),
+        "extra": extra or [],
+        "hook": hook or {},
+    }
+    _set_param(svc, "belfry.web.pending." + token, json.dumps(pending))
+    link = f"{_public_base(svc)}/{slug}/confirm/{token}"
+    lines = [
+        f"Hello {name},",
+        f"To open your thread “{title}” in {site['name']}, confirm it is your address:",
+    ]
+    if public_note:
+        lines.append(
+            f"Your request and your name will be public on {_public_base(svc)}/{slug}, like "
+            "the others there. Your e-mail address never is."
+        )
+    _mailer(svc).send(
+        email,
+        f"Confirm your thread: {title[:120]}",
+        lines,
+        (link, "Confirm and open the thread"),
+        "If you did not ask for this, ignore this mail: nothing is posted without your confirmation.",
+    )
+    return token
 
 
 def confirm(svc: Services, slug: str, token: str) -> Response:
@@ -767,9 +800,10 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
             "Link too old", "<h1>This link is too old</h1><p>Send the thread again.</p>", 410
         )
     text = f"**{p['title']}**\n\n{p['text']}"
+    more = [t for t in p.get("extra") or [] if isinstance(t, list) and t]
     me = web_identity(svc, p["channel"], p["name"], p["email"])
     if me is not None:  # as themselves, an account like everyone's
-        subject = [["subject", p["title"][:300]]]
+        subject = [["subject", p["title"][:300]], *more]
         event = drops.post(svc, p["channel"], text, subject, me["partner"], client=TAG)
     else:  # no account could be made: a card by the groups key, as before
         extra = [
@@ -777,6 +811,7 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
             ["mail-from", p["email"]],
             ["mail-name", p["name"][:100]],
             ["belfry-auth", "pass"],  # the address answered the link
+            *more,
         ]
         event = drops.post(svc, p["channel"], text, extra, None, client=TAG)
     owner = event["pubkey"] if event["pubkey"] != _groups_pubkey(svc) else p["email"]
@@ -784,6 +819,14 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
     _set_param(svc, "belfry.web.pending." + token, json.dumps(p))
     k = thread_key(svc, event["id"], owner)
     url = f"{_public_base(svc)}/{slug}/{event['id']}?k={k}"
+    hook = p.get("hook") or {}
+    if hook.get("kind") == "offer":
+        from . import sales
+
+        try:
+            sales.offer_posted(svc, hook["id"], event, f"{_public_base(svc)}/{slug}/{event['id']}", url)
+        except Exception:  # noqa: BLE001 — the thread is posted; the console shows the offer
+            log.exception("webthreads: offer %s not marked posted", hook.get("id"))
     _mailer(svc).send(
         p["email"],
         f"Your thread: {p['title'][:120]}",

@@ -272,29 +272,11 @@ def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
     )
 
 
-def _offer_admins(svc: Services, ref: str, address: str) -> Mail | None:
-    from . import console, sales
-
-    f = sales.store(svc).offer(ref.split(":")[0])
-    if f is None or f["state"] != "open":
-        return None
-    return (
-        f"{f['name']} offers something for a pass",
-        [
-            f"{f['name']} asks for {f['percent']}% off the {f['product']} pass and offers:",
-            f["offer"],
-            "Decide in the console.",
-        ],
-        (console.console_url(svc.settings) + "/sales#offers", "Open the offers"),
-        [],
-    )
-
-
 def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
     from . import sales
 
     f = sales.store(svc).offer(ref)
-    if f is None or f["state"] == "open":
+    if f is None or f["state"] not in ("accepted", "declined"):
         return None
     name = _mailer(svc).name
     if f.get("code"):
@@ -311,7 +293,12 @@ def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
         ]
     if f.get("note"):
         lines.append(f["note"])
-    return f"Your offer to {name}", lines, None, []
+    lines.append(
+        "The answer is in your request's thread too, without the code: the code is only in this "
+        "mail, and works only for you."
+    )
+    button = (f["my_url"], "Open your request") if f.get("my_url") else None
+    return f"Your offer to {name}", lines, button, []
 
 
 BUILD = {
@@ -319,20 +306,8 @@ BUILD = {
     "order_confirm": _order_confirm,
     "invoice": _invoice,
     "reminder": _reminder,
-    "offer_admins": _offer_admins,
     "offer_answer": _offer_answer,
 }
-
-
-def offer_to_admins(svc: Services, f: dict[str, Any]) -> None:
-    from . import console
-
-    try:
-        admins = sorted(console.admin_emails(svc))
-    except Exception:  # noqa: BLE001
-        admins = []
-    for a in admins:
-        queue(svc, "offer_admins", f"{f['id']}:{a}", a)
 
 
 def offer_answer(svc: Services, f: dict[str, Any]) -> None:

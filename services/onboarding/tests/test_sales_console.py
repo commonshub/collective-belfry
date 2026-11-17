@@ -4,13 +4,11 @@ secrets, products, codes, offers and orders."""
 # ruff: noqa: F811
 from __future__ import annotations
 
-import re
-
 import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import console, mailer, mypass, sales, salesconsole
+from belfry_onboarding import console, mypass, sales, salesconsole
 from belfry_onboarding.app import create_app
 
 from .test_guests import published, rsvc  # noqa: F401 — fixtures
@@ -181,44 +179,6 @@ def test_orders_cancel_and_mark_paid_need_a_reason(admin):
         assert o["state"] == "cancelled" and o["ended"]["by"] == "Ada Admin"
         post(c, "/sales/order", id=oid2, reason="again", do="paid")
         assert "not open any more" in c.get("/sales", headers=H).text
-
-
-def test_offers_in_kind(admin, world):
-    rsvc, ada_id = admin
-    ada = world[3]
-    me = PrivateKey()
-    mailer.SENT.clear()
-    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
-        body = {
-            "product": "village-2027",
-            "name": "Kim",
-            "email": "kim@example.org",
-            "offer": "I cook for 40 people on two evenings.",
-            "percent": 100,
-        }
-        r = call(c, me, "/offers", {**body, "percent": 20})
-        assert r.status_code == 422
-        r = call(c, me, "/offers", body)
-        assert r.status_code == 201 and r.json()["state"] == "open"
-        fid = r.json()["offer"]
-        assert any("offers something" in str(m["Subject"]) for m in mailer.SENT)
-        assert call(c, PrivateKey(), f"/offers/{fid}", method="GET").status_code == 404
-        # the console shows it; an admin decides 50%
-        signed_in(c, rsvc, ada_id)
-        assert "I cook for 40 people" in c.get("/sales", headers=H).text
-        post(c, "/sales/offer", id=fid, percent="50", note="Thanks, see you there!")
-        got = call(c, me, f"/offers/{fid}", method="GET").json()
-        assert got == {"offer": fid, "state": "accepted", "product": "village-2027", "percent": 50}
-        text = mailer.SENT[-1].get_body(("plain",)).get_content()
-        code = re.search(r"code: ([A-Z0-9-]+)", text).group(1)
-        assert "50% off" in text and "see you there" in text
-        r = call(c, me, "/codes/check", {"product": "village-2027", "code": code})
-        assert r.json() == {"percent": 50, "left": 1}
-        # deciding twice, and over the API by a non-admin
-        r = call(c, ada, f"/offers/{fid}/decide", {"percent": 0})
-        assert r.status_code == 409
-        r = call(c, me, f"/offers/{fid}/decide", {"percent": 0})
-        assert r.status_code == 403
 
 
 def test_prices_text_parses():

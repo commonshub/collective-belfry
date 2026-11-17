@@ -544,6 +544,7 @@ def settings(svc: Services) -> dict[str, Any]:
         "manual_journal": st.get("manual_journal") or _int(env.accounting_manual_journal),
         "ref_prefix": st.get("ref_prefix") or env.accounting_ref_prefix or "Belfry ",
         "bank_holder": st.get("bank_holder") or "",
+        "requests_channel": st.get("requests_channel") or "",
         "bank_iban": st.get("bank_iban") or "",
         "bank_bic": st.get("bank_bic") or "",
     }
@@ -852,7 +853,12 @@ def listing(svc: Services) -> dict[str, Any]:
     rows = [
         x for p in products(svc) if p.get("on_sale") and (x := public_product(svc, p)) is not None
     ]
-    data = {"currency": settings(svc)["currency"], "can_sell": can_sell(svc), "products": rows}
+    data = {
+        "currency": settings(svc)["currency"],
+        "can_sell": can_sell(svc),
+        "offers": requests_site(svc) is not None,
+        "products": rows,
+    }
     c.update(at=time.monotonic(), path=path, data=data)
     return data
 
@@ -877,6 +883,8 @@ def make_codes(
     note: str = "",
     by: str = "",
     offer: str | None = None,
+    bound_key: str = "",
+    bound_email: str = "",
 ) -> list[dict[str, Any]]:
     from .holder_invites import ApiError
 
@@ -912,6 +920,8 @@ def make_codes(
                 "note": " ".join(str(note or "").split())[:200],
                 "by": by[:100],
                 "offer": offer,
+                "bound_key": bound_key or None,
+                "bound_email": bound_email.lower() or None,
                 "revoked": False,
                 "created": iso(now()),
             }
@@ -933,10 +943,19 @@ def code_row(c: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _usable(c: dict[str, Any] | None, pid: str) -> str | None:
-    """Why the code can't be used for product PID, or None."""
+def _usable(
+    c: dict[str, Any] | None, pid: str, key: str = "", verified_email: str = ""
+) -> str | None:
+    """Why the code can't be used for product PID by KEY (whose account has VERIFIED_EMAIL
+    proven, if any), or None. A personal code (an offer's) works only for the requester's key or
+    an account proven with the requester's address."""
     if c is None or c.get("revoked"):
         return "unknown_code"
+    if c.get("bound_key") or c.get("bound_email"):
+        mine = key and key == c.get("bound_key")
+        theirs = verified_email and verified_email.lower() == (c.get("bound_email") or "").lower()
+        if not (mine or theirs):
+            return "unknown_code"
     if c.get("product") and c["product"] != pid:
         return "unknown_code"
     if c.get("expires") and dt.date.fromisoformat(c["expires"]) < today():
@@ -1476,7 +1495,7 @@ def _checkout(
         with st.tx() as db:
             if code:
                 c = st.code(code, db)
-                why = _usable(c, pid)
+                why = _usable(c, pid, key, acct["email"] if acct and acct["verified"] else "")
                 if why:
                     raise ApiError(
                         404 if why == "unknown_code" else 409,
@@ -2047,19 +2066,79 @@ def _read_invoices(svc: Services) -> None:
     salesodoo.read_open_invoices(svc)
 
 
-# ── offers (in kind) ────────────────────────────────────────────────────────────────────────
-def offer_answer(f: dict[str, Any]) -> dict[str, Any]:
-    out = {"offer": f["id"], "state": f["state"], "product": f["product"]}
+# ── offers (in kind): public requests in the requests channel ───────────────────────────────
+# Xavier, 2026-11-17: in-kind requests are public, like GitHub issues, with back and forth in
+# the thread. An offer is a thread from outside in the "requests channel" (a channel whose web
+# page is on and public, webthreads.py): the same confirmation of the address before anything
+# is public, then a card in the channel tagged ["offer", id] with buttons for the belfry's
+# admins (docs/actions.md, belfry:offer-decide). A decision is a public reply in the thread;
+# the personal code goes only in the private mail to the requester.
+OFFER_PERCENTS = (50, 75, 100)
+
+
+def requests_site(svc: Services) -> tuple[str, dict[str, Any]] | None:
+    """(slug, site) of the requests channel when its page is on and public, else None."""
+    from . import webthreads
+
+    channel = settings(svc).get("requests_channel") or ""
+    if not channel:
+        return None
+    try:
+        sites = webthreads.sites(svc)
+    except Exception:  # noqa: BLE001
+        return None
+    for slug, site in sites.items():
+        if site["channel"] == channel and site.get("list") == "public":
+            return slug, site
+    return None
+
+
+def public_channels(svc: Services) -> list[dict[str, str]]:
+    """The channels that can take offers: page on and public (the console's pick-list)."""
+    from . import webthreads
+
+    try:
+        sites = webthreads.sites(svc)
+    except Exception:  # noqa: BLE001
+        return []
+    return [
+        {"channel": site["channel"], "slug": slug, "name": site.get("name") or slug}
+        for slug, site in sorted(sites.items())
+        if site.get("list") == "public"
+    ]
+
+
+def offer_answer(f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
+    out: dict[str, Any] = {"offer": f["id"], "state": f["state"], "product": f["product"]}
+    if f.get("url"):
+        out["url"] = f["url"]
+    if mine and f.get("my_url"):
+        out["my_url"] = f["my_url"]
     if f["state"] in ("accepted", "declined"):
         out["percent"] = f.get("decided_percent") or 0
     return out
 
 
+def offer_buttons() -> list[list[str]]:
+    return [
+        ["button", "offer-50", "50% off", "", "belfry:offer-decide"],
+        ["button", "offer-75", "75% off", "", "belfry:offer-decide"],
+        ["button", "offer-100", "100% off", "primary", "belfry:offer-decide"],
+        ["button", "offer-no", "Decline", "danger", "belfry:offer-decide"],
+    ]
+
+
 def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> dict[str, Any]:
+    """POST /offers: a public request, posted once its author confirmed the mailed link."""
+    from . import webthreads
     from .holder_invites import ApiError
 
     if not own(svc):
         raise ApiError(409, "unsupported", "Selling needs the belfry's own register.")
+    found = requests_site(svc)
+    if found is None:
+        raise ApiError(409, "no_requests_channel", "This belfry takes no offers in kind yet.")
+    slug, site = found
     p = product(svc, str(data.get("product") or ""))
     if p is None:
         raise ApiError(404, "unknown_product", "No such product.")
@@ -2073,40 +2152,85 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     if not name or not text or len(text) > 2000:
         raise ApiError(422, "invalid", "Say who you are and what you offer (2000 characters).")
     try:
-        percent = int(data.get("percent"))
+        percent = int(data.get("percent") if data.get("percent") not in (None, "") else 50)
     except (TypeError, ValueError) as exc:
         raise ApiError(422, "invalid", "percent: 50 to 100.") from exc
     if not 50 <= percent <= 100:
         raise ApiError(422, "invalid", "percent: 50 to 100.")
     st = store(svc)
-    mine = [f for f in st.offers(key) if f["state"] == "open"]
+    mine = [f for f in st.offers(key) if f["state"] in ("confirm", "open")]
     if (
         len(mine) >= 3
         or not st.hit("offer-key:" + key, OFFERS_PER_DAY, 86400)
         or not st.hit("offer-ip:" + ip_tag(svc, ip), OFFERS_PER_DAY, 86400)
     ):
         raise ApiError(429, "too_many", "Too many offers for now.")
+    fid = "f_" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16))
+    title = f"{name}: {percent}% off {p['name']} in kind"
+    extra = [
+        ["offer", fid],
+        ["product", p["id"]],
+        ["percent", str(percent)],
+        ["p", key],
+        *offer_buttons(),
+    ]
+    token = webthreads.start_thread(
+        svc,
+        slug,
+        site,
+        title,
+        text,
+        name,
+        email,
+        ip,
+        extra=extra,
+        hook={"kind": "offer", "id": fid},
+        public_note=True,
+    )
+    if token is None:
+        raise ApiError(429, "too_many", "Too many requests in a short time: try in an hour.")
     f = {
-        "id": "f_"
-        + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16)),
+        "id": fid,
         "key": key,
         "product": p["id"],
         "name": name,
         "email": email,
         "offer": text,
         "percent": percent,
-        "state": "open",
+        "state": "confirm",
+        "channel": site["channel"],
+        "slug": slug,
         "created": iso(now()),
     }
     st.put_offer(f)
-    from . import salesmail
-
-    salesmail.offer_to_admins(svc, f)
-    log.info("sales: offer %s for %s (%s)", f["id"], p["id"], mask(email))
+    log.info("sales: offer %s for %s (%s), waiting for its link", fid, p["id"], mask(email))
     return f
 
 
+def offer_posted(svc: Services, fid: str, event: dict[str, Any], url: str, my_url: str) -> None:
+    """webthreads: the requester pressed the link; the request is public."""
+    st = store(svc)
+    f = st.offer(fid)
+    if f is None or f["state"] != "confirm":
+        return
+    f.update(state="open", card=event["id"], url=url, my_url=my_url)
+    st.put_offer(f)
+
+
+def offer_chat_link(svc: Services, f: dict[str, Any]) -> str:
+    from urllib.parse import quote
+
+    if not f.get("card") or not f.get("channel"):
+        return ""
+    return (
+        f"https://chat.{svc.settings.nip05_domain}/#/c/{quote(f['channel'], safe='')}"
+        f"/thread/{f['card']}"
+    )
+
+
 def decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> dict[str, Any]:
+    """An admin's answer: a public reply in the thread ("Approved: 50% off." / "Not this
+    time.", with the note), and the personal code only in the private mail."""
     from .holder_invites import ApiError
 
     st = store(svc)
@@ -2114,7 +2238,13 @@ def decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> d
     if f is None:
         raise ApiError(404, "not_found", "No such offer.")
     if f["state"] != "open":
-        raise ApiError(409, "decided", "This offer has an answer already.")
+        raise ApiError(
+            409,
+            "decided" if f["state"] != "confirm" else "not_open",
+            "This offer has an answer already."
+            if f["state"] != "confirm"
+            else "This offer is not public yet.",
+        )
     try:
         percent = int(percent)
     except (TypeError, ValueError) as exc:
@@ -2125,7 +2255,17 @@ def decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> d
     code = None
     if percent:
         code = make_codes(
-            svc, percent, f["product"], 1, 1, None, f"Offer from {f['name']}", by, fid
+            svc,
+            percent,
+            f["product"],
+            1,
+            1,
+            None,
+            f"Offer from {f['name']}",
+            by,
+            fid,
+            bound_key=f["key"],
+            bound_email=f["email"],
         )[0]["code"]
     f.update(
         state="accepted" if percent else "declined",
@@ -2136,10 +2276,72 @@ def decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> d
         code=code,
     )
     st.put_offer(f)
+    _reply_in_thread(
+        svc,
+        f,
+        (f"Approved: {percent}% off." if percent else "Not this time.")
+        + (f" {note}" if note else ""),
+    )
     from . import salesmail
 
     salesmail.offer_answer(svc, f)
     return f
+
+
+def _reply_in_thread(svc: Services, f: dict[str, Any], text: str) -> None:
+    """The decision, public, as a reply under the request (by the groups key)."""
+    from . import followers
+
+    got = followers._relay(svc)
+    if got is None or not f.get("card"):
+        return
+    relay, sign = got
+    root = f["card"]
+    found = relay.query([{"ids": [root]}], sign) or []
+    author = (found[0] if found else {}).get("pubkey") or ""
+    tags = [
+        ["h", f["channel"]],
+        ["E", root, "", author],
+        ["K", "9"],
+        ["P", author],
+        ["e", root, "", author],
+        ["k", "9"],
+        ["p", author],
+        ["client", "belfry-sales"],
+    ]
+    try:
+        event = sign({"kind": 1111, "created_at": int(time.time()), "content": text, "tags": tags})
+        relay.publish(event, sign)
+    except Exception:  # noqa: BLE001 — the decision stands; the mail tells the requester
+        log.exception("sales: offer %s: the decision was not posted in its thread", f["id"])
+
+
+async def offer_decide_press(p: Any) -> Any:
+    """docs/actions.md: belfry:offer-decide, pressed on an offer's card in the chat."""
+    from . import actions, apps
+
+    svc = p.svc
+    admins = await run_in_threadpool(apps.admin_pubkeys, svc)
+    if p.press["pubkey"] not in admins:
+        return actions.Result.error("not_allowed", "Only admins of this belfry decide offers.")
+    fid = next((t[1] for t in p.message.get("tags", []) if t[:1] == ["offer"] and len(t) > 1), "")
+    f = store(svc).offer(fid) if OFFER_RE.match(fid or "") else None
+    if f is None or f.get("card") != p.message.get("id"):
+        return actions.Result.error("no_target", "This message is not an offer here.")
+    bid = p.button["id"]
+    percent = 0 if bid == "offer-no" else int(bid.removeprefix("offer-") or 0)
+    if percent and percent not in OFFER_PERCENTS:
+        return actions.Result.error("no_target")
+    name = await run_in_threadpool(actions._name, svc, p.press["pubkey"])
+    from .holder_invites import ApiError
+
+    try:
+        await run_in_threadpool(decide_offer, svc, fid, percent, "", name)
+    except ApiError as exc:
+        return actions.Result.error("gone" if exc.error == "decided" else "failed", exc.message)
+    if percent:
+        return actions.Result("ok", f"Approved by {name}: {percent}% off.", closed=True)
+    return actions.Result("ok", f"Declined by {name}.", closed=True)
 
 
 # ── the API ─────────────────────────────────────────────────────────────────────────────────
@@ -2199,7 +2401,9 @@ def register(app: FastAPI) -> None:
             raise ApiError(429, "too_many", "Too many codes tried. Try again in an hour.")
         pid = str(data.get("product") or "")
         c = store(s).code(norm_code(data.get("code")))
-        why = _usable(c, pid) if product(s, pid) else "unknown_code"
+        acct = await run_in_threadpool(account_of, s, key)
+        mail_ok = acct["email"] if acct and acct["verified"] else ""
+        why = _usable(c, pid, key, mail_ok) if product(s, pid) else "unknown_code"
         if why == "unknown_code":
             raise ApiError(404, "unknown_code", "That code doesn't work for this.")
         if why == "code_used":
@@ -2279,7 +2483,7 @@ def register(app: FastAPI) -> None:
         f = store(s).offer(fid) if OFFER_RE.match(fid) else None
         if f is None or f["key"] != key:
             raise ApiError(404, "not_found", "No such offer.")
-        return JSONResponse(offer_answer(f), headers=NO_STORE)
+        return JSONResponse(offer_answer(f, mine=True), headers=NO_STORE)
 
     @app.post(API + "/offers/{fid}/decide")
     async def api_offer_decide(fid: str, request: Request) -> JSONResponse:

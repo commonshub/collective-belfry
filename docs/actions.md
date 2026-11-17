@@ -107,10 +107,12 @@ A client that doesn't know the name of a `belfry:` action shows the button disab
 | Action | Who | What | Confirmation the client shows |
 |---|---|---|---|
 | `belfry:website-publish` | an admin of the belfry | Publishes the site the message points to as the website. The site is the message's first `["a", "35128:<pubkey>:<name>"]` tag, else the first preview link in its text. Answers `ok` + `closed`, "Published by <name>." The usual "Website updated" line follows in #website. | "Publish this version as the website? Everyone will see it at https://<domain>." · Publish / Cancel |
+| `belfry:offer-decide` | an admin of the belfry | Answers an offer in kind (docs/sales.md): the button's id says how much (`offer-50`, `offer-75`, `offer-100`) or no (`offer-no`); the offer is the message's `["offer", id]` tag, and the message must be that offer's own card. Posts the public reply in the thread and mails the requester their personal code. Answers `ok` + `closed`, "Approved by <name>: 75% off." / "Declined by <name>." | "Answer this offer? The answer is public in the thread; the code goes privately to them." · Answer / Cancel |
 
-Errors: `not_allowed` "Only admins of this belfry can publish the website.", `no_target` "This
+Errors (website): `not_allowed` "Only admins of this belfry can publish the website.", `no_target` "This
 message doesn't point to a version of the website.", `failed` "Couldn't publish: <reason in a few
-words>."
+words>." Errors (offers): `not_allowed` "Only admins of this belfry decide offers.", `no_target`
+"This message is not an offer here.", `gone` "This offer has an answer already."
 
 New actions are added to this table first.
 

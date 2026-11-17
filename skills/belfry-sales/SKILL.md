@@ -55,10 +55,18 @@ Belfry's own page of the order; the PDF comes by mail. Show the message, keep th
 
 Never tell a buyer whether an address is already a member: Belfry doesn't either.
 
-## In kind
+## In kind (public requests)
 
-`POST /offers {"product", "name", "email", "offer", "percent": 50–100}` → `{offer, state}`;
-the admins answer by mail with a personal code. `GET /offers/<id>` by the same key.
+Offers in kind are public, like GitHub issues, on the belfry's requests page
+(`https://<domain>/requests` or whichever channel the admins picked; `GET /products` says
+`"offers": true` when there is one). Say so plainly on the form: the request and the name are
+public, the e-mail address never is.
+
+`POST /offers {"product", "name", "email", "offer", "percent"}` (percent 50–100, default 50)
+→ `{offer, state: "confirm"}`; the requester confirms the mailed link, then the request is public.
+`GET /offers/<id>` by the same key → `state`, `url` (the public thread), `my_url` (theirs, to
+comment). The admins answer in the thread; the personal code comes only by mail and works only
+for that key or that address.
 
 ## For admins
 

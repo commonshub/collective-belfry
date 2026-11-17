@@ -202,8 +202,15 @@ async def website_publish(p: Press) -> Result:
 
 
 # name (after "belfry:") → handler. New actions go into docs/actions.md §4 first.
+async def offer_decide(p: Press) -> Result:
+    from . import sales
+
+    return await sales.offer_decide_press(p)
+
+
 HANDLERS: dict[str, Handler] = {
     "website-publish": website_publish,
+    "offer-decide": offer_decide,  # an offer in kind's card (sales.py)
 }
 
 

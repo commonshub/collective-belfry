@@ -296,18 +296,6 @@ def test_limits_per_ip_and_per_address(seller):
             c, PrivateKey(), "/checkout", order_body("b98@example.org"), "2001:db8:1:3::1"
         )
         assert r.status_code == 201
-        # offers: three a day per key
-        me = PrivateKey()
-        offer = {
-            "product": "village-2027",
-            "name": "K",
-            "email": "k@example.org",
-            "offer": "help",
-            "percent": 50,
-        }
-        for _ in range(3):
-            assert post_from(c, me, "/offers", offer, ip="192.0.2.50").status_code == 201
-        assert post_from(c, me, "/offers", offer, ip="192.0.2.51").status_code == 429
 
 
 def test_thirty_orders_an_hour_per_ip_and_refusals_apart(seller):

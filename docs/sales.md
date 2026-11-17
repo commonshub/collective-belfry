@@ -201,11 +201,36 @@ card session when Stripe's (24 hours) expired. Another key gets 404.
 
 `GET /billing` — NIP-98, a verified account only → the billing details saved at its last order.
 
-`POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent": 50–100}`
-(the website's form offers 50% by default) → 201 `{"offer": "f_…", "state": "open"}`. 3 a day per key and per IP, 3 open per key. The belfry's admins see it in the console and decide
-(percent may differ from the asked one, or no); the answer is mailed with a personal code.
-`GET /offers/<id>` by the same key → its state. Admins: `POST /offers/<id>/decide
-{"percent": 0|50–100, "note"}`.
+**Offers in kind are public requests** (Xavier, 2026-11-17: "be clear that those requests are
+public (show a link to /requests which should look like github issues)"). They live in the
+belfry's **requests channel**: a channel whose web page is on and public (webthreads.py: the
+"issues" template at `<domain>/<slug>`), picked in the console (a hint says to make a channel
+`requests` with the slug `requests` when there is none). No requests channel → `POST /offers`
+answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
+
+`POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent"}`
+(`percent` 50–100, 50 when left out; the website's form shows 50% by default) → 201
+`{"offer": "f_…", "state": "confirm"}`. It goes through the requests page's own path for a thread
+from outside: the confirmation mail must be answered (the address must be theirs) before
+anything is public; the page's limits apply, and 3 a day per key and per IP, 3 open per key.
+The form and the confirmation mail say in plain words that the request and the name will be
+public; the e-mail address never is. Once the link is pressed: a thread titled
+"<name>: <percent>% off <product> in kind" with the offer as its text, tagged `["offer", id]`,
+`["product", id]`, `["percent", n]`, `["p", <the requester's key>]`, and four buttons for the
+belfry's admins (docs/actions.md, `belfry:offer-decide`: 50%, 75%, 100%, Decline). Members
+answer in the thread in the chat; the requester comments with their link; replies are mailed
+back to them (webthreads.py).
+
+`GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
+"declined", "product", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
+requester's own link (to comment), only in this answer and in their mail.
+
+Deciding: the belfry's admins only, in the console (any percent 50–100 or no, with a note) or
+with the card's buttons in the chat. A decision posts a public reply in the thread ("Approved:
+75% off." or "Not this time.", with the note); the personal code goes **only** in the private
+mail to the requester. That code is bound to the requester's key **and** address: the checkout
+takes it from that key, or from an account proven with that address; one use, that product.
+Admins over the API: `POST /offers/<id>/decide {"percent": 0|50–100, "note"}`.
 
 `POST /codes` — NIP-98, admins. `{"percent", "product"?, "uses": 1, "count": 1, "expires"?,
 "note"?}` → the codes. A sponsor paying for N passes is an order by hand in Odoo and N codes

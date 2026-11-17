@@ -310,16 +310,42 @@ The restricted key needs Checkout Sessions: write.</p>
             )
             act = f"""<form method="post" action="{PATH}/offer" class="f"><input type="hidden" name="csrf" value="{csrf}">
 <input type="hidden" name="id" value="{E(f["id"])}"><label>Answer <select name="percent">{choices}</select></label>
-<label>Note to them (optional) <input type="text" name="note"></label><div class="actions"><button class="btn" type="submit">Send the answer</button></div></form>"""
+<label>Note (optional; public in the thread) <input type="text" name="note"></label><div class="actions"><button class="btn" type="submit">Send the answer</button></div></form>"""
+        elif f["state"] == "confirm":
+            act = '<p class="hint">Waiting for them to confirm their address: not public yet.</p>'
         else:
             act = (
                 f"<p>{E(f['state'])}"
                 + (f", {f.get('decided_percent')}% off" if f.get("decided_percent") else "")
                 + "</p>"
             )
-        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(f["product"])} · asks {f["percent"]}% off · {E(f["created"][:10])}</span></p>
+        chat = sales.offer_chat_link(svc, f)
+        link = f' · <a href="{E(chat)}">the thread in the chat</a>' if chat else ""
+        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(f["product"])} · asks {f["percent"]}% off · {E(f["created"][:10])}</span>{link}</p>
 <p>{E(f["offer"])}</p>{act}</div>"""
-    offers = f'<h2 id="offers">Offers in kind</h2>{orow or "<p class=hint>No offers yet.</p>"}'
+    chans = sales.public_channels(svc)
+    current = st.get("requests_channel") or ""
+    if chans:
+        pick = _select(
+            "channel",
+            [{"id": c["channel"], "label": f"{c['name']} (/{c['slug']})"} for c in chans],
+            lambda r: r["label"],
+            current,
+            "— none: no offers in kind —",
+        )
+        chooser = f"""<form method="post" action="{PATH}/requests" class="f"><input type="hidden" name="csrf" value="{csrf}">
+<label>Requests channel {pick}</label>
+<p class="hint">Offers in kind are public there, like issues: the request and the person's name, never their e-mail address. Members answer in the thread; only admins decide.</p>
+<div class="actions"><button class="btn" type="submit">Save</button></div></form>"""
+    else:
+        chooser = (
+            '<p class="hint">To take offers in kind, make a channel named <b>requests</b>, turn on '
+            "its web page with the slug <b>requests</b> and make it public (the channel's settings "
+            "in the chat). It then shows here.</p>"
+        )
+    offers = (
+        f'<h2 id="offers">Offers in kind</h2>{chooser}{orow or "<p class=hint>No offers yet.</p>"}'
+    )
     # ── orders
     rrow = ""
     for o in sales.store(svc).orders(limit=300):
@@ -552,6 +578,17 @@ def register(app: FastAPI) -> None:
     async def code_revoke(request: Request, me: dict[str, Any], form: Any):
         await run_in_threadpool(sales.revoke_code, svc(request), str(form.get("code") or ""))
         return back(request, msg="revoked")
+
+    @app.post("/console/sales/requests")
+    @admin_only
+    async def requests_channel(request: Request, me: dict[str, Any], form: Any):
+        s = svc(request)
+        channel = str(form.get("channel") or "")
+        ok = {c["channel"] for c in await run_in_threadpool(sales.public_channels, s)}
+        if channel and channel not in ok:
+            return back(request, err="expired")
+        await run_in_threadpool(sales.save_settings, s, {"requests_channel": channel})
+        return back(request, msg="picks", at="offers")
 
     @app.post("/console/sales/offer")
     @admin_only
