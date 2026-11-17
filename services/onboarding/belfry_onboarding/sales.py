@@ -380,7 +380,8 @@ def settings(svc: Services) -> dict[str, Any]:
         "card_journal": st.get("card_journal") or _int(env.accounting_journal),
         "manual_journal": st.get("manual_journal") or _int(env.accounting_manual_journal),
         "ref_prefix": st.get("ref_prefix") or env.accounting_ref_prefix or "Belfry ",
-        "send_invoice": bool(st.get("send_invoice", env.accounting_send)),
+        # Odoo mails its own invoice PDF too (Belfry always mails the transfer details)
+        "send_invoice": bool(st.get("send_invoice", False)),
         "bank_holder": st.get("bank_holder") or "",
         "bank_iban": st.get("bank_iban") or "",
         "bank_bic": st.get("bank_bic") or "",
@@ -1106,6 +1107,16 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
         raise ApiError(422, "invalid", 'pay: "card" or "invoice".')
     code = norm_code(data.get("code")) if data.get("code") else ""
     return_url = _own_url(svc, data.get("return_url"))
+    flags: list[str] = []
+    if billing["kind"] == "organisation" and billing.get("vat") and can_sell(svc):
+        # checked before the invoice is made (outside the lock: VIES can be slow)
+        from . import salesodoo
+
+        valid = salesodoo.check_vat(billing["vat"])
+        if valid is False:
+            raise ApiError(422, "invalid_vat", "That VAT number is not valid.")
+        if valid is None:
+            flags.append("vies_down")  # taken; the admins check the number by hand
     st = store(svc)
     with _checkout_lock:
         # the same key, product and address while an order is open (or just became active: a
@@ -1153,6 +1164,7 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
         if total["gross"] > 0 and not can_sell(svc):
             _give_back(svc, {"id": oid, "code": code})
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
+
         acct = account_of(svc, key)
         created = now()
         o = {
@@ -1183,7 +1195,7 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
             "pass_id": None,
             "invoice": {},
             "stripe": {},
-            "flags": [],
+            "flags": flags,
             "error": None,
         }
         st.put_order(o)

@@ -1192,3 +1192,133 @@ def flash_of(response) -> str:
             claims = jwt.decode(token, options={"verify_signature": False})
             return f"{claims.get('msg', '')} {claims.get('err', '')}".strip()
     return ""
+
+
+class FakeSellerOdoo:
+    """The seller's Odoo over JSON-2 (salesodoo.py): partners, invoices posted with a number and a
+    structured communication, payments, credit notes. ``down``: every call fails as a network
+    error; ``refuse``: Odoo answers 422."""
+
+    TAXES = {10: (21.0, True), 11: (21.0, False)}  # id → (rate, price includes it)
+
+    def __init__(self) -> None:
+        self.records: dict[str, dict[int, dict[str, Any]]] = {}
+        self.calls: list[tuple[str, str]] = []
+        self.down = False
+        self.refuse = False
+        self.add("res.company", name="XL Collective")
+        self.add("res.country", code="BE", name="Belgium")
+        self.add("res.currency", name="EUR")
+        self.add("product.product", display_name="Village pass", sale_ok=True)
+
+    def add(self, model: str, **vals: Any) -> int:
+        table = self.records.setdefault(model, {})
+        rid = max(table, default=0) + 1
+        table[rid] = {"id": rid, **vals}
+        return rid
+
+    def _fail(self, model: str, method: str) -> None:
+        self.calls.append((model, method))
+        if self.down:
+            raise httpx.ConnectError("odoo down")
+        if self.refuse:
+            raise OdooError(f"{model}.{method}: refused", {"status": 422})
+
+    @staticmethod
+    def _ok(rec: dict[str, Any], domain: list[Any]) -> bool:
+        for field, op, value in domain:
+            v = rec.get(field, False)
+            if isinstance(v, list) and v and isinstance(v[0], int):
+                v = v[0]
+            if op == "=" and v != value:
+                return False
+            if op == "!=" and v == value:
+                return False
+            if op == "=ilike" and str(v).lower() != str(value).lower():
+                return False
+            if op == "in" and v not in value:
+                return False
+        return True
+
+    def search_read(self, model, domain, fields, limit=None):
+        self._fail(model, "search_read")
+        rows = [dict(r) for r in self.records.get(model, {}).values() if self._ok(r, domain)]
+        return rows[:limit] if limit else rows
+
+    def read_one(self, model, rec_id, fields):
+        self._fail(model, "read")
+        r = self.records.get(model, {}).get(rec_id)
+        return dict(r) if r else None
+
+    def create(self, model, vals, context=None):
+        self._fail(model, "create")
+        vals = dict(vals)
+        if model == "account.move":
+            total = untaxed = 0.0
+            for _, _, line in vals.get("invoice_line_ids", []):
+                price = line["price_unit"] * line["quantity"] * (1 - line["discount"] / 100)
+                rate, included = self.TAXES[line["tax_ids"][0][2][0]]
+                if included:
+                    net = round(price / (1 + rate / 100), 2)
+                    untaxed, total = untaxed + net, total + round(price, 2)
+                else:
+                    gross = round(price * (1 + rate / 100), 2)
+                    untaxed, total = untaxed + round(price, 2), total + gross
+            vals.update(
+                state="draft",
+                name="/",
+                payment_state="not_paid",
+                payment_reference=False,
+                amount_untaxed=round(untaxed, 2),
+                amount_tax=round(total - untaxed, 2),
+                amount_total=round(total, 2),
+                journal_id=[1, "Customer Invoices"],
+                move_type=vals.get("move_type", "out_invoice"),
+            )
+        if model in ("account.payment.register", "account.move.reversal"):
+            vals["context"] = context
+        return self.add(model, **vals)
+
+    def call(self, model, method, ids=None, context=None, **params):
+        self._fail(model, method)
+        moves = self.records.setdefault("account.move", {})
+        if model == "account.move" and method == "read":
+            return [dict(moves[i]) for i in ids if i in moves]
+        if model == "account.move" and method == "action_post":
+            for i in ids:
+                m = moves[i]
+                if m["state"] == "draft":
+                    n = sum(1 for x in moves.values() if x["name"] != "/") + 1
+                    prefix = "RINV" if m.get("move_type") == "out_refund" else "INV"
+                    m.update(state="posted", name=f"{prefix}/2026/{n:04d}")
+                    if prefix == "INV":
+                        m["payment_reference"] = f"+++000/0000/{n:05d}+++"
+            return True
+        if model == "account.move" and method == "button_cancel":
+            for i in ids:
+                moves[i]["state"] = "cancel"
+            return True
+        if model == "account.move" and method == "get_portal_url":
+            return f"/my/invoices/{ids[0]}?access_token=t"
+        if model == "account.payment.register" and method == "action_create_payments":
+            wiz = self.records[model][ids[0]]
+            moves[wiz["context"]["active_id"]]["payment_state"] = "paid"
+            moves[wiz["context"]["active_id"]]["paid_journal"] = wiz["journal_id"]
+            return True
+        if model == "account.move.reversal" and method == "refund_moves":
+            wiz = self.records[model][ids[0]]
+            orig = moves[wiz["context"]["active_id"]]
+            rid = self.add(
+                "account.move",
+                move_type="out_refund",
+                reversed_entry_id=orig["id"],
+                state="draft",
+                name="/",
+                payment_state="not_paid",
+                amount_total=orig["amount_total"],
+            )
+            orig["payment_state"] = "reversed"
+            return {"res_id": rid}
+        if method == "action_send_and_print":
+            return True
+        raise AssertionError(f"unexpected {model}.{method}")
