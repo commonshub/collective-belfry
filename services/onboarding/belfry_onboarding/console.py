@@ -623,6 +623,7 @@ ICONS = {
     "apps": '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     "setup": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    "sales": '<path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6zM14 5v14"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
     "trash": '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
@@ -631,7 +632,14 @@ ICONS = {
 
 # (section, [(path, label, icon, who may see it: "admin" | "member")])
 SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
-    ("Community", [("/", "Home", "home", "member"), ("/website", "Website", "website", "admin")]),
+    (
+        "Community",
+        [
+            ("/", "Home", "home", "member"),
+            ("/website", "Website", "website", "admin"),
+            ("/sales", "Sales", "sales", "admin"),
+        ],
+    ),
     (
         "People",
         [("/members", "Members", "members", "member"), ("/agents", "Agents", "agents", "admin")],
@@ -1478,6 +1486,10 @@ def register(app: FastAPI) -> None:
             # no version.json (an older host command): the changelog's last code entry
             info["version"] = {"short": data["version"], "subject": data["version_summary"]}
         code = code_html(info, me, msg, err)
+        from . import sales
+
+        if sales.own(services):
+            code += f'<p class="meta">{E(sales.status_line(services))}</p>'
         page_ = HTMLResponse(status_html(data, me, code), headers={"Cache-Control": "no-store"})
         return flash.clear(page_, request)
 

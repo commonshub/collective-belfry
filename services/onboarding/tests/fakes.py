@@ -1209,7 +1209,7 @@ class FakeSellerOdoo:
         self.add("res.company", name="XL Collective")
         self.add("res.country", code="BE", name="Belgium")
         self.add("res.currency", name="EUR")
-        self.add("product.product", display_name="Village pass", sale_ok=True)
+        self.add("product.product", display_name="Festival ticket", sale_ok=True)
 
     def add(self, model: str, **vals: Any) -> int:
         table = self.records.setdefault(model, {})

@@ -496,6 +496,7 @@ cmd_status() {
     printf '  push gateway on: APNs key %s (id %s, team %s), FCM account %s\n' "$(secret_state apns_key)" "$(env_get APNS_KEY_ID)" "$(env_get APNS_TEAM_ID)" "$(secret_state fcm_service_account)"
   fi
   printf '  accounting   %s (key %s)\n' "$(env_get ACCOUNTING_ODOO_URL || true)" "$(secret_state accounting_odoo_api_key)"
+  printf '  sales        %s\n' "$(compose --profile app exec -T onboarding python -m belfry_onboarding sales-status 2>/dev/null | tail -n1 || echo 'not known (is the stack running?)')"
   local seeddir; seeddir=$(env_get CUSTODY_SEED_DIR)
   if [[ -z "$seeddir" ]]; then
     printf '  custody seed on this disk (infra/secrets/custody); move it under YubiKeys: infra/DEPLOY.md\n'

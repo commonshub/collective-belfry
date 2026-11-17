@@ -515,6 +515,19 @@ def summary(svc: Services) -> dict[str, bool]:
 
 
 # ── products ────────────────────────────────────────────────────────────────────────────────
+def status_line(svc: Services) -> str:
+    """One sentence for the Status page and ``belfry status``: never a value."""
+    s = summary(svc)
+    parts = ", ".join(
+        f"{name} {'set' if s[k] else 'not set'}"
+        for k, name in (("odoo", "Odoo"), ("bank", "bank"), ("stripe", "Stripe"))
+    )
+    head = "Selling passes: paid passes can be sold" if s["can_sell"] else (
+        "Selling passes: free passes only"
+    )
+    return f"{head} ({parts})."
+
+
 def products(svc: Services) -> list[dict[str, Any]]:
     got = _param(svc, PRODUCTS_PARAM)
     return [p for p in got if isinstance(p, dict) and p.get("id")] if isinstance(got, list) else []

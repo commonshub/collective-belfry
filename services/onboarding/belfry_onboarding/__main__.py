@@ -79,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     rst.add_argument("--all-admins", action="store_true", help="remove every admin")
     rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
+    sub.add_parser("sales-status", help="whether this belfry can sell passes (no values)")
     pl = sub.add_parser(
         "pay-link",
         help="a signed belfry.<domain>/pay link (its description shows; belfry pay-link)",
@@ -108,6 +109,15 @@ def main(argv: list[str] | None = None) -> int:
         print(register_import(odoo, Register(settings.register_path, settings), args.force))
         return 0
     services = build_services(settings)
+    if args.command == "sales-status":
+        from . import sales
+
+        print(
+            sales.status_line(services)
+            if sales.own(services)
+            else "Selling passes: off (Odoo register)."
+        )
+        return 0
     if args.command == "pay-link":
         from . import sales, salespay
 
