@@ -1609,7 +1609,7 @@ html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h,
 .page-rows { margin: 12px; }
 .page-row { width: 100%; }
 .page-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.active-line { padding-top: 12px; }
+.active-line { padding: 12px 16px 0 !important; }
 @keyframes page-in { from { transform: translateX(100%); } to { transform: none; } }
 .screen.slide-in { animation: page-in 220ms cubic-bezier(0, 0, 0.2, 1); }
 @media (prefers-reduced-motion: reduce) { .screen.slide-in { animation: none; } }
