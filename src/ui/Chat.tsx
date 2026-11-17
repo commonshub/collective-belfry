@@ -500,8 +500,8 @@ export function ChannelView({ id, topic, focus, activeThread, menu = false }: { 
         left={<LeftButton id={id} />}
         right={<button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
       {g?.isProposal && <SiteBar groupId={id} />}
-      <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g?.isPod && g.closed && !g.members.has(me())} />
-      {g?.isPod && !g.members.has(me()) && <JoinBar g={g} />}
+      <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g && g.closed && (g.isPod || !canAdmin(g)) && !g.members.has(me())} />
+      {g && !g.members.has(me()) && (g.isPod || (g.closed && !g.isEvent && !g.isProposal && !canAdmin(g))) && <JoinBar g={g} />}
     </div>
   )
 }
@@ -511,17 +511,18 @@ function JoinBar({ g }: { g: Group }) {
   const [asking, setAsking] = useState(false)
   const [answer, setAnswer] = useState('')
   const applied = group(g.id)?.applications.some((a) => a.pubkey === me())
+  const what = g.isPod ? 'group' : 'channel'
   if (!g.closed)
     return (
       <div className="join-bar">
-        <span>You're not in this group yet.</span>
+        <span>You're not in this {what} yet.</span>
         <Btn className="btn small" onClick={() => joinGroup(g.id)}>Join</Btn>
       </div>
     )
   return (
     <>
       <div className="join-bar">
-        <span>{applied ? (g.vouches > 0 ? 'Request sent. Its members vouch, or its admins answer.' : 'Request sent. The group’s admins will answer.') : 'People join this group by request.'}</span>
+        <span>{applied ? (g.vouches > 0 ? 'Request sent. Its members vouch, or its stewards answer.' : `Request sent. The ${what}’s stewards will answer.`) : `Members apply to join this ${what}.`}</span>
         {!applied && <button className="btn small" onClick={() => setAsking(true)}>Apply to join</button>}
       </div>
       {asking && (
@@ -531,7 +532,7 @@ function JoinBar({ g }: { g: Group }) {
             <textarea className="input" rows={4} autoFocus value={answer} onChange={(e) => setAnswer(e.target.value)} />
             <div style={{ height: 12 }} />
             <button className="btn" disabled={!answer.trim()}>Send my request</button>
-            <p className="hint" style={{ marginTop: 10 }}>{g.vouches > 0 ? `${g.vouches === 1 ? 'One member' : `${g.vouches} members`} vouching for you, or an admin, let you in.` : 'The group’s admins see your answer and let you in, or not.'}</p>
+            <p className="hint" style={{ marginTop: 10 }}>{g.vouches > 0 ? `${g.vouches === 1 ? 'One member' : `${g.vouches} members`} vouching for you, or a steward, let you in.` : `The ${what}’s stewards see your answer and let you in, or not.`}</p>
           </Form>
         </Sheet>
       )}
@@ -594,7 +595,7 @@ export function AccessFields({ closed, prompt, vouches = 0, set }: Access & { se
       <div className="field"><span>Who can join</span></div>
       <div className="choice" style={{ marginTop: -8 }}>
         <button type="button" className={!closed ? 'on' : ''} onClick={() => set({ closed: false, prompt, vouches })}><b>Open</b><small>Any member joins</small></button>
-        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt, vouches })}><b>By request</b><small>People ask to join</small></button>
+        <button type="button" className={closed ? 'on' : ''} onClick={() => set({ closed: true, prompt, vouches })}><b>Closed</b><small>Members apply to join</small></button>
       </div>
       {closed && (
         <label className="field"><span>Question people answer when they ask</span>
@@ -604,10 +605,10 @@ export function AccessFields({ closed, prompt, vouches = 0, set }: Access & { se
         <div className="field vouch-rule"><span>Requests are accepted</span>
           <div className="pick-group" role="radiogroup" aria-label="How requests are accepted">
             <button type="button" role="radio" aria-checked={!vouches} className={'pick-row' + (!vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: 0 })}>
-              <span className="radio" aria-hidden="true" /><span className="t"><b>By its admins</b><small>An admin accepts or declines each request</small></span>
+              <span className="radio" aria-hidden="true" /><span className="t"><b>By its stewards</b><small>A steward accepts or declines each request</small></span>
             </button>
             <button type="button" role="radio" aria-checked={!!vouches} className={'pick-row' + (vouches ? ' on' : '')} onClick={() => set({ closed, prompt, vouches: vouches || 2 })}>
-              <span className="radio" aria-hidden="true" /><span className="t"><b>When members vouch</b><small>Once enough of its members vouch, they’re in. Admins can still answer.</small></span>
+              <span className="radio" aria-hidden="true" /><span className="t"><b>When members vouch</b><small>Once enough of its members vouch, they’re in. Stewards can still answer.</small></span>
             </button>
           </div>
           {!!vouches && (
@@ -625,7 +626,8 @@ export function AccessFields({ closed, prompt, vouches = 0, set }: Access & { se
 function NewPod({ parent, onClose }: { parent: string; onClose: () => void }) {
   const [name, setName] = useState('')
   const [about, setAbout] = useState('')
-  const [access, setAccess] = useState<Access>({ closed: false, prompt: '', vouches: 0 })
+  // closed by default: members apply, its stewards (the creator first) let them in (Xavier, 2026-11-17)
+  const [access, setAccess] = useState<Access>({ closed: true, prompt: '', vouches: 0 })
   const where = group(parent)
   return (
     <Sheet title="New group" onClose={onClose}>

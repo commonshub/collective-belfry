@@ -13,7 +13,7 @@
 //   POST /events/<d>/attendees {}                         → {people, going, checked_in}
 //   POST /events/<d>/checkin {code | pubkey, undo?}       → {person, already}
 // Errors are shown in fixed words by code, never the server's text.
-import { DOOR } from './places'
+import { DOOR, STEWARD } from './places'
 import { sha256 } from '@noble/hashes/sha256'
 import { BELFRY } from '../config'
 import { belfryAdminKeys, isAdmin } from './access'
@@ -105,7 +105,7 @@ export function onTheDay(e: Pick<CalEvent, 'start' | 'end'>, now = new Date()): 
 export function roleWord(groupId: string, pk: string, e?: Pick<CalEvent, 'creator' | 'groupId'>): string {
   if (e) { const r = eventRoles(e, pk)[0]; return r === 'host' ? 'Host' : r === 'cohost' ? 'Co-host' : r === 'steward' ? DOOR : '' }
   const g = group(groupId)
-  return g?.admins.has(pk) && !everywhere(groupId).has(pk) ? 'Admin' : ''
+  return g?.admins.has(pk) && !everywhere(groupId).has(pk) ? (g.isEvent ? 'Admin' : STEWARD) : ''
 }
 
 // ---- errors ----------------------------------------------------------------------------------

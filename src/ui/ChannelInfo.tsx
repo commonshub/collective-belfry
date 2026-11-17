@@ -179,6 +179,8 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.name ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   const [moving, setMoving] = useState<ChannelVisibility | null>(null)
+  // closed: members apply to join, its stewards let them in (Xavier, 2026-11-17)
+  const [closedCh, setClosedCh] = useState(!!g?.closed)
   const [archiving, setArchiving] = useState(false)
   const [archiveError, setArchiveError] = useState('')
   if (!g || g.archived) return null
@@ -197,7 +199,9 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   return (
           <Form className="chan-settings-form" onSubmit={async (e) => {
             e.preventDefault()
-            if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
+            if (!g.isPod && closedCh !== !!g.closed)
+              await editPod(id, name.trim(), about.trim(), { closed: closedCh, prompt: g.prompt ?? '', vouches: 0 })
+            else if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
               await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
             if (web.on) {
               const slug = slugify(web.slug)
@@ -217,10 +221,11 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
             {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} vouches={access.vouches} set={setAccess} />}
             {!g.isPod && <div className="field visibility"><span>Visibility</span>
-              <label className="toggle"><input type="radio" name="visibility" checked={isPublicChannel(g)} onChange={() => setMoving('public')} /> <span><b>Public</b> · anyone reads it on the web</span></label>
-              <label className="toggle"><input type="radio" name="visibility" checked={!isPublicChannel(g)} onChange={() => setMoving('members')} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
+              <label className="toggle"><input type="radio" name="visibility" checked={isPublicChannel(g)} onChange={() => { setClosedCh(false); setMoving('public') }} /> <span><b>Public</b> · anyone reads it on the web</span></label>
+              <label className="toggle"><input type="radio" name="visibility" checked={!isPublicChannel(g) && !closedCh} onChange={() => { setClosedCh(false); if (isPublicChannel(g)) setMoving('members') }} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
+              {g.id !== 'general' && <label className="toggle"><input type="radio" name="visibility" value="closed" checked={!isPublicChannel(g) && closedCh} onChange={() => { setClosedCh(true); if (isPublicChannel(g)) setMoving('members') }} /> <span><b>Closed</b> · members apply to join; its stewards let them in</span></label>}
             </div>}
-            {moving && <VisibilitySheet g={g} to={moving} onClose={() => setMoving(null)} onDone={(page) => { setWeb({ ...web, on: page.on, visibility: page.visibility, periods: page.periods, slug: web.on ? web.slug : page.slug }); setMoving(null) }} />}
+            {moving && <VisibilitySheet g={g} to={moving} onClose={() => { setMoving(null); setClosedCh(!!g.closed) }} onDone={(page) => { setWeb({ ...web, on: page.on, visibility: page.visibility, periods: page.periods, slug: web.on ? web.slug : page.slug }); setMoving(null) }} />}
             {!g.isPod && <div className="field visibility"><span>Posts</span>
               {([['', 'Anything', 'messages, threads, events, proposals'], ['thread', 'Threads only', 'every post has a title; talk goes in its thread'], ['event', 'Events only', 'the composer becomes "New event"'], ['proposal', 'Proposals only', 'to discuss and vote on'],
                 ...(web.posts === 'request' ? [['request', 'Requests', 'from the web; members turn them into proposals']] : [])] as [string, string, string][]).map(([v, label, hint]) => (
@@ -385,7 +390,7 @@ export function Members({ groupId }: { groupId: string }) {
   const g = group(groupId)
   const members = [...new Set([...(g?.members ?? []), ...(g?.isPod ? [] : [me()])])].filter(Boolean)
   // requests to join: its admins answer; while it accepts by vouches, its members vouch
-  const reviewing = g?.isPod && !g.archived ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
+  const reviewing = g && (g.isPod || g.closed) && !g.archived ? (canAdmin(g) ? g.applications : groupRequestsFor(g)) : []
   // guest mode: people who opened an invite link and have not joined are a number, not members
   const readingN = g ? [...g.reading].filter((p) => p !== me()).length : 0
   // guests (people or agents) and who brought them in: whose agent it is

@@ -12,7 +12,7 @@ import { allGroups, channelIcon, displayName, realName, eventOfGroup, group, gro
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
 import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
-import { DOOR } from '../core/places'
+import { DOOR, STEWARD } from '../core/places'
 import { agentOwner, agentOwners, isAdmin } from '../core/access'
 import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, setMyAgent, type MyAgents } from '../core/invite'
 import { useVersion } from '../core/store'
@@ -158,8 +158,8 @@ function GroupRoleCard({ groupId, pk }: { groupId: string; pk: string }) {
   const may = canAdmin(g) && pk !== creator
   const options: [GroupRole, string, string][] = isEvent
     ? [['member', 'Attendee', 'Comes to the event'], ['admin', 'Co-host', 'Edits the event, answers applications, checks people in'], ['steward', DOOR, 'Checks people in at the door']]
-    : [['member', 'Member', 'Reads and writes here'], ['admin', 'Admin', 'Changes the channel, its members and their roles']]
-  const word = pk === creator ? 'Host' : isEvent ? (er === 'cohost' ? 'Co-host' : er === 'steward' ? DOOR : now === 'admin' ? 'Admin' : 'Attendee') : now === 'admin' ? 'Admin' : 'Member'
+    : [['member', 'Member', 'Reads and writes here'], ['admin', STEWARD, 'Lets people in, changes the group, names other stewards']]
+  const word = pk === creator ? 'Host' : isEvent ? (er === 'cohost' ? 'Co-host' : er === 'steward' ? DOOR : now === 'admin' ? 'Admin' : 'Attendee') : now === 'admin' ? STEWARD : 'Member'
   const name = isEvent ? ev!.title : `${channelIcon(g)}${g.isPod ? ' ' : ''}${g.name}`
   return (
     <div className="card group-role">
