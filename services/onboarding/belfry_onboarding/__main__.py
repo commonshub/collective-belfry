@@ -79,6 +79,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     rst.add_argument("--all-admins", action="store_true", help="remove every admin")
     rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
+    pl = sub.add_parser(
+        "pay-link",
+        help="a signed belfry.<domain>/pay link (its description shows; belfry pay-link)",
+    )
+    pl.add_argument("--amount", default="", help="in euros, e.g. 12.50")
+    pl.add_argument("--communication", default="")
+    pl.add_argument("--description", default="")
     imp = sub.add_parser(
         "register-import",
         help="copy people, passes and invites from Odoo into the belfry's own register",
@@ -101,6 +108,18 @@ def main(argv: list[str] | None = None) -> int:
         print(register_import(odoo, Register(settings.register_path, settings), args.force))
         return 0
     services = build_services(settings)
+    if args.command == "pay-link":
+        from . import sales, salespay
+
+        if not sales.bank_ready(services):
+            print("Set the bank details first (belfry.<domain>/sales)", file=sys.stderr)
+            return 2
+        try:
+            print(salespay.make_link(services, args.amount, args.communication, args.description))
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        return 0
     if args.command == "reconcile":
         result = core.reconcile(services)
     elif args.command == "sync-relay":

@@ -12,6 +12,7 @@
 #   belfry update-request            run an update asked for in the admin console (belfry-update.path)
 #   belfry homepage publish DIR [--title T]   publish a built static site as the homepage (nsite)
 #   belfry homepage status           what the apex serves
+#   belfry pay-link [--amount 12.50] [--communication C] [--description D]   a signed /pay link
 #   belfry setup-code [NAME]         a link to https://belfry.<domain>/setup with a code in it, for
 #                                    NAME (valid 24 h). A new belfry needs none: while it has no
 #                                    admin, https://belfry.<domain>/setup is open to the first
@@ -1038,6 +1039,7 @@ case "${1:-help}" in
   version) cmd_version ;;
   update-request) cmd_update_request ;;
   homepage) shift; cmd_homepage "$@" ;;
+  pay-link) shift; compose --profile app exec -T onboarding python -m belfry_onboarding pay-link "$@" ;;
   setup-code) shift; cmd_setup_code "$@" ;;
   setup-reset) shift; cmd_setup_reset "$@" ;;
   setup-apply) cmd_setup_apply ;;
