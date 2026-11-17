@@ -983,7 +983,10 @@ def _move_passes(svc: Services, temp: int, other: int) -> int:
         )
         core.activate_free_pass(svc, new)
         if r.get("sale_order") and st.order(r["sale_order"]):
-            st.update(r["sale_order"], pass_id=new, partner_id=other, moved_from=temp)
+            # the browser's session was on the temporary account: it ends with it
+            st.update(
+                r["sale_order"], pass_id=new, partner_id=other, moved_from=temp, bunker_url=None
+            )
         core.revoke_pass(svc, r["id"], "moved to the account of the same address")
         n += 1
     svc.odoo.write("res.partner", [temp], {"belfry_pending_email": False})

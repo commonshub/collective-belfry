@@ -16,6 +16,10 @@ key from `odoo-partner-<id>` (the name is historical), so a moved belfry keeps e
 What it does not do: invoices, payments, tiers and prices, volunteer shifts. Those need the
 Odoo add-on; the admin pages show them empty.
 
+Selling passes is separate from the register's RPC: products, prices and codes, orders with
+invoices in the community's own Odoo (Odoo Online works), Stripe or bank transfer
+(`docs/sales.md`; `sales.py`, `sales.sqlite` and `sales-secrets.json` next to `register.sqlite`).
+
 ## Membership without Odoo
 
 A membership is free and has no invoice (`tier` `member`, no end date: 2099-12-31, no tokens).
@@ -32,7 +36,9 @@ A membership is free and has no invoice (`tier` `member`, no end date: 2099-12-3
 - New installs: `install.sh` sets `BELFRY_REGISTER=belfry` (no Odoo); `--odoo` keeps Odoo.
 - `belfry` adds `infra/docker-compose.noodoo.yml` when `REGISTER=belfry`: Odoo only starts with
   `--profile odoo`, nothing waits for it, and `bootstrap.sh` skips its Odoo steps.
-- Back up the `register-data` volume (`sqlite3 register.sqlite ".backup …"`).
+- Back up the `register-data` volume (`sqlite3 register.sqlite ".backup …"`); it also holds
+  `events.sqlite`, `sales.sqlite` and `sales-secrets.json` (the sales secrets: back it up
+  encrypted, as `backup.sh` does).
 
 ## Moving a belfry off Odoo
 

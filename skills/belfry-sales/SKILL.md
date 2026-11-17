@@ -1,0 +1,65 @@
+---
+name: belfry-sales
+description: Build a ticket or pass checkout on a community's website against a Belfry that sells passes (products, codes, card or bank transfer, invoices in the community's Odoo), or help a Belfry admin set up selling. Use when asked to add "buy a pass" / "get tickets" to a site, to make discount codes or pay links, or to explain how an order becomes a pass.
+---
+
+# Selling passes on a Belfry
+
+The full contract is `docs/sales.md` in the Belfry repository. This is the short version for
+an agent building the website's checkout, or helping an admin.
+
+## Where things are
+
+- API: `https://belfry.<domain>/api/v1/…` (CORS open to `https://<domain>`).
+- Admin settings: `https://belfry.<domain>/sales` (admins only: Odoo, bank, Stripe, products,
+  codes, offers, orders). Secrets are typed there, never in chat.
+- Bank transfer page: `https://belfry.<domain>/pay/<order>`.
+- `https://<domain>/.well-known/belfry.json` lists the hosts.
+
+## The checkout, from the website
+
+1. `GET /products` (no auth): `{currency, can_sell, products: [{id, name, description, tier,
+   valid_from, valid_until, price: {amount, vat_rate, until}, next_price, left}]}`. Show the
+   price; `left` null = no limit. `can_sell: false` means only free products (or 100% codes)
+   work.
+2. In the browser, make a key (secp256k1, e.g. `nostr-tools` `generateSecretKey`) and keep it
+   in `localStorage`. Sign every call with it: NIP-98 (kind 27235, tags `u` = the full URL,
+   `method`, and `payload` = SHA-256 of the body for a POST), header
+   `Authorization: Nostr <base64 of the event>`. One event per request (replays are refused).
+   If the visitor is signed in to the community already, sign with their session instead: the
+   pass goes on their account.
+3. Optional: `POST /codes/check {"product", "code"}` → `{percent, left}` (404 `unknown_code`,
+   409 `code_used`; 10 an hour per key).
+4. `POST /checkout {"product", "name", "email", "code"?, "pay": "card"|"invoice",
+   "billing": {"kind": "person"|"organisation", "name", "vat", "street", "zip", "city",
+   "country", "invoice_email"}, "return_url"}` → 201 with `order`, `state`, `total` (`net`,
+   `vat`, `gross`, `percent_off`), `invoice` (`number`, `communication`, `url`), `card_url`,
+   `pay_url`, `hold_until`. Send the buyer to `card_url` to pay by card; or show `pay_url` /
+   the communication for a transfer. `return_url` must be on the community's own domain;
+   Belfry adds `?order=<id>`.
+5. On the return page, poll `GET /checkout/<order>` (signed by the same key) every few seconds
+   until `state` is `active`; its `bunker_url` (NIP-46) signs the browser in to the
+   community's apps. States: `pending` → `invoiced` → `paid` → `active`, or `cancelled` /
+   `expired` (unpaid after 7 days).
+
+Errors are `{"error", "message"}`: `unknown_product`, `not_on_sale`, `sold_out`,
+`unknown_code`, `code_used`, `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell`,
+`too_many`, `accounting`. Show the message, keep the form filled in.
+
+Never tell a buyer whether an address is already a member: Belfry doesn't either.
+
+## In kind
+
+`POST /offers {"product", "name", "email", "offer", "percent": 50–100}` → `{offer, state}`;
+the admins answer by mail with a personal code. `GET /offers/<id>` by the same key.
+
+## For admins
+
+- Codes: `POST /codes {"percent", "product"?, "uses", "count", "expires"?, "note"?}` (admins'
+  key), or the console. A sponsor paying for N passes: an invoice by hand in Odoo and N codes.
+- Pay links with a description: `belfry pay-link --amount 12.50 --communication "…"
+  --description "…"` on the server, or `POST /pay-links` (admins). An unsigned `/pay?…` link
+  shows only an amount and a communication, never a description.
+- A buyer's address is unproven until they click the receipt's link or sign in with an e-mail
+  code; until then they hold the pass but can't invite, have no mailbox and aren't found by
+  e-mail.

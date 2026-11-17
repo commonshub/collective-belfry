@@ -6,8 +6,10 @@ invoices kept in an Odoo the community already has (Odoo Online works: only stan
 its JSON-2 API, no module to install). Decided by Xavier on 2026-11-17 for Open Source Village
 2027; first user: opensourcevillage.org.
 
-Status: **contract, being built**. Nothing takes money until an admin has entered the Odoo
-connection, the bank details and the Stripe key in the console.
+Status: **built** (2026-11-17, `sales.py`, `salesodoo.py`, `salesstripe.py`, `salespay.py`,
+`salesconsole.py`; tests `tests/test_sales*.py`). Tested against fakes only: the real Odoo
+Online, Stripe and VIES were never called (see §8). Nothing takes money until an admin has
+entered the Odoo connection, the bank details and the Stripe key in the console.
 
 ## 1. Pieces
 
@@ -24,12 +26,22 @@ live there). Free products and codes worth 100% work with nothing set.
 ## 2. Settings (console, admins only): belfry.<domain>/sales
 
 Secrets are typed into the console, never sent in chat or shown again (only "set" / "not set"
-and the last 4 characters).
+and the last 4 characters); an admin can clear one.
 
-- **Odoo**: URL, database, API key → "Check" (reads the companies the key sees). Then pick:
-  company, the product each Belfry product is invoiced as, the VAT tax with the price including
-  it (people) and the one on top (organisations), the journal for card payments. The lists come
-  from Odoo. Saved as the existing `ACCOUNTING_*` settings (accounting.py).
+Where they are kept: the non-secret settings in the register (params `belfry.sales.settings`
+and `belfry.sales.products`), the secrets (Odoo API key, Stripe key, webhook secret) in
+`sales-secrets.json` next to the register (mode 600, written atomically by the service; never
+in an answer, a log line, an error text or `register-import`). Both live in the `register-data`
+volume, so they are in the (encrypted) backups. Where the console left a field empty, the
+server's `ACCOUNTING_*` / `STRIPE_WEBHOOK_SECRET` settings are used instead. The Status page and
+`belfry status` say only whether paid passes can be sold and which of Odoo / bank / Stripe are
+set.
+
+- **Odoo**: URL, database, API key → "Check" (reads the companies the key sees; nothing is
+  saved when it fails). Then pick: company, the product each Belfry product is invoiced as, the
+  VAT tax with the price including it (people) and the one on top (organisations), the journal
+  for card payments and the one for payments marked by hand (empty: not booked, the order says
+  so), and whether Odoo also mails its invoice PDF. The lists come from Odoo.
 - **Bank**: account holder, IBAN (checked mod 97), BIC.
 - **Stripe**: restricted secret key, webhook signing secret. The page shows the webhook URL to
   enter at Stripe (`https://belfry.<domain>/hooks/stripe`) and the events to select.
@@ -64,7 +76,14 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   existing account and the temporary one is closed, as a saved guest's does (guests.md).
 - A member or guest who is signed in signs with their own session: the pass goes on their
   account, nothing unverified.
-- An order nobody pays leaves no account: the contact is removed with the expired order.
+- An order nobody pays leaves no account: the contact is made only when the pass opens.
+- Settled while building: the unproven address is kept in `belfry_pending_email`, never in
+  `email`, so every lookup by e-mail misses it by construction; the receipt's link shows a
+  button and only its POST confirms (mail scanners open links); the sign-in by e-mail code
+  (connect.py, pass.<domain>/me/login) is the one place that looks pending addresses up. Until
+  then the account keeps its member number as username, and the sign-in by name@domain
+  (sessions.py) answers `no_email`. A signed-in guest without an address gets the typed one as
+  pending on their own contact.
 
 ## 4. API (https://belfry.<domain>/api/v1, CORS open to the apex)
 
@@ -102,8 +121,14 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
  "hold_until": "2026-11-24T16:00:00Z"}
 ```
 
-- `return_url` must be on the belfry's own domain (apex or a subdomain); else it is ignored and
-  Belfry's own thanks page is used. Belfry adds only `?order=<id>`.
+- `return_url` must be `https://` on the belfry's own domain (apex or a subdomain) with no query
+  of its own; else it is ignored and Belfry's own thanks page (`belfry.<domain>/sales/thanks`)
+  is used. Belfry adds only `?order=<id>`.
+- `pay` defaults to `card`. The answer also carries `product`, and `bunker_url` once active (to
+  the key that made the order).
+- Odoo's invoice is the truth for the amounts: after the invoice is posted, `total` is Odoo's
+  (rounding, a fiscal position); when it differs from Belfry's own sum the order is flagged
+  for the admins.
 - Total 0 (a 100% code, a free product): state `active` at once, no invoice, no payment.
 - `pay: card` → `card_url` (a Stripe Checkout session made from the posted invoice: invoice
   number in `client_reference_id` and metadata). `pay: invoice` → the invoice is mailed and
@@ -114,11 +139,16 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `too_many` (5 open orders per key, 20 an hour per address), `accounting` (Odoo refused).
-- Asking again with the same key, product and e-mail while an order is open returns that order.
+- Asking again with the same key, product and e-mail while an order is open (or became active
+  in the last 24 hours: a retried request) returns that order, with 200.
+- `unknown_code` is 404, `code_used` and the other refusals 409, `accounting` 502 (the order is
+  cancelled and its code's use given back). Odoo not answering is no error: the order is kept
+  `pending` and the tick makes the invoice later.
 
 `GET /checkout/<order>` — NIP-98 by the key that made it → the same shape with the current
 state (`pending` → `invoiced` → `paid` → `active`, or `cancelled` / `expired`) and, once active,
-`bunker_url` when the key isn't signed in yet.
+`bunker_url` when the key isn't signed in yet. Asking also retries a step that failed and makes
+a new card session when Stripe's (24 hours) expired. Another key gets 404.
 
 `GET /billing` — NIP-98, a verified account only → the billing details saved at its last order.
 
@@ -136,15 +166,22 @@ made here (no sponsor checkout in this version).
 
 - **Hold**: an unpaid order holds its place for **7 days** (`hold_until`), then expires: the
   invoice gets a credit note, the code's use is given back. One reminder is mailed 2 days before.
-- **Card**: `checkout.session.completed` at `/hooks/stripe` (signature checked) → the payment is
-  registered on the Odoo invoice in the card journal → pass active.
+- **Card**: `checkout.session.completed` (and `checkout.session.async_payment_succeeded`) at
+  `https://belfry.<domain>/hooks/stripe` (signature checked with the console's webhook secret,
+  deduplicated on the event id; amount, currency and invoice number must match the order, else
+  it is flagged and nothing opens) → pass active → the payment registered on the Odoo invoice
+  in the card journal (after the pass: Odoo being down never keeps a paid pass shut; the tick
+  retries the booking). Stripe refusing to make a session leaves the transfer (flag on the
+  order). A payment that arrives after the order ended still opens the pass, flagged.
 - **Transfer**: Belfry reads the open orders' invoices from Odoo every 15 minutes; when Odoo's
   reconciliation says paid → pass active. An admin can also mark an order paid by hand.
 - **Active** = `core.activate_free_pass`-style activation with the product's tier, role and
   dates, the receipt mail (with the confirm-your-e-mail link when unverified) and the usual
   welcome.
-- **Refunds**: by hand in Stripe and Odoo. When the invoice gets a full credit note, Belfry
-  closes the pass at its next read.
+- **Refunds**: by hand in Stripe and Odoo. When the invoice gets a full credit note
+  (`payment_state` `reversed`), Belfry closes the pass at its next read.
+- The pass is made with the product's tier, its dates (`valid_from`, else today; `valid_until`,
+  else no end) and its role, when that role exists.
 
 ## 6. The /pay page: belfry.<domain>/pay
 
@@ -160,9 +197,26 @@ message field, exactly as given).
   signed by the belfry (`&sig=`, made with `belfry pay-link` or `POST /api/v1/pay-links` by an
   admin): Belfry never shows free text taken from an unsigned URL.
 - No bank details set → 404.
+- `POST /api/v1/pay-links {"amount"?, "communication"?, "description"?}` (admins) → 201
+  `{"url"}`; `belfry pay-link --amount … --communication … --description …` on the server.
+- Paid or ended orders show no bank details on `/pay/<order>`.
 
 ## 7. Not in this version
 
 Sponsor checkout (N passes in one order), partial payments, automatic refunds, other currencies
 than the one in settings, Mollie, selling on a belfry that keeps its register in Odoo (it sells
 through Odoo as before), the phone apps (they open the website).
+
+## 8. Not tested against the real services
+
+Everything above runs against fakes in the tests. Unproven until tried live:
+
+- Odoo Online over JSON-2: `account.move` `get_portal_url` (the invoice link), the
+  `account.payment.register` and `account.move.reversal` wizards with these contexts,
+  `payment_reference` filled in at posting (needs the journal's communication standard set to
+  Belgian for `+++…+++`), the company scoping of the pick-lists, `price_include` on taxes.
+- Stripe: the session form fields, `Idempotency-Key`, expiring a session, the restricted key's
+  permissions, the events' exact shape.
+- VIES's REST answer for a number and when a member state is down.
+- The browser key binding (Keycast patch 0022) and an EPC QR read by real banking apps.
+
