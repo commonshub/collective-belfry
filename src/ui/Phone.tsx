@@ -31,6 +31,8 @@ export function Phone({ children, open, current, section, bar }: { children: Rea
     const setX = (v: number) => el.style.setProperty('--drag', `${v}px`)
     const start = (e: TouchEvent) => { const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; t0 = e.timeStamp; dx = 0; dragging = false; decided = false }
     const move = (e: TouchEvent) => {
+      // a channel held to be moved (Categories.tsx) takes the finger: not a drag of the drawer
+      if (e.defaultPrevented && !dragging) { decided = true; return }
       const t = e.touches[0]
       const mx = t.clientX - x0, my = t.clientY - y0
       if (!decided) {

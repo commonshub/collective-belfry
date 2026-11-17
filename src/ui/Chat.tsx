@@ -40,16 +40,17 @@ import { GuestBar, JoinSheet } from './GuestJoin'
 import { InviteSheet } from './Invite'
 import { ChannelSettingsSheet, VisibilitySheet } from './ChannelInfo'
 import { MORE_EMOJIS, ReactionChips } from './Reactions'
-import { inOrder, mayOrder, setChannelOrder } from '../core/order'
+import { inOrder, mayOrder, setChannelOrder, shownCategories, LIFE } from '../core/order'
 import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
 import { amGuest, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
-import { GATES, SECTION_TITLE, sectionOf } from '../core/places'
+import { MEMBERS, SECTION_TITLE } from '../core/places'
+import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
 import { applyStatus } from '../core/apply'
-import { GateIcon, PlusIcon } from './icons'
+import { HomeIcon } from './icons'
 
 /** A guest's line under their name: how long they stay. */
 function guestLine() {
@@ -91,9 +92,10 @@ export function ChannelList(props: ListProps) {
   return placesOn() ? <TownList {...props} /> : <OldChannelList {...props} />
 }
 
-/** The Town's places (board iOS-Town; iOS SPEC 19.31): The town (the Square, the Gates, the
- *  Charter), Community life (every other channel), Building together (proposals, the website);
- *  the stewards' order holds inside each section. Groups have their own place, so they are not
+/** The Town's places (board iOS-Town; iOS SPEC 19.31, 19.34): Today (Home) first, The town (the
+ *  Square, Members, the Charter), then the categories (Community life, Building together, the
+ *  admins' own; core/order.ts), each with a + for a new channel in it; admins hold and drag
+ *  channels between them. The gear top right opens the belfry's settings. Groups have their own place, so they are not
  *  here; nor are events, mentions and messages (Home holds those). A guest's drawer: Apply, the
  *  channels they were invited to, what is open to everyone. */
 function TownList({ current, side = false, section, drawer = false, top }: ListProps) {
@@ -101,13 +103,14 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
   const community = useCommunityName(NAME)
   const steward = THEME === 'belfry' && isBelfryAdmin(me())
   const brand = useBranding()
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState<string | null>(null) // the category a new channel goes into
   const guest = amGuest()
   const town = groups().filter((g) => isTownChannel(g.id))
   const square = town.find((g) => g.id === 'general')
-  const life = inOrder(town.filter((g) => sectionOf(g.id) === 'life'))
-  const building = inOrder(town.filter((g) => sectionOf(g.id) === 'building'))
-  const dnd = useChannelDrag([], life, true)
+  const admin = mayOrder()
+  const cats = townCategories()
+  const shown = shownCategories(cats, admin)
+  const dnd = useCategoryDrag(cats, admin)
   const waitingN = requestCount()
   const rules = charter()
   const showCharter = guest ? (remoteAgreements()?.length ?? rules.length) > 0 : charterExists() || steward // the group exists, or a steward (to write the first)
@@ -124,12 +127,14 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
     )
   }
   const Place = ({ to, on, icon, title, small, n, cls = '' }: { to: string; on: boolean; icon: ReactNode; title: string; small?: string; n?: number; cls?: string }) => (
-    <button className={'chan town-chan ' + cls + (on ? ' on' : '')} onClick={() => closeDrawer(to)}>
+    <button className={'chan town-chan ' + cls + (on ? ' on' : '')} aria-current={on ? 'page' : undefined} onClick={() => closeDrawer(to)}>
       <span className="hash">{icon}</span>
-      <span className="t"><b>{title}{small && <small className="inline">{small}</small>}</b></span>
+      <span className="t"><b>{title}</b>{small && <small>{small}</small>}</span>
       {n ? <span className="badge lime">{n}</span> : null}
     </button>
   )
+  // the first row: Today (Home), unless the laptop's places above already hold it
+  const today = !top && <Place to="home" on={section === 'home'} icon={<HomeIcon />} title="Today" cls="today-row" />
   if (guest) {
     const mine = myGuestChannels()
     const open = ['issues', 'requests'].map((id) => group(id)).filter((g): g is Group => !!g && !mine.some((m) => m.id === g.id))
@@ -142,13 +147,14 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
         </div>
         <div className="scroll">
           {top}
+          {today}
           {!(st?.application && st.application.state !== 'declined') && <div style={{ padding: '12px 16px 4px' }}><button className="btn" onClick={() => closeDrawer('apply')}>Apply to become a member</button></div>}
           {mine.length > 0 && <div className="section-title">You were invited to</div>}
           {mine.map((g) => <Row key={g.id} g={g} />)}
           {(showCharter || open.length > 0) && <div className="section-title">Open to everyone</div>}
           {showCharter && <Place to="charter" on={section === 'charter'} icon={<DocIcon />} title="Charter" />}
           {open.map((g) => <Row key={g.id} g={g} />)}
-          <p className="hint" style={{ padding: '12px 16px' }}>Read-only for guests. Members also have the Square, the Fairground, the Assembly and the Gates.</p>
+          <p className="hint" style={{ padding: '12px 16px' }}>Read-only for guests. Members also have the Square, the Fairground, the Assembly and Members.</p>
         </div>
         {side && <SideUser />}
       </div>
@@ -158,27 +164,27 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
     <div className="screen town-list">
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
-        {/* stewards: the belfry's name opens its settings, as in Discord */}
-        {steward
-          ? <h1 style={{ paddingLeft: drawer ? 0 : 8 }}><button type="button" className="belfry-name" aria-label={`${community} settings`} onClick={() => closeDrawer('settings')}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span>{community}</span><ChevronDownIcon /></button><small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>
-          : <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}{community}<small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>}
-        <button className="icon-btn" aria-label="New channel" onClick={() => setCreating(true)}><PlusIcon /></button>
+        <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span className="belfry-title">{community}</span><small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>
+        {/* the belfry's settings (its admins), where the + used to be (the owner, 2026-11-17) */}
+        {steward && <button className={'icon-btn settings-gear' + (section === 'settings' ? ' on' : '')} aria-label="Belfry settings" onClick={() => closeDrawer('settings')}><GearIcon /></button>}
       </div>
       <div className="scroll">
         {top}
         {brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
+        {today}
         <button className="town-search" onClick={() => closeDrawer('search')}><SearchIcon /><span>Search the town</span></button>
         <div className="section-title">{SECTION_TITLE.town}</div>
         {square && <Row g={square} />}
-        <Place to="members" on={section === 'members' || section === 'requests'} icon={<GateIcon />} title={GATES} small="members" n={waitingN} cls="members-row" />
+        <Place to="members" on={section === 'members' || section === 'requests'} icon={<PeopleIcon />} title={MEMBERS} small={waitingN ? `${waitingN} ${waitingN === 1 ? 'request' : 'requests'} waiting for you` : undefined} n={waitingN} cls="members-row" />
         {showCharter && <Place to="charter" on={section === 'charter'} icon={<DocIcon />} title="Charter" n={fresh} />}
-        <div ref={dnd.ref} className={'chan-sections' + (dnd.drag ? ' sorting' : '')}>
-          {(life.length > 0 || dnd.may) && <div className="section-title" data-sec="mem">{SECTION_TITLE.life}</div>}
-          {life.map((g, i) => <div key={g.id} {...dnd.slot(g, 'mem', i)}><Row g={g} /></div>)}
+        <div ref={dnd.ref} className={'chan-sections' + (dnd.drag ? ' sorting' : '') + (admin ? ' may' : '')}>
+          {shown.map((c) => (
+            <Fragment key={c.id}>
+              <CategoryHead c={c} into={dnd.into(c.id)} add={c.id === LIFE || admin ? () => setCreating(c.id) : undefined} />
+              {c.items.map((g, i) => <div key={g.id} {...dnd.slot(g, c.id, i)}><Row g={g} /></div>)}
+            </Fragment>
+          ))}
         </div>
-        {dnd.sheet}
-        {building.length > 0 && <div className="section-title">{SECTION_TITLE.building}</div>}
-        {building.map((g) => <Row key={g.id} g={g} />)}
         {town.length === 0 && <div className="empty">No channels yet. They appear here once the relay answers.</div>}
         {archivedGroups().length > 0 && (
           <button className={'chan archived-row' + (section === 'archived' ? ' on' : '')} onClick={() => closeDrawer('archived')}>
@@ -187,9 +193,8 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
           </button>
         )}
       </div>
-      {steward && <button className={'chan settings-row' + (section === 'settings' ? ' on' : '')} onClick={() => closeDrawer('settings')}><span className="hash"><GearIcon /></span><span className="t"><b>Belfry settings</b></span></button>}
       {side && <SideUser />}
-      {creating && <NewChannel onClose={() => setCreating(false)} />}
+      {creating && <NewChannel category={creating} onClose={() => setCreating(null)} />}
     </div>
   )
 }
@@ -429,7 +434,7 @@ function NewThreadSheet({ groupId, onClose, onSent }: { groupId: string; onClose
   )
 }
 
-function NewChannel({ onClose }: { onClose: () => void }) {
+function NewChannel({ onClose, category }: { onClose: () => void; /** made from a category's + (Categories.tsx) */ category?: string }) {
   const [d, setD, clearDraft] = useFormDraft('channel', () => ({ name: '', about: '', address: '' }))
   const { name, about } = d
   const setName = (v: string) => setD((x) => ({ ...x, name: v }))
@@ -440,11 +445,13 @@ function NewChannel({ onClose }: { onClose: () => void }) {
   const address = slug(d.address || name || 'channel')
   const taken = pick && !!d.address && groups().some((g) => g.id === address)
   return (
-    <Sheet title="New channel" onClose={onClose}>
+    <Sheet title={category && category !== LIFE ? `New channel in ${townCategories().find((c) => c.id === category)?.name ?? 'this category'}` : 'New channel'} onClose={onClose}>
       <Form onSubmit={async (e) => {
         e.preventDefault()
         if (taken) return
         const id = await createChannel(name.trim(), about.trim(), addressFor(name.trim(), '', pick ? d.address : ''))
+        // an admin's new channel goes at the end of the category its + was in
+        if (category) await placeNewChannel(id, category).catch(() => undefined)
         clearDraft()
         onClose()
         go('c/' + id)

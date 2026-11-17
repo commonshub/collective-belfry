@@ -16,7 +16,7 @@ import { Avatar, back } from './common'
 import { useCommunityName } from './community'
 import { openProfile } from './Profile'
 import { RequestSections } from './Requests'
-import { gatesName, placesOn } from './Places'
+import { membersName, placesOn } from './Places'
 
 export function MembersDirectory() {
   useVersion()
@@ -38,7 +38,7 @@ export function MembersDirectory() {
     <div className="screen members-dir">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back(placesOn() ? 'home' : 'c')}>‹</button>
-        <h1>{gatesName()}<small>{directory() ? `${directory()!.length} in ${community}` : community}</small></h1>
+        <h1>{membersName()}<small>{directory() ? `${directory()!.length} in ${community}` : community}</small></h1>
         {mayInviteMembers() && inviteIn && <button className="icon-btn" aria-label="Invite someone" onClick={() => setInviting(true)}><PersonPlusIcon /></button>}
       </div>
       {inviting && inviteIn && <InviteSheet id={inviteIn} preset="member" onClose={() => setInviting(false)} />}

@@ -1571,3 +1571,20 @@ html.kb .mail-head .mh-note { display: none; } /* typing: the room goes to the t
    fills the visible part only, so the composer sits just above the keyboard (main.tsx sets
    --app-h / --app-top from visualViewport). */
 html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h, 100%); transform: translateY(var(--app-top, 0px)); }
+
+/* r3 (2026-11-17): Home's tiles at zero, category heads with their +, the gear, holding channels */
+.tile.zero > small { color: var(--faint); }
+.place-top .icon-btn.round { margin-left: auto; }
+.section-title.cat-head { position: relative; min-height: 28px; margin-top: 14px; margin-bottom: 2px; }
+.cat-head .cat-add { width: 28px; height: 28px; padding: 0; margin-right: -6px; color: var(--muted); }
+.cat-head .cat-add .ico { width: 18px; height: 18px; }
+.chan-sections.may .chan-slot { user-select: none; -webkit-user-select: none; }
+.settings-gear.on { color: var(--text); }
+.today-row { margin-top: 4px; }
+.settings-cats .cat-block { margin-bottom: 4px; }
+.settings-cats .section-title.cat-head { margin-left: 0; margin-right: 0; }
+.settings-cats .act-group { margin-top: 4px; }
+.settings-cats .chan-row .hash { color: var(--muted); width: 18px; }
+.settings-cats .chan-row > .ico:last-child { color: var(--faint); }
+.add-cat { margin-top: 16px; width: 100%; display: inline-flex; justify-content: center; align-items: center; gap: 6px; }
+.cat-rename { display: flex; flex-direction: column; gap: 8px; }

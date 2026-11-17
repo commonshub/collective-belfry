@@ -21,7 +21,7 @@ import { myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
 import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, type CalEvent, type Group } from '../core/model'
-import { CHARTER_ID, GATES } from '../core/places'
+import { CHARTER_ID, MEMBERS } from '../core/places'
 import { agentRequests, belfryRequests, groupRequests, requestCount, startRequests } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -35,6 +35,7 @@ import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, DocIcon, GateIcon, Hex
 import { mentions, isNew as isNewMention, preview } from './Mentions'
 import { eventPath, when } from './Calendar'
 import { Arms } from './Login'
+import { MenuButton } from './Chat'
 
 // ---- which place, and whether the bar shows ------------------------------------------------
 
@@ -193,7 +194,8 @@ export function SidePlaces({ place }: { place?: Place }) {
   )
   return (
     <div className="side-places" role="navigation" aria-label="Places">
-      <Row p="home" label="Home" icon={HomeIcon} to="home" n={homeN} />
+      {/* Home is "Today" in the channel list (the owner, 2026-11-17), its first row */}
+      <Row p="home" label="Today" icon={HomeIcon} to="home" n={homeN} />
       <Row p="calendar" label="Calendar" icon={CalendarIcon} to="calendar" />
       {!guest && <Row p="groups" label="Groups" icon={PeopleIcon} to="groups" />}
       <Row p="town" label="Town" icon={TownIcon} to={townPath()} />
@@ -280,14 +282,15 @@ const lastLine = (id: string) => {
   return m ? { text: `${m.ev.pubkey === me() ? 'You' : displayName(m.ev.pubkey)}: ${preview(m.text) || (m.media.length ? 'Photo' : '')}`, at: m.ev.created_at } : undefined
 }
 
-/** The belfry's name at the top of a place (with its logo); on Home and Calendar, a button. */
-function PlaceHead({ title, sub, right }: { title: string; sub?: string; right?: ReactNode }) {
+/** The belfry's name at the top of a place (with its logo); on Home and Calendar, a button.
+ *  Home has ☰ there instead (LEFT), the same as a channel's: the drawer holds the belfry's name. */
+function PlaceHead({ title, sub, right, left }: { title: string; sub?: string; right?: ReactNode; left?: ReactNode }) {
   const community = useCommunityName(NAME)
   const brand = useBranding()
   return (
     <div className="place-head">
       <div className="place-top">
-        <span className="place-belfry">{brand.logo ? <img className="brand-logo" src={brand.logo} alt="" /> : <Arms size={20} />}<span>{community}</span></span>
+        {left ?? <span className="place-belfry">{brand.logo ? <img className="brand-logo" src={brand.logo} alt="" /> : <Arms size={20} />}<span>{community}</span></span>}
         {right}
       </div>
       <h1 className="place-title">{title}</h1>
@@ -295,6 +298,9 @@ function PlaceHead({ title, sub, right }: { title: string; sub?: string; right?:
     </div>
   )
 }
+
+/** Home's title: the date, "Tuesday, 17 November" (the owner, 2026-11-17: not "Today"). */
+export const homeTitle = (d = new Date()) => d.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
 
 function DayChip({ d }: { d: Date }) {
   const today = sameDay(d, new Date())
@@ -330,12 +336,14 @@ function ActivityRow({ g }: { g: Group }) {
   )
 }
 
-/** #/home (and the app's start): what needs me today. Guests get their own (GuestHome). */
+/** #/home (and the app's start): what needs me today. One layout, always (the owner,
+ *  2026-11-17: no "all caught up"): the date, the To-dos / Mentions / Messages tiles (a shortcut
+ *  even at zero), what waits for me when something does, then what's coming. Guests get their
+ *  own (GuestHome). */
 export function HomeScreen() {
   useVersion()
   useEffect(() => { startRequests() }, [])
   if (amGuest()) return <GuestHome />
-  const now = new Date()
   const asks = requestCount()
   const askNames = [...belfryRequests().map((p) => p.name), ...(isBelfryAdmin(me()) ? agentRequests().map((a) => `${a.name}, an agent`) : []), ...groupRequests().flatMap(({ list }) => list.map((a) => displayName(a.pubkey)))]
   const rules = charter()
@@ -347,41 +355,22 @@ export function HomeScreen() {
   const dmCount = unreadTotal()
   const dmNames = dms.slice(0, 2).map((t) => convName(t.conv).split(/[ @]/)[0])
   const soon = comingUp()
+  const next = soon.length ? undefined : upcomingEvents().filter((e) => isMine(e) && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
   const act = recentActivity()
-  const calm = !asks && !fresh.length && todos.mine.length + men.length + dmCount === 0 && !soon.length && !act.length
-  const tiles = !calm // To-dos, Mentions, Messages: always reachable from Home (zero is fine)
-  const date = now.toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' })
   const search = <button className="icon-btn round" aria-label="Search" onClick={() => go('search')}><SearchIcon /></button>
-  if (calm) {
-    const next = upcomingEvents().filter((e) => isMine(e) && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
-    return (
-      <div className="screen place home">
-        <div className="scroll">
-          <PlaceHead title="Today" sub={date} right={search} />
-          <div className="calm">
-            <span className="calm-mark"><Arms size={40} /></span>
-            <h2>You're all caught up</h2>
-            <p>No to-dos, mentions or messages waiting. They'll show up here when someone needs you.{next ? '' : ' Nothing on your calendar this week.'}</p>
-          </div>
-          {next && <><div className="place-section"><h3>Next on your calendar</h3></div><div className="home-card"><EventLine e={next} /></div></>}
-          <div className="calm-actions">
-            <button className="btn ghost small" onClick={() => go(townPath())}><TownIcon /> Open the Square</button>
-            <button className="btn ghost small" onClick={() => go('calendar')}><CalendarIcon /> What's on</button>
-            <button className="btn ghost small" onClick={() => go('dm')}><MessageIcon /> Messages</button>
-            <button className="btn ghost small" onClick={() => go('mentions')}><AtIcon /> Mentions</button>
-          </div>
-        </div>
-      </div>
-    )
-  }
   return (
     <div className="screen place home">
       <div className="scroll">
-        <PlaceHead title="Today" sub={date} right={search} />
+        <PlaceHead title={homeTitle()} left={<MenuButton />} right={search} />
+        <div className="home-tiles">
+          <button className={'tile' + (todos.mine.length ? '' : ' zero')} onClick={() => go('todos')}><span className="tile-ico c-todo"><TodoIcon /></span><b>{todos.mine.length || ''}</b><span>To-dos</span><small>{todos.mine.length ? `on you · ${todos.open} open` : todos.open ? `${todos.open} open` : 'Nothing new'}</small></button>
+          <button className={'tile' + (men.length ? '' : ' zero')} onClick={() => go('mentions')}><span className="tile-ico c-ev"><AtIcon /></span><b>{men.length || ''}</b><span>Mentions</span><small>{men.length ? menWhere.join(', ') : 'Nothing new'}</small></button>
+          <button className={'tile' + (dmCount ? '' : ' zero')} onClick={() => go('dm')}><span className="tile-ico c-msg"><MessageIcon /></span><b>{dmCount || ''}</b><span>Messages</span><small>{dmCount ? dmNames.join(', ') + (dms.length > 2 ? ` +${dms.length - 2}` : '') : 'Nothing new'}</small></button>
+        </div>
         {asks > 0 && (
           <div className="home-card">
             <button className="home-row" onClick={() => go('members')}>
-              <span className="row-ico"><GateIcon /></span>
+              <span className="row-ico"><PeopleIcon /></span>
               <span className="t"><b>{asks} asking to join</b><small>{askNames.slice(0, 3).join(' · ') || 'Requests waiting for you'}</small></span>
               <span className="badge lime">{asks}</span><ChevronRightIcon />
             </button>
@@ -396,20 +385,17 @@ export function HomeScreen() {
             </button>
           </div>
         )}
-        {tiles && (
-          <div className="home-tiles">
-            <button className="tile" onClick={() => go('todos')}><span className="tile-ico c-todo"><TodoIcon /></span><b>{todos.mine.length}</b><span>To-dos</span><small>on you · {todos.open} open</small></button>
-            <button className="tile" onClick={() => go('mentions')}><span className="tile-ico c-ev"><AtIcon /></span><b>{men.length}</b><span>Mentions</span><small>{menWhere.join(', ') || 'none new'}</small></button>
-            <button className="tile" onClick={() => go('dm')}><span className="tile-ico c-msg"><MessageIcon /></span><b>{dmCount}</b><span>Messages</span><small>{dmNames.length ? dmNames.join(', ') + (dms.length > 2 ? ` +${dms.length - 2}` : '') : 'none new'}</small></button>
-          </div>
-        )}
+        {act.length > 0 && <>
+          <div className="place-section"><h3>Recent activity</h3><button className="link" onClick={() => go(townPath())}>Town</button></div>
+          <div className="home-card">{act.slice(0, 8).map((g) => <ActivityRow key={g.id} g={g} />)}</div>
+        </>}
         {soon.length > 0 && <>
           <div className="place-section"><h3>Coming up</h3><button className="link" onClick={() => go('calendar')}>Calendar</button></div>
           <div className="home-card">{soon.slice(0, 5).map((e) => <EventLine key={e.coord} e={e} />)}</div>
         </>}
-        {act.length > 0 && <>
-          <div className="place-section"><h3>Recent activity</h3><button className="link" onClick={() => go(townPath())}>Town</button></div>
-          <div className="home-card">{act.slice(0, 8).map((g) => <ActivityRow key={g.id} g={g} />)}</div>
+        {next && <>
+          <div className="place-section"><h3>Next on your calendar</h3><button className="link" onClick={() => go('calendar')}>Calendar</button></div>
+          <div className="home-card"><EventLine e={next} /></div>
         </>}
       </div>
     </div>
@@ -437,7 +423,7 @@ function GuestHome() {
   return (
     <div className="screen place home guest-home">
       <div className="scroll">
-        <PlaceHead title={`Welcome, ${name}`} sub={st?.until ? `Guest until ${untilWords(st.until)}` : 'Guest'} />
+        <PlaceHead title={homeTitle()} sub={`Welcome, ${name} · ${st?.until ? `guest until ${untilWords(st.until)}` : 'guest'}`} left={<MenuButton />} />
         <ApplyCard st={st} community={community} />
         {mine.length > 0 && <>
           <div className="place-section"><h3>You were invited to</h3></div>
@@ -739,8 +725,8 @@ export function TodosScreen() {
   )
 }
 
-/** The Gates (members and their requests) in the drawer and its screen. */
-export const gatesName = () => (THEME === 'belfry' ? GATES : 'Members')
+/** Members (and their requests) in the drawer and its screen. */
+export const membersName = () => MEMBERS
 
 // demo hooks (window.demoApplyStatus)
 export { demoApplyStatus }
