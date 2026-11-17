@@ -1,7 +1,7 @@
 // The belfry's settings in the chat (Xavier, 2026-11-12, canvas "Settings-Phone" / "Settings-Wide";
 // Discord's server settings are the model). Admins of the belfry only; opened from the
-// belfry's name at the top of the channel list, and from Me. One list of sections:
-//   Community: Overview, Branding, Roles · People: Members, Invite links, Requests to join ·
+// gear at the top of the channel list, and from Me. One list of sections:
+//   Community: Overview, Branding, Roles, Channels (order and categories, Categories.tsx) · People: Members, Invite links, Requests to join ·
 //   Belfry: E-mail, Apps, Version and updates.
 // Roles and Branding are screens here; the others open what exists already (the console on
 // belfry.<domain>, or the chat's Admin screen) rather than a second copy of it.
@@ -21,6 +21,7 @@ import { BrandingScreen } from './Branding'
 import { useCommunityName } from './community'
 import { ChevronRightIcon, GlobeIcon, ImageIcon, LinkIcon, MailIcon, PeopleIcon, GearIcon } from './icons'
 import { PlusIcon, RoleForm } from './RolePicker'
+import { ChannelsPanel } from './Categories'
 
 /** belfry.<domain>: the console, where the rest of the settings live today. */
 const CONSOLE = BELFRY.api.replace(/\/api(\/v1)?$/, '').replace('//pass.', '//belfry.')
@@ -30,6 +31,7 @@ const ShieldIcon = () => <svg className="ico" width="22" height="22" viewBox="0 
 const InboxIcon = () => <svg className="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 13h4l2 3h4l2-3h4M5 5h14l1 8v6H4v-6z" /></svg>
 const KeyIcon = () => <svg className="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="8" cy="15" r="4" /><path d="m11 12 9-9M16 7l3 3M14 9l2 2" /></svg>
 const InfoIcon = () => <svg className="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5M12 8v.01" /></svg>
+const HashIcon = () => <svg className="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" aria-hidden="true"><path d="M5 9h15M4 15h15M10 3 8 21M16 3l-2 18" /></svg>
 const AppsIcon = () => <svg className="ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="2" /><rect x="13" y="4" width="7" height="7" rx="2" /><rect x="4" y="13" width="7" height="7" rx="2" /><rect x="13" y="13" width="7" height="7" rx="2" /></svg>
 
 const GROUPS: { title: string; items: Section[] }[] = [
@@ -37,6 +39,7 @@ const GROUPS: { title: string; items: Section[] }[] = [
     { id: 'overview', label: 'Overview', icon: <InfoIcon />, sub: () => 'Name, description', href: '/' },
     { id: 'branding', label: 'Branding', icon: <ImageIcon />, sub: () => 'Logo, colours' },
     { id: 'roles', label: 'Roles', icon: <ShieldIcon />, sub: () => String(roles().length) },
+    { id: 'channels', label: 'Channels', icon: <HashIcon />, sub: () => 'Order, categories' },
   ] },
   { title: 'People', items: [
     { id: 'membership', label: 'Membership', icon: <KeyIcon />, sub: () => (membership().invite === 'members' ? 'Any member invites' : 'Admins invite') },
@@ -51,7 +54,7 @@ const GROUPS: { title: string; items: Section[] }[] = [
   ] },
 ]
 const SECTIONS = GROUPS.flatMap((g) => g.items)
-const BUILT = new Set(['branding', 'roles', 'membership'])
+const BUILT = new Set(['branding', 'roles', 'membership', 'channels'])
 
 /** #/settings[/<section>[/<role id>|new]] */
 export function SettingsScreen({ section, id }: { section?: string; id?: string }) {
@@ -83,7 +86,7 @@ export function SettingsScreen({ section, id }: { section?: string; id?: string 
             ))}
           </nav>
           <main className="settings-panel">
-            {open === 'branding' ? <BrandingScreen embedded /> : open === 'membership' ? <MembershipPanel wide /> : <RolesPanel id={id} wide />}
+            {open === 'branding' ? <BrandingScreen embedded /> : open === 'membership' ? <MembershipPanel wide /> : open === 'channels' ? <ChannelsPanel wide /> : <RolesPanel id={id} wide />}
           </main>
         </div>
       </div>
@@ -95,6 +98,14 @@ export function SettingsScreen({ section, id }: { section?: string; id?: string 
       <div className="screen settings">
         <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => up('settings')}>‹</button><h1>Membership</h1></div>
         <div className="scroll pad"><MembershipPanel /></div>
+      </div>
+    )
+  }
+  if (current === 'channels') {
+    return (
+      <div className="screen settings">
+        <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => up('settings')}>‹</button><h1>Channels</h1></div>
+        <div className="scroll pad"><ChannelsPanel /></div>
       </div>
     )
   }
