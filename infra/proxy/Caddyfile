@@ -181,6 +181,14 @@ belfry.{$BELFRY_DOMAIN} {
 	reverse_proxy onboarding:8100
 }
 
+# www.<domain> is the website's other name: always sent to the apex. Its certificate is only
+# issued once www points at this box (Caddy keeps retrying quietly until then).
+www.{$BELFRY_DOMAIN} {
+	tls {$CADDY_TLS_ARG}
+	header -Server
+	redir https://{$BELFRY_DOMAIN}{uri} permanent
+}
+
 # Previews of proposed website versions (website.py): /p/<npub>[@<name>] picks a site (a
 # cookie), every other path is that site's. A host of its own: never the website's or the chat's.
 preview.{$BELFRY_DOMAIN} {
