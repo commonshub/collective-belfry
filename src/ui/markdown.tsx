@@ -10,9 +10,30 @@ const SAFE_URL = /^(https?:\/\/|mailto:)/i
 type Plain = (text: string, key: string) => ReactNode[]
 const asIs: Plain = (t) => [t]
 
+/** A bare http(s) link in text: ends before spaces, < > ( ), and never on a final . , ; : ! ? ' "
+ *  (the end of a sentence). "@" and "_" are part of it. A host without scheme isn't a link. */
+export const URL_RE = /https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g
+
+/** Plain text with every http(s) link clickable (no other Markdown): to-do titles, comments, cards.
+ *  A link's click doesn't reach a clickable row around it. */
+export function Linkify({ text }: { text: string }) {
+  const out: ReactNode[] = []
+  let last = 0
+  let n = 0
+  for (const m of text.matchAll(URL_RE)) {
+    if (m.index! > last) out.push(text.slice(last, m.index))
+    out.push(<a key={n++} className="ln" href={m[0]} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()}>{m[0]}</a>)
+    last = m.index! + m[0].length
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return <>{out}</>
+}
+
 function inline(text: string, key: string, plain: Plain = asIs): ReactNode[] {
   const out: ReactNode[] = []
-  const re = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)\)|\*([^*\s][^*]*)\*|_([^_\s][^_]*)_|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]))/g
+  // _italic_ and __bold__ only at word edges, so a "_" inside a word or a link (my_file,
+  // https://x.org/a_b_c) never starts one
+  const re = /(\*\*([^*]+)\*\*|(?<![\p{L}\p{N}_])__([^_]+)__(?![\p{L}\p{N}_])|`([^`]+)`|~~([^~]+)~~|\[([^\]]+)\]\(([^)\s]+)\)|\*([^*\s][^*]*)\*|(?<![\p{L}\p{N}_/])_([^_\s][^_]*)_(?![\p{L}\p{N}_])|(https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]))/gu
   let last = 0
   let m: RegExpExecArray | null
   let i = 0
@@ -27,7 +48,7 @@ function inline(text: string, key: string, plain: Plain = asIs): ReactNode[] {
         ? <a key={k} href={m[7]} target="_blank" rel="noreferrer noopener">{inline(m[6], k)}</a>
         : m[0])
     } else if (m[8] ?? m[9]) out.push(<em key={k}>{inline(m[8] ?? m[9], k, plain)}</em>)
-    else if (m[10]) out.push(<a key={k} href={m[10]} target="_blank" rel="noreferrer noopener">{m[10]}</a>)
+    else if (m[10]) out.push(<a key={k} href={m[10]} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()}>{m[10]}</a>)
     last = m.index + m[0].length
   }
   if (last < text.length) out.push(...plain(text.slice(last), `${key}-tz`))

@@ -30,6 +30,10 @@ export interface OutboxItem {
   signed?: NostrEvent
   /** The direct message or e-mail it carries (dm.ts), told when it is out. */
   dm?: string
+  /** Not an event to publish but a call to the belfry's API (POST BELFRY.api + path, NIP-98
+   *  signed when it is sent). Its kind and tags still show in the app while it waits (a 9002:
+   *  the channel's new name at once); what the belfry publishes comes back from the relay. */
+  http?: { path: string; body: unknown }
 }
 
 type Schema = {

@@ -57,11 +57,21 @@ export async function enqueue(
   return put(target, t, files)
 }
 
+/** Like enqueue, but sent as a call to the belfry (POST BELFRY.api + PATH with BODY), which
+ *  publishes the change itself; T is how it shows meanwhile. */
+export async function enqueueApi(target: Target, t: { kind: number; content?: string; tags: string[][] }, path: string, body: unknown) {
+  if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  const refused = target === 'groups' ? writeGuard?.(t) : undefined
+  if (refused) throw new Error(refused)
+  return put(target, t, [], { path, body })
+}
+
 /** Save and send, whoever asks (the app's own first events; everything else goes through enqueue). */
 async function put(
   target: Target,
   t: { kind: number; content?: string; tags: string[][] },
-  files: File[] = []
+  files: File[] = [],
+  http?: OutboxItem['http']
 ) {
   const d = await db()
   const attachments: Attachment[] = []
@@ -80,6 +90,7 @@ async function put(
     attachments,
     status: 'queued',
     tries: 0,
+    ...(http ? { http } : {}),
   }
   await putOutbox(item)
   void flush()
@@ -127,7 +138,7 @@ export async function flush() {
       try {
         const ev = await send(item)
         retryStep = 0
-        if (!item.signed) addEvents([ev])
+        if (!item.signed && !item.http) addEvents([ev])
         await dropOutbox(item.localId)
         sentListeners.forEach((f) => f(item, ev))
       } catch (e) {
@@ -195,7 +206,40 @@ export async function retry(localId: string) {
   void flush()
 }
 
+/** Why the belfry refused a call, in a sentence (its `error` codes, Belfry checkin.py). */
+let apiErrors: Record<string, string> = {}
+export function setApiErrors(m: Record<string, string>) { apiErrors = m }
+// demo only (tests): the next API calls from the outbox fail with this code ('' = they pass)
+let demoApiFail = ''
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoApiFail: (code: string) => void }).__demoApiFail = (code) => { demoApiFail = code }
+
+/** An outbox call to the belfry. Refused for good (4xx but 401, 408, 429): "error: <sentence>";
+ *  anything else (offline, 5xx, a signer that was away) is tried again. */
+async function sendApi(item: OutboxItem): Promise<NostrEvent> {
+  const http = item.http!
+  if (localOnly) {
+    if (demoApiFail) throw new Error('error: ' + (apiErrors[demoApiFail] ?? apiErrors.failed ?? 'That did not work.'))
+    // what the belfry would publish: the event, as the groups key would sign it
+    const ev = await signer!.sign({ kind: item.kind, content: item.content, tags: item.tags, created_at: item.created_at })
+    addEvents([ev])
+    synthesizeRelayEvents(ev)
+    return {} as NostrEvent
+  }
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}${http.path}`, 'POST', http.body) } catch (e) {
+    throw new Error('timeout: no connection to the belfry (' + (e instanceof Error ? e.message : String(e)) + ')')
+  }
+  if (r.ok) return {} as NostrEvent
+  const d = (await r.json().catch(() => ({}))) as { error?: string }
+  if (r.status >= 400 && r.status < 500 && ![401, 408, 429].includes(r.status)) {
+    const code = r.status === 404 && !d.error ? 'missing' : String(d.error ?? 'failed')
+    throw new Error('error: ' + (apiErrors[code] ?? (code === 'missing' ? 'This belfry can’t do this yet.' : apiErrors.failed ?? 'That did not work.')))
+  }
+  throw new Error(`timeout: the belfry answered ${r.status}`)
+}
+
 async function send(item: OutboxItem): Promise<NostrEvent> {
+  if (item.http) return sendApi(item)
   if (item.signed) {
     if (localOnly) return item.signed
     await publish(item.target, item.signed)

@@ -3,7 +3,7 @@ import { roleWord } from '../core/checkin'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { FORWARD_ERRORS, ForwardFailed, loadForward, onDemoForward, resendForward, setForward, type Forward } from '../core/mailforward'
 import { extras, placeLabel } from '../core/people'
-import { Markdown } from './markdown'
+import { Linkify, Markdown } from './markdown'
 import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
@@ -251,9 +251,14 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
                 {webError && <p className="error">{webError}</p>}
               </div>
             )}
-            <button className="btn" disabled={!name.trim()}>Save</button>
+            <button className="btn primary save-btn" disabled={!name.trim()}>Save</button>
             {/* a softer way to delete: out of the list and read only, until someone unarchives it */}
-            {archivable(id) && <button type="button" className="link danger archive-link" onClick={() => setArchiving(true)}><ArchiveIcon /> Archive this {g.isPod ? 'group' : 'channel'}…</button>}
+            {archivable(id) && (
+              <div className="archive-under">
+                <button type="button" className="link danger archive-link" onClick={() => setArchiving(true)}><ArchiveIcon /> Archive this {g.isPod ? 'group' : 'channel'}</button>
+                <small>It leaves the channel list and becomes read only. You can unarchive it later.</small>
+              </div>
+            )}
             <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
           </Form>
   )
@@ -355,14 +360,14 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
       <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? 'Mark as not done' : 'Mark as done'}
         onClick={() => taskAction(groupId, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}</button>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="title" onClick={toggle}>{t.title}</div>
+        <div className="title" onClick={toggle}><Linkify text={t.title} /></div>
         <small onClick={toggle}>
           {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Unassigned'}
           {t.comments.length ? ` · 💬 ${t.comments.length}` : ''}
         </small>
         {open && (
           <div style={{ marginTop: 8 }}>
-            {t.comments.map((c, i) => <div key={i} style={{ fontSize: 14, margin: '4px 0' }}><b>{displayName(c.author)}</b> {c.text}</div>)}
+            {t.comments.map((c, i) => <div key={i} style={{ fontSize: 14, margin: '4px 0' }}><b>{displayName(c.author)}</b> <Linkify text={c.text} /></div>)}
             <div className="row" style={{ margin: '8px 0', flexWrap: 'wrap' }}>
               <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, mine ? 'unclaim' : 'claim')}>
                 {mine ? 'Unassign me' : t.assignee ? 'Take over' : "I'll take it"}

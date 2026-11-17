@@ -1,3 +1,5 @@
+import { Linkify } from './markdown'
+import { MessageButtons } from './Buttons'
 import { nip19 } from 'nostr-tools'
 import { address, unreadTotal } from '../core/dm'
 import { useBranding } from '../core/branding'
@@ -570,7 +572,7 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
       <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
       <span className="info">
         <b>{g.name}</b>
-        {g.about && <small>{g.about}</small>}
+        {g.about && <small><Linkify text={g.about} /></small>}
         <small>{g.closed ? 'Group · by request' : 'Group · open'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : pending ? ' · request sent' : ''}</small>
       </span>
       {!inIt && !g.closed && <button className="btn small" onClick={(e) => { e.stopPropagation(); void joinGroup(id) }}>Join</button>}
@@ -1031,6 +1033,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
+          <MessageButtons ev={m.ev} groupId={groupId} disabled={!!p || frozen} />
           {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
           <MediaGrid media={m.media} />
@@ -1414,6 +1417,7 @@ function InlineReply({ r, groupId, onAct }: { r: Message; groupId: string; onAct
       <div className="body">
         <div className="who">{displayName(r.ev.pubkey)}<AgentTag pk={r.ev.pubkey} /><time>{fmtTime(r.ev.created_at)}</time>{r.edited && <span className="edited">edited</span>}</div>
         {r.text && <RichText text={r.text} groupId={groupId} />}
+        <MessageButtons ev={r.ev} groupId={groupId} disabled={!!r.ev.pending || !!group(groupId)?.archived} />
         <MediaGrid media={r.media} />
       </div>
     </div>

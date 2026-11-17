@@ -8,8 +8,9 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { markSeen } from '../core/actions'
 import { channelIcon, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group } from '../core/model'
 import { BELFRY } from '../config'
-import { useVersion } from '../core/store'
-import { me } from '../core/sync'
+import { dropOutbox, outboxItems, useVersion } from '../core/store'
+import { me, retry } from '../core/sync'
+import { Btn, Sheet } from './common'
 import { SummaryLine } from './ChannelLine'
 import { ChannelMenu, ChannelSubtitle } from './ChannelMenu'
 import { PodShape } from './icons'
@@ -93,6 +94,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
           {g?.isPod ? <PodShape members={g.members.size} size={18} /> : g && !g.isEvent && !g.isProposal && isPublicChannel(g) ? '#' : channelIcon(g)} {g?.name ?? id}
           {g && !g.isEvent && <ChannelSubtitle g={g} />}
         </h1>
+        <SaveFailedIcon id={id} />
         {right}
       </div>
       <SummaryLine id={id} open={open} onToggle={toggle} topic={topic} onTopic={onTopic} pull={pull} />
@@ -140,4 +142,30 @@ export function visibilityText(g: Group): { title: string; lines: string[] } {
   lines.push(isInbox(g) ? `Anyone can write to ${mail}: their mail lands here.` : `Members can write to ${mail}.`)
   if (publicPeriods(g).length) lines.push(`What was posted while it was public stays readable at ${page || BELFRY.domain}.`)
   return { title: '🔒 Members only', lines }
+}
+
+/** The channel's settings that the relay or the belfry refused for good (a 9002 in the outbox,
+ *  failed): a mark next to its name; tapped, what failed, Try again or Discard (the relay's
+ *  version comes back). */
+export function SaveFailedIcon({ id }: { id: string }) {
+  useVersion()
+  const [open, setOpen] = useState(false)
+  const failed = outboxItems().filter((o) => o.status === 'failed' && o.kind === 9002 && o.tags.some((t) => t[0] === 'h' && t[1] === id))
+  if (!failed.length) return null
+  const why = (failed[failed.length - 1].error ?? '').replace(/^(error|blocked|invalid|restricted):\s*/, '').trim()
+  return (
+    // (the header around it is dragged and tapped: nothing of this reaches it, the sheet neither)
+    <span className="save-failed-wrap" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="icon-btn save-failed" aria-label="The channel's settings weren't saved" onClick={() => setOpen(true)}>!</button>
+      {open && (
+        <Sheet title="Not saved" onClose={() => setOpen(false)}>
+          <p className="save-failed-why">The new settings of this channel weren't saved{why ? `: ${why.replace(/[.!]$/, '')}` : ''}.</p>
+          <div className="row-btns">
+            <Btn className="btn ghost" onClick={async () => { for (const o of failed) await dropOutbox(o.localId); setOpen(false) }}>Discard</Btn>
+            <Btn className="btn" onClick={async () => { for (const o of failed) await retry(o.localId); setOpen(false) }}>Try again</Btn>
+          </div>
+        </Sheet>
+      )}
+    </span>
+  )
 }

@@ -15,12 +15,12 @@
 // Errors are shown in fixed words by code, never the server's text.
 import { DOOR, STEWARD } from './places'
 import { sha256 } from '@noble/hashes/sha256'
-import { BELFRY } from '../config'
+import { BELFRY, getBackend } from '../config'
 import { belfryAdminKeys, isAdmin } from './access'
 import { knownGroupsKey } from './dm'
 import { displayName, group, profiles, type CalEvent } from './model'
 import { addEvents, all, touch, type Ev } from './store'
-import { enqueue, isLocalOnly, me, queryComplete, signedFetch } from './sync'
+import { enqueue, enqueueApi, isLocalOnly, me, queryComplete, setApiErrors, signedFetch } from './sync'
 
 export const ROLE_NS = 'belfry/group-role'
 export const TICKET_NS = 'belfry/ticket'
@@ -129,6 +129,7 @@ export const CHECK_ERRORS: Record<CheckError, string> = {
   offline: 'No connection to the belfry. Try again.',
   failed: 'That did not work. Try again.',
 }
+setApiErrors(CHECK_ERRORS)
 export class CheckFailed extends Error { constructor(public code: CheckError) { super(CHECK_ERRORS[code]) } }
 
 async function call(path: string, body: unknown): Promise<Record<string, unknown>> {
@@ -274,10 +275,15 @@ export async function archiveGroupMeta(groupId: string, tags: string[][], on: bo
 /** A group's new metadata: TAGS as a 9002 when I can publish one, else FIELDS through the belfry
  *  (which keeps every other tag of the current metadata). */
 export async function editGroupMeta(groupId: string, tags: string[][], fields: { name?: string; about?: string; picture?: string; closed?: boolean; prompt?: string; vouches?: number }): Promise<void> {
-  const direct = () => enqueue('groups', { kind: 9002, tags: [['h', groupId], ...tags] })
-  if (isLocalOnly() || relayAdmin(groupId)) { await direct(); return }
-  if ((await viaBelfry('/group-meta', { channel: groupId, ...fields })) === 'missing') await direct()
+  const ev = { kind: 9002, tags: [['h', groupId], ...tags] }
+  // both through the outbox: saved at once, shown at once, sent when it can be (a reload or
+  // being offline doesn't lose it); a refusal shows next to the channel's name (ChannelHeader)
+  if (isLocalOnly() ? !demoViaBelfry : relayAdmin(groupId)) { await enqueue('groups', ev); return }
+  await enqueueApi('groups', ev, '/group-meta', { channel: groupId, ...fields })
 }
+// demo only (tests): edits go the belfry's way (POST /group-meta through the outbox)
+let demoViaBelfry = false
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoViaBelfry: (on: boolean) => void }).__demoViaBelfry = (on) => { demoViaBelfry = on }
 
 // ---- deleting an empty channel ---------------------------------------------------------------
 // Settings → Channels (Xavier, 2026-11-17): a channel nobody wrote in can be deleted; one with

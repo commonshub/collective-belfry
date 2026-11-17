@@ -6,6 +6,7 @@
 //   - each group I'm an admin of (or a member of, when it accepts by vouches): who asks, their
 //     answer to its question, "1 of 2 vouches", Accept / Decline / Vouch.
 // Everything the askers wrote is shown as plain text.
+import { Linkify } from './markdown'
 import { relayAdmin } from '../core/checkin'
 import { useState } from 'react'
 import { nip19 } from 'nostr-tools'
@@ -72,7 +73,7 @@ function AgentRow({ a }: { a: AgentRequest }) {
   return (
     <div className="appl req-row">
       <div className="who"><span className="req-ic"><BotIcon /></span><span className="t">{a.name || 'An agent'}<small>{nip19.npubEncode(a.pubkey).slice(0, 16)}… · {when(a.created)}{a.forMe ? ' · asked for you' : ''}</small></span></div>
-      {a.about && <blockquote>{a.about}</blockquote>}
+      {a.about && <blockquote><Linkify text={a.about} /></blockquote>}
       <Fail error={error} />
       <div className="row">
         <Btn className="btn small" onClick={() => act(true)}>Let it in as my agent</Btn>
@@ -125,7 +126,7 @@ export function GroupRequest({ g, a }: { g: Group; a: Application }) {
     <div className="appl req-row">
       <div className="who"><Avatar pubkey={a.pubkey} size={28} /><span className="t">{displayName(a.pubkey)}<small>{fmtTime(a.at)}</small></span></div>
       {g.prompt && <div className="hint req-q">{g.prompt}</div>}
-      <blockquote>{a.answer || '(no answer)'}</blockquote>
+      <blockquote><Linkify text={a.answer || '(no answer)'} /></blockquote>
       {g.vouches > 0 && (
         <div className="hint vouch-line"><VouchIcon /> {vouchLine(vouchers.length, g.vouches)}
           {vouchers.length > 0 && <> · {vouchers.map((v) => displayName(v)).join(', ')}</>}</div>

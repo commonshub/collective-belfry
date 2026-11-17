@@ -1617,3 +1617,28 @@ html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h,
 @keyframes page-in { from { transform: translateX(100%); } to { transform: none; } }
 .screen.slide-in { animation: page-in 220ms cubic-bezier(0, 0, 0.2, 1); }
 @media (prefers-reduced-motion: reduce) { .screen.slide-in { animation: none; } }
+
+/* buttons on messages (Buttons.tsx, docs/actions.md) */
+.msg-buttons { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
+.msg-buttons .mb-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.msg-buttons .mb { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 10px; font-size: 15px; font-weight: 600;
+  background: var(--surface); color: var(--text); border: 1px solid var(--line); max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.msg-buttons .mb.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); }
+.msg-buttons .mb.danger { color: #dc2626; border-color: #dc2626; }
+.msg-buttons .mb:disabled { opacity: 0.5; }
+.msg-buttons .mb-spin { width: 14px; height: 14px; border-radius: 99px; border: 2px solid currentColor; border-top-color: transparent; animation: spin 0.8s linear infinite; flex: none; }
+.msg-buttons .mb-line { font-size: 14px; overflow-wrap: anywhere; }
+.msg-buttons .mb-line.ok { color: var(--text); }
+.msg-buttons .mb-line.ok::before { content: '✓ '; color: var(--accent); }
+.msg-buttons .mb-line.error { color: #dc2626; }
+.msg-buttons .mb-line.muted { color: var(--muted); }
+.msg-buttons.closed .mb-line { padding: 6px 10px; background: var(--surface); border-radius: 8px; align-self: flex-start; }
+.mb-ask { font-size: 16px; margin: 4px 0 8px; }
+a.ln { overflow-wrap: anywhere; }
+.pod-card .info small, .appl blockquote, .req blockquote { overflow-wrap: anywhere; }
+.icon-btn.save-failed { color: #fff; background: #dc2626; width: 24px; height: 24px; min-width: 24px; border-radius: 99px; font-weight: 800; font-size: 15px; padding: 0; align-self: center; flex: none; }
+.save-failed-why { font-size: 16px; margin: 4px 0 8px; overflow-wrap: anywhere; }
+.save-failed-wrap { display: contents; }
+.chan-settings-form .archive-under { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; margin-top: 6px; }
+.chan-settings-form .archive-under .archive-link { align-self: center; }
+.chan-settings-form .archive-under small { color: var(--muted); font-size: 13px; max-width: 34ch; }

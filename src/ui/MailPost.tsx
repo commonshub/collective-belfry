@@ -1,3 +1,4 @@
+import { Linkify } from './markdown'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { finalizeEvent, generateSecretKey, type NostrEvent } from 'nostr-tools'
 import { addEvents, all } from '../core/store'
@@ -151,7 +152,7 @@ export function MailFrame({ it, address }: { it: MailItem; /** the channel's own
           {it.dir === 'in' && !it.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
         </div>
         {it.subject && <b className="mf-subject">{it.subject}</b>}
-        <p className="mf-text">{mailText(it.m.text, { subject: it.subject }) || '(empty)'}</p>
+        <p className="mf-text"><Linkify text={mailText(it.m.text, { subject: it.subject }) || '(empty)'} /></p>
         <MediaGrid media={it.m.media} />
         {it.original && <button className="link full-mail-btn" onClick={() => setFull(true)}>Full e-mail</button>}
       </div>
