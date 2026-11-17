@@ -72,7 +72,8 @@ content  one short sentence for people, plain text
 An answer counts only when it is signed by the button's handler:
 
 - no `action`: the author of the message;
-- `belfry:<name>`: the belfry's key or its groups key (the keys `belfry.json` names).
+- `belfry:<name>`: the belfry's key or its groups key: `nostr.pubkey` and `groups_key.pubkey`
+  in `/.well-known/belfry.json`. The belfry signs its answers with the groups key.
 
 Answers from anyone else are ignored.
 

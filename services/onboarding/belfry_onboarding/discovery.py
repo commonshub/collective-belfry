@@ -60,6 +60,13 @@ def _belfry_key(settings: Any) -> dict[str, str]:
     return {"pubkey": pk, "npub": hex_to_npub(pk)} if pk else {}
 
 
+def _groups_key(settings: Any) -> dict[str, str]:
+    from .groups_members import api_pubkey
+
+    pk = api_pubkey(getattr(settings, "groups_api_nsec", "") or "")
+    return {"pubkey": pk, "npub": hex_to_npub(pk)} if pk else {}
+
+
 def document(settings: Any) -> dict[str, Any]:
     """The discovery document. Addresses not configured here are left out."""
     public = _url(settings.public_url)
@@ -103,6 +110,9 @@ def document(settings: Any) -> dict[str, Any]:
         "console": _url(getattr(settings, "console_url", "")),
         # the belfry's own key: signs its website (nsite) and receives proposals
         "nostr": _belfry_key(settings),
+        # the groups relay's owner key: posts the belfry's lines in channels and answers presses
+        # on belfry: buttons (docs/actions.md §3); clients trust answers from it or from `nostr`
+        "groups_key": _groups_key(settings),
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,

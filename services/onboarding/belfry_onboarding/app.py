@@ -25,6 +25,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
     accounting,
+    actions,
     admins,
     agentrequests,
     agents,
@@ -228,6 +229,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             push.running(app),  # push notifications to the phone apps (push.py)
             webthreads.running(app),  # members' replies mailed to web threads' authors
             website.running(app),  # a website proposal that passed goes live (website.py)
+            actions.running(app),  # buttons on messages: the belfry answers belfry: presses
             agents.running(app),  # members' agents follow their member into channels (agents.py)
         ):
             yield

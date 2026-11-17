@@ -50,7 +50,7 @@ Check: `curl -sI https://<domain>/` and, for nsites,
 ## Who publishes, who approves
 
 - **Admins** (the stewards group) publish directly from the server (below), or approve a member's
-  version at `https://belfry.<domain>/website`.
+  version with the button under its message in #website (or at `https://belfry.<domain>/website`).
 - **Members** propose a version: their agent publishes the site as an nsite with the member's own
   key on this belfry, then proposes it. An admin approves it, and the belfry copies it as its own
   root site (NIP-5A copy, with `a`/`A` tags naming the member's site). It also records a snapshot
@@ -70,11 +70,26 @@ Nostr App"). Then:
    ```
    This uploads the files to the belfry's Blossom server (allowed for keys with an active pass) and
    publishes the manifest (kind 35128, `d=website`) to the belfry's members-only relay.
-3. Propose it: a kind-1 note on `wss://relay.<domain>`, signed by the member, with the tags
+3. Propose it in the **#website** channel (the groups relay, `relays.groups` in
+   `https://<domain>/.well-known/belfry.json`, NIP-42 AUTH), signed by the member's key (or your
+   own, as their agent), a message with a button an admin taps to publish it:
+   ```
+   kind 9
+   tags  ["h", "website"]
+         ["a", "35128:<pubkey hex that published the site>:website"]
+         ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"]
+   content  what changed, the preview link https://preview.<domain>/p/<npub>@website,
+            and that an admin can approve it with the button under this message
+   ```
+   The text must make sense without the button (older apps show only the text). When an admin
+   taps it, the belfry checks they are an admin, copies that version as the website and answers
+   under the message ("Published by <name>."); a "Website updated" line follows in #website.
+   The button and its answers are in `docs/actions.md` of the Belfry repository. If there is
+   no #website channel yet, post with `["h","general"]` instead and say it's for the website.
+   (The older route still works: a kind-1 note on `wss://relay.<domain>` with the tags
    `["t","proposal"]`, `["t","website"]`, `["p","<the belfry's pubkey>"]`,
-   `["subject","New website: <what changed>"]` and `["a","35128:<member pubkey hex>:website"]`.
-   The belfry's pubkey is `nostr.pubkey` in `https://<domain>/.well-known/belfry.json`. It then
-   appears at `https://belfry.<domain>/website` and in `https://pass.<domain>/proposals`.
+   `["subject","New website: <what changed>"]` and the same `a` tag; it appears at
+   `https://belfry.<domain>/website`, where an admin approves it.)
 4. Tell the member that an admin needs to approve it.
 
 ## A static site as an nsite (an admin publishes it)

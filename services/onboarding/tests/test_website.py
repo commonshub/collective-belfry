@@ -115,11 +115,8 @@ def test_only_admins_publish_and_every_update_is_logged(rsvc, monkeypatch):  # n
 def test_the_channel_says_how_to_propose(rsvc):  # noqa: F811
     rsvc.settings.nip05_domain = "belfry.test"
     text = website.about(rsvc)
-    assert (
-        "https://belfry.test" in text
-        and "https://preview.belfry.test/p/" in text
-        and "agent" in text
-    )
+    assert text.startswith("What goes on our public website and how we want to present ourselves.")
+    assert "preview link" in text and "button" in text and len(text) < 300
 
 
 async def _async(v):

@@ -1,8 +1,11 @@
 """The website as a conversation: the #website channel, previews, and publishing from the chat.
 
 - ``ensure_channel``: the belfry creates ``#website`` the first time it posts there (``changelog``),
-  described with a link to the site and how to propose a version. Anyone chats there; anyone (or their agent, invited
-  as a guest) publishes a version as an nsite (NIP-5A) with their own key and shares its preview.
+  described in one short paragraph (``ABOUT``: what it's for, propose with a preview link, an admin
+  approves with the button under the message, docs/actions.md); ``refresh_about`` (at start-up)
+  gives an existing #website that text while its description is still an old default. Anyone
+  chats there; anyone (or their agent, invited as a guest) publishes a version as an nsite
+  (NIP-5A) with their own key and shares its preview.
 - Previews: ``https://preview.<domain>/p/<npub>[@<name>]`` remembers that site for the browser
   (a cookie) and serves it at the root of ``preview.<domain>``, so the site's own absolute links
   work; a host of its own, apart from the website and the chat. Manifests come from the
@@ -90,15 +93,54 @@ def parse_ref(text: str, dom: str = "") -> tuple[str, str] | None:
 
 
 # ── the channel ─────────────────────────────────────────────────────────────────────────────
+ABOUT = (
+    "What goes on our public website and how we want to present ourselves. "
+    "To propose a version, post its preview link here with what changed; an admin approves it "
+    "with the button under the message."
+)
+# the defaults #website had before (with {d} = the domain): a channel whose description is still
+# one of these gets ABOUT; a description someone wrote is never replaced
+OLD_ABOUTS = (
+    "Our website, https://{d}: talk about its content and how to improve it. "
+    "To propose a new version, publish it as an nsite with your own key (or invite your agent "
+    "here as a guest to do it), then share its preview link, "
+    "https://preview.{d}/p/<your npub>, with what changed. "
+    "An admin long-presses a preview to make it the new version; every update is posted here.",
+)
+
+
 def about(svc: Services) -> str:
-    d = domain(svc)
-    return (
-        f"Our website, https://{d}: talk about its content and how to improve it. "
-        f"To propose a new version, publish it as an nsite with your own key (or invite your agent "
-        f"here as a guest to do it), then share its preview link, "
-        f"https://preview.{d}/p/<your npub>, with what changed. "
-        "An admin long-presses a preview to make it the new version; every update is posted here."
-    )
+    return ABOUT
+
+
+def refresh_about(svc: Services, relay: Any = None, sign: Any = None) -> bool | None:
+    """Give #website the current default description when it still has an old default one.
+    None when there is no #website (it is never made here), else whether it changed."""
+    from . import followers
+
+    if relay is None:
+        got = followers._relay(svc)
+        if got is None:
+            return None
+        relay, sign = got
+    found = [
+        e
+        for e in relay.query([{"kinds": [39000], "#d": [CHANNEL]}], sign) or []
+        if _tagv(e, "d") == CHANNEL
+    ]
+    if not found:
+        return None
+    latest = max(found, key=lambda e: e.get("created_at", 0))
+    if _tagv(latest, "about") not in {t.format(d=domain(svc)) for t in OLD_ABOUTS}:
+        return False
+    tags = [
+        ["about", ABOUT] if t[0] == "about" else list(map(str, t))
+        for t in latest.get("tags", [])
+        if t and t[0] not in ("d", "-")
+    ]
+    followers._publish(relay, sign, 9002, [["h", CHANNEL], *tags])
+    log.info("website: #%s has the new description", CHANNEL)
+    return True
 
 
 def ensure_channel(svc: Services) -> dict[str, Any]:
@@ -108,7 +150,7 @@ def ensure_channel(svc: Services) -> dict[str, Any]:
     if got is None:
         return {}
     relay, sign = got
-    if relay.query([{"kinds": [39000], "#d": [CHANNEL]}], sign):
+    if refresh_about(svc, relay, sign) is not None:
         return {"made": []}
     followers._publish(relay, sign, 9007, [["h", CHANNEL]])
     followers._publish(
