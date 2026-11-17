@@ -56,6 +56,7 @@ from . import (
     homepage,
     invite,
     mail,
+    mailforward,
     meetingguests,
     membership,
     mentions,
@@ -262,6 +263,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
+    mailforward.register(app)  # /api/mail-forward, /mail-forward/<token> (mailforward.py)
     apps.register(app)  # belfry.<domain>/apps: approved apps, as Nostr events (apps.py)
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)

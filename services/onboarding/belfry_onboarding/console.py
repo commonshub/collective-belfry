@@ -1695,6 +1695,7 @@ def map_host(request: Request) -> Response | None:
                     "/static/",
                     "/invite/",
                     "/mentions/",
+                    "/mail-forward/",
                     "/skills/",
                 )
             )

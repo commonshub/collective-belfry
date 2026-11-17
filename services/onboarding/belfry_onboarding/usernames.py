@@ -48,6 +48,7 @@ RESERVED = {
     "noreply",
     "no-reply",
     "mailer-daemon",
+    "bounces",
     "belfry",
     "_smtp",
     "_groups",

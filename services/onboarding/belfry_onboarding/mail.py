@@ -14,7 +14,10 @@ nostr.json:
   - ``<channel>@<domain>``: a channel, group or event chat of the groups relay. Only a member may
     post, from their own address, and the mail must prove it (DKIM or SPF aligned with From): it
     is posted as the member, attachments on Blossom.
-  - ``postmaster@`` and ``abuse@`` go to the admins, like a member's mail.
+  - ``postmaster@`` and ``abuse@`` go to the admins, like a member's mail; ``bounces@`` (the
+    envelope sender of forwarded copies) is taken and dropped.
+  - A channel with a confirmed forward address (mailforward.py) sends it a copy of every mail
+    it took, after posting.
   The usernames come first: a channel named like a member gets no mail.
 - **Out.** A member's app sends a kind 1301 rumor with ``mail-from`` (their ``username@domain``)
   and ``rcpt-to``, gift-wrapped to the belfry key on the community relay. The belfry checks the
@@ -270,7 +273,10 @@ def resolve(svc: Services, address: str) -> dict[str, Any] | None:
     if held and time.monotonic() - held[0] < 60:
         return held[1]
     found: dict[str, Any] | None = None
-    if local in RESERVED:
+    if local == "bounces":
+        # the envelope sender of forwarded copies (mailforward.py): taken, logged and dropped
+        found = {"kind": "bounces"}
+    elif local in RESERVED:
         keys = sorted(apps.admin_pubkeys(svc))
         found = {"kind": "admins", "pubkeys": keys} if keys else None
     else:
@@ -739,13 +745,23 @@ def deliver(
         return 451, "4.7.1 Too many messages from you; try again later."
     auth = authenticate(raw, peer, helo, mail_from, sender)
     done, errors = 0, []
+    posted: list[str] = []  # channels that took it: their forward addresses get a copy
     for rcpt in rcpts[:MAX_RCPT]:
         target = resolve(svc, rcpt)
         try:
             if target is None:
                 raise MailError(550, f"5.1.1 No one is called {rcpt} here.")
+            if target["kind"] == "bounces":
+                # a bounce or an auto-reply to a forwarded copy: never posted, never forwarded
+                log.info("mail: a mail to bounces@ dropped")
+                done += 1
+                continue
             if target["kind"] == "channel":
+                if target["channel"] in posted:  # its plain alias and its id, both: once
+                    done += 1
+                    continue
                 to_channel(svc, target["channel"], raw, msg, sender, auth)
+                posted.append(target["channel"])
             else:
                 for pubkey in target["pubkeys"]:
                     to_member(svc, pubkey, raw, msg, sender, auth)
@@ -756,6 +772,10 @@ def deliver(
         except Exception as exc:  # noqa: BLE001 — the sender's server tries again later
             log.warning("mail: delivery to %s failed: %r", rcpt, exc, exc_info=True)
             errors.append(MailError(451, "4.3.0 Delivery failed here; try again later."))
+    if posted:
+        from . import mailforward
+
+        mailforward.forward(svc, posted, raw, sender)
     if done:
         return 250, "2.0.0 Delivered"
     worst = max(errors, key=lambda e: e.code) if errors else MailError(550, "5.1.1 No recipient")
