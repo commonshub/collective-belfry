@@ -29,6 +29,7 @@ import asyncio
 import html
 import json
 import logging
+import re
 import secrets
 import time
 import urllib.parse
@@ -53,6 +54,8 @@ STATUS_SECONDS = 30.0
 ADMINS_SECONDS = 60.0
 WEBSITE_TAG = "website"
 SNAPSHOT_KIND = 5128
+# the belfry's reply on a website proposal it published (approve_website)
+APPROVED_RE = re.compile(r"^Approved by (.+?) and published as the website\.")
 
 
 # ── hosts ───────────────────────────────────────────────────────────────────────────────────
@@ -463,6 +466,17 @@ def website_data(svc: Services) -> dict[str, Any]:
     data["proposals"] = sorted(props, key=lambda e: e["created_at"], reverse=True)
     if props:
         data["names"] = community.names_for(svc, [e["pubkey"] for e in props])
+        # approved and published (approve_website): the belfry's reply on the proposal
+        replies = community.query(
+            svc, [{"kinds": [1], "authors": [belfry], "#e": [e["id"] for e in props], "limit": 200}]
+        )
+        approved: dict[str, dict[str, Any]] = {}
+        for r in sorted(replies, key=lambda e: e["created_at"]):
+            m = APPROVED_RE.match(r.get("content") or "")
+            root = next((t[1] for t in r["tags"] if t[0] == "e" and len(t) > 1), "")
+            if m and r["pubkey"] == belfry and root:
+                approved[root] = {"by": m.group(1), "at": r["created_at"]}
+        data["approved"] = approved
     return data
 
 
@@ -611,6 +625,7 @@ ICONS = {
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
+    "trash": '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
     "signout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
 }
 
@@ -774,6 +789,7 @@ table.list td{border:0;padding:2px 0} table.list td:empty{display:none} .ph-only
 .panel{overflow-wrap:anywhere}
 @media (min-width:900px){
 .shell{display:grid;grid-template-columns:260px minmax(0,1fr)}
+.shell.anon{display:block}
 .side{position:sticky;top:0;height:100vh;height:100dvh;overflow-y:auto}
 .side .close,.shade{display:none}
 }
@@ -840,7 +856,7 @@ def frame(title: str, current: str, who: dict[str, Any] | None, body: str) -> st
     links = "".join(f'<a href="{E(h)}">{E(text)}</a>' for h, text in t.links)
     foot = f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"
     if who is None:
-        page_ = f'<div class="shell"><div class="content"><div class="page">{topbar(None)}{inner}</div>{foot}</div></div>'
+        page_ = f'<div class="shell anon"><div class="content"><div class="page">{topbar(None)}{inner}</div>{foot}</div></div>'
         return theme.frame(title, STYLE + HOME_STYLE + SHELL_STYLE + page_, TEST_NOTICE, bare=True)
     shown = title if current != "/" else "Home"
     page_ = f"""<div class="shell">
@@ -1099,6 +1115,14 @@ a.logout{{display:inline-block;margin-top:28px;color:#c62828;font-weight:600}}
 ADD_SCRIPT = """<style>
 .list-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .list-head h2{margin:0}
+.list-head .plus{width:36px;height:36px;border-radius:99px;background:var(--accent);color:var(--accent-fg,#fff);border:0;cursor:pointer;
+box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.list-head .plus:hover{background:var(--accent);color:var(--accent-fg,#fff);filter:brightness(1.08)}
+.list-head .plus svg{width:20px;height:20px}
+.role-form{margin:0}.role-form select{width:auto;font-size:16px;padding:4px 6px;border-radius:8px;border:1px solid var(--border);
+background:var(--surface);color:var(--fg)}
+.danger-btn{border:0;background:none;cursor:pointer}.danger-btn:hover{color:#c62828;background:var(--surface-deep)}
+.danger-btn svg{width:18px;height:18px}
 .add-dlg{border:1px solid var(--border);border-radius:14px;padding:0;width:min(480px,calc(100vw - 32px));
 background:var(--surface);color:var(--fg)}
 .add-dlg::backdrop{background:rgba(0,0,0,.35)}
@@ -1144,17 +1168,25 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
     for m in mem:
         email = f'<td class="meta">{E(m["email"])}</td>' if admin else ""
         actions = ""
+        role_cell = f"<td>{'admin' if m['admin'] else 'member'}</td>"
         if admin:
-            actions = f"""<td><details><summary>Edit</summary>
-<form method="post" action="/members/{m["partner"]}/edit"><input type="hidden" name="csrf" value="{csrf}">
-<p><input type="text" name="name" value="{E(m["name"])}"></p>
-<p><label><input type="checkbox" name="admin" value="1" {"checked" if m["admin"] else ""}> admin</label></p>
-<p><button class="btn" type="submit">Save</button></p></form>
-<form method="post" action="/members/{m["partner"]}/remove" onsubmit="return confirm('Remove {E(m["name"])}? Their pass ends now; their key stays theirs.')">
-<input type="hidden" name="csrf" value="{csrf}"><button type="submit">Remove</button></form></details></td>"""
+            # the role is the one thing to change here: a dropdown that saves at once, and an icon
+            # to remove them (Xavier, 2026-11-17: no Edit); names are each member's own (/profile)
+            me_row = m["partner"] == who["partner"]
+            role_cell = f"""<td><form method="post" action="/members/{m["partner"]}/edit" class="role-form">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="name" value="{E(m["name"])}">
+<select name="admin" aria-label="Role of {E(m["name"])}" onchange="this.form.requestSubmit()"{" disabled title='Ask another admin to change your role'" if me_row else ""}>
+<option value=""{"" if m["admin"] else " selected"}>member</option><option value="1"{" selected" if m["admin"] else ""}>admin</option></select>
+<noscript><button type="submit" class="btn ghost small">Save</button></noscript></form></td>"""
+            actions = (
+                "<td></td>"
+                if me_row
+                else f"""<td><form method="post" action="/members/{m["partner"]}/remove" onsubmit="return confirm('Remove {E(m["name"])}? Their pass ends now; their key stays theirs.')">
+<input type="hidden" name="csrf" value="{csrf}"><button type="submit" class="icon-btn danger-btn" aria-label="Remove {E(m["name"])}" title="Remove">{icon("trash")}</button></form></td>"""
+            )
         rows.append(
             f'<tr><td class="who-cell"><b>{E(m["name"])}</b></td>{email}'
-            f"<td>{'admin' if m['admin'] else 'member'}</td>"
+            f"{role_cell}"
             f'<td class="meta"><span class="ph-only">since </span>{E(m["since"])}</td>{actions}</tr>'
         )
     head = (
@@ -1220,7 +1252,11 @@ def website_html(
     for e in site.get("proposals") or []:
         kind, pk, d = site_ref(e)
         approve = ""
-        if who and who["admin"]:
+        done = (site.get("approved") or {}).get(e["id"])
+        if done:  # approved and published: who did it and when, not the button again
+            approve = f"""<p class="meta ok-line">✓ Approved and published by {E(done.get("by") or "an admin")}
+{"· " + community.when(done["at"]) if done.get("at") else ""}</p>"""
+        elif who and who["admin"]:
             approve = f"""<form method="post" action="/website/{e["id"]}/approve" class="inline">
 <input type="hidden" name="csrf" value="{E(who["csrf"])}"><button class="btn" type="submit">Approve and publish</button></form>"""
         items.append(
@@ -1231,7 +1267,7 @@ def website_html(
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""
     )
-    skill = f"{pages.skills_base(s)}/skills/belfry-homepage.md"
+    skill = f"{pages.skills_base(s)}/skills/homepage.md"
     return frame(
         "Website",
         "/website",

@@ -516,7 +516,7 @@ Publish a kind 0 event (NIP-01) on `{relay}`{also}, content a JSON string:
 - `{belfry_json or "/.well-known/belfry.json"}`: every address of this belfry (API base, relays,
   file server, apps, the list of skills under `skills`).
 - Skills (Markdown): `{skills}/skill.md` and `{skills}/skills/<name>.md`, for example
-  `{skills}/skills/belfry-app.md` (signing in to apps). The `skills` map in belfry.json lists them.
+  `{skills}/skills/app.md` (signing in to apps). The `skills` map in belfry.json lists them.
 - The API is `{api_base(svc)}`; every call is NIP-98 signed with your key as above.
 
 """

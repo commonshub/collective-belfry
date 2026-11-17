@@ -1133,7 +1133,7 @@ def look_row(open_: str, settings: Any = None) -> tuple[bool, str]:
     body = (
         '<div class="form"><p class="meta">Colours, fonts and logo live in a theme folder on the '
         "server (<code>infra/data/theme</code>), which updates never touch. Give your agent the "
-        f'<a href="{E(pages.skills_base(settings))}/skills/belfry-theme.md">theme skill</a>, or run '
+        f'<a href="{E(pages.skills_base(settings))}/skills/theme.md">theme skill</a>, or run '
         "<code>belfry theme set DIR</code> on the server; <code>belfry theme reset</code> goes "
         "back to Belfry's look.</p></div>"
     )

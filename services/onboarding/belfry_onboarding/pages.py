@@ -18,7 +18,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from . import claim
 
@@ -213,6 +213,11 @@ def site_domain(settings: Any) -> str:
     return host.removeprefix("pass.") if host.startswith("pass.") else ""
 
 
+def skill_name(folder: str) -> str:
+    """A skill's name in its URL: its folder's, without "belfry-" (the host says it already)."""
+    return folder.removeprefix("belfry-")
+
+
 def skills_base(settings: Any) -> str:
     """Where the skills are served: belfry.<domain> (the belfry's own host), else pass.<domain>
     for a belfry without a console host. pass.<domain>/skills/* redirects there."""
@@ -246,11 +251,18 @@ def register(app: FastAPI) -> None:
 
     @app.get("/skills/{name}.md", include_in_schema=False)
     def named_skill(name: str, request: Request) -> Response:
-        """Every skill in skills/ (/.well-known/belfry.json lists them), by its folder's name."""
+        """Every skill in skills/ (/.well-known/belfry.json lists them), by its folder's name
+        without "belfry-" (Xavier, 2026-11-17: belfry.<domain>/skills/homepage.md, not
+        …/belfry-homepage.md); the old long names redirect there."""
         if not _SKILL_NAME.match(name):
             raise HTTPException(status_code=404)
-        try:
-            text = skill_text(request.app.state.services.settings, f"{name}/SKILL.md")
-        except FileNotFoundError:
-            raise HTTPException(status_code=404) from None
-        return Response(text, media_type="text/markdown; charset=utf-8")
+        settings = request.app.state.services.settings
+        if name.startswith("belfry-"):
+            return RedirectResponse(f"/skills/{skill_name(name)}.md", status_code=301)
+        for folder in (f"belfry-{name}", name):
+            try:
+                text = skill_text(settings, f"{folder}/SKILL.md")
+            except FileNotFoundError:
+                continue
+            return Response(text, media_type="text/markdown; charset=utf-8")
+        raise HTTPException(status_code=404)

@@ -39,13 +39,16 @@ def test_discovery_document(services, client, monkeypatch):
     assert doc["apps"] == [
         {"name": "Chat", "url": "https://chat.belfry.test", "description": "Messages"}
     ]
-    assert doc["skills"]["steward"] == BASE + "/skills/belfry-steward.md"
+    assert doc["skills"]["steward"] == BASE + "/skills/steward.md"
 
 
 def test_skills_are_served_by_name(services, client):
     services.settings.site_url = "https://belfry.test"
-    r = client.get("/skills/belfry-steward.md")
+    r = client.get("/skills/steward.md")
     assert r.status_code == 200 and "steward" in r.text
+    # no "belfry-" in the URL (Xavier, 2026-11-17): the long names redirect to the short ones
+    r = client.get("/skills/belfry-steward.md", follow_redirects=False)
+    assert r.status_code == 301 and r.headers["location"] == "/skills/steward.md"
     assert "<domain>" not in r.text  # filled in with the deployment's domain
     assert client.get("/skills/open-source-village.md").text == client.get("/skill.md").text
     assert client.get("/skills/nope.md").status_code == 404

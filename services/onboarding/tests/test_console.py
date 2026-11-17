@@ -264,6 +264,12 @@ def test_members_list_is_for_members_and_emails_for_admins(web, belfry, odoo, au
     assert 'id="add-open" aria-label="Add people"' in r.text and '<dialog class="add-dlg"' in r.text
     assert 'action="/members/link"' in r.text and 'action="/members/add"' in r.text
     assert r.text.index('id="add-open"') > r.text.index("<h2>Everyone</h2>")
+    # a role dropdown that saves at once and a remove icon, no Edit (Xavier, 2026-11-17); not on
+    # my own row
+    assert "<summary>Edit</summary>" not in r.text
+    assert 'aria-label="Role of Bob"' in r.text and 'aria-label="Remove Bob"' in r.text
+    assert 'aria-label="Remove Alice"' not in r.text
+    assert 'aria-label="Role of Alice" onchange="this.form.requestSubmit()" disabled' in r.text
 
 
 def test_profile_page_edits_my_name_lists_devices_and_logs_out(
@@ -407,6 +413,12 @@ def test_members_forms_need_an_admin_and_the_csrf(web, belfry, odoo, authentik):
 
 
 # ── website ─────────────────────────────────────────────────────────────────────────────────
+def test_logged_out_pages_use_the_full_width(web, belfry):
+    """Xavier, 2026-11-17: signed out, /website was squeezed into the menu's column on a laptop."""
+    page = web.get("/website", headers=CONSOLE).text
+    assert '<div class="shell anon">' in page and ".shell.anon{display:block}" in page
+
+
 def test_placeholder_until_the_website_is_published(web, belfry, authentik):
     belfry.settings.homepage = "nsite"
     web.app.state.homepage = homepage.Homepage(
@@ -484,6 +496,10 @@ def test_admin_approves_a_members_website(web, belfry, odoo, authentik, relay):
     assert "approved by Alice" in snap["content"]
     # the changelog shows the website change
     assert "approved by Alice" in web.get("/changelog", headers={"Host": "pass.belfry.test"}).text
+    # approved and published: who and when, not the button again (Xavier, 2026-11-17)
+    page = web.get("/website", headers=CONSOLE).text
+    assert "Approve and publish</button>" not in page
+    assert "Approved and published by Alice" in page
     # members can't approve
     console._admins["at"] = 0.0
     authentik.groups["belfry-stewards"]["members"].clear()
@@ -500,7 +516,7 @@ def test_discovery_names_the_console_and_the_belfry_key(web, belfry):
     doc = web.get("/.well-known/belfry.json", headers={"Host": "belfry.test"}).json()
     assert doc["console"] == "https://belfry.belfry.test"
     assert doc["nostr"]["pubkey"] == homepage.belfry_pubkey(belfry.settings)
-    assert doc["skills"]["website"].endswith("/skills/belfry-homepage.md")
+    assert doc["skills"]["website"].endswith("/skills/homepage.md")
 
 
 def test_status_shows_the_version_and_admins_can_update(web, belfry, odoo, authentik, tmp_path):
@@ -662,19 +678,19 @@ def test_admins_are_not_asked_again_at_once_when_authentik_is_down(belfry, monke
 
 
 def test_skills_live_on_the_belfry_host(web):
-    r = web.get("/skills/belfry-homepage.md", headers={"Host": "belfry.belfry.test"})
+    r = web.get("/skills/homepage.md", headers={"Host": "belfry.belfry.test"})
     assert r.status_code == 200 and "text/markdown" in r.headers["content-type"]
     assert web.get("/skill.md", headers={"Host": "belfry.belfry.test"}).status_code == 200
     # old links on pass.<domain> move there
     r = web.get(
-        "/skills/belfry-homepage.md",
+        "/skills/homepage.md",
         headers={"Host": "pass.belfry.test"},
         follow_redirects=False,
     )
     assert r.status_code == 301
-    assert r.headers["location"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
+    assert r.headers["location"] == "https://belfry.belfry.test/skills/homepage.md"
     doc = web.get("/.well-known/belfry.json", headers={"Host": "pass.belfry.test"}).json()
-    assert doc["skills"]["website"] == "https://belfry.belfry.test/skills/belfry-homepage.md"
+    assert doc["skills"]["website"] == "https://belfry.belfry.test/skills/homepage.md"
 
 
 def test_the_menu_shows_the_branding_logo(web, belfry, odoo, authentik, monkeypatch):
