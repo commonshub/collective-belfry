@@ -9,8 +9,10 @@ import { categorize, categoryId, layoutContent, mayOrder, setLayout, shownCatego
 import { groups, isPublicChannel, type Group } from '../core/model'
 import { useVersion } from '../core/store'
 import { Btn, Form, Sheet } from './common'
+import { setArchived } from '../core/actions'
+import { channelIsEmpty, deleteChannel } from '../core/checkin'
 import { isTownChannel } from './Places'
-import { ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, GlobeIcon, GripIcon, MoreIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
+import { ArchiveIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, GlobeIcon, GripIcon, MoreIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 
 /** The town's channels (not the Square) in their categories. */
 export const townCategories = () => categorize(groups().filter((g) => isTownChannel(g.id) && g.id !== 'general'))
@@ -161,7 +163,7 @@ export function ChannelsPanel({ wide = false }: { wide?: boolean }) {
       <p className="hint" style={{ fontSize: 14 }}>How the channel list is arranged for everyone. Hold a channel and drag it, or tap it to move it. The town always comes first.</p>
       <div className="pick-head">The town</div>
       <div className="act-group cat-fixed">
-        <div className="act settings-row"><span className="t"><b>Square, Members, Charter</b><small>Fixed: always at the top</small></span></div>
+        <div className="act settings-row"><span className="t"><b>Townsquare, Members, Charter</b><small>Fixed: always at the top</small></span></div>
       </div>
       <div ref={dnd.ref} className={'chan-sections settings-cats' + (dnd.drag ? ' sorting' : '') + (admin ? ' may' : '')}>
         {shown.map((c) => (
@@ -245,11 +247,14 @@ function CategorySheet({ cats, id, onClose }: { cats: Cat[]; id: string; onClose
 
 /** A channel's place: up, down, or into another category (at its end). */
 function ChannelMoveSheet({ cats, id, onClose }: { cats: Cat[]; id: string; onClose: () => void }) {
+  const [ending, setEnding] = useState(false)
+  const empty = useEmpty(id)
   const from = cats.find((c) => c.items.some((g) => g.id === id))
   const g = from?.items.find((x) => x.id === id)
   if (!from || !g) return null
   const i = from.items.indexOf(g)
   const go = async (to: string, pos: number) => { await saveCategories(moved(cats, id, to, pos)); onClose() }
+  if (ending) return <EndChannelSheet g={g} onClose={onClose} onBack={() => setEnding(false)} />
   return (
     <Sheet title={`# ${g.name}`} onClose={onClose}>
       <div className="act-group">
@@ -261,6 +266,52 @@ function ChannelMoveSheet({ cats, id, onClose }: { cats: Cat[]; id: string; onCl
         {cats.filter((c) => c.id !== from.id).map((c) => (
           <Btn key={c.id} className="act" onClick={() => go(c.id, c.items.length)}><ChevronRightIcon /><span>{c.name}</span></Btn>
         ))}
+      </div>
+      <div className="act-group">
+        {/* an empty channel can be deleted; one with messages is archived (Xavier, 2026-11-17) */}
+        <button type="button" className="act danger end-chan" disabled={empty === undefined} onClick={() => setEnding(true)}>
+          {empty === false ? <ArchiveIcon /> : <TrashIcon />}<span>{empty === undefined ? 'Delete or archive…' : empty ? 'Delete the channel' : 'Archive the channel'}
+            <small>{empty === undefined ? 'Checking for messages' : empty ? 'Nobody wrote in it yet' : 'It has messages: they stay readable, nobody can post'}</small></span>
+        </button>
+      </div>
+    </Sheet>
+  )
+}
+
+/** Whether channel ID has no messages: undefined while asking, null when the relay can't say. */
+function useEmpty(id: string): boolean | null | undefined {
+  const [empty, setEmpty] = useState<boolean | null | undefined>(undefined)
+  useEffect(() => { let on = true; void channelIsEmpty(id).then((v) => { if (on) setEmpty(v) }); return () => { on = false } }, [id])
+  return empty
+}
+
+/** Delete an empty channel or archive one with messages, after saying what happens. */
+function EndChannelSheet({ g, onClose, onBack }: { g: Group; onClose: () => void; onBack: () => void }) {
+  const empty = useEmpty(g.id)
+  const [error, setError] = useState('')
+  const del = empty === true
+  const run = async () => {
+    setError('')
+    try {
+      if (del) await deleteChannel(g.id)
+      else await setArchived(g.id, true)
+      onClose()
+    } catch (e) {
+      const m = e instanceof Error ? e.message : ''
+      if (/archive it instead/.test(m)) { setError(m); return } // someone wrote meanwhile: archive is offered now
+      setError(m || 'That did not work. Try again.')
+    }
+  }
+  return (
+    <Sheet title={del ? `Delete #${g.name}?` : `Archive #${g.name}?`} onClose={onClose}>
+      <p className="end-what">{del
+        ? 'Nobody wrote in it yet. It goes for everyone, with its settings. This can’t be undone.'
+        : 'People wrote in it. It leaves the channel list and becomes read only; its messages stay. Unarchive it any time from its page.'}</p>
+      {empty === null && <p className="hint">The channel could not be checked for messages, so it is archived (nothing is lost).</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+      <div className="act-group">
+        <Btn className="act danger" onClick={run}>{del ? <TrashIcon /> : <ArchiveIcon />}<span>{del ? 'Delete the channel' : 'Archive the channel'}</span></Btn>
+        <button type="button" className="act" onClick={onBack}><span>Keep it</span></button>
       </div>
     </Sheet>
   )

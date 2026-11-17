@@ -20,7 +20,7 @@ import { belfryAdminKeys, isAdmin } from './access'
 import { knownGroupsKey } from './dm'
 import { displayName, group, profiles, type CalEvent } from './model'
 import { addEvents, all, touch, type Ev } from './store'
-import { enqueue, isLocalOnly, me, signedFetch } from './sync'
+import { enqueue, isLocalOnly, me, queryComplete, signedFetch } from './sync'
 
 export const ROLE_NS = 'belfry/group-role'
 export const TICKET_NS = 'belfry/ticket'
@@ -110,10 +110,11 @@ export function roleWord(groupId: string, pk: string, e?: Pick<CalEvent, 'creato
 
 // ---- errors ----------------------------------------------------------------------------------
 
-export type CheckError = 'archived' | 'always_open' | 'not_allowed' | 'not_in_group' | 'last_admin' | 'guest_not_saved' | 'agent' | 'events_only' | 'always_admin' | 'no_ticket' | 'not_found' | 'invalid' | 'relay' | 'offline' | 'failed'
+export type CheckError = 'archived' | 'always_open' | 'not_empty' | 'not_allowed' | 'not_in_group' | 'last_admin' | 'guest_not_saved' | 'agent' | 'events_only' | 'always_admin' | 'no_ticket' | 'not_found' | 'invalid' | 'relay' | 'offline' | 'failed'
 export const CHECK_ERRORS: Record<CheckError, string> = {
   archived: 'This group is archived. Unarchive it first.',
   always_open: 'This channel can’t be archived.',
+  not_empty: 'People wrote in this channel: archive it instead.',
   not_allowed: 'Only the admins can change this.',
   not_in_group: 'This person isn’t in the group.',
   last_admin: 'A group keeps at least one admin.',
@@ -276,4 +277,31 @@ export async function editGroupMeta(groupId: string, tags: string[][], fields: {
   const direct = () => enqueue('groups', { kind: 9002, tags: [['h', groupId], ...tags] })
   if (isLocalOnly() || relayAdmin(groupId)) { await direct(); return }
   if ((await viaBelfry('/group-meta', { channel: groupId, ...fields })) === 'missing') await direct()
+}
+
+// ---- deleting an empty channel ---------------------------------------------------------------
+// Settings → Channels (Xavier, 2026-11-17): a channel nobody wrote in can be deleted; one with
+// messages is archived instead. The belfry checks again (POST /group-delete → 409 not_empty).
+
+/** What people post in a group: an empty group has none (the belfry's checkin.CONTENT_KINDS). */
+export const CONTENT_KINDS = [9, 10, 11, 12, 20, 1063, 1068, 1111, 9802, 30023, 31922, 31923]
+
+/** Whether nobody posted in group ID; null when the relay doesn't say (offline). */
+export async function channelIsEmpty(id: string): Promise<boolean | null> {
+  const mine = (e: Ev) => CONTENT_KINDS.includes(e.kind) && e.tags.some((t) => t[0] === 'h' && t[1] === id)
+  if (all(me()).some(mine)) return false
+  if (isLocalOnly()) return true
+  const found = await queryComplete('groups', [{ kinds: CONTENT_KINDS, '#h': [id], limit: 1 }])
+  return found === null ? null : !found.some((e) => e.tags.some((t) => t[0] === 'h' && t[1] === id))
+}
+
+/** Delete group ID (a 9008): through the belfry, which refuses a channel with messages; a belfry
+ *  from before /group-delete (404) gets the direct event when I can publish it. */
+export async function deleteChannel(id: string): Promise<void> {
+  const direct = () => enqueue('groups', { kind: 9008, tags: [['h', id]] })
+  if (isLocalOnly()) { await direct(); return }
+  if ((await viaBelfry('/group-delete', { channel: id })) === 'missing') {
+    if (!relayAdmin(id)) throw new CheckFailed('not_allowed')
+    await direct()
+  }
 }

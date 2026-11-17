@@ -301,7 +301,7 @@ export function demoCharter(opts: { steward?: boolean; rules?: number; agreedByM
   const author = steward ? me() : getPublicKey(generateSecretKey())
   const titles: [string, string][] = [['We look after each other', 'Kind words, good faith; speak up when someone isn’t.'], ['What’s said here stays here', 'Ask before sharing a message or photo outside.'],
     ['Shared things come back', 'Return tools within a week, clean and working.'], ['Quiet hours after 22:00', 'In the hall and the garden, every day.'],
-    ['Big changes go to the Assembly', 'Proposed and voted on, not just done.'], ['Leave it better than you found it', 'Tidy the hall and the kitchen after use.']]
+    ['Big changes are proposed first', 'Proposed and voted on, not just done.'], ['Leave it better than you found it', 'Tidy the hall and the kitchen after use.']]
   const t = [['t', listIdForCharter()], ['h', CHARTER_ID], ['each', '1']]
   const evs: Ev[] = [
     { id: hex(32), pubkey: author, sig: hex(64), kind: 9007, created_at: now - 9000, tags: [['h', CHARTER_ID]], content: '' },

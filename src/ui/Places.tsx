@@ -476,7 +476,7 @@ function ApplyCard({ st, community }: { st: ApplyStatus | null; community: strin
     <div className="home-card apply-card">
       <div className="pad-card">
         <b>Become a member of {community}</b>
-        <p className="hint">Members see the whole town: the Square, its events and groups.{st?.accept === 'vouches' ? ' Vouches from members or a steward’s yes make you one.' : ' A steward’s yes makes you one.'}</p>
+        <p className="hint">Members see the whole town: the Townsquare, its events and groups.{st?.accept === 'vouches' ? ' Vouches from members or a steward’s yes make you one.' : ' A steward’s yes makes you one.'}</p>
         <button className="btn" onClick={() => go('apply')}>Apply to become a member</button>
       </div>
     </div>

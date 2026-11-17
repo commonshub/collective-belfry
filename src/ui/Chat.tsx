@@ -153,7 +153,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
           {(showCharter || open.length > 0) && <div className="section-title">Open to everyone</div>}
           {showCharter && <Place to="charter" on={section === 'charter'} icon={<DocIcon />} title="Charter" />}
           {open.map((g) => <Row key={g.id} g={g} />)}
-          <p className="hint" style={{ padding: '12px 16px' }}>Read-only for guests. Members also have the Square, the Fairground, the Assembly and Members.</p>
+          <p className="hint" style={{ padding: '12px 16px' }}>Read-only for guests. Members also have the Townsquare, every channel and Members.</p>
         </div>
         {side && <SideUser />}
       </div>

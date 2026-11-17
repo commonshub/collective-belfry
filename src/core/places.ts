@@ -1,14 +1,16 @@
 // The town's places (iOS SPEC 19.31, the owner's canvas "One belfry, five places", 2026-11-16).
 // Display only: ids, mail addresses, links and wire values never change.
 //  - On-brand names of the default channels, only while the group's own name is still its
-//    default (empty, its id, or "#" + id, any case): general → Square, events → Fairground,
-//    proposals → Assembly, website → Scriptorium. A renamed channel keeps its name.
+//    default (empty, its id, or "#" + id, any case): general → Townsquare (it was Square, with
+//    Fairground, Assembly and Scriptorium, until 2026-11-17). A renamed channel keeps its name.
 //  - The members' directory with its requests is "Members" (it was "Gates" until 2026-11-17).
 //  - Roles read Steward (the built-in admin) · Member · Guest; the per-event / per-group check-in
 //    role (wire value `steward`) reads "Door".
 import { THEME } from '../config'
 
-export const PLACE_NAMES: Record<string, string> = { general: 'Square', events: 'Fairground', proposals: 'Assembly', website: 'Scriptorium' }
+// Since 2026-11-17 (Xavier: "Just Townsquare (instead of Square)"): #general alone is renamed;
+// #events, #proposals and #website show their own names (and a new belfry no longer has them).
+export const PLACE_NAMES: Record<string, string> = { general: 'Townsquare' }
 export const MEMBERS = 'Members'
 export const STEWARD = 'Steward'
 export const DOOR = 'Door'
