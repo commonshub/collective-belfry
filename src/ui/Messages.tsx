@@ -28,7 +28,7 @@ export function MessagesList() {
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => up('c')}>‹</button>
-        <h1>Messages{address() && <small>Your address: {address()}</small>}</h1>
+        <h1>Messages{address() && <small>{address()}</small>}</h1>
         <button className="icon-btn" aria-label="New message" onClick={() => setCreating(true)}>＋</button>
       </div>
       <div className="scroll">

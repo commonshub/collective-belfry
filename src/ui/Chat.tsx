@@ -29,7 +29,7 @@ import { BELFRY, NAME, THEME } from '../config'
 
 /** The groups relay is connected: a send that is retried says so, not "waiting for connection". */
 const relaysUp = () => status.relays[BELFRY.groupsRelay] === 'up'
-import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon } from './icons'
+import { ArchiveIcon, AtIcon, MicIcon, CalendarIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, DocIcon, HexIcon, ImageIcon, MegaphoneIcon, CopyIcon, GearIcon, GlobeIcon, LinkIcon, MailIcon, MenuIcon, MoreIcon, PencilIcon, PeopleIcon, PushPinIcon, PodShape, TodoIcon, InboxIcon, ReplyIcon, SearchIcon, SmilePlusIcon, ThreadIcon, TrashIcon, PlusIcon } from './icons'
 import { closeDrawer, toggleDrawer } from './drawer'
 import { ChannelHeader } from './ChannelHeader'
 import { agentOwner, canAdmin, isAdmin } from '../core/access'
@@ -44,7 +44,7 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
-import { amGuest, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
+import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
 import { MEMBERS, SECTION_TITLE } from '../core/places'
 import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
@@ -103,6 +103,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
   const steward = THEME === 'belfry' && isBelfryAdmin(me())
   const brand = useBranding()
   const [creating, setCreating] = useState<string | null>(null) // the category a new channel goes into
+  const [making, setMaking] = useState(false) // the Create sheet (＋ in the header, laptop)
   const guest = amGuest()
   const town = groups().filter((g) => isTownChannel(g.id))
   const square = town.find((g) => g.id === 'general')
@@ -164,6 +165,10 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
       <div className="topbar">
         {drawer && <button className="icon-btn menu-btn drawer-close" aria-label="Close the town" aria-expanded="true" onClick={() => closeDrawer()}><MenuIcon /></button>}
         <h1 style={{ paddingLeft: drawer ? 0 : 8 }}>{brand.logo && <img className="brand-logo" src={brand.logo} alt="" />}<span className="belfry-title">{community}</span><small>{members ? `${members} ${members === 1 ? 'member' : 'members'}` : ''}</small></h1>
+        {/* Create: a plain + above everything, on a laptop (Xavier, 2026-11-17: not the black
+            "+ Create" under the places); the phone has it in its bottom bar */}
+        {top && !guest && <button className="icon-btn side-create" aria-label="Create" title="Create" onClick={() => setMaking(true)}><PlusIcon /></button>}
+        {making && <CreateSheet onClose={() => setMaking(false)} where={current} />}
         {/* the belfry's settings (its admins), where the + used to be (the owner, 2026-11-17) */}
         {steward && <button className={'icon-btn settings-gear' + (section === 'settings' ? ' on' : '')} aria-label="Belfry settings" onClick={() => closeDrawer('settings')}><GearIcon /></button>}
       </div>
@@ -171,7 +176,6 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
         {top}
         {brand.cover && <img className="brand-cover" src={brand.cover} alt="" />}
         {today}
-        <button className="town-search" onClick={() => closeDrawer('search')}><SearchIcon /><span>Search the town</span></button>
         <div className="section-title">{SECTION_TITLE.town}</div>
         {square && <Row g={square} />}
         <Place to="members" on={section === 'members' || section === 'requests'} icon={<PeopleIcon />} title={MEMBERS} small={waitingN ? `${waitingN} ${waitingN === 1 ? 'request' : 'requests'} waiting for you` : undefined} n={waitingN} cls="members-row" />

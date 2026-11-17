@@ -207,8 +207,7 @@ export function SidePlaces({ place }: { place?: Place }) {
         <span className="hash"><AtIcon /></span><span className="t"><b>Mentions</b></span>
         {mentionsNew() ? <span className="badge lime">{mentionsNew()}</span> : null}
       </button>
-      {!guest && <button className="btn small side-create" onClick={() => setCreating(true)}><PlusIcon /> Create</button>}
-      {creating && <CreateSheet onClose={() => setCreating(false)} where={here} first={place === 'calendar' ? 'event' : place === 'groups' ? 'group' : undefined} />}
+      {/* Create is the + at the top of the list (TownList's header) */}
     </div>
   )
 }
