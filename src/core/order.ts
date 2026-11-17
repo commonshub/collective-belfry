@@ -115,8 +115,10 @@ export function categorize<T extends { id: string }>(channels: T[], content = or
 
 /** Shown in the list: non-admins see categories with channels; admins see every category (empty
  *  ones with their +), except `building` left out of the list and empty. */
-export const shownCategories = <T,>(cats: Category<T>[], admin: boolean) =>
-  cats.filter((c) => c.items.length > 0 || (admin && (c.listed || c.id === LIFE)))
+export const shownCategories = <T,>(cats: Category<T>[], admin: boolean, member = admin) =>
+  // Community life shows, empty, to anyone who may start a channel (its + is how: a belfry with
+  // only the Townsquare would otherwise leave members no way to make one)
+  cats.filter((c) => c.items.length > 0 || (admin && c.listed) || (c.id === LIFE && (admin || member)))
 
 /** The event content for these categories (what the admins see, in order). Ids this device
  *  doesn't know stay in their category, after the known ones. */

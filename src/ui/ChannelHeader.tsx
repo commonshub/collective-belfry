@@ -89,7 +89,8 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
       <div className="topbar chead-bar" {...pull}>
         {left}
         <h1 className="tap" onClick={toggle} aria-expanded={open}>
-          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)} {g?.name ?? id}
+          {/* a public channel's globe is in the subtitle: one globe, not two (#issues 2026-11-15) */}
+          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : g && !g.isEvent && !g.isProposal && isPublicChannel(g) ? '#' : channelIcon(g)} {g?.name ?? id}
           {g && !g.isEvent && <ChannelSubtitle g={g} />}
         </h1>
         {right}

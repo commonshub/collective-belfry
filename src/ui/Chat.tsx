@@ -108,7 +108,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
   const square = town.find((g) => g.id === 'general')
   const admin = mayOrder()
   const cats = townCategories()
-  const shown = shownCategories(cats, admin)
+  const shown = shownCategories(cats, admin, !guest)
   const dnd = useCategoryDrag(cats, admin)
   const waitingN = requestCount()
   const rules = charter()

@@ -23,7 +23,7 @@ import { isAdmin } from '../core/access'
 import { AccessFields } from './Chat'
 import { GroupRequest } from './Requests'
 import { groupRequestsFor } from '../core/requests'
-import { ArchiveIcon, GearIcon } from './icons'
+import { ArchiveIcon, GearIcon, ThreadIcon } from './icons'
 import { ArchivedBar } from './GroupPage'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
@@ -371,6 +371,9 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
           </div>
         )}
       </div>
+      {/* made from a message: its thread, where its history is written (the old pull-down row's link) */}
+      {t.source && <button type="button" className="icon-btn task-thread" aria-label="Open its thread" title="Open its thread"
+        onClick={() => go('c/' + encodeURIComponent(groupId) + '/thread/' + t.source)}><ThreadIcon /></button>}
     </div>
   )
 }
