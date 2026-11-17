@@ -601,10 +601,18 @@ class Register(OdooApi):
             "used_by": used.get("name") or "",
         }
 
+    @staticmethod
+    def unverified(partner: dict[str, Any]) -> bool:
+        """A buyer's contact whose address is not proven yet (sales.py): it holds its pass, but
+        invites nobody and is found by no e-mail lookup (the address is not in ``email``)."""
+        return bool(partner.get("belfry_pending_email")) and not partner.get("email")
+
     def _member(self, partner_id: int, message: str) -> dict[str, Any]:
         partner = self._get("res.partner", int(partner_id))
         if not partner or not self._active_pass(partner["id"]):
             raise _user_error(message)
+        if self.unverified(partner):
+            raise _user_error("Confirm your e-mail address first (the link in your receipt).")
         return partner
 
     def _m_belfry_participant_invites(self, model, partner_id, *_a, **_k):
@@ -689,6 +697,8 @@ class Register(OdooApi):
         """How many agents this member can bring: the belfry's number, or their tier's when one
         is set (params ``belfry.agents_per_member``, ``belfry.agents_per_tier.<tier>``)."""
         base = self.param("belfry.agents_per_member", str(AGENTS_PER_MEMBER))
+        if self.unverified(self._get("res.partner", int(partner_id)) or {}):
+            return 0  # a buyer whose address is not proven yet (sales.py)
         tiers = {
             p.get("tier")
             for p in self._all("belfry.pass")
@@ -1806,6 +1816,41 @@ class Register(OdooApi):
             ],
         )
         return {"state": "sent", "expires_at": expires}
+
+    def check_key_code(self, email: str, pubkey: str, code: str) -> dict[str, Any]:
+        """The code mailed to EMAIL for PUBKEY, checked and used, binding nothing:
+        ``{"state": "ok" | "wrong_code" (with tries_left) | "expired"}``. The sign-in of a buyer
+        whose address is not proven yet (sales.confirm does the rest)."""
+        email, pubkey = self._clean(email, pubkey)
+        with self._lock:
+            self._db.execute("BEGIN IMMEDIATE")
+            try:
+                out = self._check_code(email, pubkey, code)
+            except BaseException:
+                self._db.execute("ROLLBACK")
+                raise
+            self._db.execute("COMMIT")
+        return {k: v for k, v in out.items() if k != "rec"}
+
+    def _check_code(self, email: str, pubkey: str, code: str) -> dict[str, Any]:
+        live = [
+            c
+            for c in self._all("belfry.key.code")
+            if c["email"].lower() == email.lower()
+            and c["pubkey"] == pubkey
+            and not c.get("used_at")
+        ]
+        rec = live[-1] if live else None
+        if rec is None or rec["expires_at"] <= stamp() or rec.get("tries", 0) >= CODE_TRIES:
+            return {"state": "expired"}
+        tries = rec.get("tries", 0) + 1
+        self._write("belfry.key.code", [rec["id"]], {"tries": tries})
+        if not hmac.compare_digest(
+            rec["code_hash"], self._hash(rec["id"], re.sub(r"\s", "", str(code or "")))
+        ):
+            return {"state": "wrong_code", "tries_left": CODE_TRIES - tries}
+        self._write("belfry.key.code", [rec["id"]], {"used_at": stamp()})
+        return {"state": "ok", "rec": rec}
 
     def _m_belfry_key_code_verify(self, model, email, pubkey, code, name=False, *_a, **_k):
         email, pubkey = self._clean(email, pubkey)

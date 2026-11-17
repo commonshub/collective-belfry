@@ -107,10 +107,14 @@ def _limited(key: str, limit: int, seconds: float) -> bool:
 
 # ── who an address is ───────────────────────────────────────────────────────────────────────
 def active_pubkey(svc: Services, pubkey: str) -> bool:
+    """An active pass holder with a mailbox: a buyer whose address is not proven yet has none
+    (sales.py), neither for mail in nor out."""
+    from . import sales
+
     rows = svc.odoo.search_read(
         "belfry.pass", [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]], ["id"], limit=1
     )
-    return bool(rows)
+    return bool(rows) and not sales.unverified_key(svc, pubkey)
 
 
 def channel_exists(svc: Services, channel: str) -> bool:

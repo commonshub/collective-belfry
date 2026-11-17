@@ -966,7 +966,10 @@ def _finish_activation(
     sync_relay_whitelist(svc, include=[pubkey])
     if not own_custody:
         username = member_number
-        if tier != "guest":
+        # a buyer whose address is not proven yet keeps the member number (sales.py): no name
+        # of its choice until the address is theirs
+        unproven = bool(partner.get("belfry_pending_email")) and not partner.get("email")
+        if tier != "guest" and not unproven:
             # their name as a slug, not the member number; theirs to change later (usernames.py)
             from . import usernames
 
@@ -974,7 +977,7 @@ def _finish_activation(
                 svc, user_token, partner.get("name") or "", member_number
             )
         publish_profile(svc, user_token, pubkey, partner, username)
-        if tier != "guest" and username != member_number.lower():
+        if tier != "guest" and not unproven and username != member_number.lower():
             # a profile that existed already (a guest who became a member) gets the address too
             usernames.publish_nip05(
                 svc,
@@ -1034,6 +1037,12 @@ def _finish_activation(
     return "activated"
 
 
+def _own_register(svc: Services) -> bool:
+    from .register import Register
+
+    return isinstance(svc.odoo, Register)
+
+
 MEMBERSHIP_END = dt.date(2099, 12, 31)  # a free membership has no end; revoking ends it
 
 
@@ -1057,6 +1066,8 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "invoice_id",
                 "guest_days",
                 "membership_days",
+                # a sold pass's dates (sales.py; the own register only)
+                *(["sold_start", "sold_end"] if _own_register(svc) else []),
             ],
         )
         if row is None:
@@ -1081,15 +1092,20 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "belfry_npub",
                 "belfry_key_version",
                 "belfry_key_custody",
+                *(["belfry_pending_email"] if _own_register(svc) else []),
             ],
         )[0]
         tier = row.get("tier") or "member"
         end = MEMBERSHIP_END
-        if tier == "guest":
+        start = today()
+        if row.get("sold_end"):  # a sold pass (sales.py): the product's dates
+            start = odoo_date(row.get("sold_start")) or today()
+            end = odoo_date(row["sold_end"]) or end
+        elif tier == "guest":
             end = today() + dt.timedelta(days=int(row.get("guest_days") or 30))
         elif row.get("membership_days"):  # a member link for a month or a year (roles.py)
             end = today() + dt.timedelta(days=int(row["membership_days"]))
-        result = _finish_activation(svc, row, partner, tier, None, today(), end, {})
+        result = _finish_activation(svc, row, partner, tier, None, start, end, {})
         if tier == "guest":
             from . import guests
 

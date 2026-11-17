@@ -197,6 +197,12 @@ def change(svc: Services, pubkey: str, wanted: str) -> dict[str, str]:
     partner = core.m2o_id(row.get("partner_id")) if row else None
     if not partner:
         raise ApiError(403, "not_member", "Only members have an address here.")
+    from . import sales
+
+    if sales.is_unverified(svc, partner):
+        raise ApiError(
+            403, "unverified", "Confirm your e-mail address first (the link in your receipt)."
+        )
     found = community.member_token(svc, partner)
     if found is None or found[0] != pubkey:
         raise ApiError(

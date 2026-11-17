@@ -290,6 +290,12 @@ def make_channel_invite(s: Services, pubkey: str, who: dict[str, Any], data: Any
         ["tier"],
     )
     _inviter(rows)
+    from . import sales
+
+    if sales.unverified_key(s, pubkey):
+        raise ApiError(
+            403, "unverified", "Confirm your e-mail address first (the link in your receipt)."
+        )
     if not mail.channel_exists(s, channel):
         raise ApiError(404, "no_channel", "No such channel.")
     if not may_invite(s, pubkey, channel, bool(who.get("steward"))):
@@ -709,6 +715,12 @@ def register_add_route(app: FastAPI) -> None:
             ["tier"],
         )
         _inviter(rows)
+        from . import sales
+
+        if await run_in_threadpool(sales.unverified_key, s, caller):
+            raise ApiError(
+                403, "unverified", "Confirm your e-mail address first (the link in your receipt)."
+            )
         if not await run_in_threadpool(mail.channel_exists, s, channel):
             raise ApiError(404, "no_channel", "No such channel.")
         if not await run_in_threadpool(may_invite, s, caller, channel, bool(who.get("steward"))):

@@ -145,6 +145,11 @@ def outcome(svc: Services, f: dict[str, Any], member: dict[str, Any]) -> dict[st
 def send_code(svc: Services, f: dict[str, Any], email: str) -> dict[str, Any]:
     member = apps.member_by_email(svc, email)
     if member is None:
+        # a buyer whose address is not proven yet: this sign-in is its proof (sales.py)
+        from . import sales
+
+        member = sales.pending_member(svc, email)
+    if member is None:
         raise ConnectError(
             404,
             f"No member of {svc.settings.nip05_domain} has this address. Check it, or ask "
@@ -166,6 +171,8 @@ def verify_code(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
     member = f.get("pending")
     if not member:
         raise ConnectError(409, "Type your e-mail address first.")
+    if member.get("unverified"):
+        return _verify_unproven(svc, f, member, code)
     try:
         row = svc.odoo.call(
             "belfry.key.code",
@@ -186,6 +193,34 @@ def verify_code(svc: Services, f: dict[str, Any], code: str) -> dict[str, Any]:
     if state != "other_key" or row.get("npub") != nostr.hex_to_npub(member["pubkey"]):
         raise ConnectError(409, "This address does not belong to a member's account.")
     return member
+
+
+def _verify_unproven(
+    svc: Services, f: dict[str, Any], member: dict[str, Any], code: str
+) -> dict[str, Any]:
+    """The first sign-in of a buyer whose address was not proven (sales.py): the right code
+    proves it. The address becomes the account's, or, when another account has it, the pass
+    moves there; the sign-in goes on with the account that now holds it."""
+    from . import sales
+
+    try:
+        row = svc.odoo.check_key_code(member["email"], f["session"], code)
+    except (OdooError, AttributeError) as exc:
+        raise ConnectError(502, "The code could not be checked. Try again.") from exc
+    state = row.get("state")
+    if state == "wrong_code":
+        left = int(row.get("tries_left") or 0)
+        raise ConnectError(
+            422, f"That code is not right ({left} {'try' if left == 1 else 'tries'} left)."
+        )
+    if state != "ok":
+        raise ConnectError(410, "That code expired. Send a new one.")
+    sales.confirm(svc, member["partner"])
+    found = apps.member_by_email(svc, member["email"])
+    if found is None:
+        raise ConnectError(409, "This address does not belong to a member's account.")
+    f["pending"] = found
+    return found
 
 
 def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:

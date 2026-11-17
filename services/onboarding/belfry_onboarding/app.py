@@ -70,6 +70,7 @@ from . import (
     push,
     reports,
     roles,
+    sales,
     sessions,
     setup,
     signin,
@@ -247,6 +248,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     drops.register(app)  # <domain>/drop/<token>: drop box links to a channel (drops.py)
     invite.register(app)  # /invite/<token>: joining with the belfry's own register (invite.py)
     events.register(app)  # <domain>/events/<link> and /api/events: Belfry events (events.py)
+    sales.register(app)  # /api/products, /checkout, /codes, /offers: selling passes (sales.py)
+    sales.register_pages(app)  # belfry.<domain>/sales/confirm/<token>, /sales/thanks
     checkin.register(app)  # /api/group-roles, /api/events/<d>/attendees|checkin (checkin.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)
