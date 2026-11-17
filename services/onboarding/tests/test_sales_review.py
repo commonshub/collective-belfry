@@ -265,8 +265,11 @@ def order_body(email, product="village-2027", **more):
     return {"product": product, "name": "A", "email": email, "pay": "invoice", **more}
 
 
-def test_limits_per_ip_and_per_address(seller):
+def test_limits_per_ip_and_per_address(seller, monkeypatch):
     rsvc, _f, _v = seller
+    # the per-address limit counts orders whose cancel link reached the address: mail works
+    rsvc.settings.smtp_host = "smtp.test"
+    monkeypatch.setattr(mailer.Mailer, "_smtp", lambda self, msg, rcpts: None)
     sales.save_product(rsvc, {**sales.product(rsvc, "village-2027"), "quantity": 1000})
     with TestClient(create_app(rsvc)) as c:
         # an address holds at most 5 unpaid orders; the refusal says how to cancel them
@@ -773,3 +776,168 @@ def test_mails_wait_for_a_provider_and_back_off_after_failures(shop, monkeypatch
         )
     salesmail.deliver_due(rsvc)  # after 3 days: given up
     assert st.mail_state("offer_answer", "f_none") == "failed"
+
+
+# ── the third review ────────────────────────────────────────────────────────────────────────
+def deliver_ev(c, ev):
+    body_ = json.dumps(ev).encode()
+    return c.post(
+        "/hooks/stripe", content=body_, headers={**H, "Stripe-Signature": sign_header(WHSEC, body_)}
+    )
+
+
+def test_a_second_payment_is_flagged_and_other_sessions_expire(stripe, keycast):
+    (rsvc, fake, _v), made, _s, expired = stripe
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="card").json()["order"]
+        r = deliver_ev(c, event(oid, oid, 20000, id="cs_test_1"))
+        assert r.json()["result"] == "paid"
+        # the same session delivered again (another event id): nothing
+        r = deliver_ev(c, event(oid, oid, 20000, eid="evt_9", id="cs_test_1"))
+        assert r.json()["result"] == "paid"
+        # another session paid too: flagged
+        r = deliver_ev(c, event(oid, oid, 20000, eid="evt_10", id="cs_other"))
+        assert r.json()["result"] == "paid_twice"
+    o = sales.store(rsvc).order(oid)
+    assert "paid_twice" in o["flags"] and o["paid_twice"] == ["cs_other"] and o["state"] == "active"
+    assert len(fake.records["account.payment.register"]) == 1
+
+
+def test_marking_paid_expires_the_open_card_session(stripe, keycast):
+    (rsvc, _f, _v), _m, _s, expired = stripe
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="card").json()["order"]
+    assert not expired.called
+    sales.mark_paid(rsvc, oid, "hand", "cash", "Ada")
+    assert expired.called and sales.store(rsvc).order(oid)["stripe"]["expired"]
+
+
+def test_a_transfer_seen_first_then_a_card_payment_is_paid_twice(stripe, keycast):
+    (rsvc, fake, _v), _m, _s, _e = stripe
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="invoice").json()["order"]
+        o = sales.store(rsvc).order(oid)
+        fake.records["account.move"][1]["payment_state"] = "paid"  # the transfer, not seen yet
+        r = deliver_ev(c, event(oid, o["invoice"]["number"], 20000, id=o["stripe"]["id"]))
+        assert r.json()["result"] == "paid"
+    o = sales.store(rsvc).order(oid)
+    assert o["state"] == "active" and "paid_twice" in o["flags"]
+
+
+def test_an_older_session_paid_for_its_own_amount_is_accepted(stripe, keycast):
+    (rsvc, fake, _v), made, _s, _e = stripe
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="card").json()["order"]
+        first = sales.store(rsvc).order(oid)["stripe"]["id"]
+        # the buyer asks for the invoice; Odoo's total differs (a rate changed): a new session
+        fake.TAXES = {10: (21.0, False), 11: (21.0, False)}
+        try:
+            sales.switch_pay(rsvc, oid, "invoice")
+        finally:
+            fake.TAXES = {10: (21.0, True), 11: (21.0, False)}
+        o = sales.store(rsvc).order(oid)
+        assert o["total"]["gross"] == 24200 and o["stripe"]["id"] != first
+        # the first session, still open in a browser, is paid for its 200.00
+        r = deliver_ev(c, event(oid, oid, 20000, id=first))
+        assert r.json()["result"] == "paid"
+    o = sales.store(rsvc).order(oid)
+    assert o["state"] == "active" and "paid_old_amount" in o["flags"]
+    reg = list(fake.records["account.payment.register"].values())[0]
+    assert reg["amount"] == 200.0  # what Stripe took, not the invoice's 242.00
+
+
+def test_a_session_without_a_reference_is_never_accepted(stripe, keycast):
+    (rsvc, _f, _v), _m, _s, _e = stripe
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="card").json()["order"]
+        ev = event(oid, oid, 20000)
+        ev["data"]["object"]["client_reference_id"] = None
+        assert deliver_ev(c, ev).json()["result"] == "mismatch"
+    assert sales.store(rsvc).order(oid)["state"] == "pending"
+
+
+def test_card_orders_get_the_reminder_with_the_cancel_link(stripe):
+    (rsvc, _f, _v), _m, _s, _e = stripe
+    sales.save_settings(rsvc, {"bank_holder": "", "bank_iban": ""})
+    mailer.SENT.clear()
+    with TestClient(create_app(rsvc)) as c:
+        oid = buy(c, PrivateKey(), pay="card").json()["order"]
+    sales.store(rsvc).update(oid, hold_until=sales.iso(sales.now() + dt.timedelta(days=1)))
+    sales.tick(rsvc, force=True)
+    rem = [m for m in mailer.SENT if "held until" in str(m["Subject"])]
+    assert len(rem) == 1
+    assert "cancel it here:" in body(rem[0]) and "Pay by card: https://checkout" in body(rem[0])
+
+
+def test_unmailed_card_orders_dont_lock_an_address_out(stripe, monkeypatch):
+    (rsvc, _f, _v), _m, _s, _e = stripe
+    sales.save_product(rsvc, {**sales.product(rsvc, "village-2027"), "quantity": None})
+    with TestClient(create_app(rsvc)) as c:
+        for i in range(7):  # card orders send no mail: only the IP limits bound them
+            r = post_from(
+                c,
+                PrivateKey(),
+                "/checkout",
+                order_body("v@example.org", pay="card"),
+                f"198.51.100.{i}",
+            )
+            assert r.status_code == 201, r.text
+        # the victim's own transfer order still goes through
+        r = post_from(c, PrivateKey(), "/checkout", order_body("v@example.org"), "203.0.113.99")
+        assert r.status_code == 201
+
+
+def test_an_unsaved_guest_confirming_a_free_order_is_not_asked_again(shop, keycast):
+    rsvc = shop[0]
+    me = PrivateKey()
+    pid = rsvc.odoo.create("res.partner", {"name": "Gus"})
+    rsvc.odoo.create(
+        "belfry.pass",
+        {"partner_id": pid, "tier": "guest", "state": "active", "keycast_pubkey": pk(me)},
+    )
+    mailer.SENT.clear()
+    with TestClient(create_app(rsvc)) as c:
+        r = buy(c, me, product="friend", email="gus@example.org")
+        assert r.json()["state"] == "confirm"
+        c.post(last_link(), headers=H, data={"answer": "yes"})
+    row = rsvc.odoo.read_one("res.partner", pid, ["email", "belfry_pending_email"])
+    assert row["email"] == "gus@example.org" and not row["belfry_pending_email"]
+    receipt = [m for m in mailer.SENT if str(m["Subject"]) == "Your Friend"]
+    assert receipt and "confirm" not in body(receipt[-1]).lower()
+
+
+def test_one_decision_one_code(shop, monkeypatch):
+    import threading
+
+    rsvc = shop[0]
+    st = sales.store(rsvc)
+    st.put_offer(
+        {
+            "id": "f_" + "a" * 16,
+            "key": "k" * 64,
+            "product": "village-2027",
+            "name": "K",
+            "email": "k@example.org",
+            "offer": "x",
+            "percent": 50,
+            "state": "open",
+            "channel": "requests",
+            "created": sales.iso(sales.now()),
+        }
+    )
+    monkeypatch.setattr(sales, "_reply_in_thread", lambda *a: None)
+    results = []
+
+    def go():
+        try:
+            results.append(sales.decide_offer(rsvc, "f_" + "a" * 16, 50, "", "Ada")["code"])
+        except Exception as exc:  # noqa: BLE001
+            results.append(getattr(exc, "error", "x"))
+
+    ts = [threading.Thread(target=go) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert sorted(results, key=str).count("decided") == 3
+    assert len([c for c in st.codes() if c["offer"] == "f_" + "a" * 16]) == 1

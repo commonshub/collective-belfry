@@ -60,7 +60,7 @@ Never tell a buyer whether an address is already a member: Belfry doesn't either
 Offers in kind are public, like GitHub issues, on the belfry's requests page
 (`https://<domain>/requests` or whichever channel the admins picked; `GET /products` says
 `"offers": true` when there is one). Say so plainly on the form: the request and the name are
-public, the e-mail address never is.
+public; the e-mail address is never shown on the public page.
 
 `POST /offers {"product", "name", "email", "offer", "percent"}` (percent 50–100, default 50)
 → `{offer, state: "confirm"}`; the requester confirms the mailed link, then the request is public.

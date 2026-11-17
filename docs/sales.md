@@ -176,9 +176,10 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
   (429), `accounting` (Odoo refused).
-- Limits (`too_many`): 5 open orders per key; 5 unpaid orders per address (the refusal tells
-  the address's owner to cancel the ones that aren't theirs with the link in the mails sent to
-  it) and 20 orders an hour per address; 30 orders made an hour per IP, and 60 refused
+- Limits (`too_many`): 5 open orders per key; 5 unpaid orders per address, counting only the
+  orders whose cancel link was mailed to that address (the refusal tells the address's owner to
+  cancel the ones that aren't theirs with the link in the mails sent to it; a card order that
+  sent no mail yet counts only toward the IP limits) and 20 orders an hour per address; 30 orders made an hour per IP, and 60 refused
   checkouts an hour per IP (wrong code, invalid VAT…) counted apart; for a product with
   limited places, 10 unpaid orders per IP; 10 code checks an hour per key. An IPv6 address
   counts as its /64; an IP is kept only as a keyed hash. At most 5 sales mails a day go to one
@@ -214,7 +215,7 @@ answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 from outside: the confirmation mail must be answered (the address must be theirs) before
 anything is public; the page's limits apply, and 3 a day per key and per IP, 3 open per key.
 The form and the confirmation mail say in plain words that the request and the name will be
-public; the e-mail address never is. Once the link is pressed: a thread titled
+public; the e-mail address is never shown on the public page (members can read it in the chat when the card falls back to the groups key). Once the link is pressed: a thread titled
 "<name>: <percent>% off <product> in kind" with the offer as its text, tagged `["offer", id]`,
 `["product", id]`, `["percent", n]`, `["p", <the requester's key>]`, and four buttons for the
 belfry's admins (docs/actions.md, `belfry:offer-decide`: 50%, 75%, 100%, Decline). Members
@@ -255,7 +256,14 @@ made here (no sponsor checkout in this version).
   number when the order had one) must match the order, else it is flagged and nothing opens) →
   pass active → the invoice made (when the order had none) and the payment registered on it in
   the card journal (after the pass: Odoo being down never keeps a paid pass shut; the tick
-  retries the books, and the receipt goes without the PDF if the invoice is an hour late). Stripe refusing to make a session leaves the transfer (flag on the
+  retries the books, and the receipt goes without the PDF if the invoice is an hour late).
+  Each card session's amount is kept: when the total changed to Odoo's (a transfer invoice made
+  later) a fresh session is made, and an older one still paid for its own amount is accepted and
+  flagged `paid_old_amount`. The payment booked in Odoo is the amount Stripe took. A completed
+  session for an order already paid (by another session, or by a transfer Odoo saw first) is
+  flagged `paid_twice` ("Paid twice: refund one in Stripe") and changes nothing else; every
+  payment, by any route, expires the order's other open session. A session without a reference
+  is never accepted. Card orders get the same one reminder 2 days before the hold ends. Stripe refusing to make a session leaves the transfer (flag on the
   order). A payment that arrives after the order ended reopens it (above).
 - **Transfer**: Belfry reads the open orders' invoices from Odoo every 15 minutes (in one call;
   when that fails, one by one, flagging the one that can't be read); when Odoo's reconciliation

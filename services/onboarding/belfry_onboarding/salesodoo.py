@@ -38,6 +38,7 @@ MOVE_FIELDS = [
     "amount_untaxed",
     "amount_tax",
     "amount_total",
+    "amount_residual",
     "journal_id",
 ]
 
@@ -346,14 +347,25 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
             # credited or cancelled under us: nothing to pay on; the admins book it by hand
             if "payment_not_booked" not in flags:
                 flags.append("payment_not_booked")
-        elif move["payment_state"] not in PAID:
+        elif move["payment_state"] in PAID:
+            if paid.get("how") == "card" and "paid_twice" not in flags:
+                # Odoo has it paid already by another payment (a transfer seen first): this card
+                # payment is a second one
+                flags.append("paid_twice")
+        else:
             memo = " ".join(x for x in (move["name"], paid.get("ref") or "") if x)
             date = (paid.get("at") or sales.iso(sales.now()))[:10]
-            wizard = remote.create(
-                "account.payment.register",
-                {"journal_id": int(journal), "payment_date": date, "communication": memo},
-                context=_ctx(int(move_id)),
-            )
+            vals: dict[str, Any] = {
+                "journal_id": int(journal),
+                "payment_date": date,
+                "communication": memo,
+            }
+            if paid.get("amount") is not None:
+                # the amount Stripe actually took, when it isn't what the invoice still asks
+                took = int(paid["amount"])
+                if took != _cents(move.get("amount_residual", move["amount_total"])):
+                    vals["amount"] = took / 100
+            wizard = remote.create("account.payment.register", vals, context=_ctx(int(move_id)))
             remote.call(
                 "account.payment.register",
                 "action_create_payments",

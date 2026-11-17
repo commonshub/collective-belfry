@@ -275,8 +275,12 @@ class Store:
                 (email.lower(), since),
             ).fetchone()[0]
 
-    def open_for(self, column: str, value: str, product: str | None = None) -> int:
-        """Open (unpaid) orders of an address or an IP, for one product or all."""
+    def open_for(
+        self, column: str, value: str, product: str | None = None, mailed: bool = False
+    ) -> int:
+        """Open (unpaid) orders of an address or an IP, for one product or all. MAILED: only
+        those whose cancel link was mailed to the address (the per-address limit: an order its
+        owner can't see in their inbox doesn't lock them out)."""
         assert column in ("email", "ip")
         with self._lock:
             rows = self._db.execute(
@@ -284,7 +288,15 @@ class Store:
                 "'invoiced', 'confirm')",
                 (value.lower() if column == "email" else value,),
             ).fetchall()
-        return sum(1 for r in rows if product is None or json.loads(r[0])["product"] == product)
+        out = 0
+        for r in rows:
+            o = json.loads(r[0])
+            if product is not None and o["product"] != product:
+                continue
+            if mailed and not o.get("cancel_mailed"):
+                continue
+            out += 1
+        return out
 
     def count_ip(self, ip: str, since: int) -> int:
         with self._lock:
@@ -1469,7 +1481,7 @@ def _checkout(
             raise ApiError(429, "too_many", "Too many open orders. Pay or wait for one to end.")
         if st.count_ip(ipt, int(time.time()) - 3600) >= ORDERS_PER_IP_HOUR:
             raise ApiError(429, "too_many", "Too many orders from here. Try again in an hour.")
-        if st.open_for("email", email) >= OPEN_PER_ADDRESS:
+        if st.open_for("email", email, mailed=True) >= OPEN_PER_ADDRESS:
             raise ApiError(
                 429,
                 "too_many",
@@ -1743,7 +1755,15 @@ def invoice_address(o: dict[str, Any]) -> str:
     return (o.get("billing") or {}).get("invoice_email") or o["email"]
 
 
-def mark_paid(svc: Services, oid: str, how: str, ref: str = "", by: str = "") -> dict[str, Any]:
+def mark_paid(
+    svc: Services,
+    oid: str,
+    how: str,
+    ref: str = "",
+    by: str = "",
+    session: str = "",
+    amount: int | None = None,
+) -> dict[str, Any]:
     """Money came (Stripe, the bank seen in Odoo, or an admin): the pass opens, then the books
     follow (an invoice if there is none, the payment on it). Idempotent. A payment on an order
     that ended reopens it (``reopen``): they paid, they get the pass."""
@@ -1765,9 +1785,25 @@ def mark_paid(svc: Services, oid: str, how: str, ref: str = "", by: str = "") ->
             state="paid",
             step="activate",
             payment_due=due,
-            paid={"how": how, "ref": ref[:100], "by": by[:100], "at": iso(now())},
+            paid={
+                "how": how,
+                "ref": ref[:100],
+                "by": by[:100],
+                "at": iso(now()),
+                "session": session or None,
+                "amount": amount,
+            },
         )
-        return advance(svc, oid)
+        o = st.order(oid) or o
+    # any other open card session can't be paid any more (a second payment), best effort
+    stripe = o.get("stripe") or {}
+    if stripe.get("id") and stripe["id"] != session and not stripe.get("expired"):
+        from . import salesstripe
+
+        with contextlib.suppress(Exception):
+            salesstripe.expire_session(svc, o)
+            st.update(oid, stripe={**stripe, "expired": True})
+    return advance(svc, oid)
 
 
 def _reopen(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
@@ -1911,6 +1947,14 @@ def confirm_order(svc: Services, oid: str) -> dict[str, Any]:
             return o or {}
         vals: dict[str, Any] = {"state": "pending", "step": "activate", "address_confirmed": True}
         acct = o.get("account")
+        row = (
+            svc.odoo.read_one("res.partner", int(acct), ["email", "belfry_pending_email"])
+            if acct
+            else None
+        )
+        if row is not None and not row.get("email") and not row.get("belfry_pending_email"):
+            # an unsaved guest: the address they typed waits for its proof, which the link is
+            svc.odoo.write("res.partner", [int(acct)], {"belfry_pending_email": o["email"]})
         if acct and is_unverified(svc, int(acct)):
             # a signed-in account whose address waited for its proof: the link is that proof
             done = confirm(svc, int(acct), o["email"])
@@ -2000,7 +2044,8 @@ def expire_holds(svc: Services) -> int:
             elif (
                 o["state"] != "confirm"
                 and until - t <= dt.timedelta(days=REMIND_DAYS)
-                and (o.get("invoice") or {}).get("number")
+                and o["total"]["gross"] > 0
+                and ((o.get("invoice") or {}).get("number") or o.get("pay") == "card")
             ):
                 from . import salesmail
 
@@ -2146,7 +2191,7 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         raise ApiError(409, "not_on_sale", "This product is not on sale.")
     name = " ".join(str(data.get("name") or "").split())[:100]
     email = str(data.get("email") or "").strip()
-    if not EMAIL.match(email) or len(email) > 254:
+    if not webthreads.EMAIL.match(email) or len(email) > 254:  # the requests page's own rule
         raise ApiError(422, "invalid_email", "That is not an e-mail address.")
     text = str(data.get("offer") or "").strip()
     if not name or not text or len(text) > 2000:
@@ -2228,9 +2273,18 @@ def offer_chat_link(svc: Services, f: dict[str, Any]) -> str:
     )
 
 
+_decide_lock = threading.Lock()
+
+
 def decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> dict[str, Any]:
     """An admin's answer: a public reply in the thread ("Approved: 50% off." / "Not this
-    time.", with the note), and the personal code only in the private mail."""
+    time.", with the note), and the personal code only in the private mail. One decision, one
+    code: two admins at once get one answer and one "has an answer already"."""
+    with _decide_lock:
+        return _decide_offer(svc, fid, percent, note, by)
+
+
+def _decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> dict[str, Any]:
     from .holder_invites import ApiError
 
     st = store(svc)

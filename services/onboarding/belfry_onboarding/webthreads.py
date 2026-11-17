@@ -764,7 +764,7 @@ def start_thread(
     if public_note:
         lines.append(
             f"Your request and your name will be public on {_public_base(svc)}/{slug}, like "
-            "the others there. Your e-mail address never is."
+            "the others there. Your e-mail address is never shown on the public page."
         )
     _mailer(svc).send(
         email,

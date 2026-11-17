@@ -99,6 +99,7 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         if inv.get("number"):
             sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
         return
+    amounts = {**(o.get("stripe_amounts") or {}), got["id"]: int(o["total"]["gross"])}
     st.update(
         o["id"],
         step="wait",
@@ -108,6 +109,7 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
             "expires_at": got.get("expires_at"),
             "attempt": attempt,
         },
+        stripe_amounts=amounts,
         error=None,
     )
     log.info("sales: order %s: card session made", o["id"])
@@ -141,11 +143,26 @@ def handle(svc: Services, event: dict[str, Any]) -> str:
     if obj.get("payment_status") != "paid":
         return "not_paid"
     inv = (o.get("invoice") or {}).get("number")
+    sid = str(obj.get("id") or "")
+    paid_amount = int(obj.get("amount_total") or -1)
+    # the amount the session was made for (an older session still open after the total changed
+    # to Odoo's is paid for its own amount: accepted, flagged)
+    made_for = int((o.get("stripe_amounts") or {}).get(sid, o["total"]["gross"]))
+    ref = obj.get("client_reference_id")
     ok = (
-        int(obj.get("amount_total") or -1) == int(o["total"]["gross"])
+        paid_amount == made_for
         and str(obj.get("currency") or "").lower() == sales.settings(svc)["currency"].lower()
-        and obj.get("client_reference_id") in (oid, inv)
+        and bool(ref)
+        and ref in (oid, inv)
     )
+    if ok and o["state"] in ("paid", "active"):
+        if (o.get("paid") or {}).get("session") != sid:
+            # a second payment of an order already paid: nothing changes, the admins refund one
+            twice = [*(o.get("paid_twice") or []), sid][-10:]
+            st.update(oid, flags=sales._flag(o, "paid_twice"), paid_twice=twice)
+            log.warning("sales: order %s was paid twice (a second Stripe session)", oid)
+            return "paid_twice"
+        return "paid"
     if not ok:
         flags = list(o.get("flags") or [])
         if "stripe_mismatch" not in flags:
@@ -153,7 +170,16 @@ def handle(svc: Services, event: dict[str, Any]) -> str:
             st.update(oid, flags=flags)
         log.warning("sales: order %s: a Stripe payment that doesn't match it", oid)
         return "mismatch"
-    sales.mark_paid(svc, oid, "card", str(obj.get("payment_intent") or obj.get("id") or ""))
+    if made_for != int(o["total"]["gross"]):
+        st.update(oid, flags=sales._flag(o, "paid_old_amount"))
+    sales.mark_paid(
+        svc,
+        oid,
+        "card",
+        str(obj.get("payment_intent") or sid),
+        session=sid,
+        amount=paid_amount,
+    )
     return "paid"
 
 

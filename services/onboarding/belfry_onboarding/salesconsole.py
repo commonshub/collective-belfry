@@ -63,6 +63,8 @@ FLAGS = {
     "stuck": "a step gave up: look at it, then Try again",
     "slow": "its pass is slow to open: still trying every hour",
     "pass_closed": "its pass was closed",
+    "paid_twice": "Paid twice: refund one in Stripe",
+    "paid_old_amount": "paid through an older card session, for its own amount",
 }
 
 MSG = {
@@ -335,7 +337,7 @@ The restricted key needs Checkout Sessions: write.</p>
         )
         chooser = f"""<form method="post" action="{PATH}/requests" class="f"><input type="hidden" name="csrf" value="{csrf}">
 <label>Requests channel {pick}</label>
-<p class="hint">Offers in kind are public there, like issues: the request and the person's name, never their e-mail address. Members answer in the thread; only admins decide.</p>
+<p class="hint">Offers in kind are public there, like issues: the request and the person's name; their e-mail address is never shown on the public page. Members answer in the thread; only admins decide.</p>
 <div class="actions"><button class="btn" type="submit">Save</button></div></form>"""
     else:
         chooser = (

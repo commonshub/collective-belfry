@@ -97,7 +97,7 @@ def test_an_offer_is_public_once_its_author_confirms(offers, monkeypatch):
         fid = r.json()["offer"]
         assert not [e for e in relay.events if e["kind"] == 9]  # nothing public yet
         text = body(mailer.SENT[-1])
-        assert "will be public" in text and "never is" in text
+        assert "will be public" in text and "never shown on the public page" in text
         link = re.search(r"https://belfry\.test(/requests/confirm/\S+)", text).group(1)
         r = c.get(link, headers={"Host": "belfry.test"}, follow_redirects=False)
         assert r.status_code == 303

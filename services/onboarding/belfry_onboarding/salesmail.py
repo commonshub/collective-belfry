@@ -49,6 +49,20 @@ def not_me_line(svc: Services, o: dict[str, Any], address: str) -> str:
     return f"If you didn't order this, cancel it here: {url}"
 
 
+CANCEL_KINDS = ("invoice", "reminder", "order_confirm")  # the mails with the cancel link
+
+
+def _cancel_mailed(svc: Services, m: dict[str, Any]) -> None:
+    """The address got a mail with this order's cancel link: from now on the order counts
+    toward that address's limit (its owner can cancel it)."""
+    from . import sales
+
+    st = sales.store(svc)
+    o = st.order(m["ref"].split(":")[0])
+    if o and o["email"].strip().lower() == m["address"] and not o.get("cancel_mailed"):
+        st.update(o["id"], cancel_mailed=True)
+
+
 def queue(svc: Services, kind: str, ref: str, address: str) -> None:
     """Queue a mail (once per kind and reference) and try to send it now."""
     from . import sales
@@ -114,6 +128,8 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
         ok = mailer.send(m["address"], subject, lines, button=button, attachments=files)
     if ok:
         st.mail_done(m["id"], "sent")
+        if m["kind"] in CANCEL_KINDS:
+            _cancel_mailed(svc, m)
         return True
     if old:
         st.mail_done(m["id"], "failed")
@@ -245,24 +261,33 @@ def _invoice(svc: Services, ref: str, address: str) -> Mail | None:
 
 
 def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
+    """The one reminder, 2 days before the hold ends: for an invoice, and for a card order
+    (no invoice yet: its card link, and the transfer instead), with the cancel link."""
     from . import sales
 
     o = _order(svc, oid)
     inv = (o or {}).get("invoice") or {}
-    if o is None or o["state"] not in ("pending", "invoiced") or not inv.get("number"):
+    if o is None or o["state"] not in ("pending", "invoiced") or not o["total"]["gross"]:
         return None
+    if not inv.get("number") and o.get("pay") != "card":
+        return None
+    card = (o.get("stripe") or {}).get("url")
     if sales.bank_ready(svc):
         button = (sales.pay_url(svc, o["id"]), "How to pay")
-    elif (o.get("stripe") or {}).get("url"):
-        button = (o["stripe"]["url"], "Pay by card")
+    elif card:
+        button = (card, "Pay by card")
     else:
         button = None
+    what = (
+        f"(invoice {inv['number']}, {_money(o['total']['gross'])})"
+        if inv.get("number")
+        else f"({_money(o['total']['gross'])})"
+    )
     return (
         f"Your place is held until {o['hold_until'][:10]}",
         [
             f"Hello {_first(o['name'])},",
-            f"Your {o['product_name']} is not paid yet (invoice {inv['number']}, "
-            f"{_money(o['total']['gross'])}).",
+            f"Your {o['product_name']} is not paid yet {what}.",
             f"{_held(o)} After that the order ends. A transfer made before then still counts: "
             "it can take a few days to show.",
             *([not_me_line(svc, o, address)] if address == o["email"].strip().lower() else []),
