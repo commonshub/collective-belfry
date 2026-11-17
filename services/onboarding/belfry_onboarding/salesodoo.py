@@ -309,7 +309,7 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
             log.info("sales: order %s: payment registered on %s", o["id"], move["name"])
     elif move_id and "payment_not_booked" not in flags:
         flags.append("payment_not_booked")  # no journal picked: an admin books it in Odoo
-    sales.store(svc).update(o["id"], step="activate", flags=flags)
+    sales.store(svc).update(o["id"], step="done", payment_due=False, flags=flags)
 
 
 @_guard

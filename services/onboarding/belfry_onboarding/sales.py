@@ -1220,7 +1220,9 @@ def advance(svc: Services, oid: str, first: bool = False) -> dict[str, Any]:
     with _order_lock(oid):
         for _ in range(6):
             o = st.order(oid)
-            if o is None or o["state"] in ("active", "cancelled", "expired"):
+            if o is None or o["state"] in ("cancelled", "expired"):
+                break
+            if o["state"] == "active" and o.get("step") != "register_payment":
                 break
             step = o.get("step")
             try:
@@ -1288,13 +1290,13 @@ def mark_paid(svc: Services, oid: str, how: str, ref: str = "", by: str = "") ->
         if o["state"] in ("cancelled", "expired"):
             flags.append("paid_after_" + o["state"])
             log.warning("sales: order %s was paid after it ended (%s)", oid, o["state"])
-        step = "register_payment" if how in ("card", "hand") else "activate"
-        if not (o.get("invoice") or {}).get("move_id"):
-            step = "activate"
+        # the pass first (the person paid); the payment is booked in Odoo after, retried alone
+        due = how in ("card", "hand") and bool((o.get("invoice") or {}).get("move_id"))
         st.update(
             oid,
             state="paid",
-            step=step,
+            step="activate",
+            payment_due=due,
             paid={"how": how, "ref": ref[:100], "by": by[:100], "at": iso(now())},
             flags=flags,
         )
@@ -1345,7 +1347,13 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
                 svc.odoo.write("res.partner", [pid], {"belfry_role": o["role"]})
     if not o.get("account") and not o.get("bunker_url"):
         o = st.update(oid, bunker_url=_bind_key(svc, pid, o["key"]))
-    st.update(oid, state="active", step="done", activated=iso(now()), error=None)
+    o = st.update(
+        oid,
+        state="active",
+        step="register_payment" if o.get("payment_due") else "done",
+        activated=iso(now()),
+        error=None,
+    )
     if st.once("receipt:" + oid):
         from . import salesmail
 
@@ -1438,11 +1446,8 @@ def retry(svc: Services) -> None:
     """Steps that failed earlier: invoices, sessions, payments, activations, credit notes."""
     st = store(svc)
     for o in st.orders():
-        if o["state"] in OPEN and o.get("step") in (
-            "invoice",
-            "card",
-            "register_payment",
-            "activate",
+        if (o["state"] in OPEN and o.get("step") in ("invoice", "card", "activate")) or (
+            o["state"] == "active" and o.get("step") == "register_payment"
         ):
             advance(svc, o["id"])
         elif o["state"] in ("cancelled", "expired") and o.get("step") == "credit_note":
