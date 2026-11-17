@@ -1,0 +1,121 @@
+{
+  "about": "Buttons on messages, docs/actions.md. Keys are placeholders: A = the message's author, B = the belfry key, G = the groups key, P = the person who pressed, X = someone else.",
+  "buttons": [
+    {
+      "name": "two buttons, one for the belfry",
+      "tags": [["h", "website"], ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"], ["button", "later", "Not now"]],
+      "buttons": [
+        {"id": "publish", "label": "Approve and publish", "style": "primary", "action": "belfry:website-publish"},
+        {"id": "later", "label": "Not now", "style": "", "action": ""}
+      ]
+    },
+    {
+      "name": "bad id, empty label, long label, repeated id are ignored; unknown style is plain; label is trimmed",
+      "tags": [
+        ["button", "Bad Id", "Nope"],
+        ["button", "empty", "   "],
+        ["button", "long", "01234567890123456789012345678901234567890"],
+        ["button", "ok", "  Fine  ", "shiny"],
+        ["button", "ok", "Again"],
+        ["button", "stop", "Stop", "danger", ""]
+      ],
+      "buttons": [
+        {"id": "ok", "label": "Fine", "style": "", "action": ""},
+        {"id": "stop", "label": "Stop", "style": "danger", "action": ""}
+      ]
+    },
+    {
+      "name": "only the first four",
+      "tags": [["button", "a", "A"], ["button", "b", "B"], ["button", "c", "C"], ["button", "d", "D"], ["button", "e", "E"]],
+      "buttons": [
+        {"id": "a", "label": "A", "style": "", "action": ""},
+        {"id": "b", "label": "B", "style": "", "action": ""},
+        {"id": "c", "label": "C", "style": "", "action": ""},
+        {"id": "d", "label": "D", "style": "", "action": ""}
+      ]
+    },
+    {
+      "name": "no buttons",
+      "tags": [["h", "general"], ["button"], ["button", "x"]],
+      "buttons": []
+    }
+  ],
+  "press": {
+    "message": {"id": "m1", "pubkey": "A", "group": "website"},
+    "button": "publish",
+    "event": {
+      "kind": 1985,
+      "content": "",
+      "tags": [["L", "belfry/action"], ["l", "publish", "belfry/action"], ["e", "m1"], ["p", "A"], ["h", "website"]]
+    }
+  },
+  "state": [
+    {
+      "name": "the author's button: only the author's answer counts",
+      "message": {"id": "m1", "pubkey": "A", "buttons": [{"id": "yes", "action": ""}]},
+      "me": "P",
+      "press": {"id": "p1", "pubkey": "P", "button": "yes", "created_at": 100},
+      "answers": [
+        {"pubkey": "X", "l": "ok", "press": "p1", "content": "Forged", "created_at": 101},
+        {"pubkey": "B", "l": "ok", "press": "p1", "content": "Not the handler", "created_at": 102},
+        {"pubkey": "A", "l": "ok", "press": "p1", "content": "Noted.", "created_at": 103}
+      ],
+      "expect": {"closed": false, "mine": {"status": "ok", "text": "Noted."}}
+    },
+    {
+      "name": "a belfry action: the belfry key or the groups key answers, not the author",
+      "message": {"id": "m2", "pubkey": "A", "buttons": [{"id": "publish", "action": "belfry:website-publish"}]},
+      "me": "P",
+      "press": {"id": "p2", "pubkey": "P", "button": "publish", "created_at": 100},
+      "answers": [
+        {"pubkey": "A", "l": "ok", "press": "p2", "content": "Published (says the author)", "closed": true, "created_at": 101},
+        {"pubkey": "G", "l": "error", "press": "p2", "code": "not_allowed", "content": "Only admins of this belfry can publish the website.", "created_at": 102}
+      ],
+      "expect": {"closed": false, "mine": {"status": "error", "code": "not_allowed", "text": "Only admins of this belfry can publish the website."}}
+    },
+    {
+      "name": "closed for everyone: someone else's press was answered ok + closed",
+      "message": {"id": "m3", "pubkey": "A", "buttons": [{"id": "publish", "action": "belfry:website-publish"}]},
+      "me": "P",
+      "press": null,
+      "answers": [
+        {"pubkey": "B", "l": "ok", "press": "p9", "content": "Published by Xavier.", "closed": true, "created_at": 200}
+      ],
+      "expect": {"closed": true, "closed_text": "Published by Xavier.", "mine": null}
+    },
+    {
+      "name": "an error without text uses the code; an unknown code has the general sentence",
+      "message": {"id": "m4", "pubkey": "A", "buttons": [{"id": "go", "action": ""}]},
+      "me": "P",
+      "press": {"id": "p4", "pubkey": "P", "button": "go", "created_at": 100},
+      "answers": [
+        {"pubkey": "A", "l": "error", "press": "p4", "code": "weird", "content": "", "created_at": 101}
+      ],
+      "expect": {"closed": false, "mine": {"status": "error", "code": "weird", "text": "That didn't work."}}
+    },
+    {
+      "name": "the latest answer to my latest press wins; answers to other people's presses are not mine",
+      "message": {"id": "m5", "pubkey": "A", "buttons": [{"id": "go", "action": ""}]},
+      "me": "P",
+      "press": {"id": "p6", "pubkey": "P", "button": "go", "created_at": 300},
+      "answers": [
+        {"pubkey": "A", "l": "error", "press": "p5", "code": "failed", "content": "Earlier try failed.", "created_at": 250},
+        {"pubkey": "A", "l": "ok", "press": "p7", "content": "For someone else.", "created_at": 310},
+        {"pubkey": "A", "l": "ok", "press": "p6", "content": "Done.", "created_at": 320}
+      ],
+      "expect": {"closed": false, "mine": {"status": "ok", "text": "Done."}}
+    }
+  ],
+  "fixed_text": {
+    "not_allowed": "You're not allowed to do this.",
+    "unknown_action": "This belfry doesn't know this button yet.",
+    "no_target": "This message doesn't say what to act on.",
+    "gone": "This is no longer there.",
+    "expired": "That took too long. Try again.",
+    "failed": "That didn't work. Try again.",
+    "": "That didn't work.",
+    "timeout": "No answer yet.",
+    "unknown_belfry_action": "Update the app to use this.",
+    "confirm:belfry:website-publish": "Publish this version as the website? Everyone will see it at https://<domain>."
+  }
+}
