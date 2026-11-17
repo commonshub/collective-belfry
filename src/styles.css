@@ -558,6 +558,10 @@ a.chip { text-decoration: none; color: inherit; }
   background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.15s; }
 .switch-row input[type=checkbox]:checked { background: var(--text); }
 .switch-row input[type=checkbox]:checked::after { transform: translateX(18px); }
+.mail-forward-fields { margin: -4px 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.mail-forward-fields .fwd-state { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+.mail-forward-fields .fwd-state .link { padding: 0; border: 0; background: none; font: inherit; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.mail-forward-fields p.hint, .mail-forward-fields p.error { margin: 0; }
 .join-line { display: flex; align-items: baseline; gap: 10px; padding: 6px 16px 6px 22px; font-size: 14px; color: var(--muted); }
 .join-line .arrow { color: var(--ok, #16a34a); font-weight: 700; }
 .join-line b { color: var(--text); font-weight: 600; }

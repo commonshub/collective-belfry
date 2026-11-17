@@ -1,6 +1,7 @@
 import { roleBadge } from '../core/roles'
 import { roleWord } from '../core/checkin'
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { FORWARD_ERRORS, ForwardFailed, loadForward, onDemoForward, resendForward, setForward, type Forward } from '../core/mailforward'
 import { extras, placeLabel } from '../core/people'
 import { Markdown } from './markdown'
 import { openProfile } from './Profile'
@@ -230,6 +231,7 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
               <span><b>E-mails from anyone</b><small>Mail to {mailLocal(g)}@{BELFRY.domain} from outside lands here as cards; admins answer as the channel. Off: only members' mail comes in.</small></span>
               <input type="checkbox" role="switch" checked={openMail} onChange={(e) => setOpenMail(e.target.checked)} />
             </label>
+            <MailForwardRow id={g.id} />
             <label className="switch-row">
               <span><b>Threads from the web</b><small>A public page at {BELFRY.domain}/{slugify(web.slug) || '…'} where anyone opens a thread: it lands here as a card, and members' replies are mailed back to its author.</small></span>
               <input type="checkbox" role="switch" checked={web.on} onChange={(e) => setWeb({ ...web, on: e.target.checked })} />
@@ -249,6 +251,69 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
             {archivable(id) && <button type="button" className="link danger archive-link" onClick={() => setArchiving(true)}><ArchiveIcon /> Archive this {g.isPod ? 'group' : 'channel'}…</button>}
             <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
           </Form>
+  )
+}
+
+/** "Forward all e-mails to" an outside address (Belfry mailforward.py): read from the belfry
+ *  when the settings open, saved on its own (it waits for the outside address to confirm). */
+function MailForwardRow({ id }: { id: string }) {
+  const [loaded, setLoaded] = useState(false)
+  const [fwd, setFwd] = useState<Forward | null>(null)
+  const [on, setOn] = useState(false)
+  const [address, setAddress] = useState('')
+  const [error, setError] = useState('')
+  const [note, setNote] = useState('')
+  const save = useRef<HTMLSpanElement>(null)
+  const show = (f: Forward | null) => { setFwd(f); setOn(!!f); setAddress(f?.address ?? '') }
+  const fail = (e: unknown) => setError(e instanceof ForwardFailed ? e.message : FORWARD_ERRORS.failed)
+  useEffect(() => {
+    let live = true
+    const load = () => loadForward(id).then((f) => { if (live) { show(f); setLoaded(true) } }, (e) => { if (live) { fail(e); setLoaded(true) } })
+    void load()
+    const off = onDemoForward(() => void load())
+    return () => { live = false; off() }
+  }, [id])
+  const toggle = async (want: boolean) => {
+    setError(''); setNote('')
+    if (want || !fwd) { setOn(want); return }
+    try { show(await setForward(id, null)); setNote('Forwarding is off.') } catch (e) { fail(e) }
+  }
+  const submit = async () => {
+    setError(''); setNote('')
+    try {
+      const f = await setForward(id, address.trim())
+      show(f)
+      if (f?.state === 'pending') setNote('We sent a confirmation e-mail. Forwarding starts once it is confirmed.')
+    } catch (e) { fail(e) }
+  }
+  const resend = async () => {
+    setError(''); setNote('')
+    try { show(await resendForward(id)); setNote('Sent again.') } catch (e) { fail(e) }
+  }
+  const dom = (fwd?.address ?? '').split('@')[1] ?? ''
+  const same = !!fwd && address.trim().toLowerCase() === fwd.address.toLowerCase()
+  return (
+    <div className="mail-forward">
+      <label className="switch-row">
+        <span><b>Forward all e-mails to</b><small>E-mails still show up here. A copy goes to this address.</small></span>
+        <input type="checkbox" role="switch" aria-label="Forward all e-mails" checked={on} disabled={!loaded} onChange={(e) => void toggle(e.target.checked)} />
+      </label>
+      {on && (
+        <div className="mail-forward-fields">
+          {fwd?.state === 'on' && <p className="fwd-state" role="status">Forwarding to <b>{fwd.address}</b></p>}
+          {fwd?.state === 'pending' && <p className="fwd-state" role="status">Waiting for <b>{fwd.address}</b> to confirm · <Btn className="link" onClick={resend}>Send again</Btn></p>}
+          <div className="row" style={{ gap: 8, alignItems: 'center' }}>
+            <input className="input" type="email" inputMode="email" autoComplete="off" aria-label="Forward to address" placeholder="name@example.org" value={address}
+              onChange={(e) => { setError(''); setNote(''); setAddress(e.target.value) }}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save.current?.querySelector('button')?.click() } }} />
+            <span ref={save}><Btn className="btn small" disabled={!address.trim() || same} onClick={submit}>Save</Btn></span>
+          </div>
+          {fwd && fwd.sameDomainSkipped && dom && <p className="hint">E-mails sent from @{dom} addresses are not forwarded.</p>}
+          {note && <p className="hint" role="status">{note}</p>}
+          {error && <p className="error" role="alert">{error}</p>}
+        </div>
+      )}
+    </div>
   )
 }
 
