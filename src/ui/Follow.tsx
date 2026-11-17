@@ -91,6 +91,11 @@ const OPTIONS: [Frequency | 'stop', string, string][] = [
 ]
 
 function FollowSheet({ channel, onClose }: { channel: string; onClose: () => void }) {
+  return <Sheet title="Announcements" onClose={onClose}><FollowOptions channel={channel} onDone={onClose} /></Sheet>
+}
+
+/** The follow choices for CHANNEL (the bell's sheet; a channel's Notifications screen). */
+export function FollowOptions({ channel, onDone }: { channel: string; onDone?: () => void }) {
   const f = useFollows()
   const g = group(channel)
   const [busy, setBusy] = useState(false)
@@ -98,20 +103,20 @@ function FollowSheet({ channel, onClose }: { channel: string; onClose: () => voi
   const current: Frequency | 'stop' = f?.map.get(channel) ?? 'stop'
   const label = g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : `#${channel}`
   const pick = async (c: Frequency | 'stop') => {
-    if (c === current) return onClose()
+    if (c === current) return onDone?.()
     setBusy(true); setError('')
-    try { await setFollow(channel, c); onClose() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+    try { await setFollow(channel, c); onDone?.() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
   }
   return (
-    <Sheet title="Announcements" onClose={onClose}>
+    <>
       <p style={{ margin: '0 0 12px' }}>Get the announcements of <b>{label}</b> by e-mail{f?.email ? <> at <b>{f.email}</b></> : null}.
         Only its admins post announcements.</p>
       {!f && !failed && <p className="hint">Loading…</p>}
       {failed && <p className="error">{failed}</p>}
       {f && (
-        <div className="choice" style={{ gridTemplateColumns: '1fr' }}>
+        <div className="choice follow-choice" role="radiogroup" aria-label="Announcements by e-mail" style={{ gridTemplateColumns: '1fr' }}>
           {OPTIONS.map(([c, title, hint]) => (
-            <button key={c} type="button" disabled={busy} className={c === current ? 'on' : ''} onClick={() => void pick(c)}>
+            <button key={c} type="button" role="radio" aria-checked={c === current} disabled={busy} className={c === current ? 'on' : ''} onClick={() => void pick(c)}>
               <b>{title}</b><small>{hint}</small>
             </button>
           ))}
@@ -119,6 +124,13 @@ function FollowSheet({ channel, onClose }: { channel: string; onClose: () => voi
       )}
       {error && <p className="error">{error}</p>}
       <p className="hint" style={{ fontSize: 13, marginTop: 12 }}>{NAME} sends these mails; every one has links to change or stop.</p>
-    </Sheet>
+    </>
   )
+}
+
+/** Following CHANNEL: "As soon as possible", "Monthly", or "" (for a row's value). */
+export function useFollowing(channel: string): string {
+  const f = useFollows()
+  const c = f?.map.get(channel)
+  return c === 'asap' ? 'As soon as possible' : c === 'monthly' ? 'Monthly' : f ? 'Off' : ''
 }

@@ -159,8 +159,17 @@ export function VisibilitySheet({ g, to, onClose, onDone }: { g: Group; to: Chan
   )
 }
 
-/** A channel's settings (its admins): name, description, visibility, mail, its web page. */
+/** A channel's settings (its admins) in a sheet. */
 export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () => void }) {
+  const g = group(id)
+  if (!g || g.archived) return null
+  return <Sheet title={`${g.isPod ? 'Group' : 'Channel'} settings`} onClose={onClose}><ChannelSettingsForm id={id} onDone={onClose} /></Sheet>
+}
+
+/** A channel's settings (its admins): name, description, visibility, posts, mail, its web page,
+ *  archive. In a sheet, or as the channel's Settings screen (ChannelMenu.tsx). */
+export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => void }) {
+  const onClose = onDone
   const g = group(id)
   const [name, setName] = useState(g?.name ?? '')
   const [about, setAbout] = useState(g?.about ?? '')
@@ -174,7 +183,6 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
   if (!g || g.archived) return null
   // archiving: asked here, in the app (never the browser's confirm)
   if (archiving) return (
-    <Sheet title={`Archive ${g.name}?`} onClose={onClose} hideTitle>
       <div className="confirm-box" role="alertdialog" aria-label={`Archive ${g.name}`}>
         <b>Archive {g.name}?</b>
         <p>It leaves the channel list and nobody can post in it. You can unarchive it later.</p>
@@ -184,11 +192,9 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
           <Btn className="btn danger" onClick={async () => { setArchiveError(''); try { await setArchived(id, true); onClose() } catch (e) { setArchiveError(e instanceof Error ? e.message : 'That did not work. Try again.') } }}>Archive</Btn>
         </div>
       </div>
-    </Sheet>
   )
   return (
-    <Sheet title={`${g.isPod ? 'Group' : 'Channel'} settings`} onClose={onClose}>
-          <Form onSubmit={async (e) => {
+          <Form className="chan-settings-form" onSubmit={async (e) => {
             e.preventDefault()
             if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
               await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
@@ -241,8 +247,8 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
             <button className="btn" disabled={!name.trim()}>Save</button>
             {/* a softer way to delete: out of the list and read only, until someone unarchives it */}
             {archivable(id) && <button type="button" className="link danger archive-link" onClick={() => setArchiving(true)}><ArchiveIcon /> Archive this {g.isPod ? 'group' : 'channel'}…</button>}
+            <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
           </Form>
-    </Sheet>
   )
 }
 
@@ -460,13 +466,13 @@ export function Log({ groupId }: { groupId: string }) {
 
 // ---- files: every photo and file posted in the channel --------------------------------
 
-export function Files({ groupId }: { groupId: string }) {
+export function Files({ groupId, only }: { groupId: string; /** the Files screen: photos have their own */ only?: 'files' }) {
   useVersion()
-  const media = messages(groupId).flatMap((m) => m.media).reverse()
+  const media = messages(groupId).flatMap((m) => m.media).reverse().filter((m) => !only || !/^(image|video)\//.test(m.mime))
   return (
     <div className="pad">
       {!group(groupId)?.archived && <DropBox groupId={groupId} />}
-      {media.length ? <MediaGrid media={media} /> : <div className="empty">Photos and files posted in this channel show up here.</div>}
+      {media.length ? <MediaGrid media={media} /> : <div className="empty">{only ? 'Files posted in this channel show up here.' : 'Photos and files posted in this channel show up here.'}</div>}
     </div>
   )
 }
