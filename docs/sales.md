@@ -66,7 +66,11 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
 - The key stays in that browser's storage. Losing it loses nothing: the e-mail gets in.
 - The account's e-mail is **unverified** until its owner proves it: by the "Confirm your
   e-mail" link in the receipt, or by the first sign-in with an e-mail code (which is the same
-  proof). Until then:
+  proof). An unverified account has **one** address: a later order signed by that account must
+  use it (else 409 `email_mismatch`). A confirmation link is bound to its contact and its
+  address, is only ever mailed to that address, and proves nothing else. Its page shows what was
+  bought, for how much and when, with "Yes, this was me" and "This wasn't me" (which ends the
+  account's sessions, drops the address and flags the order for the admins). Until then:
   - it holds the pass, shows its ticket, and uses the chat from the browser that paid;
   - it is not found by e-mail anywhere (invites, "already a member", member lookups), has no
     username of its choice and no mailbox, cannot invite, cannot be made admin;
@@ -76,6 +80,12 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   existing account and the temporary one is closed, as a saved guest's does (guests.md).
 - A member or guest who is signed in signs with their own session: the pass goes on their
   account, nothing unverified.
+- **A free product without a code** makes no account from nothing: the order waits in state
+  `confirm` (48 hours) for the link mailed to the address; confirming it opens the pass on an
+  account whose address is proven (or on the account that already has that address). No
+  browser session is bound in that case (`bunker_url` stays empty: whoever clicks the mail may
+  not hold the browser); the buyer signs in with an e-mail code. A 100% code still opens the
+  pass at once: the code is the gate.
 - An order nobody pays leaves no account: the contact is made only when the pass opens.
 - Settled while building: the unproven address is kept in `belfry_pending_email`, never in
   `email`, so every lookup by e-mail misses it by construction; the receipt's link shows a
@@ -113,7 +123,7 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
 → 201
 
 ```json
-{"order": "o_…", "state": "pending" | "invoiced" | "active",
+{"order": "o_…", "state": "confirm" | "pending" | "invoiced" | "active",
  "total": {"net": 165.29, "vat": 34.71, "gross": 200.0, "percent_off": 0},
  "invoice": {"number": "INV/2026/0042", "communication": "+++123/4567/89012+++", "url": "…"},
  "card_url": "https://checkout.stripe.com/…",
@@ -121,24 +131,39 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
  "hold_until": "2026-11-24T16:00:00Z"}
 ```
 
-- `return_url` must be `https://` on the belfry's own domain (apex or a subdomain) with no query
-  of its own; else it is ignored and Belfry's own thanks page (`belfry.<domain>/sales/thanks`)
-  is used. Belfry adds only `?order=<id>`.
+- `return_url` must be `https://` with the hostname exactly the belfry's domain or a subdomain
+  of it, no port, user info, query, fragment, backslash, whitespace or control characters;
+  Belfry rebuilds it from its parts. Anything else is ignored and Belfry's own thanks page
+  (`belfry.<domain>/sales/thanks`) is used. Belfry adds only `?order=<id>`.
+- `invoice.url` is Belfry's own page of the order, `https://belfry.<domain>/pay/<order>`
+  (number, amount, until when the place is held, how to pay). Never a link into Odoo. The
+  invoice PDF is fetched from Odoo by Belfry and attached to Belfry's own mail to the order's
+  address (or `invoice_email`); Odoo itself sends nothing.
 - `pay` defaults to `card`. The answer also carries `product`, and `bunker_url` once active (to
   the key that made the order).
 - Odoo's invoice is the truth for the amounts: after the invoice is posted, `total` is Odoo's
   (rounding, a fiscal position); when it differs from Belfry's own sum the order is flagged
   for the admins.
-- Total 0 (a 100% code, a free product): state `active` at once, no invoice, no payment.
+- Total 0 with a code (100%), or a free product bought by a signed-in member with a proven
+  address: state `active` at once, no invoice, no payment. A free product without a code from
+  anyone else: state `confirm` until the mailed link is confirmed (see §3).
 - `pay: card` → `card_url` (a Stripe Checkout session made from the posted invoice: invoice
   number in `client_reference_id` and metadata). `pay: invoice` → the invoice is mailed and
   `pay_url` shows the transfer details. Both are returned when both are set up, so the buyer can
   change their mind.
 - An organisation's VAT number is checked on VIES before the invoice is made (`invalid_vat`;
   VIES down → accepted and flagged on the order for the admins).
+- The invoice's contact in Odoo is never found by an e-mail address (the buyer's isn't
+  proven): a person gets the Odoo contact Belfry stored on their account, else a new one; an
+  organisation is matched by its VAT number only when VIES said it is valid, else a new one.
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
-  `too_many` (5 open orders per key, 20 an hour per address), `accounting` (Odoo refused).
+  `email_mismatch` (409: an unverified account ordering for another address), `too_many`
+  (429), `accounting` (Odoo refused).
+- Limits (`too_many`): 5 open orders per key; 3 open orders per address and 20 orders an hour
+  per address; 10 checkouts an hour per IP; for a product with limited places, 2 unpaid
+  orders per IP; 10 code checks an hour per key. At most 5 sales mails a day go to one
+  address (the others wait). The IP is kept only as a keyed hash.
 - Asking again with the same key, product and e-mail while an order is open (or became active
   in the last 24 hours: a retried request) returns that order, with 200.
 - `unknown_code` is 404, `code_used` and the other refusals 409, `accounting` 502 (the order is
@@ -146,14 +171,15 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   `pending` and the tick makes the invoice later.
 
 `GET /checkout/<order>` — NIP-98 by the key that made it → the same shape with the current
-state (`pending` → `invoiced` → `paid` → `active`, or `cancelled` / `expired`) and, once active,
+state (`confirm` →) `pending` → `invoiced` → `paid` → `active`, or `cancelled` / `expired`
+(an ended order that still gets paid comes back to `active`) and, once active,
 `bunker_url` when the key isn't signed in yet. Asking also retries a step that failed and makes
 a new card session when Stripe's (24 hours) expired. Another key gets 404.
 
 `GET /billing` — NIP-98, a verified account only → the billing details saved at its last order.
 
 `POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent": 50–100}`
-→ 201 `{"offer": "f_…", "state": "open"}`. The belfry's admins see it in the console and decide
+→ 201 `{"offer": "f_…", "state": "open"}`. 3 a day per key and per IP, 3 open per key. The belfry's admins see it in the console and decide
 (percent may differ from the asked one, or no); the answer is mailed with a personal code.
 `GET /offers/<id>` by the same key → its state. Admins: `POST /offers/<id>/decide
 {"percent": 0|50–100, "note"}`.
@@ -165,16 +191,29 @@ made here (no sponsor checkout in this version).
 ## 5. Paying
 
 - **Hold**: an unpaid order holds its place for **7 days** (`hold_until`), then expires: the
-  invoice gets a credit note, the code's use is given back. One reminder is mailed 2 days before.
+  invoice gets a credit note, the code's use is given back. One reminder is mailed 2 days before;
+  it and `/pay/<order>` say until when the place is held.
+- **Paid after it ended** (a card payment that comes late, a transfer reconciled after day 7):
+  the order **reopens**: the pass opens, a new invoice is made when the first was credited (the
+  old number and its credit note stay in the order's history), the payment is registered on
+  the new one, and the order is flagged `paid_late` (and `oversold` when no place was left:
+  they paid, they get the pass, the admins see it). An admin can do the same by hand: "Reopen
+  and mark paid" (reason required) on an expired or cancelled order. Only the order's current
+  invoice counts for closing a pass on a credit note.
 - **Card**: `checkout.session.completed` (and `checkout.session.async_payment_succeeded`) at
   `https://belfry.<domain>/hooks/stripe` (signature checked with the console's webhook secret,
   deduplicated on the event id; amount, currency and invoice number must match the order, else
   it is flagged and nothing opens) → pass active → the payment registered on the Odoo invoice
   in the card journal (after the pass: Odoo being down never keeps a paid pass shut; the tick
   retries the booking). Stripe refusing to make a session leaves the transfer (flag on the
-  order). A payment that arrives after the order ended still opens the pass, flagged.
-- **Transfer**: Belfry reads the open orders' invoices from Odoo every 15 minutes; when Odoo's
-  reconciliation says paid → pass active. An admin can also mark an order paid by hand.
+  order). A payment that arrives after the order ended reopens it (above).
+- **Transfer**: Belfry reads the open orders' invoices from Odoo every 15 minutes (in one call;
+  when that fails, one by one, flagging the one that can't be read); when Odoo's reconciliation
+  says paid → pass active. An admin can also mark an order paid by hand (reason required); an
+  order paid before it had an invoice still gets one, with the payment on it.
+- A step that fails (Odoo or Stripe down) is retried every 15 minutes, 30 times at most, then
+  the order is flagged `stuck` for the admins. Mails are marked sent only once the mail
+  provider took them, and retried (8 times at most).
 - **Active** = `core.activate_free_pass`-style activation with the product's tier, role and
   dates, the receipt mail (with the confirm-your-e-mail link when unverified) and the usual
   welcome.
@@ -190,13 +229,15 @@ communication, each with a copy button, and an EPC (SEPA) QR code for banking ap
 structured communication `+++…+++` goes in the QR's structured field, anything else in the
 message field, exactly as given).
 
-- `/pay/<order>`: an order's own page; amount and communication come from the order.
+- `/pay/<order>`: an order's own page (the API's `invoice.url`): its invoice number, amount and
+  until when the place is held; the bank details when they are set, the card link when there is
+  one. It works without bank details too.
 - `/pay?amount=12.50&communication=…`: a free-standing request. `amount` must be a number;
   `communication` at most 140 characters of letters, digits, spaces and `+ / - . , : ( )`;
   anything else → the page without them. A `description` is shown **only** when the link is
   signed by the belfry (`&sig=`, made with `belfry pay-link` or `POST /api/v1/pay-links` by an
   admin): Belfry never shows free text taken from an unsigned URL.
-- No bank details set → 404.
+- No bank details set → `/pay?…` is 404.
 - `POST /api/v1/pay-links {"amount"?, "communication"?, "description"?}` (admins) → 201
   `{"url"}`; `belfry pay-link --amount … --communication … --description …` on the server.
 - Paid or ended orders show no bank details on `/pay/<order>`.
@@ -211,7 +252,8 @@ through Odoo as before), the phone apps (they open the website).
 
 Everything above runs against fakes in the tests. Unproven until tried live:
 
-- Odoo Online over JSON-2: `account.move` `get_portal_url` (the invoice link), the
+- Odoo Online over JSON-2: the invoice PDF (`invoice_pdf_report_id`, made by
+  `account.move.send.wizard` with `sending_methods: []`, read from `ir.attachment.datas`), the
   `account.payment.register` and `account.move.reversal` wizards with these contexts,
   `payment_reference` filled in at posting (needs the journal's communication standard set to
   Belgian for `+++…+++`), the company scoping of the pick-lists, `price_include` on taxes.

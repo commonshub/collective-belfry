@@ -31,6 +31,15 @@ def one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
+def masked(rcpts: list[str]) -> str:
+    """Addresses for the logs: the first letter and the domain only."""
+    out = []
+    for r in rcpts:
+        local, _, domain = str(r).partition("@")
+        out.append(f"{local[:1]}•••@{domain}" if domain else "•••")
+    return ", ".join(out)
+
+
 class Mailer:
     def __init__(self, settings: Any):
         self.s = settings
@@ -51,8 +60,10 @@ class Mailer:
         button: tuple[str, str] | None = None,
         footer: str = "",
         headers: dict[str, str] | None = None,
+        attachments: list[tuple[str, bytes, str]] | None = None,
     ) -> bool:
-        """PARAGRAPHS and FOOTER are plain text (escaped here); BUTTON is (url, label)."""
+        """PARAGRAPHS and FOOTER are plain text (escaped here); BUTTON is (url, label);
+        ATTACHMENTS are (file name, bytes, media type)."""
         rcpts = [to] if isinstance(to, str) else list(to)
         rcpts = [r for r in rcpts if r and "@" in r]
         if not rcpts:
@@ -72,15 +83,20 @@ class Mailer:
             text += f"\n\n-- \n{footer}"
         msg.set_content(text + "\n")
         msg.add_alternative(self._html(paragraphs, button, footer), subtype="html")
+        for fname, data, mime in attachments or []:
+            main, _, sub = mime.partition("/")
+            msg.add_attachment(data, maintype=main, subtype=sub or "octet-stream", filename=fname)
         if not self.s.smtp_host:
             _keep(msg)
-            log.warning("mailer: no mail provider; mail to %s not sent (%s)", rcpts, subject)
+            log.warning(
+                "mailer: no mail provider; mail to %s not sent (%s)", masked(rcpts), subject
+            )
             return False
         try:
             self._smtp(msg, rcpts)
             return True
         except (smtplib.SMTPException, OSError) as exc:
-            log.warning("mailer: mail to %s failed: %r", rcpts, exc)
+            log.warning("mailer: mail to %s failed: %r", masked(rcpts), exc)
             return False
 
     def send_html(
@@ -111,7 +127,7 @@ class Mailer:
             self._smtp(msg, [to])
             return True
         except (smtplib.SMTPException, OSError) as exc:
-            log.warning("mailer: mail to %s failed: %r", to, exc)
+            log.warning("mailer: mail to %s failed: %r", masked([to]), exc)
             return False
 
     def _smtp(self, msg: EmailMessage, rcpts: list[str]) -> None:

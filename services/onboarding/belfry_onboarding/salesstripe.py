@@ -60,6 +60,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
     inv = o.get("invoice") or {}
     if not inv.get("number") or not sales.stripe_ready(svc):
         st.update(o["id"], step="wait")
+        if inv.get("number"):
+            sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
         return
     attempt = int((o.get("stripe") or {}).get("attempt") or 0) + 1
     back = o.get("return_url") or sales.thanks_url(svc)
@@ -86,6 +88,7 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
             flags.append("card_failed")
         log.warning("sales: order %s: no card session: %s", o["id"], exc)
         st.update(o["id"], step="wait", flags=flags, error=str(exc)[:200])
+        sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
         return
     st.update(
         o["id"],
@@ -99,6 +102,7 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         error=None,
     )
     log.info("sales: order %s: card session made", o["id"])
+    sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
 
 
 def expire_session(svc: Services, o: dict[str, Any]) -> None:

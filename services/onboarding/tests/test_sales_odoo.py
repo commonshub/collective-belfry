@@ -72,7 +72,7 @@ def test_an_invoice_first_then_a_transfer_opens_the_pass(seller, keycast):
         assert got["total"] == {"net": 165.29, "vat": 34.71, "gross": 200.0, "percent_off": 0}
         assert got["invoice"]["number"] == "INV/2026/0001"
         assert got["invoice"]["communication"] == "+++000/0000/00001+++"
-        assert got["invoice"]["url"] == "https://xl.odoo.test/my/invoices/1?access_token=t"
+        assert got["invoice"]["url"] == f"https://belfry.belfry.test/pay/{got['order']}"
         assert got["pay_url"] == f"https://belfry.belfry.test/pay/{got['order']}"
         assert got["card_url"] is None  # no Stripe key
         hold = dt.datetime.strptime(got["hold_until"], "%Y-%m-%dT%H:%M:%SZ")

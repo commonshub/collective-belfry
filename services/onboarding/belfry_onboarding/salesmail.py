@@ -1,14 +1,24 @@
-"""The mails of selling passes (sales.py). To an address that is not proven yet only these go:
-the receipt (with its confirmation link), the invoice and its reminder, an offer's answer."""
+"""The mails of selling passes (sales.py), through an outbox: a mail is queued once per (kind,
+reference), written from the order as it is when it leaves, and marked sent only when the mail
+provider took it. The tick retries what failed (MAIL_TRIES at most). At most
+MAILS_PER_ADDRESS_DAY sales mails a day go to one address; the others wait (MAIL_DAYS at most).
+
+To an address that is not proven yet only these go: the receipt (with its confirmation link),
+the order's confirmation (a free order), the invoice and its reminder, an offer's answer.
+A confirmation link is only ever mailed to the address it confirms.
+"""
 
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from .core import Services
 
 log = logging.getLogger(__name__)
+
+Mail = tuple[str, list[str], tuple[str, str] | None, list[tuple[str, bytes, str]]]
 
 
 def _money(c: int) -> str:
@@ -19,24 +29,88 @@ def _first(name: str) -> str:
     return (name or "").split(" ")[0] or "there"
 
 
-def confirm_url(svc: Services, oid: str) -> str:
+def _mailer(svc: Services) -> Any:
+    from .mailer import Mailer
+
+    return getattr(svc.odoo, "mailer", None) or Mailer(svc.settings)
+
+
+def confirm_url(svc: Services, oid: str, partner_id: int, address: str, kind: str) -> str:
     from . import console, sales
 
-    token = sales.store(svc).confirm_token(oid)
+    token = sales.store(svc).confirm_token(oid, partner_id, address, kind)
     return f"{console.console_url(svc.settings)}/sales/confirm/{token}"
 
 
-def receipt(svc: Services, o: dict[str, Any]) -> None:
+def queue(svc: Services, kind: str, ref: str, address: str) -> None:
+    """Queue a mail (once per kind and reference) and try to send it now."""
     from . import sales
 
-    m = svc.odoo.mailer if hasattr(svc.odoo, "mailer") else None
-    if m is None:
+    st = sales.store(svc)
+    if not address or not st.queue_mail(kind, ref, address):
         return
-    unproven = bool(o.get("partner_id")) and sales.is_unverified(svc, o["partner_id"])
-    lines = [
-        f"Hello {_first(o['name'])},",
-        f"Your {o['product_name']} for {m.name} is ready.",
-    ]
+    for m in st.due_mails():
+        if m["kind"] == kind and m["ref"] == ref:
+            _deliver(svc, m)
+
+
+def deliver_due(svc: Services) -> int:
+    """The tick: mails that could not leave yet."""
+    from . import sales
+
+    n = 0
+    for m in sales.store(svc).due_mails():
+        n += 1 if _deliver(svc, m) else 0
+    return n
+
+
+def _deliver(svc: Services, m: dict[str, Any]) -> bool:
+    from . import sales
+
+    st = sales.store(svc)
+    if st.sent_to(m["address"]) >= sales.MAILS_PER_ADDRESS_DAY:
+        if time.time() - m["created"] > sales.MAIL_DAYS * 86400:
+            st.mail_done(m["id"], "limited", tried=False)
+            log.warning("sales: a %s mail gave up: too many mails to its address", m["kind"])
+        return False
+    try:
+        built = BUILD[m["kind"]](svc, m["ref"], m["address"])
+    except Exception:  # noqa: BLE001 — counted as a try
+        log.exception("sales: the %s mail could not be written", m["kind"])
+        built = False
+    if built is None:  # nothing to say any more (the order moved on)
+        st.mail_done(m["id"], "dropped", tried=False)
+        return False
+    mailer = _mailer(svc)
+    ok = False
+    if built:
+        subject, lines, button, files = built
+        ok = mailer.send(m["address"], subject, lines, button=button, attachments=files)
+    if ok:
+        st.mail_done(m["id"], "sent")
+        return True
+    if built and not getattr(mailer.s, "smtp_host", ""):
+        st.mail_done(m["id"], "no_provider")  # nothing can leave; not retried
+        return False
+    st.mail_done(m["id"], "failed" if m["tries"] + 1 >= sales.MAIL_TRIES else "due")
+    return False
+
+
+# ── what each mail says ─────────────────────────────────────────────────────────────────────
+def _order(svc: Services, oid: str) -> dict[str, Any] | None:
+    from . import sales
+
+    return sales.store(svc).order(oid.split(":")[0])
+
+
+def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
+    from . import sales
+
+    o = _order(svc, oid)
+    if o is None or o["state"] != "active":
+        return None
+    name = _mailer(svc).name
+    lines = [f"Hello {_first(o['name'])},", f"Your {o['product_name']} for {name} is ready."]
     if o["total"]["gross"]:
         inv = (o.get("invoice") or {}).get("number")
         lines.append(
@@ -44,109 +118,179 @@ def receipt(svc: Services, o: dict[str, Any]) -> None:
         )
     if o.get("valid_from") or o.get("valid_until"):
         lines.append(f"Valid {o.get('valid_from') or 'now'} to {o.get('valid_until') or '—'}.")
-    if unproven:
-        lines.append(
-            "One more step: confirm this is your address. Then you can sign in from any "
-            "device with it."
-        )
-        m.send(
-            o["email"],
-            f"Your {o['product_name']}: confirm your e-mail",
-            lines,
-            button=(confirm_url(svc, o["id"]), "Confirm your e-mail"),
-        )
-    else:
-        lines.append("Sign in with your address to see your pass in the apps.")
-        m.send(o["email"], f"Your {o['product_name']}", lines)
-    log.info("sales: receipt of order %s mailed", o["id"])
+    pid = o.get("partner_id")
+    if pid and sales.is_unverified(svc, pid):
+        row = svc.odoo.read_one("res.partner", pid, ["belfry_pending_email"]) or {}
+        pending = (row.get("belfry_pending_email") or "").strip().lower()
+        if pending and pending == address == o["email"].strip().lower():
+            lines.append(
+                "One more step: confirm this is your address. Then you can sign in from any "
+                "device with it. If you didn't order this, the same link lets you say so."
+            )
+            url = confirm_url(svc, o["id"], pid, pending, "receipt")
+            return (
+                f"Your {o['product_name']}: confirm your e-mail",
+                lines,
+                (url, "Confirm your e-mail"),
+                [],
+            )
+    lines.append("Sign in with your address to see your pass in the apps.")
+    return f"Your {o['product_name']}", lines, None, []
 
 
-def invoice(svc: Services, o: dict[str, Any]) -> None:
-    """Pay by transfer: the invoice's number, amount and where the bank details are."""
-    from . import sales
-
-    m = getattr(svc.odoo, "mailer", None)
-    inv = o.get("invoice") or {}
-    if m is None or not inv.get("number"):
-        return
-    lines = [
-        f"Hello {_first(o['name'])},",
-        f"Thank you for your order of a {o['product_name']} for {m.name}.",
-        f"Invoice {inv['number']}: {_money(o['total']['gross'])}.",
-        "Please pay it by bank transfer with the communication "
-        f"{inv.get('communication') or inv['number']}"
-        f" before {o['hold_until'][:10]}. Your place is held until then.",
-    ]
-    to = (o.get("billing") or {}).get("invoice_email") or o["email"]
-    m.send(
-        to, f"Invoice {inv['number']}", lines, button=(sales.pay_url(svc, o["id"]), "How to pay")
+def _order_confirm(svc: Services, oid: str, address: str) -> Mail | None:
+    o = _order(svc, oid)
+    if o is None or o["state"] != "confirm" or o["email"].strip().lower() != address:
+        return None
+    name = _mailer(svc).name
+    url = confirm_url(svc, o["id"], 0, address, "order")
+    return (
+        f"Confirm your {o['product_name']}",
+        [
+            f"Hello {_first(o['name'])},",
+            f"Someone asked for a {o['product_name']} for {name} with this address. "
+            "Confirm it to get your pass.",
+            f"The link works until {o['hold_until'][:16].replace('T', ' ')} (UTC). If it "
+            "wasn't you, the same link lets you say so, or ignore this mail.",
+        ],
+        (url, "Confirm"),
+        [],
     )
 
 
-def reminder(svc: Services, o: dict[str, Any]) -> None:
+def _held(o: dict[str, Any]) -> str:
+    return f"Your place is held until {o['hold_until'][:10]}."
+
+
+def _invoice(svc: Services, ref: str, address: str) -> Mail | None:
+    """The invoice: its number, amount, how to pay (the bank page when bank details are set,
+    else the card link), the PDF from Odoo when it could be fetched."""
+    from . import sales, salesodoo
+
+    o = _order(svc, ref)
+    inv = (o or {}).get("invoice") or {}
+    if o is None or not inv.get("number"):
+        return None
+    name = _mailer(svc).name
+    paid = o["state"] in ("paid", "active")
+    lines = [
+        f"Hello {_first(o['name'])},",
+        f"Thank you for your order of a {o['product_name']} for {name}.",
+        f"Invoice {inv['number']}: {_money(o['total']['gross'])}" + (" (paid)." if paid else "."),
+    ]
+    button = None
+    if not paid:
+        if sales.bank_ready(svc):
+            lines.append(
+                "To pay by bank transfer, use the communication "
+                f"{inv.get('communication') or inv['number']}. " + _held(o)
+            )
+            button = (sales.pay_url(svc, o["id"]), "How to pay")
+        elif (o.get("stripe") or {}).get("url"):
+            lines.append(_held(o))
+            button = (o["stripe"]["url"], "Pay by card")
+        else:
+            lines.append(_held(o))
+    files = []
+    pdf = salesodoo.invoice_pdf(svc, int(inv["move_id"]))
+    if pdf:
+        files.append((f"{inv['number'].replace('/', '-')}.pdf", pdf, "application/pdf"))
+    else:
+        st = sales.store(svc)
+        o = st.order(o["id"]) or o
+        st.update(o["id"], flags=sales._flag(o, "invoice_pdf_missing"))
+    return f"Invoice {inv['number']}", lines, button, files
+
+
+def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
     from . import sales
 
-    m = getattr(svc.odoo, "mailer", None)
-    inv = o.get("invoice") or {}
-    if m is None or not inv.get("number"):
-        return
-    m.send(
-        o["email"],
+    o = _order(svc, oid)
+    inv = (o or {}).get("invoice") or {}
+    if o is None or o["state"] not in ("pending", "invoiced") or not inv.get("number"):
+        return None
+    if sales.bank_ready(svc):
+        button = (sales.pay_url(svc, o["id"]), "How to pay")
+    elif (o.get("stripe") or {}).get("url"):
+        button = (o["stripe"]["url"], "Pay by card")
+    else:
+        button = None
+    return (
         f"Your place is held until {o['hold_until'][:10]}",
         [
             f"Hello {_first(o['name'])},",
             f"Your {o['product_name']} is not paid yet (invoice {inv['number']}, "
             f"{_money(o['total']['gross'])}).",
-            f"Your place is held until {o['hold_until'][:10]}; after that the order ends.",
+            f"{_held(o)} After that the order ends. A transfer made before then still counts: "
+            "it can take a few days to show.",
         ],
-        button=(sales.pay_url(svc, o["id"]), "How to pay"),
+        button,
+        [],
     )
 
 
-def _admins(svc: Services) -> list[str]:
-    from . import console
+def _offer_admins(svc: Services, ref: str, address: str) -> Mail | None:
+    from . import console, sales
 
-    try:
-        return sorted(console.admin_emails(svc))
-    except Exception:  # noqa: BLE001
-        return []
-
-
-def offer_to_admins(svc: Services, f: dict[str, Any]) -> None:
-    from . import console
-
-    m = getattr(svc.odoo, "mailer", None)
-    admins = _admins(svc)
-    if m is None or not admins:
-        return
-    m.send(
-        admins,
+    f = sales.store(svc).offer(ref.split(":")[0])
+    if f is None or f["state"] != "open":
+        return None
+    return (
         f"{f['name']} offers something for a pass",
         [
             f"{f['name']} asks for {f['percent']}% off the {f['product']} pass and offers:",
             f["offer"],
             "Decide in the console.",
         ],
-        button=(console.console_url(svc.settings) + "/sales#offers", "Open the offers"),
+        (console.console_url(svc.settings) + "/sales#offers", "Open the offers"),
+        [],
     )
 
 
-def offer_answer(svc: Services, f: dict[str, Any]) -> None:
-    m = getattr(svc.odoo, "mailer", None)
-    if m is None:
-        return
+def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
+    from . import sales
+
+    f = sales.store(svc).offer(ref)
+    if f is None or f["state"] == "open":
+        return None
+    name = _mailer(svc).name
     if f.get("code"):
         lines = [
             f"Hello {_first(f['name'])},",
-            f"Thank you for your offer. {m.name} gives you {f['decided_percent']}% off.",
+            f"Thank you for your offer. {name} gives you {f['decided_percent']}% off.",
             f"Your personal code: {f['code']}",
             "Type it when you get your pass. It works once.",
         ]
     else:
         lines = [
             f"Hello {_first(f['name'])},",
-            f"Thank you for your offer. {m.name} can't take it this time.",
+            f"Thank you for your offer. {name} can't take it this time.",
         ]
     if f.get("note"):
         lines.append(f["note"])
-    m.send(f["email"], f"Your offer to {m.name}", lines)
+    return f"Your offer to {name}", lines, None, []
+
+
+BUILD = {
+    "receipt": _receipt,
+    "order_confirm": _order_confirm,
+    "invoice": _invoice,
+    "reminder": _reminder,
+    "offer_admins": _offer_admins,
+    "offer_answer": _offer_answer,
+}
+
+
+def offer_to_admins(svc: Services, f: dict[str, Any]) -> None:
+    from . import console
+
+    try:
+        admins = sorted(console.admin_emails(svc))
+    except Exception:  # noqa: BLE001
+        admins = []
+    for a in admins:
+        queue(svc, "offer_admins", f"{f['id']}:{a}", a)
+
+
+def offer_answer(svc: Services, f: dict[str, Any]) -> None:
+    queue(svc, "offer_answer", f["id"], f["email"])

@@ -37,6 +37,9 @@ an agent building the website's checkout, or helping an admin.
    `pay_url`, `hold_until`. Send the buyer to `card_url` to pay by card; or show `pay_url` /
    the communication for a transfer. `return_url` must be on the community's own domain;
    Belfry adds `?order=<id>`.
+   State `confirm` (a free product without a code): tell the buyer to open the link mailed to
+   their address; the pass opens then (no `bunker_url`: they sign in with an e-mail code).
+   `email_mismatch`: this browser's account waits for another address to be confirmed.
 5. On the return page, poll `GET /checkout/<order>` (signed by the same key) every few seconds
    until `state` is `active`; its `bunker_url` (NIP-46) signs the browser in to the
    community's apps. States: `pending` → `invoiced` → `paid` → `active`, or `cancelled` /
@@ -44,7 +47,8 @@ an agent building the website's checkout, or helping an admin.
 
 Errors are `{"error", "message"}`: `unknown_product`, `not_on_sale`, `sold_out`,
 `unknown_code`, `code_used`, `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell`,
-`too_many`, `accounting`. Show the message, keep the form filled in.
+`email_mismatch`, `too_many` (limits per key, address and IP), `accounting`. `invoice.url` is
+Belfry's own page of the order; the PDF comes by mail. Show the message, keep the form filled in.
 
 Never tell a buyer whether an address is already a member: Belfry doesn't either.
 

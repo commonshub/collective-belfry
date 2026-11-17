@@ -55,8 +55,13 @@ FLAGS = {
     "card_failed": "no card session",
     "stripe_mismatch": "a Stripe payment that doesn't match",
     "payment_not_booked": "payment not booked in Odoo",
-    "paid_after_expired": "paid after it expired",
-    "paid_after_cancelled": "paid after it was cancelled",
+    "paid_late": "paid after it ended",
+    "oversold": "no place was left",
+    "not_me": "the address's owner said it wasn't them",
+    "invoice_pdf_missing": "invoice mailed without its PDF",
+    "odoo_read_failed": "Odoo could not read its invoice",
+    "stuck": "a step gave up: look at it",
+    "pass_closed": "its pass was closed",
 }
 
 MSG = {
@@ -76,6 +81,7 @@ MSG = {
     "decided": "Answer sent.",
     "cancelled": "Order cancelled.",
     "paid": "Order marked paid.",
+    "reopened": "Order reopened and marked paid.",
     "reason": "Give a reason.",
     "not_open": "This order is not open any more.",
     "expired": "The form expired; try again.",
@@ -209,7 +215,6 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
                 )
                 or '<p class="hint">Add a product below first.</p>'
             )
-            send = " checked" if st["send_invoice"] else ""
             picks = f"""<form method="post" action="{PATH}/picks" class="f">
 <input type="hidden" name="csrf" value="{csrf}">
 <label>Company {_select("company", lists["companies"], lambda r: r["name"], st["company"], "— the key's default —")}</label>
@@ -218,7 +223,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 <label>VAT for organisations (on top) {_select("tax_excluded", lists["taxes"], tax, st["tax_excluded"], "— pick a tax —")}</label>
 <label>Journal for card payments {_select("card_journal", lists["journals"], lambda r: r["name"], st["card_journal"], "— not booked —")}</label>
 <label>Journal for payments marked by hand {_select("manual_journal", lists["journals"], lambda r: r["name"], st["manual_journal"], "— not booked —")}</label>
-<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="send_invoice" value="1"{send}> Odoo also mails its invoice PDF</label>
+<p class="hint">Belfry mails each invoice with its PDF to the buyer; Odoo doesn't send it.</p>
 <div class="actions"><button class="btn" type="submit">Save</button></div></form>"""
     odoo = f"""<h2>Odoo</h2><p class="hint">Invoices, VAT and payments live in your Odoo (Odoo Online works).</p>
 <div class="card"><form method="post" action="{PATH}/odoo" class="f">
@@ -324,6 +329,13 @@ The restricted key needs Checkout Sessions: write.</p>
 <label>Reason <input type="text" name="reason" required></label>
 <div class="actions"><button class="btn" type="submit" name="do" value="paid">Mark paid</button>
 <button class="btn ghost" type="submit" name="do" value="cancel">Cancel the order</button></div></form></details>"""
+        elif o["state"] in ("cancelled", "expired") and o["total"]["gross"] > 0:
+            # a transfer made in time but seen after the hold ended (or a cancel by mistake)
+            act = f"""<details><summary>Change</summary><form method="post" action="{PATH}/order" class="f">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
+<label>Reason <input type="text" name="reason" required></label>
+<p class="hint">The pass opens; a new invoice is made if the first was credited.</p>
+<div class="actions"><button class="btn" type="submit" name="do" value="reopen">Reopen and mark paid</button></div></form></details>"""
         rrow += (
             f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span></td>"
             f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
@@ -432,7 +444,6 @@ def register(app: FastAPI) -> None:
                 "tax_excluded": num("tax_excluded"),
                 "card_journal": num("card_journal"),
                 "manual_journal": num("manual_journal"),
-                "send_invoice": form.get("send_invoice") == "1",
             },
         )
         return back(request, msg="picks")
@@ -563,9 +574,13 @@ def register(app: FastAPI) -> None:
         o = sales.store(s).order(oid) if sales.ORDER_RE.match(oid) else None
         if not reason:
             return back(request, err="reason")
+        by = me["name"] or "an admin"
+        if o is not None and form.get("do") == "reopen" and o["state"] in ("cancelled", "expired"):
+            await run_in_threadpool(sales.reopen_paid, s, oid, reason, by)
+            log.info("sales: order %s reopened and marked paid by hand", oid)
+            return back(request, msg="reopened")
         if o is None or o["state"] not in ("pending", "invoiced"):
             return back(request, err="not_open")
-        by = me["name"] or "an admin"
         if form.get("do") == "paid":
             await run_in_threadpool(sales.mark_paid, s, oid, "hand", reason, by)
             log.info("sales: order %s marked paid by hand", oid)

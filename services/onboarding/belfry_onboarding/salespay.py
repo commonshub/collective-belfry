@@ -174,7 +174,8 @@ TEXT = {
     "to your invoice.",
     "slow": "Transfers take one or two working days.",
     "paid": "This order is paid. Thank you.",
-    "ended": "This order has ended. If you still want the pass, make a new order.",
+    "ended": "This order has ended. If you paid by bank transfer before your place's date, "
+    "tell the belfry's admins: they reopen it. Otherwise, make a new order.",
     "waiting": "This order has no invoice yet. Try again in a few minutes.",
 }
 
@@ -213,6 +214,40 @@ def page_html(
 <dl>{rows}</dl></div><p class="note">{E(note)}</p></div>{SCRIPT}"""
 
 
+def order_html(svc: Services, o: dict[str, Any]) -> str:
+    """An order's own page (the API's ``invoice.url``): its invoice's number and amount; while
+    it is open, until when the place is held and how to pay (bank transfer when bank details
+    are set, the card link when there is one)."""
+    from . import sales
+
+    inv = o.get("invoice") or {}
+    money = f"€{o['total']['gross'] / 100:,.2f}"
+    head = (
+        f'<p class="lead"><b>Invoice {E(inv["number"])}</b> · {E(money)} · '
+        f"{E(o['product_name'])}</p>"
+        if inv.get("number")
+        else ""
+    )
+    if o["state"] in ("paid", "active"):
+        return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(TEXT["paid"])}</p></div>'
+    if o["state"] in ("cancelled", "expired"):
+        return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(TEXT["ended"])}</p></div>'
+    if not inv.get("number"):
+        return f'{STYLE}<div class="pay"><h1>Your order</h1><p>{E(TEXT["waiting"])}</p></div>'
+    held = f"Your place is held until {o['hold_until'][:10]}."
+    card = (o.get("stripe") or {}).get("url")
+    card_btn = f'<p><a class="btn" href="{E(card)}">Pay by card</a></p>' if card else ""
+    if sales.bank_ready(svc):
+        comm = inv.get("communication") or inv["number"]
+        body = page_html(sales.settings(svc), o["total"]["gross"], comm)
+        return body.replace(
+            '<div class="box">',
+            f'{head}<p class="lead">{E(held)}</p>{card_btn}<div class="box">',
+            1,
+        )
+    return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(held)}</p>{card_btn}</div>'
+
+
 def _frame(body: str, status: int = 200) -> HTMLResponse:
     from . import theme
 
@@ -248,7 +283,8 @@ def free_request(svc: Services, q: dict[str, str]) -> tuple[int | None, str, str
         # the signature covers the amount and the communication as given
         given_cents = parse_amount(q.get("amount")) if q.get("amount") else None
         given_comm = (q.get("communication") or "").strip()
-        if hmac.compare_digest(str(q["sig"]), sign(svc, given_cents, given_comm, raw)):
+        want = sign(svc, given_cents, given_comm, raw).encode()
+        if hmac.compare_digest(str(q["sig"]).encode("utf-8", "replace"), want):
             description = raw
     return cents, communication, description
 
@@ -268,20 +304,12 @@ def register(app: FastAPI) -> None:
     @app.get("/console/pay/{oid}", include_in_schema=False)
     async def pay_order(oid: str, request: Request):
         s = request.app.state.services
-        if not sales.own(s) or not sales.bank_ready(s):
+        if not sales.own(s):
             return _frame("<p>Not found.</p>", 404)
         o = sales.store(s).order(oid) if sales.ORDER_RE.match(oid) else None
-        if o is None:
+        if o is None or not o["total"]["gross"]:
             return _frame("<p>Not found.</p>", 404)
-        if o["state"] in ("paid", "active"):
-            return _message("paid")
-        if o["state"] in ("cancelled", "expired"):
-            return _message("ended")
-        inv = o.get("invoice") or {}
-        if not inv.get("number"):
-            return _message("waiting")
-        comm = inv.get("communication") or inv["number"]
-        return _frame(page_html(sales.settings(s), o["total"]["gross"], comm))
+        return _frame(order_html(s, o))
 
     @app.post("/api/pay-links")
     async def api_pay_link(request: Request) -> JSONResponse:

@@ -1206,6 +1206,9 @@ class FakeSellerOdoo:
         self.calls: list[tuple[str, str]] = []
         self.down = False
         self.refuse = False
+        self.batch_fails = False  # reading several invoices at once fails
+        self.unreadable: set[int] = set()  # invoices that can't be read
+        self.no_pdf = False
         self.add("res.company", name="XL Collective")
         self.add("res.country", code="BE", name="Belgium")
         self.add("res.currency", name="EUR")
@@ -1275,7 +1278,11 @@ class FakeSellerOdoo:
                 journal_id=[1, "Customer Invoices"],
                 move_type=vals.get("move_type", "out_invoice"),
             )
-        if model in ("account.payment.register", "account.move.reversal"):
+        if model in (
+            "account.payment.register",
+            "account.move.reversal",
+            "account.move.send.wizard",
+        ):
             vals["context"] = context
         return self.add(model, **vals)
 
@@ -1283,6 +1290,10 @@ class FakeSellerOdoo:
         self._fail(model, method)
         moves = self.records.setdefault("account.move", {})
         if model == "account.move" and method == "read":
+            if self.batch_fails and len(ids) > 1:
+                raise httpx.ReadTimeout("too slow")
+            if set(ids) & self.unreadable:
+                raise OdooError("account.move.read: gone", {"status": 500})
             return [dict(moves[i]) for i in ids if i in moves]
         if model == "account.move" and method == "action_post":
             for i in ids:
@@ -1320,5 +1331,11 @@ class FakeSellerOdoo:
             orig["payment_state"] = "reversed"
             return {"res_id": rid}
         if method == "action_send_and_print":
+            wiz = self.records[model][ids[0]]
+            if not self.no_pdf:
+                import base64
+
+                att = self.add("ir.attachment", datas=base64.b64encode(b"%PDF-1.4 fake").decode())
+                moves[wiz["context"]["active_id"]]["invoice_pdf_report_id"] = [att, "inv.pdf"]
             return True
         raise AssertionError(f"unexpected {model}.{method}")

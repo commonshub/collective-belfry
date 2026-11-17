@@ -35,6 +35,7 @@ import contextlib
 import datetime as dt
 import hashlib
 import hmac
+import html
 import json
 import logging
 import os
@@ -63,11 +64,19 @@ SECRETS_FILE = "sales-secrets.json"
 SECRET_KEYS = ("odoo_api_key", "stripe_key", "stripe_webhook_secret")
 HOLD_DAYS = 7
 REMIND_DAYS = 2  # one reminder this long before the hold ends
+CONFIRM_HOURS = 48  # a free order waits this long for its address to be confirmed
 OPEN_PER_KEY = 5
+OPEN_PER_ADDRESS = 3
 ORDERS_PER_ADDRESS_HOUR = 20
+CHECKOUTS_PER_IP_HOUR = 10
+HOLDS_PER_IP = 2  # unpaid orders of a product with limited places, per IP
+MAILS_PER_ADDRESS_DAY = 5
+MAIL_TRIES = 8
+MAIL_DAYS = 3  # a mail held back by the daily limit gives up after this
+STEP_TRIES = 30  # a step retried by the tick (every 15 minutes) stops after this, flagged
 CODE_CHECKS_PER_HOUR = 10
-OFFERS_PER_KEY_HOUR = 5
-OPEN = ("pending", "invoiced", "paid")
+OFFERS_PER_DAY = 3
+OPEN = ("confirm", "pending", "invoiced", "paid")
 STATES = (*OPEN, "active", "cancelled", "expired")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 PRODUCT_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,39}$")
@@ -153,7 +162,7 @@ class Store:
             """
             CREATE TABLE IF NOT EXISTS orders (
                 id TEXT PRIMARY KEY, key TEXT NOT NULL, email TEXT NOT NULL, state TEXT NOT NULL,
-                created INTEGER NOT NULL, data TEXT NOT NULL);
+                created INTEGER NOT NULL, ip TEXT NOT NULL DEFAULT '', data TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS orders_key ON orders (key);
             CREATE INDEX IF NOT EXISTS orders_state ON orders (state);
             CREATE TABLE IF NOT EXISTS codes (
@@ -164,8 +173,16 @@ class Store:
             CREATE TABLE IF NOT EXISTS stripe_events (
                 id TEXT PRIMARY KEY, at INTEGER NOT NULL, result TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS confirms (
-                token TEXT PRIMARY KEY, order_id TEXT NOT NULL, at INTEGER NOT NULL);
+                token TEXT PRIMARY KEY, order_id TEXT NOT NULL, partner_id INTEGER NOT NULL,
+                address TEXT NOT NULL, kind TEXT NOT NULL, at INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sent (key TEXT PRIMARY KEY, at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS mails (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, ref TEXT NOT NULL,
+                address TEXT NOT NULL, created INTEGER NOT NULL, tries INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'due', sent_at INTEGER, UNIQUE (kind, ref));
+            CREATE TABLE IF NOT EXISTS hits (
+                key TEXT NOT NULL, at INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS hits_key ON hits (key, at);
             """
         )
 
@@ -190,17 +207,19 @@ class Store:
         o["updated"] = iso(now())
         with self._lock:
             (db or self._db).execute(
-                "INSERT OR REPLACE INTO orders (id, key, email, state, created, data) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO orders (id, key, email, state, created, ip, data) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     o["id"],
                     o["key"],
                     o["email"].lower(),
                     o["state"],
                     int(parse_iso(o["created"]).timestamp()),
+                    o.get("ip") or "",
                     json.dumps(o),
                 ),
             )
+        _listing_cache["at"] = 0.0  # places changed
 
     def update(self, oid: str, **vals: Any) -> dict[str, Any]:
         with self.tx() as db:
@@ -234,6 +253,29 @@ class Store:
                 "SELECT COUNT(*) FROM orders WHERE email = ? AND created >= ?",
                 (email.lower(), since),
             ).fetchone()[0]
+
+    def open_for(self, column: str, value: str, product: str | None = None) -> int:
+        """Open (unpaid) orders of an address or an IP, for one product or all."""
+        assert column in ("email", "ip")
+        rows = self._db.execute(
+            f"SELECT data FROM orders WHERE {column} = ? AND state IN ('pending', 'invoiced', "
+            "'confirm')",
+            (value.lower() if column == "email" else value,),
+        ).fetchall()
+        return sum(1 for r in rows if product is None or json.loads(r[0])["product"] == product)
+
+    def hit(self, key: str, limit: int, seconds: int) -> bool:
+        """A rate limit kept in the file (survives restarts): False when KEY is over LIMIT."""
+        t = int(time.time())
+        with self._lock:
+            self._db.execute("DELETE FROM hits WHERE at < ?", (t - 86400 * 2,))
+            n = self._db.execute(
+                "SELECT COUNT(*) FROM hits WHERE key = ? AND at >= ?", (key, t - seconds)
+            ).fetchone()[0]
+            if n >= limit:
+                return False
+            self._db.execute("INSERT INTO hits (key, at) VALUES (?, ?)", (key, t))
+            return True
 
     # codes
     def code(self, code: str, db: sqlite3.Connection | None = None) -> dict[str, Any] | None:
@@ -288,12 +330,19 @@ class Store:
 
     # Stripe's events, confirmation links, mails sent once
     def first_event(self, event_id: str) -> bool:
+        """Whether this event still has to be handled: new, or received but never finished (a
+        crash in between: handling again is safe, mark_paid is idempotent)."""
         with self._lock:
             cur = self._db.execute(
                 "INSERT OR IGNORE INTO stripe_events (id, at, result) VALUES (?, ?, ?)",
                 (event_id, int(time.time()), "received"),
             )
-        return cur.rowcount == 1
+            if cur.rowcount == 1:
+                return True
+            row = self._db.execute(
+                "SELECT result FROM stripe_events WHERE id = ?", (event_id,)
+            ).fetchone()
+        return bool(row) and row[0] == "received"
 
     def event_result(self, event_id: str, result: str) -> None:
         with self._lock:
@@ -305,26 +354,77 @@ class Store:
         with self._lock:
             self._db.execute("DELETE FROM stripe_events WHERE id = ?", (event_id,))
 
-    def confirm_token(self, oid: str) -> str:
+    def confirm_token(self, oid: str, partner_id: int, address: str, kind: str) -> str:
+        """The confirmation link's token, bound to the order, the contact and the address it is
+        mailed to (only ever to that address). KIND: ``receipt`` (an account's unproven address)
+        or ``order`` (a free order waiting for its address)."""
+        address = address.strip().lower()
         with self._lock:
             row = self._db.execute(
-                "SELECT token FROM confirms WHERE order_id = ?", (oid,)
+                "SELECT token FROM confirms WHERE order_id = ? AND partner_id = ? AND address = ? "
+                "AND kind = ?",
+                (oid, int(partner_id), address, kind),
             ).fetchone()
             if row:
                 return row[0]
             token = secrets.token_urlsafe(24)
             self._db.execute(
-                "INSERT INTO confirms (token, order_id, at) VALUES (?, ?, ?)",
-                (token, oid, int(time.time())),
+                "INSERT INTO confirms (token, order_id, partner_id, address, kind, at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (token, oid, int(partner_id), address, kind, int(time.time())),
             )
             return token
 
-    def confirm_order(self, token: str) -> str | None:
-        if not token or len(token) < 20:
+    def confirm_of(self, token: str) -> dict[str, Any] | None:
+        if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,64}", token):
             return None
         with self._lock:
             row = self._db.execute(
-                "SELECT order_id FROM confirms WHERE token = ?", (token,)
+                "SELECT order_id, partner_id, address, kind FROM confirms WHERE token = ?",
+                (token,),
+            ).fetchone()
+        if not row:
+            return None
+        return {"order": row[0], "partner": int(row[1]), "address": row[2], "kind": row[3]}
+
+    # the outbox: a mail is marked sent only once the provider took it
+    def queue_mail(self, kind: str, ref: str, address: str) -> bool:
+        with self._lock:
+            cur = self._db.execute(
+                "INSERT OR IGNORE INTO mails (kind, ref, address, created) VALUES (?, ?, ?, ?)",
+                (kind, ref, address.strip().lower(), int(time.time())),
+            )
+        return cur.rowcount == 1
+
+    def due_mails(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT id, kind, ref, address, created, tries FROM mails WHERE state = 'due' "
+                "ORDER BY id"
+            ).fetchall()
+        return [
+            dict(zip(("id", "kind", "ref", "address", "created", "tries"), r, strict=True))
+            for r in rows
+        ]
+
+    def mail_done(self, mid: int, state: str, tried: bool = True) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE mails SET state = ?, tries = tries + ?, sent_at = ? WHERE id = ?",
+                (state, 1 if tried else 0, int(time.time()) if state == "sent" else None, mid),
+            )
+
+    def sent_to(self, address: str, seconds: int = 86400) -> int:
+        with self._lock:
+            return self._db.execute(
+                "SELECT COUNT(*) FROM mails WHERE address = ? AND state = 'sent' AND sent_at >= ?",
+                (address.strip().lower(), int(time.time()) - seconds),
+            ).fetchone()[0]
+
+    def mail_state(self, kind: str, ref: str) -> str | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT state FROM mails WHERE kind = ? AND ref = ?", (kind, ref)
             ).fetchone()
         return row[0] if row else None
 
@@ -380,8 +480,6 @@ def settings(svc: Services) -> dict[str, Any]:
         "card_journal": st.get("card_journal") or _int(env.accounting_journal),
         "manual_journal": st.get("manual_journal") or _int(env.accounting_manual_journal),
         "ref_prefix": st.get("ref_prefix") or env.accounting_ref_prefix or "Belfry ",
-        # Odoo mails its own invoice PDF too (Belfry always mails the transfer details)
-        "send_invoice": bool(st.get("send_invoice", False)),
         "bank_holder": st.get("bank_holder") or "",
         "bank_iban": st.get("bank_iban") or "",
         "bank_bic": st.get("bank_bic") or "",
@@ -522,8 +620,10 @@ def status_line(svc: Services) -> str:
         f"{name} {'set' if s[k] else 'not set'}"
         for k, name in (("odoo", "Odoo"), ("bank", "bank"), ("stripe", "Stripe"))
     )
-    head = "Selling passes: paid passes can be sold" if s["can_sell"] else (
-        "Selling passes: free passes only"
+    head = (
+        "Selling passes: paid passes can be sold"
+        if s["can_sell"]
+        else ("Selling passes: free passes only")
     )
     return f"{head} ({parts})."
 
@@ -622,6 +722,7 @@ def save_product(svc: Services, data: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("At most 50 products.")
     rows.append(p)
     svc.odoo.set_param(PRODUCTS_PARAM, json.dumps(rows))
+    _listing_cache["at"] = 0.0
     return p
 
 
@@ -675,11 +776,22 @@ def public_product(svc: Services, p: dict[str, Any]) -> dict[str, Any] | None:
     return out
 
 
+_listing_cache: dict[str, Any] = {"at": 0.0, "path": "", "data": None}
+LISTING_SECONDS = 15
+
+
 def listing(svc: Services) -> dict[str, Any]:
+    """GET /products, kept 15 seconds (or until an order changes or a product is saved)."""
+    path = svc.settings.register_path
+    c = _listing_cache
+    if c["data"] is not None and c["path"] == path and time.monotonic() - c["at"] < LISTING_SECONDS:
+        return c["data"]
     rows = [
         x for p in products(svc) if p.get("on_sale") and (x := public_product(svc, p)) is not None
     ]
-    return {"currency": settings(svc)["currency"], "can_sell": can_sell(svc), "products": rows}
+    data = {"currency": settings(svc)["currency"], "can_sell": can_sell(svc), "products": rows}
+    c.update(at=time.monotonic(), path=path, data=data)
+    return data
 
 
 # ── codes ───────────────────────────────────────────────────────────────────────────────────
@@ -818,7 +930,18 @@ class Limiter:
 
 
 CODE_CHECKS = Limiter(CODE_CHECKS_PER_HOUR, 3600)
-OFFERS = Limiter(OFFERS_PER_KEY_HOUR, 3600)
+
+
+def client_ip(request: Request) -> str:
+    """The client's address as Caddy forwards it (as events.py reads it)."""
+    return request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
+        request.client.host if request.client else "?"
+    )
+
+
+def ip_tag(svc: Services, ip: str) -> str:
+    """An IP kept for the limits only as a keyed hash (never the address itself)."""
+    return hmac_sign(svc, "ip:" + (ip or "?"))[:16]
 
 
 # ── who is buying ───────────────────────────────────────────────────────────────────────────
@@ -842,11 +965,15 @@ def account_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
         "name": partner.get("name") or "",
         "email": partner.get("email") or "",
         "verified": bool(partner.get("email")),
+        "pending": (partner.get("belfry_pending_email") or "").strip().lower(),
     }
 
 
 def is_unverified(svc: Services, partner_id: int) -> bool:
-    """A buyer's contact whose address is not proven yet (section 3)."""
+    """A buyer's contact whose address is not proven yet (section 3). Always False on a belfry
+    that keeps its register in Odoo (the field doesn't exist there)."""
+    if not own(svc):
+        return False
     row = svc.odoo.read_one("res.partner", int(partner_id), ["email", "belfry_pending_email"])
     return bool(row) and bool(row.get("belfry_pending_email")) and not row.get("email")
 
@@ -914,20 +1041,24 @@ def _partner_by_email(svc: Services, email: str, but: int) -> int | None:
 _confirm_lock = threading.Lock()
 
 
-def confirm(svc: Services, partner_id: int) -> dict[str, Any]:
-    """The buyer proved their address (the receipt's link, or an e-mail code). It becomes the
-    contact's ``email``; when another account has it already, the passes move there and the
-    temporary account closes. ``{"state": "confirmed" | "moved" | "already", "partner"}``."""
+def confirm(svc: Services, partner_id: int, address: str) -> dict[str, Any]:
+    """ADDRESS was proven for the contact (the link mailed to it, or a code mailed to it). It
+    becomes the contact's ``email`` only if it is the contact's pending address, nothing else
+    ever does; when another account has it already, the passes move there and the temporary
+    account closes. ``{"state": "confirmed" | "moved" | "already" | "mismatch", "partner"}``."""
     from . import core, usernames
 
+    address = (address or "").strip().lower()
     with _confirm_lock:
         row = (
             svc.odoo.read_one("res.partner", partner_id, ["name", "email", "belfry_pending_email"])
             or {}
         )
         pending = (row.get("belfry_pending_email") or "").strip()
-        if row.get("email") or not pending:
+        if row.get("email"):
             return {"state": "already", "partner": partner_id}
+        if not pending or pending.lower() != address:
+            return {"state": "mismatch", "partner": partner_id}
         other = _partner_by_email(svc, pending, partner_id)
         if other is None:
             svc.odoo.write(
@@ -958,29 +1089,62 @@ def confirm(svc: Services, partner_id: int) -> dict[str, Any]:
         return {"state": "moved", "partner": other}
 
 
+def not_me(svc: Services, oid: str, partner_id: int) -> None:
+    """ "This wasn't me" on a confirmation page: the unproven account's sessions end, its
+    address is dropped (no more links work), the order is flagged for the admins. A free
+    order still waiting for its address is cancelled."""
+    st = store(svc)
+    o = st.order(oid)
+    if o is None:
+        return
+    flags = list(o.get("flags") or [])
+    if "not_me" not in flags:
+        flags.append("not_me")
+        st.update(oid, flags=flags)
+    if o["state"] == "confirm":
+        cancel(svc, oid, "the address's owner said it wasn't them")
+        return
+    if not is_unverified(svc, partner_id):
+        return  # a proven account is its owner's: nothing to undo from a mail link
+    from . import community
+
+    try:
+        found = community.member_token(svc, partner_id)
+        if found:
+            for sess in svc.keycast.list_sessions(found[1]):
+                if sess.get("bunker_pubkey"):
+                    svc.keycast.revoke_session(found[1], sess["bunker_pubkey"])
+    except Exception:  # noqa: BLE001 — the flag tells the admins; they can revoke the pass
+        log.exception("sales: sessions of partner %s not revoked", partner_id)
+    svc.odoo.write("res.partner", [partner_id], {"belfry_pending_email": False})
+    st.update(oid, bunker_url=None)
+    log.warning("sales: order %s: the address's owner says it wasn't them", oid)
+
+
 def _move_passes(svc: Services, temp: int, other: int) -> int:
     """The temporary contact's passes open again on OTHER's account; the temporary ones close
-    (its key leaves the relays, its signer account is suspended)."""
+    (its key leaves the relays, its signer account is suspended). The tokens the pass came
+    with go along (nothing is minted twice)."""
     from . import core
 
     rows = svc.odoo.search_read(
         "belfry.pass",
         [["partner_id", "=", temp], ["state", "=", "active"]],
-        ["tier", "date_start", "date_end", "sale_order"],
+        ["tier", "date_start", "date_end", "sale_order", "cashu_token", "cashu_amount"],
     )
     st = store(svc)
     n = 0
     for r in rows:
-        new = svc.odoo.create(
-            "belfry.pass",
-            {
-                "partner_id": other,
-                "tier": r.get("tier") or "member",
-                "sold_start": r.get("date_start") or False,
-                "sold_end": r.get("date_end") or False,
-                "sale_order": r.get("sale_order") or False,
-            },
-        )
+        vals: dict[str, Any] = {
+            "partner_id": other,
+            "tier": r.get("tier") or "member",
+            "sold_start": r.get("date_start") or False,
+            "sold_end": r.get("date_end") or False,
+            "sale_order": r.get("sale_order") or False,
+        }
+        if r.get("cashu_amount"):
+            vals.update(cashu_token=r.get("cashu_token") or False, cashu_amount=r["cashu_amount"])
+        new = svc.odoo.create("belfry.pass", vals)
         core.activate_free_pass(svc, new)
         if r.get("sale_order") and st.order(r["sale_order"]):
             # the browser's session was on the temporary account: it ends with it
@@ -1030,21 +1194,35 @@ def _clean_billing(raw: Any) -> dict[str, Any]:
     return out
 
 
+URL_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
+
+
 def _own_url(svc: Services, url: Any) -> str | None:
-    """RETURN_URL when it is on the belfry's own domain (apex or a subdomain), else None."""
+    """RETURN_URL rebuilt from its parts when it is https on the belfry's own domain (the apex
+    or a subdomain), with no user info, port, query or fragment; else None."""
+    from urllib.parse import quote
+
     if not isinstance(url, str) or len(url) > 500:
+        return None
+    if any(c in url for c in "\\ \t\r\n") or any(ord(c) < 32 or ord(c) == 127 for c in url):
         return None
     try:
         u = urlparse(url)
+        port = u.port
     except ValueError:
         return None
     host = (u.hostname or "").lower()
-    domain = svc.settings.nip05_domain.lower()
-    if u.scheme != "https" or not (host == domain or host.endswith("." + domain)):
+    domain = svc.settings.nip05_domain.lower().strip(".")
+    if u.scheme != "https" or "@" in u.netloc or port is not None or u.query or u.fragment:
         return None
-    if u.username or u.password or "?" in url or "#" in url:
+    if u.params or not re.fullmatch(r"[a-z0-9.-]+", host):
         return None
-    return url
+    if not (host == domain or host.endswith("." + domain)) or ".." in host:
+        return None
+    path = quote(u.path or "/", safe="/-._~!$&'()*+,;=:@%")
+    if not URL_PATH.match(path) or path.startswith("//"):
+        return None
+    return f"https://{host}{path}"
 
 
 def thanks_url(svc: Services) -> str:
@@ -1086,7 +1264,9 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
         out["invoice"] = {
             "number": inv["number"],
             "communication": inv.get("communication") or inv["number"],
-            "url": inv.get("url"),
+            # Belfry's own page of the invoice (number, amount, communication); the PDF is
+            # mailed to the order's address
+            "url": pay_url(svc, o["id"]),
         }
     if o["state"] in ("pending", "invoiced") and tot["gross"] > 0:
         if (o.get("stripe") or {}).get("url"):
@@ -1101,7 +1281,9 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
 _checkout_lock = threading.Lock()
 
 
-def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, Any], int]:
+def checkout(
+    svc: Services, key: str, data: dict[str, Any], ip: str = ""
+) -> tuple[dict[str, Any], int]:
     """POST /checkout. Returns (the order's answer, HTTP status)."""
     from .holder_invites import ApiError
 
@@ -1123,7 +1305,28 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
         raise ApiError(422, "invalid", 'pay: "card" or "invoice".')
     code = norm_code(data.get("code")) if data.get("code") else ""
     return_url = _own_url(svc, data.get("return_url"))
+    ipt = ip_tag(svc, ip)
+    st = store(svc)
+    # the same key, product and address while an order is open (or just became active: a
+    # retried request): that order, before any limit counts it again
+    recent = iso(now() - dt.timedelta(hours=24))
+    for o in st.orders((*OPEN, "active"), key=key):
+        if (
+            o["product"] == pid
+            and o["email"].lower() == email.lower()
+            and (o["state"] != "active" or o["created"] >= recent)
+        ):
+            return answer(svc, o, key), 200
+    # an account whose address is not proven has one address: the one it waits to prove
+    acct = account_of(svc, key)
+    if acct and not acct["verified"] and acct["pending"] and acct["pending"] != email.lower():
+        raise ApiError(
+            409, "email_mismatch", "Use the address this account was made with, or confirm it."
+        )
+    if not st.hit("checkout-ip:" + ipt, CHECKOUTS_PER_IP_HOUR, 3600):
+        raise ApiError(429, "too_many", "Too many orders from here. Try again in an hour.")
     flags: list[str] = []
+    vat_valid = False
     if billing["kind"] == "organisation" and billing.get("vat") and can_sell(svc):
         # checked before the invoice is made (outside the lock: VIES can be slow)
         from . import salesodoo
@@ -1133,22 +1336,16 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
             raise ApiError(422, "invalid_vat", "That VAT number is not valid.")
         if valid is None:
             flags.append("vies_down")  # taken; the admins check the number by hand
-    st = store(svc)
+        vat_valid = valid is True and salesodoo.in_eu(billing["vat"])
     with _checkout_lock:
-        # the same key, product and address while an order is open (or just became active: a
-        # retried request): that order
-        recent = iso(now() - dt.timedelta(hours=24))
-        for o in st.orders((*OPEN, "active"), key=key):
-            if (
-                o["product"] == pid
-                and o["email"].lower() == email.lower()
-                and (o["state"] != "active" or o["created"] >= recent)
-            ):
-                return answer(svc, o, key), 200
         if len(st.orders(OPEN, key=key)) >= OPEN_PER_KEY:
             raise ApiError(429, "too_many", "Too many open orders. Pay or wait for one to end.")
+        if st.open_for("email", email) >= OPEN_PER_ADDRESS:
+            raise ApiError(429, "too_many", "Too many open orders for this address.")
         if st.count_address(email, int(time.time()) - 3600) >= ORDERS_PER_ADDRESS_HOUR:
             raise ApiError(429, "too_many", "Too many orders for this address. Try again later.")
+        if p.get("quantity") is not None and st.open_for("ip", ipt, pid) >= HOLDS_PER_IP:
+            raise ApiError(429, "too_many", "Pay the orders you have before holding more places.")
         if code and not CODE_CHECKS.allow("key:" + key):
             raise ApiError(429, "too_many", "Too many codes tried. Try again in an hour.")
         pr, _ = price_now(p)
@@ -1180,12 +1377,18 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
         if total["gross"] > 0 and not can_sell(svc):
             _give_back(svc, {"id": oid, "code": code})
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
-
-        acct = account_of(svc, key)
         created = now()
+        # a free product with no code makes no account from nothing: the address first
+        gate = total["gross"] == 0 and not code and not (acct and acct["verified"])
+        hold = None
+        if gate:
+            hold = iso(created + dt.timedelta(hours=CONFIRM_HOURS))
+        elif total["gross"]:
+            hold = iso(created + dt.timedelta(days=HOLD_DAYS))
         o = {
             "id": oid,
             "key": key,
+            "ip": ipt,
             "product": pid,
             "tier": p["tier"],
             "role": p.get("role"),
@@ -1199,19 +1402,22 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
             "code": code or None,
             "pay": pay,
             "billing": billing,
+            "vat_valid": vat_valid,
             "return_url": return_url,
             "total": total,
-            "state": "pending",
-            "step": "activate" if total["gross"] == 0 else "invoice",
+            "state": "confirm" if gate else "pending",
+            "step": "confirm" if gate else ("activate" if total["gross"] == 0 else "invoice"),
             "created": iso(created),
-            "hold_until": iso(created + dt.timedelta(days=HOLD_DAYS)) if total["gross"] else None,
+            "hold_until": hold,
             # a signed-in member or guest: the pass goes on their account
             "account": acct["partner"] if acct else None,
             "partner_id": acct["partner"] if acct else None,
             "pass_id": None,
             "invoice": {},
+            "history": [],
             "stripe": {},
             "flags": flags,
+            "tries": {},
             "error": None,
         }
         st.put_order(o)
@@ -1220,27 +1426,33 @@ def checkout(svc: Services, key: str, data: dict[str, Any]) -> tuple[dict[str, A
         oid,
         pid,
         mask(email),
-        "free" if not total["gross"] else "paid",
+        "to confirm" if gate else ("free" if not total["gross"] else "paid"),
     )
-    advance(svc, oid, first=True)
+    if gate:
+        from . import salesmail
+
+        salesmail.queue(svc, "order_confirm", oid, email)
+    else:
+        advance(svc, oid, first=True)
     o = st.order(oid) or o
     return answer(svc, o, key), 201
 
 
 def advance(svc: Services, oid: str, first: bool = False) -> dict[str, Any]:
     """Do the order's next steps until one has to wait (for a payment) or fails (retried by the
-    tick). FIRST: in the checkout request, where Odoo refusing the invoice ends the order."""
+    tick, at most STEP_TRIES times). FIRST: in the checkout request, where Odoo refusing the
+    invoice ends the order."""
     from .holder_invites import ApiError
 
     st = store(svc)
     with _order_lock(oid):
-        for _ in range(6):
+        for _ in range(8):
             o = st.order(oid)
-            if o is None or o["state"] in ("cancelled", "expired"):
-                break
-            if o["state"] == "active" and o.get("step") != "register_payment":
+            if o is None or o["state"] in ("cancelled", "expired", "confirm"):
                 break
             step = o.get("step")
+            if o["state"] == "active" and step not in ("invoice", "register_payment"):
+                break
             try:
                 if step == "invoice":
                     from . import salesodoo
@@ -1250,8 +1462,6 @@ def advance(svc: Services, oid: str, first: bool = False) -> dict[str, Any]:
                     from . import salesstripe
 
                     salesstripe.make_session(svc, o)
-                elif step == "wait":
-                    break
                 elif step == "register_payment":
                     from . import salesodoo
 
@@ -1261,40 +1471,98 @@ def advance(svc: Services, oid: str, first: bool = False) -> dict[str, Any]:
                 else:
                     break
             except Refused as exc:
-                st.update(oid, error=str(exc)[:200])
-                if first:
+                o = _tried(svc, oid, step, str(exc))
+                if first and step == "invoice" and o["state"] == "pending":
                     cancel(svc, oid, "Odoo refused the invoice")
                     raise ApiError(502, "accounting", "The invoice could not be made.") from exc
                 log.warning("sales: order %s, %s refused: %s", oid, step, exc)
                 break
             except Exception as exc:  # noqa: BLE001 — retried by the tick
                 log.warning("sales: order %s, step %s waits: %s", oid, step, type(exc).__name__)
-                st.update(oid, error=f"{step}: {type(exc).__name__}"[:200])
+                _tried(svc, oid, step, f"{step}: {type(exc).__name__}")
                 break
         return st.order(oid) or {}
+
+
+def _tried(svc: Services, oid: str, step: str, error: str) -> dict[str, Any]:
+    """A failed step: counted; past STEP_TRIES it stops (step ``stuck``), flagged."""
+    st = store(svc)
+    o = st.order(oid) or {}
+    tries = dict(o.get("tries") or {})
+    tries[step] = int(tries.get(step) or 0) + 1
+    vals: dict[str, Any] = {"tries": tries, "error": error[:200]}
+    if tries[step] >= STEP_TRIES:
+        flags = list(o.get("flags") or [])
+        if "stuck" not in flags:
+            flags.append("stuck")
+        vals.update(step="stuck", stuck_step=step, flags=flags)
+        log.warning("sales: order %s: %s gave up after %d tries", oid, step, tries[step])
+    return st.update(oid, **vals)
 
 
 class Refused(Exception):
     """The seller's Odoo (or Stripe) refused something as it is: not retried by itself."""
 
 
-_locks: dict[str, threading.Lock] = {}
+_locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
 
 
-def _order_lock(oid: str) -> threading.Lock:
+def _order_lock(oid: str) -> threading.RLock:
     with _locks_guard:
-        return _locks.setdefault(oid, threading.Lock())
+        return _locks.setdefault(oid, threading.RLock())
+
+
+def _flag(o: dict[str, Any], *names: str) -> list[str]:
+    flags = list(o.get("flags") or [])
+    for n in names:
+        if n not in flags:
+            flags.append(n)
+    return flags
+
+
+def next_after_pass(o: dict[str, Any]) -> str:
+    """What an active order still owes the books: an invoice (paid by hand before one existed,
+    or paid after its first invoice was credited), then the payment on it."""
+    if o["total"]["gross"] > 0 and not (o.get("invoice") or {}).get("move_id"):
+        return "invoice"
+    if o.get("payment_due"):
+        return "register_payment"
+    return "done"
 
 
 def after_invoice(svc: Services, o: dict[str, Any]) -> None:
-    """The invoice is posted: the next step is a card session (Stripe set) or waiting."""
-    store(svc).update(o["id"], state="invoiced", step="card" if stripe_ready(svc) else "wait")
+    """The invoice is posted. An unpaid order: a card session next (Stripe set), or waiting.
+    A paid or active one: the payment on it."""
+    st = store(svc)
+    o = st.order(o["id"]) or o
+    if o["state"] == "active":
+        st.update(o["id"], step="register_payment" if o.get("payment_due") else "done")
+    elif o["state"] == "paid":
+        st.update(o["id"], step="activate")
+    else:
+        st.update(o["id"], state="invoiced", step="card" if stripe_ready(svc) else "wait")
+        if stripe_ready(svc):
+            return  # the invoice mail goes once the card session exists (salesstripe)
+    queue_invoice_mail(svc, o)
+
+
+def queue_invoice_mail(svc: Services, o: dict[str, Any]) -> None:
+    from . import salesmail
+
+    salesmail.queue(
+        svc, "invoice", f"{o['id']}:{int(o.get('invoice_round') or 1)}", invoice_address(o)
+    )
+
+
+def invoice_address(o: dict[str, Any]) -> str:
+    return (o.get("billing") or {}).get("invoice_email") or o["email"]
 
 
 def mark_paid(svc: Services, oid: str, how: str, ref: str = "", by: str = "") -> dict[str, Any]:
-    """Money came (Stripe, the bank seen in Odoo, or an admin): register it in Odoo when it
-    didn't come through Odoo, then open the pass. Idempotent."""
+    """Money came (Stripe, the bank seen in Odoo, or an admin): the pass opens, then the books
+    follow (an invoice if there is none, the payment on it). Idempotent. A payment on an order
+    that ended reopens it (``reopen``): they paid, they get the pass."""
     st = store(svc)
     with _order_lock(oid):
         o = st.order(oid)
@@ -1302,21 +1570,61 @@ def mark_paid(svc: Services, oid: str, how: str, ref: str = "", by: str = "") ->
             raise KeyError(oid)
         if o["state"] in ("paid", "active"):
             return o
-        flags = list(o.get("flags") or [])
         if o["state"] in ("cancelled", "expired"):
-            flags.append("paid_after_" + o["state"])
-            log.warning("sales: order %s was paid after it ended (%s)", oid, o["state"])
-        # the pass first (the person paid); the payment is booked in Odoo after, retried alone
-        due = how in ("card", "hand") and bool((o.get("invoice") or {}).get("move_id"))
+            o = _reopen(svc, o)
+        inv = o.get("invoice") or {}
+        due = how in ("card", "hand") and o["total"]["gross"] > 0
+        if how == "transfer" and inv.get("move_id"):
+            due = False  # Odoo saw it: it is on the invoice already
         st.update(
             oid,
             state="paid",
             step="activate",
             payment_due=due,
             paid={"how": how, "ref": ref[:100], "by": by[:100], "at": iso(now())},
-            flags=flags,
         )
-    return advance(svc, oid)
+        return advance(svc, oid)
+
+
+def _reopen(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
+    """An ended order that gets paid: back in, with a new invoice when the old one was
+    credited (kept in ``history``), its code's use taken again, flagged ``paid_late`` (and
+    ``oversold`` when no place was left)."""
+    st = store(svc)
+    flags = ["paid_late"]
+    p = product(svc, o["product"])
+    if p is not None and (lft := left(svc, p)) is not None and lft <= 0:
+        flags.append("oversold")
+    inv = o.get("invoice") or {}
+    vals: dict[str, Any] = {"flags": _flag(o, *flags), "reopened": iso(now())}
+    if inv.get("move_id") and inv.get("credited"):
+        vals["history"] = [*(o.get("history") or []), {**inv, "credited": True}]
+        vals["invoice"] = {}
+        vals["invoice_round"] = int(o.get("invoice_round") or 1) + 1
+    else:
+        # the credit note was never made (or the invoice was paid): it stands, takes the payment
+        vals["step"] = "done"
+    if o.get("code"):
+        with st.tx() as db:
+            c = st.code(o["code"], db)
+            if c and o["id"] not in c["used"]:
+                c["used"].append(o["id"])
+                st.put_code(c, db)
+    log.warning("sales: order %s paid after it ended (%s): reopened", o["id"], o["state"])
+    return st.update(o["id"], **vals)
+
+
+def reopen_paid(svc: Services, oid: str, reason: str, by: str) -> dict[str, Any]:
+    """The console's "Reopen and mark paid": a transfer that came in time but was reconciled
+    after the hold ended (or an order cancelled by mistake)."""
+    return mark_paid(svc, oid, "hand", reason, by)
+
+
+def _existing_pass(svc: Services, oid: str) -> int | None:
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["sale_order", "=", oid], ["state", "in", ["pending", "active"]]], ["id"]
+    )
+    return rows[0]["id"] if rows else None
 
 
 def activate(svc: Services, o: dict[str, Any]) -> None:
@@ -1327,11 +1635,16 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
     st = store(svc)
     oid = o["id"]
     pid = o.get("partner_id")
+    verified_by_link = bool(o.get("address_confirmed"))
     if not pid:
-        pid = svc.odoo.create(
-            "res.partner",
-            {"name": o["name"], "belfry_pending_email": o["email"], "belfry_sale_order": oid},
-        )
+        vals: dict[str, Any] = {"name": o["name"], "belfry_sale_order": oid}
+        if o.get("odoo_partner"):
+            vals["belfry_odoo_partner"] = o["odoo_partner"]
+        if verified_by_link:  # a free order whose address was confirmed by its link
+            vals.update(email=o["email"], belfry_email_verified_at=core.now_utc_str())
+        else:
+            vals["belfry_pending_email"] = o["email"]
+        pid = svc.odoo.create("res.partner", vals)
         o = st.update(oid, partner_id=pid)
     elif o.get("account"):
         acct = svc.odoo.read_one("res.partner", pid, ["email", "belfry_pending_email"]) or {}
@@ -1339,41 +1652,44 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
             # a guest who never saved an address: the typed one waits for its proof
             svc.odoo.write("res.partner", [pid], {"belfry_pending_email": o["email"]})
     if not o.get("pass_id"):
-        start = o.get("valid_from") or today().isoformat()
-        end = o.get("valid_until") or core.MEMBERSHIP_END.isoformat()
-        if end < today().isoformat():
-            end = today().isoformat()
-        pass_id = svc.odoo.create(
-            "belfry.pass",
-            {
-                "partner_id": pid,
-                "tier": o["tier"],
-                "sale_order": oid,
-                "sold_start": start,
-                "sold_end": end,
-            },
-        )
+        pass_id = _existing_pass(svc, oid)  # made before a crash: the same one
+        if pass_id is None:
+            start = o.get("valid_from") or today().isoformat()
+            end = o.get("valid_until") or core.MEMBERSHIP_END.isoformat()
+            if end < today().isoformat():
+                end = today().isoformat()
+            pass_id = svc.odoo.create(
+                "belfry.pass",
+                {
+                    "partner_id": pid,
+                    "tier": o["tier"],
+                    "sale_order": oid,
+                    "sold_start": start,
+                    "sold_end": end,
+                },
+            )
         o = st.update(oid, pass_id=pass_id)
-    core.activate_free_pass(svc, o["pass_id"])
+    result = core.activate_free_pass(svc, o["pass_id"])
+    if result not in ("activated", "already_active"):
+        # the pass was closed by someone (revoked, expired): the order doesn't pretend
+        st.update(oid, step="stuck", stuck_step="activate", flags=_flag(o, "pass_closed"))
+        log.warning("sales: order %s: its pass could not open (%s)", oid, result)
+        return
     if o.get("role"):
         with contextlib.suppress(Exception):
             from . import roles
 
             if roles.exists(svc, o["role"]):
                 svc.odoo.write("res.partner", [pid], {"belfry_role": o["role"]})
-    if not o.get("account") and not o.get("bunker_url"):
+    if not o.get("account") and not o.get("bunker_url") and not verified_by_link:
+        # the browser that paid is signed in; never for an address proven by a mail link (the
+        # person who clicked may not be the one holding the browser)
         o = st.update(oid, bunker_url=_bind_key(svc, pid, o["key"]))
-    o = st.update(
-        oid,
-        state="active",
-        step="register_payment" if o.get("payment_due") else "done",
-        activated=iso(now()),
-        error=None,
-    )
-    if st.once("receipt:" + oid):
-        from . import salesmail
+    o = st.update(oid, state="active", activated=iso(now()), error=None)
+    o = st.update(oid, step=next_after_pass(o))
+    from . import salesmail
 
-        salesmail.receipt(svc, st.order(oid) or o)
+    salesmail.queue(svc, "receipt", oid, o["email"])
     log.info("sales: order %s active (pass %s)", oid, o["pass_id"])
 
 
@@ -1393,68 +1709,103 @@ def _bind_key(svc: Services, partner_id: int, key: str) -> str | None:
     return bunker.get("bunker_url") or None
 
 
+def confirm_order(svc: Services, oid: str) -> dict[str, Any]:
+    """A free order's address was confirmed by its link: the pass opens. If the address is an
+    account's already, the pass goes on that account."""
+    st = store(svc)
+    with _order_lock(oid):
+        o = st.order(oid)
+        if o is None or o["state"] != "confirm":
+            return o or {}
+        other = _partner_by_email(svc, o["email"], 0)
+        vals: dict[str, Any] = {"state": "pending", "step": "activate", "address_confirmed": True}
+        if other is not None and not o.get("partner_id"):
+            vals.update(partner_id=other, account=other)
+        st.update(oid, **vals)
+        return advance(svc, oid)
+
+
 def cancel(svc: Services, oid: str, reason: str, by: str = "") -> dict[str, Any]:
     """An order that ends unpaid (an admin, or Odoo refused it): the code's use comes back; an
-    invoice gets a credit note (the tick retries it)."""
+    invoice gets a credit note (the tick retries it). Under the order's lock, state read again."""
     st = store(svc)
-    o = st.order(oid)
-    if o is None:
-        raise KeyError(oid)
-    if o["state"] not in ("pending", "invoiced"):
-        return o
-    o = st.update(
-        oid,
-        state="cancelled",
-        step="credit_note" if (o.get("invoice") or {}).get("move_id") else "done",
-        ended={"reason": reason[:200], "by": by[:100], "at": iso(now())},
-    )
-    _give_back(svc, o)
-    end_unpaid(svc, o)
-    return st.order(oid) or o
+    with _order_lock(oid):
+        o = st.order(oid)
+        if o is None:
+            raise KeyError(oid)
+        if o["state"] not in ("confirm", "pending", "invoiced"):
+            return o
+        o = st.update(
+            oid,
+            state="cancelled",
+            step="credit_note" if (o.get("invoice") or {}).get("move_id") else "done",
+            ended={"reason": reason[:200], "by": by[:100], "at": iso(now())},
+        )
+        _give_back(svc, o)
+        end_unpaid(svc, o)
+        return st.order(oid) or o
 
 
 def end_unpaid(svc: Services, o: dict[str, Any]) -> None:
-    """The steps after an unpaid end: Stripe's session expires, the invoice is credited."""
+    """The steps after an unpaid end: Stripe's session expires, the invoice is credited.
+    Under the order's lock, only while the order is still ended."""
     st = store(svc)
-    if (o.get("stripe") or {}).get("id"):
-        with contextlib.suppress(Exception):
-            from . import salesstripe
+    with _order_lock(o["id"]):
+        o = st.order(o["id"]) or o
+        if o["state"] not in ("cancelled", "expired"):
+            return
+        if (o.get("stripe") or {}).get("id") and not (o.get("stripe") or {}).get("expired"):
+            with contextlib.suppress(Exception):
+                from . import salesstripe
 
-            salesstripe.expire_session(svc, o)
-    if o.get("step") == "credit_note":
-        try:
-            from . import salesodoo
+                salesstripe.expire_session(svc, o)
+                st.update(o["id"], stripe={**o["stripe"], "expired": True})
+        if o.get("step") == "credit_note":
+            try:
+                from . import salesodoo
 
-            salesodoo.credit_note(svc, o)
-            st.update(o["id"], step="done")
-        except Exception as exc:  # noqa: BLE001 — the tick tries again
-            log.warning("sales: order %s, credit note waits: %s", o["id"], type(exc).__name__)
+                credited = salesodoo.credit_note(svc, o)
+                inv = dict(o.get("invoice") or {})
+                inv["credited"] = bool(credited)
+                st.update(o["id"], step="done", invoice=inv)
+            except Exception as exc:  # noqa: BLE001 — the tick tries again
+                log.warning("sales: order %s, credit note waits: %s", o["id"], type(exc).__name__)
+                _tried(svc, o["id"], "credit_note", f"credit_note: {type(exc).__name__}")
 
 
 def expire_holds(svc: Services) -> int:
-    """Unpaid orders past their hold expire; a reminder goes 2 days before."""
+    """Unpaid orders past their hold expire; a reminder goes 2 days before. Each under its
+    order's lock, its state read again."""
     st = store(svc)
-    t = now()
     n = 0
-    for o in st.orders(("pending", "invoiced")):
-        if not o.get("hold_until"):
-            continue
-        until = parse_iso(o["hold_until"])
-        if until <= t:
-            o = st.update(
-                o["id"],
-                state="expired",
-                step="credit_note" if (o.get("invoice") or {}).get("move_id") else "done",
-                ended={"reason": "hold ended", "by": "", "at": iso(t)},
-            )
-            _give_back(svc, o)
-            end_unpaid(svc, o)
-            n += 1
-        elif until - t <= dt.timedelta(days=REMIND_DAYS) and (o.get("invoice") or {}).get("number"):
-            if st.once("remind:" + o["id"]):
+    for row in st.orders(("confirm", "pending", "invoiced")):
+        oid = row["id"]
+        with _order_lock(oid):
+            o = st.order(oid)
+            t = now()
+            if o is None or o["state"] not in ("confirm", "pending", "invoiced"):
+                continue
+            if not o.get("hold_until"):
+                continue
+            until = parse_iso(o["hold_until"])
+            if until <= t:
+                o = st.update(
+                    oid,
+                    state="expired",
+                    step="credit_note" if (o.get("invoice") or {}).get("move_id") else "done",
+                    ended={"reason": "hold ended", "by": "", "at": iso(t)},
+                )
+                _give_back(svc, o)
+                end_unpaid(svc, o)
+                n += 1
+            elif (
+                o["state"] != "confirm"
+                and until - t <= dt.timedelta(days=REMIND_DAYS)
+                and (o.get("invoice") or {}).get("number")
+            ):
                 from . import salesmail
 
-                salesmail.reminder(svc, o)
+                salesmail.queue(svc, "reminder", oid, invoice_address(o))
     return n
 
 
@@ -1462,9 +1813,15 @@ def retry(svc: Services) -> None:
     """Steps that failed earlier: invoices, sessions, payments, activations, credit notes."""
     st = store(svc)
     for o in st.orders():
-        if (o["state"] in OPEN and o.get("step") in ("invoice", "card", "activate")) or (
-            o["state"] == "active" and o.get("step") == "register_payment"
-        ):
+        if (
+            o["state"] in ("pending", "invoiced", "paid")
+            and o.get("step")
+            in (
+                "invoice",
+                "card",
+                "activate",
+            )
+        ) or (o["state"] == "active" and o.get("step") in ("invoice", "register_payment")):
             advance(svc, o["id"])
         elif o["state"] in ("cancelled", "expired") and o.get("step") == "credit_note":
             end_unpaid(svc, o)
@@ -1475,14 +1832,16 @@ _last_tick = {"at": 0.0}
 
 
 def tick(svc: Services, force: bool = False) -> None:
-    """Every 15 minutes (followers' loop runs every 5): holds, retries, and the open invoices
-    read from Odoo (paid by transfer → active; fully credited → the pass closes)."""
+    """Every 15 minutes (followers' loop runs every 5): holds, retries, the open invoices read
+    from Odoo (paid by transfer → active; fully credited → the pass closes), the mails due."""
     if not own(svc):
         return
     if not force and time.monotonic() - _last_tick["at"] < TICK_SECONDS - 5:
         return
     _last_tick["at"] = time.monotonic()
-    for job in (expire_holds, retry, _read_invoices):
+    from . import salesmail
+
+    for job in (expire_holds, retry, _read_invoices, salesmail.deliver_due):
         try:
             job(svc)
         except Exception as exc:  # noqa: BLE001 — next round
@@ -1505,7 +1864,7 @@ def offer_answer(f: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def make_offer(svc: Services, key: str, data: dict[str, Any]) -> dict[str, Any]:
+def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> dict[str, Any]:
     from .holder_invites import ApiError
 
     if not own(svc):
@@ -1530,7 +1889,11 @@ def make_offer(svc: Services, key: str, data: dict[str, Any]) -> dict[str, Any]:
         raise ApiError(422, "invalid", "percent: 50 to 100.")
     st = store(svc)
     mine = [f for f in st.offers(key) if f["state"] == "open"]
-    if len(mine) >= 3 or not OFFERS.allow("key:" + key):
+    if (
+        len(mine) >= 3
+        or not st.hit("offer-key:" + key, OFFERS_PER_DAY, 86400)
+        or not st.hit("offer-ip:" + ip_tag(svc, ip), OFFERS_PER_DAY, 86400)
+    ):
         raise ApiError(429, "too_many", "Too many offers for now.")
     f = {
         "id": "f_"
@@ -1678,7 +2041,7 @@ def register(app: FastAPI) -> None:
     @app.post(API + "/checkout")
     async def api_checkout(request: Request) -> JSONResponse:
         s, key, data = await _signed(request)
-        out, status = await run_in_threadpool(checkout, s, key, data)
+        out, status = await run_in_threadpool(checkout, s, key, data, client_ip(request))
         return JSONResponse(out, status_code=status, headers=NO_STORE)
 
     @app.get(API + "/checkout/{oid}")
@@ -1707,7 +2070,7 @@ def register(app: FastAPI) -> None:
     @app.post(API + "/offers")
     async def api_offer(request: Request) -> JSONResponse:
         s, key, data = await _signed(request)
-        f = await run_in_threadpool(make_offer, s, key, data)
+        f = await run_in_threadpool(make_offer, s, key, data, client_ip(request))
         return JSONResponse(offer_answer(f), status_code=201, headers=NO_STORE)
 
     @app.get(API + "/offers/{fid}")
@@ -1730,28 +2093,45 @@ def register(app: FastAPI) -> None:
         return JSONResponse(offer_answer(f), headers=NO_STORE)
 
 
-# ── the buyer's pages on belfry.<domain> (fixed text only) ────────────────────────────────────
+# ── the buyer's pages on belfry.<domain> (fixed text and the order's own details only) ──────
 PAGE_TEXT = {
     "thanks": "Thank you. Your order is in: the next steps come by e-mail.",
     "gone": "This link doesn't work (any more).",
     "ask": "Confirm that this address is yours. Then you can sign in with it from any device.",
+    "ask_order": "Confirm this order with your address. Your pass opens when you do.",
     "confirmed": "Done: your address is confirmed. You can sign in with it from any device.",
+    "order_confirmed": "Done: your pass is ready. Sign in with your address to see it.",
     "moved": "This address had an account here already: your pass is on that account now. "
     "Sign in with your address.",
     "already": "This address is confirmed already.",
+    "not_me": "Thank you for telling us. Nothing more happens with your address, and the "
+    "belfry's admins have been told.",
 }
 
 
-def _page(key: str, status: int = 200, form: str = "") -> Any:
+def _page(key: str, status: int = 200, extra: str = "") -> Any:
     from fastapi.responses import HTMLResponse
 
     from . import theme
 
-    body = f'<div class="card"><p>{PAGE_TEXT[key]}</p>{form}</div>'
+    body = f'<div class="card"><p>{html.escape(PAGE_TEXT[key])}</p>{extra}</div>'
     return HTMLResponse(
         theme.frame("Your pass", body),
         status_code=status,
         headers={**NO_STORE, "Referrer-Policy": "no-referrer"},
+    )
+
+
+def _order_summary(o: dict[str, Any]) -> str:
+    gross = o["total"]["gross"]
+    price = f"€{gross / 100:,.2f}" if gross else "free"
+    return (
+        "<dl>"
+        f"<dt>What</dt><dd>{html.escape(o['product_name'])}</dd>"
+        f"<dt>For</dt><dd>{html.escape(price)}</dd>"
+        f"<dt>Ordered</dt><dd>{html.escape(o['created'][:16].replace('T', ' '))} (UTC)</dd>"
+        f"<dt>Address</dt><dd>{html.escape(o['email'])}</dd>"
+        "</dl>"
     )
 
 
@@ -1760,28 +2140,55 @@ def register_pages(app: FastAPI) -> None:
     async def thanks(request: Request):
         return _page("thanks")
 
+    def _found(s: Services, token: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        c = store(s).confirm_of(token)
+        o = store(s).order(c["order"]) if c else None
+        if c is None or o is None or o["email"].strip().lower() != c["address"]:
+            return None
+        return c, o
+
     @app.get("/console/sales/confirm/{token}", include_in_schema=False)
     async def confirm_page(token: str, request: Request):
         s = request.app.state.services
-        if not store(s).confirm_order(token):
+        found = await run_in_threadpool(_found, s, token)
+        if not found:
             return _page("gone", 404)
-        # a button: mail scanners open links, only a person presses it
-        form = (
-            f'<form method="post" action="/sales/confirm/{token}">'
-            '<button class="btn" type="submit">Confirm my e-mail</button></form>'
+        c, o = found
+        if c["kind"] == "order" and o["state"] != "confirm":
+            return _page("gone", 404)
+        # buttons: mail scanners open links, only a person presses one
+        forms = (
+            _order_summary(o) + f'<form method="post" action="/sales/confirm/{html.escape(token)}">'
+            '<input type="hidden" name="answer" value="yes">'
+            '<button class="btn" type="submit">Yes, this was me</button></form>'
+            f'<form method="post" action="/sales/confirm/{html.escape(token)}">'
+            '<input type="hidden" name="answer" value="no">'
+            '<button class="btn ghost" type="submit">This wasn\'t me</button></form>'
         )
-        return _page("ask", form=form)
+        return _page("ask_order" if c["kind"] == "order" else "ask", extra=forms)
 
     @app.post("/console/sales/confirm/{token}", include_in_schema=False)
     async def confirm_post(token: str, request: Request):
         s = request.app.state.services
-        oid = store(s).confirm_order(token)
-        o = store(s).order(oid) if oid else None
-        if o is None or not o.get("partner_id"):
+        found = await run_in_threadpool(_found, s, token)
+        if not found:
             return _page("gone", 404)
-        partner = o.get("moved_from") or o["partner_id"]
-        out = await run_in_threadpool(confirm, s, int(partner))
-        return _page(out["state"] if not o.get("moved_from") else "already")
+        c, o = found
+        form = await request.form()
+        if form.get("answer") == "no":
+            await run_in_threadpool(not_me, s, o["id"], c["partner"])
+            return _page("not_me")
+        if c["kind"] == "order":
+            if o["state"] != "confirm":
+                return _page("gone", 404)
+            await run_in_threadpool(confirm_order, s, o["id"])
+            return _page("order_confirmed")
+        if o.get("moved_from") == c["partner"]:
+            return _page("already")
+        out = await run_in_threadpool(confirm, s, c["partner"], c["address"])
+        if out["state"] == "mismatch":
+            return _page("gone", 404)
+        return _page(out["state"])
 
 
 def _refresh(svc: Services, o: dict[str, Any]) -> dict[str, Any]:

@@ -28,7 +28,6 @@ def shop(world, tmp_path):
     rsvc = world[0]
     rsvc.settings.register_path = str(tmp_path / "register.sqlite")
     sales.CODE_CHECKS.reset()
-    sales.OFFERS.reset()
     sales.save_product(
         rsvc,
         {
@@ -216,7 +215,11 @@ def test_the_receipt_link_confirms_the_address(shop, keycast, monkeypatch):
         link = re.search(r"https://belfry\.belfry\.test(/sales/confirm/\S+)", text).group(1)
         h = {"Host": "belfry.belfry.test"}
         page = c.get(link, headers=h)
-        assert page.status_code == 200 and "Confirm my e-mail" in page.text
+        assert (
+            page.status_code == 200
+            and "Yes, this was me" in page.text
+            and "t me</button>" in page.text
+        )
         # opening the link changes nothing (mail scanners open links)
         o = sales.store(rsvc).order(oid)
         assert sales.is_unverified(rsvc, o["partner_id"])

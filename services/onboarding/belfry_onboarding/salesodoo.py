@@ -122,50 +122,68 @@ def _move(remote: Json2Client, move_id: int) -> dict[str, Any]:
     return move
 
 
-def ref_of(svc: Services, oid: str) -> str:
+def ref_of(svc: Services, oid: str, round_: int = 1) -> str:
+    """The invoice's ref: the order, and the round when an order was invoiced again after its
+    first invoice was credited (a payment after the order ended)."""
     from . import sales
 
-    return sales.settings(svc)["ref_prefix"] + oid
+    return sales.settings(svc)["ref_prefix"] + oid + (f"-{round_}" if round_ > 1 else "")
 
 
 # ── the steps ───────────────────────────────────────────────────────────────────────────────
-def _partner(remote: Json2Client, o: dict[str, Any], company: int | None) -> int:
+def _stored_partner(svc: Services, o: dict[str, Any]) -> int | None:
+    """The Odoo contact Belfry made for this buyer earlier: on the order (a retry), or on the
+    Belfry account (``belfry_odoo_partner``) of a signed-in buyer whose address is proven."""
+    if o.get("odoo_partner"):
+        return int(o["odoo_partner"])
+    pid = o.get("account")
+    if pid:
+        row = svc.odoo.read_one("res.partner", int(pid), ["email", "belfry_odoo_partner"]) or {}
+        if row.get("email") and row.get("belfry_odoo_partner"):
+            return int(row["belfry_odoo_partner"])
+    return None
+
+
+def _partner(svc: Services, remote: Json2Client, o: dict[str, Any], company: int | None) -> int:
+    """The invoice's contact in Odoo. Never found by an e-mail address (the buyer's isn't
+    proven): a person gets the contact Belfry stored for them, else a new one; an organisation
+    is found by its VAT number only when VIES said it is valid, else a new one."""
+    from . import sales
+
     b = o.get("billing") or {}
     org = b.get("kind") == "organisation"
     email = b.get("invoice_email") or o["email"]
-    if org and b.get("vat"):
+    found: int | None = None
+    if org and b.get("vat") and o.get("vat_valid"):
         rows = remote.search_read(
             "res.partner", [["vat", "=", b["vat"]], ["is_company", "=", True]], ["id"], limit=1
         )
-        if rows:
-            return rows[0]["id"]
+        found = rows[0]["id"] if rows else None
     elif not org:
-        rows = remote.search_read(
-            "res.partner",
-            [["email", "=ilike", email], ["is_company", "=", False]],
-            ["id", "email"],
-            limit=5,
-        )
-        for r in rows:
-            if (r.get("email") or "").strip().lower() == email.lower():
-                return r["id"]
-    vals: dict[str, Any] = {
-        "name": (b.get("name") if org else (b.get("name") or o["name"])) or o["name"],
-        "email": email,
-        "is_company": org,
-    }
-    for k in ("street", "zip", "city"):
-        if b.get(k):
-            vals[k] = b[k]
-    if org and b.get("vat"):
-        vals["vat"] = b["vat"]
-    if b.get("country"):
-        rows = remote.search_read("res.country", [["code", "=", b["country"]]], ["id"], limit=1)
-        if rows:
-            vals["country_id"] = rows[0]["id"]
-    if company:
-        vals["company_id"] = company
-    return remote.create("res.partner", vals)
+        found = _stored_partner(svc, o)
+    if found is None:
+        vals: dict[str, Any] = {
+            "name": (b.get("name") if org else (b.get("name") or o["name"])) or o["name"],
+            "email": email,
+            "is_company": org,
+        }
+        for k in ("street", "zip", "city"):
+            if b.get(k):
+                vals[k] = b[k]
+        if org and b.get("vat"):
+            vals["vat"] = b["vat"]
+        if b.get("country"):
+            rows = remote.search_read("res.country", [["code", "=", b["country"]]], ["id"], limit=1)
+            if rows:
+                vals["country_id"] = rows[0]["id"]
+        if company:
+            vals["company_id"] = company
+        found = remote.create("res.partner", vals)
+    if not org:
+        sales.store(svc).update(o["id"], odoo_partner=found)
+        if o.get("partner_id"):
+            svc.odoo.write("res.partner", [int(o["partner_id"])], {"belfry_odoo_partner": found})
+    return found
 
 
 @_guard
@@ -175,7 +193,7 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
 
     st = sales.settings(svc)
     remote = client(svc)
-    ref = ref_of(svc, o["id"])
+    ref = ref_of(svc, o["id"], int(o.get("invoice_round") or 1))
     rows = remote.search_read(
         "account.move",
         [["move_type", "=", "out_invoice"], ["ref", "=", ref], ["state", "!=", "cancel"]],
@@ -196,7 +214,7 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
             raise sales.Refused("no Odoo product or tax picked for this product")
         vals: dict[str, Any] = {
             "move_type": "out_invoice",
-            "partner_id": _partner(remote, o, st["company"]),
+            "partner_id": _partner(svc, remote, o, st["company"]),
             "ref": ref,
             "invoice_line_ids": [
                 [
@@ -242,41 +260,51 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
             total["gross"],
             o["total"]["gross"],
         )
-    url = None
-    try:
-        path = remote.call("account.move", "get_portal_url", ids=[move["id"]])
-        if isinstance(path, str) and path.startswith("/"):
-            url = st["odoo_url"].rstrip("/") + path
-    except (OdooError, httpx.HTTPError):
-        url = None
+    # no link into Odoo's portal (it would show the contact's other documents): the invoice's
+    # page is Belfry's /pay/<order>, and the PDF goes with Belfry's own mail
     invoice = {
         "move_id": move["id"],
         "number": move["name"],
         "communication": move.get("payment_reference") or move["name"],
-        "url": url,
     }
-    sales.store(svc).update(o["id"], invoice=invoice, total=total, flags=flags)
+    if o["state"] in ("paid", "active"):
+        sales.store(svc).update(o["id"], invoice=invoice)  # the amount was paid: keep it
+    else:
+        sales.store(svc).update(o["id"], invoice=invoice, total=total, flags=flags)
     log.info("sales: order %s invoiced as %s", o["id"], move["name"])
-    o = sales.store(svc).order(o["id"]) or o
-    if o["pay"] == "invoice":
-        from . import salesmail
-
-        if sales.store(svc).once("invoice:" + o["id"]):
-            salesmail.invoice(svc, o)
-        if st["send_invoice"]:
-            _send(remote, move["id"])
-    sales.after_invoice(svc, o)
+    sales.after_invoice(svc, sales.store(svc).order(o["id"]) or o)
 
 
-def _send(remote: Json2Client, move_id: int) -> None:
-    """Odoo mails its invoice (PDF) too, best effort."""
+def invoice_pdf(svc: Services, move_id: int) -> bytes | None:
+    """The invoice's PDF from Odoo (its ``invoice_pdf_report_id`` attachment; Odoo makes it
+    when the invoice is "sent" without e-mail), or None. Odoo never mails it itself here."""
+    import base64
+
     try:
-        wizard = remote.create("account.move.send.wizard", {}, context=_ctx(move_id))
-        remote.call(
-            "account.move.send.wizard", "action_send_and_print", ids=[wizard], context=_ctx(move_id)
-        )
-    except (OdooError, httpx.HTTPError) as exc:
-        log.warning("sales: Odoo did not send invoice %s: %s", move_id, type(exc).__name__)
+        remote = client(svc)
+        row = remote.read_one("account.move", move_id, ["invoice_pdf_report_id"]) or {}
+        att = row.get("invoice_pdf_report_id")
+        if not att:
+            wizard = remote.create(
+                "account.move.send.wizard", {"sending_methods": []}, context=_ctx(move_id)
+            )
+            remote.call(
+                "account.move.send.wizard",
+                "action_send_and_print",
+                ids=[wizard],
+                context=_ctx(move_id),
+            )
+            row = remote.read_one("account.move", move_id, ["invoice_pdf_report_id"]) or {}
+            att = row.get("invoice_pdf_report_id")
+        att_id = att[0] if isinstance(att, list | tuple) else att
+        if not att_id:
+            return None
+        data = (remote.read_one("ir.attachment", int(att_id), ["datas"]) or {}).get("datas")
+        pdf = base64.b64decode(data) if data else b""
+        return pdf if pdf.startswith(b"%PDF") else None
+    except (OdooError, httpx.HTTPError, OSError, ValueError, TypeError) as exc:
+        log.warning("sales: no PDF of invoice %s: %s", move_id, type(exc).__name__)
+        return None
 
 
 @_guard
@@ -292,7 +320,11 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
     if move_id and journal:
         remote = client(svc)
         move = _move(remote, int(move_id))
-        if move["payment_state"] not in PAID and move["state"] == "posted":
+        if move["state"] != "posted" or move["payment_state"] == "reversed":
+            # credited or cancelled under us: nothing to pay on; the admins book it by hand
+            if "payment_not_booked" not in flags:
+                flags.append("payment_not_booked")
+        elif move["payment_state"] not in PAID:
             memo = " ".join(x for x in (move["name"], paid.get("ref") or "") if x)
             date = (paid.get("at") or sales.iso(sales.now()))[:10]
             wizard = remote.create(
@@ -313,18 +345,21 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
 
 
 @_guard
-def credit_note(svc: Services, o: dict[str, Any]) -> None:
-    """An order that ended unpaid: its invoice is credited in full (a draft is cancelled)."""
+def credit_note(svc: Services, o: dict[str, Any]) -> bool:
+    """An order that ended unpaid: its invoice is credited in full (a draft is cancelled).
+    False when the invoice was paid after all: it stands (the tick sees it and reopens)."""
     move_id = (o.get("invoice") or {}).get("move_id")
     if not move_id:
-        return
+        return True
     remote = client(svc)
     move = _move(remote, int(move_id))
     if move["state"] == "draft":
         remote.call("account.move", "button_cancel", ids=[move["id"]])
-        return
-    if move["state"] != "posted" or move["payment_state"] in (*PAID, "reversed"):
-        return  # paid after all (the tick will see it), cancelled, or credited already
+        return True
+    if move["payment_state"] in PAID:
+        return False  # paid after all: not credited
+    if move["state"] != "posted" or move["payment_state"] == "reversed":
+        return True  # cancelled, or credited already
     rows = remote.search_read(
         "account.move",
         [["move_type", "=", "out_refund"], ["reversed_entry_id", "=", move["id"]]],
@@ -361,39 +396,64 @@ def credit_note(svc: Services, o: dict[str, Any]) -> None:
     if state == "draft":
         remote.call("account.move", "action_post", ids=[credit_id])
     log.info("sales: order %s: invoice %s credited", o["id"], move["name"])
+    return True
 
 
 def read_open_invoices(svc: Services) -> dict[str, int]:
-    """The tick: invoices of open orders paid in Odoo (a transfer reconciled) → active; the
-    invoice of an active order credited in full → its pass closes."""
+    """The tick: an invoice paid in Odoo (a transfer reconciled) → the order is paid (an ended
+    order whose invoice was never credited reopens); the CURRENT invoice of an active order
+    credited in full → its pass closes. Read in one call; when that fails, one by one, and an
+    invoice that can't be read is flagged without holding the others up."""
     from . import core, sales
 
     st = sales.store(svc)
-    watch = {
-        int(o["invoice"]["move_id"]): o
-        for o in st.orders(("invoiced", "active"))
-        if (o.get("invoice") or {}).get("move_id") and not o.get("closed")
-    }
+    watch: dict[int, dict[str, Any]] = {}
+    for o in st.orders(("invoiced", "active", "cancelled", "expired")):
+        inv = o.get("invoice") or {}
+        if not inv.get("move_id") or o.get("closed"):
+            continue
+        if o["state"] in ("cancelled", "expired") and (inv.get("credited") or o.get("reopened")):
+            continue
+        watch[int(inv["move_id"])] = o
     if not watch:
-        return {"paid": 0, "closed": 0}
+        return {"paid": 0, "closed": 0, "unread": 0}
     remote = client(svc)
-    rows = remote.call(
-        "account.move", "read", ids=sorted(watch), fields=["id", "payment_state", "state"]
-    )
+    fields = ["id", "payment_state", "state"]
+    try:
+        rows = remote.call("account.move", "read", ids=sorted(watch), fields=fields) or []
+    except (OdooError, httpx.HTTPError, OSError):
+        rows = []
+        for mid, o in watch.items():
+            try:
+                got = remote.call("account.move", "read", ids=[mid], fields=fields) or []
+            except (OdooError, httpx.HTTPError, OSError):
+                got = []
+            if not got and "odoo_read_failed" not in (o.get("flags") or []):
+                st.update(o["id"], flags=sales._flag(o, "odoo_read_failed"))
+            rows += got
     paid = closed = 0
-    for r in rows or []:
+    for r in rows:
         o = watch.get(r["id"])
         if o is None:
             continue
-        if o["state"] == "invoiced" and r.get("payment_state") in PAID:
-            sales.mark_paid(svc, o["id"], "transfer")
-            paid += 1
-        elif o["state"] == "active" and r.get("payment_state") == "reversed" and o.get("pass_id"):
-            core.revoke_pass(svc, int(o["pass_id"]), "credit note")
-            st.update(o["id"], closed=sales.iso(sales.now()))
-            log.info("sales: order %s: the invoice was credited, its pass closed", o["id"])
-            closed += 1
-    return {"paid": paid, "closed": closed}
+        try:
+            if o["state"] != "active" and r.get("payment_state") in PAID:
+                sales.mark_paid(svc, o["id"], "transfer")
+                paid += 1
+            elif (
+                o["state"] == "active" and r.get("payment_state") == "reversed" and o.get("pass_id")
+            ):
+                core.revoke_pass(svc, int(o["pass_id"]), "credit note")
+                st.update(o["id"], closed=sales.iso(sales.now()))
+                log.info("sales: order %s: the invoice was credited, its pass closed", o["id"])
+                closed += 1
+        except Exception:  # noqa: BLE001 — the others go on; this one comes again
+            log.exception("sales: order %s: its invoice's news not handled", o["id"])
+    return {"paid": paid, "closed": closed, "unread": len(watch) - len(rows)}
+
+
+def in_eu(vat: str) -> bool:
+    return vat[:2] in EU
 
 
 # ── the console's pick-lists ────────────────────────────────────────────────────────────────

@@ -215,7 +215,8 @@ def _verify_unproven(
         )
     if state != "ok":
         raise ConnectError(410, "That code expired. Send a new one.")
-    sales.confirm(svc, member["partner"])
+    # the code went to this address: it proves this address, for this contact only
+    sales.confirm(svc, member["partner"], member["email"])
     found = apps.member_by_email(svc, member["email"])
     if found is None:
         raise ConnectError(409, "This address does not belong to a member's account.")
