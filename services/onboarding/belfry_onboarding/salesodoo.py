@@ -268,11 +268,33 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
         "communication": move.get("payment_reference") or move["name"],
     }
     if o["state"] in ("paid", "active"):
-        sales.store(svc).update(o["id"], invoice=invoice)  # the amount was paid: keep it
+        # the amount was paid: keep it; say so when this invoice (a second round) differs
+        if total["gross"] != o["total"]["gross"]:
+            o = sales.store(svc).order(o["id"]) or o
+            # what was paid stands; never asked again of the buyer
+            sales.store(svc).update(o["id"], flags=sales._flag(o, "odoo_total"))
+        sales.store(svc).update(o["id"], invoice=invoice)
     else:
         sales.store(svc).update(o["id"], invoice=invoice, total=total, flags=flags)
     log.info("sales: order %s invoiced as %s", o["id"], move["name"])
     sales.after_invoice(svc, sales.store(svc).order(o["id"]) or o)
+
+
+@_guard
+def invoice_standing(svc: Services, move_id: int) -> bool:
+    """Whether the invoice can still take a payment: posted, not reversed, no credit note made
+    against it. Raises when Odoo doesn't answer (the caller tries again later)."""
+    remote = client(svc)
+    move = remote.read_one("account.move", move_id, ["state", "payment_state"])
+    if not move or move.get("state") != "posted" or move.get("payment_state") == "reversed":
+        return False
+    refunds = remote.search_read(
+        "account.move",
+        [["move_type", "=", "out_refund"], ["reversed_entry_id", "=", move_id]],
+        ["id", "state"],
+        limit=5,
+    )
+    return not any(r.get("state") != "cancel" for r in refunds)
 
 
 def invoice_pdf(svc: Services, move_id: int) -> bytes | None:

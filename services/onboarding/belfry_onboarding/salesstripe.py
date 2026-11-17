@@ -52,34 +52,42 @@ def _post(svc: Services, path: str, data: dict[str, Any] | None = None, idem: st
 
 
 def make_session(svc: Services, o: dict[str, Any]) -> None:
-    """A Checkout session for the order's invoice. Stripe refusing leaves the order to be paid
-    by transfer (flag card_failed); Stripe down leaves the step for the tick."""
+    """A Checkout session for the order: from its invoice when it has one (the payment goes on
+    that invoice), else from Belfry's own total, with the order id as the reference (the
+    invoice is made once paid). Stripe refusing leaves the transfer (flag card_failed); Stripe
+    down leaves the step for the tick."""
     from . import sales
 
     st = sales.store(svc)
     inv = o.get("invoice") or {}
-    if not inv.get("number") or not sales.stripe_ready(svc):
+    if not sales.stripe_ready(svc):
         st.update(o["id"], step="wait")
         if inv.get("number"):
             sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
         return
-    attempt = int((o.get("stripe") or {}).get("attempt") or 0) + 1
+    old = o.get("stripe") or {}
+    if old.get("id") and not old.get("expired"):
+        expire_session(svc, o)  # a new amount or reference: the old session can't be paid
+    attempt = int(old.get("attempt") or 0) + 1
     back = o.get("return_url") or sales.thanks_url(svc)
+    ref = inv.get("number") or o["id"]
+    name = f"{o['product_name']} ({inv['number']})" if inv.get("number") else o["product_name"]
     data = {
         "mode": "payment",
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": sales.settings(svc)["currency"].lower(),
         "line_items[0][price_data][unit_amount]": str(o["total"]["gross"]),
-        "line_items[0][price_data][product_data][name]": f"{o['product_name']} ({inv['number']})",
-        "client_reference_id": inv["number"],
+        "line_items[0][price_data][product_data][name]": name,
+        "client_reference_id": ref,
         "customer_email": o["email"],
         "metadata[belfry_order]": o["id"],
-        "metadata[invoice]": inv["number"],
         "payment_intent_data[metadata][belfry_order]": o["id"],
-        "payment_intent_data[metadata][invoice]": inv["number"],
         "success_url": sales._with_order(back, o["id"]),
         "cancel_url": sales._with_order(back, o["id"]),
     }
+    if inv.get("number"):
+        data["metadata[invoice]"] = inv["number"]
+        data["payment_intent_data[metadata][invoice]"] = inv["number"]
     try:
         got = _post(svc, "/checkout/sessions", data, f"belfry-{o['id']}-{attempt}")
     except sales.Refused as exc:
@@ -88,7 +96,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
             flags.append("card_failed")
         log.warning("sales: order %s: no card session: %s", o["id"], exc)
         st.update(o["id"], step="wait", flags=flags, error=str(exc)[:200])
-        sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
+        if inv.get("number"):
+            sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
         return
     st.update(
         o["id"],
@@ -102,7 +111,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         error=None,
     )
     log.info("sales: order %s: card session made", o["id"])
-    sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
+    if inv.get("number"):
+        sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
 
 
 def expire_session(svc: Services, o: dict[str, Any]) -> None:
@@ -134,7 +144,7 @@ def handle(svc: Services, event: dict[str, Any]) -> str:
     ok = (
         int(obj.get("amount_total") or -1) == int(o["total"]["gross"])
         and str(obj.get("currency") or "").lower() == sales.settings(svc)["currency"].lower()
-        and (not inv or obj.get("client_reference_id") == inv)
+        and obj.get("client_reference_id") in (oid, inv)
     )
     if not ok:
         flags = list(o.get("flags") or [])

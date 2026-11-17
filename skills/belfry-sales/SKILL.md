@@ -37,6 +37,9 @@ an agent building the website's checkout, or helping an admin.
    `pay_url`, `hold_until`. Send the buyer to `card_url` to pay by card; or show `pay_url` /
    the communication for a transfer. `return_url` must be on the community's own domain;
    Belfry adds `?order=<id>`.
+   A card order has no invoice until it is paid (`invoice: null`); to switch, `POST
+   /checkout/<order>/pay {"pay": "invoice" | "card"}` with the same key (card → invoice makes
+   the invoice then). Offer forms: in kind (`POST /offers`) defaults to 50%.
    State `confirm` (a free product without a code): tell the buyer to open the link mailed to
    their address; the pass opens then (no `bunker_url`: they sign in with an e-mail code).
    `email_mismatch`: this browser's account waits for another address to be confirmed.

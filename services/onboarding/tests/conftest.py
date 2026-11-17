@@ -26,8 +26,12 @@ STRIPE_SECRET = "whsec_test_secret"
 
 
 @pytest.fixture
-def settings() -> Settings:
+def settings(tmp_path) -> Settings:
     return Settings(
+        # every test its own register folder: events.sqlite and sales.sqlite live next to
+        # REGISTER_PATH, and the default (/data/register) is shared by every test and every run
+        # on the machine, two suites at once included
+        REGISTER_PATH=str(tmp_path / "register.sqlite"),
         ODOO_URL="http://odoo.test",
         ODOO_API_KEY="odoo-key",
         AUTHENTIK_URL=AUTHENTIK_URL,

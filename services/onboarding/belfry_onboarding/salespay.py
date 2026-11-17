@@ -214,6 +214,13 @@ def page_html(
 <dl>{rows}</dl></div><p class="note">{E(note)}</p></div>{SCRIPT}"""
 
 
+def page_token(svc: Services, oid: str) -> str:
+    """The order page's token for its own form (the page's address is the order's secret)."""
+    from . import sales
+
+    return sales.hmac_sign(svc, "pay-page:" + oid)
+
+
 def order_html(svc: Services, o: dict[str, Any]) -> str:
     """An order's own page (the API's ``invoice.url``): its invoice's number and amount; while
     it is open, until when the place is held and how to pay (bank transfer when bank details
@@ -233,6 +240,19 @@ def order_html(svc: Services, o: dict[str, Any]) -> str:
     if o["state"] in ("cancelled", "expired"):
         return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(TEXT["ended"])}</p></div>'
     if not inv.get("number"):
+        if o.get("pay") == "card" and sales.bank_ready(svc):
+            # a card order has no invoice (it is made once paid): ask for one to pay by transfer
+            card = (o.get("stripe") or {}).get("url")
+            card_btn = f'<p><a class="btn" href="{E(card)}">Pay by card</a></p>' if card else ""
+            money = f"€{o['total']['gross'] / 100:,.2f}"
+            return (
+                f'{STYLE}<div class="pay"><h1>Your order</h1><p class="lead">{E(o["product_name"])}'
+                f" · {E(money)}</p>{card_btn}"
+                f'<form method="post" action="/pay/{E(o["id"])}/invoice">'
+                f'<input type="hidden" name="t" value="{E(page_token(svc, o["id"]))}">'
+                '<button class="btn ghost" type="submit">Pay by transfer instead: get the '
+                "invoice</button></form></div>"
+            )
         return f'{STYLE}<div class="pay"><h1>Your order</h1><p>{E(TEXT["waiting"])}</p></div>'
     held = f"Your place is held until {o['hold_until'][:10]}."
     card = (o.get("stripe") or {}).get("url")
@@ -310,6 +330,26 @@ def register(app: FastAPI) -> None:
         if o is None or not o["total"]["gross"]:
             return _frame("<p>Not found.</p>", 404)
         return _frame(order_html(s, o))
+
+    @app.post("/console/pay/{oid}/invoice", include_in_schema=False)
+    async def pay_by_transfer(oid: str, request: Request):
+        """A card order's buyer asks for the invoice to pay by transfer instead."""
+        import hmac
+
+        from fastapi.responses import RedirectResponse
+
+        s = request.app.state.services
+        form = await request.form()
+        given = str(form.get("t") or "").encode("utf-8", "replace")
+        if not sales.own(s) or not sales.ORDER_RE.match(oid):
+            return _frame("<p>Not found.</p>", 404)
+        if not hmac.compare_digest(given, page_token(s, oid).encode()):
+            return _frame("<p>Not found.</p>", 404)
+        try:
+            await run_in_threadpool(sales.switch_pay, s, oid, "invoice")
+        except ApiError:
+            pass  # the page shows the order as it is
+        return RedirectResponse(f"/pay/{oid}", status_code=303)
 
     @app.post("/api/pay-links")
     async def api_pay_link(request: Request) -> JSONResponse:

@@ -42,6 +42,13 @@ def confirm_url(svc: Services, oid: str, partner_id: int, address: str, kind: st
     return f"{console.console_url(svc.settings)}/sales/confirm/{token}"
 
 
+def not_me_line(svc: Services, o: dict[str, Any], address: str) -> str:
+    """For every mail about an unpaid order: a link that cancels that order, for the owner of
+    an address someone else typed."""
+    url = confirm_url(svc, o["id"], 0, address, "cancel")
+    return f"If you didn't order this, cancel it here: {url}"
+
+
 def queue(svc: Services, kind: str, ref: str, address: str) -> None:
     """Queue a mail (once per kind and reference) and try to send it now."""
     from . import sales
@@ -65,13 +72,24 @@ def deliver_due(svc: Services) -> int:
 
 
 def _deliver(svc: Services, m: dict[str, Any]) -> bool:
+    """Send one mail, claimed first (the tick and a request never both send it). Kept due and
+    tried again: over the address's daily limit (hourly), with no mail provider (hourly, until
+    one is set), after a failure (each tick, then hourly after MAIL_TRIES); given up after
+    MAIL_DAYS."""
     from . import sales
 
     st = sales.store(svc)
+    if not st.claim_mail(m["id"]):
+        return False
+    now = time.time()
+    old = now - m["created"] > sales.MAIL_DAYS * 86400
+    hourly = int(now) + 3600
     if st.sent_to(m["address"]) >= sales.MAILS_PER_ADDRESS_DAY:
-        if time.time() - m["created"] > sales.MAIL_DAYS * 86400:
+        if old:
             st.mail_done(m["id"], "limited", tried=False)
             log.warning("sales: a %s mail gave up: too many mails to its address", m["kind"])
+        else:
+            st.mail_done(m["id"], "due", tried=False, next_at=hourly)
         return False
     try:
         built = BUILD[m["kind"]](svc, m["ref"], m["address"])
@@ -82,6 +100,14 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
         st.mail_done(m["id"], "dropped", tried=False)
         return False
     mailer = _mailer(svc)
+    if built and not getattr(mailer.s, "smtp_host", ""):
+        # no mail provider yet: kept, tried again hourly until one is set
+        subject, lines, button, files = built
+        mailer.send(m["address"], subject, lines, button=button, attachments=files)
+        st.mail_done(
+            m["id"], "no_provider" if old else "due", tried=False, next_at=None if old else hourly
+        )
+        return False
     ok = False
     if built:
         subject, lines, button, files = built
@@ -89,10 +115,13 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
     if ok:
         st.mail_done(m["id"], "sent")
         return True
-    if built and not getattr(mailer.s, "smtp_host", ""):
-        st.mail_done(m["id"], "no_provider")  # nothing can leave; not retried
-        return False
-    st.mail_done(m["id"], "failed" if m["tries"] + 1 >= sales.MAIL_TRIES else "due")
+    if old:
+        st.mail_done(m["id"], "failed")
+        log.warning("sales: a %s mail gave up after %s days", m["kind"], sales.MAIL_DAYS)
+    elif m["tries"] + 1 >= sales.MAIL_TRIES:
+        st.mail_done(m["id"], "due", next_at=hourly)
+    else:
+        st.mail_done(m["id"], "due")
     return False
 
 
@@ -118,6 +147,7 @@ def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
         )
     if o.get("valid_from") or o.get("valid_until"):
         lines.append(f"Valid {o.get('valid_from') or 'now'} to {o.get('valid_until') or '—'}.")
+    files = _pdf(svc, o)
     pid = o.get("partner_id")
     if pid and sales.is_unverified(svc, pid):
         row = svc.odoo.read_one("res.partner", pid, ["belfry_pending_email"]) or {}
@@ -132,10 +162,27 @@ def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
                 f"Your {o['product_name']}: confirm your e-mail",
                 lines,
                 (url, "Confirm your e-mail"),
-                [],
+                files,
             )
     lines.append("Sign in with your address to see your pass in the apps.")
-    return f"Your {o['product_name']}", lines, None, []
+    return f"Your {o['product_name']}", lines, None, files
+
+
+def _pdf(svc: Services, o: dict[str, Any]) -> list[tuple[str, bytes, str]]:
+    """The order's invoice PDF from Odoo, when it has an invoice (else nothing; flagged when it
+    has one but Odoo gave no PDF)."""
+    from . import sales, salesodoo
+
+    inv = o.get("invoice") or {}
+    if not inv.get("move_id"):
+        return []
+    pdf = salesodoo.invoice_pdf(svc, int(inv["move_id"]))
+    if pdf:
+        return [(f"{inv['number'].replace('/', '-')}.pdf", pdf, "application/pdf")]
+    st = sales.store(svc)
+    o = st.order(o["id"]) or o
+    st.update(o["id"], flags=sales._flag(o, "invoice_pdf_missing"))
+    return []
 
 
 def _order_confirm(svc: Services, oid: str, address: str) -> Mail | None:
@@ -152,6 +199,7 @@ def _order_confirm(svc: Services, oid: str, address: str) -> Mail | None:
             "Confirm it to get your pass.",
             f"The link works until {o['hold_until'][:16].replace('T', ' ')} (UTC). If it "
             "wasn't you, the same link lets you say so, or ignore this mail.",
+            not_me_line(svc, o, address),
         ],
         (url, "Confirm"),
         [],
@@ -165,7 +213,7 @@ def _held(o: dict[str, Any]) -> str:
 def _invoice(svc: Services, ref: str, address: str) -> Mail | None:
     """The invoice: its number, amount, how to pay (the bank page when bank details are set,
     else the card link), the PDF from Odoo when it could be fetched."""
-    from . import sales, salesodoo
+    from . import sales
 
     o = _order(svc, ref)
     inv = (o or {}).get("invoice") or {}
@@ -191,15 +239,9 @@ def _invoice(svc: Services, ref: str, address: str) -> Mail | None:
             button = (o["stripe"]["url"], "Pay by card")
         else:
             lines.append(_held(o))
-    files = []
-    pdf = salesodoo.invoice_pdf(svc, int(inv["move_id"]))
-    if pdf:
-        files.append((f"{inv['number'].replace('/', '-')}.pdf", pdf, "application/pdf"))
-    else:
-        st = sales.store(svc)
-        o = st.order(o["id"]) or o
-        st.update(o["id"], flags=sales._flag(o, "invoice_pdf_missing"))
-    return f"Invoice {inv['number']}", lines, button, files
+        if address == o["email"].strip().lower():
+            lines.append(not_me_line(svc, o, address))
+    return f"Invoice {inv['number']}", lines, button, _pdf(svc, o)
 
 
 def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
@@ -223,6 +265,7 @@ def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
             f"{_money(o['total']['gross'])}).",
             f"{_held(o)} After that the order ends. A transfer made before then still counts: "
             "it can take a few days to show.",
+            *([not_me_line(svc, o, address)] if address == o["email"].strip().lower() else []),
         ],
         button,
         [],

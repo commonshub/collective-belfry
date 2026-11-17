@@ -51,7 +51,7 @@ STYLE = """<style>
 
 FLAGS = {
     "vies_down": "VAT not checked (VIES down)",
-    "odoo_total": "Odoo's total differs",
+    "odoo_total": "Odoo's invoice total differs from Belfry's (or from what was paid)",
     "card_failed": "no card session",
     "stripe_mismatch": "a Stripe payment that doesn't match",
     "payment_not_booked": "payment not booked in Odoo",
@@ -60,7 +60,8 @@ FLAGS = {
     "not_me": "the address's owner said it wasn't them",
     "invoice_pdf_missing": "invoice mailed without its PDF",
     "odoo_read_failed": "Odoo could not read its invoice",
-    "stuck": "a step gave up: look at it",
+    "stuck": "a step gave up: look at it, then Try again",
+    "slow": "its pass is slow to open: still trying every hour",
     "pass_closed": "its pass was closed",
 }
 
@@ -82,6 +83,8 @@ MSG = {
     "cancelled": "Order cancelled.",
     "paid": "Order marked paid.",
     "reopened": "Order reopened and marked paid.",
+    "retried": "Tried again: the order shows how it went.",
+    "odoo_wait": "Odoo did not answer, so nothing changed. Try again in a moment.",
     "reason": "Give a reason.",
     "not_open": "This order is not open any more.",
     "expired": "The form expired; try again.",
@@ -336,6 +339,9 @@ The restricted key needs Checkout Sessions: write.</p>
 <label>Reason <input type="text" name="reason" required></label>
 <p class="hint">The pass opens; a new invoice is made if the first was credited.</p>
 <div class="actions"><button class="btn" type="submit" name="do" value="reopen">Reopen and mark paid</button></div></form></details>"""
+        if o.get("flags") or o.get("step") == "stuck" or o.get("next_try_at"):
+            act += f"""<form method="post" action="{PATH}/order"><input type="hidden" name="csrf" value="{csrf}">
+<input type="hidden" name="id" value="{E(o["id"])}"><button class="btn ghost" type="submit" name="do" value="retry">Try again</button></form>"""
         rrow += (
             f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span></td>"
             f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
@@ -572,11 +578,22 @@ def register(app: FastAPI) -> None:
         oid = str(form.get("id") or "")
         reason = " ".join(str(form.get("reason") or "").split())[:200]
         o = sales.store(s).order(oid) if sales.ORDER_RE.match(oid) else None
+        if o is not None and form.get("do") == "retry":
+            try:
+                await run_in_threadpool(sales.try_again, s, oid)
+            except Exception:  # noqa: BLE001 — the order says what is still wrong
+                log.exception("sales: order %s: try again failed", oid)
+            log.info("sales: order %s tried again by an admin", oid)
+            return back(request, msg="retried")
         if not reason:
             return back(request, err="reason")
         by = me["name"] or "an admin"
         if o is not None and form.get("do") == "reopen" and o["state"] in ("cancelled", "expired"):
-            await run_in_threadpool(sales.reopen_paid, s, oid, reason, by)
+            try:
+                await run_in_threadpool(sales.reopen_paid, s, oid, reason, by)
+            except Exception:  # noqa: BLE001 — Odoo didn't say whether the invoice stands
+                log.warning("sales: order %s: reopening waits for Odoo", oid)
+                return back(request, err="odoo_wait")
             log.info("sales: order %s reopened and marked paid by hand", oid)
             return back(request, msg="reopened")
         if o is None or o["state"] not in ("pending", "invoiced"):

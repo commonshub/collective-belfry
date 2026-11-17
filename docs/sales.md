@@ -147,10 +147,26 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
 - Total 0 with a code (100%), or a free product bought by a signed-in member with a proven
   address: state `active` at once, no invoice, no payment. A free product without a code from
   anyone else: state `confirm` until the mailed link is confirmed (see §3).
-- `pay: card` → `card_url` (a Stripe Checkout session made from the posted invoice: invoice
-  number in `client_reference_id` and metadata). `pay: invoice` → the invoice is mailed and
-  `pay_url` shows the transfer details. Both are returned when both are set up, so the buyer can
-  change their mind.
+- **An invoice is made only once it is needed** (Xavier, 2026-11-17: "otherwise we will create
+  too many invoices that will never be paid"):
+  - `pay: card` → no invoice at checkout: `invoice` is `null` until paid. `card_url` is a
+    Stripe Checkout session made from the order (Belfry's own total in cents, the order id in
+    `client_reference_id` and the metadata, the product's name as the line). Once paid: the
+    pass opens, then the invoice is made and posted in Odoo, the payment registered on it, and
+    the receipt carries its PDF. When Odoo's total differs from what was paid, the order is
+    flagged `odoo_total`; the buyer is never asked again. An unpaid card order that ends has no
+    invoice, so no credit note.
+  - `pay: invoice` → the invoice is made at checkout and mailed with its PDF and the link to
+    `/pay/<order>` (transfer details).
+  - `pay_url` (`/pay/<order>`) is returned whenever bank details are set. For a card order
+    without an invoice it shows "Pay by transfer instead: get the invoice", which makes the
+    invoice then.
+- **Changing how to pay** an open order: `POST /checkout/<order>/pay {"pay": "invoice" |
+  "card"}` (NIP-98, the order's key) → the order's answer. card → invoice makes the invoice
+  then (a new card session follows for the invoice's amount). invoice → card makes a card
+  session for the existing invoice's amount; the payment goes on that invoice. Asking
+  `POST /checkout` again for the same open order with another `pay` does the same. Errors:
+  409 `not_open`, `no_transfer` (no bank details), `no_card` (no Stripe key).
 - An organisation's VAT number is checked on VIES before the invoice is made (`invalid_vat`;
   VIES down → accepted and flagged on the order for the admins).
 - The invoice's contact in Odoo is never found by an e-mail address (the buyer's isn't
@@ -160,26 +176,33 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
   (429), `accounting` (Odoo refused).
-- Limits (`too_many`): 5 open orders per key; 3 open orders per address and 20 orders an hour
-  per address; 10 checkouts an hour per IP; for a product with limited places, 2 unpaid
-  orders per IP; 10 code checks an hour per key. At most 5 sales mails a day go to one
-  address (the others wait). The IP is kept only as a keyed hash.
+- Limits (`too_many`): 5 open orders per key; 5 unpaid orders per address (the refusal tells
+  the address's owner to cancel the ones that aren't theirs with the link in the mails sent to
+  it) and 20 orders an hour per address; 30 orders made an hour per IP, and 60 refused
+  checkouts an hour per IP (wrong code, invalid VAT…) counted apart; for a product with
+  limited places, 10 unpaid orders per IP; 10 code checks an hour per key. An IPv6 address
+  counts as its /64; an IP is kept only as a keyed hash. At most 5 sales mails a day go to one
+  address (the others wait).
+- Every mail about an unpaid order (the invoice, the reminder, a free order's confirmation)
+  carries "If you didn't order this, cancel it here": a page that shows the order and cancels
+  it with one button (flag `not_me`). Paid orders can't be cancelled that way.
 - Asking again with the same key, product and e-mail while an order is open (or became active
   in the last 24 hours: a retried request) returns that order, with 200.
-- `unknown_code` is 404, `code_used` and the other refusals 409, `accounting` 502 (the order is
-  cancelled and its code's use given back). Odoo not answering is no error: the order is kept
-  `pending` and the tick makes the invoice later.
+- `unknown_code` is 404, `code_used` and the other refusals 409, `accounting` 502 (a
+  `pay: invoice` order whose invoice Odoo refused: cancelled, its code's use given back). Odoo
+  not answering is no error: the order is kept `pending` and the tick makes the invoice later.
 
 `GET /checkout/<order>` — NIP-98 by the key that made it → the same shape with the current
 state (`confirm` →) `pending` → `invoiced` → `paid` → `active`, or `cancelled` / `expired`
 (an ended order that still gets paid comes back to `active`) and, once active,
-`bunker_url` when the key isn't signed in yet. Asking also retries a step that failed and makes
-a new card session when Stripe's (24 hours) expired. Another key gets 404.
+`bunker_url` when the key isn't signed in yet. Asking may also retry a waiting step (at most
+once every 10 seconds per order; a buyer's polling never counts as a failure) and makes a new
+card session when Stripe's (24 hours) expired. Another key gets 404.
 
 `GET /billing` — NIP-98, a verified account only → the billing details saved at its last order.
 
 `POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent": 50–100}`
-→ 201 `{"offer": "f_…", "state": "open"}`. 3 a day per key and per IP, 3 open per key. The belfry's admins see it in the console and decide
+(the website's form offers 50% by default) → 201 `{"offer": "f_…", "state": "open"}`. 3 a day per key and per IP, 3 open per key. The belfry's admins see it in the console and decide
 (percent may differ from the asked one, or no); the answer is mailed with a personal code.
 `GET /offers/<id>` by the same key → its state. Admins: `POST /offers/<id>/decide
 {"percent": 0|50–100, "note"}`.
@@ -190,30 +213,36 @@ made here (no sponsor checkout in this version).
 
 ## 5. Paying
 
-- **Hold**: an unpaid order holds its place for **7 days** (`hold_until`), then expires: the
-  invoice gets a credit note, the code's use is given back. One reminder is mailed 2 days before;
+- **Hold**: an unpaid order holds its place for **7 days** (`hold_until`), then expires: its
+  invoice, if it has one, gets a credit note; the code's use is given back. One reminder is mailed 2 days before;
   it and `/pay/<order>` say until when the place is held.
 - **Paid after it ended** (a card payment that comes late, a transfer reconciled after day 7):
   the order **reopens**: the pass opens, a new invoice is made when the first was credited (the
-  old number and its credit note stay in the order's history), the payment is registered on
-  the new one, and the order is flagged `paid_late` (and `oversold` when no place was left:
+  old number and its credit note stay in the order's history; whether it was credited is read
+  from Odoo, never only from Belfry's own record) or when it never had one (a card order),
+  the payment is registered on it, and the order is flagged `paid_late` (and `oversold` when no place was left:
   they paid, they get the pass, the admins see it). An admin can do the same by hand: "Reopen
   and mark paid" (reason required) on an expired or cancelled order. Only the order's current
   invoice counts for closing a pass on a credit note.
 - **Card**: `checkout.session.completed` (and `checkout.session.async_payment_succeeded`) at
   `https://belfry.<domain>/hooks/stripe` (signature checked with the console's webhook secret,
-  deduplicated on the event id; amount, currency and invoice number must match the order, else
-  it is flagged and nothing opens) → pass active → the payment registered on the Odoo invoice
-  in the card journal (after the pass: Odoo being down never keeps a paid pass shut; the tick
-  retries the booking). Stripe refusing to make a session leaves the transfer (flag on the
+  deduplicated on the event id; amount, currency and reference (the order id, or the invoice's
+  number when the order had one) must match the order, else it is flagged and nothing opens) →
+  pass active → the invoice made (when the order had none) and the payment registered on it in
+  the card journal (after the pass: Odoo being down never keeps a paid pass shut; the tick
+  retries the books, and the receipt goes without the PDF if the invoice is an hour late). Stripe refusing to make a session leaves the transfer (flag on the
   order). A payment that arrives after the order ended reopens it (above).
 - **Transfer**: Belfry reads the open orders' invoices from Odoo every 15 minutes (in one call;
   when that fails, one by one, flagging the one that can't be read); when Odoo's reconciliation
   says paid → pass active. An admin can also mark an order paid by hand (reason required); an
   order paid before it had an invoice still gets one, with the payment on it.
-- A step that fails (Odoo or Stripe down) is retried every 15 minutes, 30 times at most, then
-  the order is flagged `stuck` for the admins. Mails are marked sent only once the mail
-  provider took them, and retried (8 times at most).
+- A step that fails (Odoo, Stripe or the signer down) is retried every 15 minutes; only the
+  tick counts the failures, and a success resets the count. After 30: a paid order never gives
+  up opening its pass (it goes on hourly, flagged `slow`); any other step stops, flagged
+  `stuck`. The console's "Try again" (on every flagged order) starts it over. Mails are marked
+  sent only once the mail provider took them (claimed first, so the tick and a request never
+  both send one); retried each tick, hourly after 8 failures, given up after 3 days; with no
+  mail provider yet, kept and tried hourly until one is set (3 days at most).
 - **Active** = `core.activate_free_pass`-style activation with the product's tier, role and
   dates, the receipt mail (with the confirm-your-e-mail link when unverified) and the usual
   welcome.
@@ -231,7 +260,8 @@ message field, exactly as given).
 
 - `/pay/<order>`: an order's own page (the API's `invoice.url`): its invoice number, amount and
   until when the place is held; the bank details when they are set, the card link when there is
-  one. It works without bank details too.
+  one. It works without bank details too. A card order without an invoice shows "Pay by
+  transfer instead: get the invoice" (a POST form carrying the page's token).
 - `/pay?amount=12.50&communication=…`: a free-standing request. `amount` must be a number;
   `communication` at most 140 characters of letters, digits, spaces and `+ / - . , : ( )`;
   anything else → the page without them. A `description` is shown **only** when the link is
