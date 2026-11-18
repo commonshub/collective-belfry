@@ -165,7 +165,7 @@ const VIS: [Visibility, string, string][] = [
 
 /** Make an event, or edit one (EDIT): title, Markdown description, cover, when (all day or
  *  times in a time zone), where, online link, who sees it, its custom URL. */
-export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' }: { edit?: CalEvent; onClose: () => void; onSaved?: (link: string) => void; /** a new event's: #events public, #bookings members */ visibility?: Visibility }) {
+export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members', postedIn }: { edit?: CalEvent; onClose: () => void; onSaved?: (link: string) => void; /** made from a channel: its card goes there */ postedIn?: string; /** a new event's: #events public, #bookings members */ visibility?: Visibility }) {
   const start = new Date()
   start.setHours(start.getHours() + 1, 0, 0, 0)
   const end = new Date(+start + 3600_000)
@@ -274,15 +274,15 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
         {slugState.msg && <p className={'hint' + (slugState.free === false ? ' error' : '')} role="status" style={{ marginTop: -8 }}>{slugState.checking ? 'Checking…' : slugState.msg}</p>}
         {error && <p className="error" role="alert">{error}</p>}
         <button className="btn" disabled={!ok}>{edit ? 'Save' : 'Create the event'}</button>
-        <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone who RSVPed sees the change.' : 'It gets its own chat, photos and todos. Send its URL in a channel to show it there.'}</p>
+        <p className="hint" style={{ marginTop: 10 }}>{edit ? 'Everyone who RSVPed sees the change.' : postedIn ? `It gets its own chat, photos and todos, and its card is posted in ${postedIn}.` : 'It gets its own chat, photos and todos. Send its URL in a channel to show it there.'}</p>
       </Form>
     </Sheet>
   )
 }
 
 /** Kept for the composer's ＋ (Chat.tsx): a new event; its URL is put in the composer after. */
-export function NewEventSheet({ onClose, onCreated, visibility }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void; visibility?: Visibility }) {
-  return <EventFormSheet onClose={onClose} visibility={visibility} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
+export function NewEventSheet({ channel, onClose, onCreated, visibility }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void; visibility?: Visibility }) {
+  return <EventFormSheet onClose={onClose} visibility={visibility} postedIn={onCreated && channel ? (group(channel)?.isPod ? '' : '#') + (group(channel)?.name ?? channel) : undefined} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
 }
 
 export { CalendarIcon }

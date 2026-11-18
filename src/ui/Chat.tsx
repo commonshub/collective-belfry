@@ -859,7 +859,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
       {proposeFrom && <NewProposalSheet parent="proposals" onClose={() => setProposeFrom(null)}
         from={{ title: (proposeFrom.ev.tags.find((t) => t[0] === 'subject')?.[1] ?? plainRefs(proposeFrom.text, '').split('\n')[0].replace(/\*\*/g, '')).slice(0, 140), text: proposeFrom.text.replace(/^\*\*[^\n]*\*\*\n+/, ''), by: displayName(proposeFrom.ev.pubkey), link: `https://${BELFRY.domain}/${page?.slug ?? id}/${proposeFrom.ev.id}` }}
         onMade={(_pid, title) => void postThreadReply(id, proposeFrom.ev, `Became a proposal: “${title}”. Members discuss it and vote on it in #proposals.`, [])} />}
-      {newEvent && <NewEventSheet channel={id} visibility={only === 'event' ? (isPublic ? 'public' : 'members') : undefined} onClose={() => setNewEvent(false)} onCreated={(url) => { if (only === 'event') void postMessage(id, url, [], undefined, false, eventTags(url)); go('events/' + encodeURIComponent(url.split('/events/')[1] ?? '')) }} />}
+      {newEvent && <NewEventSheet channel={id} visibility={only === 'event' ? (isPublic ? 'public' : 'members') : undefined} onClose={() => setNewEvent(false)} onCreated={(url) => { void postMessage(id, url, [], undefined, false, eventTags(url)); go('events/' + encodeURIComponent(url.split('/events/')[1] ?? '')) }} />}
     </>
   )
 }
