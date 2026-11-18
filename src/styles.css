@@ -1844,3 +1844,8 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 /* inviting/add-agent: Copy and Share side by side */
 .agent-btns { gap: 8px; margin-top: 10px; }
 .agent-btns .btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+
+/* an agreement's explanation: two lines, then "more" (Charter.tsx AgreementAbout) */
+.agree-about { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.agree-about.open { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
+.agree-more { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); text-decoration: underline; cursor: pointer; padding: 2px 0; }

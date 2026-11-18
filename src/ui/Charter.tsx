@@ -3,8 +3,9 @@
 // and photo). Members tick for themselves; stewards write, change, reorder and remove the
 // agreements and see who agreed. Guests read them (from the belfry: they can't read the group)
 // and tick them when they apply (Places.tsx ApplyScreen).
+import { directory, loadDirectory } from '../core/requests'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useLayoutEffect, useRef } from 'react'
 import { NAME } from '../config'
 import { agentOwner, belfryAdminKeys, demoSetAdmins } from '../core/access'
 import { addAgreement, agree, agreedAt, charter, editAgreement, isStale, listIdForCharter, loadRemoteCharter, moveAgreement, parseCharter, remoteAgreements, removeAgreement, toAgree, type Agreement } from '../core/charter'
@@ -25,9 +26,31 @@ import { amGuest } from './Places'
 const fmtDate = (ts: number) => new Date(ts * 1000).toLocaleDateString([], { day: 'numeric', month: 'short' })
 
 /** The members a count is out of: people in the Square who are not guests or agents. */
+/** An agreement's explanation: up to two lines, then "more" opens the whole text (Xavier,
+ *  2026-11-18; boards onboarding/welcome-charter, apply-form, home/home). Inside a row that is
+ *  itself a button, "more" doesn't tick the row. MORE = false: two lines, no "more". */
+export function AgreementAbout({ text, more = true }: { text: string; more?: boolean }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [open, setOpen] = useState(false)
+  const [cut, setCut] = useState(false)
+  useLayoutEffect(() => { const el = ref.current; if (el && !open) setCut(el.scrollHeight > el.clientHeight + 2) }, [text, open])
+  const toggle = (e: React.SyntheticEvent) => { e.stopPropagation(); e.preventDefault(); setOpen(!open) }
+  return (
+    <>
+      <small ref={ref} className={'agree-about' + (open ? ' open' : '')}>{text}</small>
+      {more && (cut || open) && <span className="agree-more" role="button" tabIndex={0} aria-expanded={open} onClick={toggle}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggle(e) }}>{open ? 'less' : 'more'}</span>}
+    </>
+  )
+}
+
+/** The belfry's members (who should agree): its member directory, else the main channel's
+ *  members; never guests or agents (a belfry whose #general lists nobody showed "0 of 0"). */
 export function charterPeople(): string[] {
+  const dirKeys = (directory() ?? []).map((m) => m.pubkey)
   const g = group('general')
-  return [...(g?.members ?? [])].filter((pk) => !isGuest(pk) && !isAgent(pk) && !agentOwner(pk))
+  const keys = new Set([...dirKeys, ...(g?.members ?? []), ...(isGuest(me()) ? [] : [me()])])
+  return [...keys].filter((pk) => pk && !isGuest(pk) && !isAgent(pk) && !agentOwner(pk))
 }
 
 export function CharterScreen({ sub, id }: { sub?: string; id?: string }) {
@@ -41,7 +64,7 @@ function CharterList() {
   const steward = isBelfryAdmin(me())
   const [editing, setEditing] = useState(false)
   const [writing, setWriting] = useState<Agreement | 'new' | null>(null)
-  useEffect(() => { if (guest) void loadRemoteCharter() }, [guest])
+  useEffect(() => { if (guest) void loadRemoteCharter(); else if (!directory()) void loadDirectory() }, [guest])
   const rules = charter()
   const people = charterPeople()
   const back_ = () => back('home')
@@ -53,7 +76,7 @@ function CharterList() {
         <div className="scroll pad">
           {list.length === 0 ? <div className="empty">No agreements here.</div> : <>
             <p className="hint">How we do things here. You tick them when you apply to become a member.</p>
-            <div className="charter-list">{list.map((r) => <div key={r.id} className="rule ro"><DocIcon /><span className="t"><b>{r.title}</b>{r.about && <small>{r.about}</small>}</span></div>)}</div>
+            <div className="charter-list">{list.map((r) => <div key={r.id} className="rule ro"><DocIcon /><span className="t"><b>{r.title}</b>{r.about && <AgreementAbout text={r.about} />}</span></div>)}</div>
           </>}
         </div>
       </div>
@@ -86,7 +109,7 @@ function CharterList() {
         {!steward || !editing ? (
           <div className="card row charter-head">
             <span className="row-ico"><DocIcon /></span>
-            <span className="t"><b>Our charter</b><small>{at ? `You agreed · ${fmtDate(at)}` : fresh === rules.length ? `${rules.length} agreements waiting for your tick` : `${fresh} waiting for your tick`}</small></span>
+            <span className="t"><b>Our charter</b><small>{at ? `You agreed · ${fmtDate(at)}` : fresh === rules.length ? `${rules.length} ${rules.length === 1 ? 'agreement' : 'agreements'} waiting for your tick` : `${fresh} waiting for your tick`}</small></span>
           </div>
         ) : null}
         <div className="charter-list">
@@ -97,7 +120,7 @@ function CharterList() {
             const count = `${n} of ${people.length} ${steward ? 'agreed' : 'members'}`
             if (steward && editing) return (
               <div key={r.id} className="rule edit">
-                <button className="t" onClick={() => setWriting(r)} aria-label={`Change “${r.title}”`}><b>{r.title}</b>{r.about && <small>{r.about}</small>}<small className="faint">{count}</small></button>
+                <button className="t" onClick={() => setWriting(r)} aria-label={`Change “${r.title}”`}><b>{r.title}</b>{r.about && <AgreementAbout text={r.about} />}<small className="faint">{count}</small></button>
                 <span className="moves">
                   <Btn className="icon-btn" aria-label={`Move “${r.title}” up`} disabled={i === 0} onClick={() => moveAgreement(r, -1)}><ChevronUpIcon /></Btn>
                   <Btn className="icon-btn" aria-label={`Move “${r.title}” down`} disabled={i === rules.length - 1} onClick={() => moveAgreement(r, 1)}><ChevronDownIcon /></Btn>
@@ -109,7 +132,7 @@ function CharterList() {
                 <Btn className="tick" role="checkbox" aria-checked={mine} aria-label={`I agree: ${r.title}`} onClick={() => agree(r, !mine)}><CheckCircleIcon on={mine} /></Btn>
                 <span className="t">
                   <b>{r.title}{!mine && <span className="badge new-badge">{stale ? 'CHANGED' : 'NEW'}</span>}</b>
-                  {r.about && <small>{r.about}</small>}
+                  {r.about && <AgreementAbout text={r.about} />}
                   {steward
                     ? <button className="link count" onClick={() => go('charter/who/' + r.id)}>{count}{!mine || r.addedAt > Date.now() / 1000 - 14 * 86400 ? ` · added ${fmtDate(r.addedAt)}` : ''} ›</button>
                     : <small className="faint">{!mine ? `Added ${fmtDate(r.textAt)} · ` : ''}{count}</small>}
@@ -248,7 +271,7 @@ export function WelcomeFlow() {
               <button key={r.id} className={'rule' + (ticked.has(r.id) ? ' on' : '')} role="checkbox" aria-checked={ticked.has(r.id)}
                 onClick={() => setTicked((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n })}>
                 <CheckCircleIcon on={ticked.has(r.id)} />
-                <span className="t"><b>{r.title}</b>{r.about && <small>{r.about}</small>}</span>
+                <span className="t"><b>{r.title}</b>{r.about && <AgreementAbout text={r.about} />}</span>
               </button>
             ))}
           </div>

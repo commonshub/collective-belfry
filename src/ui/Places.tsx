@@ -9,6 +9,7 @@
 //   Groups   = My groups · Active · All
 //   Town     = the town's channels, with the ☰ drawer
 //   Create   = one sheet: Message, Event, Meeting, To-do, Group, Proposal into a chosen channel
+import { AgreementAbout } from './Charter'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { NAME, THEME } from '../config'
 import { agentOwner } from '../core/access'
@@ -383,7 +384,7 @@ export function HomeScreen() {
           <div className="home-card">
             <button className="home-row" onClick={() => go('charter')}>
               <span className="row-ico"><DocIcon /></span>
-              <span className="t"><b>{fresh.length === 1 ? '1 new agreement to read' : `${fresh.length} new agreements to read`}</b><small>Charter: {fresh[0].title}</small></span>
+              <span className="t"><b>{fresh.length === 1 ? '1 new agreement to read' : `${fresh.length} new agreements to read`}</b><small>Charter: {fresh[0].title}</small>{fresh.length === 1 && fresh[0].about && <AgreementAbout text={fresh[0].about} more={false} />}</span>
               <ChevronRightIcon />
             </button>
           </div>
@@ -542,7 +543,7 @@ export function ApplyScreen() {
               <button key={r.id} type="button" className={'rule' + (ticked.has(r.id) ? ' on' : '')} role="checkbox" aria-checked={ticked.has(r.id)}
                 onClick={() => setTicked((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n })}>
                 <CheckCircleIcon on={ticked.has(r.id)} />
-                <span className="t"><b>{r.title}</b>{r.about && <small>{r.about}</small>}</span>
+                <span className="t"><b>{r.title}</b>{r.about && <AgreementAbout text={r.about} />}</span>
               </button>
             ))}
           </div>

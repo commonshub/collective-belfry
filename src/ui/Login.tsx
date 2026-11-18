@@ -1,3 +1,4 @@
+import { AgreementAbout } from './Charter'
 import { accounts, activeId, discardActiveFor } from '../core/accounts'
 import { useEffect, useRef, useState } from 'react'
 import { Btn, Form } from './common'
@@ -364,7 +365,7 @@ export function ApplyForm({ email: known }: { email?: string }) {
             <button type="button" key={r.id} className={'rule' + (ticked.has(r.id) ? ' on' : '')} role="checkbox" aria-checked={ticked.has(r.id)}
               onClick={() => setTicked((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n })}>
               <span className="tick"><CheckCircleIcon on={ticked.has(r.id)} /></span>
-              <span className="t"><b>{r.title}</b>{r.about && <small>{r.about}</small>}</span>
+              <span className="t"><b>{r.title}</b>{r.about && <AgreementAbout text={r.about} />}</span>
             </button>
           ))}
         </div>
