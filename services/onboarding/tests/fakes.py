@@ -1209,6 +1209,7 @@ class FakeSellerOdoo:
         self.batch_fails = False  # reading several invoices at once fails
         self.unreadable: set[int] = set()  # invoices that can't be read
         self.no_pdf = False
+        self.refuse_partner_fields: set[str] = set()  # res.partner fields Odoo refuses (422)
         self.add("res.company", name="XL Collective")
         self.add("res.country", code="BE", name="Belgium")
         self.add("res.currency", name="EUR")
@@ -1256,6 +1257,8 @@ class FakeSellerOdoo:
     def create(self, model, vals, context=None):
         self._fail(model, "create")
         vals = dict(vals)
+        if model == "res.partner" and self.refuse_partner_fields & set(vals):
+            raise OdooError("res.partner.create: the VAT number is not valid", {"status": 422})
         if model == "account.move":
             total = untaxed = 0.0
             for _, _, line in vals.get("invoice_line_ids", []):

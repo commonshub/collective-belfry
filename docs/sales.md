@@ -137,7 +137,8 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
 {"product": "village-2027", "name": "Ada", "email": "ada@example.org", "code": "…",
  "pay": "card" | "invoice",
  "billing": {"kind": "person" | "organisation", "name": "…", "vat": "BE0…", "street": "…",
-             "zip": "…", "city": "…", "country": "BE", "invoice_email": "…"},
+             "street2": "…", "zip": "…", "city": "…", "region": "…", "country": "BE",
+             "invoice_email": "…"},
  "return_url": "https://<domain>/tickets/thanks",
  "erase_after_event": false}
 ```
@@ -202,11 +203,49 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
   session for the existing invoice's amount; the payment goes on that invoice. Asking
   `POST /checkout` again for the same open order with another `pay` does the same. Errors:
   409 `not_open`, `no_transfer` (no bank details), `no_card` (no Stripe key).
-- An organisation's VAT number is checked on VIES before the invoice is made (`invalid_vat`;
-  VIES down → accepted and flagged on the order for the admins).
+- **Billing** (all fields optional unless said; whitespace collapsed; too long →
+  422 `invalid_billing`): `name` ≤ 120, `street` ≤ 200, `street2` ≤ 200, `zip` ≤ 20 (optional
+  for every country, people and organisations alike: no country rule), `city` ≤ 100,
+  `region` ≤ 100 (free text: a state, province, county…), `country` = two letters (any ISO
+  3166 alpha-2 code; not checked against a list), `invoice_email` an address ≤ 254. An
+  organisation needs `name`, `country` and `city` (422 `invalid_billing`), as before.
+  `GET /billing` returns these same fields, `street2` and `region` included.
+- **`vat`** — what it means depends on the billing country:
+  - an organisation in an EU country (AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU
+    LV MT NL PL PT RO SE SI SK), or in GB with a Northern Ireland number (`XI…`): an EU VAT
+    number, as before: spaces, dots and dashes dropped, upper case, two letters then 2–14
+    letters or digits (else 422 `invalid_vat`), then checked on VIES before the invoice is made
+    (VIES says no → 422 `invalid_vat`; VIES down → accepted and flagged `vies_down` for the
+    admins). Greece's numbers start with EL (billing country GR).
+  - an organisation anywhere else: its own tax id (EIN, ABN, GSTIN, UID, RFC…) kept as typed
+    (whitespace collapsed): 2–32 characters, letters, digits, spaces and `. - /`, starting and
+    ending with a letter or digit (else 422 `invalid_vat`, "That tax id is not valid."). Never
+    sent to VIES, never `invalid_vat` for its format otherwise, and never used to find an
+    existing Odoo contact.
+  - a person: not used on the invoice; the old shape check still applies when one is sent.
 - The invoice's contact in Odoo is never found by an e-mail address (the buyer's isn't
   proven): a person gets the Odoo contact Belfry stored on their account, else a new one; an
   organisation is matched by its VAT number only when VIES said it is valid, else a new one.
+- A new contact gets `street`, `street2`, `zip`, `city`, `country_id` (by code) and, for
+  `region`, the `res.country.state` of that country whose code or name is the region (any
+  case) as `state_id`; no such state (or the search fails) → the region is appended to the city
+  line ("Springfield, Kerala"). A missing state never fails the order.
+- An organisation's number goes into the contact's `vat`. Odoo's VAT check (base_vat) may
+  refuse a number it doesn't know for that country: on a refusal (Odoo 4xx) the contact is
+  made with the number in `company_registry` instead, and if that is refused too, without it.
+  The order records where it went (`tax_id_on`: `vat` | `company_registry` | `note`); in the
+  last two cases the invoice's note (`narration`) says "Tax ID: <number>" ("VAT: …" for an EU
+  number), so it prints on the invoice either way. Odoo down (no answer) is not a refusal: the
+  tick retries as for every step.
+- **The tax on the invoice line** is one of the two picked in the console, never chosen by
+  country: a person (Belgian or not) gets "VAT for people (price includes it)" (`tax_included`),
+  every organisation — Belgian, EU with a valid VIES number, or outside the EU — gets "VAT for
+  organisations (on top)" (`tax_excluded`). Belfry's own total uses the product's VAT rate the
+  same way. Belfry applies no reverse charge and no exemption for any buyer and sets no fiscal
+  position (admission to an event is taxed where it takes place). Whether the community's Odoo
+  maps the tax through an automatic fiscal position (e.g. "EU private / intra-community /
+  non-EU" on the contact's country) is Odoo's setting: if it did, Odoo's total would differ and
+  the order is flagged `odoo_total` (§8).
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
@@ -363,5 +402,10 @@ Everything above runs against fakes in the tests. Unproven until tried live:
 - Stripe: the session form fields, `Idempotency-Key`, expiring a session, the restricted key's
   permissions, the events' exact shape.
 - VIES's REST answer for a number and when a member state is down.
+- Odoo's refusal of a non-conforming `vat` (base_vat) coming back as a 4xx over JSON-2 (the
+  fallback to `company_registry` / the note relies on it), `company_registry` existing on
+  `res.partner` in that Odoo version, the note printing on the invoice PDF, `=ilike` on
+  `res.country.state`, and whether an automatic fiscal position remaps the explicit
+  `tax_ids` Belfry sends for a foreign contact.
 - The browser key binding (Keycast patch 0022) and an EPC QR read by real banking apps.
 

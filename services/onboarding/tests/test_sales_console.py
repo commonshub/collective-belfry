@@ -253,3 +253,28 @@ def test_the_erase_request_shows_on_the_order_and_an_admin_clears_it(admin, keyc
         assert not sales.erase_of(rsvc, pid)
         t = c.get("/sales", headers=H).text
         assert "Clear the erase request" not in t and "(asked)" in t
+
+
+def test_billing_details_show_and_come_back_from_get_billing(admin):
+    rsvc, ada_id = admin
+    billing = {
+        "kind": "organisation",
+        "name": "Acme Inc.",
+        "vat": "12-3456789",
+        "street": "1 Main St",
+        "street2": "Suite 400",
+        "city": "Springfield",
+        "region": "IL",
+        "country": "US",
+    }
+    bob, _bob_id = person(rsvc, "bob@example.org", "Bob")
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        r = buy(c, bob, pay="invoice", billing=billing, email="bob@example.org")
+        assert r.status_code == 201, r.text
+        got = call(c, bob, "/billing", method="GET").json()["billing"]
+        assert got["street2"] == "Suite 400" and got["region"] == "IL"
+        assert got["vat"] == "12-3456789" and got["zip"] == ""
+        signed_in(c, rsvc, ada_id)
+        t = c.get("/sales", headers=H).text
+        line = "Acme Inc. · VAT / tax id 12-3456789 · 1 Main St · Suite 400 · Springfield · IL · US"
+        assert t.count(line) == 2  # in Waiting for a transfer and in the orders

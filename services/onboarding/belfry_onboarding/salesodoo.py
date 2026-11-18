@@ -14,6 +14,7 @@ Errors: Odoo answering 4xx (it refuses the record as it is, or the key) raises
 
 from __future__ import annotations
 
+import html
 import logging
 from typing import Any
 
@@ -168,23 +169,85 @@ def _partner(svc: Services, remote: Json2Client, o: dict[str, Any], company: int
             "email": email,
             "is_company": org,
         }
-        for k in ("street", "zip", "city"):
+        for k in ("street", "street2", "zip", "city"):
             if b.get(k):
                 vals[k] = b[k]
-        if org and b.get("vat"):
-            vals["vat"] = b["vat"]
+        country_id = None
         if b.get("country"):
             rows = remote.search_read("res.country", [["code", "=", b["country"]]], ["id"], limit=1)
             if rows:
-                vals["country_id"] = rows[0]["id"]
+                country_id = vals["country_id"] = rows[0]["id"]
+        if b.get("region"):
+            state = _state(remote, country_id, b["region"])
+            if state:
+                vals["state_id"] = state
+            else:  # no such state in Odoo: the region goes on the city line
+                vals["city"] = ", ".join(x for x in (b.get("city"), b["region"]) if x)
         if company:
             vals["company_id"] = company
-        found = remote.create("res.partner", vals)
+        found = _create_partner(svc, remote, o, vals, b.get("vat") if org else "")
     if not org:
         sales.store(svc).update(o["id"], odoo_partner=found)
         if o.get("partner_id"):
             svc.odoo.write("res.partner", [int(o["partner_id"])], {"belfry_odoo_partner": found})
     return found
+
+
+def _state(remote: Json2Client, country_id: int | None, region: str) -> int | None:
+    """The res.country.state of COUNTRY_ID whose code or name is REGION (any case), or None.
+    Never fails the order: Odoo refusing or not answering this search → None."""
+    if not country_id:
+        return None
+    for field in ("code", "name"):
+        try:
+            rows = remote.search_read(
+                "res.country.state",
+                [["country_id", "=", country_id], [field, "=ilike", region]],
+                ["id"],
+                limit=1,
+            )
+        except (OdooError, httpx.HTTPError, OSError):
+            log.info("sales: no state looked up for a billing region")
+            return None
+        if rows:
+            return rows[0]["id"]
+    return None
+
+
+def _create_partner(
+    svc: Services, remote: Json2Client, o: dict[str, Any], vals: dict[str, Any], vat: str
+) -> int:
+    """The new contact, with the organisation's VAT number or tax id in ``vat``. Odoo may refuse
+    a number its VAT check (base_vat) doesn't know for that country: then the contact is made
+    with the number in ``company_registry`` instead, and if Odoo refuses that too, without it.
+    Either way the order records where the number went (``tax_id_on``) and the invoice prints it
+    in its note (make_invoice) unless Odoo took it as the contact's VAT."""
+    from . import sales
+
+    tries: list[tuple[str, dict[str, Any]]] = []
+    if vat:
+        tries += [
+            ("vat", {**vals, "vat": vat}),
+            ("company_registry", {**vals, "company_registry": vat}),
+        ]
+    tries.append(("note" if vat else "", vals))
+    for i, (where, v) in enumerate(tries):
+        try:
+            found = remote.create("res.partner", v)
+        except OdooError as exc:
+            if i == len(tries) - 1 or not _refused(exc):
+                raise
+            log.warning(
+                "sales: order %s: Odoo refused the tax id in %s; trying another field",
+                o["id"],
+                where,
+            )
+            continue
+        if vat:
+            sales.store(svc).update(o["id"], tax_id_on=where)
+            o["tax_id_on"] = where
+        return found
+    raise AssertionError("unreachable")
 
 
 @_guard
@@ -232,6 +295,15 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
                 ]
             ],
         }
+        b = o.get("billing") or {}
+        if org and b.get("vat") and o.get("tax_id_on") in ("company_registry", "note"):
+            # Odoo didn't take it as the contact's VAT: the invoice says it in its note
+            label = (
+                "VAT"
+                if sales.vies_country("organisation", b.get("country", ""), b["vat"])
+                else "Tax ID"
+            )
+            vals["narration"] = f"{label}: {html.escape(b['vat'])}"
         if st["company"]:
             vals["company_id"] = int(st["company"])
         cur = remote.search_read("res.currency", [["name", "=", st["currency"]]], ["id"], limit=1)

@@ -86,6 +86,14 @@ ORDER_RE = re.compile(r"^o_[a-z0-9]{16}$")
 OFFER_RE = re.compile(r"^f_[a-z0-9]{16}$")
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 COUNTRY_RE = re.compile(r"^[A-Z]{2}$")
+# Billing countries (ISO 3166 alpha-2) whose organisations' VAT numbers go to VIES. Greece is GR
+# here (its VAT numbers start with EL); Northern Ireland's XI numbers are checked for GB.
+EU_COUNTRIES = set(
+    "AT BE BG CY CZ DE DK EE ES FI FR GR HR HU IE IT LT LU LV MT NL PL PT RO SE SI SK".split()
+)
+# A tax id outside the EU (EIN, ABN, GSTIN, UID, RFC…): as typed, letters, digits and . - / and
+# spaces, 2 to 32 characters with at least 2 letters or digits.
+TAX_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ./-]{0,30}[A-Za-z0-9]$")
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 API = "/api"
 
@@ -1288,7 +1296,14 @@ def _clean_billing(raw: Any) -> dict[str, Any]:
     if kind not in ("person", "organisation"):
         raise bad()
     out: dict[str, Any] = {"kind": kind}
-    for k, n in (("name", 120), ("street", 200), ("zip", 20), ("city", 100)):
+    for k, n in (
+        ("name", 120),
+        ("street", 200),
+        ("street2", 200),
+        ("zip", 20),
+        ("city", 100),
+        ("region", 100),
+    ):
         v = " ".join(str(raw.get(k) or "").split())
         if len(v) > n:
             raise bad()
@@ -1297,9 +1312,17 @@ def _clean_billing(raw: Any) -> dict[str, Any]:
     if country and not COUNTRY_RE.match(country):
         raise bad()
     out["country"] = country
-    vat = re.sub(r"[\s.\-]", "", str(raw.get("vat") or "")).upper()
-    if vat and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{2,14}", vat):
-        raise ApiError(422, "invalid_vat", "That VAT number is not valid.")
+    typed = " ".join(str(raw.get("vat") or "").split())
+    if vies_country(kind, country, typed):
+        # an EU VAT number: as before (prefix + 2–14, spaces dots and dashes dropped; VIES next)
+        vat = re.sub(r"[\s.\-]", "", typed).upper()
+        if vat and not re.fullmatch(r"[A-Z]{2}[A-Z0-9]{2,14}", vat):
+            raise ApiError(422, "invalid_vat", "That VAT number is not valid.")
+    else:
+        # outside the EU: the organisation's own tax id as it writes it, never sent to VIES
+        vat = typed
+        if vat and not TAX_ID_RE.match(vat):
+            raise ApiError(422, "invalid_vat", "That tax id is not valid.")
     out["vat"] = vat
     inv = str(raw.get("invoice_email") or "").strip()
     if inv and (not EMAIL.match(inv) or len(inv) > 254):
@@ -1308,6 +1331,19 @@ def _clean_billing(raw: Any) -> dict[str, Any]:
     if kind == "organisation" and not (out["name"] and out["country"] and out["city"]):
         raise bad()
     return out
+
+
+def vies_country(kind: str, country: str, vat: str = "") -> bool:
+    """Whether an organisation's number is an EU VAT number for VIES: its billing country is in
+    the EU, or it is a GB organisation with a Northern Ireland number (XI…). An organisation
+    with no country (a person's billing) keeps the old rule: the number's own prefix."""
+    if kind != "organisation":
+        return True  # never checked; the old shape check stays
+    if not country:
+        return True
+    if country in EU_COUNTRIES:
+        return True
+    return country == "GB" and vat.replace(" ", "").upper().startswith("XI")
 
 
 URL_PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
@@ -1534,7 +1570,12 @@ def _checkout(
         )
     flags: list[str] = []
     vat_valid = False
-    if billing["kind"] == "organisation" and billing.get("vat") and can_sell(svc):
+    if (
+        billing["kind"] == "organisation"
+        and billing.get("vat")
+        and vies_country(billing["kind"], billing["country"], billing["vat"])
+        and can_sell(svc)
+    ):
         # checked before the invoice is made (outside the lock: VIES can be slow)
         from . import salesodoo
 

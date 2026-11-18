@@ -163,6 +163,26 @@ def days_left(hold_until: str | None, today: dt.datetime | None = None) -> str:
     return "less than a day left" if secs < 86400 else f"{n} day{'s' if n != 1 else ''} left"
 
 
+def billing_line(b: dict[str, Any] | None) -> str:
+    """The billing details in one escaped line: organisation, tax id, address, country."""
+    b = b or {}
+    if b.get("kind") != "organisation" and not any(
+        b.get(k) for k in ("name", "street", "city", "country")
+    ):
+        return ""
+    city = " ".join(x for x in (b.get("zip"), b.get("city")) if x)
+    parts = [
+        b.get("name"),
+        ("VAT / tax id " + b["vat"]) if b.get("vat") else "",
+        b.get("street"),
+        b.get("street2"),
+        city,
+        b.get("region"),
+        b.get("country"),
+    ]
+    return E(" · ".join(x for x in parts if x))
+
+
 def waiting_for_transfer(svc: Services) -> list[dict[str, Any]]:
     """Orders with an invoice and no payment yet, the one whose hold ends soonest first."""
     rows = [o for o in sales.store(svc).orders(("invoiced",)) if not o.get("paid")]
@@ -189,6 +209,7 @@ def waiting_html(svc: Services, csrf: str) -> str:
         comm = inv.get("communication") or number
         hold = o.get("hold_until") or ""
         cards += f"""<div class="card"><p><b>{E(o["name"])}</b> · {_money(o["total"]["gross"])} · {E(o["product"])}</p>
+{f'<p class="hint">{bl}</p>' if (bl := billing_line(o.get("billing"))) else ""}
 <p class="hint">Invoice {E(number) if number else "(no number yet)"}{f" · communication <code>{E(comm)}</code>" if comm and comm != number else ""}</p>
 <p class="hint">Held until {E(hold[:16].replace("T", " ")) if hold else "—"} · {E(days_left(hold))}</p>
 <form method="post" action="{PATH}/order" class="f">
@@ -430,7 +451,8 @@ The restricted key needs Checkout Sessions: write.</p>
 <label>Reason <input type="text" name="reason" required placeholder="they asked to keep their account"></label>
 <div class="actions"><button class="btn ghost" type="submit" name="do" value="keep_data">Clear</button></div></form></details>"""
         rrow += (
-            f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span></td>"
+            f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span>"
+            f"{f'<br><span class=hint>{bl}</span>' if (bl := billing_line(o.get('billing'))) else ''}</td>"
             f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
             f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}{erase}</td><td>{act}</td></tr>"
         )
