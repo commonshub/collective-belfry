@@ -105,6 +105,7 @@ export const ShareIcon = () => <Svg><path d="M12 3v12M7 8l5-5 5 5M5 13v7h14v-7" 
 export const MessageIcon = () => <Svg><path d="M4 5h16v11H9l-5 4z" /></Svg>
 // the bottom bar (Home · Calendar · Create · Groups · Town)
 export const HomeIcon = () => <Svg><path d="M4 11 12 4l8 7v9h-5v-6H9v6H4z" /></Svg>
+export const CheckIcon = () => <Svg><path d="m5 12 5 5 9-10" /></Svg>
 export const PlusIcon = () => <Svg><path d="M12 5v14M5 12h14" /></Svg>
 /** The town: a belfry tower over roofs. */
 export const TownIcon = () => <Svg><path d="M9 21V8l3-4 3 4v13M4 21v-7l5-3M20 21v-7l-5-3M3 21h18M11 12h2M11 16h2" /></Svg>

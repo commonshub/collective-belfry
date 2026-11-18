@@ -17,7 +17,7 @@ import { addEvents, all, useVersion, type Ev } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, Btn, Form, go, Sheet, up } from './common'
 import { useCommunityName } from './community'
-import { CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, DocIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
+import { CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, DocIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
 import { Arms } from './Login'
 import { openProfile } from './Profile'
 import { amGuest } from './Places'
@@ -79,10 +79,10 @@ function CharterList() {
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={back_}>‹</button>
         <h1>Charter</h1>
-        {steward && <button className="btn small ghost" aria-pressed={editing} onClick={() => setEditing(!editing)}>{editing ? 'Done' : 'Edit'}</button>}
+        {steward && <button className="icon-btn" aria-label="New agreement" title="New agreement" onClick={() => setWriting('new')}><PlusIcon /></button>}
+        {steward && <button className="icon-btn" aria-label={editing ? 'Done' : 'Edit'} title={editing ? 'Done' : 'Edit'} aria-pressed={editing} onClick={() => setEditing(!editing)}>{editing ? <CheckIcon /> : <PencilIcon />}</button>}
       </div>
       <div className="scroll pad">
-        {steward && <button className="btn" onClick={() => setWriting('new')}><PlusIcon /> New agreement</button>}
         {!steward || !editing ? (
           <div className="card row charter-head">
             <span className="row-ico"><DocIcon /></span>
@@ -118,7 +118,7 @@ function CharterList() {
             )
           })}
         </div>
-        {steward && <p className="hint">New agreement: a title and an optional one-line explanation. {editing ? 'Tap a rule to change or remove it; the arrows move it.' : 'Edit to change, reorder or remove.'} A count shows who has and hasn't agreed.</p>}
+        {steward && <p className="hint">{editing ? 'Tap a rule to change or remove it; the arrows move it. ' : ''}A count shows who has and hasn't agreed.</p>}
       </div>
       {writing && <AgreementSheet r={writing === 'new' ? undefined : writing} onClose={() => setWriting(null)} />}
     </div>
