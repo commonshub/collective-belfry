@@ -61,3 +61,19 @@ def test_stewards_invite_or_decline(web, odoo, stewarding):  # noqa: F811
     assert flash_of(again)
     assert web.post(f"/steward/applications/{dan}/invite", data={"csrf": "bad"}).status_code == 403
     assert web.post(f"/steward/applications/{dan}/nope", data={"csrf": csrf}).status_code == 404
+
+
+def test_apply_api_for_the_chat(web, odoo):  # noqa: F811
+    """chat.<domain>/apply: e-mail and why; the name comes from the address when not given."""
+    r = web.post("/api/apply", json={"email": "dora@example.org", "motivation": " "})
+    assert r.status_code == 400 and r.json()["error"] == "missing"
+    r = web.post("/api/apply", json={"email": "dora@example.org", "motivation": "Gardens."})
+    assert r.status_code == 200 and r.json() == {"ok": True}
+    row = next(iter(odoo.tables["belfry.application"].values()))
+    want = ("dora", "dora@example.org", "Gardens.")
+    assert (row["name"], row["email"], row["motivation"]) == want
+    r = web.post("/api/apply", json={"email": "nope", "motivation": "x"})
+    assert r.status_code == 400 and r.json()["error"] == "refused"
+    r = web.post("/api/apply", json={"email": "a@b.c", "motivation": "x", "website": "x"})
+    assert r.status_code == 200 and len(odoo.tables["belfry.application"]) == 1
+    assert web.post("/api/apply", content=b"[]").status_code == 400

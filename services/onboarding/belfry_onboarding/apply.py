@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import mypass
@@ -96,6 +96,10 @@ See <a href="/privacy">privacy</a>.</p>
  .fb input[type=checkbox] {{ margin-top: 4px; }}
  .fb button {{ border: 0; font: inherit; font-weight: 600; cursor: pointer; justify-self: start; }}
  .fb fieldset.charter {{ display: grid; gap: 10px; border: 1px solid var(--osv-border-strong); border-radius: 8px; padding: 12px 14px; margin: 0; }}
+ /* round ticks, like the chat's to-dos (Xavier, 2026-11-18) */
+ .fb fieldset.charter input[type=checkbox] {{ appearance: none; -webkit-appearance: none; flex: none; width: 22px; height: 22px; margin: 1px 0 0; border-radius: 50%; border: 2px solid var(--osv-border-strong); background: transparent; cursor: pointer; display: grid; place-items: center; }}
+ .fb fieldset.charter input[type=checkbox]:checked {{ background: var(--osv-foreground); border-color: var(--osv-foreground); }}
+ .fb fieldset.charter input[type=checkbox]:checked::after {{ content: ""; width: 10px; height: 5px; border: solid var(--osv-surface-deep, #fff); border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }}
  .hp {{ position: absolute; left: -9999px; }} .small {{ font-size: 0.85rem; }}
 </style>"""
     return page(f"Apply to join {community or 'this community'}", body)
@@ -146,6 +150,8 @@ def _ctx(svc: Services, agreements: list[dict[str, Any]] | None = None) -> dict[
 
 
 MISSING = "Please fill in your name, e-mail and motivation."
+MISSING_API = "Please give your e-mail and a few words on why you would like to join."
+API = "/api/apply"
 UNTICKED = "Please tick each agreement of the charter: joining means agreeing to them."
 
 
@@ -193,3 +199,52 @@ def register(app: FastAPI) -> None:
         except ApplyError as exc:
             return HTMLResponse(form_page(str(exc), vals, **ctx), status_code=400)
         return HTMLResponse(thanks_page())
+
+    @app.post(API)
+    async def apply_api(request: Request) -> JSONResponse:
+        """The chat's own form (chat.<domain>/apply; Xavier, 2026-11-18): e-mail, why, the
+        charter's ticks. The name is optional: the part of the address before the @ otherwise."""
+        from . import invite
+
+        def no(error: str, message: str, status: int = 400) -> JSONResponse:
+            return JSONResponse(
+                {"error": error, "message": message},
+                status_code=status,
+                headers={"Cache-Control": "no-store"},
+            )
+
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            return no("bad_request", "Send JSON.")
+        text = {
+            k: str(body.get(k) or "").strip() for k in ("name", "email", "motivation", "website")
+        }
+        raw = body.get("agreed")
+        ticked = [str(v) for v in raw][:100] if isinstance(raw, list) else []
+        if text["website"]:  # the hidden field: only bots fill it in
+            log.info("apply: honeypot filled, dropped")
+            return JSONResponse({"ok": True})
+        if not text["email"] or not text["motivation"]:
+            return no("missing", MISSING_API)
+        vals = {
+            "name": (text["name"] or text["email"].split("@")[0])[:200],
+            "email": text["email"][:200],
+            "motivation": text["motivation"][:4000],
+            "kind": "volunteer" if body.get("kind") == "volunteer" else "visitor",
+        }
+        s = svc(request)
+        rules = await run_in_threadpool(_agreements, s)
+        if {r["id"] for r in rules} - set(ticked):
+            return no("unticked", UNTICKED)
+        sent: dict[str, Any] = dict(vals)
+        if rules and invite.own(s):
+            known = {r["id"] for r in rules}
+            sent["agreed"] = [t for t in ticked if t in known]
+        try:
+            await run_in_threadpool(submit, s, sent)
+        except ApplyError as exc:
+            return no("refused", str(exc))
+        return JSONResponse({"ok": True}, headers={"Cache-Control": "no-store"})
