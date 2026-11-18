@@ -2,6 +2,7 @@
 // channel opens it: what the group is, who is in it and who runs it, Follow (its announcements by
 // e-mail, the bell), and Join (open) / Apply to join (closed) / Pending / You're in. A group is
 // not membership of the belfry: whoever created it is its admin and lets people in.
+import { GroupName } from './GroupName'
 import { useState } from 'react'
 import { DEFAULT_PROMPT, joinGroup, setArchived } from '../core/actions'
 import { canAdmin } from '../core/access'
@@ -63,7 +64,7 @@ export function ArchivedScreen() {
           return (
             <button key={g.id} className="chan archived-row" onClick={() => go('c/' + encodeURIComponent(g.id))}>
               <span className="hash">{g.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)}</span>
-              <span className="t"><b>{g.name}</b><small>{kind}{last ? ` · last message ${shortDay(last)}` : ''}</small></span>
+              <span className="t"><b><GroupName g={g} /></b><small>{kind}{last ? ` · last message ${shortDay(last)}` : ''}</small></span>
               <ChevronRightIcon />
             </button>
           )

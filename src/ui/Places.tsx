@@ -9,6 +9,7 @@
 //   Groups   = My groups · Active · All
 //   Town     = the town's channels, with the ☰ drawer
 //   Create   = one sheet: Message, Event, Meeting, To-do, Group, Proposal into a chosen channel
+import { GroupName } from './GroupName'
 import { AgreementAbout } from './Charter'
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { NAME, THEME } from '../config'
@@ -334,7 +335,7 @@ function ActivityRow({ g }: { g: Group }) {
   return (
     <button className="home-row activity" onClick={() => go('c/' + encodeURIComponent(g.id))}>
       <span className="row-ico">{g.isPod ? <PodShape members={g.members.size} size={20} /> : channelIcon(g)}</span>
-      <span className="t"><b>{g.name}</b><small>{last?.text ?? g.about}</small></span>
+      <span className="t"><b><GroupName g={g} /></b><small>{last?.text ?? g.about}</small></span>
       <span className="row-end">{last && <small>{shortWhen(last.at)}</small>}{n > 0 && <span className="badge unread-n">{n > 99 ? '99+' : n}</span>}</span>
     </button>
   )
@@ -662,7 +663,7 @@ function GroupRow({ g }: { g: Group }) {
     <div className="group-row">
       <button className="home-row" onClick={() => go('c/' + encodeURIComponent(g.id) + (mine ? '' : '/group'))}>
         <span className="row-ico round"><PodShape members={g.members.size} size={20} /></span>
-        <span className="t"><b>{g.name}</b>{last && <small>{last.text}</small>}<small className="faint">{sub}</small></span>
+        <span className="t"><b><GroupName g={g} /></b>{last && <small>{last.text}</small>}<small className="faint">{sub}</small></span>
         <span className="row-end">{last && <small>{shortWhen(last.at)}</small>}{n > 0 && <span className="badge unread-n">{n > 99 ? '99+' : n}</span>}</span>
       </button>
       {!mine && !g.closed && <Btn className="btn small join-btn" onClick={() => joinGroup(g.id)}>Join</Btn>}

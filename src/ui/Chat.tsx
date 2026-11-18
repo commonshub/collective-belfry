@@ -1,3 +1,5 @@
+import { GroupName } from './GroupName'
+import { replaceHash } from '../core/nav'
 import { Linkify } from './markdown'
 import { MessageButtons } from './Buttons'
 import { nip19 } from 'nostr-tools'
@@ -124,7 +126,7 @@ function TownList({ current, side = false, section, drawer = false, top }: ListP
     return (
       <button className={'chan town-chan' + (g.id === current ? ' on' : '') + (n ? ' unread' : '')} onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
         <span className="hash">#</span>
-        <span className="t"><b>{g.name}{isPublicChannel(g) && <span className="pub" aria-label="public"><GlobeIcon /></span>}</b></span>
+        <span className="t"><b><GroupName g={g} />{isPublicChannel(g) && <span className="pub" aria-label="public"><GlobeIcon /></span>}</b></span>
         {n > 0 && <span className="badge unread-n" aria-label={`${n} unread`}>{n > 99 ? '99+' : n}</span>}
       </button>
     )
@@ -236,7 +238,7 @@ function OldChannelList({ current, side = false, section, drawer = false }: List
       <button className={'chan' + (g.id === current ? ' on' : '') + (n ? ' unread' : '')} style={depth ? { paddingLeft: 16 + depth * 18 } : undefined}
         onClick={() => closeDrawer('c/' + encodeURIComponent(g.id))}>
         <span className="hash">{channelIcon(g)}</span>
-        <span className="t"><b>{g.name}</b><small>{last(g.id) ?? g.about}</small></span>
+        <span className="t"><b><GroupName g={g} /></b><small>{last(g.id) ?? g.about}</small></span>
         {n > 0 && <span className="badge unread-n" aria-label={`${n} unread`}>{n > 99 ? '99+' : n}</span>}
       </button>
     )
@@ -565,7 +567,7 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
   if (g.archived) return (
     <div className="ev-card pod-card archived" role="button" tabIndex={0} aria-label={`Group ${g.name}: archived, read only`} onClick={() => go(`c/${encodeURIComponent(id)}`)} onKeyDown={(e) => { if (e.key === 'Enter') go(`c/${encodeURIComponent(id)}`) }}>
       <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
-      <span className="info"><b>{g.name}</b><small>Archived</small></span>
+      <span className="info"><b><GroupName g={g} /></b><small>Archived</small></span>
     </div>
   )
   const inIt = g.members.has(me())
@@ -574,7 +576,7 @@ function PodCard({ id, fallback }: { id: string; fallback: string }) {
     <div className="ev-card pod-card" role="button" tabIndex={0} aria-label={`Group ${g.name}: about it, who's in, join`} onClick={() => go(`c/${encodeURIComponent(id)}/group`)} onKeyDown={(e) => { if (e.key === 'Enter') go(`c/${encodeURIComponent(id)}/group`) }}>
       <div className="date pod-ic"><PodShape members={g.members.size} size={26} /></div>
       <span className="info">
-        <b>{g.name}</b>
+        <b><GroupName g={g} /></b>
         {g.about && <small><Linkify text={g.about} /></small>}
         <small>{g.closed ? 'Group · by request' : 'Group · open'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}{inIt ? ' · you’re in' : pending ? ' · request sent' : ''}</small>
       </span>
@@ -755,7 +757,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   items.sort((a, b) => a.at - b.at || (a.t === 'msg' ? -1 : 1))
   // with a thread already in the third column, another one replaces it (no history entry per thread)
   // Reply opens the thread's own view (or the third column), with its reply box focused: no second box in the channel (Xavier, #bugs 2026-11-10)
-  const openThread = (m: Message, reply = false) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}` + (reply ? '/reply' : ''); if (activeThread) location.replace('#/' + to); else go(to) }
+  const openThread = (m: Message, reply = false) => { const to = `c/${encodeURIComponent(id)}/thread/${m.ev.id}` + (reply ? '/reply' : ''); if (activeThread) replaceHash('#/' + to); else go(to) }
   const [acting, setActing] = useState<Message | null>(null)
   const [actingReply, setActingReply] = useState<Message | null>(null) // a reply in an unfolded thread
   const [editing, setEditing] = useState<Message | null>(null)

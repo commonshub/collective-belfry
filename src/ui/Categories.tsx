@@ -3,6 +3,7 @@
 // belfry's admins move channels by dragging them (a mouse) or holding them, then dragging (a
 // finger), within a category and across categories; "The town" stays fixed. In Belfry settings →
 // Channels: the same list, where admins also rename, add, delete and reorder the categories.
+import { GroupName } from './GroupName'
 import type React from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { categorize, categoryId, layoutContent, mayOrder, setLayout, shownCategories, LIFE, type Category } from '../core/order'
@@ -178,7 +179,7 @@ export function ChannelsPanel({ wide = false }: { wide?: boolean }) {
                 <div key={g.id} {...dnd.slot(g, c.id, i)}>
                   <button type="button" className="act settings-row chan-row" onClick={() => admin && setMenu({ kind: 'chan', id: g.id })}>
                     <span className="hash">#</span>
-                    <span className="t"><b>{g.name}{isPublicChannel(g) && <span className="pub" aria-label="public"><GlobeIcon /></span>}</b></span>
+                    <span className="t"><b><GroupName g={g} />{isPublicChannel(g) && <span className="pub" aria-label="public"><GlobeIcon /></span>}</b></span>
                     {admin && <GripIcon />}
                   </button>
                 </div>

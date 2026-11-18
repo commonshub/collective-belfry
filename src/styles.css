@@ -1849,3 +1849,8 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .agree-about { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .agree-about.open { display: block; -webkit-line-clamp: unset; line-clamp: unset; overflow: visible; }
 .agree-more { display: inline-block; font-size: 13px; font-weight: 600; color: var(--text); text-decoration: underline; cursor: pointer; padding: 2px 0; }
+
+/* a group's name that hasn't arrived yet (GroupName.tsx): a grey bar where it will be */
+.name-skel { display: inline-block; width: 40%; min-width: 64px; max-width: 160px; height: 0.9em; border-radius: 6px; background: var(--surface-2, var(--line)); vertical-align: -0.1em; animation: skel 1.4s ease-in-out infinite; }
+@keyframes skel { 50% { opacity: .55 } }
+@media (prefers-reduced-motion: reduce) { .name-skel { animation: none; } }
