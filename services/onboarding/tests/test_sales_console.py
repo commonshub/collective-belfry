@@ -4,6 +4,8 @@ secrets, products, codes, offers and orders."""
 # ruff: noqa: F811
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
@@ -188,3 +190,66 @@ def test_prices_text_parses():
     ]
     with pytest.raises(ValueError):
         salesconsole.parse_prices("200 till 2026")
+
+
+def test_waiting_for_a_transfer_comes_first_soonest_hold_first(admin):
+    rsvc, ada_id = admin
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        late = buy(c, PrivateKey(), pay="invoice", email="late@example.org").json()["order"]
+        soon = buy(c, PrivateKey(), pay="invoice", email="soon@example.org").json()["order"]
+        st = sales.store(rsvc)
+        st.update(
+            soon,
+            name="Soon Person",
+            hold_until=sales.iso(sales.now() + dt.timedelta(days=2, hours=1)),
+        )
+        st.update(
+            late, name="Late Person", hold_until=sales.iso(sales.now() + dt.timedelta(days=6))
+        )
+        card = buy(c, PrivateKey(), email="card@example.org").json()["order"]  # no invoice
+        signed_in(c, rsvc, ada_id)
+        t = c.get("/sales", headers=H).text
+        head = t[t.index("Waiting for a transfer") : t.index("<h2>Orders</h2>")]
+        assert head.index("Soon Person") < head.index("Late Person")
+        assert "3 days left" in head and "6 days left" in head
+        assert "INV/2026/" in head and "€200.00" in head
+        assert st.order(card)["state"] != "invoiced" and "card@example.org" not in head
+        # the Mark paid there is the same action: a reason, and who did it
+        post(c, "/sales/order", id=soon, reason="bank statement 7", do="paid")
+        o = st.order(soon)
+        assert o["state"] == "active" and o["paid"]["by"] == "Ada Admin"
+        t = c.get("/sales", headers=H).text
+        head = t[t.index("Waiting for a transfer") : t.index("<h2>Orders</h2>")]
+        assert "Soon Person" not in head and "Late Person" in head
+
+
+def test_days_left_wording():
+    now = sales.now()
+    assert salesconsole.days_left(None) == "no end set"
+    assert (
+        salesconsole.days_left(sales.iso(now - dt.timedelta(hours=1)), now) == "the hold has ended"
+    )
+    assert (
+        salesconsole.days_left(sales.iso(now + dt.timedelta(hours=5)), now)
+        == "less than a day left"
+    )
+    assert (
+        salesconsole.days_left(sales.iso(now + dt.timedelta(days=1, hours=1)), now) == "2 days left"
+    )
+
+
+def test_the_erase_request_shows_on_the_order_and_an_admin_clears_it(admin, keycast):
+    rsvc, ada_id = admin
+    code = sales.make_codes(rsvc, 100, "village-2027")[0]["code"]
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        oid = buy(c, PrivateKey(), code=code, erase_after_event=True).json()["order"]
+        signed_in(c, rsvc, ada_id)
+        t = c.get("/sales", headers=H).text
+        assert "Erase their data after the event (asked)" in t and "Clear the erase request" in t
+        pid = sales.store(rsvc).order(oid)["partner_id"]
+        post(c, "/sales/order", id=oid, reason="", do="keep_data")
+        assert sales.erase_of(rsvc, pid)
+        post(c, "/sales/order", id=oid, reason="they asked by phone", do="keep_data")
+        assert not sales.erase_of(rsvc, pid)
+        t = c.get("/sales", headers=H).text
+        assert "Clear the erase request" not in t and "(asked)" in t

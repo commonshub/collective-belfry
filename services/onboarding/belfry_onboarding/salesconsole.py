@@ -8,6 +8,7 @@ csrf and answers with a fixed message (flash.py); nothing on the page comes from
 
 from __future__ import annotations
 
+import datetime as dt
 import html
 import logging
 import re
@@ -46,6 +47,7 @@ STYLE = """<style>
 .sales details summary{font-weight:600}
 .sales table td form{display:inline}
 .sales .flags{font-size:12px;color:#92400e}
+.sales .waiting .card p{margin:4px 0}
 @media (max-width:600px){.sales form.f .two{grid-template-columns:1fr}}
 </style>"""
 
@@ -90,6 +92,7 @@ MSG = {
     "reason": "Give a reason.",
     "not_open": "This order is not open any more.",
     "expired": "The form expired; try again.",
+    "erase_cleared": "The request to erase their data after the event is cleared.",
 }
 
 
@@ -143,6 +146,58 @@ def parse_prices(text: str) -> list[dict[str, Any]]:
             raise ValueError("Prices: one per line, like “200 until 2026-12-31”, then “300”.")
         out.append({"amount": m.group(1).replace(",", "."), "until": m.group(2)})
     return out
+
+
+def days_left(hold_until: str | None, today: dt.datetime | None = None) -> str:
+    """The "N days left" (whole days, rounded up) until the place is no longer held."""
+    if not hold_until:
+        return "no end set"
+    try:
+        end = sales.parse_iso(hold_until)
+    except ValueError:
+        return ""
+    secs = (end - (today or sales.now())).total_seconds()
+    if secs <= 0:
+        return "the hold has ended"
+    n = int(-(-secs // 86400))
+    return "less than a day left" if secs < 86400 else f"{n} day{'s' if n != 1 else ''} left"
+
+
+def waiting_for_transfer(svc: Services) -> list[dict[str, Any]]:
+    """Orders with an invoice and no payment yet, the one whose hold ends soonest first."""
+    rows = [o for o in sales.store(svc).orders(("invoiced",)) if not o.get("paid")]
+    return sorted(rows, key=lambda o: (o.get("hold_until") is None, o.get("hold_until") or ""))
+
+
+def _change_form(csrf: str, o: dict[str, Any]) -> str:
+    """Mark paid / cancel an open order (reason required, the admin's name recorded)."""
+    return f"""<details><summary>Change</summary><form method="post" action="{PATH}/order" class="f">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
+<label>Reason <input type="text" name="reason" required></label>
+<div class="actions"><button class="btn" type="submit" name="do" value="paid">Mark paid</button>
+<button class="btn ghost" type="submit" name="do" value="cancel">Cancel the order</button></div></form></details>"""
+
+
+def waiting_html(svc: Services, csrf: str) -> str:
+    rows = waiting_for_transfer(svc)
+    if not rows:
+        return ""
+    cards = ""
+    for o in rows:
+        inv = o.get("invoice") or {}
+        number = inv.get("number") or ""
+        comm = inv.get("communication") or number
+        hold = o.get("hold_until") or ""
+        cards += f"""<div class="card"><p><b>{E(o["name"])}</b> · {_money(o["total"]["gross"])} · {E(o["product"])}</p>
+<p class="hint">Invoice {E(number) if number else "(no number yet)"}{f" · communication <code>{E(comm)}</code>" if comm and comm != number else ""}</p>
+<p class="hint">Held until {E(hold[:16].replace("T", " ")) if hold else "—"} · {E(days_left(hold))}</p>
+<form method="post" action="{PATH}/order" class="f">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
+<label>Reason <input type="text" name="reason" required placeholder="seen on the bank statement of …"></label>
+<div class="actions"><button class="btn" type="submit" name="do" value="paid">Mark paid</button></div></form></div>"""
+    return f"""<div class="waiting"><h2 id="waiting">Waiting for a transfer</h2>
+<p class="hint">Invoiced, not paid yet: the hold that ends soonest first. Odoo's bank reconciliation marks them paid by itself; mark one paid here when you saw the money.</p>
+{cards}</div>"""
 
 
 def product_form(csrf: str, p: dict[str, Any] | None) -> str:
@@ -355,11 +410,7 @@ The restricted key needs Checkout Sessions: write.</p>
         inv = (o.get("invoice") or {}).get("number") or ""
         act = ""
         if o["state"] in ("pending", "invoiced"):
-            act = f"""<details><summary>Change</summary><form method="post" action="{PATH}/order" class="f">
-<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
-<label>Reason <input type="text" name="reason" required></label>
-<div class="actions"><button class="btn" type="submit" name="do" value="paid">Mark paid</button>
-<button class="btn ghost" type="submit" name="do" value="cancel">Cancel the order</button></div></form></details>"""
+            act = _change_form(csrf, o)
         elif o["state"] in ("cancelled", "expired") and o["total"]["gross"] > 0:
             # a transfer made in time but seen after the hold ended (or a cancel by mistake)
             act = f"""<details><summary>Change</summary><form method="post" action="{PATH}/order" class="f">
@@ -370,12 +421,20 @@ The restricted key needs Checkout Sessions: write.</p>
         if o.get("flags") or o.get("step") == "stuck" or o.get("next_try_at"):
             act += f"""<form method="post" action="{PATH}/order"><input type="hidden" name="csrf" value="{csrf}">
 <input type="hidden" name="id" value="{E(o["id"])}"><button class="btn ghost" type="submit" name="do" value="retry">Try again</button></form>"""
+        erase = ""
+        if o.get("erase_after_event"):
+            erase = "<br><span class=flags>Erase their data after the event (asked)</span>"
+            if o["state"] == "active" and sales.erase_of(svc, o.get("partner_id")):
+                act += f"""<details><summary>Clear the erase request</summary><form method="post" action="{PATH}/order" class="f">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
+<label>Reason <input type="text" name="reason" required placeholder="they asked to keep their account"></label>
+<div class="actions"><button class="btn ghost" type="submit" name="do" value="keep_data">Clear</button></div></form></details>"""
         rrow += (
             f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span></td>"
             f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
-            f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}</td><td>{act}</td></tr>"
+            f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}{erase}</td><td>{act}</td></tr>"
         )
-    orders = f"""<h2>Orders</h2>{f'<table class="list"><tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice</th><th>State</th><th></th></tr>{rrow}</table>' if rrow else '<p class="hint">No orders yet.</p>'}"""
+    orders = f"""{waiting_html(svc, csrf)}<h2>Orders</h2>{f'<table class="list"><tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice</th><th>State</th><th></th></tr>{rrow}</table>' if rrow else '<p class="hint">No orders yet.</p>'}"""
     body = f"""{STYLE}<div class="sales"><h1>Sales</h1>
 <p class="muted">Passes people buy: free with a code, or paid by card or bank transfer against an invoice in your Odoo.</p>
 {note}{state}{products}{codes}{offers}{orders}{odoo}{bank}{stripe}</div>"""
@@ -627,6 +686,11 @@ def register(app: FastAPI) -> None:
         if not reason:
             return back(request, err="reason")
         by = me["name"] or "an admin"
+        if o is not None and form.get("do") == "keep_data":
+            if not o.get("partner_id"):
+                return back(request, err="not_open")
+            await run_in_threadpool(sales.clear_erase, s, o["partner_id"], by, reason)
+            return back(request, msg="erase_cleared")
         if o is not None and form.get("do") == "reopen" and o["state"] in ("cancelled", "expired"):
             try:
                 await run_in_threadpool(sales.reopen_paid, s, oid, reason, by)

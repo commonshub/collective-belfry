@@ -52,7 +52,14 @@ set.
 - **Codes**: make codes (percent 1–100, product or any, uses, expires, note; N at once), see
   who used them, revoke.
 - **Offers** (in kind) and **Orders**: lists with their state; an order can be cancelled or
-  marked paid by hand (reason required).
+  marked paid by hand (reason required, the admin's name recorded).
+- **Waiting for a transfer**, at the top of the orders: every order in state `invoiced` that
+  isn't paid, the one whose hold ends soonest first, with the buyer's name, the amount, the
+  invoice number and communication, `hold_until` and "N days left" (whole days, rounded up),
+  and the same "Mark paid" action (reason required) right there.
+- An order whose buyer asked `erase_after_event` says so in its state column; once its pass is
+  active and the request is on the contact, "Clear the erase request" (reason required) clears
+  it on the contact (`belfry_erase_after_event_cleared` keeps who, why and when).
 
 ## 3. Who is buying: a key made in the browser
 
@@ -97,6 +104,20 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
 
 ## 4. API (https://belfry.<domain>/api/v1, CORS open to the apex)
 
+CORS (discovery.py, `api_cors` middleware; not Caddy): the apex `https://<domain>` (and
+`chat.<domain>`, `API_CORS_ORIGINS`, approved apps) may call every `/api/*` path. The website's
+previews, `https://preview.<domain>`, show anyone's draft site, so they get CORS **only** on the
+buyer's sales endpoints: `GET /products`, `POST /codes/check`, `POST /checkout`,
+`GET /checkout/<order>`, `POST /checkout/<order>/pay`, `GET /billing`, `POST /offers`,
+`GET /offers/<id>` (and their preflights). Same methods and headers as the apex
+(`GET, POST, PUT`; `Authorization, Content-Type`), never `Access-Control-Allow-Credentials`:
+these calls are signed per request (NIP-98) by the page's own key, no cookie is involved.
+`POST /codes` and `POST /offers/<id>/decide` (admins) and every other endpoint refuse the
+preview's preflight (403) and answer without CORS headers.
+
+Unknown fields in a request body are ignored (`/checkout`, `/offers` and the others read only
+the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
+
 `GET /products` — no auth.
 
 ```json
@@ -117,7 +138,8 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
  "pay": "card" | "invoice",
  "billing": {"kind": "person" | "organisation", "name": "…", "vat": "BE0…", "street": "…",
              "zip": "…", "city": "…", "country": "BE", "invoice_email": "…"},
- "return_url": "https://<domain>/tickets/thanks"}
+ "return_url": "https://<domain>/tickets/thanks",
+ "erase_after_event": false}
 ```
 
 → 201
@@ -128,8 +150,21 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
  "invoice": {"number": "INV/2026/0042", "communication": "+++123/4567/89012+++", "url": "…"},
  "card_url": "https://checkout.stripe.com/…",
  "pay_url": "https://belfry.<domain>/pay/o_…",
- "hold_until": "2026-11-24T16:00:00Z"}
+ "hold_until": "2026-11-24T16:00:00Z",
+ "erase_after_event": false}
 ```
+
+- `erase_after_event` (optional, default `false`): the buyer ticked "Send me all my data and
+  erase it all from your server as soon as the event is over". It must be a JSON boolean when
+  present (`"true"`, `1`, `null`… → 422 `invalid`). Kept on the order; when the pass opens it is
+  copied onto the person's contact: `belfry_erase_after_event: true`,
+  `belfry_erase_after_event_order` (the order id) and `belfry_erase_after_event_at` (when it was
+  asked). Once true it stays true: a later order without it never clears it, only an admin
+  does (console). Asking again for the same open order with `true` adds it; `false` never takes
+  it back. A code that answers an offer in kind that asked it carries it to the order. When the
+  pass moves to the existing account of the same address, the request goes along. The answer
+  (and `GET /checkout/<order>`) always carries it. **Only recorded: the run that exports the
+  person's data to them and erases it after the event is not built yet.**
 
 - `return_url` must be `https://` with the hostname exactly the belfry's domain or a subdomain
   of it, no port, user info, query, fragment, backslash, whitespace or control characters;
@@ -209,9 +244,11 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 `requests` with the slug `requests` when there is none). No requests channel → `POST /offers`
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
-`POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent"}`
-(`percent` 50–100, 50 when left out; the website's form shows 50% by default) → 201
-`{"offer": "f_…", "state": "confirm"}`. It goes through the requests page's own path for a thread
+`POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent",
+"erase_after_event"?}` (`percent` 50–100, 50 when left out; the website's form shows 50% by
+default; `erase_after_event` as for `/checkout`: a JSON boolean or 422 `invalid`, kept on the
+offer, carried to the order made with the offer's code) → 201
+`{"offer": "f_…", "state": "confirm", "product", "erase_after_event"}`. It goes through the requests page's own path for a thread
 from outside: the confirmation mail must be answered (the address must be theirs) before
 anything is public; the page's limits apply, and 3 a day per key and per IP, 3 open per key.
 The form and the confirmation mail say in plain words that the request and the name will be
@@ -223,7 +260,7 @@ answer in the thread in the chat; the requester comments with their link; replie
 back to them (webthreads.py).
 
 `GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
-"declined", "product", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
+"declined", "product", "erase_after_event", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
 requester's own link (to comment), only in this answer and in their mail.
 
 Deciding: the belfry's admins only, in the console (any percent 50–100 or no, with a note) or
@@ -306,6 +343,9 @@ message field, exactly as given).
 - Paid or ended orders show no bank details on `/pay/<order>`.
 
 ## 7. Not in this version
+
+The export-and-erase run behind `erase_after_event` (the flag is recorded on the order and the
+contact; nothing exports or erases anything yet).
 
 Sponsor checkout (N passes in one order), partial payments, automatic refunds, other currencies
 than the one in settings, Mollie, selling on a belfry that keeps its register in Odoo (it sells
