@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { allGroups, channelIcon, displayName, realName, eventOfGroup, group, groups, guestJoins, profiles } from '../core/model'
 import { aboutOf, addPlace, allTags, cleanTag, countries, extras, isBelfryAdmin, placeLabel, saveExtras, saveProfile, searchPlaces, setUsername, type Place, type Share } from '../core/people'
-import { ADMIN, loadRoles, roleBadge, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
+import { ADMIN, loadRoles, roleById, roleOf, rolesLoaded, setMemberRole } from '../core/roles'
 import { RolePickerSheet } from './RolePicker'
 import { DOOR, STEWARD } from '../core/places'
 import { agentOwner, agentOwners, isAdmin } from '../core/access'
@@ -19,7 +19,7 @@ import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, go, Sheet, Form, Btn } from './common'
 import { Markdown } from './markdown'
-import { ChevronRightIcon, CopyIcon, PencilIcon, PinIcon, TrashIcon } from './icons'
+import { ChevronRightIcon, CopyIcon, MailIcon, MessageIcon, PencilIcon, PinIcon, ShareIcon, TrashIcon } from './icons'
 
 export const profileHref = (pubkey: string) => 'u/' + nip19.npubEncode(pubkey)
 /** IN: the group it is opened from (a channel's or an event's people): the profile then shows the
@@ -41,6 +41,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const [dropping, setDropping] = useState(false)
   const [agentError, setAgentError] = useState('')
   const [picking, setPicking] = useState(false)
+  const [shared_, setShared] = useState(false)
   useEffect(() => { if (isAdmin() && !rolesLoaded()) void loadRoles() }, [])
   if (!pk) return <div className="screen"><div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Profile</h1></div><div className="empty">This link doesn't point to a person.</div></div>
   const mine = pk === me()
@@ -60,9 +61,18 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const admin = isBelfryAdmin(pk)
   // their role (roles.ts): admins change it here, through the one role picker
   const role = roleOf(pk) ?? (admin ? ADMIN : undefined)
-  const badge = roleBadge(pk) || (admin ? roleById(ADMIN)?.label ?? 'Steward' : '')
   const canRole = isAdmin() && !mine && !owner
   const community = useCommunityName(NAME)
+  // the address people reach them at (their NIP-05, as iOS): E-mail writes to it, Share shares it (else their npub)
+  const address = p?.nip05 && p.nip05.includes('@') ? p.nip05 : undefined
+  const share = async () => {
+    const text = address ?? nip19.npubEncode(pk)
+    try { if (navigator.share) { await navigator.share({ title: p?.name || displayName(pk), text }); return } } catch { return }
+    try { await navigator.clipboard.writeText(text) } catch {
+      const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
+    }
+    setShared(true); setTimeout(() => setShared(false), 1500)
+  }
   return (
     <div className="screen">
       <div className="topbar">
@@ -71,29 +81,43 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
         {mine && <button className="btn small ghost" onClick={() => setEditing(true)}>Edit</button>}
       </div>
       <div className="scroll pad profile">
-        <div className="profile-head">
-          <Avatar pubkey={pk} size={88} />
-          <div style={{ minWidth: 0 }}>
-            <div className="profile-name">{p?.name || displayName(pk)}</div>
-            {p?.nip05 && <div className="hint" style={{ overflowWrap: 'anywhere' }}>{p.nip05}</div>}
-            <div className="profile-badges">
-              {badge && <span className="chip role">{badge}</span>}
-              {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
-              {guest && <span className="chip">{guest.agent ? 'agent' : guest.unsaved ? 'guest · not saved' : 'guest'}</span>}
-              {guest?.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
-            </div>
+        {/* a contact card (board home/profile, as on iOS): face, name, address, then Message · E-mail · Share */}
+        <div className="profile-head card-head">
+          <Avatar pubkey={pk} size={96} />
+          <div className="profile-name">{p?.name || displayName(pk)}</div>
+          {address && <div className="hint profile-address">{address}</div>}
+          <div className="profile-badges">
+            {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
+            {guest && <span className="chip">{guest.agent ? 'agent' : guest.unsaved ? 'guest · not saved' : 'guest'}</span>}
+            {guest?.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
+          </div>
+          <div className="profile-acts">
+            {!mine && !guest && !isGuest(me()) && <button className="profile-act" onClick={() => go('dm/' + encodeURIComponent('n:' + pk))}><span className="bx"><MessageIcon /></span>Message</button>}
+            {!mine && address && <a className="profile-act" href={'mailto:' + address}><span className="bx"><MailIcon /></span>E-mail</a>}
+            <button className="profile-act" onClick={() => void share()}><span className="bx"><ShareIcon /></span>{shared_ ? 'Copied' : 'Share'}</button>
           </div>
         </div>
+        {/* the belfry-wide role (docs/roles.md): everyone sees it, the belfry's admins change it */}
+        {(canRole || role) && !owner && (
+          <div className="card profile-role">
+            <div className="hint card-title">Role in {community}</div>
+            {canRole ? (
+              <button type="button" className="pick-row role-row" disabled={!!noAdmin && !role} onClick={() => { setError(''); setPicking(true) }}>
+                <span className="t"><b>{role ? roleById(role)?.label ?? role : guest ? (guest.agent ? 'Agent' : 'Guest') : '—'}</b>
+                  <small>{noAdmin || (role ? roleById(role)?.description : 'A guest now: a role makes them a member of the belfry.')}</small></span>
+                <ChevronRightIcon />
+              </button>
+            ) : (
+              <div className="pick-row role-row ro"><span className="t"><b>{roleById(role)?.label ?? 'Member'}</b>{roleById(role)?.description && <small>{roleById(role)!.description}</small>}</span></div>
+            )}
+            {isAdmin() && <button type="button" className="pick-row edit-roles" onClick={() => go('settings/roles')}><PencilIcon /><span>Edit roles…</span></button>}
+            {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
+          </div>
+        )}
+        {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
         {x?.place && <div className="profile-place"><PinIcon /> {placeLabel(x.place)}</div>}
         {about ? <Markdown text={about} className="profile-about" /> : mine && <p className="hint">Say a few words about yourself: tap Edit.</p>}
         {x && x.tags.length > 0 && <div className="profile-tags">{x.tags.map((t) => <span key={t} className="chip">#{t}</span>)}</div>}
-        {!mine && !guest && <button className="btn" style={{ marginTop: 8 }} onClick={() => go('dm/' + encodeURIComponent('n:' + pk))}>Message</button>}
-        {shared.length > 0 && (
-          <div className="card" style={{ marginTop: 16 }}>
-            <div className="hint" style={{ marginBottom: 6 }}>{mine ? 'Your channels' : 'Channels'}</div>
-            {shared.map((g) => <button key={g.id} className="link profile-chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>{channelIcon(g)} {g.name}</button>)}
-          </div>
-        )}
         {(canOwn || canDrop) && (
           <div className="card">
             {canOwn && <>
@@ -114,24 +138,12 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
             {agentError && <div className="error" style={{ marginTop: 8 }}>{agentError}</div>}
           </div>
         )}
-        {/* the belfry-wide role (docs/roles.md): everyone sees it, the belfry's admins change it */}
-        {(canRole || role) && !owner && (
-          <div className="card profile-role">
-            <div className="hint card-title">Role in {community}</div>
-            {canRole ? (
-              <button type="button" className="pick-row role-row" disabled={!!noAdmin && !role} onClick={() => { setError(''); setPicking(true) }}>
-                <span className="t"><b>{role ? roleById(role)?.label ?? role : guest ? (guest.agent ? 'Agent' : 'Guest') : '—'}</b>
-                  <small>{noAdmin || (role ? roleById(role)?.description : 'A guest now: a role makes them a member of the belfry.')}</small></span>
-                <ChevronRightIcon />
-              </button>
-            ) : (
-              <div className="pick-row role-row ro"><span className="t"><b>{roleById(role)?.label ?? 'Member'}</b>{roleById(role)?.description && <small>{roleById(role)!.description}</small>}</span></div>
-            )}
-            {isAdmin() && <button type="button" className="pick-row edit-roles" onClick={() => go('settings/roles')}><PencilIcon /><span>Edit roles…</span></button>}
-            {error && <div className="error" style={{ marginTop: 8 }}>{error}</div>}
+        {shared.length > 0 && (
+          <div className="card" style={{ marginTop: 16 }}>
+            <div className="hint card-title">{mine ? 'Your channels' : 'Channels in common'}</div>
+            {shared.map((g) => <button key={g.id} className="link profile-chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>{channelIcon(g)} {g.name}</button>)}
           </div>
         )}
-        {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
         {mine && THEME === 'belfry' && !isGuest(me()) && !agentOwner(me()) && !isAgent(me()) && <MyAgentCard />}
       </div>
       {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}

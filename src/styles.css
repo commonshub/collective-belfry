@@ -660,6 +660,17 @@ dialog.modal .modal-close:hover { background: var(--surface); color: var(--text)
 button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 .profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
 .profile-name { font-size: 22px; font-weight: 700; line-height: 1.2; }
+/* the contact card (board home/profile): centred face, name and address, then three actions */
+.profile-head.card-head { flex-direction: column; align-items: center; text-align: center; gap: 4px; margin: 4px 0 16px; }
+.card-head .profile-name { font-size: 26px; margin-top: 8px; overflow-wrap: anywhere; }
+.card-head .profile-address { font-size: 15px; overflow-wrap: anywhere; }
+.card-head .profile-badges { justify-content: center; margin-top: 2px; }
+.card-head .profile-badges:empty { display: none; }
+.profile-acts { display: flex; gap: 14px; justify-content: center; margin-top: 12px; }
+.profile-act { display: flex; flex-direction: column; align-items: center; gap: 4px; font: inherit; font-size: 13px; color: var(--text); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: none; min-width: 62px; }
+.profile-act .bx { width: 62px; height: 44px; border-radius: 12px; background: var(--surface); display: grid; place-items: center; }
+.profile-act:hover .bx { background: color-mix(in srgb, var(--text) 8%, var(--surface)); }
+.profile-act svg { width: 22px; height: 22px; }
 .profile-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
 .profile-place { display: flex; gap: 6px; align-items: center; color: var(--muted); margin-bottom: 8px; }
 .profile-about { margin: 8px 0; }
