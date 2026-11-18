@@ -67,7 +67,7 @@ export function ChannelInfoBody({ id, tab, setTab, tabs }: { id: string; tab: Ta
 export type InfoTab = Tab
 
 export function Tabs<T extends string>({ tab, setTab, tabs }: { tab: T; setTab: (t: T) => void; tabs?: [T, string][] }) {
-  const list = tabs ?? ([['about', 'About'], ['members', 'Members'], ['tasks', 'Todos'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
+  const list = tabs ?? ([['about', 'About'], ['members', 'Members'], ['tasks', 'To-dos'], ['files', 'Files'], ['log', 'Log']] as [T, string][])
   return (
     <div className="seg">
       {list.map(([k, label]) => <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{label}</button>)}
@@ -405,10 +405,10 @@ export function Tasks({ groupId }: { groupId: string }) {
   return (
     <div>
       <Form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-        <input className="input" placeholder="Add a todo…" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
         <button className="btn small" disabled={!title.trim()}>Add</button>
       </Form>
-      {tasks.length === 0 && <div className="empty">No todos yet.</div>}
+      {tasks.length === 0 && <div className="empty">No to-dos yet.</div>}
       {[...todo, ...done].map((t) => (
         <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
       ))}
@@ -429,7 +429,7 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="title" onClick={toggle}><Linkify text={t.title} /></div>
         <small onClick={toggle}>
-          {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Unassigned'}
+          {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Nobody on it yet'}
           {t.comments.length ? ` · 💬 ${t.comments.length}` : ''}
         </small>
         {open && (
@@ -519,7 +519,7 @@ export function Members({ groupId }: { groupId: string }) {
 interface LogItem { ev: Ev; icon: string; text: string; detail?: string; go?: string }
 
 const LABEL_WORDS: Record<string, string> = { steward: 'put someone on the door', none: 'changed someone’s role', 'checked-in': 'checked someone in', 'not-checked-in': 'undid a check-in', pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
-const TASK_WORDS: Record<string, string> = { assign: 'gave someone a todo', unassign: 'took someone off a todo', claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
+const TASK_WORDS: Record<string, string> = { assign: 'gave someone a to-do', unassign: 'took someone off a to-do', claim: 'took a to-do', unclaim: 'let go of a to-do', done: 'marked a to-do done', undone: 'reopened a to-do', idle: '', working: '', delete: 'deleted a to-do' }
 const short = (t: string, n = 80) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x }
 
 function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem | null {
@@ -540,9 +540,9 @@ function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem |
     case 1010: return { ev: e, icon: '✏️', text: 'edited a message', detail: short(e.content, 200), go: t('e') ? at('m/' + t('e')) : undefined }
     case 7: return { ev: e, icon: e.content && e.content.length <= 4 && e.content !== '+' ? e.content : '👍', text: 'reacted', go: t('e') ? at('m/' + t('e')) : undefined }
     case 5: case 9005: return { ev: e, icon: '🗑', text: t('k') === '7' ? 'took back a reaction' : 'deleted something' }
-    case 2100: return { ev: e, icon: '☑️', text: 'made a todo', detail: short(t('title') || e.content, 200), go: at('todos') }
+    case 2100: return { ev: e, icon: '☑️', text: 'made a to-do', detail: short(t('title') || e.content, 200), go: at('todos') }
     case 2101: { const w = TASK_WORDS[t('action') ?? ''] ; if (!w) return null; const title = titles.get(t('e') ?? ''); return { ev: e, icon: t('action') === 'done' ? '✅' : '☑️', text: w, detail: title, go: at('todos') } }
-    case 2103: return { ev: e, icon: '💬', text: 'commented on a todo', detail: short(e.content, 200), go: at('todos') }
+    case 2103: return { ev: e, icon: '💬', text: 'commented on a to-do', detail: short(e.content, 200), go: at('todos') }
     case 9000: return { ev: e, icon: '👋', text: e.tags.some((x) => x[0] === 'p' && x[2] === 'admin') ? 'made someone an admin' : 'added someone', detail: t('p') ? displayName(t('p')!) : undefined, go: at('members') }
     case 9001: return { ev: e, icon: '🚪', text: 'removed someone', detail: t('p') ? displayName(t('p')!) : undefined, go: at('members') }
     case 9021: return { ev: e, icon: '🙋', text: 'asked to join', detail: short(e.content, 200) }

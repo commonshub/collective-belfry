@@ -140,7 +140,7 @@ function NewTodo({ groupId }: { groupId: string }) {
   const [title, setTitle] = useState('')
   return (
     <Form className="row pull-newtodo" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-      <input className="input" placeholder="Add a todo…" value={title} onChange={(e) => setTitle(e.target.value)} />
+      <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
       <Btn className="btn small" disabled={!title.trim()}>Add</Btn>
     </Form>
   )
