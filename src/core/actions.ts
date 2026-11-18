@@ -232,6 +232,10 @@ export const pinMessage = (groupId: string, id: string, on: boolean) =>
 export const taskAction = (groupId: string, taskId: string, action: 'claim' | 'unclaim' | 'done' | 'undone' | 'delete') =>
   enqueue('groups', { kind: 2101, tags: [['e', taskId], ['action', action], ...taskTags(groupId)] })
 
+/** Give a to-do to someone ("assign") or take them off it ("unassign"), SPEC 19.40. */
+export const assignTask = (groupId: string, taskId: string, pubkey: string, on: boolean) =>
+  enqueue('groups', { kind: 2101, tags: [['e', taskId], ['action', on ? 'assign' : 'unassign'], ['p', pubkey], ...taskTags(groupId)] })
+
 export const commentTask = (groupId: string, taskId: string, text: string) =>
   enqueue('groups', { kind: 2103, content: text.slice(0, 2000), tags: [['e', taskId], ...taskTags(groupId)] })
 

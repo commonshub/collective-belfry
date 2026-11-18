@@ -640,7 +640,7 @@ export interface Task {
   history: TaskStep[]
 }
 
-export interface TaskStep { at: number; who: string; what: 'created' | 'claim' | 'unclaim' | 'working' | 'idle' | 'done' | 'undone' | 'comment'; text?: string }
+export interface TaskStep { at: number; who: string; what: 'created' | 'claim' | 'unclaim' | 'assign' | 'unassign' | 'working' | 'idle' | 'done' | 'undone' | 'comment'; text?: string }
 
 /** A to-do is being worked on right now: its assignee's heartbeat is under 5 minutes old (agents
  *  send one every 2 minutes while busy, `idle` when they stop). One to-do per person at a time. */
@@ -677,6 +677,13 @@ export function tasklist(groupId: string): { name?: string; tasks: Task[] } {
       } else if (a === 'claim' || a === 'unclaim' || a === 'idle' || a === 'done' || a === 'undone') t.history.push({ at: e.created_at, who: e.pubkey, what: a })
       if (a === 'claim') t.assignee = e.pubkey
       if (a === 'unclaim' && t.assignee === e.pubkey) t.assignee = undefined
+      // giving it to someone, taking someone off it (SPEC 19.40, Android 2026-11-18): ["p", <key>]
+      const p = tag(e, 'p')
+      if ((a === 'assign' || a === 'unassign') && p && /^[0-9a-f]{64}$/.test(p)) {
+        t.history.push({ at: e.created_at, who: e.pubkey, what: a, text: p })
+        if (a === 'assign') t.assignee = p
+        else if (t.assignee === p) t.assignee = undefined
+      }
       if (a === 'done') t.done = true
       if (a === 'undone') t.done = false
       if (a === 'delete' && e.pubkey === t.author) tasks.delete(t.id)

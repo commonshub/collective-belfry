@@ -10,8 +10,9 @@ const MembersMap = lazy(() => import('./MembersMap'))
 import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
 import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
 import { BELFRY, NAME } from '../config'
-import { addTask, admit, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
+import { addTask, admit, assignTask, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
+import { isGuest } from '../core/invite'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
 import { InviteSheet } from './Invite'
@@ -417,6 +418,7 @@ export function Tasks({ groupId }: { groupId: string }) {
 
 function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open: boolean; toggle: () => void }) {
   const [comment, setComment] = useState('')
+  const [assigning, setAssigning] = useState(false)
   const mine = t.assignee === me()
   const now = useNow()
   const busy = isWorking(t, now)
@@ -437,8 +439,21 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
               <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, mine ? 'unclaim' : 'claim')}>
                 {mine ? 'Unassign me' : t.assignee ? 'Take over' : "I'll take it"}
               </button>
+              {/* someone else: give it to them, or take them off it (Xavier, 2026-11-18) */}
+              <button className="btn small ghost" aria-expanded={assigning} onClick={() => setAssigning(!assigning)}>Assign to…</button>
+              {t.assignee && !mine && <Btn className="btn small ghost" onClick={() => assignTask(groupId, t.id, t.assignee!, false)}>Unassign {displayName(t.assignee)}</Btn>}
               {t.author === me() && <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, 'delete')}>Delete</button>}
             </div>
+            {assigning && (
+              <div className="assign-list" role="listbox" aria-label="Assign to">
+                {[me(), ...[...(group(groupId)?.members ?? [])].filter((k) => k !== me() && !isGuest(k))].slice(0, 50).map((k) => (
+                  <Btn key={k} className={'pick-row' + (t.assignee === k ? ' on' : '')} role="option" aria-selected={t.assignee === k}
+                    onClick={async () => { await (k === me() ? taskAction(groupId, t.id, 'claim') : assignTask(groupId, t.id, k, true)); setAssigning(false) }}>
+                    <Avatar pubkey={k} size={24} /><span>{k === me() ? 'Me' : displayName(k)}</span>
+                  </Btn>
+                ))}
+              </div>
+            )}
             <Form className="row" onSubmit={async (e) => { e.preventDefault(); if (comment.trim()) { await commentTask(groupId, t.id, comment.trim()); setComment('') } }}>
               <input className="input" placeholder="Comment…" value={comment} onChange={(e) => setComment(e.target.value)} />
               <button className="btn small" disabled={!comment.trim()}>Send</button>
@@ -504,7 +519,7 @@ export function Members({ groupId }: { groupId: string }) {
 interface LogItem { ev: Ev; icon: string; text: string; detail?: string; go?: string }
 
 const LABEL_WORDS: Record<string, string> = { steward: 'put someone on the door', none: 'changed someone’s role', 'checked-in': 'checked someone in', 'not-checked-in': 'undid a check-in', pinned: 'pinned a message', unpinned: 'unpinned a message', attended: 'checked someone in', absent: 'marked someone not there', saved: 'saved their account', member: 'became a member', cancelled: 'cancelled the event', scheduled: 'reopened the event', assigned: 'assigned a mail', done: 'closed a mail', open: 'reopened a mail' }
-const TASK_WORDS: Record<string, string> = { claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
+const TASK_WORDS: Record<string, string> = { assign: 'gave someone a todo', unassign: 'took someone off a todo', claim: 'took a todo', unclaim: 'let go of a todo', done: 'marked a todo done', undone: 'reopened a todo', idle: '', working: '', delete: 'deleted a todo' }
 const short = (t: string, n = 80) => { const x = t.replace(/\s+/g, ' ').trim(); return x.length > n ? x.slice(0, n - 1) + '…' : x }
 
 function logItem(e: Ev, groupId: string, titles: Map<string, string>): LogItem | null {

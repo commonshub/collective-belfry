@@ -1563,7 +1563,7 @@ export function replyText(m: Message): string {
 // Only a to-do's status shows in its thread (Xavier, 2026-11-11): comments are replies already,
 // and "stopped working" or "let go" is noise.
 const STEP_WORDS: Partial<Record<TaskStep['what'], string>> = {
-  created: 'made a todo', claim: 'took it', working: 'started working on it', done: 'marked it done', undone: 'reopened it',
+  created: 'made a todo', claim: 'took it', assign: 'gave it to someone', unassign: 'took someone off it', working: 'started working on it', done: 'marked it done', undone: 'reopened it',
 }
 export interface StepGroup { t: Task; who: string; at: number; what: TaskStep['what'][] }
 
