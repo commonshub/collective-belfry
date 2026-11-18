@@ -1732,3 +1732,7 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .place-list li .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .place-list .place-credit, .place-list.place-credit { font-size: 11px; color: var(--muted); cursor: default; padding: 6px 10px; }
 .place-list li.place-credit:hover { background: none; }
+
+/* A ticket's price (Xavier, 2026-11-18): an amount and what it is paid in */
+.price-field { display: grid; grid-template-columns: 1fr 140px; gap: 8px; }
+.ticket-price { margin: 0 0 10px; }

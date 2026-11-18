@@ -41,7 +41,7 @@ export const slugOf = (title: string) => title.toLowerCase().normalize('NFKD').r
 
 // ---- what the belfry's API answers (GET /api/v1/events/<link>) ---------------------------
 
-export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean }
+export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; price?: Price | null }
 export interface ApiViewer {
   host: boolean; ticket: string | null; applied: boolean; waitlist: boolean; declined: boolean; rsvp: Rsvp | null; member: boolean
   /** check-in (docs/checkin.md): my ticket's code and the URL its QR holds, when I hold one */
@@ -127,14 +127,36 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
 
 // ---- tickets and the people of an event ---------------------------------------------------
 
-export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev }
+/** A ticket's price (NIP-99 ["price", amount, currency]; Xavier, 2026-11-18): an ISO 4217 code (EUR),
+ *  HOUR for time, or the host's own short label. No tag: free. A priced ticket is never self-served:
+ *  people ask, the hosts mark it paid and admit them (the belfry agent's contract, belfry-sh). */
+export interface Price { amount: string; currency: string }
+export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev; price?: Price }
+
+export const PRICE_AMOUNT = /^\d{1,9}(\.\d{1,2})?$/
+export const PRICE_LABEL = /^[\p{L}\p{N} ]{1,12}$/u
+/** "€15", "2 hours", "3 tokens". */
+export function priceLabel(p: Price): string {
+  const n = Number(p.amount)
+  if (/^[A-Z]{3}$/.test(p.currency) && p.currency !== 'HOU') {
+    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: p.currency, minimumFractionDigits: Number.isInteger(n) ? 0 : 2 }).format(n) } catch { /* not a currency the browser knows */ }
+  }
+  if (p.currency === 'HOUR') return `${p.amount} ${n === 1 ? 'hour' : 'hours'}`
+  return `${p.amount} ${p.currency}`
+}
+const priceOf = (x: Ev): Price | undefined => {
+  const t = x.tags.find((y) => y[0] === 'price')
+  return t && PRICE_AMOUNT.test(t[1] ?? '') && Number(t[1]) > 0 && t[2] ? { amount: t[1], currency: t[2] } : undefined
+}
+/** People ask for this ticket (an application, a price) instead of taking it in one tap. */
+export const asks = (t: { closed: boolean; price?: Price | null }) => t.closed || !!t.price
 
 export const freeTicket = (e: Pick<CalEvent, 'd'>): Ticket => ({ d: `${e.d}:free`, id: 'free', title: 'RSVP', summary: '', closed: false, prompt: '', members: false, position: 0, implicit: true })
 
 export function tickets(e: CalEvent, api?: ApiEvent): Ticket[] {
   if (api || e.remote) {
     const a = api ?? remoteEvent(e.d)
-    if (a) return a.tickets.map((t) => ({ ...t, quantity: t.quantity ?? undefined }))
+    if (a) return a.tickets.map((t) => ({ ...t, quantity: t.quantity ?? undefined, price: t.price ?? undefined }))
   }
   const list = all(me())
   const latest = new Map<string, Ev>()
@@ -153,7 +175,7 @@ export function tickets(e: CalEvent, api?: ApiEvent): Ticket[] {
     out.push({
       d, id: d.slice(e.d.length + 1), title: tag(x, 'title') || 'Ticket', summary: tag(x, 'summary') ?? '',
       quantity: tag(x, 'quantity') !== undefined && q >= 0 ? q : undefined, closed: x.tags.some((t) => t[0] === 'closed'),
-      prompt: tag(x, 'prompt') ?? '', members: x.tags.some((t) => t[0] === 'members'), position: Number(tag(x, 'position')) || 0, implicit: false, ev: x,
+      prompt: tag(x, 'prompt') ?? '', members: x.tags.some((t) => t[0] === 'members'), position: Number(tag(x, 'position')) || 0, implicit: false, ev: x, price: priceOf(x),
     })
   }
   return out.length ? out.sort((a, b) => a.position - b.position || a.title.localeCompare(b.title)) : [freeTicket(e)]
@@ -353,8 +375,13 @@ export async function setStatus(e: CalEvent, status: 'cancelled' | 'scheduled', 
   await enqueue('main', { kind: e.ev.kind, content: e.ev.content, tags: status === 'cancelled' ? [...tags, ['status', 'cancelled']] : tags })
 }
 
-export interface TicketForm { id?: string; title: string; summary: string; quantity: string; closed: boolean; prompt: string; members: boolean; position: number }
-/** Save a ticket type (NIP-99 30402; no `price` in v1: free). */
+export interface TicketForm { id?: string; title: string; summary: string; quantity: string; closed: boolean; prompt: string; members: boolean; position: number; /** empty: free */ price: string; /** EUR, HOUR, or the host's label */ currency: string }
+/** The price tag a form gives, or none (free; a bad amount or label is refused by the sheet). */
+export const formPrice = (t: Pick<TicketForm, 'price' | 'currency'>): Price | undefined => {
+  const amount = t.price.trim().replace(',', '.'), currency = t.currency.trim()
+  return PRICE_AMOUNT.test(amount) && Number(amount) > 0 && PRICE_LABEL.test(currency) ? { amount: String(Number(amount)), currency } : undefined
+}
+/** Save a ticket type (NIP-99 30402, with its `price` when it has one). */
 export async function saveTicket(e: CalEvent, t: TicketForm) {
   const id = t.id || newId(3)
   const tags: string[][] = [['d', `${e.d}:${id}`], ['a', e.coord, BELFRY.mainRelay], ['h', e.groupId], ['title', t.title.trim() || 'Ticket'], ['t', 'ticket'], ['position', String(t.position)]]
@@ -362,9 +389,11 @@ export async function saveTicket(e: CalEvent, t: TicketForm) {
   if (/^\d+$/.test(t.quantity.trim())) tags.push(['quantity', t.quantity.trim()])
   if (t.closed) tags.push(['closed'], ['prompt', t.prompt.trim() || 'Why would you like to come?'])
   if (t.members) tags.push(['members'])
+  const price = formPrice(t)
+  if (price) tags.push(['price', price.amount, price.currency])
   await enqueue('main', { kind: 30402, content: t.summary.trim(), tags })
   // any ticket that takes an application closes the event's group (NIP-29 `closed`)
-  const closing = t.closed || tickets(e).some((x) => x.closed && x.id !== id)
+  const closing = t.closed || !!price || tickets(e).some((x) => asks(x) && x.id !== id)
   const g = group(e.groupId)
   if (g && g.closed !== closing) await editGroupMeta(e.groupId, [['name', g.rawName], ['about', g.about], closing ? ['closed'] : ['open']], { closed: closing })
 }
@@ -419,7 +448,7 @@ export async function decide(e: CalEvent, pubkey: string, action: 'approve' | 'd
     return
   }
   if (action === 'decline') return void (await enqueue('groups', { kind: 9001, tags: [['h', e.groupId], ['p', pubkey]] }))
-  await enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'member'], ['ticket', ticketD || `${e.d}:free`], ['paid', 'free'], ['a', e.coord], ...(app ? [['e', app.id]] : [])] })
+  await enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'member'], ['ticket', ticketD || `${e.d}:free`], ['paid', tickets(e).find((x) => x.d === ticketD)?.price ? 'paid' : 'free'], ['a', e.coord], ...(app ? [['e', app.id]] : [])] })
 }
 
 /** Make a member a co-host: an admin of the event's group. */
@@ -476,7 +505,7 @@ export function demoApply(link: string, name: string, answer: string, waitlist =
   if (!e) return
   const pk = hex(32)
   const now = Math.floor(Date.now() / 1000)
-  const t = tickets(e).find((x) => x.closed) ?? tickets(e)[0]
+  const t = tickets(e).find((x) => asks(x)) ?? tickets(e)[0]
   addEvents([
     { id: hex(32), pubkey: pk, sig: hex(64), kind: 0, created_at: now, tags: [], content: JSON.stringify({ name }) },
     { id: hex(32), pubkey: pk, sig: hex(64), kind: 9021, created_at: now, content: answer, tags: [['h', e.groupId], ['ticket', t.d], ...(waitlist ? [['waitlist']] : [])] },
