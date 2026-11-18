@@ -60,6 +60,7 @@ class Theme:
     footer: str
     links: list[tuple[str, str]] = field(default_factory=list)
     scheme: str = "light dark"
+    logo_in_footer: bool = False
 
 
 def custom_dir(settings: Any) -> Path | None:
@@ -126,6 +127,8 @@ def load(settings: Any) -> Theme:
                 theme.links = [(str(h), str(t)) for h, t in data["links"]]
             if data.get("wordmark") is True:
                 theme.logo_is_wordmark = True
+            if data.get("logo") == "footer":  # no logo on top of the pages: it sits in the footer
+                theme.logo_in_footer = True
             if data.get("scheme") in ("light", "dark", "light dark"):
                 theme.scheme = str(data["scheme"])
         except (ValueError, TypeError) as exc:
@@ -165,6 +168,8 @@ FRAME_STYLE = """
  .ok { color: var(--ok, var(--accent)); font-weight: 600; } .bad { color: var(--accent-2); font-weight: 600; }
  code { font-family: var(--font-mono); word-break: break-all; background: var(--surface-deep); padding: 2px 6px; border-radius: 4px; }
  footer { margin-top: 24px; font-size: 0.85rem; color: var(--fg-faint); }
+ footer .foot-logo { display: block; margin-bottom: 10px; } footer .foot-logo img { height: 28px; width: auto; }
+ footer a { color: inherit; text-decoration: underline; }
  footer nav { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px 14px; } footer nav a { color: var(--fg-muted); }
  .test-notice { background: var(--accent-2); color: var(--on-accent); font-weight: 600; text-align: center; padding: 8px 16px; font-size: 0.95rem; }
 """
@@ -187,6 +192,21 @@ def renamed(text: str, name: str, escape: bool = True) -> str:
     return text
 
 
+FOOTER_LINK = re.compile(r"\[([^\[\]\n]{1,80})\]\((https://[^\s()<>\"']{1,300}|/(?!/)[^\s()<>\"']{0,300})\)")
+
+
+def footer_html(text: str) -> str:
+    """The footer line of theme.json: plain text, where ``[words](https://…)`` (or a path on
+    this site) becomes a link. Everything else is escaped."""
+    out, at = [], 0
+    for m in FOOTER_LINK.finditer(text):
+        out.append(E(text[at : m.start()]))
+        out.append(f'<a href="{E(m.group(2))}">{E(m.group(1))}</a>')
+        at = m.end()
+    out.append(E(text[at:]))
+    return "".join(out)
+
+
 def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: bool = False) -> str:
     """The page: logo, BODY, footer. BARE leaves out the footer (the first-run setup wizard)."""
     t = current()
@@ -199,6 +219,11 @@ def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: boo
         else f'<img src="{E(t.logo)}" alt=""><span>{E(t.name)}</span>'
     )
     links = "".join(f'<a href="{E(h)}">{E(text)}</a>' for h, text in t.links)
+    foot_logo = (
+        f'<a class="foot-logo" href="{E(t.url)}"><img src="{E(t.logo)}" alt="{E(t.name)}"></a>'
+        if t.logo_in_footer
+        else ""
+    )
     width = "<style>main{max-width:960px}</style>" if wide else ""
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -207,9 +232,9 @@ def frame(title: str, body: str, notice: str = "", wide: bool = False, bare: boo
 {css}
 <title>{E(title)}</title>
 <style>{FRAME_STYLE}</style>{width}<script src="/static/busy.js" defer></script></head><body>{strip}<main>
-<header class="site"><a href="{E(t.url)}">{brand}</a></header>
+{"" if t.logo_in_footer and not bare else f'<header class="site"><a href="{E(t.url)}">{brand}</a></header>'}
 {body}
-{"" if bare else f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"}
+{"" if bare else f"<footer>{foot_logo}{footer_html(t.footer)}<nav>{links}</nav></footer>"}
 </main></body></html>"""
 
 

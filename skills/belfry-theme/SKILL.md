@@ -45,7 +45,9 @@ gif and json files.
 
 - `name`: the name on the pages (default: `COMMUNITY_NAME`, set on the setup page);
 - `url`: where the logo links (default: the homepage);
-- `footer`: the footer line (default: "<name>, run by Belfry");
+- `footer`: the footer line (default: "<name>, run by Belfry"). Plain text; `[words](https://…)` or
+  `[words](/path)` in it becomes a link;
+- `logo`: `"footer"` puts the logo at the bottom left of the pages instead of on top;
 - `links`: the footer links, `[["href", "text"], …]` (default: Proposals, Changelog, Code, This belfry);
 - `wordmark`: `true` when the logo already spells the name (then the name isn't repeated);
 - `scheme`: `"light"`, `"dark"` or `"light dark"` (the default: follows the device).

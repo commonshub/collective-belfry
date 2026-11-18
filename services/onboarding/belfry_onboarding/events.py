@@ -791,6 +791,28 @@ def names(svc: Services, pubkeys: list[str]) -> dict[str, str]:
         return {}
 
 
+def _known(found: dict[str, str], pubkey: str) -> str:
+    from .community import UNKNOWN
+
+    name = found.get(pubkey, "")
+    return "" if name == UNKNOWN else name
+
+
+def shown_hosts(svc: Services, ev: Event) -> list[str]:
+    """Who the event says it is hosted by: its creator and the co-hosts put in with the admin
+    role. Not everyone who can moderate it (the relay's own keys and the belfry's admins are
+    admins of every group), and never the belfry's service keys."""
+    from . import checkin, community
+
+    try:
+        by_role = checkin.group_state(svc, ev.group).by_role
+    except Exception:  # noqa: BLE001 — the creator alone is still right
+        by_role = set()
+    service = {checkin.groups_pubkey(svc), community.belfry_pubkey(svc.settings)}
+    keys = [ev.creator, *sorted(by_role - {ev.creator})]
+    return [k for k in keys if k and k not in service]
+
+
 def domain(svc: Services) -> str:
     return svc.settings.nip05_domain
 
@@ -864,7 +886,10 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         "visibility": ev.visibility,
         "status": ev.status,
         "status_reason": ev.status_reason,
-        "hosts": [{"pubkey": h, "name": host_names.get(h, "")} for h in sorted(ev.hosts)],
+        # everyone who may run it (permissions); a name is empty when there is no profile
+        "hosts": [{"pubkey": h, "name": _known(host_names, h)} for h in sorted(ev.hosts)],
+        # who to SHOW as hosting it: the creator and co-hosts, no service keys
+        "hosted_by": [{"pubkey": h, "name": _known(host_names, h)} for h in shown_hosts(svc, ev)],
         "tickets": [t.public(ppl.taken(t.d)) for t in tks],
         "going": ppl.going(),
         "community": _community_name(),
@@ -1428,7 +1453,7 @@ STYLE = """<style>
 .ev .go{
   display:inline-block;
   background:var(--accent);
-  color:var(--accent-fg,#fff);
+  color:var(--on-accent,#fff);
   padding:11px 20px;
   border-radius:10px;
   text-decoration:none;
@@ -1499,8 +1524,9 @@ def event_page(svc: Services, ev: Event) -> str:
     url = url_of(svc, ev)
     ppl = people(svc, ev)
     tks = tickets(svc, ev)
-    host_names = names(svc, sorted(ev.hosts))
-    hosts = ", ".join(host_names.get(h) or "a member" for h in sorted(ev.hosts))
+    from . import community
+
+    hosts = community.people_html(svc, shown_hosts(svc, ev))
     desc = re.sub(r"\s+", " ", ev.about)[:200]
     head = (
         '<meta property="og:type" content="event">'
@@ -1544,7 +1570,7 @@ def event_page(svc: Services, ev: Event) -> str:
 <h1>{E(ev.title)}</h1>
 <p class="when">{E(when_text(ev))}</p>
 {f'<p class="where">{E(where)}</p>' if where else ""}
-<p class="hosts">Hosted by {E(hosts)} · {ppl.going()} going</p>
+<p class="hosts">Hosted by {hosts} · {ppl.going()} going</p>
 {action}<a class="ghost" href="{E(url)}.ics">Add to calendar</a>
 {ticket_rows}
 <div class="about">{_paragraphs(ev.about)}</div>

@@ -905,7 +905,7 @@ def frame(title: str, current: str, who: dict[str, Any] | None, body: str) -> st
     inner = body if current == "/" else f'<div class="panel">{_scroll_tables(body)}</div>'
     t = theme.current()
     links = "".join(f'<a href="{E(h)}">{E(text)}</a>' for h, text in t.links)
-    foot = f"<footer>{E(t.footer)}<nav>{links}</nav></footer>"
+    foot = f"<footer>{theme.footer_html(t.footer)}<nav>{links}</nav></footer>"
     if who is None:
         page_ = f'<div class="shell anon"><div class="content"><div class="page">{topbar(None)}{inner}</div>{foot}</div></div>'
         return theme.frame(title, STYLE + HOME_STYLE + SHELL_STYLE + page_, TEST_NOTICE, bare=True)
@@ -1173,9 +1173,9 @@ ADD_SCRIPT = """<style>
 .tag.tester{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;background:#fef3c7;color:#78350f}
 .list-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .list-head h2{margin:0}
-.list-head .plus{width:36px;height:36px;border-radius:99px;background:var(--accent);color:var(--accent-fg,#fff);border:0;cursor:pointer;
+.list-head .plus{width:36px;height:36px;border-radius:99px;background:var(--accent);color:var(--on-accent,#fff);border:0;cursor:pointer;
 box-shadow:0 1px 2px rgba(0,0,0,.12)}
-.list-head .plus:hover{background:var(--accent);color:var(--accent-fg,#fff);filter:brightness(1.08)}
+.list-head .plus:hover{background:var(--accent);color:var(--on-accent,#fff);filter:brightness(1.08)}
 .list-head .plus svg{width:20px;height:20px}
 .role-form{margin:0}.role-form select{width:auto;font-size:16px;padding:4px 6px;border-radius:8px;border:1px solid var(--border);
 background:var(--surface);color:var(--fg)}

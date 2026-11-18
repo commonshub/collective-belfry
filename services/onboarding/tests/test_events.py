@@ -766,3 +766,29 @@ def test_the_address_on_the_event_is_honoured_and_short_ids_work(rsvc, world, mo
     with TestClient(create_app(rsvc)) as c:
         assert c.get("/events/plainname").status_code == 404
         assert "Garden day" in c.get("/events/k7p2xr").text  # a short id, no address
+
+
+def test_hosted_by_shows_names_and_never_a_key(rsvc, world, monkeypatch):
+    from belfry_onboarding import checkin, community, events, theme
+
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    make_event(world, ada)
+    monkeypatch.setattr(checkin, "groups_pubkey", lambda svc: pk(world.gkey))
+    world.admins(GROUP, [pk(ada), pk(world.gkey)])  # the relay lists the belfry's own key too
+    monkeypatch.setattr(community, "names_for", lambda svc, keys: {k: "Unknown" for k in keys})
+    ev = events.load(rsvc, D)
+    assert events.shown_hosts(rsvc, ev) == [pk(ada)]  # not the groups key
+    html_ = community.people_html(rsvc, [pk(ada)])
+    assert html_.startswith('<span title="npub1') and html_.endswith(">unknown</span>")
+    named = {pk(ada): "Ada", "b" * 64: "Unknown", "c" * 64: "Unknown"}
+    monkeypatch.setattr(community, "names_for", lambda svc, keys: {k: named[k] for k in keys})
+    html_ = community.people_html(rsvc, [pk(ada), "b" * 64, "c" * 64])
+    assert html_.startswith("Ada and <span title=") and ">2 others</span>" in html_
+    with TestClient(create_app(rsvc)) as c:
+        page = c.get(f"/events/{D}").text
+        assert "Hosted by Ada" in page and "npub1" not in page.split("Hosted by")[1][:200]
+    out = theme.footer_html(
+        "Has its own [digital belfry](https://belfry.sh). <b> [x](//evil.example)"
+    )
+    assert '<a href="https://belfry.sh">digital belfry</a>' in out and "&lt;b&gt;" in out
+    assert 'href="//evil' not in out
