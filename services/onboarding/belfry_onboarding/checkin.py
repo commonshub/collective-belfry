@@ -338,6 +338,71 @@ def set_role(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]
     return {"role": role}
 
 
+# ── requests to join a closed channel or group, answered by any of its admins ───────────────
+REQUESTS_PATH = "/api/group-requests/decide"
+
+
+def decide_request(svc: Services, caller: str, data: dict[str, Any]) -> dict[str, Any]:
+    """``{"channel", "pubkey", "action": "approve" | "decline"}`` by an admin of the channel (by
+    the relay's list, as its creator, or by role) or a belfry admin: the request (the person's
+    latest unanswered 9021) is answered by the groups key, naming who decided. The relay takes
+    a 9000 / 9001 only from the few admins it knows, so an admin by role decides through here."""
+    from .holder_invites import ApiError
+
+    group = str(data.get("channel") or "").strip()
+    target = str(data.get("pubkey") or "").strip().lower()
+    action = data.get("action")
+    if not GROUP_RE.match(group) or not HEX.match(target) or action not in ("approve", "decline"):
+        raise ApiError(
+            422, "invalid", 'Send {"channel", "pubkey", "action": "approve" | "decline"}.'
+        )
+    if is_event_group(group):
+        raise ApiError(409, "event", "An event's requests are answered on the event.")
+    st = group_state(svc, group)
+    if caller not in st.admins and caller not in _belfry_admins(svc):
+        raise ApiError(403, "not_allowed", "Only the admins of this channel answer its requests.")
+    refuse_archived(svc, group)
+    found = events.groups(
+        svc,
+        [
+            {"kinds": [9021, 9022], "#h": [group], "authors": [target]},
+            {"kinds": [9000, 9001], "#h": [group], "#p": [target]},
+        ],
+    )
+    found = [e for e in found if events.tag(e, "h") == group]
+    asks = [e for e in found if e.get("kind") == 9021 and e.get("pubkey") == target]
+    if not asks:
+        if target in st.members and action == "approve":
+            return {"already": True}
+        raise ApiError(409, "no_request", "This person has no open request here.")
+    ask = max(asks, key=lambda e: e.get("created_at", 0))
+    after = [
+        e
+        for e in found
+        if e is not ask
+        and e.get("created_at", 0) >= ask.get("created_at", 0)
+        and (
+            (e.get("kind") == 9022 and e.get("pubkey") == target)
+            or (e.get("kind") in (9000, 9001) and events.tag(e, "p") == target)
+        )
+    ]
+    if after:
+        last = max(after, key=lambda e: e.get("created_at", 0))
+        if last.get("kind") == 9000 and action == "approve":
+            return {"already": True}
+        raise ApiError(409, "no_request", "This person has no open request here.")
+    relay_fail = ApiError(503, "relay", "The group could not be reached. Try again.")
+    if action == "decline":
+        tags = [["h", group], ["p", target], ["by", caller], ["e", ask["id"]]]
+        if not events.publish(svc, 9001, tags):
+            raise relay_fail
+        return {"declined": True}
+    tags = [["h", group], ["p", target, "member"], ["by", caller], ["e", ask["id"]]]
+    if not events.publish(svc, 9000, tags):
+        raise relay_fail
+    return {"approved": True}
+
+
 # ── a group's name and description, by any of its admins ────────────────────────────────
 META_PATH = "/api/group-meta"
 FLAGS = ("closed", "open", "private", "public", "hidden", "restricted")
@@ -634,6 +699,12 @@ def register(app: FastAPI) -> None:
     async def group_roles(request: Request) -> JSONResponse:
         s, caller, data = await signed(request, PATH)
         out = await run_in_threadpool(set_role, s, caller, data)
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.post(REQUESTS_PATH)
+    async def group_request_decide(request: Request) -> JSONResponse:
+        s, caller, data = await signed(request, REQUESTS_PATH)
+        out = await run_in_threadpool(decide_request, s, caller, data)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})
 
     @app.post(META_PATH)

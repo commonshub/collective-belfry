@@ -143,3 +143,16 @@ docstring is the reference). Same endpoint, NIP-98 by the guest's own key:
 The web form `/apply` lists the charter's agreements with a checkbox each when there is one
 and takes the request only with all ticked (`agreed` on the application, own register only);
 when the applicant takes the invite and their membership opens, their ticks are signed for them.
+
+## Requests to a closed channel or group, answered through the belfry
+
+`POST /api/v1/group-requests/decide` (NIP-98) with `{"channel", "pubkey", "action": "approve" |
+"decline"}`, by an admin of that channel (on the relay's list, its creator, or an admin by role:
+see docs/checkin.md) or a belfry admin. The belfry answers the person's latest unanswered
+request (their 9021) as the groups key: a 9000 (`["p", <key>, "member"]`) or a 9001, with
+`["by", <who decided>]` and `["e", <the 9021>]`. Answers `{"approved": true}`,
+`{"declined": true}` or `{"already": true}` (approved since). Errors: 403 `not_allowed`, 409
+`no_request` (nothing open: none, withdrawn, or answered), 409 `archived`, 409 `event` (an
+event's requests go through `/events/<d>/decide`), 422 `invalid`, 503 `relay`. Admins the
+relay knows (its list, the creator) may still publish the 9000 / 9001 themselves; clients
+should use this call for everyone so an admin by role sees the same buttons.

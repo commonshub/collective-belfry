@@ -421,3 +421,47 @@ def test_peek_records_nothing(rsvc, cw):
         assert r["already"] is True and r["person"]["checked_in"]
         bad = call(c, ada, "POST", f"/{D}/checkin", {"code": "a" * 16, "peek": True})
         assert bad.status_code == 404 and bad.json()["error"] == "no_ticket"
+
+
+def decide_post(c, key, data):
+    body = json.dumps(data).encode()
+    time.sleep(1.05)
+    url = "https://belfry.belfry.test/api/v1/group-requests/decide"
+    return c.post(
+        "/api/v1/group-requests/decide",
+        content=body,
+        headers={**HOST, "Authorization": nip98(key, url, "POST", body)},
+    )
+
+
+def test_an_admin_by_role_answers_a_request_to_a_closed_channel(rsvc, cw, keycast, monkeypatch):
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    cy = member(rsvc, "cy@belfry.test", "Cy")
+    dan = member(rsvc, "dan@belfry.test", "Dan")
+    cw.put(ada, 9007, [["h", "board"]])
+    cw.admins("board", [pk(ada)])
+    cw.put(cw.gkey, 9000, [["h", "board"], ["p", pk(bea), "admin"], ["role", "admin"]])
+    with TestClient(create_app(rsvc)) as c:
+        ask = {"channel": "board", "pubkey": pk(cy), "action": "approve"}
+        assert decide_post(c, bea, ask).json()["error"] == "no_request"
+        req = cw.put(cy, 9021, [["h", "board"]], "I keep the books")
+        assert decide_post(c, dan, ask).json()["error"] == "not_allowed"
+        assert decide_post(c, bea, {**ask, "action": "maybe"}).status_code == 422
+        r = decide_post(c, bea, ask)  # Bea is an admin by role only
+        assert r.json() == {"approved": True}
+        put = cw.grp.events[-1]
+        assert put["kind"] == 9000 and put["pubkey"] == pk(cw.gkey)
+        assert ["p", pk(cy), "member"] in put["tags"] and ["by", pk(bea)] in put["tags"]
+        assert ["e", req["id"]] in put["tags"]
+        assert decide_post(c, bea, ask).json() == {"already": True}
+        # declined: a 9001 naming who decided; then nothing is open
+        time.sleep(1.05)
+        cw.put(dan, 9021, [["h", "board"]], "Me too")
+        no = {"channel": "board", "pubkey": pk(dan), "action": "decline"}
+        assert decide_post(c, ada, no).json() == {"declined": True}
+        assert cw.grp.events[-1]["kind"] == 9001 and ["by", pk(ada)] in cw.grp.events[-1]["tags"]
+        assert decide_post(c, ada, no).json()["error"] == "no_request"
+        # an event's requests go through the event
+        r = decide_post(c, ada, {"channel": GROUP, "pubkey": pk(cy), "action": "approve"})
+        assert r.status_code == 409 and r.json()["error"] == "event"
