@@ -113,6 +113,8 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
     if built is None:  # nothing to say any more (the order moved on)
         st.mail_done(m["id"], "dropped", tried=False)
         return False
+    if built:
+        built = _mark_test(svc, m, built)
     mailer = _mailer(svc)
     if built and not getattr(mailer.s, "smtp_host", ""):
         # no mail provider yet: kept, tried again hourly until one is set
@@ -139,6 +141,24 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
     else:
         st.mail_done(m["id"], "due")
     return False
+
+
+TEST_LINE = (
+    "TEST ORDER: made through the test environment (Stripe test mode, test Odoo). No real money."
+)
+
+
+def _mark_test(svc: Services, m: dict[str, Any], built: Mail) -> Mail:
+    """A test order's mails say so, in their subject and first line (fixed text)."""
+    from . import sales
+
+    if m["kind"] not in ("receipt", "order_confirm", "invoice", "reminder"):
+        return built
+    o = _order(svc, str(m["ref"]).split(":", 1)[0])
+    if sales.env_of(o) != "test":
+        return built
+    subject, lines, button, files = built
+    return f"[TEST] {subject}", [TEST_LINE, *lines], button, files
 
 
 # ── what each mail says ─────────────────────────────────────────────────────────────────────
@@ -192,7 +212,7 @@ def _pdf(svc: Services, o: dict[str, Any]) -> list[tuple[str, bytes, str]]:
     inv = o.get("invoice") or {}
     if not inv.get("move_id"):
         return []
-    pdf = salesodoo.invoice_pdf(svc, int(inv["move_id"]))
+    pdf = salesodoo.invoice_pdf(svc, int(inv["move_id"]), sales.env_of(o))
     if pdf:
         return [(f"{inv['number'].replace('/', '-')}.pdf", pdf, "application/pdf")]
     st = sales.store(svc)

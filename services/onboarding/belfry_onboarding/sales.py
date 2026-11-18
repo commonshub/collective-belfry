@@ -61,7 +61,24 @@ log = logging.getLogger(__name__)
 PRODUCTS_PARAM = "belfry.sales.products"
 SETTINGS_PARAM = "belfry.sales.settings"
 SECRETS_FILE = "sales-secrets.json"
-SECRET_KEYS = ("odoo_api_key", "stripe_key", "stripe_webhook_secret")
+TEST_SETTINGS_PARAM = "belfry.sales.settings.test"
+BASE_SECRETS = ("odoo_api_key", "stripe_key", "stripe_webhook_secret")
+# the test environment's own secrets (docs/sales.md §9): the same names with "test_" in front
+SECRET_KEYS = (*BASE_SECRETS, *(f"test_{k}" for k in BASE_SECRETS))
+ENVS = ("live", "test")
+# what belongs to one Odoo database: a test database has its own ids, so none of these is
+# shared between the two environments
+ODOO_KEYS = (
+    "odoo_url",
+    "odoo_db",
+    "company",
+    "company_name",
+    "odoo_products",
+    "tax_included",
+    "tax_excluded",
+    "card_journal",
+    "manual_journal",
+)
 HOLD_DAYS = 7
 REMIND_DAYS = 2  # one reminder this long before the hold ends
 CONFIRM_HOURS = 48  # a free order waits this long for its address to be confirmed
@@ -545,29 +562,50 @@ def _param(svc: Services, key: str) -> Any:
         return None
 
 
-def settings(svc: Services) -> dict[str, Any]:
-    """The non-secret sales settings, with the environment's ACCOUNTING_* as the fallback."""
+def env_of(o: dict[str, Any] | None) -> str:
+    """An order's environment, fixed when it was made: ``test`` (a tester's order: Stripe's test
+    mode and the test Odoo) or ``live``. Orders made before environments existed are live."""
+    return "test" if (o or {}).get("env") == "test" else "live"
+
+
+def _env(env: str) -> str:
+    if env not in ENVS:
+        raise ValueError("unknown environment")
+    return env
+
+
+def settings(svc: Services, env: str = "live") -> dict[str, Any]:
+    """The non-secret sales settings, with the environment's ACCOUNTING_* as the fallback. ENV
+    ``test``: the Odoo part (ODOO_KEYS) is the test environment's own, with no fallback; the
+    rest (currency, bank, requests channel, invoice ref prefix) is shared."""
     st = _param(svc, SETTINGS_PARAM)
     st = st if isinstance(st, dict) else {}
-    env = svc.settings
+    cfg = svc.settings
     out = {
         "currency": st.get("currency") or "EUR",
-        "odoo_url": st.get("odoo_url") or env.accounting_odoo_url,
-        "odoo_db": st.get("odoo_db") or env.accounting_odoo_db,
+        "odoo_url": st.get("odoo_url") or cfg.accounting_odoo_url,
+        "odoo_db": st.get("odoo_db") or cfg.accounting_odoo_db,
         "company": st.get("company") or None,
-        "company_name": st.get("company_name") or env.accounting_issuer,
+        "company_name": st.get("company_name") or cfg.accounting_issuer,
         "odoo_products": st.get("odoo_products") or {},
-        "fallback_products": _env_products(env.accounting_products),
-        "tax_included": st.get("tax_included") or _int(env.accounting_tax_included),
-        "tax_excluded": st.get("tax_excluded") or _int(env.accounting_tax_excluded),
-        "card_journal": st.get("card_journal") or _int(env.accounting_journal),
-        "manual_journal": st.get("manual_journal") or _int(env.accounting_manual_journal),
-        "ref_prefix": st.get("ref_prefix") or env.accounting_ref_prefix or "Belfry ",
+        "fallback_products": _env_products(cfg.accounting_products),
+        "tax_included": st.get("tax_included") or _int(cfg.accounting_tax_included),
+        "tax_excluded": st.get("tax_excluded") or _int(cfg.accounting_tax_excluded),
+        "card_journal": st.get("card_journal") or _int(cfg.accounting_journal),
+        "manual_journal": st.get("manual_journal") or _int(cfg.accounting_manual_journal),
+        "ref_prefix": st.get("ref_prefix") or cfg.accounting_ref_prefix or "Belfry ",
         "bank_holder": st.get("bank_holder") or "",
         "requests_channel": st.get("requests_channel") or "",
         "bank_iban": st.get("bank_iban") or "",
         "bank_bic": st.get("bank_bic") or "",
     }
+    if _env(env) == "test":
+        t = _param(svc, TEST_SETTINGS_PARAM)
+        t = t if isinstance(t, dict) else {}
+        for k in ODOO_KEYS:
+            out[k] = t.get(k) or ({} if k == "odoo_products" else None)
+        out["company_name"] = t.get("company_name") or out.get("company_name") or ""
+        out["fallback_products"] = {}  # the server's ACCOUNTING_PRODUCTS are production's
     return out
 
 
@@ -587,11 +625,18 @@ def _env_products(spec: str) -> dict[str, int]:
         return {}
 
 
-def save_settings(svc: Services, values: dict[str, Any]) -> None:
-    st = _param(svc, SETTINGS_PARAM)
+def save_settings(svc: Services, values: dict[str, Any], env: str = "live") -> None:
+    """Save sales settings. ENV ``test`` takes only the Odoo part (ODOO_KEYS), kept apart from
+    production's (param ``belfry.sales.settings.test``)."""
+    param = SETTINGS_PARAM
+    if _env(env) == "test":
+        if set(values) - set(ODOO_KEYS):
+            raise ValueError("the test environment has only its own Odoo settings")
+        param = TEST_SETTINGS_PARAM
+    st = _param(svc, param)
     st = st if isinstance(st, dict) else {}
     st.update(values)
-    svc.odoo.set_param(SETTINGS_PARAM, json.dumps(st))
+    svc.odoo.set_param(param, json.dumps(st))
 
 
 def _secrets_path(svc: Services) -> Path:
@@ -613,23 +658,30 @@ def _read_secrets(svc: Services) -> dict[str, str]:
     )
 
 
-def secret(svc: Services, name: str) -> str:
-    """A secret: the console's, else the environment's. Never logged, never in an answer."""
-    got = _read_secrets(svc).get(name, "")
-    if got:
+def _secret_name(name: str, env: str) -> str:
+    if name not in BASE_SECRETS:
+        raise ValueError("unknown secret")
+    return f"test_{name}" if _env(env) == "test" else name
+
+
+def secret(svc: Services, name: str, env: str = "live") -> str:
+    """A secret: the console's, else the environment's (production only: the test environment
+    has no server-side fallback). Never logged, never in an answer."""
+    got = _read_secrets(svc).get(_secret_name(name, env), "")
+    if got or env == "test":
         return got
-    env = svc.settings
+    cfg = svc.settings
     return {
-        "odoo_api_key": env.accounting_odoo_api_key,
-        "stripe_key": getattr(env, "stripe_secret_key", "") or "",
-        "stripe_webhook_secret": env.stripe_webhook_secret,
+        "odoo_api_key": cfg.accounting_odoo_api_key,
+        "stripe_key": getattr(cfg, "stripe_secret_key", "") or "",
+        "stripe_webhook_secret": cfg.stripe_webhook_secret,
     }.get(name, "") or ""
 
 
-def set_secret(svc: Services, name: str, value: str | None) -> None:
-    """Write (or with None clear: back to the environment's) one secret, atomically, mode 600."""
-    if name not in SECRET_KEYS:
-        raise ValueError("unknown secret")
+def set_secret(svc: Services, name: str, value: str | None, env: str = "live") -> None:
+    """Write (or with None clear: back to the environment's) one secret, atomically, mode 600.
+    ENV ``test`` writes the test environment's own (``test_<name>``)."""
+    name = _secret_name(name, env)
     path = _secrets_path(svc)
     with _secrets_lock:
         data = _read_secrets(svc)
@@ -645,10 +697,10 @@ def set_secret(svc: Services, name: str, value: str | None) -> None:
         os.replace(tmp, path)
 
 
-def secret_state(svc: Services, name: str) -> dict[str, Any]:
+def secret_state(svc: Services, name: str, env: str = "live") -> dict[str, Any]:
     """What the console may show of a secret: set or not, where from, and its last 4."""
-    mine = _read_secrets(svc).get(name, "")
-    value = mine or secret(svc, name)
+    mine = _read_secrets(svc).get(_secret_name(name, env), "")
+    value = mine or secret(svc, name, env)
     return {
         "set": bool(value),
         "from": "console" if mine else ("environment" if value else ""),
@@ -656,24 +708,24 @@ def secret_state(svc: Services, name: str) -> dict[str, Any]:
     }
 
 
-def odoo_ready(svc: Services) -> bool:
-    st = settings(svc)
-    return bool(st["odoo_url"] and st["odoo_db"] and secret(svc, "odoo_api_key"))
+def odoo_ready(svc: Services, env: str = "live") -> bool:
+    st = settings(svc, env)
+    return bool(st["odoo_url"] and st["odoo_db"] and secret(svc, "odoo_api_key", env))
 
 
-def accounting_ready(svc: Services) -> bool:
+def accounting_ready(svc: Services, env: str = "live") -> bool:
     """Invoices can be made: the connection, a product and both taxes picked."""
-    st = settings(svc)
+    st = settings(svc, env)
     return bool(
-        odoo_ready(svc)
+        odoo_ready(svc, env)
         and (st["odoo_products"] or st["fallback_products"])
         and st["tax_included"]
         and st["tax_excluded"]
     )
 
 
-def stripe_ready(svc: Services) -> bool:
-    return bool(secret(svc, "stripe_key"))
+def stripe_ready(svc: Services, env: str = "live") -> bool:
+    return bool(secret(svc, "stripe_key", env))
 
 
 def bank_ready(svc: Services) -> bool:
@@ -681,9 +733,10 @@ def bank_ready(svc: Services) -> bool:
     return bool(st["bank_holder"] and st["bank_iban"])
 
 
-def can_sell(svc: Services) -> bool:
-    """Paid products can be sold: invoices, and at least one way to pay them."""
-    return accounting_ready(svc) and (stripe_ready(svc) or bank_ready(svc))
+def can_sell(svc: Services, env: str = "live") -> bool:
+    """Paid products can be sold: invoices, and at least one way to pay them (bank details are
+    shared by both environments)."""
+    return accounting_ready(svc, env) and (stripe_ready(svc, env) or bank_ready(svc))
 
 
 def summary(svc: Services) -> dict[str, bool]:
@@ -829,8 +882,27 @@ def price_now(p: dict[str, Any], on: dt.date | None = None) -> tuple[dict | None
 
 
 def taken(svc: Services, pid: str) -> int:
-    """Places held: open and active orders of the product."""
-    return sum(1 for o in store(svc).orders((*OPEN, "active")) if o["product"] == pid)
+    """Places held: open and active orders of the product. A tester's (test) orders take no
+    place from real buyers."""
+    return sum(
+        1
+        for o in store(svc).orders((*OPEN, "active"))
+        if o["product"] == pid and env_of(o) == "live"
+    )
+
+
+def taken_by_tests(svc: Services, pid: str) -> int:
+    """Test orders of the product (shown apart in the console)."""
+    return sum(
+        1
+        for o in store(svc).orders((*OPEN, "active"))
+        if o["product"] == pid and env_of(o) == "test"
+    )
+
+
+def uses_key(o: dict[str, Any]) -> str:
+    """Where an order's use of a code is recorded: a test order's never takes a real use."""
+    return "test_used" if env_of(o) == "test" else "used"
 
 
 def left(svc: Services, p: dict[str, Any]) -> int | None:
@@ -1003,9 +1075,10 @@ def _give_back(svc: Services, o: dict[str, Any]) -> None:
     st = store(svc)
     with st.tx() as db:
         c = st.code(o["code"], db)
-        if c and o["id"] in c["used"]:
-            c["used"].remove(o["id"])
-            st.put_code(c, db)
+        for k in ("used", "test_used"):
+            if c and o["id"] in (c.get(k) or []):
+                c[k].remove(o["id"])
+                st.put_code(c, db)
 
 
 # ── rate limits (in memory) ─────────────────────────────────────────────────────────────────
@@ -1411,6 +1484,9 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
         "pay_url": None,
         "hold_until": o.get("hold_until"),
         "erase_after_event": bool(o.get("erase_after_event")),
+        # a tester's order (docs/sales.md §9): Stripe's test mode and the test Odoo, no real
+        # money; the buying page shows a banner
+        "test": env_of(o) == "test",
     }
     inv = o.get("invoice") or {}
     if inv.get("number"):
@@ -1568,13 +1644,23 @@ def _checkout(
         raise ApiError(
             409, "email_mismatch", "Use the address this account was made with, or confirm it."
         )
+    # test or live (docs/sales.md §9): only the address decides, never the request. A test
+    # order's pass goes on the tester's own account and nowhere else; the key that signs is
+    # treated as the tester's only when it already is a session of that account.
+    from . import testers
+
+    tester = testers.tester_by_email(svc, email)
+    env = "test" if tester is not None else "live"
+    owner = acct  # whose account the order is on (None: a browser key)
+    if tester is not None and (acct is None or acct["partner"] != tester):
+        owner = None
     flags: list[str] = []
     vat_valid = False
     if (
         billing["kind"] == "organisation"
         and billing.get("vat")
         and vies_country(billing["kind"], billing["country"], billing["vat"])
-        and can_sell(svc)
+        and can_sell(svc, env)
     ):
         # checked before the invoice is made (outside the lock: VIES can be slow)
         from . import salesodoo
@@ -1629,15 +1715,25 @@ def _checkout(
                 if c.get("offer") and not erase:
                     # asked with the offer in kind this code answers
                     erase = bool((st.offer(c["offer"]) or {}).get("erase_after_event"))
-                c["used"].append(oid)
+                # a test order never takes one of the code's real uses
+                c.setdefault(uses_key({"env": env}), []).append(oid)
                 st.put_code(c, db)
         total = split(pr["amount"], p["vat_rate"], percent, billing["kind"])
-        if total["gross"] > 0 and not can_sell(svc):
+        if total["gross"] > 0 and env == "test" and not can_sell(svc, "test"):
+            # never a fall back to production
+            _give_back(svc, {"id": oid, "code": code})
+            raise ApiError(
+                409,
+                "test_not_set_up",
+                "This address is a tester's, and the test environment (Stripe test mode, test "
+                "Odoo) is not set up yet.",
+            )
+        if total["gross"] > 0 and not can_sell(svc, env):
             _give_back(svc, {"id": oid, "code": code})
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
         created = now()
         # a free product with no code makes no account from nothing: the address first
-        gate = total["gross"] == 0 and not code and not (acct and acct["verified"])
+        gate = total["gross"] == 0 and not code and not (owner and owner["verified"])
         hold = None
         if gate:
             hold = iso(created + dt.timedelta(hours=CONFIRM_HOURS))
@@ -1676,8 +1772,10 @@ def _checkout(
             "created": iso(created),
             "hold_until": hold,
             # a signed-in member or guest: the pass goes on their account
-            "account": acct["partner"] if acct else None,
-            "partner_id": acct["partner"] if acct else None,
+            "account": owner["partner"] if owner else None,
+            # a test order: always the tester's own account
+            "partner_id": tester if tester is not None else (owner["partner"] if owner else None),
+            "env": env,
             "pass_id": None,
             "invoice": {},
             "history": [],
@@ -1688,7 +1786,8 @@ def _checkout(
         }
         st.put_order(o)
     log.info(
-        "sales: order %s for %s (%s), %s",
+        "sales: %sorder %s for %s (%s), %s",
+        "test " if env == "test" else "",
         oid,
         pid,
         mask(email),
@@ -1851,8 +1950,9 @@ def after_invoice(svc: Services, o: dict[str, Any]) -> None:
     elif o["state"] == "paid":
         st.update(o["id"], step="activate")
     else:
-        st.update(o["id"], state="invoiced", step="card" if stripe_ready(svc) else "wait")
-        if stripe_ready(svc):
+        card = stripe_ready(svc, env_of(o))
+        st.update(o["id"], state="invoiced", step="card" if card else "wait")
+        if card:
             return  # the invoice mail goes once the card session exists (salesstripe)
     queue_invoice_mail(svc, o)
 
@@ -1937,7 +2037,7 @@ def _reopen(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
         # Odoo says whether the invoice still stands. Odoo not answering raises: retried.
         from . import salesodoo
 
-        credited = not salesodoo.invoice_standing(svc, int(inv["move_id"]))
+        credited = not salesodoo.invoice_standing(svc, int(inv["move_id"]), env_of(o))
     if inv.get("move_id") and credited:
         vals["history"] = [*(o.get("history") or []), {**inv, "credited": True}]
         vals["invoice"] = {}
@@ -1948,8 +2048,8 @@ def _reopen(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
     if o.get("code"):
         with st.tx() as db:
             c = st.code(o["code"], db)
-            if c and o["id"] not in c["used"]:
-                c["used"].append(o["id"])
+            if c and o["id"] not in (c.get(uses_key(o)) or []):
+                c.setdefault(uses_key(o), []).append(o["id"])
                 st.put_code(c, db)
     log.warning("sales: order %s paid after it ended (%s): reopened", o["id"], o["state"])
     return st.update(o["id"], **vals)
@@ -1977,6 +2077,16 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
     oid = o["id"]
     pid = o.get("partner_id")
     verified_by_link = bool(o.get("address_confirmed"))
+    test = env_of(o) == "test"
+    if test:
+        # a test order opens a pass only on the account of the tester it was made for, while
+        # that person still is a tester with that address (removed since: nothing opens)
+        from . import testers
+
+        if not pid or testers.tester_by_email(svc, o["email"]) != int(pid):
+            st.update(oid, step="stuck", stuck_step="activate", flags=_flag(o, "tester_gone"))
+            log.warning("sales: test order %s: its tester is gone; no pass", oid)
+            return
     if not pid:
         vals: dict[str, Any] = {"name": o["name"], "belfry_sale_order": oid}
         if o.get("odoo_partner"):
@@ -2007,6 +2117,7 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
                     "sale_order": oid,
                     "sold_start": start,
                     "sold_end": end,
+                    **({"belfry_test": True} if test else {}),
                 },
             )
         o = st.update(oid, pass_id=pass_id)
@@ -2016,16 +2127,17 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
         st.update(oid, step="stuck", stuck_step="activate", flags=_flag(o, "pass_closed"))
         log.warning("sales: order %s: its pass could not open (%s)", oid, result)
         return
-    if o.get("role"):
+    if o.get("role") and not test:  # a tester's role never changes (testers.py)
         with contextlib.suppress(Exception):
             from . import roles
 
             if roles.exists(svc, o["role"]):
                 svc.odoo.write("res.partner", [pid], {"belfry_role": o["role"]})
     mark_erase(svc, pid, o)
-    if not o.get("account") and not o.get("bunker_url") and not verified_by_link:
+    if not o.get("account") and not o.get("bunker_url") and not verified_by_link and not test:
         # the browser that paid is signed in; never for an address proven by a mail link (the
-        # person who clicked may not be the one holding the browser)
+        # person who clicked may not be the one holding the browser), never for a test order
+        # (test cards are public: knowing a tester's address must not sign anyone in)
         o = st.update(oid, bunker_url=_bind_key(svc, pid, o["key"]))
     o = st.update(oid, state="active", activated=iso(now()), error=None)
     o = st.update(oid, step=next_after_pass(o))
@@ -2219,11 +2331,15 @@ def tick(svc: Services, force: bool = False) -> None:
 
 
 def _read_invoices(svc: Services) -> None:
-    if not odoo_ready(svc):
-        return
+    """Each environment's open invoices from its own Odoo."""
     from . import salesodoo
 
-    salesodoo.read_open_invoices(svc)
+    for env in ENVS:
+        if odoo_ready(svc, env):
+            try:
+                salesodoo.read_open_invoices(svc, env)
+            except Exception as exc:  # noqa: BLE001 — the other environment still goes
+                log.warning("sales: %s invoices not read: %s", env, type(exc).__name__)
 
 
 # ── offers (in kind): public requests in the requests channel ───────────────────────────────
@@ -2808,7 +2924,7 @@ def switch_pay(svc: Services, oid: str, pay: str) -> dict[str, Any]:
             raise ApiError(409, "not_open", "This order can't change how it is paid now.")
         if pay == "invoice" and not bank_ready(svc):
             raise ApiError(409, "no_transfer", "Paying by transfer is not set up here.")
-        if pay == "card" and not stripe_ready(svc):
+        if pay == "card" and not stripe_ready(svc, env_of(o)):
             raise ApiError(409, "no_card", "Paying by card is not set up here.")
         vals: dict[str, Any] = {"pay": pay}
         has_invoice = bool((o.get("invoice") or {}).get("move_id"))
@@ -2840,7 +2956,7 @@ def _refresh(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
     if o.get("step") in ("invoice", "card", "register_payment", "activate"):
         o = advance(svc, o["id"]) or o
     if o["state"] in ("pending", "invoiced") and (o.get("stripe") or {}).get("expires_at"):
-        if int(o["stripe"]["expires_at"]) < time.time() + 60 and stripe_ready(svc):
+        if int(o["stripe"]["expires_at"]) < time.time() + 60 and stripe_ready(svc, env_of(o)):
             store(svc).update(o["id"], step="card")
             o = advance(svc, o["id"]) or o
     return o

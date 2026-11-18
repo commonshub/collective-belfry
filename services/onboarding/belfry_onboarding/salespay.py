@@ -221,7 +221,25 @@ def page_token(svc: Services, oid: str) -> str:
     return sales.hmac_sign(svc, "pay-page:" + oid)
 
 
+TEST_BANNER = (
+    '<p class="lead" style="padding:8px 12px;border-radius:8px;background:#fef3c7;color:#78350f">'
+    "<b>Test order: no real money.</b> It goes through Stripe's test mode and the test Odoo.</p>"
+)
+
+
 def order_html(svc: Services, o: dict[str, Any]) -> str:
+    """An order's own page; a tester's order says it is a test, with a fixed line."""
+    from . import sales
+
+    page = _order_html(svc, o)
+    if sales.env_of(o) != "test":
+        return page
+    if "</h1>" in page:
+        return page.replace("</h1>", "</h1>" + TEST_BANNER, 1)
+    return TEST_BANNER + page
+
+
+def _order_html(svc: Services, o: dict[str, Any]) -> str:
     """An order's own page (the API's ``invoice.url``): its invoice's number and amount; while
     it is open, until when the place is held and how to pay (bank transfer when bank details
     are set, the card link when there is one)."""

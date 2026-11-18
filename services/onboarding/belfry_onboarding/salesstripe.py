@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -34,10 +35,16 @@ EVENTS = ("checkout.session.completed", "checkout.session.async_payment_succeede
 HTTP = httpx.Client(timeout=20.0)
 
 
-def _post(svc: Services, path: str, data: dict[str, Any] | None = None, idem: str = "") -> dict:
+def _post(
+    svc: Services,
+    path: str,
+    data: dict[str, Any] | None = None,
+    idem: str = "",
+    env: str = "live",
+) -> dict:
     from . import sales
 
-    headers = {"Authorization": f"Bearer {sales.secret(svc, 'stripe_key')}"}
+    headers = {"Authorization": f"Bearer {sales.secret(svc, 'stripe_key', env)}"}
     if idem:
         headers["Idempotency-Key"] = idem
     r = HTTP.post(API + path, data=data or {}, headers=headers)
@@ -60,7 +67,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
 
     st = sales.store(svc)
     inv = o.get("invoice") or {}
-    if not sales.stripe_ready(svc):
+    env = sales.env_of(o)
+    if not sales.stripe_ready(svc, env):
         st.update(o["id"], step="wait")
         if inv.get("number"):
             sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
@@ -89,7 +97,7 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         data["metadata[invoice]"] = inv["number"]
         data["payment_intent_data[metadata][invoice]"] = inv["number"]
     try:
-        got = _post(svc, "/checkout/sessions", data, f"belfry-{o['id']}-{attempt}")
+        got = _post(svc, "/checkout/sessions", data, f"belfry-{o['id']}-{attempt}", env)
     except sales.Refused as exc:
         flags = list(o.get("flags") or [])
         if "card_failed" not in flags:
@@ -119,27 +127,53 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
 
 def expire_session(svc: Services, o: dict[str, Any]) -> None:
     """An order that ended: its open session can't be paid any more (best effort)."""
+    from . import sales
+
     sid = (o.get("stripe") or {}).get("id")
     if not sid:
         return
     try:
-        _post(svc, f"/checkout/sessions/{sid}/expire")
+        _post(svc, f"/checkout/sessions/{sid}/expire", env=sales.env_of(o))
     except Exception as exc:  # noqa: BLE001 — paid or expired already; a late payment is flagged
         log.info("sales: order %s: session not expired: %s", o["id"], type(exc).__name__)
 
 
-def handle(svc: Services, event: dict[str, Any]) -> str:
-    """One verified Stripe event → a short result."""
+def livemode_ok(svc: Services, event: dict[str, Any], env: str) -> bool:
+    """Stripe's ``livemode`` must match the hook's environment. The test hook takes only test
+    events (``livemode`` false). The production hook takes live events, and test events only
+    while production's own key is a test key (a belfry that tried Stripe before environments
+    existed keeps working)."""
+    from . import sales
+
+    live = event.get("livemode")
+    if env == "test":
+        return live is False
+    if live is True:
+        return True
+    return bool(re.match(r"^(sk|rk)_test_", sales.secret(svc, "stripe_key")))
+
+
+def handle(svc: Services, event: dict[str, Any], env: str = "live") -> str:
+    """One verified Stripe event of ENV's hook → a short result. An order of the other
+    environment is never settled by it."""
     from . import sales
 
     if event.get("type") not in EVENTS:
         return "ignored"
+    if not livemode_ok(svc, event, env):
+        log.warning("sales: a Stripe event of the wrong mode on the %s hook", env)
+        return "wrong_mode"
     obj = (event.get("data") or {}).get("object") or {}
     oid = str((obj.get("metadata") or {}).get("belfry_order") or "")
     st = sales.store(svc)
     o = st.order(oid) if sales.ORDER_RE.match(oid) else None
     if o is None:
         return "unknown_order"
+    if sales.env_of(o) != env:
+        log.warning(
+            "sales: order %s is %s; an event on the %s hook ignored", oid, sales.env_of(o), env
+        )
+        return "wrong_env"
     if obj.get("payment_status") != "paid":
         return "not_paid"
     inv = (o.get("invoice") or {}).get("number")
@@ -188,14 +222,22 @@ def register(app: FastAPI) -> None:
 
     @app.post("/console/hooks/stripe", include_in_schema=False)
     async def stripe_hook(request: Request) -> JSONResponse:
+        return await hook(request, "live")
+
+    @app.post("/console/hooks/stripe/test", include_in_schema=False)
+    async def stripe_hook_test(request: Request) -> JSONResponse:
+        """The test environment's hook (Stripe's test mode): its own signing secret; settles
+        only test orders."""
+        return await hook(request, "test")
+
+    async def hook(request: Request, env: str) -> JSONResponse:
         s: Services = request.app.state.services
         body = await request.body()
+        whsec = sales.secret(s, "stripe_webhook_secret", env)
+        if not whsec:
+            return JSONResponse({"error": "not set up"}, status_code=400)
         try:
-            verify_signature(
-                body,
-                request.headers.get("stripe-signature"),
-                sales.secret(s, "stripe_webhook_secret"),
-            )
+            verify_signature(body, request.headers.get("stripe-signature"), whsec)
         except StripeSignatureError as exc:
             log.warning("sales: stripe hook refused: %s", exc)
             return JSONResponse({"error": "invalid signature"}, status_code=400)
@@ -206,13 +248,15 @@ def register(app: FastAPI) -> None:
         if not isinstance(event, dict) or not event.get("id"):
             return JSONResponse({"error": "not a Stripe event"}, status_code=400)
         st = sales.store(s)
-        if not st.first_event(str(event["id"])):
+        # Stripe's ids are unique per account and mode; the environment keeps the two apart
+        eid = str(event["id"]) if env == "live" else f"test:{event['id']}"
+        if not st.first_event(eid):
             return JSONResponse({"result": "duplicate"})
         try:
-            result = await run_in_threadpool(handle, s, event)
+            result = await run_in_threadpool(handle, s, event, env)
         except Exception:  # noqa: BLE001 — Stripe delivers again; handle it then
-            st.forget_event(str(event["id"]))
+            st.forget_event(eid)
             log.exception("sales: stripe event failed")
             return JSONResponse({"error": "failed"}, status_code=500)
-        st.event_result(str(event["id"]), result)
+        st.event_result(eid, result)
         return JSONResponse({"result": result})

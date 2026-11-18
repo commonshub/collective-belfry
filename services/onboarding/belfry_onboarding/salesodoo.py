@@ -80,10 +80,28 @@ def check_vat(vat: str) -> bool | None:
 
 # ── the client ──────────────────────────────────────────────────────────────────────────────
 def client(svc: Services) -> Json2Client:
+    """Production's Odoo."""
     from . import sales
 
     st = sales.settings(svc)
     return Json2Client(st["odoo_url"], st["odoo_db"], sales.secret(svc, "odoo_api_key"))
+
+
+def test_client(svc: Services) -> Json2Client:
+    """The test environment's Odoo (a tester's orders; docs/sales.md §9)."""
+    from . import sales
+
+    st = sales.settings(svc, "test")
+    return Json2Client(st["odoo_url"], st["odoo_db"], sales.secret(svc, "odoo_api_key", "test"))
+
+
+def client_for(svc: Services, env: str) -> Json2Client:
+    """The Odoo of ENV: never production's for a test order, nor the reverse."""
+    if env == "test":
+        return test_client(svc)
+    if env != "live":
+        raise ValueError("unknown environment")
+    return client(svc)
 
 
 def _refused(exc: OdooError) -> bool:
@@ -136,8 +154,12 @@ def ref_of(svc: Services, oid: str, round_: int = 1) -> str:
 def _stored_partner(svc: Services, o: dict[str, Any]) -> int | None:
     """The Odoo contact Belfry made for this buyer earlier: on the order (a retry), or on the
     Belfry account (``belfry_odoo_partner``) of a signed-in buyer whose address is proven."""
+    from . import sales
+
     if o.get("odoo_partner"):
         return int(o["odoo_partner"])
+    if sales.env_of(o) == "test":
+        return None  # the account's stored contact is production's Odoo's
     pid = o.get("account")
     if pid:
         row = svc.odoo.read_one("res.partner", int(pid), ["email", "belfry_odoo_partner"]) or {}
@@ -188,7 +210,7 @@ def _partner(svc: Services, remote: Json2Client, o: dict[str, Any], company: int
         found = _create_partner(svc, remote, o, vals, b.get("vat") if org else "")
     if not org:
         sales.store(svc).update(o["id"], odoo_partner=found)
-        if o.get("partner_id"):
+        if o.get("partner_id") and sales.env_of(o) == "live":
             svc.odoo.write("res.partner", [int(o["partner_id"])], {"belfry_odoo_partner": found})
     return found
 
@@ -255,8 +277,9 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
     """The order's posted invoice: its number, communication and totals read back."""
     from . import sales
 
-    st = sales.settings(svc)
-    remote = client(svc)
+    env = sales.env_of(o)
+    st = sales.settings(svc, env)
+    remote = client_for(svc, env)
     ref = ref_of(svc, o["id"], int(o.get("invoice_round") or 1))
     rows = remote.search_read(
         "account.move",
@@ -354,10 +377,10 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
 
 
 @_guard
-def invoice_standing(svc: Services, move_id: int) -> bool:
+def invoice_standing(svc: Services, move_id: int, env: str = "live") -> bool:
     """Whether the invoice can still take a payment: posted, not reversed, no credit note made
     against it. Raises when Odoo doesn't answer (the caller tries again later)."""
-    remote = client(svc)
+    remote = client_for(svc, env)
     move = remote.read_one("account.move", move_id, ["state", "payment_state"])
     if not move or move.get("state") != "posted" or move.get("payment_state") == "reversed":
         return False
@@ -370,13 +393,13 @@ def invoice_standing(svc: Services, move_id: int) -> bool:
     return not any(r.get("state") != "cancel" for r in refunds)
 
 
-def invoice_pdf(svc: Services, move_id: int) -> bytes | None:
+def invoice_pdf(svc: Services, move_id: int, env: str = "live") -> bytes | None:
     """The invoice's PDF from Odoo (its ``invoice_pdf_report_id`` attachment; Odoo makes it
     when the invoice is "sent" without e-mail), or None. Odoo never mails it itself here."""
     import base64
 
     try:
-        remote = client(svc)
+        remote = client_for(svc, env)
         row = remote.read_one("account.move", move_id, ["invoice_pdf_report_id"]) or {}
         att = row.get("invoice_pdf_report_id")
         if not att:
@@ -407,13 +430,14 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
     """The money that came by card (or that an admin marked) on the invoice, in its journal."""
     from . import sales
 
-    st = sales.settings(svc)
+    env = sales.env_of(o)
+    st = sales.settings(svc, env)
     paid = o.get("paid") or {}
     journal = st["card_journal"] if paid.get("how") == "card" else st["manual_journal"]
     move_id = (o.get("invoice") or {}).get("move_id")
     flags = list(o.get("flags") or [])
     if move_id and journal:
-        remote = client(svc)
+        remote = client_for(svc, env)
         move = _move(remote, int(move_id))
         if move["state"] != "posted" or move["payment_state"] == "reversed":
             # credited or cancelled under us: nothing to pay on; the admins book it by hand
@@ -454,10 +478,12 @@ def register_payment(svc: Services, o: dict[str, Any]) -> None:
 def credit_note(svc: Services, o: dict[str, Any]) -> bool:
     """An order that ended unpaid: its invoice is credited in full (a draft is cancelled).
     False when the invoice was paid after all: it stands (the tick sees it and reopens)."""
+    from . import sales
+
     move_id = (o.get("invoice") or {}).get("move_id")
     if not move_id:
         return True
-    remote = client(svc)
+    remote = client_for(svc, sales.env_of(o))
     move = _move(remote, int(move_id))
     if move["state"] == "draft":
         remote.call("account.move", "button_cancel", ids=[move["id"]])
@@ -505,7 +531,7 @@ def credit_note(svc: Services, o: dict[str, Any]) -> bool:
     return True
 
 
-def read_open_invoices(svc: Services) -> dict[str, int]:
+def read_open_invoices(svc: Services, env: str = "live") -> dict[str, int]:
     """The tick: an invoice paid in Odoo (a transfer reconciled) → the order is paid (an ended
     order whose invoice was never credited reopens); the CURRENT invoice of an active order
     credited in full → its pass closes. Read in one call; when that fails, one by one, and an
@@ -515,6 +541,8 @@ def read_open_invoices(svc: Services) -> dict[str, int]:
     st = sales.store(svc)
     watch: dict[int, dict[str, Any]] = {}
     for o in st.orders(("invoiced", "active", "cancelled", "expired")):
+        if sales.env_of(o) != env:
+            continue  # the other environment's invoices are in the other Odoo
         inv = o.get("invoice") or {}
         if not inv.get("move_id") or o.get("closed"):
             continue
@@ -523,7 +551,7 @@ def read_open_invoices(svc: Services) -> dict[str, int]:
         watch[int(inv["move_id"])] = o
     if not watch:
         return {"paid": 0, "closed": 0, "unread": 0}
-    remote = client(svc)
+    remote = client_for(svc, env)
     fields = ["id", "payment_state", "state"]
     try:
         rows = remote.call("account.move", "read", ids=sorted(watch), fields=fields) or []
@@ -569,12 +597,12 @@ def check_connection(url: str, db: str, key: str) -> list[dict[str, Any]]:
     return remote.search_read("res.company", [], ["id", "name"])
 
 
-def pick_lists(svc: Services) -> dict[str, list[dict[str, Any]]]:
-    """Companies, products, sale taxes and bank/cash journals, read from Odoo."""
+def pick_lists(svc: Services, env: str = "live") -> dict[str, list[dict[str, Any]]]:
+    """Companies, products, sale taxes and bank/cash journals, read from ENV's Odoo."""
     from . import sales
 
-    remote = client(svc)
-    company = sales.settings(svc)["company"]
+    remote = client_for(svc, env)
+    company = sales.settings(svc, env)["company"]
     scope = [["company_id", "in", [int(company), False]]] if company else []
     return {
         "companies": remote.search_read("res.company", [], ["id", "name"]),
