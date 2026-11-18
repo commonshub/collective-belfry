@@ -6,7 +6,7 @@
 // count says how many people a message will actually reach.
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { markSeen } from '../core/actions'
-import { channelIcon, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group } from '../core/model'
+import { channelIcon, group, isInbox, isPublicChannel, mailLocal, publicPeriods, webPage, type Group, nameOf } from '../core/model'
 import { BELFRY } from '../config'
 import { dropOutbox, outboxItems, useVersion } from '../core/store'
 import { me, retry } from '../core/sync'
@@ -91,7 +91,7 @@ export function ChannelHeader({ id, left, right, topic, onTopic, initialOpen = f
         {left}
         <h1 className="tap" onClick={toggle} aria-expanded={open}>
           {/* a public channel's globe is in the subtitle: one globe, not two (#issues 2026-11-15) */}
-          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : g && !g.isEvent && !g.isProposal && isPublicChannel(g) ? '#' : channelIcon(g)} {g?.name ?? id}
+          {g?.isPod ? <PodShape members={g.members.size} size={18} /> : g && !g.isEvent && !g.isProposal && isPublicChannel(g) ? '#' : channelIcon(g)} {nameOf(id)}
           {g && !g.isEvent && <ChannelSubtitle g={g} />}
         </h1>
         <SaveFailedIcon id={id} />

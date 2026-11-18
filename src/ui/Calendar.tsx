@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, THEME } from '../config'
 import { jitsiLink, mayPickAddress, randomEnd } from '../core/actions'
-import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, type Visibility } from '../core/model'
+import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, type Visibility, nameOf } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import PlaceInput from './PlaceInput'
@@ -282,7 +282,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members',
 
 /** Kept for the composer's ＋ (Chat.tsx): a new event; its URL is put in the composer after. */
 export function NewEventSheet({ channel, onClose, onCreated, visibility }: { channel?: string; onClose: () => void; onCreated?: (url: string) => void; visibility?: Visibility }) {
-  return <EventFormSheet onClose={onClose} visibility={visibility} postedIn={onCreated && channel ? (group(channel)?.isPod ? '' : '#') + (group(channel)?.name ?? channel) : undefined} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
+  return <EventFormSheet onClose={onClose} visibility={visibility} postedIn={onCreated && channel ? (group(channel)?.isPod ? '' : '#') + (nameOf(channel)) : undefined} onSaved={(link) => (onCreated ? onCreated(`https://${BELFRY.domain}/events/${link}`) : go('events/' + encodeURIComponent(link)))} />
 }
 
 export { CalendarIcon }

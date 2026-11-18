@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { createDropLink, dropUrl, endDropLink } from '../core/actions'
-import { dropLinks, group, type DropLink } from '../core/model'
+import { dropLinks, group, type DropLink, nameOf } from '../core/model'
 import { me } from '../core/sync'
 import { useVersion } from '../core/store'
 import { Sheet, Btn } from './common'
@@ -55,7 +55,7 @@ function NewDropSheet({ groupId, onClose, onMade }: { groupId: string; onClose: 
   const g = group(groupId)
   return (
     <Sheet title="New drop link" onClose={onClose}>
-      <p style={{ margin: '0 0 12px' }}>People with the link upload photos and files to <b>{g?.name ?? groupId}</b>. They can add their name afterwards, or sign in to post as themselves.</p>
+      <p style={{ margin: '0 0 12px' }}>People with the link upload photos and files to <b>{nameOf(groupId)}</b>. They can add their name afterwards, or sign in to post as themselves.</p>
       <div className="field"><span>Works for</span>
         <div className="chips">{DAYS.map(([d, label]) => <button key={d} type="button" className={'chip' + (d === days ? ' on' : '')} onClick={() => setDays(d)}>{label}</button>)}</div>
       </div>

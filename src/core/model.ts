@@ -85,6 +85,8 @@ export interface Group {
   name: string
   /** The group's own name as the relay has it (what an edit writes back). */
   rawName: string
+  /** no name known yet: NAME is a neutral word ("this channel"), never something to save */
+  unnamed?: boolean
   about: string
   picture?: string
   createdAt: number
@@ -153,7 +155,7 @@ export function channelOfNaddr(naddr: string): string | undefined {
 export function plainRefs(text: string, npub = '@…'): string {
   return text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub).replace(NADDR, (all, a: string) => {
     const id = channelOfNaddr(a)
-    return id ? '#' + (group(id)?.name ?? id) : all
+    return id ? '#' + (nameOf(id)) : all
   })
 }
 export const isPodId = (id: string) => id.startsWith('pod-')
@@ -289,6 +291,25 @@ const groupSets: () => GroupSets = perLog((list) => {
   for (const [id, at] of goneAt) { const g = map.get(id); if (g && !((madeAt.get(id) ?? 0) > at)) gone.set(id, g) }
   // the on-brand names of the default places (display only; rawName is what the relay has)
   for (const g of map.values()) { g.rawName = g.name; g.name = placeName(g.id, g.name) ?? g.name }
+  // never an id as a name (Xavier, 2026-11-18: "Don't put the ugly slug here. Just use the name of
+  // the event"): a group whose metadata hasn't come yet takes its event's or proposal's title, else
+  // a neutral word; it re-renders with its own name as soon as the 39000 / 9002 arrives
+  const titles = new Map<string, { title: string; at: number }>()
+  for (const e of list) {
+    if (e.kind !== 31922 && e.kind !== 31923 && !(e.kind === 30023 && e.tags.some((t) => t[0] === 't' && t[1] === 'proposal'))) continue
+    const title = tag(e, 'title')?.trim()
+    if (!title) continue
+    const d = tag(e, 'd') ?? ''
+    for (const gid of [tag(e, 'h'), e.kind === 30023 ? undefined : 'ev-' + d, e.kind === 30023 ? undefined : 'ws-' + d.replace(/^session-/, '')]) {
+      if (gid && (titles.get(gid)?.at ?? -1) <= e.created_at) titles.set(gid, { title, at: e.created_at })
+    }
+  }
+  for (const g of map.values()) {
+    if (g.metaAt.name !== undefined || g.name !== g.id) continue // named (its id can be its name: "alpha")
+    const t = titles.get(g.id)?.title.slice(0, 120)
+    g.name = t ?? (g.isEvent ? 'this event' : g.isProposal ? 'this proposal' : g.isPod ? 'this group' : 'this channel')
+    if (!t) g.unnamed = true
+  }
   const kept = [...map.values()].filter((g) => !gone.has(g.id))
   // the charter (19.32) is a group of the relay, never a channel or a group in any list
   const every = kept.filter((g) => g.id !== CHARTER_ID)
@@ -895,6 +916,10 @@ export const calendar: () => CalEvent[] = perLog((list) => {
 
 export const eventByCoord = (coord: string) => calendar().find((x) => x.coord === coord)
 export const eventByLinkLocal = (link: string) => calendar().find((x) => x.d === link || x.slug === link)
+/** A group's name to show, never its id (a group not loaded yet: a neutral word). */
+export const nameOf = (id: string): string => group(id)?.name
+  ?? (id.startsWith('ev-') || id.startsWith('ws-') ? 'this event' : isProposalId(id) ? 'this proposal' : isPodId(id) ? 'this group' : 'this channel')
+
 export const eventOfGroup = (groupId: string) => calendar().find((x) => x.groupId === groupId)
 
 // ---- proposals ----------------------------------------------------------------------------

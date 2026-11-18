@@ -7,7 +7,7 @@ import { agentOwner, agentOwners, canAdmin, demoSetAgents, isAdmin, loadAccessIn
 import { relayAdmin } from './checkin'
 import { admit } from './actions'
 import { sendDm } from './dm'
-import { allGroups, group, groups, guestJoins, profiles, type Group } from './model'
+import { allGroups, eventLink, eventOfGroup, group, groups, guestJoins, profiles, type Group, nameOf } from './model'
 import { isLocalOnly, me, signedFetch } from './sync'
 import { touch } from './store'
 
@@ -25,7 +25,11 @@ export function inChannel(g: Group | undefined, pubkey: string): boolean {
   return !isGuest(pubkey)
 }
 
-export const channelUrl = (id: string) => `https://chat.${BELFRY.domain}/#/c/${encodeURIComponent(id)}`
+/** A channel's link in the chat; an event's chat: the event's own address, by its slug when it has one. */
+export const channelUrl = (id: string) => {
+  const e = eventOfGroup(id)
+  return e?.isNew ? `https://chat.${BELFRY.domain}/#/events/${encodeURIComponent(eventLink(e))}` : `https://chat.${BELFRY.domain}/#/c/${encodeURIComponent(id)}`
+}
 
 /** Invite a member: 'admitted' when they are in at once, 'asked' when they still have to apply
  *  (a closed pod I do not administer), 'sent' for an open channel. */
@@ -37,7 +41,7 @@ export async function inviteMember(groupId: string, pubkey: string): Promise<'ad
     if (!res.ok) throw new Error(body.message || 'Could not add them. Try again.')
     if (!body.member) return 'guest'
   }
-  const name = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '# ' + g.name) : groupId
+  const name = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '# ' + g.name) : nameOf(groupId)
   let state: 'admitted' | 'asked' | 'sent' = 'sent'
   if (g?.closed && !g.members.has(pubkey)) {
     if (canAdmin(g) && relayAdmin(groupId)) { await admit(groupId, pubkey); state = 'admitted' } else state = 'asked'

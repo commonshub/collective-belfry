@@ -11,7 +11,7 @@ import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../
 import { wipe } from '../core/db'
 import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
 import { roleBadge } from '../core/roles'
-import { archivedGroups, deletedGroup, group, groups, profiles } from '../core/model'
+import { archivedGroups, deletedGroup, group, groups, profiles, nameOf } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
@@ -28,7 +28,7 @@ import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
-import { EventsScreen } from './Calendar'
+import { EventsScreen, eventPath } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
 import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication, ticketLinkFromUrl } from '../core/events'
 import { eventOfGroup } from '../core/model'
@@ -209,6 +209,12 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // one shows that, whatever the link was to (groupstate.ts asks the relay when nothing is known)
   const chanId = route[1] ?? lastChannel() ?? groups()[0]?.id ?? 'general'
   const chanState = useGroupState((route[0] ?? 'c') === 'c' && route[1] ? chanId : undefined)
+  // an event's chat has the event's own address: its slug when it has one (Xavier, 2026-11-18:
+  // "Always use the custom slug if one is set as a general rule"), never #/c/ev-<d>
+  const evRoute = route[0] === 'c' && route[1] && (!route[2] || route[2] === 'm') ? eventOfGroup(route[1]) : undefined
+  useEffect(() => {
+    if (evRoute?.isNew) location.replace('#/' + eventPath(evRoute) + (route[2] === 'm' && route[3] ? '/m/' + route[3] : ''))
+  }, [evRoute?.coord, evRoute?.slug, route[2], route[3]]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   // a guest link opened while signed in (or kept while signing in): this account gets the channel
   const [joined, setJoined] = useState('')
@@ -219,7 +225,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     setPendingInvite('')
     if (session.backend === 'demo') { setJoined('You joined # general'); go('c/general'); return }
     joinWithAccount(token).then(
-      ({ channel, already }) => { go('c/' + encodeURIComponent(channel)); setJoined(already ? '' : `You joined # ${group(channel)?.name ?? channel}`) },
+      ({ channel, already }) => { go('c/' + encodeURIComponent(channel)); setJoined(already ? '' : `You joined # ${nameOf(channel)}`) },
       (e) => setJoined(e instanceof Error ? e.message : String(e)),
     )
   }, [ready, route.join('/')])

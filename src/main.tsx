@@ -38,10 +38,26 @@ if (vv) {
     if (up) {
       root.style.setProperty('--app-h', `${Math.round(vv.height)}px`)
       root.style.setProperty('--app-top', `${Math.round(vv.offsetTop)}px`)
+      // sheets and dialogs are fixed to the layout viewport: their bottom goes up to the keyboard's
+      // top (styles.css, html.kb .sheet), so a field in them stays on screen (Xavier, 2026-11-18)
+      root.style.setProperty('--kb-bottom', `${Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop))}px`)
+      keepFocusedInSheet()
     } else {
       root.style.removeProperty('--app-h')
       root.style.removeProperty('--app-top')
+      root.style.removeProperty('--kb-bottom')
     }
+  }
+  // a field inside a sheet: once the keyboard has settled, scrolled into the sheet's own view
+  // (its scroll box), never by panning the page
+  let settle = 0
+  const keepFocusedInSheet = () => {
+    clearTimeout(settle)
+    settle = window.setTimeout(() => {
+      const el = document.activeElement as HTMLElement | null
+      if (el?.closest?.('.sheet, dialog.modal') && el.matches('textarea, input, [contenteditable]')) el.scrollIntoView({ block: 'nearest' })
+      if (window.scrollY) window.scrollTo(0, 0)
+    }, 120)
   }
   const later = () => { if (!frame) frame = requestAnimationFrame(fit) }
   vv.addEventListener('resize', later)

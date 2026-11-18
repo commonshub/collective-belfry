@@ -3,7 +3,7 @@ import { archiveGroupMeta, editGroupMeta } from './checkin'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable, nameOf } from './model'
 import { enqueue, me, newId } from './sync'
 import { all } from './store'
 import { reading } from './guestmode'
@@ -145,13 +145,13 @@ export const setWebPage = (groupId: string, page: WebPage) =>
  *  was posted before keeps the visibility it had. */
 export async function setVisibility(groupId: string, visibility: ChannelVisibility) {
   const g = group(groupId)
-  const w: WebPage = webPage(g) ?? { on: false, slug: slugify(g?.name ?? groupId), visibility: 'members' }
+  const w: WebPage = webPage(g) ?? { on: false, slug: slugify(g?.rawName ?? groupId), visibility: 'members' }
   const now = Math.floor(Date.now() / 1000)
   const periods = publicPeriods(g).map((p) => [...p] as Period)
   const open = periods.at(-1)?.[1] === null
   if (visibility === 'public' && !open) periods.push([now, null])
   if (visibility === 'members' && open) periods.at(-1)![1] = now
-  const page: WebPage = { ...w, visibility, periods, on: visibility === 'public' ? true : w.on, slug: w.slug || slugify(g?.name ?? groupId) }
+  const page: WebPage = { ...w, visibility, periods, on: visibility === 'public' ? true : w.on, slug: w.slug || slugify(nameOf(groupId)) }
   await setWebPage(groupId, page)
   return page
 }

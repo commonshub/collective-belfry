@@ -6,7 +6,7 @@ import { isLocalOnly, me } from '../core/sync'
 import { baseSubject, channelSignature, DEMO_GROUPS, fetchLarge, report, sendAsChannel } from '../core/dm'
 import { hexToBytes } from '@noble/hashes/utils'
 import { assignCard, createChannel, setCardStatus, setInbox } from '../core/actions'
-import { displayName, plainRefs, type CardState, type Group } from '../core/model'
+import { displayName, plainRefs, type CardState, type Group, nameOf } from '../core/model'
 import { BELFRY } from '../config'
 import { parseMail, type Mail } from '../core/mime'
 import { mailIn, mailOut, type MailItem, type MailThread } from '../core/mailthreads'
@@ -215,7 +215,7 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
   /** Send TEXT by e-mail after the countdown; resolves once it left this device. */
   const send = (text: string) => new Promise<void>((resolve, reject) => {
     const refs = to?.messageId ? t.refs.filter((x) => x !== to.messageId) : t.refs
-    const go = () => sendAsChannel({ channel: groupId, local, channelName: g?.name ?? groupId, to: to!.address, subject, text, inReplyTo: to!.messageId, references: refs.slice(-10).join(' ') || undefined, cardId: to!.m.ev.id })
+    const go = () => sendAsChannel({ channel: groupId, local, channelName: nameOf(groupId), to: to!.address, subject, text, inReplyTo: to!.messageId, references: refs.slice(-10).join(' ') || undefined, cardId: to!.m.ev.id })
     let left = UNDO_SECONDS
     setCountdown(left)
     const stop = () => { if (timer.current) clearInterval(timer.current); timer.current = null; pending.current = null; setCountdown(0) }
@@ -231,7 +231,7 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
 
   const name = to ? who(to) : who(t)
   const firstName = to ? first(to) : first(t)
-  const where = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '#' + g.name) : '#' + groupId
+  const where = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '#' + g.name) : nameOf(groupId)
   const line: ReactNode = (
     <div className={'mail-switch-wrap' + (mail ? ' mail' : ' team')}>
       {canMail && to && (
@@ -255,7 +255,7 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
         {r?.status !== 'queued' && <button onClick={() => setSentId('')}>OK</button>}
       </div>
     ) : null
-  return { mail, line, toast, send, sending: countdown > 0, placeholder: mail ? `Write your e-mail to ${firstName}` : 'Write a comment for the team', signature: channelSignature(g?.name ?? groupId) }
+  return { mail, line, toast, send, sending: countdown > 0, placeholder: mail ? `Write your e-mail to ${firstName}` : 'Write a comment for the team', signature: channelSignature(nameOf(groupId)) }
 }
 
 /** Demo mode only (tests): an e-mail from outside lands in the shared inbox CHANNEL. IN_REPLY_TO:

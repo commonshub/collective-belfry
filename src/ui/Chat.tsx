@@ -8,7 +8,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -503,7 +503,7 @@ export function ChannelView({ id, topic, focus, activeThread, menu = false }: { 
       {/* ☰ · the name and its subtitle · search; notifications and settings are rows of its menu (2026-11-17) */}
       <ChannelHeader id={id} topic={topic} onTopic={openTopic} initialOpen={menu}
         left={<LeftButton id={id} />}
-        right={<button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
+        right={<button className="icon-btn" aria-label={`Search ${groupName(id)}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>} />
       {g?.isProposal && <SiteBar groupId={id} />}
       <Conversation id={id} events topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly={!!g && g.closed && (g.isPod || !canAdmin(g)) && !g.members.has(me())} />
       {g && !g.members.has(me()) && (g.isPod || (g.closed && !g.isEvent && !g.isProposal && !canAdmin(g))) && <JoinBar g={g} />}
@@ -910,8 +910,8 @@ export function ThreadView({ groupId, rootId: asked, pane = false, replying = fa
   return (
     <div className="screen">
       <div className="topbar">
-        {!pane && <button className="icon-btn" aria-label={`Back to ${g?.name ?? groupId}`} onClick={back}>‹</button>}
-        <h1>{mailT ? mailT.subject || '(no subject)' : 'Thread'}<small>{channelIcon(g)} {g?.name ?? groupId}</small></h1>
+        {!pane && <button className="icon-btn" aria-label={`Back to ${groupName(groupId)}`} onClick={back}>‹</button>}
+        <h1>{mailT ? mailT.subject || '(no subject)' : 'Thread'}<small>{channelIcon(g)} {groupName(groupId)}</small></h1>
         {pane && <button className="icon-btn" aria-label="Close the thread" onClick={back}><CloseIcon /></button>}
       </div>
       {mailT && <MailThreadHead t={mailT} groupId={groupId} canAct={!frozen && !reading() && !guestInfo()} />}
@@ -1122,7 +1122,9 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const copy = async (what: string, text: string) => {
     try { await navigator.clipboard.writeText(text); setCopied(what); setTimeout(onClose, 600) } catch { setCopied('') }
   }
-  const link = `${location.origin}${location.pathname}#/c/${encodeURIComponent(groupId)}/m/${m.ev.id}`
+  // an event's chat: the event's address (its slug when it has one), never the group id
+  const evOf = eventOfGroup(groupId)
+  const link = `${location.origin}${location.pathname}#/${evOf?.isNew ? 'events/' + encodeURIComponent(eventLink(evOf)) : 'c/' + encodeURIComponent(groupId)}/m/${m.ev.id}`
   const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
   )

@@ -1611,6 +1611,12 @@ html.kb .mail-head .mh-note { display: none; } /* typing: the room goes to the t
    fills the visible part only, so the composer sits just above the keyboard (main.tsx sets
    --app-h / --app-top from visualViewport). */
 html.kb #root { position: fixed; left: 0; right: 0; top: 0; height: var(--app-h, 100%); transform: translateY(var(--app-top, 0px)); }
+/* sheets (phone) and dialogs follow the same visible part: bottom at the keyboard's top, no taller
+   than what is visible; the page under them doesn't scroll (main.tsx sets --kb-bottom) */
+html.kb .sheet { bottom: var(--kb-bottom, 0px); max-height: calc(var(--app-h, 100dvh) - 8px); }
+html.kb .sheet .sheet-scroll { padding-bottom: 16px; }
+html.kb dialog.modal { max-height: calc(var(--app-h, 100dvh) - 16px); }
+html.kb body:has(.sheet), html.kb body:has(dialog[open]) { overflow: hidden; overscroll-behavior: none; }
 
 /* r3 (2026-11-17): Home's tiles at zero, category heads with their +, the gear, holding channels */
 .tile.zero > small { color: var(--faint); }

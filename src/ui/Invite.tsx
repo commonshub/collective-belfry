@@ -7,7 +7,7 @@
 // it: someone who is here already, by name.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
-import { channelIcon, displayName, group, profiles } from '../core/model'
+import { channelIcon, displayName, group, profiles, nameOf } from '../core/model'
 import { inChannel, inviteMember, isAgent, isGuest, LinkFailed, makeInviteLink, myAgents, type GuestDays, type JoinsAs, type LinkOpts, type Membership, type MyAgents } from '../core/invite'
 import { agentOwner } from '../core/access'
 import { isBelfryAdmin } from '../core/people'
@@ -66,7 +66,7 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
   const [error, setError] = useState('')
   const [copied, setCopied] = useState(false)
   const asked = useRef(0)
-  const label = `${channelIcon(g)}${g?.isPod || g?.isEvent || g?.isProposal ? ' ' : ''}${g?.name ?? id}`
+  const label = `${channelIcon(g)}${g?.isPod || g?.isEvent || g?.isProposal ? ' ' : ''}${nameOf(id)}`
   // an admin's or an agent's link is for one person, whatever "Link" says
   const onlyOne = who.as === 'agent' || (who.as === 'member' && who.role === 'admin')
   const people = onlyOne ? 1 : link.people
@@ -233,7 +233,7 @@ function InviteMember({ id }: { id: string }) {
   const kind = (pk: string) => { const o = agentOwner(pk); return o ? `${displayName(o)}'s agent · ` : isGuest(pk) ? (isAgent(pk) ? 'Agent, a guest · ' : 'Guest · ') : '' }
   return (
     <div className="invite-member">
-      <label className="field" style={{ marginBottom: 6 }}><span>Someone who is here already</span>
+      <label className="field" style={{ marginBottom: 6 }}><span>Invite someone already in the community</span>
         <input className="input" placeholder="Type a name" value={q} autoCapitalize="none" autoCorrect="off" onChange={(e) => { setQ(e.target.value); setError('') }} /></label>
       {list.map((pk) => {
         const here = inChannel(g, pk)

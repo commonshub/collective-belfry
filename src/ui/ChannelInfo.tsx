@@ -8,7 +8,7 @@ import { openProfile } from './Profile'
 
 const MembersMap = lazy(() => import('./MembersMap'))
 import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
-import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
+import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage, nameOf } from '../core/model'
 import { BELFRY, NAME } from '../config'
 import { addTask, admit, assignTask, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
@@ -37,7 +37,7 @@ export function ChannelInfo({ id, initial = 'about' }: { id: string; initial?: T
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back" onClick={() => back('c/' + id)}>‹</button>
-        <h1>{channelIcon(g)} {g?.name ?? id}</h1>
+        <h1>{channelIcon(g)} {nameOf(id)}</h1>
         {g && canAdmin(g) && !g.archived && <button className="icon-btn" aria-label="Settings" onClick={() => setSettings(true)}><GearIcon /></button>}
       </div>
       {g?.archived && <ArchivedBar g={g} />}
@@ -172,11 +172,11 @@ export function ChannelSettingsSheet({ id, onClose }: { id: string; onClose: () 
 export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => void }) {
   const onClose = onDone
   const g = group(id)
-  const [name, setName] = useState(g?.name ?? '')
+  const [name, setName] = useState(g && !g.unnamed ? g.name : '')
   const [about, setAbout] = useState(g?.about ?? '')
   const [access, setAccess] = useState<{ closed: boolean; prompt: string; vouches?: number }>({ closed: !!g?.closed, prompt: g?.prompt ?? '', vouches: g?.vouches ?? 0 })
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
-  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.name ?? '') : (g?.id ?? ''), visibility: 'members' })
+  const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.rawName ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
   // who can read it, one choice of three (Xavier, 2026-11-18, canvas "Settings-A/B"): members only,
   // public (the belfry:web period, never retroactive) or closed (NIP-29 closed: people ask, a

@@ -1,7 +1,7 @@
 // Search messages: in one channel (from its header) or in all of them. Every word must appear
 // (accents and case ignored); a result opens its channel on that message.
 import { useMemo, useState } from 'react'
-import { allGroups, channelIcon, displayName, messages, type Message } from '../core/model'
+import { allGroups, channelIcon, displayName, messages, type Message, nameOf } from '../core/model'
 import { useVersion } from '../core/store'
 import { Avatar, back, fmtTime, go } from './common'
 import { CloseIcon, SearchIcon } from './icons'
@@ -60,7 +60,7 @@ export function SearchView({ channel }: { channel?: string }) {
             <button key={m.ev.id} className="search-hit" onClick={() => go(`c/${encodeURIComponent(gid)}/m/${m.ev.id}`)}>
               <Avatar pubkey={m.ev.pubkey} size={32} />
               <span className="t">
-                <span className="who"><b>{displayName(m.ev.pubkey)}</b>{(everywhere || !channel) && <span className="in">{channelIcon(g)}{g?.name ?? gid}</span>}
+                <span className="who"><b>{displayName(m.ev.pubkey)}</b>{(everywhere || !channel) && <span className="in">{channelIcon(g)}{nameOf(gid)}</span>}
                   <time>{when(m.ev.created_at)}</time></span>
                 <span className="snip">{snippet(m.text || m.media.map((x) => x.name || 'Photo').join(', '), words)}</span>
               </span>

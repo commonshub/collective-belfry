@@ -2,7 +2,7 @@ import { useRef, useState, type ReactNode } from 'react'
 import { openProfile } from './Profile'
 import { setTopics } from '../core/actions'
 import { nip19 } from 'nostr-tools'
-import { ANNOUNCE, channelIcon, channelOfNaddr, displayName, group, isAnnouncement, messages, normTopic, realName, topics } from '../core/model'
+import { ANNOUNCE, channelIcon, channelOfNaddr, displayName, group, isAnnouncement, messages, normTopic, realName, topics, nameOf } from '../core/model'
 import { go } from './common'
 import { me } from '../core/sync'
 import { Markdown } from './markdown'
@@ -100,7 +100,7 @@ function ChannelRef({ naddr }: { naddr: string }) {
   const id = channelOfNaddr(naddr)
   if (!id) return <>{'nostr:' + naddr}</>
   const g = group(id)
-  return <button type="button" className="mention channel-ref" onClick={(e) => { e.stopPropagation(); go('c/' + encodeURIComponent(id)) }}>{channelIcon(g)}{g?.name ?? id}</button>
+  return <button type="button" className="mention channel-ref" onClick={(e) => { e.stopPropagation(); go('c/' + encodeURIComponent(id)) }}>{channelIcon(g)}{nameOf(id)}</button>
 }
 
 function Mention({ npub }: { npub: string }) {

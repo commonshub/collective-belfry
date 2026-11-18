@@ -1,7 +1,7 @@
 import { BELFRY } from '../config'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createProposal, markSeen, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
-import { canDecide, displayName, group, messages, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
+import { canDecide, displayName, group, messages, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus, nameOf } from '../core/model'
 import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, Btn, fmtDay, go, Sheet, Form, useFormDraft } from './common'
@@ -304,7 +304,7 @@ export function ProposalView({ id, left, topic, onTopic, focus, activeThread }: 
   const right = (
     <>
       <SaveFailedIcon id={id} />
-      <button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>
+      <button className="icon-btn" aria-label={`Search ${nameOf(id)}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>
       <button className="icon-btn" aria-label="More about this proposal" onClick={() => setMenu(true)}><MoreIcon /></button>
     </>
   )

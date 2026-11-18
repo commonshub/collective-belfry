@@ -6,7 +6,7 @@ import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
 import { JoinFailed, joinErrorText, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
-import { channelIcon, group } from '../core/model'
+import { channelIcon, group, nameOf } from '../core/model'
 import { touch } from '../core/store'
 import { joinWithAccount } from '../core/sync'
 import { Btn, Form, Sheet } from './common'
@@ -56,7 +56,7 @@ export function GuestBar({ groupId }: { groupId: string }) {
     <div className="guest-bar" role="region" aria-label="Guest mode">
       {member
         ? <span><b>You’re invited</b> to join {community} as {asWho(member.label)}.</span>
-        : <span><b>Guest mode</b> · You’re reading {g ? channelIcon(g) : '#'} {g?.name ?? groupId} as a guest.</span>}
+        : <span><b>Guest mode</b> · You’re reading {g ? channelIcon(g) : '#'} {nameOf(groupId)} as a guest.</span>}
       <button className="btn small" onClick={askToJoin}>Join</button>
     </div>
   )
