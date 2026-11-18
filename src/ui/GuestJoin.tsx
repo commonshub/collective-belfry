@@ -25,6 +25,26 @@ export function OpeningScreen({ name }: { name?: string }) {
   )
 }
 
+/** A belfry member link (#issues 2026-11-18): no channel behind it, only "log in or sign up".
+ *  Both open the Join sheet: a new e-mail makes the account (the link makes it a member), the
+ *  e-mail of an account that exists already signs in with it. */
+export function MemberInviteScreen() {
+  useGuestMode()
+  const community = useCommunityName(NAME)
+  const member = guestInfo()?.member
+  if (!member) return null
+  return (
+    <div className="screen login member-invite">
+      <h2>You’re invited to {community}</h2>
+      <p>Join as {asWho(member.label)}{member.membership === 'permanent' || !member.membership ? '' : member.membership === 'year' ? ', for a year' : ', for a month'}. No password: a 6-digit code by e-mail.</p>
+      <div className="login-ctas">
+        <button className="btn" onClick={askToJoin}>Sign up</button>
+        <button className="btn ghost" onClick={askToJoin}>I have an account: log in</button>
+      </div>
+    </div>
+  )
+}
+
 /** Where the composer would be: you are reading; Join opens the sheet. */
 export function GuestBar({ groupId }: { groupId: string }) {
   useGuestMode()

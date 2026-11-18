@@ -6,7 +6,7 @@ import { Phone } from './Phone'
 import { SearchView } from './Search'
 import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
-import { GuestJoinHost, OpeningScreen } from './GuestJoin'
+import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { archivedGroups, deletedGroup, group, groups, profiles } from '../core/model'
@@ -237,6 +237,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     return <EventWaitScreen title={pendingApplication()!.title} onSignOut={onSignOut} />
   if (status.access === 'denied')
     return <MembershipScreen session={session} reason={status.accessReason} onSignOut={onSignOut} />
+
+  // a member link, not used yet: log in or sign up, no channel behind it (#issues 2026-11-18)
+  if (reading() && guestInfo()?.member) return <>{toast}<MemberInviteScreen /></>
 
   // the places (Places.tsx): the app starts on Home; #/town opens the town channel I was in
   const places = placesOn()
