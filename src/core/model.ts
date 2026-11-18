@@ -769,7 +769,8 @@ export interface CalEvent {
 }
 
 export const isEventKind = (k: number) => k === 31922 || k === 31923
-export const EVENT_D = /^\d{4}-[a-z0-9]{6}$/
+/** An event's id: 6 of a–z, 0–9 (since 2026-11-18, Belfry ba5024b); older ones have the year before them. */
+export const EVENT_D = /^(\d{4}-)?[a-z0-9]{6}$/
 export const EVENT_STATUS_NS = 'belfry/event-status'
 export const eventLink = (e: Pick<CalEvent, 'd' | 'slug'>) => e.slug || e.d
 export const eventUrl = (e: Pick<CalEvent, 'd' | 'slug'>) => `https://${BELFRY.domain}/events/${eventLink(e)}`

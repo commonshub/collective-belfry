@@ -29,7 +29,7 @@ async function photo(hue: number, label: string): Promise<string> {
 export type DemoAs = 'host' | 'cohost' | 'steward' | 'attendee' | 'outsider'
 export async function demoEvent(opts: { as?: DemoAs; today?: boolean; plain?: boolean; d?: string; slug?: string; title?: string; photos?: boolean; /** the same people every time (tests) */ seed?: string } = {}): Promise<string> {
   const { as = 'host', today = true, plain = false, slug = 'garden-day', title = 'Garden day', photos = true } = opts
-  const d = opts.d ?? `${new Date().getFullYear()}-${hex(3)}`
+  const d = opts.d ?? hex(3)
   const group = 'ev-' + d
   const now = Math.floor(Date.now() / 1000)
   const gk = knownGroupsKey() ?? 'f'.repeat(64)

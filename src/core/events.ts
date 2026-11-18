@@ -24,10 +24,10 @@ const tag = (e: Ev, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 // ---- ids, URLs ---------------------------------------------------------------------------
 
 const ALPHA = 'abcdefghijklmnopqrstuvwxyz0123456789'
-/** A new event's id: the year it is made in (UTC) and 6 random characters. Never recomputed. */
+/** A new event's id: 6 random characters (no year since 2026-11-18). Never recomputed. */
 export function newEventD(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6))
-  return `${new Date().getUTCFullYear()}-${[...bytes].map((b) => ALPHA[b % 36]).join('')}`
+  return [...bytes].map((b) => ALPHA[b % 36]).join('')
 }
 export const SLUG = /^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$/
 const RESERVED = new Set(['new', 'slug', 'feed', 'past', 'mine'])
@@ -324,7 +324,9 @@ export async function createEvent(n: EventForm, extra: string[][] = []): Promise
   await enqueue('groups', { kind: 9002, tags: [['h', groupId], ['name', n.title.trim()], ['about', n.description.split('\n')[0].slice(0, 200) || 'The event’s chat'], ...(n.cover ? [['picture', n.cover]] : []), n.closed ? ['closed'] : ['open']] })
   const v = versionTags(d, n, extra)
   await enqueue('main', { kind: v.kind, content: n.description, tags: v.tags })
-  if (n.slug) await claimSlug(d, n.slug).catch(() => undefined)
+  // the belfry also adopts the event's own `slug` tag when it loads it (Belfry ba5024b); claiming
+  // right away can reach it before the event does (404), so try again a few times
+  if (n.slug) void claimSoon(d, n.slug)
   return d
 }
 
@@ -361,11 +363,18 @@ export async function slugFree(name: string, d = ''): Promise<{ free: boolean; s
   if (!r.ok) throw new Error(j.message || 'Could not check the URL.')
   return j
 }
+async function claimSoon(d: string, slug: string) {
+  for (const wait of [0, 2000, 5000, 15000]) {
+    if (wait) await new Promise((r) => setTimeout(r, wait))
+    try { await claimSlug(d, slug); return } catch (x) { if (!(x instanceof SlugError) || x.code !== 'not_found') return }
+  }
+}
+class SlugError extends Error { constructor(m: string, readonly code?: string) { super(m) } }
 export async function claimSlug(d: string, slug: string) {
   if (isLocalOnly()) return
   const r = await signedFetch(`${BELFRY.api}/events/${d}/slug`, 'PUT', { slug })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.message || 'That URL could not be set.')
+  if (!r.ok) throw new SlugError(j.message || 'That URL could not be set.', j.error)
 }
 
 /** Cancel (with a line to the guests) or reopen: a label in the group and a new version. */
