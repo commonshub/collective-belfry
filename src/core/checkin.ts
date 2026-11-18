@@ -251,6 +251,41 @@ async function viaBelfry(path: string, body: unknown): Promise<'done' | 'missing
   return 'done'
 }
 
+// ---- requests to join a closed channel or a group: its admins decide (Belfry 161d4d7) -----------
+// POST /group-requests/decide {"channel", "pubkey", "action": "approve" | "decline"} (NIP-98), by any
+// admin of that channel (the relay's list, its creator, an admin by role) or a belfry admin; the
+// belfry answers the latest open 9021 as the groups key (docs/membership.md). Used for everyone,
+// so an admin by role has the same Accept / Decline. An event's requests keep /events/<d>/decide.
+
+export type DecideError = 'not_allowed' | 'no_request' | 'archived' | 'event' | 'invalid' | 'relay' | 'offline' | 'failed'
+export class DecideFailed extends Error { constructor(public code: DecideError) { super(code) } }
+/** Fixed words for each answer (never the server's text). */
+export const DECIDE_ERRORS: Record<DecideError, string> = {
+  not_allowed: 'Only this channel’s admins can decide.',
+  no_request: 'This request was answered or withdrawn already.',
+  archived: 'This channel is archived.',
+  event: 'An event’s requests are answered from the event.',
+  invalid: 'That did not work. Try again.',
+  relay: 'The belfry could not reach its relay. Try again in a moment.',
+  offline: 'No connection. Try again.',
+  failed: 'That did not work. Try again.',
+}
+
+/** Accept (APPROVE) or decline PK's request to join GROUPID; 'already' when they were let in since. */
+export async function decideRequest(groupId: string, pk: string, approve: boolean): Promise<'done' | 'already'> {
+  if (isLocalOnly()) { // demo: what the belfry would publish
+    await enqueue('groups', approve ? { kind: 9000, tags: [['h', groupId], ['p', pk, 'member']] } : { kind: 9001, tags: [['h', groupId], ['p', pk]] })
+    return 'done'
+  }
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}/group-requests/decide`, 'POST', { channel: groupId, pubkey: pk, action: approve ? 'approve' : 'decline' }) } catch { throw new DecideFailed('offline') }
+  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+  if (!r.ok) throw new DecideFailed((String(d.error) in DECIDE_ERRORS ? d.error : 'failed') as DecideError)
+  if (d.already === true) return 'already'
+  if (d.approved === true || d.declined === true) return 'done'
+  throw new DecideFailed('failed')
+}
+
 /** Take PK out of a group (an event: their ticket too): through the belfry, else a direct 9001. */
 export async function removeFromGroup(groupId: string, pk: string): Promise<void> {
   const direct = () => enqueue('groups', { kind: 9001, tags: [['h', groupId], ['p', pk]] })

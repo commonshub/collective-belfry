@@ -7,7 +7,7 @@
 //     answer to its question, "1 of 2 vouches", Accept / Decline / Vouch.
 // Everything the askers wrote is shown as plain text.
 import { Linkify } from './markdown'
-import { relayAdmin } from '../core/checkin'
+import { DECIDE_ERRORS, DecideFailed, decideRequest, relayAdmin } from '../core/checkin'
 import { useState } from 'react'
 import { nip19 } from 'nostr-tools'
 import { NAME } from '../config'
@@ -116,12 +116,16 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
 export function GroupRequest({ g, a }: { g: Group; a: Application }) {
   useVersion()
   const [error, setError] = useState('')
-  // its admins, and the belfry's; an admin by role can't admit on the relay (docs/checkin.md): they vouch
-  const admin = canAdmin(g) && relayAdmin(g.id)
+  // its admins (an admin by role too) and the belfry's decide through the belfry (decideRequest);
+  // an event's requests are answered from the event
+  const admin = canAdmin(g) && (!g.isEvent || relayAdmin(g.id))
+  const decide = (approve: boolean) => g.isEvent
+    ? (approve ? admit(g.id, a.pubkey) : declineInGroup(g.id, a.pubkey))
+    : decideRequest(g.id, a.pubkey, approve).catch((e) => { throw e instanceof DecideFailed ? new Error(DECIDE_ERRORS[e.code]) : e })
   const vouchers = groupVouches(g, a)
   const mine = vouchers.includes(me())
   const canVouch = g.vouches > 0 && g.members.has(me()) && a.pubkey !== me()
-  const run = (f: () => Promise<unknown>) => f().catch((e) => setError(e instanceof Error ? 'That did not work. Try again.' : String(e)))
+  const run = (f: () => Promise<unknown>) => { setError(''); return f().catch((e) => setError(e instanceof Error && Object.values(DECIDE_ERRORS).includes(e.message) ? e.message : 'That did not work. Try again.')) }
   return (
     <div className="appl req-row">
       <div className="who"><Avatar pubkey={a.pubkey} size={28} /><span className="t">{displayName(a.pubkey)}<small>{fmtTime(a.at)}</small></span></div>
@@ -133,8 +137,8 @@ export function GroupRequest({ g, a }: { g: Group; a: Application }) {
       )}
       <Fail error={error} />
       <div className="row">
-        {admin && <Btn className="btn small" onClick={() => run(() => admit(g.id, a.pubkey))}>Accept</Btn>}
-        {admin && <Btn className="btn small ghost" onClick={() => run(() => declineInGroup(g.id, a.pubkey))}>Decline</Btn>}
+        {admin && <Btn className="btn small" onClick={() => run(() => decide(true))}>Accept</Btn>}
+        {admin && <Btn className="btn small ghost" onClick={() => run(() => decide(false))}>Decline</Btn>}
         {canVouch && <Btn className={'btn small' + (mine || admin ? ' ghost' : '')} aria-pressed={mine} onClick={() => run(() => vouchInGroup(g, a, !mine))}>{mine ? 'Take back my vouch' : 'Vouch'}</Btn>}
       </div>
     </div>
