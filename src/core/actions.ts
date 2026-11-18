@@ -199,7 +199,9 @@ export function topEmojis(n = 6): string[] {
   return [...new Set([...used, ...DEFAULT_EMOJIS])].slice(0, n)
 }
 
-export async function react(groupId: string, msg: { id: string; pubkey: string }, emoji: string, mine?: { id: string; pending?: unknown }) {
+/** React to MSG (a message, kind 9, or a reply in a thread, kind 1111): kind 7 with h, e = its id,
+ *  p = its author, k = its kind (board channels/thread, decided 2026-11-18; readers key on e). */
+export async function react(groupId: string, msg: { id: string; pubkey: string; kind?: number }, emoji: string, mine?: { id: string; pending?: unknown }) {
   if (mine) {
     if (mine.pending) return // not sent yet: nothing to take back on the relay
     return enqueue('groups', { kind: 5, tags: [['h', groupId], ['e', mine.id], ['k', '7']] })
@@ -209,7 +211,7 @@ export async function react(groupId: string, msg: { id: string; pubkey: string }
     u[emoji] = (u[emoji] ?? 0) + 1
     localStorage.setItem(USAGE, JSON.stringify(u))
   } catch { /* private mode: no memory, defaults stay */ }
-  return enqueue('groups', { kind: 7, content: emoji, tags: [['h', groupId], ['e', msg.id], ['p', msg.pubkey], ['k', '9']] })
+  return enqueue('groups', { kind: 7, content: emoji, tags: [['h', groupId], ['e', msg.id], ['p', msg.pubkey], ['k', String(msg.kind ?? 9)]] })
 }
 
 export const setMemberLabels = (groupId: string, pubkey: string, labels: string[]) =>
