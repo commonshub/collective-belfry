@@ -105,8 +105,8 @@ def world(monkeypatch):
     svc = SimpleNamespace(settings=SimpleNamespace(nip05_domain="belfry.test"))
     published: list[tuple] = []
 
-    async def publish_from(s, pubkey, name, admin):
-        published.append((pubkey, name, admin))
+    async def publish_from(s, pubkey, name, admin, paths=None):
+        published.append((pubkey, name, admin) + ((paths,) if paths else ()))
         return {"files": 3}
 
     monkeypatch.setattr(website, "publish_from", publish_from)

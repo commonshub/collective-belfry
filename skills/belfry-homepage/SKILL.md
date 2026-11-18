@@ -59,9 +59,32 @@ Check: `curl -sI https://<domain>/` and, for nsites,
 ### A member's agent proposes a version
 
 You need the member's bunker URL from their account page (`https://apps.<domain>`, "Connect to
-Nostr App"). Then:
+Nostr App"). First decide **what you are changing**:
 
-1. Build the site to a folder (`dist/`), with `index.html` at its root.
+- **Only a part of the site** (the usual case: you look after `/ios/screenshots/`, a page, a
+  folder of downloads): make a **scoped** proposal. Prefer it whenever you own only a part of
+  the site. Publishing it changes only that path; nothing else on the website is touched, even
+  if your copy of the rest is old.
+- **The whole site** (a redesign, a new generator): an unscoped proposal replaces every file.
+  Start from the **current live site**, never from an old copy, or you undo other people's
+  changes. Admins judge these more carefully.
+
+One proposal per responsibility: don't bundle unrelated paths (screenshots and a pricing page)
+in one proposal; an admin may want one and not the other.
+
+**A path** is a folder, starting and ending with `/` (`/ios/screenshots/`), or one file
+(`/android/index.html`; a file name has an extension). Letters, digits, `-`, `_` and `.`; no
+empty, `.`, `..` or hidden (`.git`) parts; at most 200 characters, at most 10 paths. No path
+(or `/`) means the whole site. A proposal with an invalid path is **not** published (the belfry
+says so under it); it never falls back to the whole site.
+
+1. Build the files to a folder (`dist/`), **at their real paths**:
+   - scoped: only that subtree, for example `dist/ios/screenshots/*.png` for `/ios/screenshots/`.
+     It needs no `index.html` of its own; files outside the path are ignored.
+   - whole site: everything, with `index.html` at its root. To start from the live site, read
+     its manifest (the belfry's root site: kind 15128 by the belfry's key, `nostr` in
+     `https://<domain>/.well-known/belfry.json`, on `wss://relay.<domain>`) and download each
+     `path` from `https://blossom.<domain>/<sha256>`; or ask the admin for the source.
 2. Publish it as a named site `website` with ngit 3:
    ```bash
    ngit account login --bunker-url 'bunker://…' --alias member
@@ -69,7 +92,9 @@ Nostr App"). Then:
      --blossom-server https://blossom.<domain> --relay wss://relay.<domain> --repo-relay-only --defaults
    ```
    This uploads the files to the belfry's Blossom server (allowed for keys with an active pass) and
-   publishes the manifest (kind 35128, `d=website`) to the belfry's members-only relay.
+   publishes the manifest (kind 35128, `d=website`) to the belfry's members-only relay. For
+   several parts of the site, use one site name each (`--id ios-shots`, at most 13 characters)
+   so the previews don't overwrite each other.
 3. Propose it in the **#website** channel (the groups relay, `relays.groups` in
    `https://<domain>/.well-known/belfry.json`, NIP-42 AUTH), signed by the member's key (or your
    own, as their agent), a message with a button an admin taps to publish it:
@@ -77,20 +102,49 @@ Nostr App"). Then:
    kind 9
    tags  ["h", "website"]
          ["a", "35128:<pubkey hex that published the site>:website"]
+         ["path", "/ios/screenshots/"]        ← one per path; none for the whole site
          ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"]
-   content  what changed, the preview link https://preview.<domain>/p/<npub>@website,
+   content  "Website: /ios/screenshots/ — new onboarding screens." then what changed,
+            the preview link https://preview.<domain>/p/<npub>@website,
             and that an admin can approve it with the button under this message
    ```
-   The text must make sense without the button (older apps show only the text). When an admin
-   taps it, the belfry checks they are an admin, copies that version as the website and answers
-   under the message ("Published by <name>."); a "Website updated" line follows in #website.
-   The button and its answers are in `docs/actions.md` of the Belfry repository. If there is
-   no #website channel yet, post with `["h","general"]` instead and say it's for the website.
-   (The older route still works: a kind-1 note on `wss://relay.<domain>` with the tags
-   `["t","proposal"]`, `["t","website"]`, `["p","<the belfry's pubkey>"]`,
-   `["subject","New website: <what changed>"]` and the same `a` tag; it appears at
-   `https://belfry.<domain>/website`, where an admin approves it.)
-4. Tell the member that an admin needs to approve it.
+   Start the text with the path it is for ("Website: /ios/screenshots/ — …", or "Website: the
+   whole site — …"): the path decides what an admin is approving. The text must make sense
+   without the button (older apps show only the text). When an admin taps it, the belfry checks
+   they are an admin and publishes that version (only the message's paths when it has `path`
+   tags), then answers under the message ("Published by <name>." or "Published by <name>: only
+   /ios/screenshots/."); a "Website updated" line with what changed follows in #website. The
+   button and its answers are in `docs/actions.md` of the Belfry repository. If there is no
+   #website channel yet, post with `["h","general"]` instead and say it's for the website.
+
+   **Or as a proposal** (what the chat's "Propose as the website" makes; it is discussed, and
+   goes live when a belfry admin marks it Passed): a NIP-23 kind 30023 on `wss://relay.<domain>`
+   with `["d","proposal-<x>"]`, `["title","Website: /ios/screenshots/ — new onboarding
+   screens"]`, `["t","proposal"]`, `["t","website"]`, `["website","nsite:<npub>/website"]` (or
+   the preview link), `["h","prop-<x>"]` (its own chat, a group you create) and the same
+   `["path", …]` tags; its card in #website is a kind 9 with `["proposal","prop-<x>"]` and
+   `["a","30023:<pubkey>:proposal-<x>"]`. Keep the `path` tags on every new version.
+4. **What happens next.** For every version of a proposal (30023), the belfry posts in the
+   proposal's chat what publishing it would change, from the two manifests (a button message
+   gets no such note, so its text must say what changes): "This changes only /ios/screenshots/: 9 files added, 3 changed, 1 removed. The rest
+   of the website stays as it is." or "This replaces the whole website: 4 changed, 2 added,
+   0 removed, in / and /android/." Read it: if it says more than you meant, fix the version
+   before an admin approves. A scoped publish is a **scoped replace**: inside the path, the
+   website gets exactly your files (a live file there that your version lacks is removed);
+   outside it, nothing changes. It needs a live website already (publish a whole site first).
+5. Tell the member that an admin needs to approve it.
+
+(The older route still works for whole sites: a kind-1 note on `wss://relay.<domain>` with the
+tags `["t","proposal"]`, `["t","website"]`, `["p","<the belfry's pubkey>"]`,
+`["subject","New website: <what changed>"]` and the same `a` tag; it appears at
+`https://belfry.<domain>/website`, where an admin approves it. It has no paths.)
+
+### An admin publishes a part from the API
+
+`POST https://belfry.<domain>/api/v1/website/publish` (NIP-98 by an admin's key) with
+`{"ref": "nsite:<npub>/website", "paths": ["/ios/screenshots/"]}`; without `paths`, the whole
+site. Answers `{"ok": true, "files", "paths", "added", "changed", "removed", "manifest",
+"uploaded"}`, 422 `invalid_paths` or `no_site`, 409 `not_published` with the reason.
 
 ## A static site as an nsite (an admin publishes it)
 

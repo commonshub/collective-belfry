@@ -67,10 +67,11 @@ def test_only_admins_publish_and_every_update_is_logged(rsvc, monkeypatch):  # n
     monkeypatch.setattr(
         homepage,
         "publish",
-        lambda settings, files, title, by, note: (
-            published.update(files=files, by=by, note=note) or {"manifest": "m1"}
+        lambda settings, files, title, by, note, keep=None: (
+            published.update(files=files, by=by, note=note, keep=keep) or {"manifest": "m1"}
         ),
     )
+    monkeypatch.setattr(website, "live_paths", lambda s: _async(None))
     monkeypatch.setattr(website, "changelog", lambda svc, text: logged.append(text))
     from belfry_onboarding import console
 

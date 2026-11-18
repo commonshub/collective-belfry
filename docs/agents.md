@@ -94,6 +94,8 @@ tags) and answer the presses itself; the full contract is `docs/actions.md`.
   the relay only says they are in the group.
 - **Proposing a website version**: post in #website (`["h","website"]`) with
   `["a","35128:<your pubkey hex>:website"]` and
-  `["button","publish","Approve and publish","primary","belfry:website-publish"]`; the text says
-  what changed, gives the preview link and says an admin can approve it. The belfry answers the
+  `["button","publish","Approve and publish","primary","belfry:website-publish"]`, plus one
+  `["path","/that/part/"]` per path when you change only part of the site (prefer that whenever
+  you own only a part); the text starts with the path it is for, says what changed, gives the
+  preview link and says an admin can approve it. The belfry answers the
   press (only an admin's press publishes). Steps: `/skills/homepage.md`.

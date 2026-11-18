@@ -189,15 +189,21 @@ async def website_publish(p: Press) -> Result:
     target = website_target(svc, p.message)
     if target is None:
         return Result.error("no_target", "This message doesn't point to a version of the website.")
+    try:  # the message's own ["path", …] tags: only those paths of the website change
+        scope = website.parse_paths(website.path_tags(p.message))
+    except website.PathsError:
+        return Result.error("failed", f"Couldn't publish: {website.INVALID_PATHS}.")
     name = await run_in_threadpool(_name, svc, p.press["pubkey"])
     try:
-        await website.publish_from(svc, target[0], target[1], name)
+        await website.publish_from(svc, target[0], target[1], name, scope)
     except Exception as exc:  # noqa: BLE001 — said under the button
         log.warning("actions: website-publish failed: %r", exc)
         return Result.error("failed", f"Couldn't publish: {_short(exc)}.")
     hp = getattr(getattr(p.app, "state", None), "homepage", None)
     if hp is not None:
         hp._site = None  # serve the new version at once
+    if scope:
+        return Result("ok", f"Published by {name}: only {website.scope_words(scope)}.", closed=True)
     return Result("ok", f"Published by {name}.", closed=True)
 
 

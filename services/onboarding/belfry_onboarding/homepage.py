@@ -479,23 +479,42 @@ def blossom_auth(secret: bytes, verb: str, sha: str) -> str:
 
 
 def publish(
-    settings: Any, files: dict[str, bytes], title: str = "", by: str = "", note: str = ""
+    settings: Any,
+    files: dict[str, bytes],
+    title: str = "",
+    by: str = "",
+    note: str = "",
+    keep: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Upload every file to the community's Blossom server (through its gate, as the belfry's key)
-    and publish the root site manifest (kind 15128) on the community relay."""
+    and publish the root site manifest (kind 15128) on the community relay.
+
+    ``keep`` (path → sha256) are files already on that server (the live site's, for a publish of
+    one part of the site, website.py): they go into the manifest as they are, without being
+    downloaded or uploaded again; each is checked to be there. ``files`` win over ``keep``."""
     key = belfry_key(settings)
     if key is None:
         raise HomepageError("no belfry key (infra/secrets/belfry_nsec): run gen-secrets.sh")
-    if "/index.html" not in files:
+    keep = {p: s for p, s in (keep or {}).items() if p not in files}
+    if "/index.html" not in files and "/index.html" not in keep:
         raise HomepageError("the site has no index.html at its root")
     relay_url = getattr(settings, "relay_url", "") or ""
     if not relay_url:
         raise HomepageError("RELAY_URL is not set")
     upload = (getattr(settings, "homepage_upload_url", "") or "http://blossom-gate").rstrip("/")
     public = (getattr(settings, "blossom_public_url", "") or "").rstrip("/")
-    paths: dict[str, str] = {}
+    paths: dict[str, str] = dict(keep)
     uploaded = 0
     with httpx.Client(timeout=60.0) as http:
+        missing = sum(
+            1
+            for sha in sorted(set(keep.values()))
+            if http.head(f"{upload}/{sha}").status_code != 200
+        )
+        if missing:
+            raise HomepageError(
+                f"{missing} file(s) of the live website are missing from the Blossom server"
+            )
         for path, body in sorted(files.items()):
             sha = hashlib.sha256(body).hexdigest()
             paths[path] = sha
