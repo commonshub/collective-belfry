@@ -1,5 +1,5 @@
 import { BELFRY } from '../config'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { createProposal, markSeen, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
 import { canDecide, displayName, group, messages, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
 import { all, useVersion } from '../core/store'
@@ -206,6 +206,40 @@ export function proposalVersions(p: Proposal): { version: number; at: number; by
   return out.sort((a, b) => b.version - a.version)
 }
 
+const VOTE_ICON: Record<string, string> = { yes: '✓', no: '✗', abstain: '–' }
+
+/** The folded bar's tally, longest first: "12 yes · 2 no · 1 abstain", then "✓12 ✗2 –1" (an
+ *  option without an icon of its own shows its first letter), then dropping options from the end
+ *  (abstain goes first). The bar shows the first that fits; the last one may still be cut. */
+export function tallyForms(opts: [string, string][], count: Record<string, number>): string[] {
+  const full = opts.map(([o, label]) => `${count[o] ?? 0} ${label.toLowerCase()}`).join(' · ')
+  const short = opts.map(([o, label]) => `${VOTE_ICON[o] ?? label.trim().charAt(0).toUpperCase()}${count[o] ?? 0}`)
+  const out = [full]
+  for (let n = short.length; n >= 1; n--) out.push(short.slice(0, n).join(' '))
+  return out
+}
+
+/** Shows the first of `forms` that fits its box (re-measured when the box changes width). */
+function FitText({ forms, className, title }: { forms: string[]; className?: string; title?: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [i, setI] = useState(0)
+  const key = forms.join('\n')
+  useEffect(() => setI(0), [key])
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && i < forms.length - 1 && el.scrollWidth > el.clientWidth + 1) setI(i + 1)
+  })
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let w = el.clientWidth
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; setI(0) } })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return <span ref={ref} className={className} title={title}>{forms[Math.min(i, forms.length - 1)]}</span>
+}
+
 /** prop-<id>: the proposal on top, its chat under it. */
 export function ProposalView({ id, left, topic, onTopic, focus, activeThread }: { id: string; left: ReactNode; topic?: string; onTopic: (t?: string) => void; focus?: string; activeThread?: string }) {
   useVersion()
@@ -314,9 +348,9 @@ export function ProposalView({ id, left, topic, onTopic, focus, activeThread }: 
       <div className="topbar prop-top">
         {left}
         {level === 0 ? (
-          <button className="prop-bar" onClick={() => setLevel(1)} aria-label="Show the proposal">
+          <button className="prop-bar" onClick={() => setLevel(1)} aria-label={`Show the proposal: ${p.title}, ${STATUS_LABEL[p.status] ?? p.status}${tallyText ? ', ' + tallyText : ''}`}>
             <b>{p.title}</b>
-            <small><StatusBadge s={p.status} /><span className="prop-tally">{tallyText}</span></small>
+            <small><StatusBadge s={p.status} />{p.poll && <FitText className="prop-tally" forms={tallyForms(opts, count)} title={tallyText} />}</small>
           </button>
         ) : (
           <h1 className="tap" onClick={() => setLevel(0)}>Proposal<small>{where ? 'In ' + where : 'Proposal'}</small></h1>
