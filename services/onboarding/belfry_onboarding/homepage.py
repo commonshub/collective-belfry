@@ -44,6 +44,7 @@ from fastapi import Request
 from fastapi.responses import Response, StreamingResponse
 from starlette.background import BackgroundTask
 from starlette.concurrency import run_in_threadpool
+from websockets.exceptions import WebSocketException
 
 from . import nostr
 from .blossom import event_id, verify_signature
@@ -244,7 +245,9 @@ class Homepage:
         for url in self.relays():
             try:
                 events += RelayPublisher(url, timeout=8.0).query(filters, sign)
-            except (RelayError, OSError, TimeoutError) as exc:
+            except (RelayError, OSError, TimeoutError, WebSocketException) as exc:
+                # one relay that is down or refuses (a public one answering 503) never breaks
+                # the page: the others answer
                 log.info("homepage: relay %s: %s", url, exc)
         return [e for e in events if event_id(e) == e.get("id") and verify_signature(e)]
 
