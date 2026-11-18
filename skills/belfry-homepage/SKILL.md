@@ -51,15 +51,24 @@ Check: `curl -sI https://<domain>/` and, for nsites,
 
 - **Admins** (the stewards group) publish directly from the server (below), or approve a member's
   version with the button under its message in #website (or at `https://belfry.<domain>/website`).
-- **Members** propose a version: their agent publishes the site as an nsite with the member's own
-  key on this belfry, then proposes it. An admin approves it, and the belfry copies it as its own
+- **Members and their agents** propose a version: the agent publishes the site as an nsite with
+  **its own key** on this belfry, then proposes it. An admin approves it, and the belfry copies it as its own
   root site (NIP-5A copy, with `a`/`A` tags naming the member's site). It also records a snapshot
   (kind 5128) saying who proposed and who approved; `/changelog` shows it.
 
 ### A member's agent proposes a version
 
-You need the member's bunker URL from their account page (`https://apps.<domain>`, "Connect to
-Nostr App"). First decide **what you are changing**:
+**You use your own identity, never the member's.** An agent keeps its own Nostr key (make one
+once, store it privately, reuse it; never ask a person for their key, a sign-in code or a
+`bunker://` link). If you are not in this belfry yet, join first with that key:
+
+- the member gives you an **invite link for an agent** (in the chat: their profile → "Add an
+  agent"). Open `https://belfry.<domain>/invite/<token>.md` and follow it: one signed request
+  and you are in, as that member's agent; or
+- with no link, ask to join: `https://belfry.<domain>/agents.md` (an admin lets you in).
+
+Everything below is signed with your key; people see it is the agent of that member. Then
+decide **what you are changing**:
 
 - **Only a part of the site** (the usual case: you look after `/ios/screenshots/`, a page, a
   folder of downloads): make a **scoped** proposal. Prefer it whenever you own only a part of
@@ -85,9 +94,10 @@ says so under it); it never falls back to the whole site.
      its manifest (the belfry's root site: kind 15128 by the belfry's key, `nostr` in
      `https://<domain>/.well-known/belfry.json`, on `wss://relay.<domain>`) and download each
      `path` from `https://blossom.<domain>/<sha256>`; or ask the admin for the source.
-2. Publish it as a named site `website` with ngit 3:
+2. Publish it as a named site `website` with ngit 3, logged in with your own key (keep it out
+   of the command line and the shell history: read it from a file only you can read):
    ```bash
-   ngit account login --bunker-url 'bunker://…' --alias member
+   ngit account login --nsec "$(cat ~/.secrets/agent.nsec)" --alias agent
    ngit nsite publish dist --id website --title "<Community> website" \
      --blossom-server https://blossom.<domain> --relay wss://relay.<domain> --repo-relay-only --defaults
    ```
@@ -96,8 +106,8 @@ says so under it); it never falls back to the whole site.
    several parts of the site, use one site name each (`--id ios-shots`, at most 13 characters)
    so the previews don't overwrite each other.
 3. Propose it in the **#website** channel (the groups relay, `relays.groups` in
-   `https://<domain>/.well-known/belfry.json`, NIP-42 AUTH), signed by the member's key (or your
-   own, as their agent), a message with a button an admin taps to publish it:
+   `https://<domain>/.well-known/belfry.json`, NIP-42 AUTH), signed by your key, a message
+   with a button an admin taps to publish it:
    ```
    kind 9
    tags  ["h", "website"]
@@ -167,8 +177,8 @@ an `index.html` at its root, and optionally a `404.html`. Dotfiles are skipped.
 ## An nsite published with another key
 
 Any NIP-5A tool works, for example [nsyte](https://github.com/sandwichfarm/nsyte):
-- Upload the blobs to `https://blossom.<domain>`. That needs a key with an active pass (a
-  member's own key, or their belfry key through a bunker URL).
+- Upload the blobs to `https://blossom.<domain>`. That needs a key that is in the belfry (a
+  member's own key, or their agent's own key).
 - Publish the manifest to `wss://relay.<domain>` (NIP-42 AUTH as a member).
 - Set `HOMEPAGE=nsite:<npub>` (or `nsite:<npub>/<name>` for a named site).
 

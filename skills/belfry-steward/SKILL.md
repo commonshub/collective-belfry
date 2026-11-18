@@ -42,11 +42,12 @@ The participant-side skill (passes, ordering, posting, groups) is at `https://be
 
 ## Acting for a steward: the signer
 
-As for any pass holder (participant skill, section 6): the steward signs in at
-`https://apps.<domain>`, chooses **Connect to Nostr App** with the permissions **Belfry event
-apps**, and gives you the `bunker://` URL. Every request below is a Nostr event signed through it.
-You then have the steward's rights, nothing more. The steward can end your access at any time
-(**Revoke Access**).
+An agent joins a belfry with its own key (`https://belfry.<domain>/agents.md`) and never holds
+an admin's rights: what only a steward may do, the steward does in the console at
+`https://belfry.<domain>`. The requests below must be signed by the steward's own key. Only a
+steward who keeps that key in a signer app of their own can hand you a `bunker://` link from
+it; Belfry's account page no longer offers one, so otherwise prepare the request and let the
+steward carry it out.
 
 ## What you can do through the API
 
