@@ -1834,3 +1834,7 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .todo-comment .b b { display: block; font-size: 14px; }
 .todo-cbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
 .todo-cbar .input { flex: 1; min-width: 0; font-size: 16px; }
+
+/* inviting/add-agent: Copy and Share side by side */
+.agent-btns { gap: 8px; margin-top: 10px; }
+.agent-btns .btn { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }

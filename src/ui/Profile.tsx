@@ -252,10 +252,20 @@ function AddAgentSheet({ community, onClose }: { community: string; onClose: () 
   useEffect(() => { void make() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <Sheet title="Add an agent" onClose={onClose}>
-      <p className="hint">Paste this to your agent (ChatGPT, Claude, Grok…). The link holds everything else it needs: how to join, read and post, always as your agent. It works once, today.</p>
+      {/* board inviting/add-agent: the one line, Copy and Share, and that the link works once */}
+      <p className="hint">Paste this to your agent (ChatGPT, Claude, Grok…). It reads the instructions at the address, joins {community} as your agent, and follows your channels. The link works once.</p>
       {line ? <>
         <div className="agent-prompt" aria-label="What to paste to your agent">{line}</div>
-        <Btn className="btn" onClick={async () => { try { await navigator.clipboard.writeText(line); setCopied(true); setTimeout(() => setCopied(false), 2000) } catch { setError('Copy did not work: select the text and copy it.') } }}><CopyIcon /> {copied ? 'Copied' : 'Copy'}</Btn>
+        <div className="row agent-btns">
+          <Btn className="btn" onClick={async () => {
+            try { await navigator.clipboard.writeText(line) } catch {
+              const t = document.createElement('textarea'); t.value = line; document.body.appendChild(t); t.select(); const ok = document.execCommand('copy'); t.remove()
+              if (!ok) { setError('Copy did not work: select the text and copy it.'); return }
+            }
+            setCopied(true); setTimeout(() => setCopied(false), 2000)
+          }}><CopyIcon /> {copied ? 'Copied' : 'Copy'}</Btn>
+          {'share' in navigator && <Btn className="btn ghost" onClick={async () => { try { await navigator.share({ text: line }) } catch { /* closed */ } }}><ShareIcon /> Share</Btn>}
+        </div>
         <p className="hint" style={{ marginTop: 10 }}>Once it has joined, it shows here on your profile, and next to its name everywhere: “{realName(me()) || 'your name'}’s agent”.</p>
       </> : !error && <p className="hint">Making the link…</p>}
       {error && <><div className="error" role="alert">{error}</div><Btn className="btn ghost" onClick={make}>Try again</Btn></>}
