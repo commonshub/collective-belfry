@@ -369,7 +369,7 @@ async function relay(target: Target): Promise<Relay> {
   r._onauth = () => {
     setRelay(url, 'auth')
     r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-      .then(() => { setRelay(url, 'up'); resubscribe(target) })
+      .then(() => { setRelay(url, 'up'); replay[target] = true; resubscribe(target) })
       .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
   }
   r.onclose = () => {
@@ -409,6 +409,8 @@ async function publish(target: Target, ev: NostrEvent) {
       const msg = e instanceof Error ? e.message : String(e)
       if (!msg.startsWith('auth-required')) throw e
       await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
+      // signed in only now: the live subscription had the public part only
+      replay[target] = true; resubscribe(target)
       await within(r.publish(ev), 15000, 'the relay did not answer')
     }
   } catch (e) {
@@ -479,11 +481,24 @@ const eoseListeners = new Set<(target: Target) => void>()
 /** Called each time a relay has sent what it stored for the live subscription (EOSE). */
 export function onEose(f: (target: Target) => void) { eoseListeners.add(f) }
 
+// Once signed in to a relay (NIP-42), the next subscription replays from the start: what came
+// before the sign-in was only what anyone may read, and its newer timestamps must not become the
+// `since` that hides the members-only events (Xavier, 2026-11-18: channels missing, the charter's
+// older agreement missing).
+const replay: Partial<Record<Target, boolean>> = {}
+
 function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
   // overlap by an hour: relays may deliver late events with older timestamps
-  const since = Math.max(0, latestCreatedAt((e) => kinds.includes(e.kind)) - 3600)
-  if (target === 'groups' || !signer) return [{ kinds, since, limit: 2000 }]
+  const since = replay[target] ? 0 : Math.max(0, latestCreatedAt((e) => kinds.includes(e.kind)) - 3600)
+  // every group's metadata and the charter, always whole: a device that saw less before (a guest,
+  // a sign-in after the first answer) still gets every channel and every agreement
+  if (target === 'groups') return [
+    { kinds, since, limit: 2000 },
+    { kinds: [39000, 39001, 39002, 39003], limit: 1000 },
+    { kinds: [2100, 2101, 2102, 2103], '#h': ['charter'], limit: 2000 },
+  ]
+  if (!signer) return [{ kinds, since, limit: 2000 }]
   // direct messages and e-mail (dm.ts) on the community relay, my DM relay (10050): gift wraps
   // are back-dated up to two days (NIP-59), so they overlap by three
   const p = signer.pubkey
@@ -506,7 +521,9 @@ function resubscribe(target: Target) {
   const r = relays[target]
   if (!r) return
   subs[target]?.close()
-  subs[target] = r.subscribe(filters(target), {
+  const fs = filters(target)
+  replay[target] = false
+  subs[target] = r.subscribe(fs, {
     onevent: (e) => addEvents([e]),
     oneose: () => {
       eoseListeners.forEach((f) => f(target))
