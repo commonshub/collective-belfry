@@ -1,9 +1,9 @@
 """``belfry.<domain>/sales``: selling passes, for the belfry's admins (docs/sales.md §2).
 
-Odoo (connection, "Check", then the picks read from Odoo), bank, Stripe, products, codes, offers
-and orders. Secrets are write-only: the page says set or not and their last 4 characters, and an
-admin can clear one (back to the environment's value, if any). Every form carries the console's
-csrf and answers with a fixed message (flash.py); nothing on the page comes from its URL.
+Bank, products, codes, offers and orders (live and test apart). The Odoo and Stripe connections,
+for production and for testing, are on belfry.<domain>/plugins (plugins.py). Every form carries
+the console's csrf and answers with a fixed message (flash.py); nothing on the page comes from
+its URL.
 """
 
 from __future__ import annotations
@@ -15,13 +15,11 @@ import re
 import secrets as pysecrets
 from typing import Any
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import console, flash, sales, salesodoo, salespay
-from .clients.odoo import OdooError
+from . import console, flash, sales, salespay
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -48,6 +46,7 @@ STYLE = """<style>
 .sales table td form{display:inline}
 .sales .flags{font-size:12px;color:#92400e}
 .sales .waiting .card p{margin:4px 0}
+.sales .test-mark{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.05em;padding:1px 6px;border-radius:6px;background:#fef3c7;color:#78350f}
 @media (max-width:600px){.sales form.f .two{grid-template-columns:1fr}}
 </style>"""
 
@@ -70,15 +69,9 @@ FLAGS = {
 }
 
 MSG = {
-    "odoo_ok": "Odoo answers. Now pick the company, products, taxes and journals below.",
-    "odoo_bad": "Odoo did not accept the connection. Check the URL, the database and the key.",
-    "odoo_need": "Give the URL, the database and the API key.",
     "picks": "Saved.",
     "bank": "Bank details saved.",
     "bank_bad": "That IBAN or BIC is not valid.",
-    "stripe": "Stripe saved.",
-    "stripe_bad": "The key starts with rk_ or sk_; the webhook secret with whsec_.",
-    "cleared": "Cleared.",
     "product": "Product saved.",
     "product_gone": "Product deleted.",
     "codes": "Codes made: they are at the top of the list.",
@@ -104,23 +97,6 @@ def _opt(value: Any, label: str, current: Any) -> str:
 def _select(name: str, rows: list[dict[str, Any]], label_of, current: Any, empty: str) -> str:
     opts = _opt("", empty, current) + "".join(_opt(r["id"], label_of(r), current) for r in rows)
     return f'<select name="{E(name)}">{opts}</select>'
-
-
-def _secret_line(svc: Services, name: str) -> str:
-    st = sales.secret_state(svc, name)
-    if not st["set"]:
-        return '<span class="chip">not set</span>'
-    tail = f" ··· {E(st['last4'])}" if st["last4"] else ""
-    where = " (from the server's settings)" if st["from"] == "environment" else ""
-    return f'<span class="chip ok">set{tail}</span><span class="hint">{where}</span>'
-
-
-def _clear(csrf: str, name: str) -> str:
-    return (
-        f'<form method="post" action="{PATH}/clear" class="inline">'
-        f'<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="secret" value="{E(name)}">'
-        '<button class="btn ghost" type="submit">Clear</button></form>'
-    )
 
 
 def _money(c: int) -> str:
@@ -266,56 +242,9 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         + chip(s["bank"], "Bank")
         + chip(s["stripe"], "Stripe")
         + "</div>"
+        + '<p class="hint">The Odoo and Stripe connections, for production and for testing, are on '
+        '<a href="/plugins">Plugins</a>.</p>'
     )
-    # ── Odoo
-    picks = ""
-    if sales.odoo_ready(svc):
-        try:
-            lists = salesodoo.pick_lists(svc)
-        except (OdooError, httpx.HTTPError, OSError):
-            lists = None
-        if lists is None:
-            picks = '<p class="bad">Odoo did not answer just now; the picks show when it does.</p>'
-        else:
-
-            def tax(t: dict[str, Any]) -> str:
-                return f"{t['name']} ({t['amount']:g}%)"
-
-            prod_rows = (
-                "".join(
-                    f"<label>{E(p['name'])} is invoiced as "
-                    + _select(
-                        f"product_{p['id']}",
-                        lists["products"],
-                        lambda r: r["display_name"],
-                        st["odoo_products"].get(p["id"]),
-                        "— pick a product —",
-                    )
-                    + "</label>"
-                    for p in sales.products(svc)
-                )
-                or '<p class="hint">Add a product below first.</p>'
-            )
-            picks = f"""<form method="post" action="{PATH}/picks" class="f">
-<input type="hidden" name="csrf" value="{csrf}">
-<label>Company {_select("company", lists["companies"], lambda r: r["name"], st["company"], "— the key's default —")}</label>
-{prod_rows}
-<label>VAT for people (price includes it) {_select("tax_included", lists["taxes"], tax, st["tax_included"], "— pick a tax —")}</label>
-<label>VAT for organisations (on top) {_select("tax_excluded", lists["taxes"], tax, st["tax_excluded"], "— pick a tax —")}</label>
-<label>Journal for card payments {_select("card_journal", lists["journals"], lambda r: r["name"], st["card_journal"], "— not booked —")}</label>
-<label>Journal for payments marked by hand {_select("manual_journal", lists["journals"], lambda r: r["name"], st["manual_journal"], "— not booked —")}</label>
-<p class="hint">Belfry mails each invoice with its PDF to the buyer; Odoo doesn't send it.</p>
-<div class="actions"><button class="btn" type="submit">Save</button></div></form>"""
-    odoo = f"""<h2>Odoo</h2><p class="hint">Invoices, VAT and payments live in your Odoo (Odoo Online works).</p>
-<div class="card"><form method="post" action="{PATH}/odoo" class="f">
-<input type="hidden" name="csrf" value="{csrf}">
-<label>URL <input type="text" name="url" inputmode="url" placeholder="https://yourorg.odoo.com" value="{E(st["odoo_url"] or "")}"></label>
-<label>Database <input type="text" name="db" value="{E(st["odoo_db"] or "")}"></label>
-<label>API key <input type="password" name="key" autocomplete="off" placeholder="leave empty to keep the one set"></label>
-<div class="actions">{_secret_line(svc, "odoo_api_key")}</div>
-<div class="actions"><button class="btn" type="submit">Check</button></div></form>
-<div class="actions" style="margin-top:8px">{_clear(csrf, "odoo_api_key") if sales.secret_state(svc, "odoo_api_key")["from"] == "console" else ""}</div>
-{picks}</div>"""
     # ── bank
     bank = f"""<h2>Bank</h2><div class="card"><form method="post" action="{PATH}/bank" class="f">
 <input type="hidden" name="csrf" value="{csrf}">
@@ -323,19 +252,6 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 <label>IBAN <input type="text" name="iban" value="{E(salespay.iban_spaced(st["bank_iban"]))}"></label>
 <label>BIC <input type="text" name="bic" value="{E(st["bank_bic"])}"></label>
 <div class="actions"><button class="btn" type="submit">Save</button>{'<a href="/pay">See the pay page</a>' if s["bank"] else ""}</div></form></div>"""
-    # ── Stripe
-    hook = console.console_url(svc.settings) + "/hooks/stripe"
-    stripe = f"""<h2>Stripe</h2><div class="card"><form method="post" action="{PATH}/stripe" class="f">
-<input type="hidden" name="csrf" value="{csrf}">
-<label>Restricted key <input type="password" name="key" autocomplete="off" placeholder="rk_live_…"></label>
-<div class="actions">{_secret_line(svc, "stripe_key")}</div>
-<label>Webhook signing secret <input type="password" name="webhook" autocomplete="off" placeholder="whsec_…"></label>
-<div class="actions">{_secret_line(svc, "stripe_webhook_secret")}</div>
-<p class="hint">At Stripe, add the webhook <code>{E(hook)}</code> with the events
-<code>checkout.session.completed</code> and <code>checkout.session.async_payment_succeeded</code>.
-The restricted key needs Checkout Sessions: write.</p>
-<div class="actions"><button class="btn" type="submit">Save</button></div></form>
-<div class="actions" style="margin-top:8px">{_clear(csrf, "stripe_key") if sales.secret_state(svc, "stripe_key")["from"] == "console" else ""}{_clear(csrf, "stripe_webhook_secret") if sales.secret_state(svc, "stripe_webhook_secret")["from"] == "console" else ""}</div></div>"""
     # ── products
     prods = ""
     for p in sales.products(svc):
@@ -343,8 +259,9 @@ The restricted key needs Checkout Sessions: write.</p>
         price = _money(sales.cents(pub["price"]["amount"])) if pub else "no price now"
         left = sales.left(svc, p)
         sold = sales.taken(svc, p["id"])
+        tests = sales.taken_by_tests(svc, p["id"])
         status = "on sale" if p.get("on_sale") else "off sale"
-        prods += f"""<details><summary>{E(p["name"])} · {E(price)} · {sold} taken{f", {left} left" if left is not None else ""} · {status}</summary>
+        prods += f"""<details><summary>{E(p["name"])} · {E(price)} · {sold} taken{f", {left} left" if left is not None else ""}{f" · {tests} test" if tests else ""} · {status}</summary>
 {product_form(csrf, p)}
 <form method="post" action="{PATH}/product/delete" onsubmit="return confirm('Delete this product?')"><input type="hidden" name="csrf" value="{csrf}">
 <input type="hidden" name="id" value="{E(p["id"])}"><p><button class="btn ghost" type="submit">Delete</button></p></form></details>"""
@@ -425,8 +342,9 @@ The restricted key needs Checkout Sessions: write.</p>
         f'<h2 id="offers">Offers in kind</h2>{chooser}{orow or "<p class=hint>No offers yet.</p>"}'
     )
     # ── orders
-    rrow = ""
+    rrow = trow = ""
     for o in sales.store(svc).orders(limit=300):
+        test = sales.env_of(o) == "test"
         flags = ", ".join(FLAGS.get(x, x) for x in o.get("flags") or [])
         inv = (o.get("invoice") or {}).get("number") or ""
         act = ""
@@ -450,16 +368,25 @@ The restricted key needs Checkout Sessions: write.</p>
 <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
 <label>Reason <input type="text" name="reason" required placeholder="they asked to keep their account"></label>
 <div class="actions"><button class="btn ghost" type="submit" name="do" value="keep_data">Clear</button></div></form></details>"""
-        rrow += (
-            f"<tr><td>{E(o['created'][:10])}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span>"
+        row = (
+            f"<tr><td>{E(o['created'][:10])}{'<br><span class=test-mark>TEST</span>' if test else ''}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span>"
             f"{f'<br><span class=hint>{bl}</span>' if (bl := billing_line(o.get('billing'))) else ''}</td>"
             f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
             f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}{erase}</td><td>{act}</td></tr>"
         )
-    orders = f"""{waiting_html(svc, csrf)}<h2>Orders</h2>{f'<table class="list"><tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice</th><th>State</th><th></th></tr>{rrow}</table>' if rrow else '<p class="hint">No orders yet.</p>'}"""
+        if test:
+            trow += row
+        else:
+            rrow += row
+    head = "<tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice</th><th>State</th><th></th></tr>"
+    orders = f"""{waiting_html(svc, csrf)}<h2>Orders</h2>{f'<table class="list">{head}{rrow}</table>' if rrow else '<p class="hint">No orders yet.</p>'}"""
+    if trow:
+        orders += f"""<h2 id="test-orders">Test orders</h2>
+<p class="hint">Orders of testers: through Stripe's test mode and the test Odoo, no real money. They take no places and count in no totals.</p>
+<table class="list test">{head}{trow}</table>"""
     body = f"""{STYLE}<div class="sales"><h1>Sales</h1>
 <p class="muted">Passes people buy: free with a code, or paid by card or bank transfer against an invoice in your Odoo.</p>
-{note}{state}{products}{codes}{offers}{orders}{odoo}{bank}{stripe}</div>"""
+{note}{state}{products}{codes}{offers}{orders}{bank}</div>"""
     return console.frame("Sales", PATH, who, body)
 
 
@@ -516,53 +443,6 @@ def register(app: FastAPI) -> None:
         run.__name__ = fn.__name__
         return run
 
-    @app.post("/console/sales/odoo")
-    @admin_only
-    async def odoo(request: Request, me: dict[str, Any], form: Any):
-        s = svc(request)
-        url = str(form.get("url") or "").strip().rstrip("/")
-        db = str(form.get("db") or "").strip()
-        key = str(form.get("key") or "").strip()
-        key = key or sales.secret(s, "odoo_api_key")
-        if not (url.startswith("https://") and db and key) or len(url) > 200 or len(db) > 100:
-            return back(request, err="odoo_need")
-        try:
-            await run_in_threadpool(salesodoo.check_connection, url, db, key)
-        except (OdooError, httpx.HTTPError, OSError, ValueError):
-            log.info("sales: an admin's Odoo check failed")
-            return back(request, err="odoo_bad")
-        await run_in_threadpool(sales.save_settings, s, {"odoo_url": url, "odoo_db": db})
-        if str(form.get("key") or "").strip():
-            await run_in_threadpool(sales.set_secret, s, "odoo_api_key", key)
-        log.info("sales: %s set the Odoo connection", me["name"] or "an admin")
-        return back(request, msg="odoo_ok")
-
-    @app.post("/console/sales/picks")
-    @admin_only
-    async def picks(request: Request, me: dict[str, Any], form: Any):
-        s = svc(request)
-
-        def num(k: str) -> int | None:
-            v = str(form.get(k) or "").strip()
-            return int(v) if v.isdigit() else None
-
-        products = {
-            p["id"]: n for p in sales.products(s) if (n := num(f"product_{p['id']}")) is not None
-        }
-        await run_in_threadpool(
-            sales.save_settings,
-            s,
-            {
-                "company": num("company"),
-                "odoo_products": products,
-                "tax_included": num("tax_included"),
-                "tax_excluded": num("tax_excluded"),
-                "card_journal": num("card_journal"),
-                "manual_journal": num("manual_journal"),
-            },
-        )
-        return back(request, msg="picks")
-
     @app.post("/console/sales/bank")
     @admin_only
     async def bank(request: Request, me: dict[str, Any], form: Any):
@@ -577,31 +457,6 @@ def register(app: FastAPI) -> None:
             {"bank_holder": holder, "bank_iban": iban, "bank_bic": bic},
         )
         return back(request, msg="bank")
-
-    @app.post("/console/sales/stripe")
-    @admin_only
-    async def stripe(request: Request, me: dict[str, Any], form: Any):
-        s = svc(request)
-        key = str(form.get("key") or "").strip()
-        hook = str(form.get("webhook") or "").strip()
-        if (key and not re.fullmatch(r"(rk|sk)_(test|live)_[A-Za-z0-9]{8,200}", key)) or (
-            hook and not re.fullmatch(r"whsec_[A-Za-z0-9]{8,200}", hook)
-        ):
-            return back(request, err="stripe_bad")
-        if key:
-            await run_in_threadpool(sales.set_secret, s, "stripe_key", key)
-        if hook:
-            await run_in_threadpool(sales.set_secret, s, "stripe_webhook_secret", hook)
-        return back(request, msg="stripe")
-
-    @app.post("/console/sales/clear")
-    @admin_only
-    async def clear(request: Request, me: dict[str, Any], form: Any):
-        name = str(form.get("secret") or "")
-        if name not in sales.SECRET_KEYS:
-            return back(request, err="expired")
-        await run_in_threadpool(sales.set_secret, svc(request), name, None)
-        return back(request, msg="cleared")
 
     @app.post("/console/sales/product")
     @admin_only

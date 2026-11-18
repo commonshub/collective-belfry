@@ -66,6 +66,7 @@ from . import (
     passkeys,
     passlogin,
     places,
+    plugins,
     programme,
     push,
     reports,
@@ -256,6 +257,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     salespay.register(app)  # belfry.<domain>/pay: bank transfers with an EPC QR (salespay.py)
     salesstripe.register(app)  # belfry.<domain>/hooks/stripe: card payments (salesstripe.py)
     salesconsole.register(app)  # belfry.<domain>/sales: the admins' settings (salesconsole.py)
+    plugins.register(app)  # belfry.<domain>/plugins: Stripe, Odoo, e-mail (plugins.py)
     checkin.register(app)  # /api/group-roles, /api/events/<d>/attendees|checkin (checkin.py)
     guests.register(app)  # /api/channel-invites: a channel's guests for 30 days (guests.py)
     mentions.register(app)  # /mentions/<token>: daily, weekly or no mention e-mails (mentions.py)

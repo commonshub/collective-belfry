@@ -1173,15 +1173,20 @@ def _inputs(st: dict[str, Any], fields: list[tuple[str, str, bool, str]], cls: s
     return out
 
 
-def _form(csrf: str, pid: str, body: str, button: str) -> str:
+# where a form posting to /setup may send its answer back to (plugins.py's E-mail page)
+BACKS = ("/plugins/email",)
+
+
+def _form(csrf: str, pid: str, body: str, button: str, back: str = "") -> str:
+    back_field = f'<input type="hidden" name="back" value="{E(back)}">' if back in BACKS else ""
     return (
         f'<form method="post" action="/setup"><input type="hidden" name="csrf" value="{E(csrf)}">'
-        f'<input type="hidden" name="provider" value="{pid}">{body}'
+        f'<input type="hidden" name="provider" value="{pid}">{back_field}{body}'
         f'<p><button class="btn" type="submit">{E(button)}</button></p></form>'
     )
 
 
-def mail_row(st: dict[str, Any], csrf: str, open_: str) -> tuple[bool, str]:
+def mail_row(st: dict[str, Any], csrf: str, open_: str, back: str = "") -> tuple[bool, str]:
     by = {pid: fields for pid, _, _, fields in PROVIDERS}
     lm = bool(st["set"].get("BELFRY_LETTERMINT_API_KEY"))
     rs = bool(st["set"].get("BELFRY_RESEND_API_KEY"))
@@ -1217,7 +1222,7 @@ def mail_row(st: dict[str, Any], csrf: str, open_: str) -> tuple[bool, str]:
         f'<summary><span class="tick{" done" if done else ""}">{"✓" if done else ""}</span>'
         f'<span class="what"><strong>E-mail</strong><span class="meta">{E(summary)}</span></span>'
         f'<span class="act">{"Change" if done else "Set up"}</span></summary>'
-        + _form(csrf, "mail", body, "Save and check")
+        + _form(csrf, "mail", body, "Save and check", back)
         + "</details>"
     )
     return done, row
@@ -1682,8 +1687,10 @@ def register(app: FastAPI) -> None:
         if ok is None or not same_origin(request):
             return RedirectResponse("/setup", status_code=303)
         csrf, who = ok
+        # the E-mail plugin page (plugins.py) posts here too and gets its answer back there
+        to = str(form.get("back", "")) if str(form.get("back", "")) in BACKS else "/setup"
         if not csrf or not hmac.compare_digest(str(form.get("csrf", "")), csrf):
-            return flash.redirect(services, "/setup", err="The form expired; try again.")
+            return flash.redirect(services, to, err="The form expired; try again.")
         st = state(services.settings)
         provider = str(form.get("provider", ""))
         values: dict[str, str] = {}
@@ -1717,22 +1724,24 @@ def register(app: FastAPI) -> None:
                         check, values[key_name], services.settings.nip05_domain
                     )
                 except ValueError as exc:
-                    return flash.redirect(services, "/setup?open=mail", err=str(exc))
+                    return flash.redirect(
+                        services, "/setup?open=mail" if to == "/setup" else to, err=str(exc)
+                    )
                 if (
                     not str(st["values"].get("BELFRY_MAIL_FROM", ""))
                     and "BELFRY_MAIL_FROM" not in values
                 ):
                     values["BELFRY_MAIL_FROM"] = sender
         if not values:
-            return flash.redirect(services, "/setup", msg="Nothing changed.")
+            return flash.redirect(services, to, msg="Nothing changed.")
         try:
             keys = write_pending(services.settings, values, who or "the setup code")
         except ValueError as exc:
-            return flash.redirect(services, "/setup", err=str(exc))
+            return flash.redirect(services, to, err=str(exc))
         log.info("setup: %s queued %s", who, ", ".join(keys))
         name = (
             "E-mail"
             if provider == "mail"
             else next((n for pid, n, _, _ in PROVIDERS if pid == provider), "Settings")
         )
-        return flash.redirect(services, "/setup", msg=f"{name} saved.")
+        return flash.redirect(services, to, msg=f"{name} saved.")

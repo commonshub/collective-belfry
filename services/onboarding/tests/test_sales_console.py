@@ -58,11 +58,19 @@ def test_only_admins_see_the_page(admin, world):
         assert r.status_code == 200
         t = r.text
         assert "Can sell paid passes" in t and "Two-week pass" in t
-        assert 'href="/sales"' in t  # in the side menu
-        # the Odoo picks come from Odoo; the key is never on the page
-        assert "Festival ticket" in t and "XL Collective" in t
+        assert 'href="/sales"' in t and 'href="/plugins"' in t  # in the side menu
+        assert "XL Collective" in t
+        # the connections moved to Plugins (Production sections): the Odoo picks come from
+        # Odoo; the key is never on the page
+        t = c.get("/plugins/odoo", headers=H).text
+        assert "Festival ticket" in t
         assert "odoo-key-" not in t and "x" * 20 not in t
+        t = c.get("/plugins/stripe", headers=H).text
         assert "https://belfry.belfry.test/hooks/stripe" in t
+        assert "https://belfry.belfry.test/hooks/stripe/test" in t
+        signed_in(c, rsvc, bob_id)
+        assert c.get("/plugins/odoo", headers=H).status_code == 403
+        signed_in(c, rsvc, ada_id)
         # a form without the csrf does nothing
         r = c.post(
             "/sales/bank",
@@ -88,15 +96,15 @@ def test_settings_secrets_products_and_codes(admin, monkeypatch):
     monkeypatch.setattr(salesodoo, "check_connection", check)
     with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
         signed_in(c, rsvc, ada_id)
-        post(c, "/sales/odoo", url="https://xl.odoo.test", db="xl", key="bad")
-        assert "did not accept" in c.get("/sales", headers=H).text
+        post(c, "/plugins/odoo/live", url="https://xl.odoo.test", db="xl", key="bad")
+        assert "did not accept" in c.get("/plugins/odoo", headers=H).text
         assert sales.secret(rsvc, "odoo_api_key") != "bad"
-        post(c, "/sales/odoo", url="https://xl.odoo.test", db="xl2", key="k" * 30 + "LAST")
-        t = c.get("/sales", headers=H).text
+        post(c, "/plugins/odoo/live", url="https://xl.odoo.test", db="xl2", key="k" * 30 + "LAST")
+        t = c.get("/plugins/odoo", headers=H).text
         assert "Odoo answers" in t and "··· LAST" in t and "k" * 30 not in t
         assert sales.settings(rsvc)["odoo_db"] == "xl2"
         # the key kept when left empty
-        post(c, "/sales/odoo", url="https://xl.odoo.test", db="xl", key="")
+        post(c, "/plugins/odoo/live", url="https://xl.odoo.test", db="xl", key="")
         assert checked[-1] == ("https://xl.odoo.test", "xl", 34)
         # bank: IBAN checked
         post(c, "/sales/bank", holder="Hub", iban="BE68 5390 0754 7035")
@@ -104,17 +112,22 @@ def test_settings_secrets_products_and_codes(admin, monkeypatch):
         post(c, "/sales/bank", holder="Hub", iban="BE68 5390 0754 7034", bic="gkccbebb")
         assert sales.settings(rsvc)["bank_bic"] == "GKCCBEBB"
         # Stripe: write-only, cleared back to nothing
-        post(c, "/sales/stripe", key="rk_live_" + "a" * 20 + "ZZ99", webhook="whsec_" + "b" * 20)
-        t = c.get("/sales", headers=H).text
+        post(
+            c,
+            "/plugins/stripe/live",
+            key="rk_live_" + "a" * 20 + "ZZ99",
+            webhook="whsec_" + "b" * 20,
+        )
+        t = c.get("/plugins/stripe", headers=H).text
         assert "··· ZZ99" in t and "a" * 20 not in t
-        post(c, "/sales/clear", secret="stripe_key")
+        post(c, "/plugins/clear", secret="stripe_key", env="live", back="stripe")
         assert not sales.secret_state(rsvc, "stripe_key")["set"]
-        post(c, "/sales/stripe", key="pk_live_nope")
-        assert "starts with rk_" in c.get("/sales", headers=H).text
+        post(c, "/plugins/stripe/live", key="pk_live_nope")
+        assert "starts with rk_" in c.get("/plugins/stripe", headers=H).text
         # picks
         post(
             c,
-            "/sales/picks",
+            "/plugins/odoo/live/picks",
             company="1",
             **{"product_village-2027": "1"},
             tax_included="10",

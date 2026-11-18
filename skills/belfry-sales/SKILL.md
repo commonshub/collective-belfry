@@ -11,8 +11,12 @@ an agent building the website's checkout, or helping an admin.
 ## Where things are
 
 - API: `https://belfry.<domain>/api/v1/…` (CORS open to `https://<domain>`).
-- Admin settings: `https://belfry.<domain>/sales` (admins only: Odoo, bank, Stripe, products,
-  codes, offers, orders). Secrets are typed there, never in chat.
+- Admin settings: `https://belfry.<domain>/sales` (admins only: bank, products, codes, offers,
+  orders) and `https://belfry.<domain>/plugins` (the Stripe and Odoo connections, each with a
+  Production and a Test section, and the e-mail provider). Secrets are typed there, never in chat.
+- Trying it out: add a **Tester** (Members → +, Tester; a new person). Whatever a tester's address
+  buys goes through the Test sections (Stripe test mode, a test Odoo database): test cards, no
+  real money, no place taken. Order answers carry `"test": true`; show a banner then.
 - Bank transfer page: `https://belfry.<domain>/pay/<order>`.
 - `https://<domain>/.well-known/belfry.json` lists the hosts.
 

@@ -23,7 +23,13 @@ entered the Odoo connection, the bank details and the Stripe key in the console.
 A product with a price can only be sold when the Odoo connection is set (invoice numbers and VAT
 live there). Free products and codes worth 100% work with nothing set.
 
-## 2. Settings (console, admins only): belfry.<domain>/sales
+## 2. Settings (console, admins only): belfry.<domain>/sales and belfry.<domain>/plugins
+
+Since 2026-11-18 the **connections** (Odoo with its picks, Stripe) are on the **Plugins** page
+(`plugins.py`; Stripe, Odoo and E-mail, each its own page), each with a **Production** and a
+**Test** section (§9). `/sales` keeps the bank, products, codes, offers and orders, and links to
+Plugins. What was saved before keeps working unchanged as Production (same params and secret
+names; no migration).
 
 Secrets are typed into the console, never sent in chat or shown again (only "set" / "not set"
 and the last 4 characters); an admin can clear one.
@@ -44,7 +50,9 @@ set.
   so), and whether Odoo also mails its invoice PDF. The lists come from Odoo.
 - **Bank**: account holder, IBAN (checked mod 97), BIC.
 - **Stripe**: restricted secret key, webhook signing secret. The page shows the webhook URL to
-  enter at Stripe (`https://belfry.<domain>/hooks/stripe`) and the events to select.
+  enter at Stripe (`https://belfry.<domain>/hooks/stripe`, and `…/hooks/stripe/test` for the
+  Test section) and the events to select. Production refuses a test key (`sk_test_` /
+  `rk_test_`), Test refuses a live one (`sk_live_` / `rk_live_`), with a fixed message.
 - **Products**: id (slug), name, description, pass tier, role, valid from / until (the pass's
   dates), prices `[{until?: date, amount}]` in order (the first whose `until` hasn't passed
   applies; amount = price excluding VAT for organisations, including VAT for people — the same
@@ -249,7 +257,8 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
-  (429), `accounting` (Odoo refused).
+  (429), `accounting` (Odoo refused), `test_not_set_up` (409: a tester's paid order while the
+  test environment can't sell; §9).
 - Limits (`too_many`): 5 open orders per key; 5 unpaid orders per address, counting only the
   orders whose cancel link was mailed to that address (the refusal tells the address's owner to
   cancel the ones that aren't theirs with the link in the mails sent to it; a card order that
@@ -409,3 +418,70 @@ Everything above runs against fakes in the tests. Unproven until tried live:
   `tax_ids` Belfry sends for a foreign contact.
 - The browser key binding (Keycast patch 0022) and an EPC QR read by real banking apps.
 
+## 9. Testing with testers: the test environment (2026-11-18)
+
+Xavier: "for Stripe and Odoo, have two sections for test environment and production environment.
+And there should be a role "tester" that should make use of the stripe test and odoo test."
+
+**Environments.** Each order has `env`: `live` or `test`, fixed when it is made and stored on
+the order (orders made before have none: live). Everything afterwards uses that order's
+environment only: the Stripe key and session, the webhook, the Odoo invoice, the 15-minute tick
+(each environment's open invoices read from its own Odoo), credit notes, reopening, mark paid,
+the invoice PDF, mails.
+
+| | Production (`live`) | Test (`test`) |
+|---|---|---|
+| Odoo URL, database, company, products, taxes, journals | param `belfry.sales.settings` (as before), `ACCOUNTING_*` fallback | param `belfry.sales.settings.test`, no fallback |
+| Odoo API key | secret `odoo_api_key` (as before) | secret `test_odoo_api_key` |
+| Stripe key, webhook secret | `stripe_key`, `stripe_webhook_secret` (as before), `STRIPE_*` fallback | `test_stripe_key`, `test_stripe_webhook_secret` |
+| Webhook | `https://belfry.<domain>/hooks/stripe` | `https://belfry.<domain>/hooks/stripe/test` |
+
+Shared: the currency, the bank details, the invoice reference prefix, the requests channel.
+Secrets stay in `sales-secrets.json` (mode 600); the console shows set / not set and the last 4.
+The test Odoo must be another URL + database than production's ("another database").
+
+**Which orders are test orders.** An order is `test` exactly when the checkout's e-mail address
+(lower-cased, trimmed) is the **proven** address (`res.partner.email`, never a pending one) of a
+**tester** (docs/roles.md) who holds an active pass. Nothing in the request body or URL can ask
+for test mode. A normal buyer is never affected by test settings.
+
+**What a test order does and doesn't do** (test cards are public, so knowing a tester's address
+must give nobody anything):
+
+- It never creates a contact, never binds the signing browser key as a session, never returns
+  `bunker_url`. The order's `partner_id` is always the tester's; `account` is the tester's only
+  when the signing key is already an active session of the tester's account (then it behaves as
+  any signed-in member's order), else `null`.
+- On activation the pass opens on the tester's own account only, marked `belfry_test: true`,
+  and only while that person still is a tester with that address (else the order stops,
+  flagged `tester_gone`, and nothing opens). The product's role is not written (a tester's role
+  never changes). Receipts and invoices go to the tester's address; every sales mail of a test
+  order starts with "[TEST]" and a fixed line.
+- A free product without a code waits for the confirmation link mailed to the tester's address,
+  as for anyone; a 100% code opens the pass on the tester's account at once.
+- The test Odoo never gets (or stores on the account) the tester's production Odoo contact
+  (`belfry_odoo_partner`): each test invoice gets its own test contact.
+- No places: test orders don't count in `left` / `sold_out` for real buyers, and a code's use by
+  a test order goes in `test_used`, never `used` (a code still has to be valid for it).
+- Paid orders need the test environment to be able to sell (test Odoo connection + picks, and
+  the test Stripe key or bank details): else **409 `test_not_set_up`**, never a fall back to
+  production.
+- `pay: invoice` / transfer: the invoice is made in the test Odoo; "Mark paid" works as usual;
+  the `/pay/<order>` page shows "Test order: no real money."
+
+**Webhooks.** `/hooks/stripe/test` checks the test signing secret and takes only events with
+`livemode: false`; `/hooks/stripe` takes `livemode: true` (and test-mode events only while
+production's own key is a test key, as a belfry that tried Stripe before environments existed
+had). An event for an order of the other environment answers `wrong_env` and changes nothing;
+the wrong mode answers `wrong_mode`. Test events are deduplicated apart (`test:<id>`).
+
+**API.** Every order answer (`POST /checkout`, `GET /checkout/<order>`, …) carries `"test":
+true | false`: the buying page shows a banner when true. New error: 409 `test_not_set_up`.
+Testers: 409 `tester` on `POST /admins` and `POST /member-roles`; `POST /whois` answers
+`"testers"`.
+
+**Console.** `/sales` lists test orders apart ("Test orders", a TEST mark) and products show
+"N test" next to the places taken. `/plugins` says what the test environment still misses and how
+many testers there are.
+
+Not tested against the real Stripe test mode or a real test Odoo database (fakes only, as §8).
