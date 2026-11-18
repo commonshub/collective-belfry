@@ -866,7 +866,9 @@ def member_invite_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
     for r in sorted(rows, key=lambda r: -int(r["id"])):
         inv_id = m2o_id(r.get("invite_id"))
         inv = (
-            svc.odoo.read_one("belfry.invite", inv_id, ["member_role", "membership"])
+            svc.odoo.read_one(
+                "belfry.invite", inv_id, ["member_role", "membership", "member_tester"]
+            )
             if inv_id
             else None
         )
@@ -878,11 +880,32 @@ def member_invite_of(svc: Services, pubkey: str) -> dict[str, Any] | None:
 def become_member(svc: Services, pubkey: str, inv: dict[str, Any]) -> bool:
     """A guest who came with a member link and has a proven e-mail: a member now, with the link's
     role (the default when that role was deleted since) and length of membership."""
+    from . import testers
+
     rid = str(inv.get("member_role") or "")
     if not roles.exists(svc, rid):
         rid = roles.default_role(svc)
     days = roles.MEMBERSHIP_DAYS.get(str(inv.get("membership") or "permanent"), 0)
-    return roles.make_member(svc, pubkey, rid, days)
+    partner = None
+    if inv.get("member_tester"):
+        # a tester link (console, testers.py) makes a tester of a NEW person only: someone
+        # who had an account before it (a guest of another channel) is left as they were
+        rows = svc.odoo.search_read(
+            "belfry.pass",
+            [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+            ["partner_id"],
+        )
+        partner = m2o_id(rows[0].get("partner_id")) if rows else None
+        if not partner or not testers.fresh_for_invite(svc, partner, int(inv["id"])):
+            log.warning("guests: a tester link used by an existing account: nothing given")
+            return False
+        rid = roles.default_role(svc)
+        if rid == roles.ADMIN:
+            return False
+    made = roles.make_member(svc, pubkey, rid, days)
+    if made and partner:
+        testers.mark(svc, partner)
+    return made
 
 
 def join_account(svc: Services, token: str, pubkey: str) -> dict[str, Any] | None:

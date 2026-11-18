@@ -407,6 +407,9 @@ def set_member(svc: Services, caller: str, pubkey: str, role: str) -> dict[str, 
     apps.forget()
     if caller not in apps.admin_pubkeys(svc):
         raise ApiError(403, "not_admin", "Only the belfry's admins give roles.")
+    from . import testers
+
+    testers.refuse_admin(svc, pubkey=pubkey)  # 409 tester: a tester's role never changes
     if not exists(svc, role):
         raise ApiError(404, "unknown_role", "No such role.")
     if not own(svc) and role not in BUILTIN:

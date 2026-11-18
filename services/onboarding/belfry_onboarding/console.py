@@ -287,15 +287,13 @@ def members(svc: Services) -> list[dict[str, Any]]:
         order="id desc",
         limit=2000,
     )
+    from . import testers
+
     ids = sorted({core.m2o_id(p["partner_id"]) for p in passes if p.get("partner_id")})
-    partners = (
-        {
-            r["id"]: r
-            for r in svc.odoo.read("res.partner", ids, ["name", "email", "belfry_member_number"])
-        }
-        if ids
-        else {}
-    )
+    fields = ["name", "email", "belfry_member_number"]
+    if testers.own(svc):  # the flag exists only in the belfry's own register
+        fields.append(testers.FIELD)
+    partners = {r["id"]: r for r in svc.odoo.read("res.partner", ids, fields)} if ids else {}
     admins = admin_emails(svc)
     out, seen = [], set()
     for p in passes:
@@ -314,15 +312,24 @@ def members(svc: Services) -> list[dict[str, Any]]:
                 "number": r.get("belfry_member_number") or "",
                 "since": str(p.get("date_start") or "")[:10],
                 "admin": bool(email) and email in admins,
+                "tester": bool(r.get(testers.FIELD)),
             }
         )
     return sorted(out, key=lambda m: (not m["admin"], m["name"].lower()))
 
 
-def add_member(svc: Services, email: str, name: str, admin: bool) -> str:
+def add_member(svc: Services, email: str, name: str, admin: bool, tester: bool = False) -> str:
+    """Add by e-mail (the Add people modal). TESTER: a new person only (testers.add_tester),
+    never an admin."""
+    from . import testers
+
     email = email.strip().lower()
     if "@" not in email or "." not in email.split("@")[-1]:
         raise ValueError("That is not an e-mail address.")
+    if tester:
+        if admin:
+            raise ValueError("A tester can't be an admin.")
+        return testers.add_tester(svc, email, name)
     if admin:
         steward.add_steward(svc, email, name.strip())
     else:
@@ -332,6 +339,14 @@ def add_member(svc: Services, email: str, name: str, admin: bool) -> str:
 
 
 def set_admin(svc: Services, email: str, admin: bool) -> None:
+    from . import testers
+
+    if admin and testers.own(svc):
+        rows = svc.odoo.search_read(
+            "res.partner", [["email", "=ilike", email.strip()]], [testers.FIELD], limit=5
+        )
+        if any(r.get(testers.FIELD) for r in rows):
+            raise ValueError("A tester can't be an admin.")
     ak = svc.authentik
     group = ak.find_group(svc.settings.steward_group)
     if group is None:
@@ -352,6 +367,10 @@ def edit_member(svc: Services, partner: int, name: str, admin: bool) -> None:
         svc.odoo.write("res.partner", [partner], {"name": name.strip()})
     email = (row.get("email") or "").lower()
     if email and admin != (email in admin_emails(svc)):
+        from . import testers
+
+        if admin and testers.is_tester(svc, partner):
+            raise ValueError("A tester can't be an admin.")
         set_admin(svc, email, admin)
 
 
@@ -393,6 +412,24 @@ def revoke_device(svc: Services, partner: int, bunker: str) -> None:
 
 
 def invite_link(svc: Services, partner: int, kind: str, days: int) -> str:
+    """See _invite_link. ``tester``: a member link whose NEW person becomes a tester
+    (testers.py); the flag is set on the invite here, never through the API."""
+    from . import testers
+
+    if kind != "tester":
+        return _invite_link(svc, partner, kind, days)
+    if not testers.own(svc):
+        raise ValueError("Testers need the belfry's own register.")
+    url = _invite_link(svc, partner, "member", days)
+    token = url.rstrip("/").rsplit("/", 1)[-1]
+    inv = svc.odoo.invite_by_token(token)
+    if not inv or not inv.get("id"):
+        raise ValueError("The link could not be made. Try again.")
+    svc.odoo.write("belfry.invite", [int(inv["id"])], {"member_tester": True})
+    return url
+
+
+def _invite_link(svc: Services, partner: int, kind: str, days: int) -> str:
     """A link that brings one person into the belfry, made by PARTNER (an admin) as the chat's
     invite sheet makes it (guests.make_channel_invite, #general): an admin or a member (the
     default role, for good), or a guest of #general for a day, a week or a month. It can be
@@ -623,6 +660,7 @@ ICONS = {
     "apps": '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
     "setup": '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
     "menu": '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    "plugins": '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
     "sales": '<path d="M3 9V6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v3a3 3 0 0 0 0 6v3a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-3a3 3 0 0 0 0-6zM14 5v14"/>',
     "close": '<path d="M18 6 6 18M6 6l12 12"/>',
     "plus": '<path d="M12 5v14M5 12h14"/>',
@@ -650,6 +688,7 @@ SECTIONS: list[tuple[str, list[tuple[str, str, str, str]]]] = [
             ("/status", "Status", "status", "member"),
             ("/monitor", "Monitor", "monitor", "member"),
             ("/apps", "Apps", "apps", "admin"),
+            ("/plugins", "Plugins", "plugins", "admin"),
             ("/setup", "Setup", "setup", "admin"),
         ],
     ),
@@ -782,6 +821,10 @@ display:inline-grid;place-items:center;font-weight:600;color:var(--fg);flex:none
 cursor:pointer;flex:none;text-decoration:none}
 .icon-btn:hover{background:var(--surface-deep);color:var(--fg)}
 .icon-btn:focus-visible,.side-nav a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button.icon-btn{border:0;background:none;padding:0;margin:0;font:inherit;box-shadow:none;-webkit-appearance:none;appearance:none}
+dialog .icon-btn{width:44px;height:44px;border-radius:99px;color:var(--fg-muted)}
+dialog .icon-btn:hover,dialog .icon-btn:focus-visible{background:var(--surface-deep);color:var(--fg)}
+dialog .icon-btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .mbar{display:none}
 .content{min-width:0;display:flex;flex-direction:column}
 .page{flex:1;width:100%;max-width:1040px;box-sizing:border-box;margin:0 auto;padding:32px 32px 24px}
@@ -1120,7 +1163,14 @@ a.logout{{display:inline-block;margin-top:28px;color:#c62828;font-weight:600}}
     )
 
 
+TESTER_WHY = (
+    "A tester is for trying payments. What a tester buys goes through Stripe's test mode and "
+    "your test Odoo, with test cards and no real money. Make a separate person for this: it "
+    "can't be given to someone who is already a member."
+)
+
 ADD_SCRIPT = """<style>
+.tag.tester{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:99px;background:#fef3c7;color:#78350f}
 .list-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .list-head h2{margin:0}
 .list-head .plus{width:36px;height:36px;border-radius:99px;background:var(--accent);color:var(--accent-fg,#fff);border:0;cursor:pointer;
@@ -1146,7 +1196,10 @@ document.getElementById('add-close').addEventListener('click',function(){d.close
 d.addEventListener('click',function(e){if(e.target===d)d.close();});
 var f=document.getElementById('link-form'),days=f.querySelector('.guest-days'),out=f.querySelector('.link-out'),
 inp=out.querySelector('input'),err=f.querySelector('.link-err'),btn=f.querySelector('button[type=submit]');
-f.addEventListener('change',function(){days.hidden=f.as.value!=='guest';out.hidden=true;});
+f.addEventListener('change',function(){days.hidden=f.as.value!=='guest';
+f.querySelector('.tester-why').hidden=f.as.value!=='tester';out.hidden=true;});
+var a=document.getElementById('add-form');a.addEventListener('change',function(){
+a.querySelector('.tester-why').hidden=a.role.value!=='tester';a.querySelector('.role-admin').hidden=a.role.value!=='admin';});
 f.addEventListener('submit',function(e){e.preventDefault();if(btn.disabled)return;btn.disabled=true;
 var t=btn.textContent;btn.textContent='Making the link\u2026';err.hidden=true;
 fetch(f.action,{method:'POST',body:new FormData(f),headers:{'Accept':'application/json'}})
@@ -1192,6 +1245,9 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
                 else f"""<td><form method="post" action="/members/{m["partner"]}/remove" onsubmit="return confirm('Remove {E(m["name"])}? Their pass ends now; their key stays theirs.')">
 <input type="hidden" name="csrf" value="{csrf}"><button type="submit" class="icon-btn danger-btn" aria-label="Remove {E(m["name"])}" title="Remove">{icon("trash")}</button></form></td>"""
             )
+        if m.get("tester"):
+            # a tester's role never changes (testers.py): no dropdown, the tag says what it is
+            role_cell = '<td><span class="tag tester" title="Buys through the test environment">Tester</span></td>'
         rows.append(
             f'<tr><td class="who-cell"><b>{E(m["name"])}</b></td>{email}'
             f"{role_cell}"
@@ -1220,15 +1276,22 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
 <div class="pick" role="radiogroup" aria-label="Joins as">
 <label><input type="radio" name="as" value="member" checked> Member</label>
 <label><input type="radio" name="as" value="admin"> Admin</label>
-<label><input type="radio" name="as" value="guest"> Guest</label></div>
+<label><input type="radio" name="as" value="guest"> Guest</label>
+<label><input type="radio" name="as" value="tester"> Tester</label></div>
+<p class="meta tester-why" hidden>{E(TESTER_WHY)}</p>
 <p class="guest-days" hidden><label>For <select name="days"><option value="1">a day</option><option value="7">a week</option><option value="30">a month</option></select></label></p>
 <p><button class="btn" type="submit">Make the link</button></p>
 <p class="link-out" hidden><input type="text" readonly aria-label="The invite link"><button type="button" class="btn ghost" id="link-copy">Copy</button></p>
 <p class="bad link-err" role="alert" hidden></p></form></section>
-<section><h3>Add by e-mail</h3><form method="post" action="/members/add"><input type="hidden" name="csrf" value="{csrf}">
+<section><h3>Add by e-mail</h3><form method="post" action="/members/add" id="add-form"><input type="hidden" name="csrf" value="{csrf}">
 <p><input type="text" inputmode="email" autocomplete="email" name="email" placeholder="e-mail address" required aria-label="E-mail address"></p>
 <p><input type="text" name="name" placeholder="name (optional)" aria-label="Name"></p>
-<p><label><input type="checkbox" name="admin" value="1"> admin (can add and remove members, approve the website)</label></p>
+<div class="pick" role="radiogroup" aria-label="Role">
+<label><input type="radio" name="role" value="member" checked> Member</label>
+<label><input type="radio" name="role" value="admin"> Admin</label>
+<label><input type="radio" name="role" value="tester"> Tester</label></div>
+<p class="meta role-admin" hidden>An admin can add and remove members and approve the website.</p>
+<p class="meta tester-why" hidden>{E(TESTER_WHY)}</p>
 <p><button class="btn" type="submit">Add</button></p>
 <p class="meta">They get a pass at once and an e-mail with a sign-in link. Removing someone ends their pass; their Nostr key stays theirs.</p></form></section>
 </dialog>{ADD_SCRIPT}"""
@@ -1609,14 +1672,23 @@ def register(app: FastAPI) -> None:
         email: str = Form(""),
         name: str = Form(""),
         admin: str = Form(""),
+        role: str = Form(""),
     ):
         me = await admin_form(request, csrf)
         if me is None:
             return back(
                 "/members", err="Only admins can add members. Sign in again if you are one."
             )
+        # the role choice (Member · Admin · Tester); the old checkbox "admin=1" still works
+        if role not in ("", "member", "admin", "tester"):
+            return back("/members", err="Pick member, admin or tester.")
+        as_admin = role == "admin" or (admin == "1" and role != "tester")
+        if role == "tester" and admin == "1":
+            return back("/members", err="A tester can't be an admin.")
         try:
-            added = await run_in_threadpool(add_member, svc(request), email, name, admin == "1")
+            added = await run_in_threadpool(
+                add_member, svc(request), email, name, as_admin, role == "tester"
+            )
         except Exception as exc:
             log.warning("console: add %s by %s failed: %s", email, me["email"], exc)
             return back(
@@ -1625,7 +1697,9 @@ def register(app: FastAPI) -> None:
                 if isinstance(exc, ValueError)
                 else "Adding failed; see the logs.",
             )
-        log.info("console: %s added %s (admin=%s)", me["email"], added, admin == "1")
+        log.info("console: an admin added a member (role %s)", role or "member")
+        if role == "tester":
+            return back("/members", msg=f"{added} is a tester now and got a sign-in link.")
         return back("/members", msg=f"{added} is a member now and got a sign-in link.")
 
     @app.post("/console/members/link")

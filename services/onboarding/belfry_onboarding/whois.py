@@ -10,9 +10,13 @@ event saying so unless a label was published). The register knows, so it answers
 - Anyone holding an active pass may ask (guests too: they see who joined their channel).
 - The answer also has ``"roles": {"<hex>": "<role id>"}`` for the members among the keys
   (roles.py; guests and agents have no role). Labels: ``GET /api/roles``.
+- And ``"testers": ["<hex>", …]``: the keys among those asked that belong to a tester
+  (testers.py: an account for trying payments; its purchases go through the test environment).
+  Members still, so "people" says "member"; apps label them "Tester".
 - ``{"directory": true}`` (members only, #issues 2026-11-15: the chat's Members directory) →
   ``{"members": [{"pubkey", "name", "role"?}], "agents": {"<agent>": "<its member>"},
-  "names": {"<agent>": "<name>"}}``: everyone holding a member's pass, and members' own agents.
+  "names": {"<agent>": "<name>"}}``: everyone holding a member's pass, and members' own agents;
+  a tester's entry has ``"tester": true``.
 """
 
 from __future__ import annotations
@@ -67,6 +71,13 @@ def answer(svc: Services, caller: str, keys: list[str]) -> dict[str, Any]:
         out["roles"] = {k: held[k] for k in keys if k in held}
     except Exception:  # noqa: BLE001 — the kinds answer anyway
         pass
+    from . import testers
+
+    try:
+        found = testers.tester_pubkeys(svc, set(keys))
+    except Exception:  # noqa: BLE001
+        found = set()
+    out["testers"] = sorted(found)
     return out
 
 
@@ -88,9 +99,20 @@ def directory(svc: Services, caller: str) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         held = {}
     names = mentions._names(svc, set(members) | set(owners))
+    from . import testers
+
+    try:
+        tested = testers.tester_pubkeys(svc, set(members))
+    except Exception:  # noqa: BLE001
+        tested = set()
     return {
         "members": [
-            {"pubkey": k, "name": names.get(k, ""), **({"role": held[k]} if k in held else {})}
+            {
+                "pubkey": k,
+                "name": names.get(k, ""),
+                **({"role": held[k]} if k in held else {}),
+                **({"tester": True} if k in tested else {}),
+            }
             for k in members
         ],
         "agents": owners,

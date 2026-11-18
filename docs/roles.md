@@ -22,6 +22,22 @@ All paths are under `https://belfry.<domain>/api/v1` and signed with NIP-98
   invite sheet starts on it, and a membership that opens gets it when the person has no role
   yet. Members who have no stored role stay `member`; changing the default never relabels them.
 
+- **Tester** (2026-11-18, `testers.py`): not one of these roles and not editable. A tester is a
+  member account made for trying payments: everything a tester buys goes through the **test
+  environment** of Stripe and Odoo (belfry.<domain>/plugins), never the real ones (docs/sales.md
+  §9). A flag on the person, `res.partner.belfry_tester` (own register only). It is given only
+  when the person is created, in the console's "Add people" modal: the invite link's
+  **Tester** choice (a member link with `member_tester` on the invite, set by the console only;
+  the flag goes on the person who joins with it only when they are new: every pass they ever
+  held came with that link; someone who had an account before gets nothing from it), or "Add by
+  e-mail" with **Tester** (refused when the address already has an account, proven or waiting
+  for its proof, and refused together with Admin). No API or screen gives the flag to an
+  existing person or takes it away: the way out is removing the person. While the flag is set:
+  `POST /admins` and `POST /member-roles` on the tester answer **409 `tester`**, the console
+  refuses to make them admin, and the Members list shows a "Tester" tag instead of the role
+  dropdown. `POST /whois` answers `"testers": [hex…]` among the keys asked (and `"tester": true`
+  on a directory entry); `belfry.json` is public and never lists testers.
+
 Stored in the register param `belfry.roles` (`{"roles": [{"id", "label", "description"}],
 "default"}`) and, per person, `res.partner.belfry_role` (survives a new pass).
 

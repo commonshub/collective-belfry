@@ -4,10 +4,11 @@ NIP-98 by a current admin, ``{"pubkey": "<hex>", "admin": true|false}``. An admi
 the stewards group (console.admin_emails); the target must be an active member. A channel's guest
 who saved their account (an e-mail on it) becomes a member with the role: same key, a membership
 next to the guest passes (guests.became_member). A guest without an e-mail and an agent can't.
-The last admin can't be removed. The relay sync follows at once, so the new admin administers
-every channel (zooid patch 0003) and belfry.json lists them. The admin role of roles.py is this
-same list: its stored role follows (``roles.after_admin_change``), and ``POST /api/member-roles``
-with ``"role": "admin"`` comes here.
+The last admin can't be removed. A tester (testers.py) is never an admin: 409 ``tester``.
+The relay sync follows at once, so the new admin administers every channel (zooid patch 0003)
+and belfry.json lists them. The admin role of roles.py is this same list: its stored role
+follows (``roles.after_admin_change``), and ``POST /api/member-roles`` with ``"role": "admin"``
+comes here.
 """
 
 from __future__ import annotations
@@ -35,6 +36,9 @@ def change(svc: Services, caller: str, target: str, admin: bool) -> list[str]:
     console._admins["at"] = 0.0
     if caller not in apps.admin_pubkeys(svc):
         raise ApiError(403, "not_admin", "Only the belfry's admins give the admin role.")
+    from . import testers
+
+    testers.refuse_admin(svc, pubkey=target)  # 409 tester: a tester is never an admin
     row = member_key(svc, target)
     guest_passes: list[dict[str, Any]] = []
     if row is None:
