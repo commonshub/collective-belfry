@@ -133,7 +133,7 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
 export interface Price { amount: string; currency: string }
 export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev; price?: Price }
 
-export const PRICE_AMOUNT = /^\d{1,9}(\.\d{1,2})?$/
+export const PRICE_AMOUNT = /^\d{1,7}(\.\d{1,2})?$/
 export const PRICE_LABEL = /^[\p{L}\p{N} ]{1,12}$/u
 /** "€15", "2 hours", "3 tokens". */
 export function priceLabel(p: Price): string {
