@@ -813,7 +813,10 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
             if (it.t === 'act') {
               const key = 'act:' + it.root.ev.id
               return <Fragment key={key}>
-                <ThreadActivity root={it.root} last={it.last} onOpen={() => openThread(it.root)} open={activeThread === it.root.ev.id} />
+                <ReplyQuote root={it.root} onOpen={() => openThread(it.root)} open={activeThread === it.root.ev.id} />
+                <Row m={it.last} prevAt={items[i - 1]?.at} groupId={id} name={displayName(it.last.ev.pubkey, ps)}
+                  reactions={rx.get(it.last.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(it.last) }}
+                  topic={topic} onTopic={onTopic} announce={false} active={activeThread === it.root.ev.id} />
               </Fragment>
             }
             const m = it.m
@@ -1492,18 +1495,18 @@ function EditSheet({ m, groupId, onClose }: { m: Message; groupId: string; onClo
   )
 }
 
-/** An older thread, back in the feed where its latest reply came: the message it answers as one
- *  grey quote line, then the reply (proposal A). */
-function ThreadActivity({ root, last, open, onOpen }: { root: Message; last: Message; open: boolean; onOpen: () => void }) {
-  const snip = plainRefs(root.text || (root.media.length ? 'a photo' : ''), '').replace(/\s+/g, ' ').trim().slice(0, 80)
+/** A reply in a thread, back in the feed (board channels/reply-row, as on iOS): the message it
+ *  answers on one grey line with an elbow (its author's face and name, the start of its text);
+ *  tapping it opens the thread. The reply itself follows as a normal message. */
+function ReplyQuote({ root, open, onOpen }: { root: Message; open: boolean; onOpen: () => void }) {
+  const full = plainRefs(root.text || (root.media.length ? 'a photo' : ''), '').replace(/\s+/g, ' ').trim()
   return (
-    <button className={'thread-activity' + (open ? ' open' : '')} onClick={onOpen} aria-expanded={open}>
-      <Avatar pubkey={last.ev.pubkey} size={28} />
-      <span className="t">
-        <span className="quote">↳ {displayName(root.ev.pubkey)}: {snip}{root.text.length > 80 ? '…' : ''}</span>
-        <span className="who"><b>{displayName(last.ev.pubkey)}</b><time>{fmtTime(last.ev.created_at)}</time></span>
-        <span className="reply">{replyText(last).slice(0, 200) || 'a photo'}</span>
-      </span>
+    <button className={'reply-quote' + (open ? ' open' : '')} onClick={onOpen} aria-expanded={open}
+      aria-label={`Reply to ${displayName(root.ev.pubkey)}: open the thread`}>
+      <span className="elbow" aria-hidden="true" />
+      <Avatar pubkey={root.ev.pubkey} size={18} />
+      <b>{displayName(root.ev.pubkey)}</b>
+      <span className="q">{full.slice(0, 120)}</span>
     </button>
   )
 }
