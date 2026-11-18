@@ -25,11 +25,11 @@ const DAYS_WORD: Record<GuestDays, string> = { 1: 'a day', 7: 'a week', 30: 'a m
 const MEMBERSHIP_WORD: Record<Membership, string> = { month: 'one month', year: 'one year', permanent: 'permanent' }
 
 /** What "Joins as" says: a name and a line (the canvas's wording). */
-export function joinsAsLine(who: JoinsAs, channel: string, community: string): [string, string] {
+export function joinsAsLine(who: JoinsAs, channel: string, community: string, toBelfry = false): [string, string] {
   if (who.as === 'guest') return [`Guest for ${DAYS_WORD[who.days]}`, `${channel} only, for ${DAYS_WORD[who.days]}`]
   if (who.as === 'agent') return ['My own agent', 'Your AI agent: a member for as long as you are one']
   const label = roleById(who.role)?.label ?? 'Member'
-  return [`${label} · ${MEMBERSHIP_WORD[who.membership]}`, `A member of ${community}, starting in ${channel}`]
+  return [`${label} · ${MEMBERSHIP_WORD[who.membership]}`, toBelfry ? `A member of ${community}` : `A member of ${community}, starting in ${channel}`]
 }
 export function linkLine(link: LinkOpts): string {
   return `${link.people === 1 ? 'One person' : 'Up to 50 people'}, the link works for ${DAYS_WORD[link.linkDays]}`
@@ -48,6 +48,11 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
   useEffect(() => { void loadMembership() }, [])
   useEffect(() => { if (members) void loadRoles() }, [members])
   const [view, setView] = useState<View>('main')
+  // from the members screen: an invitation to the belfry itself (no "who is here already");
+  // from a channel, event or proposal: people who are here come first, and the link for
+  // someone from outside stays folded until asked for (Xavier, 2026-11-18)
+  const toBelfry = preset === 'member'
+  const [outside, setOutside] = useState(toBelfry)
   const [who, setWho] = useState<JoinsAs>(preset === 'member' && members ? { as: 'member', role: defaultRole(), membership: 'permanent' } : { as: 'guest', days: 1 })
   const [link, setLink] = useState<LinkOpts>({ people: 1, linkDays: 1 })
   const [membership, setMembership] = useState<Membership>('permanent')
@@ -62,8 +67,9 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
   const [copied, setCopied] = useState(false)
   const asked = useRef(0)
   const label = `${channelIcon(g)}${g?.isPod || g?.isEvent || g?.isProposal ? ' ' : ''}${g?.name ?? id}`
-  // an admin link is for one person, whatever "Link" says
-  const people = who.as === 'agent' || (who.as === 'member' && who.role === 'admin') ? 1 : link.people
+  // an admin's or an agent's link is for one person, whatever "Link" says
+  const onlyOne = who.as === 'agent' || (who.as === 'member' && who.role === 'admin')
+  const people = onlyOne ? 1 : link.people
   const fetchLink = async () => {
     const n = ++asked.current // a newer choice wins
     setBusy(true); setError(''); setUrl(''); setAgentUrl('')
@@ -77,7 +83,8 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
     } finally { if (n === asked.current) setBusy(false) }
   }
   const key = JSON.stringify([who, link.linkDays, people])
-  useEffect(() => { setCopied(false); void fetchLink() }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+  // no link is made before the part for someone from outside is open
+  useEffect(() => { setCopied(false); if (outside) void fetchLink() }, [key, outside]) // eslint-disable-line react-hooks/exhaustive-deps
   const pending = !url
   const qr = useMemo(() => {
     const q = qrcode(0, 'M')
@@ -91,7 +98,7 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
     }
     setCopied(true); setTimeout(() => setCopied(false), 1500)
   }
-  const [asName, asDesc] = joinsAsLine(who, label, community)
+  const [asName, asDesc] = joinsAsLine(who, label, community, toBelfry)
   const pick = (w: JoinsAs) => { setWho(w); setView('main') }
   const isOn = (w: JoinsAs) => JSON.stringify(w) === JSON.stringify(who)
 
@@ -145,7 +152,7 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
         <div className="pick-head">How many people</div>
         <div className="pick-group" role="radiogroup" aria-label="How many people">
           {([[1, 'One person'], [50, 'Up to 50 people']] as const).map(([n, l]) => (
-            <button key={n} type="button" role="radio" aria-checked={link.people === n} disabled={people === 1 && n === 50 && who.as !== 'guest'} className={'pick-row' + (link.people === n ? ' on' : '')} onClick={() => { setLink({ ...link, people: n }); setView('main') }}>
+            <button key={n} type="button" role="radio" aria-checked={link.people === n} disabled={onlyOne && n === 50} className={'pick-row' + (link.people === n ? ' on' : '')} onClick={() => { setLink({ ...link, people: n }); setView('main') }}>
               <span className="radio" aria-hidden="true" /><span className="t"><b>{l}</b></span>
             </button>
           ))}
@@ -158,12 +165,17 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
             </button>
           ))}
         </div>
-        <p className="hint" style={{ fontSize: 13 }}>How long they stay is chosen under “Joins as”.</p>
+        <p className="hint" style={{ fontSize: 13 }}>{onlyOne ? (who.as === 'agent' ? 'A link for your agent works once. ' : 'A link that makes someone an admin works once. ') : ''}How long they stay is chosen under “Joins as”.</p>
       </Sheet>
     )
   }
   return (
-    <Sheet title={`Invite to ${label}`} onClose={onClose}>
+    <Sheet title={`Invite to ${toBelfry ? community : label}`} onClose={onClose}>
+      {!toBelfry && <InviteMember id={id} />}
+      {!toBelfry && <button type="button" className="pick-row invite-outside" aria-expanded={outside} onClick={() => setOutside(!outside)}>
+        <span className="t"><b>Or invite an external person</b><small>A link or a QR code for someone who is not in {community} yet</small></span><ChevronRightIcon />
+      </button>}
+      {outside && <>
       <div className={'qr-box' + (pending ? ' waiting' : '')}>
         <img className="drop-qr" src={qr} alt={pending ? '' : 'QR code of the invite link'} />
         {pending && busy && <span className="qr-over" role="status" aria-label="Making the link"><span className="spinner" /></span>}
@@ -192,10 +204,12 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
         {who.as === 'agent'
           ? <>Give this link to your agent, within {DAYS_WORD[link.linkDays]}: it reads the instructions there and joins with its own key. It works once.</>
           : who.as === 'member'
-          ? <>They read {label} at once and join {community} as {roleById(who.role)?.label ?? 'Member'} with their name and e-mail address. Someone who is a member already just gets the channel.</>
+          ? toBelfry
+            ? <>They join {community} as {roleById(who.role)?.label ?? 'Member'} with their name and e-mail address.</>
+            : <>They read {label} at once and join {community} as {roleById(who.role)?.label ?? 'Member'} with their name and e-mail address. Someone who is a member already just gets the channel.</>
           : <>They read {label} at once and join with a name and an e-mail address; someone who has an account joins with it. Everyone here sees who invited them.{agentUrl && <> An AI agent reads <a href={agentUrl} target="_blank" rel="noreferrer">its instructions</a> instead.</>}</>}
       </p>
-      <InviteMember id={id} />
+      </>}
     </Sheet>
   )
 }
@@ -219,8 +233,7 @@ function InviteMember({ id }: { id: string }) {
   const kind = (pk: string) => { const o = agentOwner(pk); return o ? `${displayName(o)}'s agent · ` : isGuest(pk) ? (isAgent(pk) ? 'Agent, a guest · ' : 'Guest · ') : '' }
   return (
     <div className="invite-member">
-      <div className="invite-or"><span>or someone who is here already</span></div>
-      <label className="field" style={{ marginBottom: 6 }}><span>Invite by name</span>
+      <label className="field" style={{ marginBottom: 6 }}><span>Someone who is here already</span>
         <input className="input" placeholder="Type a name" value={q} autoCapitalize="none" autoCorrect="off" onChange={(e) => { setQ(e.target.value); setError('') }} /></label>
       {list.map((pk) => {
         const here = inChannel(g, pk)
@@ -236,7 +249,7 @@ function InviteMember({ id }: { id: string }) {
           </div>
         )
       })}
-      {words && list.length === 0 && <p className="hint">Nobody here by that name. For someone new, share the link above.</p>}
+      {words && list.length === 0 && <p className="hint">Nobody here by that name. For someone new, invite an external person below.</p>}
       {error && <div className="error">{error}</div>}
     </div>
   )

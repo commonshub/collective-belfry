@@ -1736,3 +1736,9 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 /* A ticket's price (Xavier, 2026-11-18): an amount and what it is paid in */
 .price-field { display: grid; grid-template-columns: 1fr 140px; gap: 8px; }
 .ticket-price { margin: 0 0 10px; }
+/* the invite sheet from a channel: the link for someone from outside, folded until asked for */
+.pick-row.invite-outside { border: 1px solid var(--line); border-radius: 12px; margin: 10px 0 14px; }
+.pick-row.invite-outside .t { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.pick-row.invite-outside small { color: var(--muted); font-size: 13px; }
+.pick-row.invite-outside svg { transition: transform .15s; flex: none; }
+.pick-row.invite-outside[aria-expanded="true"] svg { transform: rotate(90deg); }
