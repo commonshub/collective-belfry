@@ -1093,6 +1093,10 @@ def _move_to_account(svc: Services, pubkey: str, other_partner: int) -> bool:
         )
         if r.get("guest_unnamed") and r.get("guest_channel") and not r.get("guest_event")
     ]
+    # a member link (roles.py): the account that owns the address gets what the link gives. A
+    # member keeps their role; a guest with this proven address becomes a member (the link was
+    # used up by the anonymous guest, so signing in and opening it again would find it spent)
+    inv = member_invite_of(svc, pubkey) if mine else None
     for r in mine:
         channel, inviter = r["guest_channel"], r.get("guest_inviter") or ""
         got = svc.odoo.add_guest_channel(account, channel, inviter, DAYS)
@@ -1110,6 +1114,14 @@ def _move_to_account(svc: Services, pubkey: str, other_partner: int) -> bool:
             core.revoke_pass(svc, r["id"], "signed in with their own account")
         except Exception:  # noqa: BLE001 — the account has the channel; this pass ends by itself
             log.exception("guest pass %s: not closed after moving to the account", r["id"])
+    from .places import member_key
+
+    if inv and not member_key(svc, account) and not _is_agent(svc, account):
+        try:
+            if _saved_email(svc, account):
+                become_member(svc, account, inv)
+        except Exception:  # noqa: BLE001 — they have the channel; an admin can still add them
+            log.exception("guest save: the member link's membership was not given")
     return bool(mine)
 
 

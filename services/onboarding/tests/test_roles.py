@@ -272,6 +272,39 @@ def test_a_member_link_makes_a_member_once_they_join_with_an_e_mail(world):
     assert not any(k == 9001 for k, _t in published)  # still in the channel
 
 
+def _saved_reader(rsvc, keycast, c, token, email, name):
+    """Open TOKEN with a new key and save EMAIL: (key, the verify answer)."""
+    got = _join(c, token, PrivateKey())
+    assert got.status_code == 200, got.text
+    me = PrivateKey()
+    p = rsvc.odoo.search_read(
+        "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["id", "partner_id"]
+    )[0]
+    rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": pk(me)})
+    keycast.status[pk(me)] = "active"
+    keycast.users[f"odoo-partner-{core.m2o_id(p['partner_id'])}"]["pubkey"] = pk(me)
+    mailer.SENT.clear()
+    assert call(c, me, "/guest/save", {"email": email, "name": name}).status_code == 202
+    time.sleep(1.1)
+    return me, call(c, me, "/guest/save/verify", {"email": email, "code": _code(), "name": name})
+
+
+def test_a_member_link_signed_up_with_the_address_of_a_guest_makes_that_guest_a_member(world):
+    rsvc, _published, keycast, ada, _ada_id, _s = world
+    with TestClient(create_app(rsvc)) as c:
+        token = call(c, ada, "/channel-invites", {"channel": "garden"}).json()["url"]
+        gus, r = _saved_reader(rsvc, keycast, c, token.rsplit("/", 1)[1], "gus@example.org", "Gus")
+        assert r.status_code == 200 and not r.json().get("member")
+        assert member_key(rsvc, pk(gus)) is None  # a saved guest
+        token = call(c, ada, "/channel-invites", {"channel": "kitchen", "as": "member"}).json()
+        _anon, r = _saved_reader(
+            rsvc, keycast, c, token["url"].rsplit("/", 1)[1], "gus@example.org", "Gus"
+        )
+        assert r.status_code == 409 and r.json()["error"] == "taken" and r.json()["moved"] is True
+    row = member_key(rsvc, pk(gus))
+    assert row is not None and row["tier"] == "member"  # the link's membership went to Gus
+
+
 def test_a_member_link_used_by_someone_who_has_an_account(world):
     rsvc, published, _k, ada, ada_id, _s = world
     bob, _ = person(rsvc, "bob@belfry.test", "Bob")
