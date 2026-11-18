@@ -20,16 +20,16 @@ import { threads, unreadTotal, convName } from '../core/dm'
 import { myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
-import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, type CalEvent, type Group } from '../core/model'
+import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, isWorking, workingSince, type CalEvent, type Group, type Task } from '../core/model'
 import { CHARTER_ID, MEMBERS } from '../core/places'
 import { agentRequests, belfryRequests, groupRequests, requestCount, startRequests } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { channelNewest, channelUnread } from '../core/unread'
-import { joinGroup } from '../core/actions'
+import { joinGroup, taskAction } from '../core/actions'
 import { isBelfryAdmin } from '../core/people'
 import { inOrder } from '../core/order'
-import { Avatar, Btn, Form, fmtTime, go, Sheet, back, useRoute } from './common'
+import { Avatar, Btn, Form, fmtTime, go, Sheet, back, useRoute, useNow, WorkRing } from './common'
 import { useCommunityName } from './community'
 import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, DocIcon, GateIcon, HexIcon, HomeIcon, MessageIcon, PeopleIcon, PlusIcon, SearchIcon, TodoIcon, TownIcon, AtIcon, ArchiveIcon, PodShape, ClockIcon, CheckCircleIcon } from './icons'
 import { mentions, isNew as isNewMention, preview } from './Mentions'
@@ -220,19 +220,23 @@ const hm = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-d
 const startOfDay = (d = new Date()) => new Date(d.toDateString())
 const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString()
 
-/** To-dos on me (taken by me, not done) and how many are open in my channels. */
-function myTodos(): { mine: { g: Group; title: string; id: string }[]; open: number } {
-  const mine: { g: Group; title: string; id: string }[] = []
+/** To-dos on me (taken by me, not done), the open ones nobody is on yet, and how many are open
+ *  in my channels and groups. */
+type MyTodo = { g: Group; title: string; id: string; t: Task }
+function myTodos(): { mine: MyTodo[]; unclaimed: MyTodo[]; open: number } {
+  const mine: MyTodo[] = [], unclaimed: MyTodo[] = []
   let open = 0
   for (const g of groups()) {
     if (!g.members.has(me()) && !isTownChannel(g.id)) continue
     for (const t of tasklist(g.id).tasks) {
       if (t.done) continue
       open++
-      if (t.assignee === me()) mine.push({ g, title: t.title, id: t.id })
+      if (t.assignee === me()) mine.push({ g, title: t.title, id: t.id, t })
+      else if (!t.assignee) unclaimed.push({ g, title: t.title, id: t.id, t })
     }
   }
-  return { mine, open }
+  unclaimed.sort((a, b) => b.t.at - a.t.at)
+  return { mine, unclaimed, open }
 }
 
 /** My part in an event, in words (no buttons on rows: the event screen holds the actions). */
@@ -699,26 +703,41 @@ export function GroupsScreen() {
   )
 }
 
-// ---- #/todos: the to-dos on me ---------------------------------------------------------------
+// ---- #/todos: the to-dos on me, then the open ones nobody is on yet (board todos/my-todos) ------
 
 export function TodosScreen() {
   useVersion()
-  const { mine } = myTodos()
-  const by = new Map<string, { g: Group; items: typeof mine }>()
-  for (const t of mine) { const x = by.get(t.g.id) ?? { g: t.g, items: [] }; x.items.push(t); by.set(t.g.id, x) }
+  const now = useNow()
+  const { mine, unclaimed } = myTodos()
+  const row = ({ g, t }: MyTodo) => {
+    const busy = isWorking(t, now)
+    const where = g.isPod ? g.name : '#' + g.name
+    const line = [where, busy ? `working on it · ${Math.max(1, Math.round((now - (workingSince(t) ?? now)) / 60))} min` : '', t.comments.length ? `${t.comments.length} ${t.comments.length === 1 ? 'comment' : 'comments'}` : ''].filter(Boolean).join(' · ')
+    return (
+      <div key={t.id} className="home-row todo-row">
+        <Btn className={'check' + (t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={`Mark “${t.title}” as done`} onClick={() => taskAction(g.id, t.id, 'done')}>
+          {busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}
+        </Btn>
+        <button className="todo-open" onClick={() => go(`c/${encodeURIComponent(g.id)}/todos`)}>
+          <span className="t"><b>{t.title}</b><small>{line}</small></span><ChevronRightIcon />
+        </button>
+      </div>
+    )
+  }
   return (
     <div className="screen">
-      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('home')}>‹</button><h1>Your to-dos</h1></div>
-      <div className="scroll">
-        {mine.length === 0 && <div className="empty">Nothing on you. To-dos you take on show up here.</div>}
-        {[...by.values()].map(({ g, items }) => (
-          <div key={g.id}>
-            <div className="place-section"><h3>{g.isPod ? g.name : '# ' + g.name}</h3><button className="link" onClick={() => go(`c/${encodeURIComponent(g.id)}/todos`)}>All</button></div>
-            <div className="home-card">{items.map((t) => (
-              <button key={t.id} className="home-row" onClick={() => go(`c/${encodeURIComponent(g.id)}/todos`)}><span className="row-ico"><TodoIcon /></span><span className="t"><b>{t.title}</b></span><ChevronRightIcon /></button>
-            ))}</div>
-          </div>
-        ))}
+      <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('home')}>‹</button><h1>To-dos</h1></div>
+      <div className="scroll todos-screen">
+        {mine.length === 0 && unclaimed.length === 0 && <div className="empty">Nothing to do. To-dos from your channels and groups show up here.</div>}
+        {mine.length > 0 && <>
+          <div className="place-section"><h3>On you</h3></div>
+          <div className="home-card">{mine.map(row)}</div>
+        </>}
+        {unclaimed.length > 0 && <>
+          <div className="place-section"><h3>Open · nobody on it yet</h3></div>
+          <div className="home-card">{unclaimed.map(row)}</div>
+        </>}
+        {(mine.length > 0 || unclaimed.length > 0) && <p className="hint todos-foot">Open to-dos in the channels and groups you are in. Tap the ring to tick one off; tap the row to open it.</p>}
       </div>
     </div>
   )

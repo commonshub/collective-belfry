@@ -771,6 +771,15 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .pull-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; text-align: left; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .pull-row .t small, .pull-row > small { font-size: 12px; color: var(--muted); }
 .pull-row.todo .check { margin-top: 0; }
+/* #/todos (Places.tsx TodosScreen): the ring ticks it off, the rest of the row opens it */
+.todo-row { padding: 0; gap: 0; }
+.todo-row > .check { margin: 0 0 0 10px; width: 24px; height: 24px; padding: 0; box-sizing: border-box; position: relative; }
+.todo-row > .check::before { content: ""; position: absolute; inset: -10px; }
+.todo-row .todo-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 12px 14px 12px 12px; background: none; border: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.todo-row .todo-open .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.todo-row .todo-open .t b { font-weight: 500; overflow-wrap: anywhere; }
+.todo-row .todo-open .t small { color: var(--muted); font-size: 13px; }
+.todos-foot { margin: 8px 20px 16px; font-size: 13px; }
 .pull-all { align-self: flex-start; font-size: 13px; padding: 6px 0; }
 .pull-pin { display: flex; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; margin-bottom: 6px; }
 .pull-pin > .ico { flex: none; width: 18px; height: 18px; margin-top: 2px; }
