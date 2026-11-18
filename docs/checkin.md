@@ -198,3 +198,17 @@ for every `/api/*` (the chat's origin is allowed). Cached 60 s by clients.
 
 - A zooid patch (0005) letting per-group admins moderate on the relay and listing them in 39001
   would make clients that only read 39001 see co-hosts too. Not done: a relay rebuild on every box.
+
+## Ticket prices
+
+A ticket type (kind 30402) may carry NIP-99's price tag: `["price", "<amount>", "<currency>"]`.
+The amount is a decimal string (dot, at most two decimals, above zero); the currency is an ISO
+4217 code (`EUR`), `HOUR` for hours, or the host's own label (1–12 letters, digits, spaces).
+No tag, or an amount of zero, means free. A tag that can't be read still counts as priced.
+
+A priced ticket is never self-served. `POST /events/<d>/join` answers 409 `payment`; the person
+asks through the application path (`/apply`, or a member's own 9021 with the `ticket` tag), and a
+host admitting them (their own 9000, or `/decide`) is the host saying the price is settled: that
+9000 carries `["paid", "paid"]`. Belfry takes no money for event tickets; the person and the host
+settle it between them. `GET /events/<link>` gives each ticket `price` (`{amount, currency}` or
+null) and `needs_payment`. The public page shows the price instead of "Free".

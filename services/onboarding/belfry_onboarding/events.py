@@ -223,6 +223,30 @@ def group_id(d: str) -> str:
     return "ev-" + d
 
 
+CURRENCY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]{0,11}")
+
+
+def price_of(e: dict[str, Any]) -> tuple[bool, str, str]:
+    """A ticket's NIP-99 price tag, ["price", "<amount>", "<currency>"] → (priced, amount,
+    currency). No tag, or an amount of zero = free. A tag that can't be read still counts as
+    priced (amount empty), so a ticket meant to be paid is never handed out for free."""
+    t = next((t for t in e.get("tags", []) if t[:1] == ["price"]), None)
+    if t is None:
+        return False, "", ""
+    raw = str(t[1]).strip() if len(t) > 1 else ""
+    cur = " ".join(str(t[2]).split()) if len(t) > 2 else ""
+    if not re.fullmatch(r"\d{1,7}(\.\d{1,2})?", raw) or not CURRENCY_RE.fullmatch(cur):
+        return True, "", ""
+    if float(raw) == 0:
+        return False, "", ""
+    whole, _, frac = raw.partition(".")
+    frac = frac.rstrip("0")
+    amount = str(int(whole)) + ("." + frac.ljust(2, "0") if frac else "")
+    if re.fullmatch(r"[A-Za-z]{3}", cur) or cur.upper() in ("HOUR", "HOURS"):
+        cur = "HOUR" if cur.upper() in ("HOUR", "HOURS") else cur.upper()
+    return True, amount, cur
+
+
 @dataclass
 class Ticket:
     d: str
@@ -235,6 +259,25 @@ class Ticket:
     members: bool = False
     position: int = 0
     implicit: bool = False
+    priced: bool = False  # carries a price: never self-served, a host admits once it is settled
+    amount: str = ""  # decimal string; empty when the price tag could not be read
+    currency: str = ""  # ISO 4217 code, "HOUR", or the host's own short label
+
+    @property
+    def asks(self) -> bool:
+        """Taken through a request the hosts answer (an application, or a price to settle)."""
+        return self.closed or self.priced
+
+    def price_text(self) -> str:
+        if not self.priced:
+            return ""
+        if not self.amount:
+            return "Paid"
+        if self.currency == "EUR":
+            return "€" + self.amount
+        if self.currency == "HOUR":
+            return f"{self.amount} {'hour' if self.amount == '1' else 'hours'}"
+        return f"{self.amount} {self.currency}"
 
     def public(self, taken: int) -> dict[str, Any]:
         return {
@@ -249,6 +292,10 @@ class Ticket:
             "members": self.members,
             "position": self.position,
             "implicit": self.implicit,
+            "price": {"amount": self.amount, "currency": self.currency}
+            if self.priced and self.amount
+            else None,
+            "needs_payment": self.priced,
         }
 
 
@@ -459,6 +506,7 @@ def tickets(svc: Services, ev: Event) -> list[Ticket]:
             pos = int(tag(e, "position") or "0")
         except ValueError:
             pos = 0
+        priced, amount, currency = price_of(e)
         out.append(
             Ticket(
                 d=td,
@@ -470,6 +518,9 @@ def tickets(svc: Services, ev: Event) -> list[Ticket]:
                 prompt=(tag(e, "prompt") or "")[:500],
                 members=has(e, "members"),
                 position=pos,
+                priced=priced,
+                amount=amount,
+                currency=currency,
             )
         )
     if not out:
@@ -754,7 +805,7 @@ def _ticket_tags(ev: Event, pubkey: str, t: Ticket, extra: list[list[str]]) -> l
         ["h", ev.group],
         ["p", pubkey, "member"],
         ["ticket", t.d],
-        ["paid", "free"],
+        ["paid", "paid" if t.priced else "free"],
         ["a", ev.coord],
         *extra,
     ]
@@ -813,6 +864,8 @@ def join(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[st
         raise ApiError(404, "no_ticket", "Pick one of the event's tickets.")
     if t.closed:
         raise ApiError(409, "needs_application", "This ticket takes an application.")
+    if t.priced:
+        raise ApiError(409, "payment", "This ticket has a price: ask the hosts for it.")
     member = is_member(svc, caller)
     if (t.members or ev.visibility == "members") and not member and caller not in ev.hosts:
         raise ApiError(403, "members_only", "This ticket is for members.")
@@ -906,7 +959,7 @@ def apply(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[s
     if caller in ppl.holders:
         return {"already": True, "ticket": ppl.holders[caller]}
     full = t.quantity is not None and ppl.taken(t.d) >= t.quantity
-    if not t.closed and not full:
+    if not t.asks and not full:
         raise ApiError(409, "use_join", "This ticket is open: take it.")
     waitlist = full
     mine = passes_of(svc, caller)
@@ -1315,10 +1368,12 @@ def event_page(svc: Services, ev: Event) -> str:
         rows = []
         for t in tks:
             left = "" if t.quantity is None else f" · {max(0, t.quantity - ppl.taken(t.d))} left"
-            kind = "Apply" if t.closed else "Free"
+            kind = t.price_text() or ("Apply" if t.closed else "Free")
+            if t.priced and t.closed:
+                kind += " · Apply"
             mem = " · Members only" if t.members else ""
             rows.append(
-                f"<li><b>{E(t.title)}</b><small>{kind}{mem}{left}</small>"
+                f"<li><b>{E(t.title)}</b><small>{E(kind)}{mem}{left}</small>"
                 + (f"<small>{E(t.summary)}</small>" if t.summary else "")
                 + "</li>"
             )

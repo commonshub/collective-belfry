@@ -136,6 +136,8 @@ def ticket(w: World, host: PrivateKey, tid: str, title: str, **opts):
         tags += [["closed"], ["prompt", opts.get("prompt", "Why?")]]
     if opts.get("members"):
         tags.append(["members"])
+    if opts.get("price"):
+        tags.append(["price", *opts["price"]])
     return w.put(host, 30402, tags)
 
 
@@ -611,3 +613,48 @@ def test_the_public_list_for_guests(rsvc, world):
         assert [e["d"] for e in c.get("/api/v1/events", headers=HOST).json()["events"]] == [early]
         r = c.get("/api/v1/events?cancelled=1", headers=HOST)
         assert [e["d"] for e in r.json()["events"]] == [early, D]
+
+
+def test_a_priced_ticket_is_never_self_served(rsvc, world, keycast):
+    from belfry_onboarding import events
+
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    make_event(world, ada)
+    ticket(world, ada, "std", "Standard", price=["15.50", "eur"])
+    ticket(world, ada, "time", "Helper", price=["2", "hours"])
+    ticket(world, ada, "odd", "Odd", price=["lots", "<b>"])
+    ticket(world, ada, "zero", "Zero", price=["0", "EUR"])
+    with TestClient(create_app(rsvc)) as c:
+        by = {t["id"]: t for t in call(c, bea, "GET", f"/{D}").json()["tickets"]}
+        assert by["std"]["price"] == {"amount": "15.50", "currency": "EUR"}
+        assert by["std"]["needs_payment"] is True and by["std"]["closed"] is False
+        assert by["time"]["price"] == {"amount": "2", "currency": "HOUR"}
+        assert by["odd"]["price"] is None and by["odd"]["needs_payment"] is True
+        assert by["zero"]["price"] is None and by["zero"]["needs_payment"] is False
+        page = c.get(f"/events/{D}").text
+        assert "€15.50" in page and "2 hours" in page and "lots" not in page
+        n = len(world.grp.events)
+        for tid in ("std", "time", "odd"):
+            r = call(c, bea, "POST", f"/{D}/join", {"ticket": tid})
+            assert r.status_code == 409 and r.json()["error"] == "payment"
+        r = call(c, PrivateKey(), "POST", f"/{D}/join", {"ticket": "std", "name": "Gus"})
+        assert r.json()["error"] == "payment"
+        assert len(world.grp.events) == n  # nobody got a ticket
+        # asking goes through the application path: a member sends the request themselves
+        r = call(c, bea, "POST", f"/{D}/apply", {"ticket": "std"})
+        assert r.json()["error"] == "publish_yourself"
+        # the host settles it: the ticket says paid
+        r = call(
+            c,
+            ada,
+            "POST",
+            f"/{D}/decide",
+            {"pubkey": pk(bea), "action": "approve", "ticket": "std"},
+        )
+        assert r.json()["approved"] is True
+        put = world.grp.events[-1]
+        assert put["kind"] == 9000 and ["paid", "paid"] in put["tags"]
+        assert call(c, bea, "POST", f"/{D}/join", {"ticket": "zero"}).json().get("already")
+    assert events.price_of({"tags": [["price", "007.10", "tokens"]]}) == (True, "7.10", "tokens")
+    assert events.price_of({"tags": [["price", "5"]]}) == (True, "", "")
