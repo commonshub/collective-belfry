@@ -1263,9 +1263,10 @@ def _move_passes(svc: Services, temp: int, other: int) -> int:
         core.activate_free_pass(svc, new)
         if r.get("sale_order") and st.order(r["sale_order"]):
             # the browser's session was on the temporary account: it ends with it
-            st.update(
+            moved = st.update(
                 r["sale_order"], pass_id=new, partner_id=other, moved_from=temp, bunker_url=None
             )
+            mark_erase(svc, other, moved)  # the request goes along with the pass
         core.revoke_pass(svc, r["id"], "moved to the account of the same address")
         n += 1
     svc.odoo.write("res.partner", [temp], {"belfry_pending_email": False})
@@ -1373,6 +1374,7 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
         "card_url": None,
         "pay_url": None,
         "hold_until": o.get("hold_until"),
+        "erase_after_event": bool(o.get("erase_after_event")),
     }
     inv = o.get("invoice") or {}
     if inv.get("number"):
@@ -1396,6 +1398,66 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
 
 
 _checkout_lock = threading.Lock()
+
+# "Send me all my data and erase it all from your server as soon as the event is over": asked
+# on POST /checkout or POST /offers, kept on the order (or the offer), copied onto the person's
+# contact when the pass opens. Only recorded: the export-and-erase run is not built (sales.md).
+ERASE = "belfry_erase_after_event"
+
+
+def erase_flag(data: dict[str, Any]) -> bool:
+    """The body's ``erase_after_event``: absent → False; a JSON boolean; anything else 422."""
+    from .holder_invites import ApiError
+
+    if "erase_after_event" not in data:
+        return False
+    v = data["erase_after_event"]
+    if not isinstance(v, bool):
+        raise ApiError(422, "invalid", "erase_after_event: true or false.")
+    return v
+
+
+def mark_erase(svc: Services, partner_id: int | None, o: dict[str, Any]) -> None:
+    """The order asked for its data to be erased after the event: say so on the contact. Once
+    there it stays (a later order without it never clears it; only an admin does)."""
+    if not partner_id or not o.get("erase_after_event"):
+        return
+    row = svc.odoo.read_one("res.partner", int(partner_id), [ERASE]) or {}
+    if row.get(ERASE):
+        return
+    svc.odoo.write(
+        "res.partner",
+        [int(partner_id)],
+        {
+            ERASE: True,
+            ERASE + "_order": o["id"],
+            ERASE + "_at": o.get("erase_after_event_at") or iso(now()),
+        },
+    )
+    log.info("sales: partner %s asked to be erased after the event (order %s)", partner_id, o["id"])
+
+
+def clear_erase(svc: Services, partner_id: int, by: str, reason: str) -> None:
+    """An admin clears the request (the person changed their mind, said so to an admin)."""
+    svc.odoo.write(
+        "res.partner",
+        [int(partner_id)],
+        {
+            ERASE: False,
+            ERASE + "_cleared": {"by": by[:100], "reason": reason[:200], "at": iso(now())},
+        },
+    )
+    log.info("sales: partner %s: erase-after-event cleared by an admin", partner_id)
+
+
+def erase_of(svc: Services, partner_id: int | None) -> bool:
+    if not partner_id:
+        return False
+    try:
+        row = svc.odoo.read_one("res.partner", int(partner_id), [ERASE]) or {}
+    except Exception:  # noqa: BLE001 — the console still shows the order
+        return False
+    return bool(row.get(ERASE))
 
 
 def checkout(
@@ -1438,6 +1500,7 @@ def _checkout(
     pay = data.get("pay") or "card"
     if pay not in ("card", "invoice"):
         raise ApiError(422, "invalid", 'pay: "card" or "invoice".')
+    erase = erase_flag(data)
     code = norm_code(data.get("code")) if data.get("code") else ""
     return_url = _own_url(svc, data.get("return_url"))
     ipt = ip_tag(svc, ip)
@@ -1457,6 +1520,11 @@ def _checkout(
                 and o["total"]["gross"]
             ):
                 o = switch_pay(svc, o["id"], pay)
+            if erase and not o.get("erase_after_event"):
+                # asked on the retry: kept (never taken back by one that leaves it out)
+                o = st.update(o["id"], erase_after_event=True, erase_after_event_at=iso(now()))
+                if o["state"] == "active":
+                    mark_erase(svc, o.get("partner_id"), o)
             return answer(svc, o, key), 200
     # an account whose address is not proven has one address: the one it waits to prove
     acct = account_of(svc, key)
@@ -1517,6 +1585,9 @@ def _checkout(
                         else "That code is used up.",
                     )
                 percent = int(c["percent"])
+                if c.get("offer") and not erase:
+                    # asked with the offer in kind this code answers
+                    erase = bool((st.offer(c["offer"]) or {}).get("erase_after_event"))
                 c["used"].append(oid)
                 st.put_code(c, db)
         total = split(pr["amount"], p["vat_rate"], percent, billing["kind"])
@@ -1550,6 +1621,8 @@ def _checkout(
             "billing": billing,
             "vat_valid": vat_valid,
             "return_url": return_url,
+            "erase_after_event": erase,
+            "erase_after_event_at": iso(created) if erase else None,
             "total": total,
             "state": "confirm" if gate else "pending",
             # Xavier, 2026-11-17: an invoice only once paid (card) or once the buyer asked
@@ -1908,6 +1981,7 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
 
             if roles.exists(svc, o["role"]):
                 svc.odoo.write("res.partner", [pid], {"belfry_role": o["role"]})
+    mark_erase(svc, pid, o)
     if not o.get("account") and not o.get("bunker_url") and not verified_by_link:
         # the browser that paid is signed in; never for an address proven by a mail link (the
         # person who clicked may not be the one holding the browser)
@@ -2154,7 +2228,12 @@ def public_channels(svc: Services) -> list[dict[str, str]]:
 
 
 def offer_answer(f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
-    out: dict[str, Any] = {"offer": f["id"], "state": f["state"], "product": f["product"]}
+    out: dict[str, Any] = {
+        "offer": f["id"],
+        "state": f["state"],
+        "product": f["product"],
+        "erase_after_event": bool(f.get("erase_after_event")),
+    }
     if f.get("url"):
         out["url"] = f["url"]
     if mine and f.get("my_url"):
@@ -2202,6 +2281,7 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         raise ApiError(422, "invalid", "percent: 50 to 100.") from exc
     if not 50 <= percent <= 100:
         raise ApiError(422, "invalid", "percent: 50 to 100.")
+    erase = erase_flag(data)
     st = store(svc)
     mine = [f for f in st.offers(key) if f["state"] in ("confirm", "open")]
     if (
@@ -2242,6 +2322,8 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         "email": email,
         "offer": text,
         "percent": percent,
+        "erase_after_event": erase,
+        "erase_after_event_at": iso(now()) if erase else None,
         "state": "confirm",
         "channel": site["channel"],
         "slug": slug,
