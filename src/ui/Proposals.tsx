@@ -1,11 +1,16 @@
 import { BELFRY } from '../config'
-import { useState } from 'react'
-import { createProposal, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
-import { canDecide, displayName, group, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
-import { useVersion } from '../core/store'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { createProposal, markSeen, reviseProposal, setProposalStatus, vote, type NewProposal } from '../core/actions'
+import { canDecide, displayName, group, messages, proposalFor, STATUS_LABEL, STATUSES, VOTE_OPTIONS, type Proposal, type ProposalStatus } from '../core/model'
+import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { go, Sheet, Form, useFormDraft } from './common'
+import { Avatar, Btn, fmtDay, go, Sheet, Form, useFormDraft } from './common'
 import { Markdown } from './markdown'
+import { Conversation } from './Chat'
+import { ChannelMenu } from './ChannelMenu'
+import { SaveFailedIcon } from './ChannelHeader'
+import { openProfile } from './Profile'
+import { ChevronDownIcon, ChevronUpIcon, MoreIcon, SearchIcon } from './icons'
 
 // A proposal is a channel template: its chat is where feedback goes; above it, the text (with its
 // version), its status and, while open for votes, the vote.
@@ -158,6 +163,232 @@ export function SiteBar({ groupId }: { groupId: string }) {
     <div className="prop-site">
       <a className="btn small" href={previewLink(p.website)} target="_blank" rel="noreferrer">Preview this version</a>
       <span className="hint">{p.status === 'passed' ? `Passed: it is (or is about to be) live at ${BELFRY.domain}.` : `A new version of ${BELFRY.domain}: it goes live once a belfry admin marks this proposal Passed.`}</span>
+    </div>
+  )
+}
+
+// ---- the proposal at the top of its chat (Xavier, 2026-11-18, canvas "Proposal-A/B") -----------
+// Like an event's screen: one header at three levels — 0 a bar (title, status, tally, Vote),
+// 1 half (opens here: status, by whom and which version, the title, the start of the text, the
+// vote with its counts and who has voted), 2 full (the whole text, then New version / Change
+// status for those who may) — over Chat · Versions · Votes (only the tabs with something in them).
+// Pull the header or its handle; scrolling or typing in the chat folds it to the bar.
+
+type PLevel = 0 | 1 | 2
+type PTab = 'chat' | 'versions' | 'votes'
+
+/** The options of the proposal's poll (its NIP-88 `option` tags), else yes / no / abstain. */
+export function pollOptions(p: Proposal): [string, string][] {
+  const tags = p.poll?.ev.tags.filter((t) => t[0] === 'option' && t[1]).map((t) => [t[1], t[2] || t[1]] as [string, string]) ?? []
+  return tags.length ? tags : VOTE_OPTIONS.map(([id, label]) => [id, label] as [string, string])
+}
+
+/** Who voted and who could have: the voters, of the chat's members and the voters themselves. */
+export function voteCounts(p: Proposal) {
+  const g = group(p.groupId)
+  const voters = p.poll?.votes.size ?? 0
+  const people = new Set([...(g?.members ?? []), ...(p.poll?.votes.keys() ?? [])]).size
+  return { voters, people }
+}
+
+/** The versions it had: its first (when its card was posted), then each "📝 Version N" note in its
+ *  chat (reviseProposal), with the text when this device still holds that version's event. */
+export function proposalVersions(p: Proposal): { version: number; at: number; by: string; note: string; text?: string }[] {
+  const texts = new Map<number, string>()
+  for (const e of all(me())) if (e.kind === 30023 && `30023:${e.pubkey}:${e.tags.find((t) => t[0] === 'd')?.[1]}` === p.coord) texts.set(Number(e.tags.find((t) => t[0] === 'version')?.[1]) || 1, e.content)
+  const card = all(me()).find((e) => e.kind === 9 && e.tags.some((t) => t[0] === 'proposal' && t[1] === p.groupId))
+  const out: { version: number; at: number; by: string; note: string; text?: string }[] = [{ version: 1, at: card?.created_at ?? 0, by: p.author, note: '', text: texts.get(1) }]
+  for (const m of messages(p.groupId)) {
+    const v = Number(m.ev.tags.find((t) => t[0] === 'version')?.[1])
+    if (!v || v < 2 || !m.ev.tags.some((t) => t[0] === 'a' && t[1] === p.coord) || out.some((x) => x.version === v)) continue
+    out.push({ version: v, at: m.ev.created_at, by: m.ev.pubkey, note: m.text.replace(/^📝 Version \d+:?\s*/, ''), text: texts.get(v) })
+  }
+  return out.sort((a, b) => b.version - a.version)
+}
+
+/** prop-<id>: the proposal on top, its chat under it. */
+export function ProposalView({ id, left, topic, onTopic, focus, activeThread }: { id: string; left: ReactNode; topic?: string; onTopic: (t?: string) => void; focus?: string; activeThread?: string }) {
+  useVersion()
+  const p = proposalFor(id)
+  const g = group(id)
+  const [level, setLevel] = useState<PLevel>(1)
+  const [tab, setTab] = useState<PTab>('chat')
+  const [menu, setMenu] = useState(false)
+  const [revising, setRevising] = useState(false)
+  const [status, setStatus] = useState(false)
+  useEffect(() => { markSeen(id) }, [id])
+  useEffect(() => { setLevel(1); setTab('chat') }, [id])
+  useEffect(() => {
+    const k = (x: KeyboardEvent) => { if (x.key === 'Escape' && level === 2 && !menu && !revising && !status) setLevel(1) }
+    addEventListener('keydown', k)
+    return () => removeEventListener('keydown', k)
+  }, [level, menu, revising, status])
+
+  // pulling the header (as the event's: vertical drags only, a tap stays a tap)
+  const start = useRef<{ y: number; x: number; dragging: boolean } | null>(null)
+  const [drag, setDrag] = useState(0)
+  const pull = {
+    onPointerDown: (x: React.PointerEvent) => { if (x.pointerType === 'mouse' && x.button !== 0) return; if ((x.target as HTMLElement).closest('textarea, input')) return; start.current = { y: x.clientY, x: x.clientX, dragging: false } },
+    onPointerMove: (x: React.PointerEvent) => {
+      const st = start.current
+      if (!st) return
+      const dy = x.clientY - st.y, dx = x.clientX - st.x
+      if (!st.dragging) { if (Math.abs(dy) < 10 || Math.abs(dy) < Math.abs(dx)) return; st.dragging = true; (x.currentTarget as HTMLElement).setPointerCapture(x.pointerId) }
+      setDrag(dy)
+    },
+    onPointerUp: () => { const st = start.current; start.current = null; if (st?.dragging) { if (drag > 40) setLevel((l) => Math.min(2, l + 1) as PLevel); else if (drag < -40) setLevel((l) => Math.max(0, l - 1) as PLevel) } setDrag(0) },
+    onPointerCancel: () => { start.current = null; setDrag(0) },
+    onClickCapture: (x: React.MouseEvent) => { if (start.current?.dragging) { x.stopPropagation(); x.preventDefault() } },
+  }
+  const fold = () => { if (level === 1) setLevel(0) }
+
+  const parent = g?.parent ? group(g.parent) : undefined
+  const where = parent ? (parent.isPod ? parent.name : '#' + parent.name) : ''
+  const right = (
+    <>
+      <SaveFailedIcon id={id} />
+      <button className="icon-btn" aria-label={`Search ${g?.name ?? id}`} onClick={() => go(`search/${encodeURIComponent(id)}`)}><SearchIcon /></button>
+      <button className="icon-btn" aria-label="More about this proposal" onClick={() => setMenu(true)}><MoreIcon /></button>
+    </>
+  )
+  if (!p) return (
+    <div className="screen prop-screen">
+      <div className="topbar">{left}<h1>{g?.name ?? 'Proposal'}<small>Proposal{where ? ' in ' + where : ''}</small></h1>{right}</div>
+      <div className="prop-wait hint">The proposal’s text is on its way (syncing).</div>
+      <Conversation id={id} events topic={topic} onTopic={onTopic} focus={focus} activeThread={activeThread} />
+      {menu && <Sheet title={g?.name ?? 'Proposal'} onClose={() => setMenu(false)}><ChannelMenu id={id} onPick={() => setMenu(false)} /></Sheet>}
+    </div>
+  )
+
+  const opts = pollOptions(p)
+  const mine = p.poll?.votes.get(me())
+  const voting = p.status === 'voting' && !!p.poll && p.poll.version === p.version
+  const count: Record<string, number> = {}
+  for (const v of p.poll?.votes.values() ?? []) count[v] = (count[v] ?? 0) + 1
+  const tallyText = p.poll ? opts.map(([o, label]) => `${count[o] ?? 0} ${label.toLowerCase()}`).join(' · ') : ''
+  const { voters, people } = voteCounts(p)
+  const mineLabel = opts.find(([o]) => o === mine)?.[1]
+  const versions = proposalVersions(p)
+  const tabs: [PTab, string][] = [['chat', 'Chat'], ...(versions.length > 1 ? [['versions', 'Versions'] as [PTab, string]] : []), ...(p.poll && voters > 0 ? [['votes', 'Votes'] as [PTab, string]] : [])]
+  const shownTab = tabs.some(([k]) => k === tab) ? tab : 'chat'
+
+  const voteRow = voting && (
+    <div className="prop-votes" role="group" aria-label="Your vote">
+      {opts.map(([o, label]) => (
+        <Btn key={o} className={'prop-v' + (mine === o ? ' on' : '')} aria-pressed={mine === o} disabled={!!p.poll?.ev.pending} onClick={() => vote(p, o) ?? undefined}>
+          {label}<span>{count[o] ?? 0}</span>
+        </Btn>
+      ))}
+    </div>
+  )
+  const voteLine = p.poll && (voting
+    ? <p className="hint prop-voted">{mineLabel ? `You voted ${mineLabel.toLowerCase()}` : 'You haven’t voted yet'} · {voters} of {people} {people === 1 ? 'member has' : 'members have'}</p>
+    : <p className="hint prop-voted">Vote on version {p.poll.version}: {tallyText}</p>)
+
+  const header = level > 0 && (
+    <div className={'evh prop-head2 lvl' + level + (drag ? ' dragging' : '')} {...pull} style={drag ? { transform: `translateY(${Math.max(-30, Math.min(30, drag / 3))}px)` } : undefined}>
+      <div className={'evh-body' + (level === 2 ? ' full' : '')}>
+        <div className="evh-main prop-main">
+          <p className="prop-meta"><StatusBadge s={p.status} /><span className="hint">Proposal by <button className="link who" onClick={() => openProfile(p.author)}>{displayName(p.author)}</button> · version {p.version}</span></p>
+          <h2 className="prop-title">{p.title}</h2>
+          {p.text ? <Markdown className={'prop-text' + (level === 1 ? ' teaser' : '')} text={p.text} /> : <p className="hint">No text yet.</p>}
+          {level === 1 && p.text && <button className="link prop-more" onClick={() => setLevel(2)}>Read the full proposal</button>}
+          {voteRow}
+          {voteLine}
+          {level === 2 && (canDecide(p) || p.author === me()) && (
+            <div className="row prop-acts">
+              {p.author === me() && <button className="btn small ghost" onClick={() => setRevising(true)}>New version</button>}
+              {canDecide(p) && <button className="btn small ghost" onClick={() => setStatus(true)}>Change status</button>}
+            </div>
+          )}
+        </div>
+      </div>
+      <button className="evh-handle" onClick={() => setLevel(level === 1 ? 2 : 1)} aria-label={level === 1 ? 'Read the full proposal' : 'Show less'}>
+        <span className="grip" />{level === 1 ? <ChevronDownIcon /> : <ChevronUpIcon />}
+      </button>
+    </div>
+  )
+
+  return (
+    <div className="screen prop-screen">
+      <div className="topbar prop-top">
+        {left}
+        {level === 0 ? (
+          <button className="prop-bar" onClick={() => setLevel(1)} aria-label="Show the proposal">
+            <b>{p.title}</b>
+            <small><StatusBadge s={p.status} /><span className="prop-tally">{tallyText}</span></small>
+          </button>
+        ) : (
+          <h1 className="tap" onClick={() => setLevel(0)}>Proposal<small>{where ? 'In ' + where : 'Proposal'}</small></h1>
+        )}
+        {level === 0 && voting && (mine
+          ? <button className="chip on prop-mine" onClick={() => setLevel(1)}>Voted {mineLabel?.toLowerCase()}</button>
+          : <button className="btn small prop-vote-btn" onClick={() => setLevel(1)}>Vote</button>)}
+        {right}
+      </div>
+      {header}
+      <SiteBar groupId={id} />
+      {level < 2 && <>
+        {tabs.length > 1 && (
+          <div className="seg ev-tabs prop-tabs" role="tablist" aria-label="The proposal">
+            {tabs.map(([k, l]) => <button key={k} role="tab" aria-selected={shownTab === k} className={shownTab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>)}
+          </div>
+        )}
+        <div className="ev-content" onWheel={fold} onTouchMove={fold} onFocusCapture={(x) => { if ((x.target as HTMLElement).matches('textarea, input')) fold() }} onInputCapture={fold}>
+          {shownTab === 'chat' && <Conversation id={id} events topic={topic} onTopic={onTopic} focus={focus} activeThread={activeThread} />}
+          {shownTab === 'versions' && <Versions p={p} onRead={() => setLevel(2)} />}
+          {shownTab === 'votes' && <Votes p={p} opts={opts} />}
+        </div>
+      </>}
+      {menu && <Sheet title={p.title} onClose={() => setMenu(false)}><ChannelMenu id={id} onPick={() => setMenu(false)} /></Sheet>}
+      {revising && <ReviseSheet p={p} onClose={() => setRevising(false)} />}
+      {status && (
+        <Sheet title="Status" onClose={() => setStatus(false)}>
+          {STATUSES.map((st) => (
+            <button key={st} className={'btn ' + (st === p.status ? '' : 'ghost')} style={{ marginBottom: 8 }}
+              onClick={() => { setStatus(false); if (st !== p.status) void setProposalStatus(p, st) }}>{STATUS_LABEL[st]}</button>
+          ))}
+          <p className="hint">Opening the votes starts a vote on version {p.version}.</p>
+        </Sheet>
+      )}
+    </div>
+  )
+}
+
+function Versions({ p, onRead }: { p: Proposal; onRead: () => void }) {
+  const [open, setOpen] = useState<number | null>(null)
+  return (
+    <div className="scroll pad prop-versions">
+      {proposalVersions(p).map((v) => (
+        <div key={v.version} className="prop-version">
+          <div className="pv-head">
+            <b>Version {v.version}</b>
+            <span className="hint">{v.at ? fmtDay(new Date(v.at * 1000)) : ''}{v.version === p.version ? ' · current' : ''}</span>
+          </div>
+          {v.note && <p className="pv-note">{v.note}</p>}
+          {v.version === p.version
+            ? <button className="link" onClick={onRead}>Read it</button>
+            : v.text ? (open === v.version ? <Markdown className="prop-text" text={v.text} /> : <button className="link" onClick={() => setOpen(v.version)}>Read it</button>) : null}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function Votes({ p, opts }: { p: Proposal; opts: [string, string][] }) {
+  const by = new Map<string, string[]>()
+  for (const [pk, o] of p.poll?.votes ?? []) by.set(o, [...(by.get(o) ?? []), pk])
+  return (
+    <div className="scroll pad prop-votes-list">
+      <p className="hint">Vote on version {p.poll?.version}. The latest answer of each person counts.</p>
+      {opts.map(([o, label]) => (
+        <section key={o}>
+          <h3>{label} · {by.get(o)?.length ?? 0}</h3>
+          {(by.get(o) ?? []).map((pk) => (
+            <button key={pk} className="ev-person" onClick={() => openProfile(pk, p.groupId)}><Avatar pubkey={pk} size={32} /><span className="t"><b>{displayName(pk)}</b></span></button>
+          ))}
+        </section>
+      ))}
     </div>
   )
 }
