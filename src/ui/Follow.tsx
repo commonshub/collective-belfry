@@ -147,7 +147,7 @@ const MuteIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="non
 
 const CHOICES: [Choice, () => JSX.Element, string, string][] = [
   ['all', RingIcon, 'Everything', 'Every new message'],
-  ['mine', AtIcon, 'When it’s for me', 'Mentions, replies to me, to-dos given to me'],
+  ['mine', AtIcon, 'When it’s for me', 'Mentions, replies to me, announcements'],
   ['off', MuteIcon, 'Nothing', 'I’ll look when I open the channel'],
 ]
 
