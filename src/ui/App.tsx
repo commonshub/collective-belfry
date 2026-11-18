@@ -4,12 +4,12 @@ import { useEffect, useState } from 'react'
 import { closeDrawer, useDrawer } from './drawer'
 import { Phone } from './Phone'
 import { SearchView } from './Search'
-import { belfrySignOut, endSession, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
+import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
-import { accounts, discardActiveFor, dropActive, forgetAll, noteAccount } from '../core/accounts'
+import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
 import { roleBadge } from '../core/roles'
 import { archivedGroups, deletedGroup, group, groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
@@ -438,9 +438,12 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
         <button className="link sign-out" onClick={onSignOut}>Sign out{accounts().filter((a) => a.pubkey).length > 1 ? ' of this account' : ''}</button>
         <Btn className="link sign-out forget-device" onClick={async () => {
           if (!confirm('Sign out of every account on this browser and forget them all?')) return
-          // this account's session ends in the signer; the others' keys are deleted with their databases
-          if (session.backend === 'belfry') await endSession(session)
+          // every account's session ends in the signer, each signed with its own key, then everything goes
           stop()
+          for (const a of allAccounts()) {
+            const s = a.id === activeId() ? session : await readOf<Session>(a, 'session')
+            if (s) await revokeWith(s)
+          }
           await forgetAll()
           location.hash = ''
           location.reload()

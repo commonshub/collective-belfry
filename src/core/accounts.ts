@@ -6,6 +6,7 @@
 //   screen for another, and an outbox item queued by A can only be sent by A's session.
 // - other belfries: rows that open https://chat.<domain> (its domain, name and picture only).
 // Only one account is connected at a time: no background connection, no dots for the others.
+import { openDB } from 'idb'
 import { BELFRY } from '../config'
 
 export interface Account {
@@ -115,7 +116,18 @@ export async function dropActive(): Promise<boolean> {
   return false
 }
 
-/** "Forget this device": every account, every belfry row, every key. */
+/** What account A's own database keeps under KEY (its session, for "Forget this device"). */
+export async function readOf<T>(a: Account, key: string): Promise<T | undefined> {
+  try {
+    const d = await openDB(a.db, 1, { upgrade(x) { for (const n of ['events', 'outbox', 'blobs', 'kv']) x.createObjectStore(n, n === 'events' ? { keyPath: 'id' } : n === 'outbox' ? { keyPath: 'localId' } : undefined) } })
+    try { return (await d.get('kv', key)) as T | undefined } finally { d.close() }
+  } catch { return undefined }
+}
+/** Every account of this browser (the live one too, even before it was noted). */
+export const allAccounts = (): Account[] => { const l = accounts(); return l.some((a) => a.id === activeId()) ? l : [active(), ...l] }
+
+/** "Forget this device": every account, every belfry row, every key (the caller ends each
+ *  account's session first). */
 export async function forgetAll() {
   const dbs = new Set([LEGACY_DB, ...accounts().map((a) => a.db)])
   for (const store of [localStorage, sessionStorage]) {

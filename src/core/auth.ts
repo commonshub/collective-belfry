@@ -222,6 +222,31 @@ export async function endSession(s: Session) {
   } catch { /* the session expires by itself; signing out goes on */ }
 }
 
+/** End session S in the signer with S's OWN key (the revoke above, NIP-98 signed by it): used by
+ *  "Forget this device" for every account of this browser, live or not. One at a time, 5 s each,
+ *  best effort. Demo: only noted (sessionStorage `test-demo-revokes`, for the tests). */
+export async function revokeWith(s: Session) {
+  if (s.backend === 'demo') {
+    try { const k = 'test-demo-revokes'; sessionStorage.setItem(k, JSON.stringify([...JSON.parse(sessionStorage.getItem(k) || '[]'), s.email ?? ''])) } catch { /* private mode */ }
+    return
+  }
+  const bunker = /^bunker:\/\/([0-9a-f]{64})/i.exec(s.bunkerUrl ?? '')?.[1]?.toLowerCase()
+  if (!bunker) return
+  try {
+    await Promise.race([
+      (async () => {
+        const signer = await makeSigner(s)
+        const url = `${BELFRY.api}/me/sessions/revoke`
+        const text = JSON.stringify({ bunker_pubkey: bunker })
+        const auth = await signer.sign({ kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000),
+          tags: [['u', url], ['method', 'POST'], ['payload', bytesToHex(sha256(new TextEncoder().encode(text)))]] })
+        await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text })
+      })(),
+      new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 5000)),
+    ])
+  } catch { /* the session expires by itself; forgetting goes on */ }
+}
+
 /** Everything this app kept in the browser's own storage for this account (join key, guest note,
  *  last channel, hidden pins, …): gone at sign-out. The other accounts of this browser stay. */
 export function forgetDevice() {
