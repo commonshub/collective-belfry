@@ -16,13 +16,16 @@ import { reading } from './guestmode'
 import { archivable, deletedGroup, group } from './model'
 import { addEvents, touch, useVersion } from './store'
 import { isGuest } from './invite'
-import { isLocalOnly, me, queryComplete } from './sync'
+import { isLocalOnly, me, queryComplete, relayAuthed } from './sync'
 
 export type GroupState = 'live' | 'archived' | 'deleted' | 'unknown'
 
 // what the relay said it does not have: id → when it said so (kept on this device, so a deleted
 // group's card still says so offline; the group's own events, if they ever come, win over it)
-const KEY = 'belfry-groups-absent'
+// (v2, 2026-11-18: notes written before that may come from an answer given before the relay had
+// signed us in, which shows nothing members-only: they are dropped)
+const KEY = 'belfry-groups-absent-v2'
+try { localStorage.removeItem('belfry-groups-absent') } catch { /* private mode */ }
 const absent = new Map<string, number>()
 try { for (const [id, at] of Object.entries(JSON.parse(localStorage.getItem(KEY) ?? '{}') as Record<string, number>)) absent.set(id, Number(at) || 0) } catch { /* nothing kept */ }
 const keep = () => { try { localStorage.setItem(KEY, JSON.stringify(Object.fromEntries([...absent].slice(-200)))) } catch { /* private mode */ } }
@@ -54,6 +57,7 @@ export function checkGroup(id: string): void {
   const now = Date.now()
   if (asked.has(id) && now - asked.get(id)! < (absent.has(id) ? AGAIN_ABSENT : 10_000)) return
   asked.set(id, now)
+  const signedIn = relayAuthed('groups')
   void queryComplete('groups', [{ kinds: [39000], '#d': [id] }, { kinds: [9007, 9002, 9008], '#h': [id] }]).then((found) => {
     if (found === null) { // no answer: still unknown
       const n = (tries.get(id) ?? 0) + 1
@@ -67,9 +71,14 @@ export function checkGroup(id: string): void {
     if (found.length) {
       addEvents(found) // its metadata (older than what the live subscription reached), or its 9008
       if (absent.delete(id)) keep()
-    } else {
+    } else if (signedIn && relayAuthed('groups')) {
+      // nothing, from a relay that had signed us in before and after the question: it isn't there
       absent.set(id, now)
       keep()
+    } else {
+      // asked before the sign-in: the answer proves nothing; ask again in a moment
+      asked.delete(id)
+      setTimeout(() => { if (!group(id)?.known && !deletedGroup(id)) checkGroup(id) }, 2000)
     }
     touch()
   })

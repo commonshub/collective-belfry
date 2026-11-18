@@ -366,14 +366,16 @@ async function relay(target: Target): Promise<Relay> {
   if (existing?.connected) return existing
   const url = URLS[target]
   const r = new Relay(url)
+  authed[target] = false // a new socket: not signed in until it says so
   r._onauth = () => {
     setRelay(url, 'auth')
     r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-      .then(() => { setRelay(url, 'up'); replay[target] = true; resubscribe(target) })
+      .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = true; resubscribe(target) })
       .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
   }
   r.onclose = () => {
     if (relays[target] && relays[target] !== r) return // an older socket
+    authed[target] = false
     setRelay(url, 'down')
     delete relays[target]
     setTimeout(() => void connect(target), backoff(target))
@@ -410,7 +412,7 @@ async function publish(target: Target, ev: NostrEvent) {
       if (!msg.startsWith('auth-required')) throw e
       await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
       // signed in only now: the live subscription had the public part only
-      replay[target] = true; resubscribe(target)
+      authed[target] = true; replay[target] = true; resubscribe(target)
       await within(r.publish(ev), 15000, 'the relay did not answer')
     }
   } catch (e) {
@@ -486,11 +488,28 @@ export function onEose(f: (target: Target) => void) { eoseListeners.add(f) }
 // `since` that hides the members-only events (Xavier, 2026-11-18: channels missing, the charter's
 // older agreement missing).
 const replay: Partial<Record<Target, boolean>> = {}
+// signed in to that relay (NIP-42) on its current connection: only then does an empty answer mean
+// "it has nothing" (groupstate.ts), not "you may not see it yet"
+const authed: Partial<Record<Target, boolean>> = {}
+export const relayAuthed = (target: Target) => !!authed[target] && !!relays[target]?.connected
+// The catch-up mark: up to when this device has everything the relay would show it signed in. It
+// moves only at an EOSE received after AUTH (an answer given before the sign-in is the public part
+// only, and its newer events must not hide the rest at the next reconnect or start). Per account
+// (a belfry- key: accounts.ts keeps one copy per account).
+const MARK = (t: Target) => 'belfry-sync-mark:' + t
+const syncMark = (t: Target): number => { try { return Number(localStorage.getItem(MARK(t)) || 0) } catch { return 0 } }
+function moveMark(t: Target) {
+  const kinds = t === 'groups' ? KINDS_GROUPS : KINDS_MAIN
+  const at = latestCreatedAt((e) => kinds.includes(e.kind)) // relay events only (store.ts: not the outbox)
+  if (at > syncMark(t)) try { localStorage.setItem(MARK(t), String(at)) } catch { /* private mode */ }
+}
 
 function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
-  // overlap by an hour: relays may deliver late events with older timestamps
-  const since = replay[target] ? 0 : Math.max(0, latestCreatedAt((e) => kinds.includes(e.kind)) - 3600)
+  // from the catch-up mark (moved only at an EOSE after the relay signed us in), overlapping by
+  // an hour: relays may deliver late events with older timestamps. No mark yet: from the start.
+  const m = syncMark(target)
+  const since = replay[target] || !m ? 0 : Math.max(0, m - 3600)
   // every group's metadata and the charter, always whole: a device that saw less before (a guest,
   // a sign-in after the first answer) still gets every channel and every agreement
   if (target === 'groups') return [
@@ -526,6 +545,7 @@ function resubscribe(target: Target) {
   subs[target] = r.subscribe(fs, {
     onevent: (e) => addEvents([e]),
     oneose: () => {
+      if (relayAuthed(target)) moveMark(target)
       eoseListeners.forEach((f) => f(target))
       if (target !== 'groups') return
       if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })
@@ -650,7 +670,8 @@ export async function start(s: Signer, opts: { localOnly: boolean }) {
 // may create a group; its creator administers it). Once per page load, after the relay's EOSE.
 let firstChannelTried = false
 async function firstChannel() {
-  if (firstChannelTried || reading() || latestCreatedAt((e) => e.kind === 39000)) return
+  // only once signed in to the relay: before, its answer can't show the members-only channels
+  if (firstChannelTried || reading() || !relayAuthed('groups') || latestCreatedAt((e) => e.kind === 39000)) return
   firstChannelTried = true
   await enqueue('groups', { kind: 9007, tags: [['h', 'general']] })
   await enqueue('groups', { kind: 9002, tags: [['h', 'general'], ['name', 'general'], ['about', `Everything about ${PLACE}. Say hi 👋`]] })
