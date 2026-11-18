@@ -21,10 +21,9 @@ import { Avatar, Btn, fmtDay, go, MediaGrid, up, useWide } from './common'
 import { channelFacts, hiddenPins, hidePin, mayPin } from './ChannelLine'
 import { visibilityText } from './ChannelHeader'
 import { ChannelSettingsForm, Files, Log, Members, Tasks } from './ChannelInfo'
-import { FollowOptions, useFollowing } from './Follow'
+import { NotifyOptions, NotifySheet, useNotifyRow } from './Follow'
 import { InviteSheet } from './Invite'
 import { Markdown } from './markdown'
-import { ProposalHeader } from './Proposals'
 import { RichText, TopicsBar } from './Topics'
 import { BellIcon, CalendarIcon, ChevronRightIcon, DocIcon, GearIcon, GlobeIcon, ImageIcon, LinkIcon, PeopleIcon, PersonPlusIcon, PodShape, PushPinIcon, TodoIcon } from './icons'
 import { stateLabel } from './Calendar'
@@ -70,7 +69,8 @@ type Row = { page: string; icon: ReactNode; title: string; n?: number | string; 
 export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) {
   useVersion()
   const [, redraw] = useState(0)
-  const following = useFollowing(id)
+  const [notify, setNotify] = useState(false)
+  const notifyRow = useNotifyRow(id)
   const c = menuCounts(id)
   const f = c.f
   const g = f.g
@@ -92,9 +92,10 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
   ].filter((r) => (r.n as number) > 0 || (r.page === 'todos' && f.allTasks.length > 0))
   const asking = g.isPod && canAdmin(g) ? g.applications.length : 0
   rows.push({ page: 'members', icon: <PeopleIcon />, title: 'Members', n: g.members.size, hint: asking ? `${asking} asking to join` : undefined })
-  if (!guestish) rows.push({ page: 'notifications', icon: <BellIcon on={following !== 'Off' && following !== ''} />, title: 'Notifications', n: following })
+  if (!guestish) rows.push({ page: 'notifications', icon: <BellIcon on={notifyRow.on} />, title: 'Notifications', n: notifyRow.value })
   if (mayEdit(g) && !g.archived) rows.push({ page: 'settings', icon: <GearIcon />, title: 'Settings' })
-  const open = (r: Row) => { onPick(); go(`c/${encodeURIComponent(id)}/${r.page}`) }
+  // Notifications is a sheet over the channel (three choices, applied on tap); the others are screens
+  const open = (r: Row) => { if (r.page === 'notifications') { setNotify(true); return } onPick(); go(`c/${encodeURIComponent(id)}/${r.page}`) }
   return (
     <div className="pull cmenu">
       {g.about && <Markdown className="pull-about" text={g.about} />}
@@ -105,7 +106,6 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
         <button className="link pull-parent" onClick={() => { onPick(); go('c/' + encodeURIComponent(parent.id)) }}>{g.isProposal ? 'Proposal' : 'Group'} in {parent.isPod ? '' : '# '}{parent.name}{g.isPod ? (g.closed ? ' · by request' : ' · open to members') : ''}</button>
       )}
       {g.isPod && g.closed && g.prompt && <p className="hint pull-prompt">Question for people who ask to join: {g.prompt}</p>}
-      {g.isProposal && <ProposalHeader groupId={id} />}
       {pin && (
         <div className="pull-pin first">
           <PushPinIcon />
@@ -130,6 +130,7 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
         {f.allTasks.length + messages(id).length > 0 && <button className="link" onClick={() => { onPick(); go(`c/${encodeURIComponent(id)}/log`) }}>Log</button>}
         {g.isPod && g.members.has(me()) && <LeaveLink g={g} />}
       </div>
+      {notify && <NotifySheet channel={id} onClose={() => setNotify(false)} />}
     </div>
   )
 }
@@ -188,8 +189,8 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
   )
   else if (page === 'topics') body = <div className="pad pull-topics"><TopicsBar groupId={id} onOpen={(t) => location.replace('#/' + parent + (t ? '/t/' + encodeURIComponent(t) : ''))} /></div>
   else if (page === 'members') body = <><ActiveLine id={id} /><Members groupId={id} /></>
-  else if (page === 'notifications') body = <div className="pad"><FollowOptions channel={id} /></div>
-  else if (page === 'settings') body = mayEdit(g) && !g.archived ? <div className="pad"><ChannelSettingsForm id={id} onDone={() => up(parent)} /></div> : <div className="empty">Only the channel’s admins change its settings.</div>
+  else if (page === 'notifications') body = <div className="pad"><NotifyOptions channel={id} /></div>
+  else if (page === 'settings') body = mayEdit(g) && !g.archived ? <div className="pad"><ChannelSettingsForm key={id} id={id} onDone={() => up(parent)} /></div> : <div className="empty">Only the channel’s admins change its settings.</div>
   else if (page === 'log') body = <Log groupId={id} />
   return (
     <div className={'screen chan-page' + (wide ? '' : ' slide-in')}>

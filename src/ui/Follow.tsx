@@ -4,6 +4,7 @@ import { BELFRY, NAME } from '../config'
 import { isLocalOnly, signedFetch } from '../core/sync'
 import { channelIcon, group } from '../core/model'
 import { Sheet } from './common'
+import { choiceOf, setChoice, useNotify, type Choice } from '../core/notify'
 
 // Follow a channel's announcements by e-mail, like following an account: as soon as possible
 // (a few minutes after each one) or monthly. Belfry keeps the follows (GET/POST
@@ -133,4 +134,81 @@ export function useFollowing(channel: string): string {
   const f = useFollows()
   const c = f?.map.get(channel)
   return c === 'asap' ? 'As soon as possible' : c === 'monthly' ? 'Monthly' : f ? 'Off' : ''
+}
+
+// ---- a channel's notifications: one sheet (Xavier, 2026-11-18, canvas "Notif-C") --------------
+// Three large choices, applied on tap (no Save), then the e-mail of its announcements. The three
+// are the belfry's push levels for this channel (core/notify.ts), the switch is the e-mail follow
+// above (asap; a monthly follow shows as on and stays monthly).
+
+const RingIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 17v-6a6 6 0 0 1 12 0v6l2 2H4l2-2zM10 21h4M2 9a10 10 0 0 1 3-6M22 9a10 10 0 0 0-3-6" /></svg>
+const AtIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4" /><path d="M16 12v1.5a2.5 2.5 0 0 0 5 0V12a9 9 0 1 0-4 7.5" /></svg>
+const MuteIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M6 17v-6a6 6 0 0 1 10-4.5M18 11v6l2 2H8M10 21h4M3 3l18 18" /></svg>
+
+const CHOICES: [Choice, () => JSX.Element, string, string][] = [
+  ['all', RingIcon, 'Everything', 'Every new message'],
+  ['mine', AtIcon, 'When it’s for me', 'Mentions, replies to me, to-dos given to me'],
+  ['off', MuteIcon, 'Nothing', 'I’ll look when I open the channel'],
+]
+
+/** "Notify me about #x": the pull-down's Notifications row. */
+export function NotifySheet({ channel, onClose }: { channel: string; onClose: () => void }) {
+  return <Sheet title={`Notify me about ${channelLabel(channel)}`} onClose={onClose}><NotifyOptions channel={channel} /></Sheet>
+}
+
+const channelLabel = (channel: string) => { const g = group(channel); return g ? `${channelIcon(g)}${g.isPod || g.isEvent || g.isProposal ? ' ' : ''}${g.name}` : `#${channel}` }
+
+/** The three choices and the e-mail switch for CHANNEL. */
+export function NotifyOptions({ channel }: { channel: string }) {
+  const n = useNotify()
+  const f = useFollows()
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const current = n.state ? choiceOf(n.state.channels[channel]) : null
+  const pick = async (c: Choice) => {
+    if (c === current || busy) return
+    setBusy(true); setError('')
+    try { await setChoice(channel, c) } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  const follow = f?.map.get(channel)
+  const [mailBusy, setMailBusy] = useState(false)
+  const toggleMail = async (on: boolean) => {
+    setMailBusy(true); setError('')
+    try { await setFollow(channel, on ? 'asap' : 'stop') } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setMailBusy(false) }
+  }
+  return (
+    <div className="notify">
+      {!n.state && !n.failed && <p className="hint">Loading…</p>}
+      {n.failed && <p className="error" role="alert">{n.failed}</p>}
+      {n.state && !n.state.unsupported && (
+        <div className="notify-opts" role="radiogroup" aria-label={`Notify me about ${channelLabel(channel)}`}>
+          {CHOICES.map(([c, Icon, title, hint]) => (
+            <button key={c} type="button" role="radio" aria-checked={c === current}
+              className={'notify-opt' + (c === current ? ' on' : '')} disabled={busy} onClick={() => void pick(c)}>
+              <span className="no-ico"><Icon /></span>
+              <span className="t"><b>{title}{c === 'mine' && <span className="no-default"> (the default here)</span>}</b><small>{hint}</small></span>
+            </button>
+          ))}
+        </div>
+      )}
+      {n.state && !n.state.unsupported && n.state.devices === 0 && <p className="hint notify-phone">These choices are for the Belfry app on your phone.</p>}
+      <label className="switch-row notify-mail">
+        <span><b>Also e-mail me its announcements</b><small>What admins mark as an announcement{follow === 'monthly' ? ' · once a month' : ''}</small></span>
+        <input type="checkbox" role="switch" aria-label="E-mail me its announcements" checked={!!follow} disabled={!f || mailBusy} onChange={(e) => void toggleMail(e.target.checked)} />
+      </label>
+      {failed && <p className="error">{failed}</p>}
+      {error && <p className="error" role="alert">{error}</p>}
+    </div>
+  )
+}
+
+/** For the menu's row: what is chosen ("Everything", "For me", "Nothing"; "" while unknown) and
+ *  whether anything reaches me (the bell drawn filled). */
+export function useNotifyRow(channel: string): { value: string; on: boolean } {
+  const n = useNotify()
+  const f = useFollows()
+  const mail = !!f?.map.has(channel)
+  if (!n.state || n.state.unsupported) return { value: mail ? 'E-mail' : n.state ? 'Off' : '', on: mail }
+  const c = choiceOf(n.state.channels[channel])
+  return { value: c === 'all' ? 'Everything' : c === 'off' ? 'Nothing' : 'For me', on: c !== 'off' || mail }
 }
