@@ -628,9 +628,9 @@ def test_a_priced_ticket_is_never_self_served(rsvc, world, keycast):
     ticket(world, ada, "zero", "Zero", price=["0", "EUR"])
     with TestClient(create_app(rsvc)) as c:
         by = {t["id"]: t for t in call(c, bea, "GET", f"/{D}").json()["tickets"]}
-        assert by["std"]["price"] == {"amount": "15.50", "currency": "EUR"}
+        assert (by["std"]["price"]["amount"], by["std"]["price"]["currency"]) == ("15.50", "EUR")
         assert by["std"]["needs_payment"] is True and by["std"]["closed"] is False
-        assert by["time"]["price"] == {"amount": "2", "currency": "HOUR"}
+        assert (by["time"]["price"]["amount"], by["time"]["price"]["currency"]) == ("2", "HOUR")
         assert by["odd"]["price"] is None and by["odd"]["needs_payment"] is True
         assert by["zero"]["price"] is None and by["zero"]["needs_payment"] is False
         page = c.get(f"/events/{D}").text
@@ -657,8 +657,86 @@ def test_a_priced_ticket_is_never_self_served(rsvc, world, keycast):
         put = world.grp.events[-1]
         assert put["kind"] == 9000 and ["paid", "paid"] in put["tags"]
         assert call(c, bea, "POST", f"/{D}/join", {"ticket": "zero"}).json().get("already")
-    assert events.price_of({"tags": [["price", "007.10", "tokens"]]}) == (True, "7.10", "tokens")
-    assert events.price_of({"tags": [["price", "5"]]}) == (True, "", "")
+    got = events.price_of({"tags": [["price", "007.10", "tokens"]]})
+    assert (got["priced"], got["amount"], got["currency"]) == (True, "7.10", "tokens")
+    got = events.price_of({"tags": [["price", "5"]]})
+    assert (got["priced"], got["amount"]) == (True, "")
+
+
+def test_vat_and_prices_for_a_while(rsvc, world, keycast):
+    from belfry_onboarding import events
+
+    jan1 = 1798761600  # 2027-01-01 00:00 UTC
+    tags = [
+        ["price_at", "50", "EUR", "", str(jan1)],
+        ["price", "75", "EUR"],
+        ["vat", "21"],
+    ]
+    early = events.price_of({"tags": tags}, now=jan1 - 10)
+    assert (early["amount"], early["vat"], early["vat_included"]) == ("50", "21", False)
+    assert early["until"] == jan1 and early["on_sale"] is True
+    late = events.price_of({"tags": tags}, now=jan1)
+    assert late["amount"] == "75" and late["until"] is None
+    incl = events.price_of({"tags": [["price", "12.5", "EUR"], ["vat", "6.00", "included"]]})
+    assert (incl["amount"], incl["vat"], incl["vat_included"]) == ("12.50", "6", True)
+    # the plain price holds until a later dated one starts
+    nxt = events.price_of(
+        {"tags": [["price", "50", "EUR"], ["price_at", "75", "EUR", str(jan1), ""]]}, now=jan1 - 10
+    )
+    assert nxt["amount"] == "50" and nxt["until"] == jan1
+    # no VAT on hours; dated prices only and none now = not on sale, never free
+    assert events.price_of({"tags": [["price", "2", "HOUR"], ["vat", "21"]]})["vat"] == ""
+    off = events.price_of({"tags": [["price_at", "50", "EUR", "", str(jan1)]]}, now=jan1 + 1)
+    assert off["priced"] is True and off["on_sale"] is False and off["amount"] == ""
+    bad = events.price_of({"tags": [["price_at", "50", "EUR", "soon", ""], ["price", "75", "EUR"]]})
+    assert bad["priced"] is True and bad["amount"] == ""
+
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    make_event(world, ada)
+    far = str(int(time.time()) + 400 * 86400)
+    world.put(
+        ada,
+        30402,
+        [
+            ["d", f"{D}:std"],
+            ["a", f"31923:{pk(ada)}:{D}"],
+            ["h", GROUP],
+            ["title", "Standard"],
+            ["t", "ticket"],
+            ["price_at", "50", "EUR", "", far],
+            ["price", "75", "EUR"],
+            ["vat", "21"],
+        ],
+    )
+    world.put(
+        ada,
+        30402,
+        [
+            ["d", f"{D}:gone"],
+            ["a", f"31923:{pk(ada)}:{D}"],
+            ["h", GROUP],
+            ["title", "Early"],
+            ["t", "ticket"],
+            ["price_at", "10", "EUR", "", "1700000000"],
+        ],
+    )
+    with TestClient(create_app(rsvc)) as c:
+        by = {t["id"]: t for t in call(c, bea, "GET", f"/{D}").json()["tickets"]}
+        assert by["std"]["price"] == {
+            "amount": "50",
+            "currency": "EUR",
+            "vat": "21",
+            "vat_included": False,
+            "until": int(far),
+        }
+        assert len(by["std"]["prices"]) == 2 and by["std"]["on_sale"] is True
+        assert by["gone"]["on_sale"] is False and by["gone"]["needs_payment"] is True
+        page = c.get(f"/events/{D}").text
+        assert "€50 + 21% VAT · until" in page and "Not on sale now" in page
+        for path in ("join", "apply"):
+            r = call(c, bea, "POST", f"/{D}/{path}", {"ticket": "gone"})
+            assert r.status_code == 409 and r.json()["error"] == "not_on_sale"
 
 
 def test_the_address_on_the_event_is_honoured_and_short_ids_work(rsvc, world, monkeypatch):

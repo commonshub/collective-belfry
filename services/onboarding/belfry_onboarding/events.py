@@ -228,25 +228,98 @@ def group_id(d: str) -> str:
 CURRENCY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ]{0,11}")
 
 
-def price_of(e: dict[str, Any]) -> tuple[bool, str, str]:
-    """A ticket's NIP-99 price tag, ["price", "<amount>", "<currency>"] → (priced, amount,
-    currency). No tag, or an amount of zero = free. A tag that can't be read still counts as
-    priced (amount empty), so a ticket meant to be paid is never handed out for free."""
-    t = next((t for t in e.get("tags", []) if t[:1] == ["price"]), None)
-    if t is None:
-        return False, "", ""
-    raw = str(t[1]).strip() if len(t) > 1 else ""
-    cur = " ".join(str(t[2]).split()) if len(t) > 2 else ""
+def _amount(raw: str, cur: str) -> tuple[str, str] | None:
+    """A readable (amount, currency), or None."""
+    raw, cur = raw.strip(), " ".join(cur.split())
     if not re.fullmatch(r"\d{1,7}(\.\d{1,2})?", raw) or not CURRENCY_RE.fullmatch(cur):
-        return True, "", ""
-    if float(raw) == 0:
-        return False, "", ""
+        return None
     whole, _, frac = raw.partition(".")
     frac = frac.rstrip("0")
     amount = str(int(whole)) + ("." + frac.ljust(2, "0") if frac else "")
-    if re.fullmatch(r"[A-Za-z]{3}", cur) or cur.upper() in ("HOUR", "HOURS"):
-        cur = "HOUR" if cur.upper() in ("HOUR", "HOURS") else cur.upper()
-    return True, amount, cur
+    if cur.upper() in ("HOUR", "HOURS"):
+        cur = "HOUR"
+    elif re.fullmatch(r"[A-Za-z]{3}", cur):
+        cur = cur.upper()
+    return amount, cur
+
+
+def _ts(x: str) -> int | None:
+    return int(x) if re.fullmatch(r"\d{9,11}", x or "") else None
+
+
+def price_of(e: dict[str, Any], now: int | None = None) -> dict[str, Any]:
+    """What a ticket costs now (docs/checkin.md "Ticket prices"):
+
+    - ``["price", "<amount>", "<currency>"]`` (NIP-99): the price when no dated one applies;
+    - ``["price_at", "<amount>", "<currency>", "<from>", "<until>"]``, any number: a price for a
+      while (unix seconds, either may be empty); the first one whose time it is wins;
+    - ``["vat", "<rate>"]`` or ``["vat", "<rate>", "included"]``: the VAT on a price in money;
+      without "included" the price is before VAT.
+
+    No price tag at all, or a current amount of zero = free. A tag that can't be read still
+    counts as priced (amount empty), so a ticket meant to be paid is never handed out for free.
+    Dated prices and none of them now, with no plain price = not on sale."""
+    now = int(time.time()) if now is None else now
+    tags = e.get("tags", [])
+    base = next((t for t in tags if t[:1] == ["price"]), None)
+    dated = [t for t in tags if t[:1] == ["price_at"]]
+    out: dict[str, Any] = {
+        "priced": False,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": False,
+        "until": None,
+        "on_sale": True,
+        "prices": [],
+    }
+    if base is None and not dated:
+        return out
+    unreadable = False
+    rows: list[dict[str, Any]] = []
+    for t in dated:
+        got = _amount(str(t[1]) if len(t) > 1 else "", str(t[2]) if len(t) > 2 else "")
+        start = str(t[3]).strip() if len(t) > 3 else ""
+        end = str(t[4]).strip() if len(t) > 4 else ""
+        if got is None or (start and _ts(start) is None) or (end and _ts(end) is None):
+            unreadable = True
+            continue
+        rows.append({"amount": got[0], "currency": got[1], "from": _ts(start), "until": _ts(end)})
+    if base is not None:
+        got = _amount(str(base[1]) if len(base) > 1 else "", str(base[2]) if len(base) > 2 else "")
+        if got is None:
+            unreadable = True
+        else:
+            rows.append({"amount": got[0], "currency": got[1], "from": None, "until": None})
+    out["prices"] = rows
+    if unreadable:
+        out["priced"] = True
+        return out
+    cur = next(
+        (
+            r
+            for r in rows
+            if (r["from"] is None or r["from"] <= now) and (r["until"] is None or now < r["until"])
+        ),
+        None,
+    )
+    if cur is None:  # dated prices only, none of them now
+        out.update(priced=True, on_sale=False)
+        return out
+    if float(cur["amount"]) == 0:
+        return out
+    out.update(priced=True, amount=cur["amount"], currency=cur["currency"], until=cur["until"])
+    if cur["until"] is None and base is not None and cur is rows[-1]:
+        # the plain price holds until the next dated one starts
+        later = [r["from"] for r in rows[:-1] if r["from"] is not None and r["from"] > now]
+        out["until"] = min(later) if later else None
+    vat = next((t for t in tags if t[:1] == ["vat"]), None)
+    if vat is not None and re.fullmatch(r"[A-Z]{3}", cur["currency"]):
+        rate = str(vat[1]).strip() if len(vat) > 1 else ""
+        if re.fullmatch(r"\d{1,2}(\.\d{1,2})?", rate):
+            out["vat"] = rate.rstrip("0").rstrip(".") if "." in rate else rate
+            out["vat_included"] = len(vat) > 2 and vat[2] == "included"
+    return out
 
 
 @dataclass
@@ -264,6 +337,11 @@ class Ticket:
     priced: bool = False  # carries a price: never self-served, a host admits once it is settled
     amount: str = ""  # decimal string; empty when the price tag could not be read
     currency: str = ""  # ISO 4217 code, "HOUR", or the host's own short label
+    vat: str = ""  # percent, on a price in money; empty = none stated
+    vat_included: bool = False  # False: the price is before VAT
+    until: int | None = None  # when the current price ends (unix), if it does
+    on_sale: bool = True  # False: it has dated prices and none of them is now
+    prices: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def asks(self) -> bool:
@@ -273,13 +351,22 @@ class Ticket:
     def price_text(self) -> str:
         if not self.priced:
             return ""
+        if not self.on_sale:
+            return "Not on sale now"
         if not self.amount:
             return "Paid"
         if self.currency == "EUR":
-            return "€" + self.amount
-        if self.currency == "HOUR":
-            return f"{self.amount} {'hour' if self.amount == '1' else 'hours'}"
-        return f"{self.amount} {self.currency}"
+            out = "€" + self.amount
+        elif self.currency == "HOUR":
+            out = f"{self.amount} {'hour' if self.amount == '1' else 'hours'}"
+        else:
+            out = f"{self.amount} {self.currency}"
+        if self.vat:
+            out += f" incl. {self.vat}% VAT" if self.vat_included else f" + {self.vat}% VAT"
+        if self.until:
+            day = dt.datetime.fromtimestamp(self.until, dt.UTC)
+            out += " · until " + day.strftime("%-d %B %Y")
+        return out
 
     def public(self, taken: int) -> dict[str, Any]:
         return {
@@ -294,9 +381,17 @@ class Ticket:
             "members": self.members,
             "position": self.position,
             "implicit": self.implicit,
-            "price": {"amount": self.amount, "currency": self.currency}
+            "price": {
+                "amount": self.amount,
+                "currency": self.currency,
+                "vat": self.vat or None,
+                "vat_included": self.vat_included,
+                "until": self.until,
+            }
             if self.priced and self.amount
             else None,
+            "prices": self.prices,
+            "on_sale": self.on_sale,
             "needs_payment": self.priced,
         }
 
@@ -559,7 +654,7 @@ def tickets(svc: Services, ev: Event) -> list[Ticket]:
             pos = int(tag(e, "position") or "0")
         except ValueError:
             pos = 0
-        priced, amount, currency = price_of(e)
+        cost = price_of(e)
         out.append(
             Ticket(
                 d=td,
@@ -571,9 +666,14 @@ def tickets(svc: Services, ev: Event) -> list[Ticket]:
                 prompt=(tag(e, "prompt") or "")[:500],
                 members=has(e, "members"),
                 position=pos,
-                priced=priced,
-                amount=amount,
-                currency=currency,
+                priced=cost["priced"],
+                amount=cost["amount"],
+                currency=cost["currency"],
+                vat=cost["vat"],
+                vat_included=cost["vat_included"],
+                until=cost["until"],
+                on_sale=cost["on_sale"],
+                prices=cost["prices"],
             )
         )
     if not out:
@@ -917,6 +1017,8 @@ def join(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[st
         raise ApiError(404, "no_ticket", "Pick one of the event's tickets.")
     if t.closed:
         raise ApiError(409, "needs_application", "This ticket takes an application.")
+    if t.priced and not t.on_sale:
+        raise ApiError(409, "not_on_sale", "This ticket is not on sale now.")
     if t.priced:
         raise ApiError(409, "payment", "This ticket has a price: ask the hosts for it.")
     member = is_member(svc, caller)
@@ -1011,6 +1113,8 @@ def apply(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[s
     ppl = people(svc, ev)
     if caller in ppl.holders:
         return {"already": True, "ticket": ppl.holders[caller]}
+    if t.priced and not t.on_sale:
+        raise ApiError(409, "not_on_sale", "This ticket is not on sale now.")
     full = t.quantity is not None and ppl.taken(t.d) >= t.quantity
     if not t.asks and not full:
         raise ApiError(409, "use_join", "This ticket is open: take it.")

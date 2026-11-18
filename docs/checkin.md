@@ -212,3 +212,17 @@ host admitting them (their own 9000, or `/decide`) is the host saying the price 
 9000 carries `["paid", "paid"]`. Belfry takes no money for event tickets; the person and the host
 settle it between them. `GET /events/<link>` gives each ticket `price` (`{amount, currency}` or
 null) and `needs_payment`. The public page shows the price instead of "Free".
+
+### VAT and prices for a while
+
+- `["vat", "<rate>"]` or `["vat", "<rate>", "included"]`: the VAT on a price in money (an ISO
+  currency; ignored for hours and own labels). Without `included` the price is before VAT and is
+  shown as "€50 + 21% VAT"; with it, "€50 incl. 21% VAT". No `vat` tag = no VAT stated.
+- `["price_at", "<amount>", "<currency>", "<from>", "<until>"]`, any number of them: a price for
+  a while. `from` / `until` are unix seconds, either may be empty. The first `price_at` (in tag
+  order) whose time it is gives the current price; otherwise the plain `price` tag does. A ticket
+  with `price_at` tags only, none of them current, is not on sale: `/join` and `/apply` answer
+  409 `not_on_sale`. An unreadable `price_at` makes the ticket priced with no readable amount.
+- `GET /events/<link>`: a ticket's `price` is `{amount, currency, vat, vat_included, until}` (the
+  current one; `until` = when it ends or the next one starts, or null), `prices` lists every row
+  (`{amount, currency, from, until}`), `on_sale` says whether it can be asked for now.
