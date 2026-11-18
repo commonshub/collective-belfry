@@ -11,7 +11,7 @@ import { reading } from '../core/guestmode'
 import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
-import { addCoHost, applyFor, asks, formPrice, priceLabel, PRICE_AMOUNT, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { addCoHost, apiTicket, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -34,7 +34,15 @@ const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Toda
 const at = (e: CalEvent) => (e.allDay ? '' : ' ' + when(e).split(' – ')[0])
 const ended = (e: CalEvent) => +(e.end ?? e.start) < Date.now()
 /** The button that takes a ticket: "Ask for a ticket · €15", "Apply" or "RSVP". */
-const pickWord = (t: { closed: boolean; price?: Price | null }) => t.price ? `Ask for a ticket · ${priceLabel(t.price)}` : t.closed ? 'Apply' : 'RSVP'
+const pickWord = (t: { closed: boolean; price?: Price | null; priced?: boolean; onSale?: boolean }) => t.priced && t.onSale === false ? 'Not on sale now' : t.price ? `Ask for a ticket · ${priceLabel(t.price)}` : t.closed ? 'Apply' : 'RSVP'
+/** A ticket's prices back in the sheet: its rows, currency and VAT (from its tags). */
+const formOfPrices = (t: Ticket) => {
+  const vat = t.ev?.tags.find((x) => x[0] === 'vat')
+  const rows = (t.prices ?? []).map((r) => ({ amount: r.amount, from: dayInput(r.from), until: dayInput(r.until) }))
+  return { prices: rows.length ? rows : [{ amount: '', from: '', until: '' }], currency: t.prices?.[0]?.currency ?? 'EUR', vat: vat ? vat[1] : t.prices?.length ? '' : '21', vatIncluded: vat?.[2] === 'included' }
+}
+/** What a ticket is: its price now ("€50 + 21% VAT · until 1 January 2027"), and/or how it is taken. */
+const ticketSub = (t: Ticket, open = 'Free') => { const p = priceLine(t); return p ? p + (t.closed ? ' · By application' : '') : t.closed ? 'By application' : open }
 const STATE_LINE: Record<string, string> = { ticket: 'You’re going', maybe: 'Maybe', cant: 'Can’t go', applied: 'Application sent: the hosts will answer', waitlist: 'On the waitlist: the hosts will tell you', declined: 'The hosts could not give you a place' }
 
 /** The event by its URL's last part, or (older ones) by coordinate. */
@@ -408,7 +416,7 @@ function RsvpRow({ e, p, tks, st, onPick, onWithdraw }: { e: CalEvent; p: People
   const held = p.holders.get(me())
   const plain = tks.length === 1 && tks[0].implicit && !e.remote && !isGuest(me())
   if (st === 'applied' || st === 'waitlist')
-    return <div className="row" style={{ gap: 8, justifyContent: 'space-between' }}><span>{st === 'applied' && tks.find((t) => t.d === p.applications.find((a) => a.pubkey === me())?.ticket)?.price ? 'Waiting for the host to confirm your payment' : STATE_LINE[st]}</span><Btn className="btn small ghost" onClick={onWithdraw}>Withdraw</Btn></div>
+    return <div className="row" style={{ gap: 8, justifyContent: 'space-between' }}><span>{st === 'applied' && tks.find((t) => t.d === p.applications.find((a) => a.pubkey === me())?.ticket)?.priced ? 'Waiting for the host to confirm your payment' : STATE_LINE[st]}</span><Btn className="btn small ghost" onClick={onWithdraw}>Withdraw</Btn></div>
   if (st === 'declined') return <p className="hint">{STATE_LINE.declined}.</p>
   if (!plain && !held && st === 'none')
     return <div className="rsvp">{tks.length === 1 ? <button className="on" onClick={() => onPick(tks[0])}>{pickWord(tks[0])}</button> : <button className="on" onClick={() => onPick(tks[0])}>Pick a ticket</button>}</div>
@@ -428,10 +436,10 @@ function TicketRow({ t, p, onPick }: { t: Ticket; p: People; onPick?: () => void
   return (
     <div className="ticket-row">
       <div className="t"><b>{t.title}</b>
-        <small>{t.price ? priceLabel(t.price) + (t.closed ? ' · By application' : '') : t.closed ? 'By application' : 'Free'}{t.members ? ' · Members only' : ''}{left !== undefined ? ` · ${left} left` : ''}</small>
+        <small>{ticketSub(t)}{t.members ? ' · Members only' : ''}{left !== undefined ? ` · ${left} left` : ''}</small>
         {t.summary && <small>{t.summary}</small>}
       </div>
-      {onPick && <button className="btn small" onClick={onPick}>{full ? 'Waitlist' : t.price ? 'Ask' : pickWord(t)}</button>}
+      {onPick && <button className="btn small" disabled={t.priced && t.onSale === false} onClick={onPick}>{full ? 'Waitlist' : t.priced && t.onSale === false ? 'Not on sale' : t.price ? 'Ask' : pickWord(t)}</button>}
     </div>
   )
 }
@@ -453,7 +461,7 @@ function TakeSheet({ e, tks, p, t, onPick, onClose }: { e: CalEvent; tks: Ticket
   if (t.members && !member)
     return <Sheet title={t.title} onClose={onClose}><p>This ticket is for members of {NAME}.</p><button className="btn" onClick={onClose}>OK</button></Sheet>
   return (
-    <Sheet title={waitlist ? `Waitlist: ${t.title}` : t.closed && !t.price ? `Apply: ${t.title}` : t.title} onClose={onClose}>
+    <Sheet title={waitlist ? `Waitlist: ${t.title}` : t.closed && !t.priced ? `Apply: ${t.title}` : t.title} onClose={onClose}>
       <Form onSubmit={async (x) => {
         x.preventDefault(); setError('')
         try {
@@ -464,7 +472,7 @@ function TakeSheet({ e, tks, p, t, onPick, onClose }: { e: CalEvent; tks: Ticket
       }}>
         {t.closed && !waitlist && <p className="apply-q">{t.prompt || 'Why would you like to come?'}</p>}
         {waitlist && <p className="hint">It is full. Leave a word for the hosts: they may make an exception.</p>}
-        {t.price && !waitlist && <p className="ticket-price"><b>{priceLabel(t.price)}</b> · you pay the hosts; once they confirm your payment, the place is yours.</p>}
+        {t.price && !waitlist && <p className="ticket-price"><b>{priceLine(t)}</b> · you pay the hosts; once they confirm your payment, the place is yours.</p>}
         {needs && <textarea className="input" rows={4} autoFocus value={answer} maxLength={2000} placeholder={waitlist || !t.closed ? 'A word for the hosts (optional)' : 'Your answer'} onChange={(x) => setAnswer(x.target.value)} />}
         {!needs && <p>{t.summary || 'A free place.'}{left !== undefined ? ` ${left} left.` : ''}</p>}
         {error && <p className="error" role="alert">{error}</p>}
@@ -570,30 +578,51 @@ function TicketsSheet({ e, onClose }: { e: CalEvent; onClose: () => void }) {
   useVersion()
   const list = tickets(e).filter((t) => !t.implicit)
   const [editing, setEditing] = useState<TicketForm | null>(null)
+  const money = editing ? formPriceTags(editing) : { tags: [] as string[][] }
+  const shown = editing && !money.error ? priceLine(pricesOf(money.tags)) : ''
   if (editing) return (
     <Sheet title={editing.id ? 'Edit the ticket' : 'New ticket'} onClose={onClose}>
       <Form onSubmit={async (x) => { x.preventDefault(); await saveTicket(e, editing); setEditing(null) }}>
         <label className="field"><span>Name</span><input className="input" autoFocus value={editing.title} maxLength={120} placeholder="e.g. Standard, Speaker, Volunteer" onChange={(x) => setEditing({ ...editing, title: x.target.value })} /></label>
         <label className="field"><span>Summary</span><input className="input" value={editing.summary} maxLength={300} onChange={(x) => setEditing({ ...editing, summary: x.target.value })} /></label>
         <label className="field"><span>How many places</span><input className="input" inputMode="numeric" placeholder="No limit" value={editing.quantity} onChange={(x) => setEditing({ ...editing, quantity: x.target.value.replace(/\D/g, '') })} /></label>
-        <div className="field"><span>Price</span>
-          <div className="price-field">
-            <input className="input" inputMode="decimal" aria-label="Price" placeholder="Free" value={editing.price} onChange={(x) => setEditing({ ...editing, price: x.target.value.replace(/[^\d.,]/g, '') })} />
-            <select className="input" aria-label="Currency" value={['EUR', 'HOUR'].includes(editing.currency) ? editing.currency : 'other'} onChange={(x) => setEditing({ ...editing, currency: x.target.value === 'other' ? '' : x.target.value })}>
-              <option value="EUR">Euros</option><option value="HOUR">Hours</option><option value="other">Other…</option>
-            </select>
-          </div>
+        {/* prices (Xavier, 2026-11-18): an amount, optionally for a while (from / until), in Euros
+            (with VAT: 21% on top by default), Hours or a label of the host's own */}
+        <div className="field price-head"><span>Price</span>
+          <select className="input" aria-label="Currency" value={['EUR', 'HOUR'].includes(editing.currency) ? editing.currency : 'other'} onChange={(x) => setEditing({ ...editing, currency: x.target.value === 'other' ? '' : x.target.value })}>
+            <option value="EUR">Euros</option><option value="HOUR">Hours</option><option value="other">Other…</option>
+          </select>
         </div>
         {!['EUR', 'HOUR'].includes(editing.currency) && <label className="field"><span>Paid in</span><input className="input" autoFocus maxLength={12} placeholder="e.g. tokens" value={editing.currency} onChange={(x) => setEditing({ ...editing, currency: x.target.value.replace(/[^\p{L}\p{N} ]/gu, '') })} /></label>}
-        {editing.price.trim() && !formPrice(editing) && <p className="error" style={{ marginTop: -8 }}>{!PRICE_AMOUNT.test(editing.price.trim().replace(',', '.')) || !(Number(editing.price.replace(',', '.')) > 0) ? 'A price like 15 or 7.50' : 'Say what it is paid in'}</p>}
-        {formPrice(editing) && <p className="hint" style={{ marginTop: -8 }}>People ask for it; they pay you, and you mark them paid to give them their place.</p>}
+        <div className="price-rows">
+          {editing.prices.map((r, i) => {
+            const put = (patch: Partial<FormPrice>) => setEditing({ ...editing, prices: editing.prices.map((x, j) => (j === i ? { ...x, ...patch } : x)) })
+            return (
+              <div key={i} className="price-row">
+                <input className="input" inputMode="decimal" aria-label={i ? `Price ${i + 1}` : 'Price'} placeholder="Free" value={r.amount} onChange={(x) => put({ amount: x.target.value.replace(/[^\d.,]/g, '') })} />
+                <label className="price-date"><span>From</span><input className="input" type="date" aria-label={`From (price ${i + 1})`} value={r.from} onChange={(x) => put({ from: x.target.value })} /></label>
+                <label className="price-date"><span>Until</span><input className="input" type="date" aria-label={`Until (price ${i + 1})`} value={r.until} onChange={(x) => put({ until: x.target.value })} /></label>
+                {editing.prices.length > 1 && <button type="button" className="icon-btn" aria-label={`Remove price ${i + 1}`} onClick={() => setEditing({ ...editing, prices: editing.prices.filter((_, j) => j !== i) })}><TrashIcon /></button>}
+              </div>
+            )
+          })}
+          <button type="button" className="link price-add" onClick={() => setEditing({ ...editing, prices: [...editing.prices, { amount: '', from: '', until: '' }] })}>＋ Add a price (e.g. early bird until a date)</button>
+        </div>
+        {isMoney(editing.currency) && money.tags.length > 0 && (
+          <div className="vat-row">
+            <label className="vat-rate"><input className="input" inputMode="decimal" aria-label="VAT rate" placeholder="0" value={editing.vat} onChange={(x) => setEditing({ ...editing, vat: x.target.value.replace(/[^\d.,]/g, '') })} /><span>% VAT</span></label>
+            <label className="toggle"><input type="checkbox" checked={editing.vatIncluded} onChange={(x) => setEditing({ ...editing, vatIncluded: x.target.checked })} /> Price includes VAT</label>
+          </div>
+        )}
+        {money.error && <p className="error" style={{ marginTop: -4 }}>{money.error}</p>}
+        {!money.error && money.tags.length > 0 && <p className="hint" style={{ marginTop: -4 }}>{shown ? <><b>{shown}</b> · </> : null}People ask for it; they pay you, and you mark them paid to give them their place.{editing.prices.some((r) => r.amount && (r.from || r.until)) && !editing.prices.some((r) => r.amount && !r.from && !r.until) ? ' Outside its dates it is not on sale.' : ''}</p>}
         <div className="choice" style={{ marginTop: 4 }}>
-          <button type="button" className={!editing.closed ? 'on' : ''} onClick={() => setEditing({ ...editing, closed: false })}><b>Open</b><small>{formPrice(editing) ? 'Anyone can ask for it' : 'One tap and you’re in'}</small></button>
+          <button type="button" className={!editing.closed ? 'on' : ''} onClick={() => setEditing({ ...editing, closed: false })}><b>Open</b><small>{money.tags.length ? 'Anyone can ask for it' : 'One tap and you’re in'}</small></button>
           <button type="button" className={editing.closed ? 'on' : ''} onClick={() => setEditing({ ...editing, closed: true })}><b>Needs an application</b><small>Hosts approve</small></button>
         </div>
         {editing.closed && <label className="field"><span>The question applicants answer</span><textarea className="input" rows={2} value={editing.prompt} placeholder="Why would you like to come?" onChange={(x) => setEditing({ ...editing, prompt: x.target.value })} /></label>}
         <label className="toggle"><input type="checkbox" checked={editing.members} onChange={(x) => setEditing({ ...editing, members: x.target.checked })} /> Members only (shown to everyone, taken by members)</label>
-        <button className="btn" disabled={!editing.title.trim() || (!!editing.price.trim() && !formPrice(editing))}>Save the ticket</button>
+        <button className="btn" disabled={!editing.title.trim() || !!money.error}>Save the ticket</button>
       </Form>
     </Sheet>
   )
@@ -602,13 +631,13 @@ function TicketsSheet({ e, onClose }: { e: CalEvent; onClose: () => void }) {
       {list.length === 0 && <p className="hint">No tickets: anyone who may see the event RSVPs in one tap, without a limit. Add a ticket for a limit, an application or a members-only place.</p>}
       {list.map((t) => (
         <div key={t.d} className="ticket-row">
-          <div className="t"><b>{t.title}</b><small>{t.price ? priceLabel(t.price) + (t.closed ? ' · By application' : '') : t.closed ? 'By application' : 'Open'}{t.members ? ' · Members only' : ''}{t.quantity !== undefined ? ` · ${t.quantity} places` : ''}</small></div>
-          <button className="icon-btn" aria-label={`Edit ${t.title}`} onClick={() => setEditing({ id: t.id, title: t.title, summary: t.summary, quantity: t.quantity === undefined ? '' : String(t.quantity), closed: t.closed, prompt: t.prompt, members: t.members, position: t.position, price: t.price?.amount ?? '', currency: t.price?.currency ?? 'EUR' })}><PencilIcon /></button>
+          <div className="t"><b>{t.title}</b><small>{ticketSub(t, 'Open')}{t.members ? ' · Members only' : ''}{t.quantity !== undefined ? ` · ${t.quantity} places` : ''}</small></div>
+          <button className="icon-btn" aria-label={`Edit ${t.title}`} onClick={() => setEditing({ id: t.id, title: t.title, summary: t.summary, quantity: t.quantity === undefined ? '' : String(t.quantity), closed: t.closed, prompt: t.prompt, members: t.members, position: t.position, ...formOfPrices(t) })}><PencilIcon /></button>
           <Btn className="icon-btn" aria-label={`Delete ${t.title}`} onClick={() => deleteTicket(e, t)}><TrashIcon /></Btn>
         </div>
       ))}
       <div style={{ height: 8 }} />
-      <button className="btn ghost" onClick={() => setEditing({ title: '', summary: '', quantity: '', closed: false, prompt: '', members: false, position: list.length + 1, price: '', currency: 'EUR' })}>＋ Add a ticket</button>
+      <button className="btn ghost" onClick={() => setEditing({ title: '', summary: '', quantity: '', closed: false, prompt: '', members: false, position: list.length + 1, prices: [{ amount: '', from: '', until: '' }], currency: 'EUR', vat: '21', vatIncluded: false })}>＋ Add a ticket</button>
     </Sheet>
   )
 }
@@ -635,7 +664,7 @@ function GuestList({ e, onClose }: { e: CalEvent; onClose: () => void }) {
   )
   const Decide = ({ a }: { a: (typeof p.applications)[number] }) => (
     <span className="row" style={{ gap: 6 }}>
-      <Btn className="btn small" onClick={() => decide(e, a.pubkey, 'approve', a.ticket, a.ev)}>{tks.find((t) => t.d === a.ticket)?.price && !a.waitlist ? 'Mark paid and admit' : 'Approve'}</Btn>
+      <Btn className="btn small" onClick={() => decide(e, a.pubkey, 'approve', a.ticket, a.ev)}>{tks.find((t) => t.d === a.ticket)?.priced && !a.waitlist ? 'Mark paid and admit' : 'Approve'}</Btn>
       <Btn className="btn small ghost" onClick={() => decide(e, a.pubkey, 'decline')}>Decline</Btn>
     </span>
   )
@@ -700,7 +729,7 @@ const DEMO: ApiEvent = {
 export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: { link: string; backend: Backend; onJoined: (s: Session) => void; onSignIn: () => void; onDemo: (name: string) => void }) {
   const [ev, setEv] = useState<ApiEvent | null>(null)
   const [error, setError] = useState('')
-  const [t, setT] = useState<ApiEvent['tickets'][number] | null>(null)
+  const [t, setT] = useState<ReturnType<typeof apiTicket> | null>(null)
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [answer, setAnswer] = useState('')
@@ -727,7 +756,7 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
     )
   const start = ev.start ? new Date(ev.start) : undefined
   const open = ev.status !== 'cancelled' && !(ev.end && new Date(ev.end) < new Date())
-  const left = (x: ApiEvent['tickets'][number]) => x.left
+  const left = (x: { left: number | null }) => x.left
   const needs = !!t && (asks(t) || left(t) === 0)
   const submit = async (x: React.FormEvent) => {
     x.preventDefault()
@@ -768,10 +797,10 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
       {ev.status === 'cancelled' && <p className="error">This event is cancelled.</p>}
       {open && !t && (
         <div className="ev-tickets">
-          {ev.tickets.map((x) => (
+          {ev.tickets.map(apiTicket).map((x) => (
             <button key={x.d} className="ticket-row" onClick={() => x.members ? onSignIn() : setT(x)}>
-              <div className="t"><b>{x.implicit ? 'RSVP' : x.title}</b><small>{x.price ? priceLabel(x.price) + (x.closed ? ' · By application' : '') : x.closed ? 'By application' : 'Free'}{x.members ? ' · Members only: sign in' : ''}{x.left !== null ? ` · ${x.left} left` : ''}</small></div>
-              <span className="btn small">{x.left === 0 ? 'Waitlist' : x.price ? 'Ask' : pickWord(x)}</span>
+              <div className="t"><b>{x.implicit ? 'RSVP' : x.title}</b><small>{ticketSub(x)}{x.members ? ' · Members only: sign in' : ''}{x.left !== null ? ` · ${x.left} left` : ''}</small></div>
+              <span className="btn small">{x.left === 0 ? 'Waitlist' : x.priced && x.onSale === false ? 'Not on sale' : x.price ? 'Ask' : pickWord(x)}</span>
             </button>
           ))}
         </div>
@@ -780,7 +809,7 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
         <Form onSubmit={submit}>
           <h3 style={{ margin: '8px 0' }}>{t.implicit ? 'RSVP' : t.title}</h3>
           {t.closed && left(t) !== 0 && <p className="apply-q">{t.prompt || 'Why would you like to come?'}</p>}
-          {t.price && left(t) !== 0 && <p className="ticket-price"><b>{priceLabel(t.price)}</b> · you pay the hosts; once they confirm your payment, the place is yours.</p>}
+          {t.price && left(t) !== 0 && <p className="ticket-price"><b>{priceLine(t)}</b> · you pay the hosts; once they confirm your payment, the place is yours.</p>}
           {needs && <textarea className="input" rows={3} value={answer} maxLength={2000} placeholder={left(t) === 0 || !t.closed ? 'A word for the hosts (optional)' : 'Your answer'} onChange={(x) => setAnswer(x.target.value)} />}
           <label className="field"><span>Your name</span><input className="input" value={name} maxLength={100} autoComplete="name" autoFocus onChange={(x) => setName(x.target.value)} /></label>
           <label className="field"><span>E-mail{needs ? '' : ' (optional)'}</span><input className="input" type="email" inputMode="email" autoComplete="email" value={email} onChange={(x) => setEmail(x.target.value)} /></label>

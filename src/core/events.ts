@@ -41,7 +41,8 @@ export const slugOf = (title: string) => title.toLowerCase().normalize('NFKD').r
 
 // ---- what the belfry's API answers (GET /api/v1/events/<link>) ---------------------------
 
-export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; price?: Price | null }
+export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean
+  price?: { amount: string; currency: string; vat?: string | null; vat_included?: boolean; until?: number | null } | null; prices?: { amount: string; currency: string; from?: number | null; until?: number | null }[]; on_sale?: boolean }
 export interface ApiViewer {
   host: boolean; ticket: string | null; applied: boolean; waitlist: boolean; declined: boolean; rsvp: Rsvp | null; member: boolean
   /** check-in (docs/checkin.md): my ticket's code and the URL its QR holds, when I hold one */
@@ -130,8 +131,11 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
 /** A ticket's price (NIP-99 ["price", amount, currency]; Xavier, 2026-11-18): an ISO 4217 code (EUR),
  *  HOUR for time, or the host's own short label. No tag: free. A priced ticket is never self-served:
  *  people ask, the hosts mark it paid and admit them (the belfry agent's contract, belfry-sh). */
-export interface Price { amount: string; currency: string }
-export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev; price?: Price }
+export interface Price { amount: string; currency: string; /** VAT rate in %, money only */ vat?: string; vatIncluded?: boolean; /** unix: this price ends then (or the next starts) */ until?: number }
+/** One price of a ticket: without dates (["price", …]) or for a while (["price_at", amount, CUR, from, until]). */
+export interface PriceRow { amount: string; currency: string; from?: number; until?: number }
+export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev
+  /** the price now (none: free, or not on sale when `priced`) */ price?: Price; /** it has a price at all */ priced?: boolean; prices?: PriceRow[]; /** false: priced, but no price is on now */ onSale?: boolean }
 
 export const PRICE_AMOUNT = /^\d{1,7}(\.\d{1,2})?$/
 export const PRICE_LABEL = /^[\p{L}\p{N} ]{1,12}$/u
@@ -144,19 +148,51 @@ export function priceLabel(p: Price): string {
   if (p.currency === 'HOUR') return `${p.amount} ${n === 1 ? 'hour' : 'hours'}`
   return `${p.amount} ${p.currency}`
 }
-const priceOf = (x: Ev): Price | undefined => {
-  const t = x.tags.find((y) => y[0] === 'price')
-  return t && PRICE_AMOUNT.test(t[1] ?? '') && Number(t[1]) > 0 && t[2] ? { amount: t[1], currency: t[2] } : undefined
+export const isMoney = (currency: string) => /^[A-Z]{3}$/.test(currency)
+export const VAT_RATE = /^\d{1,2}(\.\d{1,2})?$/
+/** "€50 + 21% VAT", "€50 incl. 21% VAT", "2 hours". */
+export const priceFull = (p: Price) => priceLabel(p) + (p.vat && isMoney(p.currency) ? (p.vatIncluded ? ` incl. ${p.vat}% VAT` : ` + ${p.vat}% VAT`) : '')
+const dayFmt = (t: number) => new Date(t * 1000).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' })
+/** Under a ticket's name: "€50 + 21% VAT · until 1 January 2027", or "Not on sale now". */
+export const priceLine = (t: Pick<Ticket, 'price' | 'priced' | 'onSale'>) =>
+  t.priced && t.onSale === false ? 'Not on sale now' : t.price ? priceFull(t.price) + (t.price.until ? ` · until ${dayFmt(t.price.until)}` : '') : ''
+/** The tags' prices and the one on now (docs/checkin.md "VAT and prices for a while"): the first
+ *  price_at whose window holds now, else the plain price; a priced ticket with neither is not on sale. */
+export function pricesOf(tags: string[][], now = Date.now() / 1000): Pick<Ticket, 'price' | 'priced' | 'prices' | 'onSale'> {
+  const ok = (a?: string) => !!a && PRICE_AMOUNT.test(a) && Number(a) > 0
+  const num = (v?: string) => (v && /^\d+$/.test(v) ? Number(v) : undefined)
+  const rows: PriceRow[] = []
+  for (const t of tags) if (t[0] === 'price_at' && ok(t[1]) && t[2]) rows.push({ amount: t[1], currency: t[2], from: num(t[3]), until: num(t[4]) })
+  const plain = tags.find((t) => t[0] === 'price')
+  const base = plain && ok(plain[1]) && plain[2] ? { amount: plain[1], currency: plain[2] } : undefined
+  const priced = rows.length > 0 || !!plain
+  const v = tags.find((t) => t[0] === 'vat' && VAT_RATE.test(t[1] ?? ''))
+  const vat = (c: string) => (v && isMoney(c) ? { vat: v[1], vatIncluded: v[2] === 'included' } : {})
+  const on = rows.find((r) => (r.from === undefined || r.from <= now) && (r.until === undefined || now < r.until))
+  let price: Price | undefined
+  if (on) price = { amount: on.amount, currency: on.currency, ...vat(on.currency), until: on.until }
+  else if (base) {
+    const next = rows.map((r) => r.from).filter((f): f is number => f !== undefined && f > now).sort((a, b) => a - b)[0]
+    price = { ...base, ...vat(base.currency), until: next }
+  }
+  return { price, priced, prices: base ? [...rows, base] : rows, onSale: !priced || !!price }
 }
 /** People ask for this ticket (an application, a price) instead of taking it in one tap. */
-export const asks = (t: { closed: boolean; price?: Price | null }) => t.closed || !!t.price
+export const asks = (t: { closed: boolean; price?: unknown; priced?: boolean }) => t.closed || !!t.price || !!t.priced
 
 export const freeTicket = (e: Pick<CalEvent, 'd'>): Ticket => ({ d: `${e.d}:free`, id: 'free', title: 'RSVP', summary: '', closed: false, prompt: '', members: false, position: 0, implicit: true })
 
+/** A ticket as the belfry describes it (GET /events/<link>), in the app's shape. */
+export const apiTicket = (t: ApiTicket): Ticket & { left: number | null } => ({
+  ...t, quantity: t.quantity ?? undefined,
+  price: t.price ? { amount: t.price.amount, currency: t.price.currency, vat: t.price.vat ?? undefined, vatIncluded: !!t.price.vat_included, until: t.price.until ?? undefined } : undefined,
+  prices: (t.prices ?? []).map((r) => ({ amount: r.amount, currency: r.currency, from: r.from ?? undefined, until: r.until ?? undefined })),
+  priced: !!t.price || (t.prices?.length ?? 0) > 0, onSale: t.on_sale ?? true,
+})
 export function tickets(e: CalEvent, api?: ApiEvent): Ticket[] {
   if (api || e.remote) {
     const a = api ?? remoteEvent(e.d)
-    if (a) return a.tickets.map((t) => ({ ...t, quantity: t.quantity ?? undefined, price: t.price ?? undefined }))
+    if (a) return a.tickets.map(apiTicket)
   }
   const list = all(me())
   const latest = new Map<string, Ev>()
@@ -175,7 +211,7 @@ export function tickets(e: CalEvent, api?: ApiEvent): Ticket[] {
     out.push({
       d, id: d.slice(e.d.length + 1), title: tag(x, 'title') || 'Ticket', summary: tag(x, 'summary') ?? '',
       quantity: tag(x, 'quantity') !== undefined && q >= 0 ? q : undefined, closed: x.tags.some((t) => t[0] === 'closed'),
-      prompt: tag(x, 'prompt') ?? '', members: x.tags.some((t) => t[0] === 'members'), position: Number(tag(x, 'position')) || 0, implicit: false, ev: x, price: priceOf(x),
+      prompt: tag(x, 'prompt') ?? '', members: x.tags.some((t) => t[0] === 'members'), position: Number(tag(x, 'position')) || 0, implicit: false, ev: x, ...pricesOf(x.tags),
     })
   }
   return out.length ? out.sort((a, b) => a.position - b.position || a.title.localeCompare(b.title)) : [freeTicket(e)]
@@ -384,11 +420,31 @@ export async function setStatus(e: CalEvent, status: 'cancelled' | 'scheduled', 
   await enqueue('main', { kind: e.ev.kind, content: e.ev.content, tags: status === 'cancelled' ? [...tags, ['status', 'cancelled']] : tags })
 }
 
-export interface TicketForm { id?: string; title: string; summary: string; quantity: string; closed: boolean; prompt: string; members: boolean; position: number; /** empty: free */ price: string; /** EUR, HOUR, or the host's label */ currency: string }
-/** The price tag a form gives, or none (free; a bad amount or label is refused by the sheet). */
-export const formPrice = (t: Pick<TicketForm, 'price' | 'currency'>): Price | undefined => {
-  const amount = t.price.trim().replace(',', '.'), currency = t.currency.trim()
-  return PRICE_AMOUNT.test(amount) && Number(amount) > 0 && PRICE_LABEL.test(currency) ? { amount: String(Number(amount)), currency } : undefined
+/** A price row of the sheet: an amount, and optional dates (YYYY-MM-DD, this device's time zone). */
+export interface FormPrice { amount: string; from: string; until: string }
+export interface TicketForm { id?: string; title: string; summary: string; quantity: string; closed: boolean; prompt: string; members: boolean; position: number
+  /** empty amounts: free */ prices: FormPrice[]; /** EUR, HOUR, or the host's label */ currency: string; /** money only; empty: no VAT */ vat: string; vatIncluded: boolean }
+const dayStart = (s: string) => (s ? Math.floor(new Date(s + 'T00:00:00').getTime() / 1000) : undefined)
+export const dayInput = (t?: number) => { if (!t) return ''; const d = new Date(t * 1000); const z = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}` }
+/** The form's price tags, or why they can't be written (the sheet shows it). Free: no tags. */
+export function formPriceTags(t: Pick<TicketForm, 'prices' | 'currency' | 'vat' | 'vatIncluded'>): { tags: string[][]; error?: string } {
+  const currency = t.currency.trim()
+  const rows = t.prices.map((r) => ({ ...r, amount: r.amount.trim().replace(',', '.') })).filter((r) => r.amount)
+  if (!rows.length) return { tags: [] }
+  if (rows.some((r) => !PRICE_AMOUNT.test(r.amount) || !(Number(r.amount) > 0))) return { tags: [], error: 'A price like 15 or 7.50' }
+  if (!PRICE_LABEL.test(currency)) return { tags: [], error: 'Say what it is paid in' }
+  const plain = rows.filter((r) => !r.from && !r.until)
+  if (plain.length > 1) return { tags: [], error: 'Only one price without dates' }
+  if (rows.some((r) => r.from && r.until && r.until <= r.from)) return { tags: [], error: 'A price ends after it starts' }
+  const tags: string[][] = []
+  for (const r of rows.filter((x) => x.from || x.until)) tags.push(['price_at', String(Number(r.amount)), currency, String(dayStart(r.from) ?? ''), String(dayStart(r.until) ?? '')])
+  if (plain[0]) tags.push(['price', String(Number(plain[0].amount)), currency])
+  const rate = t.vat.trim().replace(',', '.')
+  if (isMoney(currency) && rate) {
+    if (!VAT_RATE.test(rate)) return { tags: [], error: 'A VAT rate like 21 or 5.5' }
+    if (Number(rate) > 0) tags.push(t.vatIncluded ? ['vat', String(Number(rate)), 'included'] : ['vat', String(Number(rate))])
+  }
+  return { tags }
 }
 /** Save a ticket type (NIP-99 30402, with its `price` when it has one). */
 export async function saveTicket(e: CalEvent, t: TicketForm) {
@@ -398,11 +454,13 @@ export async function saveTicket(e: CalEvent, t: TicketForm) {
   if (/^\d+$/.test(t.quantity.trim())) tags.push(['quantity', t.quantity.trim()])
   if (t.closed) tags.push(['closed'], ['prompt', t.prompt.trim() || 'Why would you like to come?'])
   if (t.members) tags.push(['members'])
-  const price = formPrice(t)
-  if (price) tags.push(['price', price.amount, price.currency])
+  const money = formPriceTags(t)
+  if (money.error) throw new Error(money.error)
+  tags.push(...money.tags)
+  const price = money.tags.length > 0
   await enqueue('main', { kind: 30402, content: t.summary.trim(), tags })
   // any ticket that takes an application closes the event's group (NIP-29 `closed`)
-  const closing = t.closed || !!price || tickets(e).some((x) => asks(x) && x.id !== id)
+  const closing = t.closed || price || tickets(e).some((x) => asks(x) && x.id !== id)
   const g = group(e.groupId)
   if (g && g.closed !== closing) await editGroupMeta(e.groupId, [['name', g.rawName], ['about', g.about], closing ? ['closed'] : ['open']], { closed: closing })
 }
@@ -457,7 +515,7 @@ export async function decide(e: CalEvent, pubkey: string, action: 'approve' | 'd
     return
   }
   if (action === 'decline') return void (await enqueue('groups', { kind: 9001, tags: [['h', e.groupId], ['p', pubkey]] }))
-  await enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'member'], ['ticket', ticketD || `${e.d}:free`], ['paid', tickets(e).find((x) => x.d === ticketD)?.price ? 'paid' : 'free'], ['a', e.coord], ...(app ? [['e', app.id]] : [])] })
+  await enqueue('groups', { kind: 9000, tags: [['h', e.groupId], ['p', pubkey, 'member'], ['ticket', ticketD || `${e.d}:free`], ['paid', tickets(e).find((x) => x.d === ticketD)?.priced ? 'paid' : 'free'], ['a', e.coord], ...(app ? [['e', app.id]] : [])] })
 }
 
 /** Make a member a co-host: an admin of the event's group. */

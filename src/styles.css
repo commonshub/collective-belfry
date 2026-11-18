@@ -1734,7 +1734,18 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .place-list li.place-credit:hover { background: none; }
 
 /* A ticket's price (Xavier, 2026-11-18): an amount and what it is paid in */
-.price-field { display: grid; grid-template-columns: 1fr 140px; gap: 8px; }
+.price-head { grid-template-columns: 1fr 160px; align-items: center; }
+.price-head select { margin: 0; }
+.price-rows { display: grid; gap: 8px; margin: -6px 0 12px; }
+.price-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr auto; gap: 8px; align-items: end; }
+.price-row .price-date { display: grid; gap: 2px; }
+.price-row .price-date span { font-size: 12px; color: var(--muted); }
+.price-add { justify-self: start; font-size: 14px; }
+.vat-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; }
+.vat-rate { display: inline-flex; align-items: center; gap: 6px; }
+.vat-rate .input { width: 80px; }
+.vat-row .toggle { margin: 0; }
+@media (max-width: 520px) { .price-row { grid-template-columns: 1fr 1fr auto; } .price-row > input { grid-column: 1 / -1; } }
 .ticket-price { margin: 0 0 10px; }
 /* the invite sheet from a channel: the link for someone from outside, folded until asked for */
 .pick-row.invite-outside { border: 1px solid var(--line); border-radius: 12px; margin: 10px 0 14px; }
