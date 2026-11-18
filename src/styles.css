@@ -1495,7 +1495,6 @@ div.settings-row { cursor: default; }
 .town-chan.on { background: var(--surface); border-radius: 10px; }
 .town-chan .pub .ico { width: 14px; height: 14px; color: var(--faint); }
 .town-chan small.inline { display: inline; font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 4px; }
-.town-search { display: flex; align-items: center; gap: 8px; margin: 8px 12px; padding: 10px 12px; width: calc(100% - 24px); border-radius: 10px; background: var(--surface); color: var(--muted); font-size: 16px; }
 .settings-row { border-top: 1px solid var(--line); }
 .side-places { padding: 8px 4px 4px; border-bottom: 1px solid var(--line); }
 .side-places .side-place .hash { background: none !important; border: 0 !important; }
@@ -1865,3 +1864,13 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
   white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; text-align: start; }
 .composer .comp-marks mark { color: var(--text); background: color-mix(in srgb, var(--text) 14%, transparent); border-radius: 4px;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 14%, transparent); -webkit-text-stroke: 0.4px var(--text); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+
+/* #/about (Accounts.tsx AboutBelfry, board home/about) */
+.about-head { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 12px 0 20px; text-align: center; }
+.about-head h2 { margin: 10px 0 0; font-size: 24px; }
+.about-head p { margin: 0; }
+.about-icon { width: 72px; height: 72px; border-radius: 18px; background: var(--text); color: var(--bg); display: grid; place-items: center; }
+.about-icon svg { width: 40px; height: 46px; }
+.about-mark svg { width: 22px; height: 25px; }
+.about-foot { margin: 12px 6px 0; font-size: 13px; }
+.about-screen a.home-row { color: inherit; text-decoration: none; }

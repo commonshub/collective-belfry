@@ -1,5 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
+// @ts-ignore: the project has no Node types (only vite.config.ts runs in Node)
+import { execSync } from 'node:child_process'
 
 declare const process: { env: Record<string, string | undefined> }
 
@@ -36,4 +38,11 @@ function belfryNames(): Plugin {
 }
 
 // base './' so the build works from any sub-path (e.g. /projects/osv-app/)
-export default defineConfig({ base: './', plugins: [react(), belfryNames()] })
+// the chat's version, shown in About Belfry: the commit it is built from and the day
+const version = (() => {
+  let sha = 'dev'
+  try { sha = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() } catch { /* not a git checkout */ }
+  return `${sha} · ${new Date().toISOString().slice(0, 10)}`
+})()
+
+export default defineConfig({ base: './', plugins: [react(), belfryNames()], define: { __CHAT_VERSION__: JSON.stringify(version) } })

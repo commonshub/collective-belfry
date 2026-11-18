@@ -9,7 +9,8 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, back, Btn, Form, go, Sheet } from './common'
 import { useCommunityName } from './community'
-import { CheckIcon, ChevronRightIcon, CloseIcon, PeopleIcon } from './icons'
+import { CheckIcon, ChevronRightIcon, CloseIcon, GlobeIcon, PeopleIcon } from './icons'
+import { Arms } from './Login'
 
 /** A face from what the account row kept (its picture, else its first letter): the other
  *  accounts' profiles are in their own databases, not in this one. */
@@ -69,6 +70,7 @@ export function AccountsScreen() {
         </div>
         <div className="home-card" style={{ marginTop: 18 }}>
           <button className="home-row" onClick={() => go('me')}><Avatar pubkey={me()} size={28} /><span className="t"><b>Me</b><small>Profile, sign-in, connections, sign out</small></span><ChevronRightIcon /></button>
+          <button className="home-row" onClick={() => go('about')}><span className="row-ico about-mark"><Arms /></span><span className="t"><b>About Belfry</b><small>Version {__CHAT_VERSION__.split(' · ')[0]}</small></span><ChevronRightIcon /></button>
         </div>
       </div>
       {adding && <AddAccountSheet onClose={() => setAdding(false)} onAdded={() => { setAdding(false); setTick((t) => t + 1) }} />}
@@ -158,5 +160,39 @@ function ScanInviteSheet({ onClose }: { onClose: () => void }) {
       </div>
       {state === 'bad' && <p className="hint" role="status">That code isn’t a belfry invite.</p>}
     </Sheet>
+  )
+}
+
+// ---- #/about: About Belfry (board home/about; the web shows its version only, no updates row) ----
+
+const HOME = 'belfry.sh' // the belfry of Belfry
+
+/** About Belfry: the mark and the chat's version; belfry.sh; the belfry of Belfry (join it, switch
+ *  to it when another account of this browser is there, or "you're in it" when this one is). */
+export function AboutBelfry() {
+  useVersion()
+  const here = BELFRY.domain === HOME
+  const elsewhere = !here && otherBelfries().some((b) => b.domain === HOME)
+  return (
+    <div className="screen about-screen">
+      <div className="topbar"><button className="icon-btn" aria-label="Back to Accounts" onClick={() => back('accounts')}>‹</button><h1>About Belfry</h1></div>
+      <div className="scroll pad">
+        <div className="about-head">
+          <span className="about-icon"><Arms /></span>
+          <h2>Belfry for the web</h2>
+          <p className="hint">Version {__CHAT_VERSION__}</p>
+        </div>
+        <div className="place-section"><h3>Belfry</h3></div>
+        <div className="home-card">
+          <a className="home-row" href={`https://${HOME}`} target="_blank" rel="noopener"><span className="row-ico"><GlobeIcon /></span><span className="t"><b>{HOME}</b><small>The project’s website</small></span><ChevronRightIcon /></a>
+          {here
+            ? <button className="home-row" onClick={() => go('c/general')}><span className="row-ico"><PeopleIcon /></span><span className="t"><b>You’re in it with this account</b><small>The belfry of Belfry: open its Townsquare</small></span><ChevronRightIcon /></button>
+            : elsewhere
+              ? <a className="home-row" href={`https://chat.${HOME}/`}><span className="row-ico"><PeopleIcon /></span><span className="t"><b>Switch to the belfry of Belfry</b><small>Another account of this browser is in {HOME}</small></span><ChevronRightIcon /></a>
+              : <a className="home-row" href={`https://chat.${HOME}/apply`}><span className="row-ico"><PeopleIcon /></span><span className="t"><b>Join the belfry of Belfry</b><small>Apply to join {HOME}</small></span><ChevronRightIcon /></a>}
+        </div>
+        <p className="hint about-foot">Belfry is open source software a community runs on its own server.</p>
+      </div>
+    </div>
   )
 }
