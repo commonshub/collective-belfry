@@ -9,11 +9,14 @@ import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../cor
 import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
+import { accounts, discardActiveFor, dropActive, forgetAll, noteAccount } from '../core/accounts'
+import { roleBadge } from '../core/roles'
 import { archivedGroups, deletedGroup, group, groups, profiles } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
 import { Admin } from './Admin'
+import { AccountsScreen } from './Accounts'
 import { BrandingScreen } from './Branding'
 import { SettingsScreen } from './Settings'
 import { MembersDirectory } from './Directory'
@@ -38,7 +41,7 @@ import { MessagesList, MessageThread } from './Messages'
 import { demoMail, groupsKey, lastChannelMail, setMyAddress, startDms } from '../core/dm'
 import { startReadState } from '../core/readstate'
 import { demoInboxChannel, demoInboxMail, demoMailPost } from './MailPost'
-import { Avatar, back, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
+import { Avatar, back, Btn, devMode, go, setDevMode, useRoute, useWide, WIDE3 } from './common'
 import { openProfile, ProfileView } from './Profile'
 import { dropCode, OpenInvite, MembershipScreen, WelcomeScreen } from './Login'
 import { MentionsScreen } from './Mentions'
@@ -98,8 +101,10 @@ export function App() {
     await clearSession()
     await wipe()
     forgetDevice()
+    // this account only: its database goes; another account of this browser opens if there is one
+    const another = await dropActive()
     location.hash = ''
-    if (s?.backend === 'belfry') return belfrySignOut(s)
+    if (s?.backend === 'belfry' && !another) return belfrySignOut(s)
     location.reload()
   }
 
@@ -173,6 +178,16 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     })()
     return () => { cancelled = true; stop() }
   }, [session.bunkerUrl, session.demoSecret])
+  // this account's row in Accounts (who it is, its role); the same person signed in twice in two
+  // slots: this new slot goes (its session ended) and the older one opens
+  useVersion()
+  const meP = ready ? profiles().get(me()) : undefined
+  const badge = ready ? roleBadge(me()) : ''
+  useEffect(() => {
+    if (!ready) return
+    const dup = noteAccount({ pubkey: me(), email: session.email, name: meP?.name, picture: meP?.picture, label: guestInfo() ? 'Guest' : badge || 'Member' })
+    if (dup) void (async () => { if (session.backend === 'belfry') await endSession(session); discardActiveFor(dup.id) })()
+  }, [ready, meP?.name, meP?.picture, badge]) // eslint-disable-line react-hooks/exhaustive-deps
   // A guest link just used: the loading screen stays until the channel can be drawn in full (the
   // relay let this key in and sent what it has, or said no), at most 10 s more.
   useGuestMode()
@@ -266,6 +281,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'me' && a === 'signin') view = <SignInMethods />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
+  else if (section === 'accounts') view = <AccountsScreen />
   else if (section === 'settings' && THEME === 'belfry') view = <SettingsScreen section={a} id={b} />
   else if (section === 'archived') view = <ArchivedScreen />
   else if (section === 'requests') view = <MembersDirectory />
@@ -419,7 +435,16 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>
-        <button className="link sign-out" onClick={onSignOut}>Sign out</button>
+        <button className="link sign-out" onClick={onSignOut}>Sign out{accounts().filter((a) => a.pubkey).length > 1 ? ' of this account' : ''}</button>
+        <Btn className="link sign-out forget-device" onClick={async () => {
+          if (!confirm('Sign out of every account on this browser and forget them all?')) return
+          // this account's session ends in the signer; the others' keys are deleted with their databases
+          if (session.backend === 'belfry') await endSession(session)
+          stop()
+          await forgetAll()
+          location.hash = ''
+          location.reload()
+        }}>Forget this device</Btn>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { openDB, type IDBPDatabase } from 'idb'
 import type { NostrEvent } from 'nostr-tools'
+import { dbName } from './accounts'
 
 // Everything the app knows lives in IndexedDB first. The UI reads from memory
 // (loaded from here at start), writes go here before they go anywhere else.
@@ -47,7 +48,7 @@ let dbp: Promise<IDBPDatabase<Schema>> | null = null
 
 export function db() {
   if (!dbp) {
-    dbp = openDB<Schema>('osv-village', 1, {
+    dbp = openDB<Schema>(dbName(), 1, { // the live account's own database (accounts.ts)
       upgrade(d) {
         d.createObjectStore('events', { keyPath: 'id' })
         d.createObjectStore('outbox', { keyPath: 'localId' })

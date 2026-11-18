@@ -1,3 +1,4 @@
+import { accounts, activeId, discardActiveFor } from '../core/accounts'
 import { useEffect, useRef, useState } from 'react'
 import { Btn, Form } from './common'
 import { INVITE_CLOSED, demoSession, inviteInfo, joinAsNew, setGuestInfo, setPendingInvite, startSignIn, type InviteInfo, type Session } from '../core/auth'
@@ -92,6 +93,18 @@ export function OpenInvite({ token, backend, onJoined, onSignIn }: { token: stri
   )
 }
 
+/** "Add an account" left this slot empty: the accounts of this browser, to go back to one. */
+function BackToAccounts() {
+  const list = accounts().filter((a) => a.pubkey && a.id !== activeId())
+  if (!list.length) return null
+  return (
+    <div className="back-accounts">
+      <p className="hint">Or go back to</p>
+      {list.map((a) => <button key={a.id} type="button" className="btn ghost" onClick={() => discardActiveFor(a.id)}>{a.name || a.email || 'your other account'}</button>)}
+    </div>
+  )
+}
+
 export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Backend; error?: string; onDemo: (email: string) => void; invited?: boolean }) {
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState(!!savedCode())
@@ -106,6 +119,7 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
         <label className="field"><span>E-mail</span>
           <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
         <button className="btn">Enter</button>
+        <BackToAccounts />
       </Form>
     )
   const signIn = () => { setBusy(true); void startSignIn() }
@@ -138,6 +152,7 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
           <button className="btn ghost" onClick={() => apply(true)}>Apply to join</button>
         </div>
         <button className="link" style={{ alignSelf: 'center', marginTop: 18 }} onClick={() => setInvite(true)}>I have an invite code</button>
+        <BackToAccounts />
       </div>
     )
   return (
@@ -177,6 +192,7 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
           ? <>Not a member yet? <a href="/apply" onClick={(e) => { e.preventDefault(); setInvite(false); apply(true) }}>Apply to join</a>: the answer comes by e-mail.</>
           : <>No invite? Sign in all the same and ask to join: the village's admins get your note.</>}
       </p>
+      <BackToAccounts />
     </div>
   )
 }

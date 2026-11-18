@@ -222,12 +222,13 @@ export async function endSession(s: Session) {
   } catch { /* the session expires by itself; signing out goes on */ }
 }
 
-/** Everything this app kept in the browser's own storage (join key, guest note, last channel,
- *  hidden pins, …): gone at sign-out, so the next person on this device starts clean. */
+/** Everything this app kept in the browser's own storage for this account (join key, guest note,
+ *  last channel, hidden pins, …): gone at sign-out. The other accounts of this browser stay. */
 export function forgetDevice() {
   for (const store of [localStorage, sessionStorage]) {
     try {
-      for (const k of Object.keys(store)) if (/^(belfry|osv)[-:]/.test(k)) store.removeItem(k)
+      // this account's keys only: the device's list of accounts and the others' saved keys stay (accounts.ts)
+      for (const k of Object.keys(store)) if (/^(belfry|osv)[-:]/.test(k) && !/^(belfry-accounts?|belfry-accounts-ls:|belfry-other-belfries|osv-backend|osv-branding|belfry-community-name|osv-dev-mode)\b/.test(k)) store.removeItem(k)
     } catch { /* private mode */ }
   }
 }

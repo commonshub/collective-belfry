@@ -73,12 +73,13 @@ function eventTags(text: string): string[][] {
 import { useCommunityName } from './community'
 export { useCommunityName }
 
-/** On a laptop: who is signed in, bottom left (opens Me). */
+/** Who is signed in, at the bottom of the Town drawer (and bottom left on a laptop): opens
+ *  Accounts (board home/accounts), which leads to Me. */
 function SideUser() {
   useVersion()
   const p = profiles().get(me())
   return (
-    <button className="side-user" onClick={() => closeDrawer('me')} aria-label="Me: your profile and settings">
+    <button className="side-user" onClick={() => closeDrawer('accounts')} aria-label="Accounts: switch, add one, or open Me">
       <span className="me-btn"><Avatar pubkey={me()} size={36} /><SyncDot /></span>
       <span className="t"><b>{p?.name ?? displayName(me())}</b><small>{placesOn() && amGuest() ? guestLine() : address()}</small></span>
       <span className="hint"><GearIcon /></span>
