@@ -5,7 +5,8 @@ Protocol: work/events-design/PROTOCOL.md (the belfry agent's notes).
 An event is three things that point at each other:
 
 1. a NIP-52 calendar event (kind 31923 timed, 31922 all day) on the community relay, ``d`` =
-   ``<year>-<6 of [a-z0-9]>``, with our tags ``visibility`` (members | link | public), ``slug``
+   ``<6 of [a-z0-9]>`` (older ones ``<year>-<6>``), with our tags ``visibility`` (members | link |
+   public), ``slug``
    and ``image`` (the cover);
 2. its NIP-29 group ``ev-<d>`` on the groups relay: its chat, and the people in it; the hosts
    are the group's admins (39001) plus the creator;
@@ -56,7 +57,8 @@ from .core import Services, m2o_id
 log = logging.getLogger(__name__)
 E = html.escape
 
-D_RE = re.compile(r"^\d{4}-[a-z0-9]{6}$")
+# an event's own id: 6 of [a-z0-9]; the ones made before 2026-11-18 start with their year
+D_RE = re.compile(r"^(\d{4}-)?[a-z0-9]{6}$")
 SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}[a-z0-9]$")
 LINK_RE = re.compile(r"^[a-z0-9-]{3,40}$")
 RESERVED_SLUGS = {"new", "slug", "feed", "past", "mine"}
@@ -452,7 +454,56 @@ def load(svc: Services, d: str) -> Event | None:
             )
             ev.status = "cancelled" if label == "cancelled" else "scheduled"
             ev.status_reason = (last.get("content") or "")[:500] if ev.status == "cancelled" else ""
+    adopt(svc, ev)
     return ev
+
+
+def adopt(svc: Services, ev: Event) -> None:
+    """The address a host wrote on the event itself (its ``slug`` tag) becomes its address, by
+    the rules of ``PUT /<d>/slug``, when the store doesn't have it yet: the chat's own claim can
+    be lost (sent before the event reached the relay). Never takes another event's address."""
+    slug = (tag(ev.version, "slug") or "").strip().lower()
+    if not slug or slug_problem(slug) is not None:
+        return
+    st = store(svc)
+    if st.current_slug(ev.d) == slug:
+        return
+    got = st.slug(slug)
+    if got is not None and got[0] != ev.d:
+        return
+    if got is not None and st.current_slug(ev.d):
+        return  # an older address of this event; a later one was claimed since
+    if not re.search(r"-[a-z0-9]{4}$", slug):
+        from . import apps
+
+        try:
+            if ev.version["pubkey"] not in apps.admin_pubkeys(svc):
+                return
+        except Exception as exc:  # noqa: BLE001 — the register; the next load tries again
+            log.warning("events %s: address not adopted: %s", ev.d, exc)
+            return
+    st.claim(ev.d, slug)
+
+
+_slug_miss: dict[str, float] = {}
+
+
+def find_by_slug(svc: Services, link: str) -> Event | None:
+    """An address nobody claimed: is it written on a recent event? (One question to the relay,
+    at most once a minute per address.)"""
+    now = time.monotonic()
+    if now - _slug_miss.get(link, -1e9) < 60:
+        return None
+    if len(_slug_miss) > 2000:
+        _slug_miss.clear()
+    _slug_miss[link] = now
+    found = community(svc, [{"kinds": list(KINDS), "since": int(time.time()) - 400 * 86400}])
+    ds = {tag(e, "d") or "" for e in found if (tag(e, "slug") or "").strip().lower() == link}
+    for d in sorted(ds):
+        ev = load(svc, d)  # adopts the address when it is this event's to take
+        if ev is not None and store(svc).current_slug(ev.d) == link:
+            return ev
+    return None
 
 
 def resolve(svc: Services, link: str) -> tuple[Event | None, str | None]:
@@ -460,12 +511,14 @@ def resolve(svc: Services, link: str) -> tuple[Event | None, str | None]:
     (the caller redirects)."""
     link = (link or "").lower()
     if D_RE.match(link):
-        return load(svc, link), None
+        ev = load(svc, link)
+        if ev is not None:  # its own id still works; the page moves to its address
+            return ev, store(svc).current_slug(ev.d)
     if not LINK_RE.match(link):
         return None, None
     found = store(svc).slug(link)
     if found is None:
-        return None, None
+        return find_by_slug(svc, link), None
     d, current = found
     if not current:
         return load(svc, d), store(svc).current_slug(d) or d

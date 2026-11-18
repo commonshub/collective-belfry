@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import sys
 import time
 
 import pytest
@@ -658,3 +659,32 @@ def test_a_priced_ticket_is_never_self_served(rsvc, world, keycast):
         assert call(c, bea, "POST", f"/{D}/join", {"ticket": "zero"}).json().get("already")
     assert events.price_of({"tags": [["price", "007.10", "tokens"]]}) == (True, "7.10", "tokens")
     assert events.price_of({"tags": [["price", "5"]]}) == (True, "", "")
+
+
+def test_the_address_on_the_event_is_honoured_and_short_ids_work(rsvc, world, monkeypatch):
+    from belfry_onboarding import apps, events
+
+    assert events.D_RE.match("j5l6m3") and events.D_RE.match("2026-j5l6m3")
+    assert events.slug_problem("abc123")  # an id's shape
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: {pk(ada)})
+    # the chat's claim never arrived: only the tag on the event says the address
+    make_event(world, ada, slug="garden2027")
+    with TestClient(create_app(rsvc)) as c:
+        assert "Garden day" in c.get("/events/garden2027").text
+        moved = c.get(f"/events/{D}", follow_redirects=False)
+        assert moved.status_code == 301 and moved.headers["location"] == "/events/garden2027"
+        assert call(c, ada, "GET", f"/{D}").json()["link"] == "garden2027"
+        assert c.get("/events/nothere2027").status_code == 404
+    # someone who is no admin: a plain address on the event is not taken
+    world.comm.events.clear()
+    world.grp.events.clear()
+    events._slug_miss.clear()
+    monkeypatch.setattr(apps, "admin_pubkeys", lambda svc: set())
+    bea = member(rsvc, "bea@belfry.test", "Bea")
+    monkeypatch.setattr(sys.modules[__name__], "D", "k7p2xr")
+    monkeypatch.setattr(sys.modules[__name__], "GROUP", "ev-k7p2xr")
+    make_event(world, bea, slug="plainname")
+    with TestClient(create_app(rsvc)) as c:
+        assert c.get("/events/plainname").status_code == 404
+        assert "Garden day" in c.get("/events/k7p2xr").text  # a short id, no address
