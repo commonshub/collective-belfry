@@ -104,60 +104,63 @@ export function sentOf(ev: NostrEvent, key?: string) {
 const Envelope = ({ size = 14 }: { size?: number }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" /><path d="m3 7 9 6 9-6" /></svg>
 )
+const LockIcon = ({ size = 16 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+)
+const SentIcon = ({ size = 13 }: { size?: number }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12 20 4l-6 16-3-6-7-2z" /></svg>
+)
+/** On a team member's message in an e-mail thread: only the team sees it. */
+export const TeamOnlyTag = () => <span className="msg-tag tag-team"><LockIcon size={13} />team only</span>
+/** On what went out by e-mail: who it went as. */
+export const SentAsTag = ({ local }: { local: string }) => <span className="msg-tag tag-out"><SentIcon />sent as {local}@</span>
 const STATUS: Record<CardState['status'], string> = { open: 'Open', waiting: 'Answered', closed: 'Closed' }
 const UNDO_SECONDS = 8
 const who = (t: { name: string; address: string }) => t.name || t.address
 const first = (t: { name: string; address: string }) => t.name.split(' ')[0] || t.address
 const snippet = (it: MailItem) => plainRefs(mailText(it.m.text, { subject: it.subject }) || (it.m.media.length ? 'a photo or file' : ''), '').replace(/\s+/g, ' ').trim().slice(0, 140)
 
-/** In the channel's feed: one line per e-mail thread, where its latest activity is. */
+/** Two letters for someone from outside: "Marie Dubois" → MD, "tom@example.org" → TO. */
+export function initials(name: string, address: string): string {
+  const words = name.trim().split(/\s+/).filter((w) => /\p{L}/u.test(w))
+  if (words.length >= 2) return (words[0][0] + words.at(-1)![0]).toUpperCase()
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase()
+  return (address.split('@')[0].replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2) || '?').toUpperCase()
+}
+
+/** Someone who wrote from outside: their initials on a neutral disc (they have no profile here). */
+export function GuestAvatar({ name, address, size = 36 }: { name: string; address: string; size?: number }) {
+  return <div className="avatar guest-av" aria-hidden="true" style={{ width: size, height: size, fontSize: size * 0.36 }}>{initials(name, address)}</div>
+}
+
+/** "guest, by e-mail" next to the name of someone who wrote from outside. */
+export const GuestMailTag = () => <span className="msg-tag tag-guest"><Envelope size={13} />guest, by e-mail</span>
+
+/** In the channel's feed: one row per e-mail thread, where its latest activity is. It reads like
+ *  a message from a guest (Xavier, 2026-11-18): their initials, name, "guest, by e-mail", time,
+ *  then the subject and the latest words, and the thread's state under them. */
 export function MailRow({ t, open, unread, onOpen }: { t: MailThread; open: boolean; unread: number; onOpen: () => void }) {
   const latest = t.mails.at(-1)!
   const n = t.mails.length
   return (
     <button className={'mail-row' + (open ? ' open' : '')} id={'m-' + t.id} onClick={onOpen} aria-label={`E-mail from ${who(t)}: ${t.subject || '(no subject)'}`}>
-      <span className="mr-ico"><Envelope size={18} /></span>
+      <GuestAvatar name={t.name} address={t.address} />
       <span className="mr-main">
         <span className="mr-top">
           <b className="mr-from">{who(t)}</b>
-          <span className={'mc-pill ' + t.state.status}>{STATUS[t.state.status]}</span>
+          <GuestMailTag />
           <time>{fmtTime(t.last)}</time>
         </span>
         <span className="mr-subject">{t.subject || '(no subject)'}</span>
         <span className="mr-snip">{latest.dir === 'out' ? 'Sent: ' : ''}{snippet(latest)}</span>
         <span className="mr-meta">
+          <span className={'mc-pill ' + t.state.status}>{STATUS[t.state.status]}</span>
           {n} {n === 1 ? 'e-mail' : 'e-mails'}{t.replies ? ` · ${t.replies} ${t.replies === 1 ? 'reply' : 'replies'} in the team` : ''}
           {t.state.assignee ? ` · ${t.state.assignee === me() ? 'you have it' : displayName(t.state.assignee) + ' has it'}` : ''}
           {unread > 0 && <span className="badge lime new-n">{unread} new</span>}
         </span>
       </span>
     </button>
-  )
-}
-
-/** In the thread: one e-mail, framed (received or sent). */
-export function MailFrame({ it, address }: { it: MailItem; /** the channel's own address (sent ones) */ address: string }) {
-  const [full, setFull] = useState(false)
-  const t = it.m.ev.created_at
-  return (
-    <div className={'mail-frame ' + it.dir} id={'m-' + it.m.ev.id}>
-      <div className="mf-head">
-        <Envelope />
-        <span>{it.dir === 'in' ? 'E-mail received' : `E-mail sent by ${it.by ? displayName(it.by) : 'a member'}`}</span>
-        <time>{fmtTime(t)}</time>
-      </div>
-      <div className="mf-body">
-        <div className="mf-addr">
-          {it.dir === 'in' ? <>From {it.name ? `${it.name} <${it.address}>` : it.address}</> : <>From {address} · to {it.address}</>}
-          {it.dir === 'in' && !it.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
-        </div>
-        {it.subject && <b className="mf-subject">{it.subject}</b>}
-        <p className="mf-text"><Linkify text={mailText(it.m.text, { subject: it.subject }) || '(empty)'} /></p>
-        <MediaGrid media={it.m.media} />
-        {it.original && <button className="link full-mail-btn" onClick={() => setFull(true)}>Full e-mail</button>}
-      </div>
-      {full && it.original && <FullMail mail={{ subject: it.subject, original: it.original }} onClose={() => setFull(false)} />}
-    </div>
   )
 }
 
@@ -184,15 +187,20 @@ export function MailThreadHead({ t, groupId, canAct }: { t: MailThread; groupId:
 /** Rejected by a send that was undone: the composer takes the text back without an error. */
 export const UNDONE = 'undone'
 
-/** The thread's composer, for an e-mail thread: which way it goes (the thread, or by e-mail as
- *  the channel), the line that says so above the text, the 8-second Undo and the report. */
+/** The thread's composer, for an e-mail thread (Xavier, 2026-11-18, canvas "Mail-A/B"): a switch
+ *  above the text, "Reply to <first name>" (an e-mail from the channel's address; the default for
+ *  those who may answer as the channel) or "Comment" (in the thread, members only), the line that
+ *  says who gets it, the 8-second Undo of an e-mail and its report. The two ways look apart: the
+ *  e-mail is bronze, the comment the text colour. */
 export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread; g?: Group; groupId: string; local: string; canMail: boolean }) {
-  const [mode, setMode] = useState<'thread' | 'mail'>('thread')
+  const to = t.lastIn
+  const [mode, setModeState] = useState<'thread' | 'mail'>(canMail && to ? 'mail' : 'thread')
+  const chosen = useRef(false)
+  const setMode = (m: 'thread' | 'mail') => { chosen.current = true; setModeState(m) }
   const [countdown, setCountdown] = useState(0)
   const [sentId, setSentId] = useState('')
   const timer = useRef<ReturnType<typeof setInterval> | null>(null)
   const pending = useRef<{ go: () => void; undo: () => void } | null>(null)
-  const to = t.lastIn
   // Re: the e-mail it answers (the latest one received), as mail programs do
   const subject = `Re: ${baseSubject(to?.subject) || t.subject || '(no subject)'}`
   const address = `${local}@${BELFRY.domain}`
@@ -201,7 +209,8 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
   // leaving the thread during the countdown sends at once: nobody should believe it went when it didn't
   useEffect(() => () => { if (timer.current) { clearInterval(timer.current); pending.current?.go() } }, [])
   useEffect(() => { if (r?.status === 'delivered') { const x = setTimeout(() => setSentId(''), 4000); return () => clearTimeout(x) } }, [r?.status])
-  useEffect(() => { if (!canMail) setMode('thread') }, [canMail])
+  // replying is the default, also once it turns out (the group loaded) that I may
+  useEffect(() => { if (!canMail) setModeState('thread'); else if (!chosen.current && to) setModeState('mail') }, [canMail, !!to]) // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Send TEXT by e-mail after the countdown; resolves once it left this device. */
   const send = (text: string) => new Promise<void>((resolve, reject) => {
@@ -216,20 +225,26 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
       setCountdown(left)
       if (left > 0) return
       stop()
-      go().then((id) => { setSentId(id); setMode('thread'); resolve() }, reject)
+      go().then((id) => { setSentId(id); resolve() }, reject)
     }, 1000)
   })
 
-  const line: ReactNode = mail ? (
-    <div className="send-to mail" role="status">
-      <span className="st-what"><Envelope /><span>This will be sent to <b>{who(to!)}</b> by e-mail</span></span>
-      <button type="button" className="link st-switch" onClick={() => setMode('thread')}>Only send in this thread instead</button>
-      <small className="st-from">From {address} · {subject}</small>
-    </div>
-  ) : (
-    <div className="send-to" role="status">
-      <span className="st-what">Message will be sent in this thread</span>
-      {canMail && to && <button type="button" className="link st-switch" onClick={() => setMode('mail')}>Reply by e-mail instead</button>}
+  const name = to ? who(to) : who(t)
+  const firstName = to ? first(to) : first(t)
+  const where = g ? (g.isPod || g.isEvent || g.isProposal ? g.name : '#' + g.name) : '#' + groupId
+  const line: ReactNode = (
+    <div className={'mail-switch-wrap' + (mail ? ' mail' : ' team')}>
+      {canMail && to && (
+        <div className="seg mail-switch" role="group" aria-label="What you are writing">
+          <button type="button" className={mail ? 'on' : ''} aria-pressed={mail} onClick={() => setMode('mail')}><Envelope size={16} /><span>Reply to {firstName}</span></button>
+          <button type="button" className={!mail ? 'on' : ''} aria-pressed={!mail} onClick={() => setMode('thread')}><LockIcon /><span>Comment</span></button>
+        </div>
+      )}
+      <div className={'send-to' + (mail ? ' mail' : ' team')} role="status">
+        {mail
+          ? <span className="st-what">An e-mail from <b>{address}</b> to {name}</span>
+          : <span className="st-what">Only members of {where} see this. <b>{firstName} does not.</b></span>}
+      </div>
     </div>
   )
   const toast: ReactNode = countdown > 0
@@ -240,7 +255,7 @@ export function useMailReply({ t, g, groupId, local, canMail }: { t: MailThread;
         {r?.status !== 'queued' && <button onClick={() => setSentId('')}>OK</button>}
       </div>
     ) : null
-  return { mail, line, toast, send, sending: countdown > 0, placeholder: mail ? `E-mail to ${first(to!)}…` : 'Reply in the thread', signature: channelSignature(g?.name ?? groupId) }
+  return { mail, line, toast, send, sending: countdown > 0, placeholder: mail ? `Write your e-mail to ${firstName}` : 'Write a comment for the team', signature: channelSignature(g?.name ?? groupId) }
 }
 
 /** Demo mode only (tests): an e-mail from outside lands in the shared inbox CHANNEL. IN_REPLY_TO:

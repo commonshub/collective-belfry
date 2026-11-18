@@ -21,9 +21,9 @@ import { yourEvents } from './Events'
 import { eventByLink as eventByLinkAny } from '../core/events'
 import { RichText } from './Topics'
 import { newMentions, preview } from './Mentions'
-import { NewProposalSheet, ProposalCard, SiteBar } from './Proposals'
-import { cardOf, FullMail, MailFrame, MailRow, MailThreadHead, mailOf, mailText, sentOf, UNDONE, useMailReply, ViaMail } from './MailPost'
-import { mailThreads, type MailThread } from '../core/mailthreads'
+import { NewProposalSheet, ProposalCard, ProposalView, SiteBar } from './Proposals'
+import { cardOf, FullMail, GuestAvatar, GuestMailTag, MailRow, MailThreadHead, mailOf, mailText, SentAsTag, sentOf, TeamOnlyTag, UNDONE, useMailReply, ViaMail } from './MailPost'
+import { mailThreads, type MailItem, type MailThread } from '../core/mailthreads'
 import { knownGroupsKey } from '../core/dm'
 import { markRead } from '../core/readstate'
 import { channelNewest, channelUnread, threadNewest, threadUnread, useVisible } from '../core/unread'
@@ -495,6 +495,8 @@ export function ChannelView({ id, topic, focus, activeThread, menu = false }: { 
       <Conversation id={id} topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} readOnly />
     </div>
   )
+  // a proposal: the proposal itself on top, like an event (Xavier, 2026-11-18)
+  if (g?.isProposal) return <ProposalView id={id} left={<LeftButton id={id} />} topic={topic} onTopic={openTopic} focus={focus} activeThread={activeThread} />
   return (
     <div className="screen">
       {/* ☰ · the name and its subtitle · search; notifications and settings are rows of its menu (2026-11-17) */}
@@ -901,7 +903,6 @@ export function ThreadView({ groupId, rootId: asked, pane = false, replying = fa
   const nameOf = (m: Message) => displayName(m.ev.pubkey, ps)
   const back = () => up(`c/${encodeURIComponent(groupId)}`)
   const frozen = !!g?.archived
-  const address = mailAddressOf(groupId)
   return (
     <div className="screen">
       <div className="topbar">
@@ -912,14 +913,14 @@ export function ThreadView({ groupId, rootId: asked, pane = false, replying = fa
       {mailT && <MailThreadHead t={mailT} groupId={groupId} canAct={!frozen && !reading() && !guestInfo()} />}
       <div className="scroll" ref={scroller}>
         <div className="messages">
-          {root && mailT ? <div className="msg first card-row"><MailFrame it={mailT.mails[0]} address={address} /></div>
+          {root && mailT ? <MailMsg it={mailT.mails[0]} groupId={groupId} reactions={rx.get(mailT.mails[0].m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(mailT.mails[0].m) }} />
             : root ? <Row m={root} name={nameOf(root)} groupId={groupId} reactions={rx.get(root.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(root) }} announce={isAnnouncement(root, g)} onThread={() => {}} thread={{ count: replies.length, last: 0, who: [] }} />
             : <div className="empty">This message is not here (yet, or any more).</div>}
           {!mailT && <div className="thread-sep"><i />{replies.length ? `${replies.length} ${replies.length === 1 ? 'reply' : 'replies'}` : 'No replies yet'}<i /></div>}
           {flow.map((x, j) => x.mail
-            ? <div key={x.mail.m.ev.id} className="msg first card-row"><MailFrame it={x.mail} address={address} /></div>
+            ? <MailMsg key={x.mail.m.ev.id} it={x.mail} groupId={groupId} reactions={rx.get(x.mail.m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.mail!.m) }} />
             : x.m
-            ? <Row key={x.m.ev.id} m={x.m} prev={flow[j - 1]?.m} head={!flow[j - 1]?.m} name={nameOf(x.m)} groupId={groupId}
+            ? <Row key={x.m.ev.id} m={x.m} prev={flow[j - 1]?.m} head={!flow[j - 1]?.m || !!mailT} name={nameOf(x.m)} groupId={groupId} tag={mailT ? <TeamOnlyTag /> : undefined}
               reactions={rx.get(x.m.ev.id) ?? []} onAct={(emoji) => { if (frozen) return; if (reading()) return askToJoin(); setPicking(!!emoji); setActing(x.m!) }} announce={false} />
             : <TodoStepLine key={x.g!.t.id + x.g!.at + x.g!.what.join()} g={x.g!} />)}
         </div>
@@ -946,17 +947,50 @@ function MailThreadComposer({ t, groupId, root, autoFocus }: { t: MailThread; gr
   return (
     <>
       <Composer groupId={groupId} draft={'t:' + t.id} autoFocus={autoFocus} placeholder={r.placeholder} above={r.line}
-        className={r.mail ? 'mail-mode' : undefined} plain={r.mail}
+        className={r.mail ? 'mail-mode' : 'team-mode'} plain={r.mail}
         onSend={(text, files) => (r.mail ? r.send(text) : postThreadReply(groupId, root.ev, text, files))} />
       {r.toast}
     </>
   )
 }
 
-/** The channel's e-mail address: its plain alias when it has one (hello@, not hello-79f0@). */
-function mailAddressOf(groupId: string): string {
+
+/** An e-mail in a thread, as a message (Xavier, 2026-11-18): one from outside reads like a guest's
+ *  message (their initials, name, "guest, by e-mail"); one that went out reads like the member's
+ *  own message, "sent as hello@". The whole e-mail is in the message's menu. */
+function MailMsg({ it, groupId, reactions: rx, onAct }: { it: MailItem; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void }) {
+  const frozen = !!group(groupId)?.archived
+  const hold = useHold(() => onAct(), frozen)
   const g = group(groupId)
-  return `${g ? mailLocal(g) : groupId}@${BELFRY.domain}`
+  const m = it.m
+  const out = it.dir === 'out'
+  const name = out ? (it.by ? displayName(it.by) : 'A member') : (it.name || it.address)
+  return (
+    <div id={'m-' + m.ev.id} className={'msg first mail-msg ' + it.dir} {...hold}>
+      {out && it.by ? <button className="face" onClick={() => openProfile(it.by!)} aria-label={`${name}: profile`}><Avatar pubkey={it.by} /></button>
+        : out ? <div className="face"><GuestAvatar name="" address="?" /></div>
+        : <div className="face" title={it.address}><GuestAvatar name={it.name} address={it.address} /></div>}
+      <div className="body">
+        <div className="who">
+          {out && it.by ? <button className="who-name" onClick={() => openProfile(it.by!)}>{name}</button> : <span className="who-name" title={out ? undefined : it.address}>{name}</span>}
+          {out ? <SentAsTag local={g ? mailLocal(g) : groupId} /> : <GuestMailTag />}
+          <time>{fmtTime(m.ev.created_at)}</time>
+          {!out && !it.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
+        </div>
+        <RichText text={mailText(m.text, { subject: it.subject }) || '(empty)'} groupId={groupId} />
+        <MessageButtons ev={m.ev} groupId={groupId} disabled={frozen} />
+        <MediaGrid media={m.media} />
+        <ReactionChips chips={rx.map((r) => ({ emoji: r.emoji, who: r.at, mine: !!r.mine }))} disabled={frozen}
+          onToggle={(emoji) => { if (frozen) return; const r = rx.find((x) => x.emoji === emoji); void react(groupId, m.ev, emoji, r?.mine) }}
+          onAdd={frozen ? undefined : () => onAct(true)} />
+      </div>
+      {!frozen && (
+        <div className="msg-tools" role="toolbar" aria-label="Message actions">
+          <button aria-label="More" title="More" onClick={() => onAct()}><MoreIcon /></button>
+        </div>
+      )}
+    </div>
+  )
 }
 
 /** Press and hold (phones) or right-click opens a message's menu. A finger may wobble a little;
@@ -979,7 +1013,7 @@ function useHold(open: () => void, off = false) {
   }
 }
 
-function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, active = false }: { active?: boolean; todo?: Task; onOpenThread?: () => void; /** when the item above it in the feed came (a row that is not a message: an e-mail thread, a join) */ prevAt?: number; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
+function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTopic, announce, thread, onThread, onOpenThread, threadOpen = false, head, active = false, tag }: { /** a small tag after the name (e-mail threads: "team only") */ tag?: ReactNode; active?: boolean; todo?: Task; onOpenThread?: () => void; /** when the item above it in the feed came (a row that is not a message: an e-mail thread, a join) */ prevAt?: number; head?: boolean; m: Message; prev?: Message; name: string; groupId: string; reactions: Reaction[]; onAct: (emoji?: boolean) => void; topic?: string; onTopic?: (t?: string) => void; announce: boolean; thread?: ThreadInfo; onThread?: () => void; threadOpen?: boolean }) {
   // topics it carries that its text doesn't show (sent inside an open topic), except the open one
   const inText = new Set(hashtags(m.text))
   const extra = m.topics.filter((t) => !inText.has(t) && t !== topic && t !== ANNOUNCE)
@@ -1019,7 +1053,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   if (inMail) return (
     <>
       {newDay && <div className="day" role="separator"><span>{fmtDay(d)}</span></div>}
-      <div className="msg first card-row"><MailFrame it={inMail} address={mailAddressOf(groupId)} /><MessageButtons ev={m.ev} groupId={groupId} disabled={frozen} /></div>
+      <MailMsg it={inMail} groupId={groupId} reactions={rx} onAct={onAct} />
     </>
   )
   return (
@@ -1029,7 +1063,7 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
         {...hold}>
         {first || announce || mail || isCard ? <button className="face" onClick={() => openProfile(m.ev.pubkey)} aria-label={`${name}: profile`}><Avatar pubkey={m.ev.pubkey} /></button> : <div className="gutter" />}
         <div className="body">
-          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
+          {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
           {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}

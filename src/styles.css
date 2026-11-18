@@ -1525,17 +1525,17 @@ div.settings-row { cursor: default; }
    composer when what you write goes out by e-mail. */
 :root { --mail: #a4532b; --mail-ink: #8a4322; --mail-soft: color-mix(in srgb, #a4532b 9%, var(--bg)); --mail-line: color-mix(in srgb, #a4532b 35%, var(--line)); }
 @media (prefers-color-scheme: dark) { :root { --mail-ink: #f0a77f; --mail-soft: color-mix(in srgb, #a4532b 16%, var(--bg)); } }
-.mail-row { display: flex; align-items: flex-start; gap: 10px; width: calc(100% - 24px); margin: 6px 12px; padding: 10px 12px; text-align: left;
-  border: 1px solid var(--mail-line); border-radius: 12px; background: var(--mail-soft); color: var(--text); cursor: pointer; font: inherit; }
-.mail-row:hover, .mail-row.open { border-color: var(--mail); }
-.mail-row .mr-ico { flex: none; width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--mail); color: #fff; }
+.mail-row { display: flex; align-items: flex-start; gap: 10px; width: 100%; margin: 10px 0 0; padding: 3px 14px; text-align: left;
+  border: 0; border-radius: 0; background: none; color: var(--text); cursor: pointer; font: inherit; }
+.mail-row:hover { background: var(--surface); }
+.mail-row.open { background: var(--surface); box-shadow: inset 3px 0 0 var(--mail); }
 .mail-row .mr-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .mail-row .mr-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .mail-row .mr-from { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .mail-row .mr-top time { margin-left: auto; flex: none; font-size: 12px; color: var(--faint); }
 .mail-row .mr-subject { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mail-row .mr-snip { font-size: 14px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mail-row .mr-meta { font-size: 12px; color: var(--mail-ink); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+.mail-row .mr-meta { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
 .mail-row .new-n { font-size: 11px; padding: 1px 7px; }
 .mc-pill { flex: none; font-size: 12px; font-weight: 650; border-radius: 6px; padding: 2px 8px; }
 .mc-pill.open { background: #e0f2fe; color: #075985; }
@@ -1543,16 +1543,6 @@ div.settings-row { cursor: default; }
 .mc-pill.closed { background: rgba(127,127,127,.15); color: var(--faint); }
 .mc-who { border: 0; background: none; padding: 6px 2px; font-size: 13px; color: inherit; cursor: pointer; text-decoration: underline dotted; }
 .mc-who.static { cursor: default; text-decoration: none; color: var(--muted); }
-.mail-frame { width: 100%; border: 1px solid var(--mail-line); border-radius: 12px; overflow: hidden; background: var(--bg); }
-.mail-frame .mf-head { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 650; background: var(--mail-soft); color: var(--mail-ink); }
-.mail-frame .mf-head time { margin-left: auto; font-weight: 400; color: var(--faint); }
-.mail-frame.out { border-color: var(--mail); }
-.mail-frame.out .mf-head { background: var(--mail); color: #fff; }
-.mail-frame.out .mf-head time { color: rgba(255,255,255,.8); }
-.mail-frame .mf-body { padding: 9px 12px 10px; }
-.mail-frame .mf-addr { font-size: 12px; color: var(--faint); margin-bottom: 4px; overflow-wrap: anywhere; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
-.mail-frame .mf-subject { display: block; font-size: 15px; margin-bottom: 2px; }
-.mail-frame .mf-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .mail-head { padding: 8px 14px 9px; border-bottom: 1px solid var(--line); background: var(--mail-soft); font-size: 13px; }
 .mail-head .mh-from { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; overflow-wrap: anywhere; font-weight: 600; color: var(--mail-ink); }
 .mail-head .mh-from .muted { font-weight: 400; }
@@ -1570,6 +1560,31 @@ div.settings-row { cursor: default; }
 .composer.mail-mode .send { background: var(--mail); color: #fff; }
 .send[aria-busy] { opacity: .55; }
 html.kb .mail-head .mh-note { display: none; } /* typing: the room goes to the thread */
+
+/* r6 (2026-11-18): an outsider's e-mail reads like a guest's message; the composer's two ways.
+   E-mail stays bronze (white on #a4532b: 5.4:1; its border on the dark background 3.6:1); a team
+   comment takes the text colour (near black / near white): the two differ in lightness too. */
+.avatar.guest-av { background: var(--surface-2); color: var(--text); font-weight: 600; letter-spacing: .02em; }
+.msg-tag { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-size: 12px; font-weight: 400; color: var(--muted); white-space: nowrap; }
+.msg-tag.tag-out { color: var(--mail-ink); }
+.mail-row .mr-top .msg-tag { margin-left: 0; flex: none; }
+.mail-row .mr-top time { margin-left: 0; }
+.mail-switch-wrap .send-to .st-what { display: block; overflow-wrap: anywhere; }
+.mail-msg .who-name { cursor: default; }
+.mail-msg .who button.who-name { cursor: pointer; }
+.mail-switch-wrap { padding: 0 0 2px; }
+.seg.mail-switch { margin: 0 0 6px; padding: 3px; gap: 3px; border-radius: 10px; }
+.seg.mail-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 6px 8px; font-size: 15px; color: var(--text); white-space: nowrap; overflow: hidden; }
+.seg.mail-switch button span { overflow: hidden; text-overflow: ellipsis; }
+.mail-switch-wrap.mail .seg.mail-switch button.on { background: var(--mail); color: #fff; }
+.mail-switch-wrap.team .seg.mail-switch button.on { background: var(--text); color: var(--bg); }
+.send-to.team { color: var(--muted); }
+.send-to.team b { color: var(--text); font-weight: 600; }
+.send-to.mail b { color: var(--text); }
+.composer.team-mode textarea { border-color: var(--text); }
+.composer.team-mode .send { background: var(--text); color: var(--bg); }
+.composer.mail-mode textarea, [data-theme='belfry'] .composer.mail-mode textarea { border: 1.5px solid var(--mail); }
+.composer.team-mode textarea, [data-theme='belfry'] .composer.team-mode textarea { border: 1.5px solid var(--text); }
 
 /* The on-screen keyboard (iOS Safari leaves the layout viewport as it is and pans): the app
    fills the visible part only, so the composer sits just above the keyboard (main.tsx sets
@@ -1642,3 +1657,61 @@ a.ln { overflow-wrap: anywhere; }
 .chan-settings-form .archive-under { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; margin-top: 6px; }
 .chan-settings-form .archive-under .archive-link { align-self: center; }
 .chan-settings-form .archive-under small { color: var(--muted); font-size: 13px; max-width: 34ch; }
+
+/* r6 (2026-11-18): Settings › Who can read it; the Notify me sheet */
+.who-reads .sec-title { font-size: 13px; color: var(--muted); }
+.who-reads .vis-rows { margin-top: 6px; }
+.vis-row { width: 100%; border-top: 1px solid var(--line); }
+.vis-row:first-child { border-top: 0; }
+.vis-row .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.vis-row .t b { font-weight: 500; }
+.vis-row.on .cmenu-ico { color: var(--text); }
+.vis-row .vis-check { flex: none; color: var(--text); }
+.vis-foot { display: block; margin: 6px 4px 0; font-size: 13px; line-height: 1.35; }
+.vis-confirm p { line-height: 1.4; }
+.notify-opts { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.notify-opt { display: flex; align-items: center; gap: 14px; min-height: 68px; width: 100%; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 14px;
+  background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.notify-opt .no-ico { flex: none; width: 40px; height: 40px; border-radius: 20px; display: grid; place-items: center; background: var(--surface); color: var(--text); }
+.notify-opt .t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.notify-opt .t b { font-weight: 600; }
+.notify-opt .t small { font-size: 13px; color: var(--muted); }
+.notify-opt .no-default { font-weight: 400; color: var(--muted); }
+.notify-opt.on { border-color: var(--text); background: var(--surface); }
+.notify-opt.on .no-ico { background: var(--text); color: var(--bg); }
+.notify-opt:disabled { cursor: progress; }
+.notify-opt:disabled:not(.on) { opacity: .6; }
+.notify-phone { font-size: 13px; margin: 8px 4px 0; }
+.notify .notify-mail { margin-top: 14px; border-bottom: 0; }
+/* the proposal at the top of its chat (Proposals.tsx ProposalView) */
+.prop-screen { position: relative; }
+.prop-top .prop-bar { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; color: var(--text); font: inherit; padding: 2px 0; }
+.prop-top .prop-bar b { max-width: 100%; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prop-top .prop-bar small { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.prop-top .prop-bar small { max-width: 100%; }
+.prop-top .prop-bar .badge { flex: none; }
+.prop-top .prop-bar .prop-tally { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.prop-top .prop-vote-btn { width: auto; flex: none; padding: 8px 16px; border-radius: 99px; }
+.prop-top .prop-mine { flex: none; margin: 0 4px; padding: 6px 10px; }
+.prop-main { gap: 6px; }
+.prop-meta { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.prop-meta .link.who { font-size: 13px; color: inherit; text-decoration: underline dotted; padding: 0; }
+.prop-title { margin: 2px 0 0; font-size: 24px; line-height: 1.15; font-weight: 700; }
+.prop-main .prop-text { margin-top: 2px; font-size: 15px; }
+.prop-main .prop-text.teaser { max-height: 4.3em; overflow: hidden; color: var(--muted); mask-image: linear-gradient(#000 55%, transparent); -webkit-mask-image: linear-gradient(#000 55%, transparent); }
+.prop-more { align-self: flex-start; min-height: 40px; font-weight: 600; text-decoration: underline; color: var(--text); }
+.prop-votes { display: flex; gap: 8px; margin-top: 4px; }
+.prop-votes .prop-v { flex: 1; min-height: 56px; border-radius: 14px; border: 1.5px solid var(--line); background: none; color: var(--text); font: inherit; font-size: 15px; font-weight: 600; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
+.prop-votes .prop-v span { font-size: 12px; font-weight: 400; color: var(--muted); }
+.prop-votes .prop-v.on { border-color: var(--text); background: var(--text); color: var(--bg); }
+.prop-votes .prop-v.on span { color: var(--bg); opacity: .8; }
+.prop-voted { margin: 2px 0 0; font-size: 13px; }
+.prop-acts { gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+.prop-acts .btn { width: auto; }
+.prop-tabs { margin-top: 8px; }
+.prop-wait { padding: 12px 16px; }
+.prop-version { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.prop-version .pv-head { display: flex; align-items: baseline; gap: 8px; }
+.prop-version .pv-note { margin: 4px 0; }
+.prop-votes-list section { margin-top: 12px; }
+.prop-votes-list h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
