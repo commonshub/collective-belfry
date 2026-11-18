@@ -10,7 +10,7 @@ const MembersMap = lazy(() => import('./MembersMap'))
 import { setArchived, mayPickAddress, setInbox, setVisibility, setWebPage } from '../core/actions'
 import { isInbox, isPublicChannel, mailLocal, publicPeriods, slugify, webPage, WEB_RESERVED, type ChannelVisibility, type Group, type WebPage } from '../core/model'
 import { BELFRY, NAME } from '../config'
-import { addTask, admit, commentTask, decline, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
+import { addTask, admit, commentTask, decline, DEFAULT_PROMPT, editChannel, editPod, joinGroup, leaveGroup, setMemberLabels, taskAction } from '../core/actions'
 import { ACTIVE_DAYS, allGroups, archivable, channelIcon, displayName, group, groups, guestJoins, memberLabels, messages, recentlyActive, tasklist, isWorking, workingSince, type Task } from '../core/model'
 import { useVersion } from '../core/store'
 import { DropBox } from './Drop'
@@ -20,7 +20,6 @@ import { me } from '../core/sync'
 import { Avatar, back, devMode, fmtDay, fmtTime, go, Guard, MediaGrid, Sheet, Btn, Form, useNow, WorkRing } from './common'
 import { all, type Ev } from '../core/store'
 import { isAdmin } from '../core/access'
-import { AccessFields } from './Chat'
 import { GroupRequest } from './Requests'
 import { groupRequestsFor } from '../core/requests'
 import { ArchiveIcon, GearIcon, ThreadIcon } from './icons'
@@ -178,12 +177,26 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   const [openMail, setOpenMail] = useState(g ? isInbox(g) : false)
   const [web, setWeb] = useState<WebPage>((g && webPage(g)) ?? { on: false, slug: mayPickAddress() ? slugify(g?.name ?? '') : (g?.id ?? ''), visibility: 'members' })
   const [webError, setWebError] = useState('')
-  const [moving, setMoving] = useState<ChannelVisibility | null>(null)
-  // closed: members apply to join, its stewards let them in (Xavier, 2026-11-17)
-  const [closedCh, setClosedCh] = useState(!!g?.closed)
+  // who can read it, one choice of three (Xavier, 2026-11-18, canvas "Settings-A/B"): members only,
+  // public (the belfry:web period, never retroactive) or closed (NIP-29 closed: people ask, a
+  // steward lets them in). Public and closed exclude each other. Saved with the rest.
+  const vis0: Vis = g ? visOf(g) : 'members'
+  const [vis, setVis] = useState<Vis>(vis0)
+  const [askPublic, setAskPublic] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const [archiveError, setArchiveError] = useState('')
   if (!g || g.archived) return null
+  // going public: asked first, here in the app (Settings-B)
+  if (askPublic) return (
+      <div className="confirm-box vis-confirm" role="alertdialog" aria-label={`Make ${chanLabel(g)} public?`}>
+        <b>Make {chanLabel(g)} public?</b>
+        <p>From now on, anyone on the web can read what is posted here, with the names of the people who post. Earlier messages stay for members only.</p>
+        <div className="row-btns two">
+          <button type="button" className="btn ghost" onClick={() => setAskPublic(false)}>Keep it for members</button>
+          <button type="button" className="btn" onClick={() => { setVis('public'); setAskPublic(false) }}>Make it public</button>
+        </div>
+      </div>
+  )
   // archiving: asked here, in the app (never the browser's confirm)
   if (archiving) return (
       <div className="confirm-box" role="alertdialog" aria-label={`Archive ${g.name}`}>
@@ -199,10 +212,16 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
   return (
           <Form className="chan-settings-form" onSubmit={async (e) => {
             e.preventDefault()
-            if (!g.isPod && closedCh !== !!g.closed)
-              await editPod(id, name.trim(), about.trim(), { closed: closedCh, prompt: g.prompt ?? '', vouches: 0 })
-            else if (name.trim() !== g.name || about.trim() !== g.about || g.isPod)
-              await (g.isPod ? editPod(id, name.trim(), about.trim(), access) : editChannel(id, name.trim(), about.trim()))
+            const closed = vis === 'closed'
+            if (g.isPod) await editPod(id, name.trim(), about.trim(), { ...access, closed })
+            else if (closed !== !!g.closed) await editPod(id, name.trim(), about.trim(), { closed, prompt: g.prompt ?? '', vouches: 0 })
+            else if (name.trim() !== g.name || about.trim() !== g.about) await editChannel(id, name.trim(), about.trim())
+            // public from now on, or not any more (a period opens or closes; never retroactive)
+            if ((vis === 'public') !== isPublicChannel(g)) {
+              const page = await setVisibility(id, vis === 'public' ? 'public' : 'members')
+              web.visibility = page.visibility; web.periods = page.periods
+              if (page.visibility === 'public') { web.on = true; if (!web.slug) web.slug = page.slug }
+            }
             if (web.on) {
               const slug = slugify(web.slug)
               if (slug.length < 2) { setWebError('Give the page an address: two letters or more.'); return }
@@ -212,20 +231,27 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
               web.slug = slug
             }
             if (openMail !== isInbox(g)) await setInbox(id, openMail)
-            const was = webPage(g)
+            const was = webPage(group(id))
             if (was) { web.visibility = was.visibility; web.periods = was.periods; if (was.visibility === 'public') web.on = web.on || was.on }
             if (web.on !== !!was?.on || web.slug !== (was?.slug ?? web.slug) || web.visibility !== (was?.visibility ?? 'public') || (web.posts ?? '') !== (was?.posts ?? '')) await setWebPage(id, web)
             onClose()
           }}>
             <label className="field"><span>Name</span><input className="input" value={name} onChange={(e) => setName(e.target.value)} /></label>
             <label className="field"><span>Description · Markdown works, links become clickable</span><textarea className="input" rows={4} value={about} onChange={(e) => setAbout(e.target.value)} /></label>
-            {g.isPod && <AccessFields closed={access.closed} prompt={access.prompt} vouches={access.vouches} set={setAccess} />}
-            {!g.isPod && <div className="field visibility"><span>Visibility</span>
-              <label className="toggle"><input type="radio" name="visibility" checked={isPublicChannel(g)} onChange={() => { setClosedCh(false); setMoving('public') }} /> <span><b>Public</b> · anyone reads it on the web</span></label>
-              <label className="toggle"><input type="radio" name="visibility" checked={!isPublicChannel(g) && !closedCh} onChange={() => { setClosedCh(false); if (isPublicChannel(g)) setMoving('members') }} /> <span><b>Members only</b> · people from outside see only their own thread</span></label>
-              {g.id !== 'general' && <label className="toggle"><input type="radio" name="visibility" value="closed" checked={!isPublicChannel(g) && closedCh} onChange={() => { setClosedCh(true); if (isPublicChannel(g)) setMoving('members') }} /> <span><b>Closed</b> · members apply to join; its stewards let them in</span></label>}
-            </div>}
-            {moving && <VisibilitySheet g={g} to={moving} onClose={() => { setMoving(null); setClosedCh(!!g.closed) }} onDone={(page) => { setWeb({ ...web, on: page.on, visibility: page.visibility, periods: page.periods, slug: web.on ? web.slug : page.slug }); setMoving(null) }} />}
+            <div className="field who-reads"><span className="sec-title">Who can read it</span>
+              <div className="act-group vis-rows" role="radiogroup" aria-label="Who can read it">
+                {VIS.filter(([v]) => v !== 'closed' || g.id !== 'general').map(([v, Icon, title, line]) => (
+                  <button key={v} type="button" role="radio" aria-checked={vis === v} className={'act vis-row' + (vis === v ? ' on' : '')}
+                    onClick={() => { if (v === vis) return; if (v === 'public') setAskPublic(true); else setVis(v) }}>
+                    <span className="cmenu-ico"><Icon /></span>
+                    <span className="t"><b>{title}</b><small>{line}</small></span>
+                    {vis === v && <CheckIcon />}
+                  </button>
+                ))}
+              </div>
+              <small className="hint vis-foot">A change counts from now on. Messages keep the visibility they were posted with.</small>
+            </div>
+            {g.isPod && vis === 'closed' && <ClosedFields prompt={access.prompt} vouches={access.vouches} set={(a) => setAccess({ ...access, ...a })} />}
             {!g.isPod && <div className="field visibility"><span>Posts</span>
               {([['', 'Anything', 'messages, threads, events, proposals'], ['thread', 'Threads only', 'every post has a title; talk goes in its thread'], ['event', 'Events only', 'the composer becomes "New event"'], ['proposal', 'Proposals only', 'to discuss and vote on'],
                 ...(web.posts === 'request' ? [['request', 'Requests', 'from the web; members turn them into proposals']] : [])] as [string, string, string][]).map(([v, label, hint]) => (
@@ -261,6 +287,45 @@ export function ChannelSettingsForm({ id, onDone }: { id: string; onDone: () => 
             )}
             <p className="hint">{g.isPod ? 'Group' : 'Channel'} id <code>{g.id}</code></p>
           </Form>
+  )
+}
+
+type Vis = 'members' | 'public' | 'closed'
+const visOf = (g: Group): Vis => (isPublicChannel(g) ? 'public' : g.closed ? 'closed' : 'members')
+const chanLabel = (g: Group) => (g.isPod || g.isEvent || g.isProposal ? g.name : '#' + g.name)
+const VisLock = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></svg>
+const VisGlobe = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" /></svg>
+const VisAsk = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="4" /><path d="M2 21v-1a6 6 0 0 1 9.5-4.9M15 18l2 2 4-4" /></svg>
+const CheckIcon = () => <svg className="vis-check" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Selected"><path d="M5 12l5 5 9-10" /></svg>
+const VIS: [Vis, () => JSX.Element, string, string][] = [
+  ['members', VisLock, 'Members only', 'Everyone with a pass in this belfry'],
+  ['public', VisGlobe, 'Public', 'Anyone on the web can read it. Only members write.'],
+  ['closed', VisAsk, 'Closed', 'People ask to join. A steward of this channel approves.'],
+]
+
+/** A closed group's question and how requests are accepted (by its stewards, or by vouches). */
+function ClosedFields({ prompt, vouches = 0, set }: { prompt: string; vouches?: number; set: (a: { prompt: string; vouches: number }) => void }) {
+  return (
+    <>
+      <label className="field"><span>Question people answer when they ask</span>
+        <textarea className="input" rows={2} placeholder={DEFAULT_PROMPT} value={prompt} onChange={(e) => set({ prompt: e.target.value, vouches })} /></label>
+      <div className="field vouch-rule"><span>Requests are accepted</span>
+        <div className="pick-group" role="radiogroup" aria-label="How requests are accepted">
+          <button type="button" role="radio" aria-checked={!vouches} className={'pick-row' + (!vouches ? ' on' : '')} onClick={() => set({ prompt, vouches: 0 })}>
+            <span className="radio" aria-hidden="true" /><span className="t"><b>By its stewards</b><small>A steward accepts or declines each request</small></span>
+          </button>
+          <button type="button" role="radio" aria-checked={!!vouches} className={'pick-row' + (vouches ? ' on' : '')} onClick={() => set({ prompt, vouches: vouches || 2 })}>
+            <span className="radio" aria-hidden="true" /><span className="t"><b>When members vouch</b><small>Once enough of its members vouch, they’re in. Stewards can still answer.</small></span>
+          </button>
+        </div>
+        {!!vouches && (
+          <div className="seg small vouch-n" role="group" aria-label="How many vouches">
+            {[1, 2, 3, 4, 5].map((n) => <button key={n} type="button" className={vouches === n ? 'on' : ''} aria-pressed={vouches === n} onClick={() => set({ prompt, vouches: n })}>{n}</button>)}
+          </div>
+        )}
+        {!!vouches && <small className="hint">{vouches === 1 ? 'One vouch' : `${vouches} vouches`} from different members of the group (not guests, not agents).</small>}
+      </div>
+    </>
   )
 }
 
