@@ -313,12 +313,14 @@ export const deleteEvent = (e: CalEvent) =>
 
 // website: a new version of the website (an nsite ref, #issues 2026-11-13): it goes live once a
 // belfry admin marks the proposal Passed (website.py watches the card in #website)
-export interface NewProposal { title: string; summary: string; text: string; status: ProposalStatus; website?: string }
+export interface NewProposal { title: string; summary: string; text: string; status: ProposalStatus; website?: string
+  /** only these parts of the site (["path", p] each; none = the whole site; core/website.ts) */
+  paths?: string[] }
 
 const proposalTags = (d: string, groupId: string, n: NewProposal, version: number, status: ProposalStatus) => [
   ['d', d], ['title', n.title], ['summary', n.summary], ['t', 'proposal'], ['h', groupId, BELFRY.groupsRelay],
   ['version', String(version)], ['status', status], ['published_at', String(Math.floor(Date.now() / 1000))],
-  ...(n.website ? [['t', 'website'], ['website', n.website]] : []),
+  ...(n.website ? [['t', 'website'], ['website', n.website], ...(n.paths ?? []).map((p) => ['path', p])] : []),
 ]
 
 /** A proposal: its own chat `prop-…` (for feedback), its text (NIP-23, version 1) and a card in
@@ -342,7 +344,7 @@ export async function createProposal(n: NewProposal, parent = 'general') {
 /** A new version: the text replaced (same d, version + 1) and a note in its chat saying what changed. */
 export async function reviseProposal(p: Proposal, n: Omit<NewProposal, 'status'>, note: string) {
   const version = p.version + 1
-  await enqueue('main', { kind: 30023, content: n.text, tags: proposalTags(p.d, p.groupId, { ...n, status: p.status, website: p.website }, version, p.status) })
+  await enqueue('main', { kind: 30023, content: n.text, tags: proposalTags(p.d, p.groupId, { ...n, status: p.status, website: p.website, paths: p.paths }, version, p.status) })
   await enqueue('groups', {
     kind: 9,
     content: `📝 Version ${version}${note.trim() ? ': ' + note.trim() : ''}`,

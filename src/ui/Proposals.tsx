@@ -6,11 +6,12 @@ import { all, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, Btn, fmtDay, go, Sheet, Form, useFormDraft } from './common'
 import { Markdown } from './markdown'
+import { parsePaths, rootFolder, scopeWords, siteFiles, websiteTitle } from '../core/website'
 import { Conversation } from './Chat'
 import { ChannelMenu } from './ChannelMenu'
 import { SaveFailedIcon } from './ChannelHeader'
 import { openProfile } from './Profile'
-import { ChevronDownIcon, ChevronUpIcon, MoreIcon, SearchIcon } from './icons'
+import { ChevronDownIcon, ChevronUpIcon, GlobeIcon, MoreIcon, SearchIcon } from './icons'
 
 // A proposal is a channel template: its chat is where feedback goes; above it, the text (with its
 // version), its status and, while open for votes, the vote.
@@ -116,15 +117,37 @@ export function NewProposalSheet({ parent, onClose, from, onMade, website }: { p
     : { title: from?.title ?? '', summary: '', text: from ? `${from.text}\n\n_From a request by ${from.by}: ${from.link}_` : '', status: 'feedback' })
   const set = (patch: Partial<NewProposal>) => setN((x) => ({ ...x, ...patch }))
   const where = group(parent)
+  // a website version: "Only this part of the site", prefilled with the one folder all its files
+  // are in (read from its manifest) until the person types there
+  const [scope, setScope] = useState('')
+  const touched = useRef(false)
+  useEffect(() => {
+    if (!website) return
+    let live = true
+    void siteFiles(website.ref).then((f) => { const r = f && rootFolder(f); if (live && r && !touched.current) setScope(r) })
+    return () => { live = false }
+  }, [website?.ref])
+  const parsed = website ? parsePaths(scope) : { paths: [] }
+  const paths = 'paths' in parsed ? parsed.paths : null
+  const final = (): NewProposal => website && paths ? { ...n, title: websiteTitle(n.title, paths), paths } : n
   return (
     <Sheet title="New proposal" onClose={onClose}>
-      <Form onSubmit={async (e) => { e.preventDefault(); const id = await createProposal(n, parent); clearDraft(); onMade?.(id, n.title); onClose(); go('c/' + encodeURIComponent(id)) }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); if (!paths) return; const m = final(); const id = await createProposal(m, parent); clearDraft(); onMade?.(id, m.title); onClose(); go('c/' + encodeURIComponent(id)) }}>
         <Fields n={n} set={set} />
+        {website && (
+          <label className="field prop-scope-field"><span>Only this part of the site <small className="hint">(optional)</small></span>
+            <input className="input" placeholder="/ios/screenshots/" autoCapitalize="off" autoCorrect="off" spellCheck={false} value={scope}
+              onChange={(e) => { touched.current = true; setScope(e.target.value) }} aria-invalid={!paths} />
+            {paths
+              ? <small className="hint">{paths.length ? `Publishing it changes only ${scopeWords(paths)}; the rest of the website stays as it is.` : 'Empty: this version replaces the whole website.'} Posted as “{websiteTitle(n.title, paths)}”.</small>
+              : <small className="error">{'error' in parsed ? parsed.error : ''}</small>}
+          </label>
+        )}
         <div className="choice">
           <button type="button" className={n.status === 'draft' ? 'on' : ''} onClick={() => set({ status: 'draft' })}><b>Draft</b><small>Still writing it</small></button>
           <button type="button" className={n.status === 'feedback' ? 'on' : ''} onClick={() => set({ status: 'feedback' })}><b>Open for feedback</b><small>Ask for comments</small></button>
         </div>
-        <button className="btn" disabled={!n.title.trim()}>Post proposal</button>
+        <button className="btn" disabled={!n.title.trim() || !paths}>Post proposal</button>
         <p className="hint" style={{ marginTop: 10 }}>Posted in {where?.name ?? parent}. It gets its own chat for feedback; you can publish new versions.{n.website ? ` Once an admin marks it Passed, this version goes live at ${BELFRY.domain}.` : ''}</p>
       </Form>
     </Sheet>
@@ -136,7 +159,7 @@ function ReviseSheet({ p, onClose }: { p: Proposal; onClose: () => void }) {
   const [note, setNote] = useState('')
   return (
     <Sheet title={`Version ${p.version + 1}`} onClose={onClose}>
-      <Form onSubmit={async (e) => { e.preventDefault(); await reviseProposal(p, n, note); onClose() }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); await reviseProposal(p, p.website ? { ...n, title: websiteTitle(n.title, p.paths) } : n, note); onClose() }}>
         <Fields n={n} set={(patch) => setN({ ...n, ...patch })} />
         <label className="field"><span>What changed</span>
           <input className="input" placeholder="e.g. Budget lowered after feedback" value={note} onChange={(e) => setNote(e.target.value)} /></label>
@@ -162,7 +185,7 @@ export function SiteBar({ groupId }: { groupId: string }) {
   return (
     <div className="prop-site">
       <a className="btn small" href={previewLink(p.website)} target="_blank" rel="noreferrer">Preview this version</a>
-      <span className="hint">{p.status === 'passed' ? `Passed: it is (or is about to be) live at ${BELFRY.domain}.` : `A new version of ${BELFRY.domain}: it goes live once a belfry admin marks this proposal Passed.`}</span>
+      <span className="hint">{p.status === 'passed' ? `Passed: it is (or is about to be) live at ${BELFRY.domain}${p.paths.length ? ` (only ${scopeWords(p.paths)})` : ''}.` : `A new version of ${p.paths.length ? `${scopeWords(p.paths)} on ` : ''}${BELFRY.domain}: it goes live once a belfry admin marks this proposal Passed.`}</span>
     </div>
   )
 }
@@ -325,6 +348,7 @@ export function ProposalView({ id, left, topic, onTopic, focus, activeThread }: 
         <div className="evh-main prop-main">
           <p className="prop-meta"><StatusBadge s={p.status} /><span className="hint">Proposal by <button className="link who" onClick={() => openProfile(p.author)}>{displayName(p.author)}</button> · version {p.version}</span></p>
           <h2 className="prop-title">{p.title}</h2>
+          {p.website && p.paths.length > 0 && <p className="prop-scope"><GlobeIcon /> Changes only {scopeWords(p.paths)}</p>}
           {p.text ? <Markdown className={'prop-text' + (level === 1 ? ' teaser' : '')} text={p.text} /> : <p className="hint">No text yet.</p>}
           {level === 1 && p.text && <button className="link prop-more" onClick={() => setLevel(2)}>Read the full proposal</button>}
           {voteRow}

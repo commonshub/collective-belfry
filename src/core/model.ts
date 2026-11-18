@@ -924,6 +924,8 @@ export interface Proposal {
   status: ProposalStatus
   /** A new version of the website (an nsite ref): live once a belfry admin marks it Passed. */
   website?: string
+  /** Its scope (its ["path", …] tags): only these parts of the site; empty = the whole site. */
+  paths: string[]
   /** The latest poll on it, with its version and each member's latest answer. */
   poll?: { ev: Ev; version: number; votes: Map<string, string> }
 }
@@ -971,6 +973,7 @@ export function proposals(): Proposal[] {
       coord, d: tag(e, 'd')!, ev: e, author: e.pubkey, groupId,
       title: tag(e, 'title') || 'Untitled proposal', summary: tag(e, 'summary') ?? '', text: e.content,
       version: Number(tag(e, 'version')) || 1, status, poll, website: tag(e, 'website') || undefined,
+      paths: e.tags.filter((t) => t[0] === 'path' && t[1]).map((t) => t[1]),
     })
   }
   return out

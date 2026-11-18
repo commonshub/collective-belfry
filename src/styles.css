@@ -1698,6 +1698,8 @@ a.ln { overflow-wrap: anywhere; }
 .prop-main { gap: 6px; }
 .prop-meta { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
 .prop-meta .link.who { font-size: 13px; color: inherit; text-decoration: underline dotted; padding: 0; }
+.prop-scope { margin: 0; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.prop-scope svg { width: 16px; height: 16px; flex: none; }
 .prop-title { margin: 2px 0 0; font-size: 24px; line-height: 1.15; font-weight: 700; }
 .prop-main .prop-text { margin-top: 2px; font-size: 15px; }
 .prop-main .prop-text.teaser { max-height: 4.3em; overflow: hidden; color: var(--muted); mask-image: linear-gradient(#000 55%, transparent); -webkit-mask-image: linear-gradient(#000 55%, transparent); }
