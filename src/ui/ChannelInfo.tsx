@@ -23,7 +23,7 @@ import { all, type Ev } from '../core/store'
 import { isAdmin } from '../core/access'
 import { GroupRequest } from './Requests'
 import { groupRequestsFor } from '../core/requests'
-import { ArchiveIcon, GearIcon, ThreadIcon } from './icons'
+import { ArchiveIcon, ChevronRightIcon, GearIcon, PeopleIcon, ThreadIcon, TrashIcon } from './icons'
 import { ArchivedBar } from './GroupPage'
 
 type Tab = 'about' | 'tasks' | 'members' | 'files' | 'log'
@@ -399,7 +399,6 @@ export function Tasks({ groupId }: { groupId: string }) {
   useVersion()
   const { tasks } = tasklist(groupId)
   const [title, setTitle] = useState('')
-  const [open, setOpen] = useState<string | null>(null)
   const todo = tasks.filter((t) => !t.done)
   const done = tasks.filter((t) => t.done)
   return (
@@ -410,43 +409,83 @@ export function Tasks({ groupId }: { groupId: string }) {
       </Form>
       {tasks.length === 0 && <div className="empty">No to-dos yet.</div>}
       {[...todo, ...done].map((t) => (
-        <TaskRow key={t.id} t={t} groupId={groupId} open={open === t.id} toggle={() => setOpen(open === t.id ? null : t.id)} />
+        <TaskRow key={t.id} t={t} groupId={groupId} />
       ))}
     </div>
   )
 }
 
-function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open: boolean; toggle: () => void }) {
-  const [comment, setComment] = useState('')
-  const [assigning, setAssigning] = useState(false)
-  const mine = t.assignee === me()
-  const now = useNow()
+/** "Chloé Martin is on it" / "You are working on it now" / "Nobody on it yet". */
+const onIt = (t: Task, busy: boolean) => t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Nobody on it yet'
+
+/** The ring: a tap ticks it off (or back); it turns while someone is working on it now. */
+function TaskRing({ t, groupId, now }: { t: Task; groupId: string; now: number }) {
   const busy = isWorking(t, now)
   return (
+    <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? 'Mark as not done' : 'Mark as done'}
+      onClick={(e) => { e.stopPropagation(); void taskAction(groupId, t.id, t.done ? 'undone' : 'done') }}>{t.done ? '✓' : busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}</button>
+  )
+}
+
+/** A to-do in a list: the ring, its title, who is on it; the rest of the row (with its ›) opens
+ *  its own screen (board todos/todo; Xavier: "a > on the right to open a todo to discuss it"). */
+function TaskRow({ t, groupId }: { t: Task; groupId: string }) {
+  const now = useNow()
+  const busy = isWorking(t, now)
+  const open = () => go(`c/${encodeURIComponent(groupId)}/todo/${t.id}`)
+  return (
     <div className={'task' + (t.done ? ' done' : '')} style={{ opacity: t.pending ? 0.6 : 1 }}>
-      <button className={'check' + (t.done ? ' done' : t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={t.done ? 'Mark as not done' : 'Mark as done'}
-        onClick={() => taskAction(groupId, t.id, t.done ? 'undone' : 'done')}>{t.done ? '✓' : busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}</button>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div className="title" onClick={toggle}><Linkify text={t.title} /></div>
-        <small onClick={toggle}>
-          {t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Nobody on it yet'}
-          {t.comments.length ? ` · 💬 ${t.comments.length}` : ''}
-        </small>
-        {open && (
-          <div style={{ marginTop: 8 }}>
-            {t.comments.map((c, i) => <div key={i} style={{ fontSize: 14, margin: '4px 0' }}><b>{displayName(c.author)}</b> <Linkify text={c.text} /></div>)}
-            <div className="row" style={{ margin: '8px 0', flexWrap: 'wrap' }}>
-              <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, mine ? 'unclaim' : 'claim')}>
-                {mine ? 'Unassign me' : t.assignee ? 'Take over' : "I'll take it"}
-              </button>
-              {/* someone else: give it to them, or take them off it (Xavier, 2026-11-18) */}
-              <button className="btn small ghost" aria-expanded={assigning} onClick={() => setAssigning(!assigning)}>Assign to…</button>
-              {t.assignee && !mine && <Btn className="btn small ghost" onClick={() => assignTask(groupId, t.id, t.assignee!, false)}>Unassign {displayName(t.assignee)}</Btn>}
-              {t.author === me() && <button className="btn small ghost" onClick={() => taskAction(groupId, t.id, 'delete')}>Delete</button>}
-            </div>
+      <TaskRing t={t} groupId={groupId} now={now} />
+      <button className="task-open" onClick={open} aria-label={`Open the to-do “${t.title}”`}>
+        <span className="t">
+          <span className="title">{t.title}</span>
+          <small>{onIt(t, busy)}{t.comments.length ? ` · ${t.comments.length} ${t.comments.length === 1 ? 'comment' : 'comments'}` : ''}</small>
+        </span>
+        <ChevronRightIcon />
+      </button>
+    </div>
+  )
+}
+
+/** #/c/<id>/todo/<taskId>: one to-do (board todos/todo, as Android's TodoScreen): the ring and its
+ *  title, who is on it and who made it; Take it over · Assign to… · Unassign <name> · Open the
+ *  message it came from · Delete the to-do; then its discussion, with a comment box at the bottom. */
+export function TodoScreen({ groupId, taskId }: { groupId: string; taskId: string }) {
+  useVersion()
+  const now = useNow()
+  const [assigning, setAssigning] = useState(false)
+  const [comment, setComment] = useState('')
+  const g = group(groupId)
+  const t = tasklist(groupId).tasks.find((x) => x.id === taskId)
+  const where = g ? (g.isPod ? g.name : '#' + g.name) : ''
+  const top = (
+    <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back(`c/${encodeURIComponent(groupId)}/todos`)}>‹</button>
+      <h1>To-do<small>{where}</small></h1></div>
+  )
+  if (!t) return <div className="screen todo-screen">{top}<div className="empty">This to-do isn’t here (deleted, or still syncing).</div></div>
+  const busy = isWorking(t, now)
+  const mine = t.assignee === me()
+  const ro = !!g?.archived
+  return (
+    <div className="screen todo-screen">
+      {top}
+      <div className="scroll">
+        <div className="todo-head"><TaskRing t={t} groupId={groupId} now={now} /><h2 className={t.done ? 'done' : ''}><Linkify text={t.title} /></h2></div>
+        <div className="todo-who">
+          {t.assignee ? <Avatar pubkey={t.assignee} size={28} /> : <span className="todo-nobody" aria-hidden="true" />}
+          <span className="t"><b>{onIt(t, busy)}</b><small>Made by {t.author === me() ? 'you' : displayName(t.author)}</small></span>
+        </div>
+        {!ro && (
+          <div className="home-card todo-acts">
+            <Btn className="home-row" onClick={() => taskAction(groupId, t.id, mine ? 'unclaim' : 'claim')}>
+              <span className="row-ico"><PeopleIcon /></span><span className="t"><b>{mine ? 'Unassign me' : t.assignee ? 'Take it over' : 'I’ll take it'}</b></span>
+            </Btn>
+            <button className="home-row" aria-expanded={assigning} onClick={() => setAssigning(!assigning)}>
+              <span className="row-ico"><PeopleIcon /></span><span className="t"><b>Assign to…</b></span><ChevronRightIcon />
+            </button>
             {assigning && (
               <div className="assign-list" role="listbox" aria-label="Assign to">
-                {[me(), ...[...(group(groupId)?.members ?? [])].filter((k) => k !== me() && !isGuest(k))].slice(0, 50).map((k) => (
+                {[me(), ...[...(g?.members ?? [])].filter((k) => k !== me() && !isGuest(k))].slice(0, 50).map((k) => (
                   <Btn key={k} className={'pick-row' + (t.assignee === k ? ' on' : '')} role="option" aria-selected={t.assignee === k}
                     onClick={async () => { await (k === me() ? taskAction(groupId, t.id, 'claim') : assignTask(groupId, t.id, k, true)); setAssigning(false) }}>
                     <Avatar pubkey={k} size={24} /><span>{k === me() ? 'Me' : displayName(k)}</span>
@@ -454,16 +493,30 @@ function TaskRow({ t, groupId, open, toggle }: { t: Task; groupId: string; open:
                 ))}
               </div>
             )}
-            <Form className="row" onSubmit={async (e) => { e.preventDefault(); if (comment.trim()) { await commentTask(groupId, t.id, comment.trim()); setComment('') } }}>
-              <input className="input" placeholder="Comment…" value={comment} onChange={(e) => setComment(e.target.value)} />
-              <button className="btn small" disabled={!comment.trim()}>Send</button>
-            </Form>
+            {t.assignee && !mine && <Btn className="home-row" onClick={() => assignTask(groupId, t.id, t.assignee!, false)}>
+              <span className="row-ico"><PeopleIcon /></span><span className="t"><b>Unassign {displayName(t.assignee)}</b></span>
+            </Btn>}
+            {t.source && <button className="home-row" onClick={() => go(`c/${encodeURIComponent(groupId)}/thread/${t.source}`)}>
+              <span className="row-ico"><ThreadIcon /></span><span className="t"><b>Open the message it came from</b></span><ChevronRightIcon />
+            </button>}
+            {t.author === me() && <Btn className="home-row danger" onClick={async () => { if (!confirm(`Delete the to-do “${t.title}”?`)) return; await taskAction(groupId, t.id, 'delete'); back(`c/${encodeURIComponent(groupId)}/todos`) }}>
+              <span className="row-ico"><TrashIcon /></span><span className="t"><b>Delete the to-do</b></span>
+            </Btn>}
           </div>
         )}
+        {ro && t.source && <button className="link pad-x" onClick={() => go(`c/${encodeURIComponent(groupId)}/thread/${t.source}`)}>Open the message it came from</button>}
+        <div className="place-section"><h3>Discussion</h3></div>
+        {t.comments.length === 0 && <p className="hint pad-x">No comments yet.</p>}
+        {t.comments.map((c, i) => (
+          <div key={i} className="todo-comment"><Avatar pubkey={c.author} size={28} /><div className="b"><b>{displayName(c.author)}</b><Linkify text={c.text} /></div></div>
+        ))}
       </div>
-      {/* made from a message: its thread, where its history is written (the old pull-down row's link) */}
-      {t.source && <button type="button" className="icon-btn task-thread" aria-label="Open its thread" title="Open its thread"
-        onClick={() => go('c/' + encodeURIComponent(groupId) + '/thread/' + t.source)}><ThreadIcon /></button>}
+      {!ro && (
+        <Form className="todo-cbar" onSubmit={async (e) => { e.preventDefault(); if (comment.trim()) { await commentTask(groupId, t.id, comment.trim()); setComment('') } }}>
+          <input className="input" placeholder="Write a comment…" aria-label="Write a comment" value={comment} onChange={(e) => setComment(e.target.value)} />
+          <button className="btn small" disabled={!comment.trim()} aria-label="Send the comment">Send</button>
+        </Form>
+      )}
     </div>
   )
 }

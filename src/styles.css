@@ -1810,3 +1810,27 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .forget-device { color: var(--muted); }
 .back-accounts { display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: 22px; }
 .back-accounts .hint { margin: 0; }
+
+/* a to-do's row (ChannelInfo.tsx TaskRow): the ring, then the rest opens its screen */
+.task { align-items: center; }
+.task .task-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.task .task-open .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.task .task-open > svg { color: var(--faint); flex: none; }
+/* #/c/<id>/todo/<taskId> (TodoScreen, board todos/todo) */
+.todo-screen .scroll { padding-bottom: 12px; }
+.todo-head { display: flex; gap: 12px; align-items: flex-start; margin: 14px 16px 10px; }
+.todo-head .check { width: 28px; height: 28px; margin-top: 3px; }
+.todo-head h2 { margin: 0; font-size: 24px; line-height: 1.25; font-weight: 700; overflow-wrap: anywhere; }
+.todo-head h2.done { text-decoration: line-through; color: var(--muted); }
+.todo-who { display: flex; gap: 10px; align-items: center; margin: 0 16px 12px; }
+.todo-who .t { display: flex; flex-direction: column; min-width: 0; }
+.todo-who small { color: var(--muted); font-size: 13px; }
+.todo-nobody { width: 28px; height: 28px; border-radius: 50%; border: 2px dashed var(--faint); box-sizing: border-box; flex: none; }
+.todo-acts { margin: 0 12px; }
+.todo-acts .home-row.danger { color: var(--danger); }
+.todo-acts .assign-list { padding: 4px 12px 8px; }
+.todo-comment { display: flex; gap: 10px; margin: 8px 16px; }
+.todo-comment .b { flex: 1; min-width: 0; background: var(--surface); border-radius: 14px; padding: 7px 12px; font-size: 15px; overflow-wrap: anywhere; }
+.todo-comment .b b { display: block; font-size: 14px; }
+.todo-cbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px calc(8px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--bg); }
+.todo-cbar .input { flex: 1; min-width: 0; font-size: 16px; }

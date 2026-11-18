@@ -718,7 +718,7 @@ export function TodosScreen() {
         <Btn className={'check' + (t.assignee ? ' claimed' : '') + (busy ? ' working' : '')} aria-label={`Mark “${t.title}” as done`} onClick={() => taskAction(g.id, t.id, 'done')}>
           {busy ? <WorkRing since={workingSince(t) ?? now} now={now} /> : ''}
         </Btn>
-        <button className="todo-open" onClick={() => go(`c/${encodeURIComponent(g.id)}/todos`)}>
+        <button className="todo-open" onClick={() => go(`c/${encodeURIComponent(g.id)}/todo/${t.id}`)}>
           <span className="t"><b>{t.title}</b><small>{line}</small></span><ChevronRightIcon />
         </button>
       </div>

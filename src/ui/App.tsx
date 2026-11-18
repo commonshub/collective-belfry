@@ -32,7 +32,7 @@ import { EventsScreen } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
 import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication, ticketLinkFromUrl } from '../core/events'
 import { eventOfGroup } from '../core/model'
-import { ChannelInfo } from './ChannelInfo'
+import { ChannelInfo, TodoScreen } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
 import { orderContent } from '../core/order'
@@ -294,6 +294,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     const id = chanId
     const evOf = eventOfGroup(id) // an event's chat opens as the event
     if (group(id)?.archived && b && ARCHIVED_READS.has(b)) view = <ChannelInfo key={b} id={id} initial={b === 'info' ? (c === 'members' ? 'members' : 'about') : INFO_PAGES[b] === 'tasks' ? 'about' : INFO_PAGES[b]} />
+    else if (b === 'todo' && c) view = <TodoScreen key={c} groupId={id} taskId={c} />
     else if (group(id)?.archived && b && b !== 'm' && b !== 't' && b !== 'thread' && b !== 'group') view = <ChannelView id={id} /> // its to-dos, its events: the channel itself, read only
     else if (evOf && (!b || b === 'm' || (b === 'thread' && wide && three && c))) {
       view = <EventScreen key={id} coord={evOf.coord} activeThread={b === 'thread' ? c : undefined} />
