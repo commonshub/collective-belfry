@@ -274,6 +274,26 @@ def allowed_origin(settings: Any, origin: str | None, svc: Services | None = Non
     return None
 
 
+# The website's previews (preview.<domain>, website.py) show anyone's draft site: untrusted
+# content. They may call the sales API only (a draft shop page tries the checkout): those calls
+# are signed per request (NIP-98) by a key made in the page, never by a cookie, and the answer
+# never allows credentials. Paths as the app sees them: belfry.<domain>/api/v1/<name> is
+# /api/<name> by then (console.map_host runs first).
+PREVIEW_PATHS = re.compile(
+    r"^/api/(?:products|codes/check|checkout|checkout/[^/]+|checkout/[^/]+/pay"
+    r"|billing|offers|offers/[^/]+)$"
+)
+
+
+def preview_origin(settings: Any, origin: str | None, path: str) -> str | None:
+    """https://preview.<domain> for the sales endpoints (PREVIEW_PATHS), else None."""
+    domain = getattr(settings, "nip05_domain", "") or ""
+    if not origin or "." not in domain or not PREVIEW_PATHS.match(path):
+        return None
+    # one segment per [^/]+: /offers/<id>/decide (an admin's) and /codes never match
+    return origin if origin == f"https://preview.{domain}" else None
+
+
 def cors_headers(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": origin,
@@ -303,6 +323,7 @@ def register(app: FastAPI) -> None:
             origin = await run_in_threadpool(
                 allowed_origin, settings, request.headers.get("origin"), request.app.state.services
             )
+            origin = origin or preview_origin(settings, request.headers.get("origin"), path)
         else:
             return await call_next(request)
         if request.method == "OPTIONS" and request.headers.get("access-control-request-method"):
