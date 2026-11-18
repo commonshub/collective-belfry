@@ -6,6 +6,7 @@ import { jitsiLink, mayPickAddress, randomEnd } from '../core/actions'
 import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, type Visibility } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
+import PlaceInput from './PlaceInput'
 import { claimSlug, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
 import { back, fmtDay, go, Sheet, Btn, Form, up, useFormDraft } from './common'
 import { Tabs } from './ChannelInfo'
@@ -177,6 +178,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
   const [slugEdited, setSlugEdited] = useState(!!edit?.slug)
   const [slugState, setSlugState] = useState<{ checking?: boolean; free?: boolean; msg?: string }>({})
   const [coverBusy, setCoverBusy] = useState(false)
+  const [meetHint, setMeetHint] = useState(false)
   const [error, setError] = useState('')
   const asked = useRef(0)
   // the custom URL: from the title until edited; checked as it is typed
@@ -193,7 +195,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
     const mine = ++asked.current
     setSlugState({ checking: true })
     const t = setTimeout(() => {
-      slugFree(s, edit?.d).then((r) => { if (mine === asked.current) setSlugState({ free: r.free, msg: r.free ? 'Free' : `Taken. Try ${r.suggestion}` }) },
+      slugFree(s, edit?.d).then((r) => { if (mine === asked.current) setSlugState({ free: r.free, msg: r.free ? `✓ ${BELFRY.domain}/events/${s} is available` : `Taken. Try ${r.suggestion}` }) },
         () => { if (mine === asked.current) setSlugState({ msg: 'Could not check it now; it is checked again when you save.' }) })
     }, 350)
     return () => clearTimeout(t)
@@ -227,7 +229,7 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
           <input className="input" autoFocus={!edit} placeholder="e.g. Garden day" value={n.title} maxLength={200} onChange={(e) => set({ title: e.target.value })} /></label>
         <div className="field"><span>Cover</span></div>
         <label className={'cover-pick' + (n.cover ? ' has' : '')}>
-          {n.cover ? <img src={n.cover} alt="" /> : <span><ImageIcon /> {coverBusy ? 'Uploading…' : 'Add a cover picture'}</span>}
+          {n.cover ? <img src={n.cover} alt="" /> : <span className="cover-empty"><span><ImageIcon /> {coverBusy ? 'Uploading…' : 'Add a cover picture'}</span><small>Wide, 2:1: 1600 × 800 px is best (JPG or PNG)</small></span>}
           <input type="file" accept="image/*" hidden disabled={coverBusy} onChange={async (e) => {
             const f = e.target.files?.[0]
             e.target.value = ''
@@ -249,17 +251,14 @@ export function EventFormSheet({ edit, onClose, onSaved, visibility = 'members' 
             </select></label>
         )}
         <label className="field"><span>Where</span>
-          <input className="input" placeholder="A place, or leave empty if online only" value={n.location} onChange={(e) => set({ location: e.target.value })} /></label>
-        {places.length > 0 && (
-          <div className="chips" style={{ margin: '-6px 0 14px' }}>
-            {places.map((pl) => <button type="button" key={pl} className={'chip' + (n.location === pl ? ' on' : '')} onClick={() => set({ location: n.location === pl ? '' : pl })}>📍 {pl}</button>)}
-          </div>
-        )}
+          <PlaceInput placeholder="A place, or leave empty if online only" value={n.location} past={places} onChange={(v) => set({ location: v })} /></label>
         <label className="field"><span>Online</span>
           <input className="input" type="url" inputMode="url" placeholder="A Jitsi, Google Meet or Zoom link" value={n.online} onChange={(e) => set({ online: e.target.value })} /></label>
         <div className="chips" style={{ margin: '-6px 0 14px' }}>
           <button type="button" className="chip" onClick={() => set({ online: jitsiLink(n.title || 'meeting') })}>🎥 New Jitsi link</button>
+          <button type="button" className="chip" onClick={() => { window.open('https://meet.google.com/new', '_blank', 'noopener'); setMeetHint(true) }}>📹 New Google Meet</button>
         </div>
+        {meetHint && !/meet\.google\.com\//.test(n.online) && <p className="hint" style={{ marginTop: -8 }}>Google Meet opened in a new tab: copy its link (meet.google.com/…) and paste it above.</p>}
         {badOnline && <p className="error" style={{ marginTop: -8 }}>The link should start with https://</p>}
         <label className="field"><span>Description</span>
           <textarea className="input" rows={4} placeholder="Markdown: **bold**, *italic*, - lists, [links](https://…)" value={n.description} onChange={(e) => set({ description: e.target.value })} /></label>

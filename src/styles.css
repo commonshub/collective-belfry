@@ -336,7 +336,7 @@ input[type='date']::-webkit-date-and-time-value, input[type='datetime-local']::-
 .chips .chip { font-size: 13px; padding: 6px 10px; margin: 0; }
 a.chip { text-decoration: none; color: inherit; }
 .choice { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
-.choice button { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); }
+.choice button { text-align: left; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; justify-content: flex-start; align-items: stretch; }
 .choice button b { display: block; font-size: 14px; }
 .choice button small { display: block; font-size: 12px; color: var(--muted); }
 .choice button.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
@@ -851,6 +851,8 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .ev-card .card-rsvp button { padding: 8px 0; }
 .cover-pick { display: grid; place-items: center; min-height: 96px; border: 1px dashed var(--line); border-radius: 12px; margin-bottom: 14px; cursor: pointer; color: var(--muted); overflow: hidden; }
 .cover-pick span { display: inline-flex; align-items: center; gap: 8px; }
+.cover-pick .cover-empty { flex-direction: column; gap: 4px; text-align: center; padding: 12px; }
+.cover-pick .cover-empty small { font-size: 12px; }
 .cover-pick.has { border-style: solid; }
 .cover-pick img { width: 100%; aspect-ratio: 2 / 1; object-fit: cover; display: block; }
 .choice.three { grid-template-columns: 1fr 1fr 1fr; }
@@ -1715,3 +1717,18 @@ a.ln { overflow-wrap: anywhere; }
 .prop-version .pv-note { margin: 4px 0; }
 .prop-votes-list section { margin-top: 12px; }
 .prop-votes-list h3 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+
+/* Selects look like the other fields (Safari ignores padding on a native select): Xavier, 2026-11-18 */
+select.input, [data-theme] select.input { -webkit-appearance: none; appearance: none; min-height: 46px; padding-right: 38px; line-height: 1.25;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 14px center; }
+/* An event's "Where": past places, then OpenStreetMap */
+.place-input { position: relative; }
+.place-list { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); max-height: 280px; overflow-y: auto; }
+.place-list li { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.place-list li.on, .place-list li:hover { background: var(--surface); }
+.place-list li .t { display: grid; min-width: 0; }
+.place-list li .t b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.place-list li .t small { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.place-list .place-credit, .place-list.place-credit { font-size: 11px; color: var(--muted); cursor: default; padding: 6px 10px; }
+.place-list li.place-credit:hover { background: none; }
