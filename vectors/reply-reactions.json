@@ -1,0 +1,194 @@
+{
+  "about": "Reactions on a reply in a thread (iOS, 2026-11-18; the lead): NIP-25 kind 7 with h, e = the reply's id, p = its author and k = the kind of the event reacted to (\"1111\" for a reply, \"9\" for a message; never hard-coded). Readers key on the last e tag and never filter on k: the third reaction below has no k and the fourth a wrong one, both count.",
+  "generated_by": "by hand (belfry-ios); same case shape as reactions.json, plus `write`: the tags a client writes",
+  "cases": [
+    {
+      "name": "reply",
+      "me": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "group": "general",
+      "events": [
+        {
+          "id": "1111111111111111111111111111111111111111111111111111111111111111",
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": 9,
+          "created_at": 100,
+          "tags": [
+            [
+              "h",
+              "general"
+            ]
+          ],
+          "content": "root",
+          "sig": ""
+        },
+        {
+          "id": "2222222222222222222222222222222222222222222222222222222222222222",
+          "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": 1111,
+          "created_at": 110,
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "E",
+              "1111111111111111111111111111111111111111111111111111111111111111"
+            ],
+            [
+              "e",
+              "1111111111111111111111111111111111111111111111111111111111111111"
+            ]
+          ],
+          "content": "a reply",
+          "sig": ""
+        },
+        {
+          "id": "3333333333333333333333333333333333333333333333333333333333333333",
+          "pubkey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "kind": 7,
+          "created_at": 120,
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "e",
+              "2222222222222222222222222222222222222222222222222222222222222222"
+            ],
+            [
+              "p",
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ],
+            [
+              "k",
+              "1111"
+            ]
+          ],
+          "content": "🙏",
+          "sig": ""
+        },
+        {
+          "id": "4444444444444444444444444444444444444444444444444444444444444444",
+          "pubkey": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "kind": 7,
+          "created_at": 121,
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "e",
+              "2222222222222222222222222222222222222222222222222222222222222222"
+            ],
+            [
+              "p",
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ]
+          ],
+          "content": "🙏",
+          "sig": ""
+        },
+        {
+          "id": "5555555555555555555555555555555555555555555555555555555555555555",
+          "pubkey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "kind": 7,
+          "created_at": 122,
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "e",
+              "2222222222222222222222222222222222222222222222222222222222222222"
+            ],
+            [
+              "p",
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ],
+            [
+              "k",
+              "9"
+            ]
+          ],
+          "content": "+",
+          "sig": ""
+        }
+      ],
+      "expect": {
+        "reactions": {
+          "2222222222222222222222222222222222222222222222222222222222222222": [
+            {
+              "emoji": "🙏",
+              "who": [
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+              ],
+              "mine": "3333333333333333333333333333333333333333333333333333333333333333"
+            },
+            {
+              "emoji": "👍",
+              "who": [
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+              ],
+              "mine": null
+            }
+          ]
+        }
+      },
+      "write": [
+        {
+          "target": "2222222222222222222222222222222222222222222222222222222222222222",
+          "target_kind": 1111,
+          "author": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "emoji": "🙏",
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "e",
+              "2222222222222222222222222222222222222222222222222222222222222222"
+            ],
+            [
+              "p",
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            ],
+            [
+              "k",
+              "1111"
+            ]
+          ]
+        },
+        {
+          "target": "1111111111111111111111111111111111111111111111111111111111111111",
+          "target_kind": 9,
+          "author": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "emoji": "👍",
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "e",
+              "1111111111111111111111111111111111111111111111111111111111111111"
+            ],
+            [
+              "p",
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            [
+              "k",
+              "9"
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

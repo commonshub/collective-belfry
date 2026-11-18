@@ -1,0 +1,107 @@
+{
+  "about": "Channel references (NIP-19 naddr of a NIP-29 group's kind 39000 metadata, by the relay's key, d = group id, relay = the groups relay; NIP-27 nostr: in text). TLVs: 0 identifier (UTF-8), 1 relay (each, UTF-8), 2 author (32 bytes), 3 kind (u32 big-endian), written in the order 3, 2, 1 (relays in order), 0 as nostr-tools does; a reader takes any order. plain: one-line previews as plainRefs does (npub → \"@…\", channel → \"#<name>\", or its id when the channel is unknown; anything else left as is). groups = the names known in the plain cases.",
+  "generated_by": "tools/vectors/channel-refs.mjs with nostr-tools 2.10.4 (the web chat's)",
+  "groups": {
+    "general": "General",
+    "pod-3f9a1c": "Garden pod"
+  },
+  "encode": [
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "general",
+      "relays": [
+        "wss://groups-relay.example.org"
+      ],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqpm8v4hx2unpds7h4kvv"
+    },
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "pod-3f9a1c",
+      "relays": [
+        "wss://groups-relay.example.org"
+      ],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznsdajz6vmx89snzcc8c5adz"
+    },
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "ev-20261112-ab12",
+      "relays": [
+        "wss://groups-relay.example.org"
+      ],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqyr9wcknyvpjxccnzvfj94skyvfjfgcvtt"
+    },
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "général",
+      "relays": [
+        "wss://groups-relay.example.org"
+      ],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqzt8cw5kasafwfskc3ull7g"
+    },
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "general",
+      "relays": [],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqqrkwetwv4exzmqdld2at"
+    },
+    {
+      "kind": 39000,
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "identifier": "general",
+      "relays": [
+        "wss://groups-relay.example.org",
+        "wss://relay.example.org"
+      ],
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsz9mhwden5te0wfjkccte9ejhsctdwpkx2tn0wfnsqpm8v4hx2unpdsgeq9ta"
+    }
+  ],
+  "decode": [
+    {
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqpm8v4hx2unpds7h4kvv",
+      "group": "general"
+    },
+    {
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqq98qmmy95ekvwtpx93swe7x5w",
+      "group": "pod-3f9a1c"
+    },
+    {
+      "naddr": "naddr1qvzqqqr4gupzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznd0ykkzun5d93kcegut4vjz",
+      "group": null
+    },
+    {
+      "naddr": "npub1jkwzggpt9drxqt8cv9xymyc02u23s4glhufpjv9nwx3v5vsmahwsepnd0w",
+      "group": null
+    },
+    {
+      "naddr": "naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqpm8v4hx2unpds7h4kvq",
+      "group": null
+    }
+  ],
+  "plain": [
+    {
+      "text": "See nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqpm8v4hx2unpds7h4kvv for that",
+      "plain": "See #General for that"
+    },
+    {
+      "text": "nostr:npub1jkwzggpt9drxqt8cv9xymyc02u23s4glhufpjv9nwx3v5vsmahwsepnd0w moved it to nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznsdajz6vmx89snzcc8c5adz.",
+      "plain": "@… moved it to #Garden pod."
+    },
+    {
+      "text": "Unknown: nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqzt9d3ek2amgv4ex2npfgtg",
+      "plain": "Unknown: #channel"
+    },
+    {
+      "text": "An article nostr:naddr1qvzqqqr4gupzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznd0ykkzun5d93kcegut4vjz stays",
+      "plain": "An article nostr:naddr1qvzqqqr4gupzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznd0ykkzun5d93kcegut4vjz stays"
+    },
+    {
+      "text": "No refs, a #topic only",
+      "plain": "No refs, a #topic only"
+    }
+  ]
+}

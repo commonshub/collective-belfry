@@ -155,7 +155,7 @@ export function channelOfNaddr(naddr: string): string | undefined {
 export function plainRefs(text: string, npub = '@…'): string {
   return text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub).replace(NADDR, (all, a: string) => {
     const id = channelOfNaddr(a)
-    return id ? '#' + (nameOf(id)) : all
+    return id ? '#' + refName(id) : all
   })
 }
 export const isPodId = (id: string) => id.startsWith('pod-')
@@ -919,6 +919,14 @@ export const eventByLinkLocal = (link: string) => calendar().find((x) => x.d ===
 /** A group's name to show, never its id (a group not loaded yet: a neutral word). */
 export const nameOf = (id: string): string => group(id)?.name
   ?? (id.startsWith('ev-') || id.startsWith('ws-') ? 'this event' : isProposalId(id) ? 'this proposal' : isPodId(id) ? 'this group' : 'this channel')
+
+/** A channel reference's name (a "#…" in a text): its name, else the kind's word, never its id
+ *  (vectors/channel-refs.json: "Unknown: #channel"). */
+export const refName = (id: string): string => {
+  const g = group(id)
+  if (g && !g.unnamed) return g.name
+  return id.startsWith('ev-') || id.startsWith('ws-') ? 'event' : isProposalId(id) ? 'proposal' : isPodId(id) ? 'group' : 'channel'
+}
 
 export const eventOfGroup = (groupId: string) => calendar().find((x) => x.groupId === groupId)
 

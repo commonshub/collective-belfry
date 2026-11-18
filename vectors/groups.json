@@ -1,0 +1,583 @@
+{
+  "about": "NIP-29 groups derived from the event log: metadata (latest per field), admins, members, type, parent, closed + applications, deletion (9008), order (general first, then latest activity). A group without its metadata has no name (\"name\": null, \"named\": false): never shown by its id (Xavier, 2026-11-18; the UI shows a placeholder or the kind's word).",
+  "generated_by": "tools/vectors/build.mjs from the web chat (village-app, branch belfry-chat)",
+  "people": {
+    "alice": {
+      "pubkey": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+      "secret": "862519d9a0adea70bca746702bd495d9f028e5d08c20829120b127b97eeb3612",
+      "npub": "npub1grxu0284gqp442wne5jjc7qtdcmttw2czhdmg5ff39de8j5w5peq6d55at"
+    },
+    "bob": {
+      "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+      "secret": "caa666b3ba9ab485be8faa4efd49ceea1078e399589062577a5992e6ed8dfe60",
+      "npub": "npub1lr5z6l496gt0j08z2ylxwjz96la8ws5phv4cxrn7ue3ekzlvry8qxf503e"
+    },
+    "carol": {
+      "pubkey": "6a7808eb1e254a8b8b3c92c059606c4587f284b138270b9f12a9c72aacd7da4f",
+      "secret": "476900b1b1d624890192378df6d230650f10f196ebe53e56090b80623c4a979e",
+      "npub": "npub1dfuq36c7y49ghzeujtq9jcrvgkrl9p938qnsh8cj48rj4txhmf8s239n5y"
+    },
+    "dave": {
+      "pubkey": "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234",
+      "secret": "e19f850a85f1f08266b75695819802703ed6c27192f0c58d9ef13b86c156a157",
+      "npub": "npub16p8emttu7fmqssp5dkfftlfk47nwfaqzff3x5fe2pe4h4ypc7g6qs8qtyz"
+    },
+    "erin": {
+      "pubkey": "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e",
+      "secret": "45da4ddbb3358f8a5468d8c9abcedaf6617e7707cd1ad48c54d78d43d34530ab",
+      "npub": "npub1rpxa9u35smhsgecekx20nd6lrcllqtvdxgq7le0dxsdr2kt0cqhq67fgjc"
+    },
+    "zoe": {
+      "pubkey": "29c456025fce8b93474c37cf431942a940c08ede1ad41c6112fc3d6ebdf1bfbc",
+      "secret": "9b03d960dfba22af93e03feccf7b7de1db287952e17e8d6bf83b7d42c3a2c336",
+      "npub": "npub198z9vqjle69ex36vxl85xx2z49qvprk7rt2pccgjls7ka003h77qmnuka3"
+    },
+    "relay": {
+      "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+      "secret": "4f905f77219cd34450e308030694a9824a789b5ec1efcd0abc4a770458283471",
+      "npub": "npub1jkwzggpt9drxqt8cv9xymyc02u23s4glhufpjv9nwx3v5vsmahwsepnd0w"
+    },
+    "groups": {
+      "pubkey": "fcb24b775b5af1346069da83d56ca2c28db62eb5aa61a82373d0980124008e42",
+      "secret": "4597d01767f5ebe26e3605f653d5f9d300dab74014983f12a3265016849283c5",
+      "npub": "npub1ljeyka6mttcngcrfm2pa2m9zc2xmvt444fs6sgmn6zvqzfqq3epq7rhaer"
+    },
+    "bridge": {
+      "pubkey": "d7b3ee4cd1a9605cd824c721e8d96e50ca2a237b80e486ec6d3574b89a3d726b",
+      "secret": "f42b316fb4b50e20336569f7afe527faa18b5aa6b8e9122b79ba9bb8823bb014",
+      "npub": "npub167e7unx349s9ekpycus73ktw2r9z5gmmsrjgdmrdx46t3x3awf4s0ctktg"
+    }
+  },
+  "cases": [
+    {
+      "name": "basics",
+      "me": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+      "events": [
+        {
+          "id": "eba168105448098709bc3e54c79e084f3a7fdaf650cab293c9870abdf015b6e7",
+          "pubkey": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+          "kind": 9007,
+          "created_at": 1793000000,
+          "tags": [
+            [
+              "h",
+              "general"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "general-create"
+        },
+        {
+          "id": "71df44e8eff50fdc4294bba01c647731a36ca7ace0ccadfb1ac8fa54e7779ad5",
+          "pubkey": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+          "kind": 9002,
+          "created_at": 1793000001,
+          "tags": [
+            [
+              "h",
+              "general"
+            ],
+            [
+              "name",
+              "general"
+            ],
+            [
+              "about",
+              "Say hi"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "general-edit"
+        },
+        {
+          "id": "6dea73f6aed33fcd1efa34b54764e13a54fe5b77639e357319d1521d761ed745",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39000,
+          "created_at": 1793000005,
+          "tags": [
+            [
+              "d",
+              "general"
+            ],
+            [
+              "name",
+              "General"
+            ],
+            [
+              "about",
+              "From the relay"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "general-meta"
+        },
+        {
+          "id": "9dac579aee315f2499d3e9362aefe30a94f76c92f4a4a38206fb5e61dae4ff5c",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39001,
+          "created_at": 1793000005,
+          "tags": [
+            [
+              "d",
+              "general"
+            ],
+            [
+              "p",
+              "6a7808eb1e254a8b8b3c92c059606c4587f284b138270b9f12a9c72aacd7da4f",
+              "admin"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "general-admins"
+        },
+        {
+          "id": "2f7a4c48c938b0ec2af22d40044de9bb5162c4a09be1d73f482e3fdc4818206e",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39002,
+          "created_at": 1793000005,
+          "tags": [
+            [
+              "d",
+              "general"
+            ],
+            [
+              "p",
+              "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072"
+            ],
+            [
+              "p",
+              "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "general-members"
+        },
+        {
+          "id": "912cdb7c7c0bca8b9fbfb2196831dda33af94d9048cd926f2a2c3068f1b5b722",
+          "pubkey": "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234",
+          "kind": 9,
+          "created_at": 1793000100,
+          "tags": [
+            [
+              "h",
+              "general"
+            ]
+          ],
+          "content": "hello",
+          "sig": "",
+          "_label": "general-msg"
+        },
+        {
+          "id": "e275d0b6a5c72b92d7096168b0c05fc478fd961c8aee550218ec2246151823ca",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39000,
+          "created_at": 1793000002,
+          "tags": [
+            [
+              "d",
+              "garden"
+            ],
+            [
+              "name",
+              "Garden"
+            ],
+            [
+              "about",
+              "Plants"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "garden-meta"
+        },
+        {
+          "id": "ab048952bba9fae6eeac296d5c281826edbc5ff4e5318db30ac22ef64642fead",
+          "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+          "kind": 9,
+          "created_at": 1793000200,
+          "tags": [
+            [
+              "h",
+              "garden"
+            ]
+          ],
+          "content": "tomatoes",
+          "sig": "",
+          "_label": "garden-msg"
+        },
+        {
+          "id": "0b028c0fefaa3f2610a68b882e7c27d3a480ebc11dd97538bbbc49f655cf2022",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39000,
+          "created_at": 1793000003,
+          "tags": [
+            [
+              "d",
+              "quiet"
+            ],
+            [
+              "name",
+              "Quiet"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "quiet-meta"
+        },
+        {
+          "id": "c71046d8af7aa83c6d8c4460004e6c02957978b3d169e7645905f5aeb54edd29",
+          "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+          "kind": 9007,
+          "created_at": 1793000010,
+          "tags": [
+            [
+              "h",
+              "pod-tools-ab"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "pod-create"
+        },
+        {
+          "id": "e045671ec000d73120a342c4070b18141666eb5bf91d8ead280fab52ebe402d3",
+          "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+          "kind": 9002,
+          "created_at": 1793000011,
+          "tags": [
+            [
+              "h",
+              "pod-tools-ab"
+            ],
+            [
+              "name",
+              "Tools"
+            ],
+            [
+              "about",
+              "Shared tools"
+            ],
+            [
+              "closed"
+            ],
+            [
+              "prompt",
+              "What would you bring?"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "pod-edit"
+        },
+        {
+          "id": "6b433df8dd54630191bfc88fcca80963c2a14da15afe9b573cfecee5042ce059",
+          "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+          "kind": 9,
+          "created_at": 1793000012,
+          "tags": [
+            [
+              "h",
+              "garden"
+            ],
+            [
+              "pod",
+              "pod-tools-ab"
+            ]
+          ],
+          "content": "⬡ New pod: Tools",
+          "sig": "",
+          "_label": "pod-announce"
+        },
+        {
+          "id": "8f4904a7f495dd271078c4a232e4b653b5c81ef5e0066876139d06c54a63fb54",
+          "pubkey": "6a7808eb1e254a8b8b3c92c059606c4587f284b138270b9f12a9c72aacd7da4f",
+          "kind": 9021,
+          "created_at": 1793000020,
+          "tags": [
+            [
+              "h",
+              "pod-tools-ab"
+            ]
+          ],
+          "content": "A drill",
+          "sig": "",
+          "_label": "pod-apply-carol"
+        },
+        {
+          "id": "d652e93ad150381b63805c3eeea033540491c1376a9012702c008db60857a720",
+          "pubkey": "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234",
+          "kind": 9021,
+          "created_at": 1793000021,
+          "tags": [
+            [
+              "h",
+              "pod-tools-ab"
+            ]
+          ],
+          "content": "A saw",
+          "sig": "",
+          "_label": "pod-apply-dave"
+        },
+        {
+          "id": "07399ff3e28a14a72e8281d61d2dfec29d759b19c3eaa365a32859b08545eaa8",
+          "pubkey": "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e",
+          "kind": 9000,
+          "created_at": 1793000030,
+          "tags": [
+            [
+              "h",
+              "pod-tools-ab"
+            ],
+            [
+              "p",
+              "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234",
+              "member"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "pod-admit-dave"
+        },
+        {
+          "id": "2416180265f07894184e80fad2eef472532f844057e367201af2f74abe203a83",
+          "pubkey": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+          "kind": 9007,
+          "created_at": 1793000040,
+          "tags": [
+            [
+              "h",
+              "prop-rules-cd"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "prop-create"
+        },
+        {
+          "id": "34752a5d8373a57b145fa18ecbe5b66561545ade50a7d8344941effd016ecaf3",
+          "pubkey": "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e",
+          "kind": 9007,
+          "created_at": 1793000050,
+          "tags": [
+            [
+              "h",
+              "ws-1234"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "event-create"
+        },
+        {
+          "id": "a71d1ef40a7b8626a0ad131dfc5e826040d743c16314e347f17e712d63d36a5b",
+          "pubkey": "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e",
+          "kind": 9002,
+          "created_at": 1793000051,
+          "tags": [
+            [
+              "h",
+              "ws-1234"
+            ],
+            [
+              "name",
+              "Picnic"
+            ],
+            [
+              "about",
+              "Bring food"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "event-edit"
+        },
+        {
+          "id": "27f291475272424bfa58abd23b05284d0e2d1bbb5653dc2c5adbd30ac594318f",
+          "pubkey": "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e",
+          "kind": 9021,
+          "created_at": 1793000060,
+          "tags": [
+            [
+              "h",
+              "garden"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "open-join"
+        },
+        {
+          "id": "0f9a2fff5547fe50617fa8236612e839a986e8b4c500be02699b3f9061a24a63",
+          "pubkey": "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e",
+          "kind": 9022,
+          "created_at": 1793000070,
+          "tags": [
+            [
+              "h",
+              "garden"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "leave"
+        },
+        {
+          "id": "2184eb18174da2c38309fd0f9e97c01caa4e82444080a10159dc4eed7b7342ad",
+          "pubkey": "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
+          "kind": 39000,
+          "created_at": 1793000004,
+          "tags": [
+            [
+              "d",
+              "old"
+            ],
+            [
+              "name",
+              "Old"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "old-meta"
+        },
+        {
+          "id": "a2e1665d9825c780b3e235636b769bf62b003b0276011c162e4a2552db6406cb",
+          "pubkey": "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+          "kind": 9008,
+          "created_at": 1793000080,
+          "tags": [
+            [
+              "h",
+              "old"
+            ]
+          ],
+          "content": "",
+          "sig": "",
+          "_label": "old-delete"
+        }
+      ],
+      "expect": {
+        "groups": [
+          {
+            "id": "general",
+            "name": "General",
+            "named": true,
+            "about": "From the relay",
+            "created_at": 1793000000,
+            "last_activity": 1793000100,
+            "members": [
+              "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+              "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234",
+              "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e"
+            ],
+            "admins": [
+              "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072",
+              "6a7808eb1e254a8b8b3c92c059606c4587f284b138270b9f12a9c72aacd7da4f"
+            ],
+            "type": "channel",
+            "parent": null,
+            "closed": false,
+            "prompt": null,
+            "applications": []
+          },
+          {
+            "id": "garden",
+            "name": "Garden",
+            "named": true,
+            "about": "Plants",
+            "created_at": 1793000002,
+            "last_activity": 1793000200,
+            "members": [
+              "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e"
+            ],
+            "admins": [],
+            "type": "channel",
+            "parent": null,
+            "closed": false,
+            "prompt": null,
+            "applications": []
+          },
+          {
+            "id": "ws-1234",
+            "name": "Picnic",
+            "named": true,
+            "about": "Bring food",
+            "created_at": 1793000050,
+            "last_activity": 1793000050,
+            "members": [],
+            "admins": [
+              "184dd2f23486ef046719b194f9b75f1e3ff02d8d3201efe5ed341a35596fc02e"
+            ],
+            "type": "event",
+            "parent": null,
+            "closed": false,
+            "prompt": null,
+            "applications": []
+          },
+          {
+            "id": "prop-rules-cd",
+            "name": null,
+            "named": false,
+            "about": "",
+            "created_at": 1793000040,
+            "last_activity": 1793000040,
+            "members": [],
+            "admins": [
+              "40cdc7a8f540035aa9d3cd252c780b6e36b5b95815dbb45129895b93ca8ea072"
+            ],
+            "type": "proposal",
+            "parent": "general",
+            "closed": false,
+            "prompt": null,
+            "applications": []
+          },
+          {
+            "id": "pod-tools-ab",
+            "name": "Tools",
+            "named": true,
+            "about": "Shared tools",
+            "created_at": 1793000010,
+            "last_activity": 1793000010,
+            "members": [
+              "d04f9dad7cf2760840346d9295fd36afa6e4f4024a626a272a0e6b7a9038f234"
+            ],
+            "admins": [
+              "f8e82d7ea5d216f93ce2513e674845d7fa774281bb2b830e7ee6639b0bec190e"
+            ],
+            "type": "pod",
+            "parent": "garden",
+            "closed": true,
+            "prompt": "What would you bring?",
+            "applications": [
+              {
+                "pubkey": "6a7808eb1e254a8b8b3c92c059606c4587f284b138270b9f12a9c72aacd7da4f",
+                "answer": "A drill",
+                "at": 1793000020
+              }
+            ]
+          },
+          {
+            "id": "quiet",
+            "name": "Quiet",
+            "named": true,
+            "about": "",
+            "created_at": 1793000003,
+            "last_activity": 1793000003,
+            "members": [],
+            "admins": [],
+            "type": "channel",
+            "parent": null,
+            "closed": false,
+            "prompt": null,
+            "applications": []
+          }
+        ]
+      }
+    }
+  ]
+}
