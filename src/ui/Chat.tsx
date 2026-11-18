@@ -1288,6 +1288,12 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     return out
   }
 
+  // the picks still written in full in the text (a label that no longer matches is plain text, and
+  // marked again once typed back): split as [plain, label, plain, label, …]
+  const marksRef = useRef<HTMLDivElement>(null)
+  const labels = [...[...picked.current.keys()].map((n) => '@' + n), ...pickedChans.current.keys()].filter((l) => l.length > 1 && text.includes(l)).sort((a, b) => b.length - a.length)
+  const marked = labels.length ? text.split(new RegExp('(' + labels.map((l) => l.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')', 'u')) : null
+
   // locked while the send runs (an e-mail waits out its Undo): one tap, one message
   const [busy, setBusy] = useState(false)
   const send = async () => {
@@ -1369,7 +1375,9 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
             ))}
           </div>
         )}
+        <span className="comp-field">
         <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text}
+          onScroll={(e) => { if (marksRef.current) marksRef.current.scrollTop = e.currentTarget.scrollTop }}
           onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
@@ -1378,6 +1386,10 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
             // Enter sends on a keyboard; on phones the return key adds a line
             if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() }
           }} />
+        {/* the picked @mentions and #channels, marked over the field (board channels/composer-mention):
+            a soft tint behind the whole label and a thin stroke for weight, glyph widths unchanged */}
+        {marked && <div className="comp-marks" ref={marksRef} aria-hidden="true">{marked.map((p, i) => (i % 2 ? <mark key={i}>{p}</mark> : <span key={i}>{p}</span>))}{'\n'}</div>}
+        </span>
         <button className="send" aria-label={plain ? 'Send e-mail' : 'Send'} aria-busy={busy || undefined} disabled={busy || (!text.trim() && !(files.length && !plain))} onClick={() => void send()}>↑</button>
       </div>
       {menu && (onEvent || canAnnounce || onRecord) && (

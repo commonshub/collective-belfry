@@ -1854,3 +1854,14 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .name-skel { display: inline-block; width: 40%; min-width: 64px; max-width: 160px; height: 0.9em; border-radius: 6px; background: var(--surface-2, var(--line)); vertical-align: -0.1em; animation: skel 1.4s ease-in-out infinite; }
 @keyframes skel { 50% { opacity: .55 } }
 @media (prefers-reduced-motion: reduce) { .name-skel { animation: none; } }
+
+/* the composer's picked @mentions / #channels (Chat.tsx Composer, board channels/composer-mention):
+   a layer over the field with the same text box; only the labels show, on a soft tint, with a thin
+   stroke for weight (a real bold would move the glyphs after it away from the caret) */
+.composer .comp-field { flex: 1; min-width: 0; display: flex; position: relative; }
+.composer .comp-field textarea { flex: 1; min-width: 0; }
+.composer .comp-marks { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; color: transparent;
+  padding: 10px 14px; border: 1px solid transparent; font: inherit; font-size: 16px; line-height: 1.35; letter-spacing: normal;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; text-align: start; }
+.composer .comp-marks mark { color: var(--text); background: color-mix(in srgb, var(--text) 14%, transparent); border-radius: 4px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--text) 14%, transparent); -webkit-text-stroke: 0.4px var(--text); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
