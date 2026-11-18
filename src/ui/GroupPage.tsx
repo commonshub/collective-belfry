@@ -6,13 +6,13 @@ import { useState } from 'react'
 import { DEFAULT_PROMPT, joinGroup, setArchived } from '../core/actions'
 import { canAdmin } from '../core/access'
 import { useGroupState } from '../core/groupstate'
-import { archivedGroups, channelIcon, displayName, group, type Group } from '../core/model'
+import { archivedGroups, channelIcon, displayName, group, messages, type Group } from '../core/model'
 import { groupRequestsFor, groupVouches } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, back, Btn, Form, go, Sheet } from './common'
 import { FollowButton } from './Follow'
-import { PodShape, VouchIcon } from './icons'
+import { ChevronRightIcon, PodShape, VouchIcon } from './icons'
 import { Markdown } from './markdown'
 import { openProfile } from './Profile'
 import { GroupRequest } from './Requests'
@@ -43,6 +43,9 @@ export function ArchivedBar({ g }: { g: Group }) {
   )
 }
 
+/** "Nov 15" (with the year when another one). */
+const shortDay = (at: number) => { const d = new Date(at * 1000); return d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) }) }
+
 /** #/archived: the archived channels and groups (the row at the bottom of the channel list). A
  *  tap opens one, read only; Unarchive is there. */
 export function ArchivedScreen() {
@@ -53,16 +56,19 @@ export function ArchivedScreen() {
       <div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Archived</h1></div>
       <div className="scroll">
         {list.length === 0 && <div className="empty">Nothing is archived.</div>}
-        {list.length > 0 && <p className="hint pad-x" style={{ marginTop: 12 }}>Out of the channel list and read only. Open one to read it; its admins can unarchive it there.</p>}
         {list.map((g) => {
           const parent = g.parent ? group(g.parent) : undefined
+          const last = messages(g.id).at(-1)?.ev.created_at
+          const kind = g.isPod ? `Group${parent ? ` in ${parent.isPod ? '' : '#'}${parent.name}` : ''}` : 'Channel'
           return (
-            <button key={g.id} className="chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>
+            <button key={g.id} className="chan archived-row" onClick={() => go('c/' + encodeURIComponent(g.id))}>
               <span className="hash">{g.isPod ? <PodShape members={g.members.size} size={18} /> : channelIcon(g)}</span>
-              <span className="t"><b>{g.name}</b><small>{g.isPod ? `Group${parent ? ` in ${parent.isPod ? '' : '# '}${parent.name}` : ''}` : 'Channel'} · {g.members.size} {g.members.size === 1 ? 'member' : 'members'}</small></span>
+              <span className="t"><b>{g.name}</b><small>{kind}{last ? ` · last message ${shortDay(last)}` : ''}</small></span>
+              <ChevronRightIcon />
             </button>
           )
         })}
+        {list.length > 0 && <p className="hint pad-x archived-foot">Read only. Nobody can post in an archived channel or group; its stewards can unarchive it.</p>}
       </div>
     </div>
   )

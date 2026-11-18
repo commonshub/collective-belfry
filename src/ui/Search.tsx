@@ -3,8 +3,15 @@
 import { useMemo, useState } from 'react'
 import { allGroups, channelIcon, displayName, messages, type Message } from '../core/model'
 import { useVersion } from '../core/store'
-import { Avatar, back, fmtDay, fmtTime, go } from './common'
-import { SearchIcon } from './icons'
+import { Avatar, back, fmtTime, go } from './common'
+import { CloseIcon, SearchIcon } from './icons'
+
+/** A result's time as the board has it: the time today, else the day ("Nov 17", with the year when another). */
+const when = (at: number) => {
+  const d = new Date(at * 1000), now = new Date()
+  if (d.toDateString() === now.toDateString()) return fmtTime(at)
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', ...(d.getFullYear() !== now.getFullYear() ? { year: 'numeric' } : {}) })
+}
 
 const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase()
 
@@ -34,18 +41,19 @@ export function SearchView({ channel }: { channel?: string }) {
           <SearchIcon />
           <input autoFocus type="search" enterKeyHint="search" placeholder={here && !everywhere ? `Search ${channelIcon(here)}${here.name}` : 'Search all channels'}
             value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search messages" />
+          {q && <button type="button" className="search-clear" aria-label="Clear" onClick={(e) => { setQ(''); (e.currentTarget.previousElementSibling as HTMLInputElement | null)?.focus() }}><CloseIcon /></button>}
         </label>
       </div>
       {channel && (
         <div className="search-scope" role="radiogroup" aria-label="Where to search">
-          <button role="radio" aria-checked={!everywhere} className={!everywhere ? 'on' : ''} onClick={() => setEverywhere(false)}>{channelIcon(here)}{here?.name ?? channel}</button>
+          <button role="radio" aria-checked={!everywhere} className={!everywhere ? 'on' : ''} onClick={() => setEverywhere(false)}>This channel</button>
           <button role="radio" aria-checked={everywhere} className={everywhere ? 'on' : ''} onClick={() => setEverywhere(true)}>All channels</button>
         </div>
       )}
       <div className="scroll">
         {!words.length && <div className="empty">Words from a message, or a name.</div>}
         {words.length > 0 && !results.length && <div className="empty">Nothing found.</div>}
-        {results.length > 0 && <div className="search-count">{results.length === 200 ? '200+' : results.length} {results.length === 1 ? 'result' : 'results'}</div>}
+        {results.length > 0 && <div className="search-count">{results.length === 200 ? '200+' : results.length} {results.length === 1 ? 'result' : 'results'} in {here && !everywhere ? `${channelIcon(here)}${here.name}` : 'all channels'}</div>}
         {results.map(({ m, gid }) => {
           const g = all.find((x) => x.id === gid)
           return (
@@ -53,7 +61,7 @@ export function SearchView({ channel }: { channel?: string }) {
               <Avatar pubkey={m.ev.pubkey} size={32} />
               <span className="t">
                 <span className="who"><b>{displayName(m.ev.pubkey)}</b>{(everywhere || !channel) && <span className="in">{channelIcon(g)}{g?.name ?? gid}</span>}
-                  <time>{fmtDay(new Date(m.ev.created_at * 1000))} · {fmtTime(m.ev.created_at)}</time></span>
+                  <time>{when(m.ev.created_at)}</time></span>
                 <span className="snip">{snippet(m.text || m.media.map((x) => x.name || 'Photo').join(', '), words)}</span>
               </span>
             </button>
