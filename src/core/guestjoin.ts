@@ -15,7 +15,17 @@ import { demoRoles, setDemoRole } from './roles'
 export type JoinError = 'invalid' | 'name_needed' | 'too_many' | 'wrong_code' | 'expired' | 'taken' | 'not_guest' | 'offline' | 'failed'
 export class JoinFailed extends Error {
   /** retried: the request went out more than once (an answer may have been lost on the way back) */
-  constructor(public code: JoinError, public moved = false, public retried = false) { super(code) }
+  constructor(public code: JoinError, public moved = false, public retried = false, /** a wrong code: how many tries are left (the belfry's tries_left) */ public triesLeft?: number) { super(code) }
+}
+
+/** The words for FAILED: a wrong code says how many tries are left when the belfry told
+ *  (board onboarding/sign-in-code: "That code is not right. 3 tries left."). */
+export function joinErrorText(f: JoinFailed): string {
+  if (f.code === 'wrong_code' && f.triesLeft !== undefined) {
+    if (f.triesLeft <= 0) return 'That code is not right, and no tries are left. Send a new one.'
+    return `That code is not right. ${f.triesLeft} ${f.triesLeft === 1 ? 'try' : 'tries'} left.`
+  }
+  return JOIN_ERRORS[f.code]
 }
 
 /** What each answer means, in fixed words (never the server's text, never the address bar's). */
@@ -48,16 +58,19 @@ async function post(path: string, body: unknown): Promise<Record<string, unknown
     }
   }
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
-  if (!r.ok) throw new JoinFailed(KNOWN.has(String(d.error)) ? (d.error as JoinError) : 'failed', d.moved === true, tries > 1)
+  const left = typeof d.tries_left === 'number' && Number.isInteger(d.tries_left) && d.tries_left >= 0 && d.tries_left < 100 ? d.tries_left : undefined
+  if (!r.ok) throw new JoinFailed(KNOWN.has(String(d.error)) ? (d.error as JoinError) : 'failed', d.moved === true, tries > 1, left)
   return d
 }
 
 
 /** Ask for the code: it goes by e-mail to EMAIL. NAME is sent when the guest has none yet. */
 export async function sendJoinCode(email: string, name?: string) {
-  if (isLocalOnly()) { await wait(400); return } // demo: no mail; the code is 123456
+  if (isLocalOnly()) { await wait(400); demoTries = 5; return } // demo: no mail; the code is 123456
   await post('/guest/save', { email: email.trim(), ...(name ? { name: clean(name) } : {}) })
 }
+
+let demoTries = 5 // demo: the belfry allows 5 tries per code
 
 /** The code from the e-mail: the account is saved under that address (and name). */
 export async function verifyJoinCode(email: string, code: string, name?: string, again = false): Promise<void> {
@@ -65,7 +78,7 @@ export async function verifyJoinCode(email: string, code: string, name?: string,
   if (isLocalOnly()) { // demo: what the belfry would do
     await wait(400)
     if (email.trim().toLowerCase() === 'taken@example.org') throw new JoinFailed('taken', true)
-    if (code !== '123456') throw new JoinFailed('wrong_code')
+    if (code !== '123456') { demoTries = Math.max(0, demoTries - 1); throw new JoinFailed('wrong_code', false, false, demoTries) }
     const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, '0')).join('')
     if (g?.reading && name) addEvents([{ id: hex(32), pubkey: hex(32), sig: hex(64), kind: 9000, content: '', created_at: Math.floor(Date.now() / 1000),
       tags: [['h', g.channel], ['p', me(), 'member'], ['guest', ''], ['invited-by', hex(32)], ['name', clean(name)]] }])

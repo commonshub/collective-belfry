@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
-import { JOIN_ERRORS, JoinFailed, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
+import { JoinFailed, joinErrorText, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
 import { channelIcon, group } from '../core/model'
 import { touch } from '../core/store'
@@ -117,7 +117,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
   const fail = (e: unknown) => {
     const f = e instanceof JoinFailed ? e : new JoinFailed('failed')
     if (f.code === 'taken') { setMoved(f.moved); setStep('taken'); setError(''); return }
-    setError(JOIN_ERRORS[f.code])
+    setError(joinErrorText(f))
   }
   const send = async () => {
     setError(''); setNote('')
