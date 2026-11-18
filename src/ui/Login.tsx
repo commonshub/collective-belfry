@@ -5,6 +5,8 @@ import { openingNow, setOpening } from '../core/guestmode'
 import { accessInfo, lastRequest, loadAccessInfo, normalizeCode, onAccessInfo, requestAccess } from '../core/access'
 import { recheckAccess } from '../core/sync'
 import { BELFRY, NAME, PLACE, THEME, type Backend } from '../config'
+import { loadRemoteCharter, type RemoteAgreement } from '../core/charter'
+import { CheckCircleIcon } from './icons'
 
 // The arms: a tower over water on a shield (the Belfry mark).
 export const Arms = ({ size = 18 }: { size?: number }) => (
@@ -107,6 +109,37 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
       </Form>
     )
   const signIn = () => { setBusy(true); void startSignIn() }
+  // chat.<domain>/apply: the application form, on the chat's own address (Xavier, 2026-11-18)
+  const [applying, setApplying] = useState(THEME === 'belfry' && location.pathname === '/apply')
+  useEffect(() => {
+    const p = () => setApplying(location.pathname === '/apply')
+    addEventListener('popstate', p)
+    return () => removeEventListener('popstate', p)
+  }, [])
+  const apply = (on: boolean) => { history.pushState(null, '', on ? '/apply' + location.hash : '/' + location.hash); setApplying(on) }
+  if (applying)
+    return (
+      <div className="screen login" style={{ justifyContent: 'flex-start', overflowY: 'auto' }}>
+        <Logo />
+        <ApplyForm />
+        <button className="link" style={{ alignSelf: 'center', marginTop: 16 }} onClick={() => apply(false)}>I'm a member: log in</button>
+      </div>
+    )
+  if (THEME === 'belfry' && !invite)
+    return (
+      <div className="screen login">
+        <Logo />
+        <h2>{NAME}</h2>
+        <p>Channels, events and files for its members. No password: a 6-digit code by e-mail.</p>
+        {invited && <div className="card" role="status" style={{ marginBottom: 16 }}>After logging in, your invite opens its channel.</div>}
+        {error && <div className="error">{error}</div>}
+        <div className="login-ctas">
+          <button className="btn" disabled={busy} onClick={signIn}>{busy ? 'Opening…' : 'Log in'}</button>
+          <button className="btn ghost" onClick={() => apply(true)}>Apply to join</button>
+        </div>
+        <button className="link" style={{ alignSelf: 'center', marginTop: 18 }} onClick={() => setInvite(true)}>I have an invite code</button>
+      </div>
+    )
   return (
     <div className="screen login">
       <Logo />
@@ -141,7 +174,7 @@ export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Ba
       )}
       <p className="hint" style={{ marginTop: 18, fontSize: 14 }}>
         {THEME === 'belfry'
-          ? <>Not a member yet? <a href={`${BELFRY.pass}/apply`} target="_blank" rel="noreferrer">Ask to join</a>: the answer comes by e-mail.</>
+          ? <>Not a member yet? <a href="/apply" onClick={(e) => { e.preventDefault(); setInvite(false); apply(true) }}>Apply to join</a>: the answer comes by e-mail.</>
           : <>No invite? Sign in all the same and ask to join: the village's admins get your note.</>}
       </p>
     </div>
@@ -226,11 +259,11 @@ export function MembershipScreen({ session, reason, onSignOut }: {
         <>
           <div style={{ marginBottom: 12 }}><span className="badge orange">Not in yet</span></div>
           <h2>Almost in</h2>
-          <p>You're signed in{who}, but this key isn't a member of {PLACE} yet, and {PLACE} doesn't take requests from this app yet.</p>
-          {reason && <p className="hint" style={{ fontSize: 13 }}>{THEME === 'belfry' ? 'The relay' : 'The village'} said: {reason}</p>}
-          <a className="btn" style={{ textDecoration: 'none', display: 'grid', placeItems: 'center' }} href={`https://${BELFRY.domain}/apply`} target="_blank" rel="noreferrer">Apply to join</a>
+          <p>You're logged in{who}, but you're not a member of {PLACE} yet. Apply to join: the answer comes by e-mail.</p>
+          {THEME === 'belfry' ? <ApplyForm email={session.email} /> : <a className="btn" style={{ textDecoration: 'none', display: 'grid', placeItems: 'center' }} href={`https://${BELFRY.domain}/apply`} target="_blank" rel="noreferrer">Apply to join</a>}
           <div style={{ height: 10 }} />
-          <button className="btn ghost" onClick={() => { recheckAccess(); void loadAccessInfo() }}>Check again</button>
+          <button className="btn ghost" onClick={() => { recheckAccess(); void loadAccessInfo() }}>I've been let in: check again</button>
+          <button className="link" style={{ alignSelf: 'center', marginTop: 12 }} onClick={onSignOut}>Log out</button>
         </>
       ) : a?.needs_admin ? (
         <>
@@ -268,5 +301,61 @@ export function MembershipScreen({ session, reason, onSignOut }: {
         <button type="button" className="link" onClick={onSignOut}>Sign out</button>
       </div>
     </div>
+  )
+}
+
+
+/** Apply to join (chat.<domain>/apply, and after logging in with an address that isn't a
+ *  member's): e-mail, why, the charter's agreements ticked one by one (round ticks, as in the
+ *  app). Sent to the belfry (POST /api/v1/apply); the stewards answer by e-mail. */
+export function ApplyForm({ email: known }: { email?: string }) {
+  const [email, setEmail] = useState(known ?? '')
+  const [why, setWhy] = useState('')
+  const [rules, setRules] = useState<RemoteAgreement[]>([])
+  const [ticked, setTicked] = useState<Set<string>>(new Set())
+  const [error, setError] = useState('')
+  const [sent, setSent] = useState(false)
+  const trap = useRef<HTMLInputElement>(null)
+  useEffect(() => { void loadRemoteCharter(true).then((r) => setRules([...r].sort((a, b) => a.order - b.order))) }, [])
+  if (sent)
+    return (
+      <div className="apply-done" role="status">
+        <h2>Thank you</h2>
+        <p>Your request is in. You get a confirmation by e-mail now, and the answer by e-mail too.</p>
+      </div>
+    )
+  const all = rules.every((r) => ticked.has(r.id))
+  return (
+    <Form className="apply-form" onSubmit={async (e) => {
+      e.preventDefault()
+      setError('')
+      try {
+        const r = await fetch(`${BELFRY.api}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), motivation: why.trim(), agreed: [...ticked], website: trap.current?.value ?? '' }) })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok) throw new Error(j.message || 'That did not go through. Try again.')
+        setSent(true)
+      } catch (x) { setError(x instanceof TypeError ? 'No connection to the belfry. Try again.' : x instanceof Error ? x.message : String(x)) }
+    }}>
+      <h2>Apply to join</h2>
+      <label className="field"><span>Your e-mail</span>
+        <input className="input" type="email" inputMode="email" autoComplete="email" required maxLength={200} value={email} readOnly={!!known} onChange={(e) => setEmail(e.target.value)} /></label>
+      <label className="field"><span>Why would you like to join?</span>
+        <textarea className="input" rows={4} required maxLength={4000} value={why} onChange={(e) => setWhy(e.target.value)} /></label>
+      {rules.length > 0 && <>
+        <div className="field"><span>Our charter: tick each agreement</span></div>
+        <div className="charter-list" style={{ marginTop: -6 }}>
+          {rules.map((r) => (
+            <button type="button" key={r.id} className={'rule' + (ticked.has(r.id) ? ' on' : '')} role="checkbox" aria-checked={ticked.has(r.id)}
+              onClick={() => setTicked((s) => { const n = new Set(s); if (n.has(r.id)) n.delete(r.id); else n.add(r.id); return n })}>
+              <span className="tick"><CheckCircleIcon on={ticked.has(r.id)} /></span>
+              <span className="t"><b>{r.title}</b>{r.about && <small>{r.about}</small>}</span>
+            </button>
+          ))}
+        </div>
+      </>}
+      <input ref={trap} name="website" tabIndex={-1} autoComplete="off" aria-hidden="true" style={{ position: 'absolute', left: -9999 }} />
+      {error && <div className="error" role="alert">{error}</div>}
+      <button className="btn" disabled={!email.includes('@') || !why.trim() || !all}>{all ? 'Apply' : `Tick each agreement (${ticked.size} of ${rules.length})`}</button>
+    </Form>
   )
 }

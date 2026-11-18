@@ -1742,3 +1742,8 @@ select.input, [data-theme] select.input { -webkit-appearance: none; appearance: 
 .pick-row.invite-outside small { color: var(--muted); font-size: 13px; }
 .pick-row.invite-outside svg { transition: transform .15s; flex: none; }
 .pick-row.invite-outside[aria-expanded="true"] svg { transform: rotate(90deg); }
+
+/* The welcome screen's two choices, and the application form (Xavier, 2026-11-18) */
+.login-ctas { display: grid; gap: 12px; margin-top: 8px; }
+.apply-form { display: flex; flex-direction: column; width: 100%; }
+.apply-form h2 { margin-top: 0; }
