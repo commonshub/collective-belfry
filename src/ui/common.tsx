@@ -1,3 +1,4 @@
+import { replaceHash } from '../core/nav'
 import { Drawer } from 'vaul'
 import { Component, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -65,18 +66,19 @@ const mark = () => {
 }
 if (typeof addEventListener === 'function') { mark(); addEventListener('hashchange', mark) }
 const first = (h: string | undefined) => (h ?? '').replace(/^#\//, '').split('/')[0]
-const replaceWith = (path: string) => { replacing = true; location.replace('#/' + path); }
+const replaceWith = (path: string) => replaceHash('#/' + path) // keeps this entry's number (core/nav.ts)
 
 /** ‹ on a screen with no fixed parent (a profile, Me, an event): back to where you were, or
  *  FALLBACK when this is where the tab started. */
-export const back = (fallback: string) => (cur > 0 && trail[cur - 1] !== undefined ? history.back() : replaceWith(fallback))
+// (never "back" onto an entry with this same address: that is how a ‹ goes round in a loop)
+export const back = (fallback: string) => (cur > 0 && trail[cur - 1] !== undefined && trail[cur - 1] !== location.hash ? history.back() : replaceWith(fallback))
 
 /** ‹ on a screen under PARENT (a conversation under Messages, a thread under its channel): one
  *  step back when that is the parent, else the parent takes this screen's place. A one-word
  *  parent ("c", "dm") matches any screen of that section. */
 export function up(parent: string) {
   const prev = trail[cur - 1]
-  const same = prev !== undefined && cur > 0 && (parent.includes('/') ? prev === '#/' + parent : first(prev) === parent && (parent !== 'dm' || prev === '#/dm'))
+  const same = prev !== undefined && cur > 0 && prev !== location.hash && (parent.includes('/') ? prev === '#/' + parent : first(prev) === parent && (parent !== 'dm' || prev === '#/dm'))
   if (same) history.back(); else replaceWith(parent)
 }
 

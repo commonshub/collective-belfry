@@ -5,6 +5,7 @@
 // The right code puts name and address on the account; the channel gets the guest's 9000 with
 // the name (the join line). 409 `taken`: the address is another account's here; for a guest who
 // was only reading, that account got the channel ("moved") and this one is closed: sign in.
+import { replaceHash } from './nav'
 import { BELFRY } from '../config'
 import { guestInfo, setGuestInfo } from './auth'
 import { guestChanged } from './guestmode'
@@ -118,6 +119,6 @@ function becameMember(channel?: string, demoRole?: string) {
   setGuestInfo(null)
   guestChanged()
   if (isLocalOnly()) { demoRoles(demoRole === 'admin', []); if (demoRole) setDemoRole(demoRole); return }
-  location.replace(`${location.pathname}${location.search}#/c/${encodeURIComponent(channel ?? 'general')}`)
+  replaceHash(`#/c/${encodeURIComponent(channel ?? 'general')}`)
   location.reload()
 }

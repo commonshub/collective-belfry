@@ -1,3 +1,4 @@
+import { replaceHash } from './nav'
 import { finalizeEvent, generateSecretKey, getPublicKey, nip04, nip44, type EventTemplate, type NostrEvent } from 'nostr-tools'
 import { BunkerSigner, parseBunkerInput } from 'nostr-tools/nip46'
 import { sha256 } from '@noble/hashes/sha256'
@@ -70,7 +71,7 @@ export async function finishSignIn(): Promise<Session | null> {
   if (!q.has('code') && !q.has('error')) return null
   const flow = JSON.parse(localStorage.getItem(FLOW_KEY) ?? 'null') as { state: string; verifier: string } | null
   localStorage.removeItem(FLOW_KEY)
-  history.replaceState(null, '', redirectUri() + location.hash)
+  history.replaceState(history.state, '', redirectUri() + location.hash)
   if (!flow || q.get('state') !== flow.state) throw new Error('This sign-in did not start here. Please try again.')
   const err = q.get('error')
   if (err) throw new Error(err === 'access_denied' ? 'Sign-in was cancelled.' : `Not signed in (${err}).`)
@@ -124,7 +125,7 @@ export const setPendingInvite = (token: string) => {
 export function takeInviteFromUrl(): string {
   const m = /^#\/join\/([A-Za-z0-9_-]{20,})$/.exec(location.hash)
   if (!m) return ''
-  history.replaceState(null, '', location.pathname + location.search)
+  history.replaceState(history.state, '', location.pathname + location.search)
   setPendingInvite(m[1])
   return m[1]
 }
@@ -185,7 +186,7 @@ export async function joinAsNew(token: string, retried = false): Promise<Session
   // a co-host link (an event's): a host needs a proven e-mail; after joining with it, the link again
   // (a member link needs no second use: saving the e-mail makes them a member)
   setCoHostToken(body.email_needed && !member ? token : '')
-  if (body.channel) history.replaceState(null, '', `${location.pathname}${location.search}#/c/${encodeURIComponent(body.channel)}`)
+  if (body.channel) replaceHash(`#/c/${encodeURIComponent(body.channel)}`)
   // the belfry said whose key the session signs for: the app opens without asking the signer first
   await kvDel('pubkey')
   return { backend: 'belfry', bunkerUrl: body.bunker_url, clientSecret: bytesToHex(sk), membership: { status: 'unknown' }, ...(body.pubkey && /^[0-9a-f]{64}$/.test(body.pubkey) ? { pubkey: body.pubkey } : {}) }

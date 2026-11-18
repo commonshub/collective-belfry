@@ -1,6 +1,7 @@
 // An event's own screen (#/events/<link>): the channel header's pattern (one line, pulled down
 // for the rest), the event's chat under it, RSVP or apply in one tap, the guest list for hosts.
 // And the screen someone with no account sees when they open an event's URL in the chat.
+import { replaceHash } from '../core/nav'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import qrcode from 'qrcode-generator'
 import { BELFRY, NAME, type Backend } from '../config'
@@ -120,7 +121,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
     setSheet('take'); setTicketFor(null)
   }
   // a ticket's QR opened here: the code leaves the address at once (never shown, never kept)
-  useEffect(() => { if (ticketCode) location.replace('#/events/' + encodeURIComponent(link)) }, [ticketCode])
+  useEffect(() => { if (ticketCode) replaceHash('#/events/' + encodeURIComponent(link)) }, [ticketCode])
 
   // ---- pulling the header ----
   const start = useRef<{ y: number; x: number; dragging: boolean } | null>(null)
@@ -265,7 +266,7 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
           {st === 'applied' || st === 'waitlist' ? 'The event’s chat opens once the hosts give you a place.' : e.status === 'cancelled' ? 'This event is cancelled.' : 'The chat, photos and people open once you have a place.'}
         </div></div>)}
       {sheet === 'menu' && <EventMenu e={e} host={host} may={may} onClose={() => setSheet('')} open={(s) => setSheet(s)} />}
-      {sheet === 'edit' && <EventFormSheet edit={e} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) location.replace('#/events/' + encodeURIComponent(l)) }} />}
+      {sheet === 'edit' && <EventFormSheet edit={e} onClose={() => setSheet('')} onSaved={(l) => { if (l !== eventLinkOf(e)) replaceHash('#/events/' + encodeURIComponent(l)) }} />}
       {sheet === 'tickets' && <TicketsSheet e={e} onClose={() => setSheet('')} />}
       {sheet === 'guests' && <GuestList e={e} onClose={() => setSheet('')} />}
       {sheet === 'qr' && <QrSheet url={eventUrl(e)} title="URL of the event" onClose={() => setSheet('')} />}
@@ -773,7 +774,7 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
       await kvDel('pubkey')
       const session: Session = { backend: 'belfry', bunkerUrl: j.bunker_url, clientSecret: bytesToHex(sk), membership: { status: 'unknown' } }
       try { localStorage.removeItem(VISIT_KEY) } catch { /* private mode */ }
-      history.replaceState(null, '', `${location.pathname}${location.search}#/events/${encodeURIComponent(link)}`)
+      replaceHash(`#/events/${encodeURIComponent(link)}`)
       if (!needs) return onJoined(session)
       // the identity is made: it signs its own join request, which the belfry hands in
       const signer = await makeSigner(session)

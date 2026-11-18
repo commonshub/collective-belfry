@@ -8,6 +8,7 @@
 // Phone: the list, then a section, then a role (‹ goes up one level, never pushes).
 // Laptop (≥ 900 px): the list on the left, the section on the right; roles list and the role
 // being edited side by side.
+import { replaceHash } from '../core/nav'
 import { useEffect, useState, type ReactNode } from 'react'
 import { loadMembership, membership, RequestFailed, requestCount, saveMembership } from '../core/requests'
 import { BELFRY, NAME } from '../config'
@@ -168,7 +169,7 @@ function NavItem({ it, on = false, replace = false }: { it: Section; on?: boolea
   }
   return (
     <button type="button" className={'act settings-row' + (on ? ' on' : '')} aria-current={on ? 'page' : undefined}
-      onClick={() => { const path = it.to ?? 'settings/' + it.id; if (replace && !it.to) location.replace('#/' + path); else go(path) }}>
+      onClick={() => { const path = it.to ?? 'settings/' + it.id; if (replace && !it.to) replaceHash('#/' + path); else go(path) }}>
       {it.icon}<span className="t">{it.label}</span>{sub && <span className="v">{sub}</span>}<ChevronRightIcon />
     </button>
   )
@@ -180,7 +181,7 @@ function RolesPanel({ id, wide = false }: { id?: string; wide?: boolean }) {
   const all = roles()
   const order: Role[] = [...all.filter((r) => r.id === ADMIN), ...all.filter((r) => r.id !== ADMIN && r.id !== MEMBER), ...all.filter((r) => r.id === MEMBER)]
   const others = otherCounts()
-  const open = (rid: string) => (wide ? location.replace('#/settings/roles/' + rid) : go('settings/roles/' + rid))
+  const open = (rid: string) => (wide ? replaceHash('#/settings/roles/' + rid) : go('settings/roles/' + rid))
   const count = (rid: string) => holders(rid).length
   const editing = wide && id ? (id === 'new' ? 'new' : roleById(id)?.id) : undefined
   const list = (
@@ -209,7 +210,7 @@ function RolesPanel({ id, wide = false }: { id?: string; wide?: boolean }) {
       {editing && (
         <section className="role-edit" aria-label={editing === 'new' ? 'New role' : `Edit ${roleById(editing)?.label}`}>
           <h2 className="panel-title">{editing === 'new' ? 'New role' : roleById(editing)?.label}</h2>
-          <RoleForm key={editing} id={editing === 'new' ? undefined : editing} people onDone={(rid) => location.replace('#/settings/roles' + (rid ? '/' + rid : ''))} />
+          <RoleForm key={editing} id={editing === 'new' ? undefined : editing} people onDone={(rid) => replaceHash('#/settings/roles' + (rid ? '/' + rid : ''))} />
         </section>
       )}
     </div>

@@ -1,3 +1,4 @@
+import { replaceHash } from '../core/nav'
 import { AgreementAbout } from './Charter'
 import { accounts, activeId, discardActiveFor } from '../core/accounts'
 import { useEffect, useRef, useState } from 'react'
@@ -62,7 +63,7 @@ export function OpenInvite({ token, backend, onJoined, onSignIn }: { token: stri
         // tests: a token that starts with "member" is a member link (as Host, for a year)
         const member = token.startsWith('member') ? { role: 'host', label: 'Host', membership: 'year' as const } : undefined
         setGuestInfo({ channel: 'general', saved: false, reading: true, ...(member ? { member } : {}) })
-        history.replaceState(null, '', `${location.pathname}${location.search}#/c/general`)
+        replaceHash('#/c/general')
         return onJoined(demoSession('guest@example.org'))
       }
       // what the link is (for the loading line, and to say why when it can't be used) …

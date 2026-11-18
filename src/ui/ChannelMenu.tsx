@@ -8,6 +8,7 @@
 //    the right on a phone; ‹ goes back up (never pushes). Members holds Invite. Settings: those
 //    who may edit the channel. The others show when they hold at least one thing.
 // "Channel info" is gone; its parts live here (old links c/<id>/info… land on these screens).
+import { replaceHash } from '../core/nav'
 import { useState, type ReactNode } from 'react'
 import { canAdmin } from '../core/access'
 import { groupRole } from '../core/checkin'
@@ -187,7 +188,7 @@ export function ChannelPage({ id, page }: { id: string; page: string }) {
       ))}
     </div>
   )
-  else if (page === 'topics') body = <div className="pad pull-topics"><TopicsBar groupId={id} onOpen={(t) => location.replace('#/' + parent + (t ? '/t/' + encodeURIComponent(t) : ''))} /></div>
+  else if (page === 'topics') body = <div className="pad pull-topics"><TopicsBar groupId={id} onOpen={(t) => replaceHash('#/' + parent + (t ? '/t/' + encodeURIComponent(t) : ''))} /></div>
   else if (page === 'members') body = <><ActiveLine id={id} /><Members groupId={id} /></>
   else if (page === 'notifications') body = <div className="pad"><NotifyOptions channel={id} /></div>
   else if (page === 'settings') body = mayEdit(g) && !g.archived ? <div className="pad"><ChannelSettingsForm key={id} id={id} onDone={() => up(parent)} /></div> : <div className="empty">Only the channel’s admins change its settings.</div>

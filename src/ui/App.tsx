@@ -1,3 +1,4 @@
+import { replaceHash } from '../core/nav'
 import { demoButtons } from '../core/buttons'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { useEffect, useState } from 'react'
@@ -213,7 +214,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // "Always use the custom slug if one is set as a general rule"), never #/c/ev-<d>
   const evRoute = route[0] === 'c' && route[1] && (!route[2] || route[2] === 'm') ? eventOfGroup(route[1]) : undefined
   useEffect(() => {
-    if (evRoute?.isNew) location.replace('#/' + eventPath(evRoute) + (route[2] === 'm' && route[3] ? '/m/' + route[3] : ''))
+    if (evRoute?.isNew) replaceHash('#/' + eventPath(evRoute) + (route[2] === 'm' && route[3] ? '/m/' + route[3] : ''))
   }, [evRoute?.coord, evRoute?.slug, route[2], route[3]]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   // a guest link opened while signed in (or kept while signing in): this account gets the channel
@@ -264,8 +265,8 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
 
   // the places (Places.tsx): the app starts on Home; #/town opens the town channel I was in
   const places = placesOn()
-  if (places && route[0] === 'town') { location.replace('#/' + townPath()); return null }
-  if (places && welcomeDue() && route[0] !== 'welcome') { location.replace('#/welcome'); return null }
+  if (places && route[0] === 'town') { replaceHash('#/' + townPath()); return null }
+  if (places && welcomeDue() && route[0] !== 'welcome') { replaceHash('#/welcome'); return null }
   const [section = places ? 'home' : 'c', a, b, c, d] = route
   let view
   let pane // a large screen: an open thread in a third column, its channel stays in the middle

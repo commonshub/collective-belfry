@@ -3,6 +3,7 @@
 // and photo). Members tick for themselves; stewards write, change, reorder and remove the
 // agreements and see who agreed. Guests read them (from the belfry: they can't read the group)
 // and tick them when they apply (Places.tsx ApplyScreen).
+import { replaceHash } from '../core/nav'
 import { directory, loadDirectory } from '../core/requests'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
 import { useEffect, useState, useLayoutEffect, useRef } from 'react'
@@ -246,7 +247,7 @@ export function WelcomeFlow() {
   const [name, setName] = useState(profiles().get(me())?.name ?? '')
   const [error, setError] = useState('')
   const inviter = welcomeInviter()
-  const finish = () => { doneWelcome(); location.replace('#/home') }
+  const finish = () => { doneWelcome(); replaceHash('#/home') }
   if (step === 'hello') return (
     <div className="screen welcome">
       <div className="scroll pad center">
