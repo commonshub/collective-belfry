@@ -133,7 +133,7 @@ const latestTasks = (tasks: Task[]) => {
 function threadOfMessage(groupId: string, id: string): string | undefined {
   const m = messages(groupId).find((x) => x.ev.id === id)
   if (m) return m.ev.kind === 1111 ? (m.ev.tags.find((t) => t[0] === 'E')?.[1] ?? id) : id
-  const r = all().find((e) => e.id === id)
+  const r = all(me()).find((e) => e.id === id)
   return r ? (r.kind === 1111 ? r.tags.find((t) => t[0] === 'E')?.[1] : r.id) : undefined
 }
 

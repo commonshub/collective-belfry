@@ -90,7 +90,7 @@ export function Avatar({ pubkey, size = 36 }: { pubkey: string; size?: number })
   const color = COLORS[parseInt(pubkey.slice(0, 6) || '0', 16) % COLORS.length]
   return (
     <div className="avatar" style={{ background: color, width: size, height: size, fontSize: size * 0.42 }}>
-      {p?.picture ? <img src={p.picture} alt="" loading="lazy" /> : (name[0] ?? '?').toUpperCase()}
+      {p?.picture ? <img key={p.picture} src={p.picture} alt="" loading="lazy" /> : (name[0] ?? '?').toUpperCase()}
     </div>
   )
 }

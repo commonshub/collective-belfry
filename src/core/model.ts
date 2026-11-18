@@ -46,17 +46,19 @@ function perLog<T>(compute: (list: Ev[]) => T): () => T {
 }
 
 export const profiles: () => Map<string, Profile> = perLog((list) => {
-  const out = new Map<string, Profile & { at: number }>()
+  const out = new Map<string, Profile & { at: number; id?: string }>()
   const guests: [string, string][] = []
   for (const e of list) {
     // a guest's name, from the event that put them in a channel (guests.py), until a profile
     if (e.kind === 9000 && tag(e, 'name')) { const p = tag(e, 'p'); if (p) guests.push([p, tag(e, 'name')!.slice(0, 100)]) }
     if (e.kind !== 0) continue
     const prev = out.get(e.pubkey)
-    if (prev && prev.at >= e.created_at) continue
+    // the newest wins; two in the same second: my queued one, else the lowest id (NIP-01, as relays
+    // keep it), so every device and every view agrees on one profile
+    if (prev && (prev.at > e.created_at || (prev.at === e.created_at && !e.pending && (prev.id ?? '') <= e.id))) continue
     try {
       const p = JSON.parse(e.content)
-      out.set(e.pubkey, { name: p.display_name || p.name, picture: p.picture, nip05: p.nip05, at: e.created_at })
+      out.set(e.pubkey, { name: p.display_name || p.name, picture: p.picture, nip05: p.nip05, at: e.created_at, id: e.pending ? '' : e.id })
     } catch { /* bad profile json */ }
   }
   for (const [pk, name] of guests) if (!out.get(pk)?.name) out.set(pk, { ...out.get(pk), name, at: out.get(pk)?.at ?? 0 })

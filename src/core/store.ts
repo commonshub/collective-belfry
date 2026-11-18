@@ -91,9 +91,11 @@ export function setRelay(url: string, s: 'up' | 'down' | 'auth') {
 }
 
 // All events, with queued ones shown as if they were already published.
-let cache: { v: number; list: Ev[] } = { v: -1, list: [] }
+// Keyed by ME too: queued events carry my key, so a call without it (or with another key) must
+// not hand the next caller a list where my own queued events (a new profile…) belong to nobody.
+let cache: { v: number; me: string; list: Ev[] } = { v: -1, me: '', list: [] }
 export function all(me?: string): Ev[] {
-  if (cache.v === version) return cache.list
+  if (cache.v === version && cache.me === (me ?? '')) return cache.list
   const list: Ev[] = [...events.values()]
   for (const o of outbox.values()) {
     if (o.signed) continue // a gift wrap on its way: its message shows from dm.ts, not as an event
@@ -108,7 +110,7 @@ export function all(me?: string): Ev[] {
       pending: o,
     })
   }
-  cache = { v: version, list }
+  cache = { v: version, me: me ?? '', list }
   return list
 }
 

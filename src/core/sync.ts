@@ -47,7 +47,7 @@ export function setWriteGuard(f: typeof writeGuard) { writeGuard = f }
 
 export async function enqueue(
   target: Target,
-  t: { kind: number; content?: string; tags: string[][] },
+  t: { kind: number; content?: string; tags: string[][]; created_at?: number },
   files: File[] = []
 ) {
   // guest mode: nothing is sent before joining; the Join sheet opens instead
@@ -69,7 +69,7 @@ export async function enqueueApi(target: Target, t: { kind: number; content?: st
 /** Save and send, whoever asks (the app's own first events; everything else goes through enqueue). */
 async function put(
   target: Target,
-  t: { kind: number; content?: string; tags: string[][] },
+  t: { kind: number; content?: string; tags: string[][]; created_at?: number },
   files: File[] = [],
   http?: OutboxItem['http']
 ) {
@@ -86,7 +86,7 @@ async function put(
     kind: t.kind,
     content: t.content ?? '',
     tags: [...t.tags, CLIENT_TAG],
-    created_at: now() - demoShift,
+    created_at: Math.max(now() - demoShift, t.created_at ?? 0),
     attachments,
     status: 'queued',
     tries: 0,
@@ -127,6 +127,7 @@ export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, faile
 
 export async function flush() {
   if (!signer) return
+  if (localOnly && demoHold) return // tests: a relay that takes its time
   if (flushing) { again = true; return }
   flushing = true
   again = false
@@ -188,6 +189,9 @@ if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown
 // and pretend the clock is earlier for the next events (to test what a long stretch looks like)
 if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoAt: (secs: number) => void }).__demoAt = (secs) => { demoShift = secs }
 let demoShift = 0
+// and hold the outbox (a slow relay: what is queued stays queued until released)
+let demoHold = false
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoHold: (on: boolean) => void }).__demoHold = (on) => { demoHold = on; if (!on) void flush() }
 
 export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
   if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
@@ -278,10 +282,19 @@ export async function setAvatar(file: File) {
   const url = localOnly
     ? await new Promise<string>((res) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.readAsDataURL(small) })
     : await upload(small, { blobKey: '', name: 'avatar.jpg', mime: 'image/jpeg', size: small.size })
-  const mine = all(signer.pubkey).filter((e) => e.kind === 0 && e.pubkey === signer!.pubkey).sort((a, b) => b.created_at - a.created_at)[0]
+  const { content, after } = myProfile()
+  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, picture: url }), tags: [], created_at: after })
+}
+
+/** My newest profile (kind 0), queued ones included, and the second a new one must come after:
+ *  never the same second as the last, or two quick changes (a picture, then the name) tie and
+ *  one of them is lost (relays keep the lowest id of a tie). */
+export function myProfile(): { content: Record<string, unknown>; after: number } {
+  const pk = signer?.pubkey ?? ''
+  const mine = all(pk).filter((e) => e.kind === 0 && e.pubkey === pk).sort((a, b) => b.created_at - a.created_at)[0]
   let content: Record<string, unknown> = {}
   try { content = mine ? JSON.parse(mine.content) : {} } catch { content = {} }
-  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, picture: url }), tags: [] })
+  return { content, after: mine ? mine.created_at + 1 : 0 }
 }
 
 /** A picture (an event's cover) on Blossom, resized on the device; a data URL in demo mode. */

@@ -8,7 +8,7 @@
 import { BELFRY } from '../config'
 import { loadAccessInfo, accessInfo, belfryAdminKeys } from './access'
 import { all, touch, type Ev } from './store'
-import { enqueue, isLocalOnly, me, signedFetch } from './sync'
+import { enqueue, isLocalOnly, me, myProfile, signedFetch } from './sync'
 
 export const PROFILE_D = 'belfry:profile'
 
@@ -86,11 +86,9 @@ export async function setUsername(username: string): Promise<string> {
 }
 
 export async function saveProfile(p: { name: string; about: string; nip05?: string }) {
-  const mine = all(me()).filter((e) => e.kind === 0 && e.pubkey === me()).sort((a, b) => b.created_at - a.created_at)[0]
-  let content: Record<string, unknown> = {}
-  try { content = mine ? JSON.parse(mine.content) : {} } catch { content = {} }
+  const { content, after } = myProfile()
   const name = p.name.trim().slice(0, 100)
-  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, name, display_name: name, about: p.about.trim().slice(0, 2000), ...(p.nip05 ? { nip05: p.nip05 } : {}) }), tags: [] })
+  await enqueue('main', { kind: 0, content: JSON.stringify({ ...content, name, display_name: name, about: p.about.trim().slice(0, 2000), ...(p.nip05 ? { nip05: p.nip05 } : {}) }), tags: [], created_at: after })
 }
 
 /** About text from someone's kind 0. */
