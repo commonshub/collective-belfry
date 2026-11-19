@@ -46,8 +46,8 @@ export function RequestSections() {
       {people.length > 0 && <>
         <div className="section-title"><span className="lbl"><InboxIcon /> Asking to join {community}</span><span>{people.length}</span></div>
         <p className="hint pad-x req-rule">{membership().accept === 'vouches'
-          ? `${membership().vouches === 1 ? 'One vouch' : `${membership().vouches} vouches`} from members let someone in${admin ? '; admins can still accept or decline' : ''}.`
-          : admin ? 'You decide; members vouch for the people they know.' : 'Vouch for the people you know: the admins decide, and they see who vouched.'}</p>
+          ? `${membership().vouches === 1 ? 'One vouch' : `${membership().vouches} vouches`} from members let someone in${admin ? '; stewards can still accept or decline' : ''}.`
+          : admin ? 'You decide; members vouch for the people they know.' : 'Vouch for the people you know: the stewards decide. Stewards see how many members vouched.'}</p>
         {people.map((p) => <PersonRow key={p.id} p={p} admin={admin} />)}
       </>}
       {groups.map(({ g, list }) => (
@@ -94,7 +94,7 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
           {p.guest && <small className="guest-line">Guest in {p.guest.channels.map((c) => group(c)?.name ?? c).join(', ') || 'a channel'}{p.guest.since ? ` since ${when(p.guest.since)}` : ''}{p.guest.inviter ? `, invited by ${p.guest.inviter}` : ''}</small>}</span></div>
       {p.motivation && <blockquote>{p.motivation}</blockquote>}
       {/* anyone vouches (#issues 2026-11-15); while the admins decide, vouches tell them who stands for whom */}
-      <div className="hint vouch-line"><VouchIcon /> {vouching ? vouchLine(p.vouches, m.vouches) : `${p.vouches} ${p.vouches === 1 ? 'vouch' : 'vouches'} · the admins decide`}{p.vouched ? ' · you vouched' : ''}</div>
+      <div className="hint vouch-line"><VouchIcon /> {vouching ? vouchLine(p.vouches, m.vouches) : `${p.vouches} ${p.vouches === 1 ? 'vouch' : 'vouches'} · the stewards decide`}{p.vouched ? ' · you vouched' : ''}</div>
       <Fail error={error} />
       {done ? <div className="hint">{done}</div> : (
         <div className="row">
