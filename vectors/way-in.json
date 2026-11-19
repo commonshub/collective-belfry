@@ -1,0 +1,559 @@
+{
+  "about": "The way in (collective-belfry docs/membership.md \"Applying from the chat (verified)\" and \"A name and a username\"): a belfry's start screen is Log in and a smaller Apply to join. The app makes a key (the applicant key) and signs every call with it (NIP-98, belfry.<domain>/api/v1/…). cases: an answer of `call` (status + body) and `screen`, what the app shows next: code (the six boxes), signed_in (store the session bound to the applicant key like any sign-in; `nip05` = the address said, only when it is name@<domain>), pending (\"Your request is pending\"; `pending` = what /apply/status gives back), unknown (\"No account here yet\" → Apply to join, sent with `proof`), declined, start (the belfry's start screen), log_in (Log in with the address filled in), sign_in_instead (the account holds its own key: the older sign-in with its address), without_proof (ask /apply/start again without the proof: a code is mailed), stay (the refusal `message` on the screen that asked; `clears_code`: the digits typed are of no use), older (this belfry lacks these calls: the native sign-in and the unproven form). `message` is the app's own fixed words, never the server's text. /welcome answering already_set, own_key, not_member or unverified means there is nothing for this person to pick: the chat, no message (signed_in). An /apply/status state we do not know is read as none (start): that call runs on its own, so it never shows an error. A signed_in whose bunker_url is not a bunker address or whose pubkey is not 64 hex is never stored. Suggestions are kept only when they are usernames by the server's rule, three at most. username_check: the line under \"Pick a username:\" for an answer of POST /username/check. A taken username offers up to three suggestions, in the server's order, each one tap (`offers`); the line names them: \"Try a\", \"Try a or b\", \"Try a, b or c\".",
+  "domain": "riverside.example",
+  "cases": [
+    {
+      "name": "a code is on its way (known address or not)",
+      "call": "login/start",
+      "status": 202,
+      "body": {
+        "sent": true
+      },
+      "screen": "code"
+    },
+    {
+      "name": "not an address",
+      "call": "login/start",
+      "status": 422,
+      "body": {
+        "error": "invalid"
+      },
+      "screen": "stay",
+      "message": "That doesn’t look like an e-mail address."
+    },
+    {
+      "name": "too many codes",
+      "call": "login/start",
+      "status": 429,
+      "body": {
+        "error": "too_many"
+      },
+      "screen": "stay",
+      "message": "Too many codes for now. Try again in half an hour."
+    },
+    {
+      "name": "an older belfry: no such call",
+      "call": "login/start",
+      "status": 404,
+      "body": null,
+      "screen": "older"
+    },
+    {
+      "name": "no register of its own",
+      "call": "login/start",
+      "status": 409,
+      "body": {
+        "error": "unsupported"
+      },
+      "screen": "older"
+    },
+    {
+      "name": "the right code, an account: signed in",
+      "call": "login/verify",
+      "status": 200,
+      "body": {
+        "state": "signed_in",
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "signed_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "the right code, a request waits: pending",
+      "call": "login/verify",
+      "status": 200,
+      "body": {
+        "state": "pending"
+      },
+      "screen": "pending"
+    },
+    {
+      "name": "the right code, nobody's: apply with the proof",
+      "call": "login/verify",
+      "status": 200,
+      "body": {
+        "state": "unknown",
+        "proof": "1795090000.9f2c1ab4"
+      },
+      "screen": "unknown",
+      "proof": "1795090000.9f2c1ab4"
+    },
+    {
+      "name": "unknown without a proof is not a state we know",
+      "call": "login/verify",
+      "status": 200,
+      "body": {
+        "state": "unknown"
+      },
+      "screen": "stay",
+      "message": "That did not work. Try again."
+    },
+    {
+      "name": "signed_in without a bunker address is never stored",
+      "call": "login/verify",
+      "status": 200,
+      "body": {
+        "state": "signed_in",
+        "bunker_url": "https://riverside.example/",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27"
+      },
+      "screen": "stay",
+      "message": "That did not work. Try again."
+    },
+    {
+      "name": "a wrong code",
+      "call": "login/verify",
+      "status": 422,
+      "body": {
+        "error": "wrong_code",
+        "tries_left": 3
+      },
+      "screen": "stay",
+      "message": "That code is not right. 3 tries left.",
+      "clears_code": true
+    },
+    {
+      "name": "a wrong code, the last try",
+      "call": "login/verify",
+      "status": 422,
+      "body": {
+        "error": "wrong_code",
+        "tries_left": 1
+      },
+      "screen": "stay",
+      "message": "That code is not right. 1 try left.",
+      "clears_code": true
+    },
+    {
+      "name": "a wrong code, none left",
+      "call": "login/verify",
+      "status": 422,
+      "body": {
+        "error": "wrong_code",
+        "tries_left": 0
+      },
+      "screen": "stay",
+      "message": "That code is not right. Send a new one.",
+      "clears_code": true
+    },
+    {
+      "name": "an expired code",
+      "call": "login/verify",
+      "status": 410,
+      "body": {
+        "error": "expired"
+      },
+      "screen": "stay",
+      "message": "That code has expired. Send a new one.",
+      "clears_code": true
+    },
+    {
+      "name": "the account holds its own key",
+      "call": "login/verify",
+      "status": 409,
+      "body": {
+        "error": "taken",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "sign_in_instead",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "the key is linked to another account",
+      "call": "login/verify",
+      "status": 409,
+      "body": {
+        "error": "key_taken"
+      },
+      "screen": "stay",
+      "message": "That did not work. Send a new code and try again.",
+      "clears_code": true
+    },
+    {
+      "name": "the signer did not answer",
+      "call": "login/verify",
+      "status": 503,
+      "body": {
+        "error": "signer"
+      },
+      "screen": "stay",
+      "message": "The belfry’s signer is not answering. Send a new code and try again.",
+      "clears_code": true
+    },
+    {
+      "name": "a code is on its way",
+      "call": "apply/start",
+      "status": 202,
+      "body": {
+        "sent": true
+      },
+      "screen": "code"
+    },
+    {
+      "name": "with a proof: no code, the request is stored",
+      "call": "apply/start",
+      "status": 200,
+      "body": {
+        "state": "pending"
+      },
+      "screen": "pending"
+    },
+    {
+      "name": "with a proof, the address got an account meanwhile",
+      "call": "apply/start",
+      "status": 200,
+      "body": {
+        "state": "signed_in",
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "signed_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "the proof is too old",
+      "call": "apply/start",
+      "status": 422,
+      "body": {
+        "error": "proof"
+      },
+      "screen": "without_proof"
+    },
+    {
+      "name": "no name, or no words",
+      "call": "apply/start",
+      "status": 400,
+      "body": {
+        "error": "missing"
+      },
+      "screen": "stay",
+      "message": "Please give your name and a few words on why you would like to join."
+    },
+    {
+      "name": "an agreement is not ticked",
+      "call": "apply/start",
+      "status": 400,
+      "body": {
+        "error": "unticked"
+      },
+      "screen": "stay",
+      "message": "Please tick each agreement of the charter: joining means agreeing to them."
+    },
+    {
+      "name": "a username that can't be",
+      "call": "apply/start",
+      "status": 422,
+      "body": {
+        "error": "username_invalid",
+        "reason": "chars"
+      },
+      "screen": "stay",
+      "message": "Use lowercase letters, digits and dashes, 3 to 30 characters."
+    },
+    {
+      "name": "a reserved username",
+      "call": "apply/start",
+      "status": 422,
+      "body": {
+        "error": "username_invalid",
+        "reason": "reserved"
+      },
+      "screen": "stay",
+      "message": "That name is kept for the belfry."
+    },
+    {
+      "name": "a taken username, with suggestions",
+      "call": "apply/start",
+      "status": 409,
+      "body": {
+        "error": "username_taken",
+        "suggestions": [
+          "lina-moreau",
+          "lina-2",
+          "Not One!"
+        ]
+      },
+      "screen": "stay",
+      "message": "This username is taken.",
+      "suggestions": [
+        "lina-moreau",
+        "lina-2"
+      ]
+    },
+    {
+      "name": "the right code: the request is with the stewards",
+      "call": "apply/verify",
+      "status": 200,
+      "body": {
+        "state": "pending"
+      },
+      "screen": "pending"
+    },
+    {
+      "name": "the right code, and the address has an account",
+      "call": "apply/verify",
+      "status": 200,
+      "body": {
+        "state": "signed_in",
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "signed_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "a wrong code",
+      "call": "apply/verify",
+      "status": 422,
+      "body": {
+        "error": "wrong_code",
+        "tries_left": 4
+      },
+      "screen": "stay",
+      "message": "That code is not right. 4 tries left.",
+      "clears_code": true
+    },
+    {
+      "name": "nothing asked by this key",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "none"
+      },
+      "screen": "start"
+    },
+    {
+      "name": "waiting: what they sent comes back",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "pending",
+        "name": "Lina Moreau",
+        "username": "lina",
+        "email": "lina.moreau@example.org",
+        "motivation": "I run a repair café in Ghent."
+      },
+      "screen": "pending",
+      "pending": {
+        "name": "Lina Moreau",
+        "username": "lina",
+        "email": "lina.moreau@example.org",
+        "motivation": "I run a repair café in Ghent."
+      }
+    },
+    {
+      "name": "declined",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "declined"
+      },
+      "screen": "declined"
+    },
+    {
+      "name": "approved: the session comes with it",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "approved",
+        "signed_in": true,
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "signed_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "approved, the session was handed out already: log in",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "approved",
+        "signed_in": false,
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "log_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "a state we don't know",
+      "call": "apply/status",
+      "status": 200,
+      "body": {
+        "state": "archived"
+      },
+      "screen": "start"
+    },
+    {
+      "name": "the name and username are set",
+      "call": "welcome",
+      "status": 200,
+      "body": {
+        "name": "Lina Moreau",
+        "username": "lina",
+        "nip05": "lina@riverside.example"
+      },
+      "screen": "signed_in",
+      "nip05": "lina@riverside.example"
+    },
+    {
+      "name": "taken meanwhile",
+      "call": "welcome",
+      "status": 409,
+      "body": {
+        "error": "username_taken",
+        "suggestions": [
+          "lina-2"
+        ]
+      },
+      "screen": "stay",
+      "message": "This username is taken.",
+      "suggestions": [
+        "lina-2"
+      ]
+    },
+    {
+      "name": "set already",
+      "call": "welcome",
+      "status": 409,
+      "body": {
+        "error": "already_set"
+      },
+      "screen": "signed_in"
+    },
+    {
+      "name": "a guest",
+      "call": "welcome",
+      "status": 403,
+      "body": {
+        "error": "not_member"
+      },
+      "screen": "signed_in"
+    },
+    {
+      "name": "the server broke",
+      "call": "apply/verify",
+      "status": 500,
+      "body": null,
+      "screen": "stay",
+      "message": "That did not work. Try again."
+    },
+    {
+      "name": "the account holds its own key: nothing to pick",
+      "call": "welcome",
+      "status": 409,
+      "body": {
+        "error": "own_key"
+      },
+      "screen": "signed_in"
+    }
+  ],
+  "username_check": [
+    {
+      "name": "available",
+      "body": {
+        "username": "lina",
+        "state": "available",
+        "suggestions": []
+      },
+      "line": "lina@riverside.example is available"
+    },
+    {
+      "name": "taken, two suggestions",
+      "body": {
+        "username": "lina",
+        "state": "taken",
+        "suggestions": [
+          "lina-moreau",
+          "lina-2"
+        ]
+      },
+      "line": "Taken. Try lina-moreau or lina-2"
+    },
+    {
+      "name": "taken, one suggestion",
+      "body": {
+        "username": "lina",
+        "state": "taken",
+        "suggestions": [
+          "lina-moreau"
+        ]
+      },
+      "line": "Taken. Try lina-moreau",
+      "offers": [
+        "lina-moreau"
+      ]
+    },
+    {
+      "name": "taken, three suggestions (never more)",
+      "body": {
+        "username": "lina",
+        "state": "taken",
+        "suggestions": [
+          "lina-moreau",
+          "lina-2",
+          "lina-3",
+          "lina-4"
+        ]
+      },
+      "line": "Taken. Try lina-moreau, lina-2 or lina-3",
+      "offers": [
+        "lina-moreau",
+        "lina-2",
+        "lina-3"
+      ]
+    },
+    {
+      "name": "taken, nothing to suggest",
+      "body": {
+        "username": "lina",
+        "state": "taken",
+        "suggestions": []
+      },
+      "line": "Taken. Try another one."
+    },
+    {
+      "name": "invalid",
+      "body": {
+        "username": "lina_m!",
+        "state": "invalid",
+        "reason": "chars",
+        "suggestions": [
+          "lina-m"
+        ]
+      },
+      "line": "Use lowercase letters, digits and dashes, 3 to 30 characters."
+    },
+    {
+      "name": "reserved",
+      "body": {
+        "username": "admin",
+        "state": "invalid",
+        "reason": "reserved",
+        "suggestions": []
+      },
+      "line": "That name is kept for the belfry."
+    },
+    {
+      "name": "reserved, with a suggestion",
+      "body": {
+        "username": "admin",
+        "state": "invalid",
+        "reason": "reserved",
+        "suggestions": [
+          "lina"
+        ]
+      },
+      "line": "That name is kept for the belfry. Try lina"
+    }
+  ]
+}

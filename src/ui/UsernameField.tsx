@@ -6,7 +6,7 @@
 // invents a username. Under it: what the address is for.
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY } from '../config'
-import { checkUsername, type Check } from '../core/direct'
+import { checkUsername, usernameLine, type Check } from '../core/direct'
 import { CheckIcon } from './icons'
 
 export interface NameState { name: string; username: string; ok: boolean }
@@ -63,10 +63,9 @@ export function NameFields({ value, onChange, via, autoFocus }: { value: NameSta
         </span></label>
       <div id="username-state" className="username-state" role="status" aria-live="polite">
         {state === 'checking' ? <span className="hint">Checking…</span>
-          : state === 'available' ? <span className="ok"><CheckIcon /> {check!.username}@{BELFRY.domain} is available</span>
-          : state === 'taken' ? <span className="error">Taken.{check!.suggestions.length > 0 && <> Try {check!.suggestions.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setEdited(true); onChange({ ...value, username: x, ok: false }) }}>{x}</button></span>)}</>}</span>
-          : state === 'invalid' && check!.reason === 'reserved' ? <span className="error">That name is kept for the belfry.{check!.suggestions.length > 0 && <> Try {check!.suggestions.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setEdited(true); onChange({ ...value, username: x, ok: false }) }}>{x}</button></span>)}</>}</span>
-          : state === 'invalid' ? <span className="error">Use lowercase letters, digits and dashes, 3 to 30 characters.</span>
+          : check ? (() => { const l = usernameLine(check); return l.ok
+            ? <span className="ok"><CheckIcon /> {l.text}</span>
+            : <span className="error">{l.text}{l.offers.length > 0 && <> <Offers list={l.offers} pick={(x) => { setEdited(true); onChange({ ...value, username: x, ok: false }) }} /></>}</span> })()
           : null}
       </div>
       <p className="hint small username-about">This is your address here: <b>{u}@{BELFRY.domain}</b>. You log in with it, people mention you as @{u}, and it receives your direct messages and e-mails.</p>
@@ -76,3 +75,9 @@ export function NameFields({ value, onChange, via, autoFocus }: { value: NameSta
 
 /** Set the username from outside (the belfry said it was taken meanwhile): its suggestions show. */
 export const takenNow = (v: NameState): NameState => ({ ...v, ok: false })
+
+/** Suggested usernames, one tap each: "a" / "a or b" / "a, b or c" (vectors/way-in.json). */
+export function Offers({ list, pick }: { list: string[]; pick: (x: string) => void }) {
+  const xs = list.slice(0, 3)
+  return <>{xs.map((x, i) => <span key={x}>{i > 0 && (i === xs.length - 1 ? ' or ' : ', ')}<button type="button" className="chip-btn" onClick={() => pick(x)}>{x}</button></span>)}</>
+}

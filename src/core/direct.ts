@@ -44,29 +44,52 @@ const setAppliedEmail = (e: string) => { try { localStorage.setItem(EMAIL, e) } 
 
 export type DirectError = 'missing' | 'unticked' | 'invalid' | 'unsupported' | 'username_invalid' | 'username_taken' | 'wrong_code' | 'expired' | 'taken' | 'key_taken' | 'signer' | 'too_many' | 'proof' | 'offline' | 'failed'
 export class DirectFailed extends Error {
-  constructor(public code: DirectError, public triesLeft?: number, /** username_taken: the belfry's suggestions */ public suggestions: string[] = []) { super(code) }
+  constructor(public code: DirectError, public triesLeft?: number, /** username_taken: the belfry's suggestions */ public suggestions: string[] = [],
+    /** username_invalid: why (chars, short, long, reserved) */ public reason?: string, /** taken: the account's address */ public nip05?: string) { super(code) }
 }
 const KNOWN = new Set<DirectError>(['missing', 'unticked', 'invalid', 'unsupported', 'username_invalid', 'username_taken', 'wrong_code', 'expired', 'taken', 'key_taken', 'signer', 'too_many', 'proof'])
+// The words are the apps' own, the same on iOS and Android (vectors/way-in.json), never the server's text.
+export const RESERVED = 'That name is kept for the belfry.'
+export const USERNAME_RULE = 'Use lowercase letters, digits and dashes, 3 to 30 characters.'
 export function directErrorText(f: DirectFailed): string {
   if (f.code === 'wrong_code' && f.triesLeft !== undefined)
-    return f.triesLeft <= 0 ? 'That code is not right, and no tries are left. Send a new one.' : `That code is not right. ${f.triesLeft} ${f.triesLeft === 1 ? 'try' : 'tries'} left.`
+    return f.triesLeft <= 0 ? 'That code is not right. Send a new one.' : `That code is not right. ${f.triesLeft} ${f.triesLeft === 1 ? 'try' : 'tries'} left.`
+  if (f.code === 'username_invalid' && f.reason === 'reserved') return RESERVED
   return ({
-    missing: 'Write why you would like to join.',
-    unticked: 'Tick each agreement of the charter.',
+    missing: 'Please give your name and a few words on why you would like to join.',
+    unticked: 'Please tick each agreement of the charter: joining means agreeing to them.',
     invalid: 'That doesn’t look like an e-mail address.',
     unsupported: 'This belfry takes applications another way.',
-    username_invalid: 'Use lowercase letters, digits and dashes, 3 to 30 characters.',
-    username_taken: 'That username was just taken. Pick another.',
+    username_invalid: USERNAME_RULE,
+    username_taken: 'This username is taken.',
     wrong_code: 'That code is not right. Check the e-mail and try again.',
     expired: 'That code has expired. Send a new one.',
     taken: 'This address has an account that signs in with its own key.',
-    key_taken: 'That did not work. Send a new code.',
-    signer: 'That did not work just now. Send a new code.',
+    key_taken: 'That did not work. Send a new code and try again.',
+    signer: 'The belfry’s signer is not answering. Send a new code and try again.',
     too_many: 'Too many codes for now. Try again in half an hour.',
     proof: 'That took too long. We sent you a new code.',
     offline: 'No connection. Try again.',
     failed: 'That did not work. Try again.',
   } as Record<DirectError, string>)[f.code]
+}
+/** A refused call (status, body) as the error the screens know. 404: a belfry older than these calls. */
+export function failureOf(status: number, d: Record<string, unknown>): DirectFailed {
+  if (status === 404) return new DirectFailed('unsupported')
+  const e = String(d.error ?? '') as DirectError
+  const left = typeof d.tries_left === 'number' && Number.isInteger(d.tries_left) && d.tries_left >= 0 && d.tries_left < 100 ? d.tries_left : undefined
+  const nip05 = typeof d.nip05 === 'string' && d.nip05.length < 200 ? d.nip05 : undefined
+  return new DirectFailed(KNOWN.has(e) ? e : 'failed', left, suggestionsOf(d), typeof d.reason === 'string' ? d.reason : undefined, nip05)
+}
+/** What a refusal does on screen: the older ways (unsupported), the own-key sign-in (taken), ask
+ *  again without the proof (proof), else the words on the screen that asked (and whether the
+ *  digits typed are of no use any more). */
+export type Refusal = { screen: 'older' } | { screen: 'sign_in_instead'; nip05?: string } | { screen: 'without_proof' } | { screen: 'stay'; message: string; clears_code: boolean; suggestions: string[] }
+export function refusalOf(f: DirectFailed): Refusal {
+  if (f.code === 'unsupported') return { screen: 'older' }
+  if (f.code === 'taken') return { screen: 'sign_in_instead', ...(f.nip05 ? { nip05: f.nip05 } : {}) }
+  if (f.code === 'proof') return { screen: 'without_proof' }
+  return { screen: 'stay', message: directErrorText(f), clears_code: ['wrong_code', 'expired', 'key_taken', 'signer'].includes(f.code), suggestions: f.suggestions }
 }
 
 const demo = () => getBackend() === 'demo'
@@ -84,10 +107,9 @@ async function post(path: string, body: Record<string, unknown>): Promise<{ stat
   try { r = await fetch(url, { method: 'POST', headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': 'application/json' }, body: text }) } catch { throw new DirectFailed('offline') }
   const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
   if (!r.ok) {
-    const e = String(d.error ?? '') as DirectError
-    const left = typeof d.tries_left === 'number' && Number.isInteger(d.tries_left) && d.tries_left >= 0 && d.tries_left < 100 ? d.tries_left : undefined
-    if (e === 'key_taken') dropApplicantKey() // one key, one identity: the next code goes with a new key
-    throw new DirectFailed(KNOWN.has(e) ? e : 'failed', left, suggestionsOf(d))
+    const f = failureOf(r.status, d)
+    if (f.code === 'key_taken') dropApplicantKey() // one key, one identity: the next code goes with a new key
+    throw f
   }
   return { status: r.status, d }
 }
@@ -96,14 +118,15 @@ export type Verified = { state: 'pending' } | { state: 'signed_in'; signed: Sign
 
 /** A signed_in (or approved) answer: the session on the applicant key (never stored unless the
  *  bunker address and the key check out: guestjoin.signedInFrom). */
-function signed(d: Record<string, unknown>, email: string): SignedIn {
+function signed(d: Record<string, unknown>, email: string, domain?: string): SignedIn {
   // the applicant key stays stored until the session is saved and has signed once (App.tsx:
   // releaseApplicantKey): a tab that dies in between can still be let in by /apply/status
-  return signedInFrom(d, applicantKey(), email)
+  return signedInFrom(d, applicantKey(), email, domain)
 }
 
-function verified(d: Record<string, unknown>, email: string): Verified {
-  if (d.state === 'signed_in') return { state: 'signed_in', signed: signed(d, email) }
+/** An accepted /login/verify, /apply/verify or /apply/start answer. */
+export function verified(d: Record<string, unknown>, email: string, domain?: string): Verified {
+  if (d.state === 'signed_in') return { state: 'signed_in', signed: signed(d, email, domain) }
   if (d.state === 'pending') return { state: 'pending' }
   if (d.state === 'unknown' && typeof d.proof === 'string' && d.proof.length > 0 && d.proof.length < 2000) return { state: 'unknown', proof: d.proof }
   throw new DirectFailed('failed')
@@ -141,14 +164,22 @@ export async function loginVerify(email: string, code: string): Promise<Verified
 }
 
 /** Apply: with PROOF (a login code just proved the address) → pending at once; without → a code goes out. */
-export async function applyStart(email: string, motivation: string, agreed: string[], proof?: string, who?: { name: string; username: string }): Promise<'sent' | 'pending'> {
+export async function applyStart(email: string, motivation: string, agreed: string[], proof?: string, who?: { name: string; username: string }): Promise<'sent' | Verified> {
   const e = email.trim()
   setAppliedEmail(e)
   applicantKey()
   if (who) setDemoWho(who, motivation, e)
-  if (demo()) { await wait(300); if (who && demoTaken.has(who.username)) throw new DirectFailed('username_taken', undefined, demoSuggest(who.name).filter((x) => x !== who.username)); if (proof) { setDemoState('pending'); return 'pending' } return 'sent' }
-  const { d } = await post('/apply/start', { email: e, motivation: motivation.trim(), agreed, ...(proof ? { proof } : {}), ...(who ? { name: who.name.trim().replace(/\s+/g, ' ').slice(0, 100), username: who.username } : {}) })
-  return d.state === 'pending' ? 'pending' : 'sent'
+  if (demo()) { await wait(300); if (who && demoTaken.has(who.username)) throw new DirectFailed('username_taken', undefined, demoSuggest(who.name).filter((x) => x !== who.username)); if (proof) { setDemoState('pending'); return { state: 'pending' } } return 'sent' }
+  const { status, d } = await post('/apply/start', { email: e, motivation: motivation.trim(), agreed, ...(proof ? { proof } : {}), ...(who ? { name: who.name.trim().replace(/\s+/g, ' ').slice(0, 100), username: who.username } : {}) })
+  return applyStarted(status, d, e)
+}
+/** /apply/start accepted: 202 a code is on its way; 200 with the proof: pending, or signed in (the
+ *  address got an account meanwhile). */
+export function applyStarted(status: number, d: Record<string, unknown>, email: string, domain?: string): 'sent' | Verified {
+  if (status === 202 || d.state === undefined) return 'sent'
+  const v = verified(d, email, domain)
+  if (v.state === 'unknown') throw new DirectFailed('failed')
+  return v
 }
 
 export async function applyVerify(email: string, code: string): Promise<Verified> {
@@ -179,9 +210,13 @@ export async function applyStatus(): Promise<Status> {
     if (s === 'declined') return { state: 'declined' }
     return { state: 'none' }
   }
-  const { d } = await post('/apply/status', {})
+  return statusOf((await post('/apply/status', {})).d, appliedEmail())
+}
+/** An /apply/status answer. A state this app doesn't know is none (the start screen); the
+ *  applicant key stays, and is asked about again on the next open (a newer belfry may add states). */
+export function statusOf(d: Record<string, unknown>, email: string, domain?: string): Status {
   if (d.state === 'approved') {
-    if (typeof d.bunker_url === 'string') return { state: 'approved', signed: signed(d, appliedEmail()) }
+    if (typeof d.bunker_url === 'string') return { state: 'approved', signed: signed(d, email, domain) }
     return { state: 'approved', nip05: typeof d.nip05 === 'string' ? d.nip05 : undefined }
   }
   if (d.state === 'pending') {
@@ -278,10 +313,25 @@ export async function welcomeName(name: string, username: string): Promise<{ nam
   const { signedFetch } = await import('./sync')
   let r: Response
   try { r = await signedFetch(`${BELFRY.api}/welcome`, 'POST', { name: name.trim().replace(/\s+/g, ' ').slice(0, 100), username }) } catch { throw new DirectFailed('offline') }
-  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
-  // already set, an account holding its own key, a guest or an unverified address: no screen
-  if (r.status === 409 && (d.error === 'already_set' || d.error === 'own_key')) return 'already_set'
-  if (r.status === 403) return 'already_set'
-  if (!r.ok) { const e = String(d.error ?? '') as DirectError; throw new DirectFailed(e === 'username_invalid' || e === 'username_taken' ? e : 'failed', undefined, suggestionsOf(d)) }
+  return welcomed(r.status, (await r.json().catch(() => ({}))) as Record<string, unknown>, name, username)
+}
+/** A /welcome answer. Set already, an account holding its own key, a guest or an unverified
+ *  address: no name screen, on to the chat (nothing the person can do there). */
+export function welcomed(status: number, d: Record<string, unknown>, name: string, username: string): { name: string; username: string; nip05?: string } | 'already_set' {
+  if (status === 409 && (d.error === 'already_set' || d.error === 'own_key')) return 'already_set'
+  if (status === 403) return 'already_set'
+  if (status < 200 || status > 299) { const e = String(d.error ?? '') as DirectError; throw new DirectFailed(e === 'username_invalid' || e === 'username_taken' ? e : 'failed', undefined, suggestionsOf(d), typeof d.reason === 'string' ? d.reason : undefined) }
   return { name: text(d.name, 100) || name, username: text(d.username, 30) || username, nip05: typeof d.nip05 === 'string' ? d.nip05 : undefined }
 }
+
+/** The line under "Pick a username:" (vectors/way-in.json username_check): its words and the
+ *  suggestions offered (one tap each, the server's order, three at most). */
+export function usernameLine(c: Check, domain = BELFRY.domain): { text: string; offers: string[]; ok?: boolean } {
+  const offers = c.suggestions.slice(0, 3)
+  if (c.state === 'available') return { text: `${c.username}@${domain} is available`, offers: [], ok: true }
+  if (c.state === 'taken') return { text: offers.length ? 'Taken. Try' : 'Taken. Try another one.', offers }
+  if (c.reason === 'reserved') return { text: offers.length ? RESERVED + ' Try' : RESERVED, offers }
+  return { text: USERNAME_RULE, offers: [] }
+}
+/** "a" / "a or b" / "a, b or c" */
+export const orList = (xs: string[]) => xs.length < 2 ? xs.join('') : xs.slice(0, -1).join(', ') + ' or ' + xs[xs.length - 1]

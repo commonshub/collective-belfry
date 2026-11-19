@@ -11,10 +11,10 @@ import { useEffect, useRef, useState } from 'react'
 import { BELFRY, NAME } from '../config'
 import { startSignIn } from '../core/auth'
 import { loadRemoteCharter, type RemoteAgreement } from '../core/charter'
-import { applyOld, applyStart, applyStatus, applyVerify, appliedEmail, DirectFailed, directErrorText, hasApplicantKey, loginStart, loginVerify, takePollTurn, type Verified } from '../core/direct'
+import { applyOld, applyStart, applyStatus, applyVerify, appliedEmail, DirectFailed, directErrorText, refusalOf, hasApplicantKey, loginStart, loginVerify, takePollTurn, type Verified } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
 import type { Pending } from '../core/direct'
-import { NameFields, type NameState } from './UsernameField'
+import { NameFields, Offers, type NameState } from './UsernameField'
 import { takeStartAt } from '../core/signedin'
 import { AgreementAbout } from './Charter'
 import { Btn, Form } from './common'
@@ -60,6 +60,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   const [why, setWhy] = useState('')
   const [who, setWho] = useState<NameState>({ name: '', username: '', ok: false })
   const [takenSug, setTakenSug] = useState<string[]>([]) // the belfry said the username went meanwhile
+  const [takenAt, setTakenAt] = useState('') // 409 taken: the account's address, said on its screen
   const [pend, setPend] = useState<Pending | null>(null) // what /apply/status says of the request
   const [note2, setNote2] = useState('') // a declined request's note
   const named = { name: who.name.trim(), username: who.username.trim() }
@@ -77,7 +78,8 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   const go = (s: Step) => { setError(''); setNote(''); setStep(s) }
   const fail = (e: unknown) => {
     const f = e instanceof DirectFailed ? e : new DirectFailed('failed')
-    if (f.code === 'taken') return go({ s: 'taken' })
+    const r = refusalOf(f) // the same on iOS and Android (vectors/way-in.json)
+    if (r.screen === 'sign_in_instead') { setTakenAt(r.nip05 ?? ''); return go({ s: 'taken' }) }
     // the username went meanwhile: back to it, with the belfry's suggestions
     if (f.code === 'username_taken' || f.code === 'username_invalid') {
       setTakenSug(f.suggestions); setWho((w) => ({ ...w, ok: false }))
@@ -85,13 +87,14 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
       setError(directErrorText(f)); return
     }
     // a belfry without its own register: the old ways (its sign-in page; the unsigned application)
-    if (f.code === 'unsupported') {
+    if (r.screen === 'older') {
       if (step.s === 'login-email') { void startSignIn(); return }
       void applyOld(email, why, [...ticked]).then(() => go({ s: 'sent' }), (x) => setError(directErrorText(x instanceof DirectFailed ? x : new DirectFailed('failed'))))
       return
     }
-    if (f.code === 'wrong_code' || f.code === 'expired' || f.code === 'key_taken' || f.code === 'signer') setCode('')
-    setError(directErrorText(f))
+    if (r.screen !== 'stay') { setError(directErrorText(new DirectFailed('failed'))); return } // without_proof: handled where the proof is sent
+    if (r.clears_code) setCode('')
+    setError(r.message)
   }
   const landed = async (v: Verified, from: 'login' | 'apply') => {
     if (v.state === 'signed_in') { await onIn(v.signed); return }
@@ -253,7 +256,8 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
           // the address was just proven by Log in: no second code
           try {
             sentTo.current = email.trim()
-            if ((await applyStart(sentTo.current, why, [...ticked], proof, named)) === 'pending') return go({ s: 'pending' })
+            const v = await applyStart(sentTo.current, why, [...ticked], proof, named)
+            if (v !== 'sent') return landed(v, 'apply') // pending, or signed in: the address got an account meanwhile
             setCode(''); go({ s: 'apply-code' })
           } catch (e) {
             if (e instanceof DirectFailed && e.code === 'proof') { // stale: a code after all
@@ -265,7 +269,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
         }}>
           <h3>Apply to join {community}</h3>
           <NameFields value={who} onChange={(v) => { setWho(v); if (v.username !== who.username) setTakenSug([]) }} via="applicant" autoFocus />
-          {takenSug.length > 0 && <p className="username-state"><span className="error">Try {takenSug.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setWho({ ...who, username: x, ok: false }); setTakenSug([]) }}>{x}</button></span>)}</span></p>}
+          {takenSug.length > 0 && <p className="username-state"><span className="error">Try <Offers list={takenSug} pick={(x) => { setWho({ ...who, username: x, ok: false }); setTakenSug([]) }} /></span></p>}
           {proof && <p className="hint start-unknown">With <b className="addr">{email.trim()}</b>: the stewards answer there by e-mail.</p>}
           <label className="field"><span>Why would you like to join?</span>
             <textarea className="input" rows={4} required maxLength={4000} value={why} onChange={(e) => setWhy(e.target.value)} /></label>
@@ -342,7 +346,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
     <div className="screen login start">
       {head}
       <h3>This address signs in with its own key</h3>
-      <p className="hint">Its account holds its own key, so it logs in with your signer.</p>
+      <p className="hint">Its account{takenAt ? <> (<b className="addr">{takenAt}</b>)</> : null} holds its own key, so it logs in with your signer.</p>
       <Btn className="btn" onClick={() => startSignIn()}>Log in with my key</Btn>
       <button type="button" className="link" onClick={() => go({ s: 'start' })}>‹ Back</button>
     </div>

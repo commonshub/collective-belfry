@@ -2,3 +2,4 @@ node_modules
 dist
 tools/vectors/.model.mjs
 tools/vectors/.guestjoin.mjs
+tools/vectors/.direct.mjs

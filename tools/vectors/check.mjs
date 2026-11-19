@@ -91,4 +91,63 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     check(`guest-signin ${a.name}`, next === a.next && extra, got)
   }
 }
+
+// way-in.json (belfry-ios 426b308, docs/membership.md "Applying from the chat (verified)", "A name and a
+// username"): each answer of the way in → the screen the app shows next, its words, the suggestions offered
+{
+  const dout = path.join(root, 'tools/vectors/.direct.mjs')
+  await build({
+    entryPoints: [path.join(root, 'src/core/direct.ts')], bundle: true, platform: 'node', format: 'esm', outfile: dout, logLevel: 'error',
+    plugins: [{ name: 'stubs', setup(b) { b.onResolve({ filter: /^(\.\/(store|sync|nav|guestmode|roles|auth)|\.\.\/config)$/ }, () => ({ path: stubs })) } }],
+  })
+  const mem = new Map()
+  globalThis.localStorage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, String(v)), removeItem: (k) => mem.delete(k) }
+  globalThis.window ??= globalThis
+  const D = await import(dout + '?' + Date.now())
+  const v = vec('way-in.json'), dom = v.domain, typed = 'lina.moreau@example.org'
+  const ok = (r) => ({ screen: 'signed_in', ...(r.signed.address.includes('@' + dom) ? { nip05: r.signed.address } : {}) })
+  const screenOf = (c) => {
+    const d = c.body ?? {}
+    try {
+      if (c.status < 200 || c.status > 299) {
+        if (c.call === 'welcome') { const w = D.welcomed(c.status, d, 'Lina Moreau', 'lina'); return { screen: 'signed_in', ...(w !== 'already_set' && w.nip05 ? { nip05: w.nip05 } : {}) } }
+        throw D.failureOf(c.status, d)
+      }
+      if (c.call === 'login/start') return { screen: 'code' }
+      if (c.call === 'login/verify' || c.call === 'apply/verify') {
+        const r = D.verified(d, typed, dom)
+        if (r.state === 'signed_in') return ok(r)
+        if (r.state === 'pending') return { screen: 'pending' }
+        if (c.call === 'apply/verify') throw new D.DirectFailed('failed')
+        return { screen: 'unknown', proof: r.proof }
+      }
+      if (c.call === 'apply/start') {
+        const r = D.applyStarted(c.status, d, typed, dom)
+        if (r === 'sent') return { screen: 'code' }
+        return r.state === 'signed_in' ? ok(r) : { screen: 'pending' }
+      }
+      if (c.call === 'apply/status') {
+        const st = D.statusOf(d, typed, dom)
+        if (st.state === 'approved') return st.signed ? ok(st) : { screen: 'log_in', ...(st.nip05 ? { nip05: st.nip05 } : {}) }
+        if (st.state === 'pending') return { screen: 'pending', ...(st.pending ? { pending: st.pending } : {}) }
+        return { screen: st.state === 'declined' ? 'declined' : 'start' }
+      }
+      if (c.call === 'welcome') { const w = D.welcomed(c.status, d, 'Lina Moreau', 'lina'); return { screen: 'signed_in', ...(w !== 'already_set' && w.nip05 ? { nip05: w.nip05 } : {}) } }
+      return { screen: '?' }
+    } catch (e) {
+      const r = D.refusalOf(e instanceof D.DirectFailed ? e : new D.DirectFailed('failed'))
+      if (r.screen !== 'stay') return r
+      return { screen: 'stay', message: r.message, ...(r.clears_code ? { clears_code: true } : {}), ...(r.suggestions.length ? { suggestions: r.suggestions } : {}) }
+    }
+  }
+  const keys = ['screen', 'message', 'clears_code', 'suggestions', 'proof', 'nip05', 'pending']
+  const pick = (o) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]))
+  for (const c of v.cases) { const got = pick(screenOf(c)); check(`way-in ${c.call} ${c.status}: ${c.name}`, eq(got, pick(c)), { got, want: pick(c) }) }
+  for (const c of v.username_check) {
+    const d = c.body, sug = D.suggestionsOf(d)
+    const l = D.usernameLine({ state: d.state, username: d.username, reason: d.reason, suggestions: sug }, dom)
+    const line = l.offers.length ? `${l.text} ${D.orList(l.offers)}` : l.text
+    check(`way-in username: ${c.name}`, line === c.line && (!c.offers || eq(l.offers, c.offers)), { line, offers: l.offers })
+  }
+}
 process.exit(bad ? 1 : 0)

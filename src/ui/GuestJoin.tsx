@@ -6,7 +6,7 @@ import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
 import { JoinFailed, joinErrorText, nameDone, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
 import { DirectFailed, directErrorText, welcomeName } from '../core/direct'
-import { NameFields, type NameState } from './UsernameField'
+import { NameFields, Offers, type NameState } from './UsernameField'
 import { switchToLogin, switchToSignedIn } from '../core/signedin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
 import { channelIcon, group, nameOf } from '../core/model'
@@ -249,7 +249,7 @@ export function MemberNameScreen({ email, onDone }: { email: string; onDone: () 
         <h2>Welcome to {community}</h2>
         <p className="hint">{email ? <><b className="addr">{email}</b> is confirmed. </> : null}One last thing: how people will know you here.</p>
         <NameFields value={who} onChange={(v) => { setWho(v); if (v.username !== who.username) setSug([]) }} via="session" autoFocus />
-        {sug.length > 0 && <p className="username-state"><span className="error">Try {sug.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setWho({ ...who, username: x, ok: false }); setSug([]) }}>{x}</button></span>)}</span></p>}
+        {sug.length > 0 && <p className="username-state"><span className="error">Try <Offers list={sug} pick={(x) => { setWho({ ...who, username: x, ok: false }); setSug([]) }} /></span></p>}
         {error && <div className="error" role="alert">{error}</div>}
         <button className="btn" disabled={!who.name.trim() || !who.ok}>Go to the chat</button>
       </Form>
