@@ -281,12 +281,13 @@ def allowed_origin(settings: Any, origin: str | None, svc: Services | None = Non
 # /api/<name> by then (console.map_host runs first).
 PREVIEW_PATHS = re.compile(
     r"^/api/(?:products|codes/check|checkout|checkout/[^/]+|checkout/[^/]+/pay"
-    r"|billing|offers|offers/[^/]+)$"
+    r"|billing|offers|offers/[^/]+|events|events/[^/]+)$"
 )
 
 
 def preview_origin(settings: Any, origin: str | None, path: str) -> str | None:
-    """https://preview.<domain> for the sales endpoints (PREVIEW_PATHS), else None."""
+    """https://preview.<domain> for the sales endpoints and for reading events (the list and
+    one event, whose tickets a checkout page shows): PREVIEW_PATHS; else None."""
     domain = getattr(settings, "nip05_domain", "") or ""
     if not origin or "." not in domain or not PREVIEW_PATHS.match(path):
         return None

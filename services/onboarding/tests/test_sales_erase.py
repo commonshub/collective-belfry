@@ -106,11 +106,16 @@ def test_the_preview_gets_nothing_else(shop):
             ("/offers/f_abcdefghijklmnop/decide", "POST"),
             ("/checkout/o_abcdefghijklmnop/pay/x", "POST"),
             ("/channel-invites", "POST"),
+            ("/events/abc123/join", "POST"),
+            ("/events/abc123/slug", "PUT"),
             ("/admins", "POST"),
         ):
             assert preflight(c, path, method).status_code == 403, path
         r = c.get("/api/v1/roles", headers={**HOST, "Origin": PREVIEW})
         assert "access-control-allow-origin" not in r.headers
+        # reading events (a checkout page lists their tickets) is allowed, nothing under them
+        assert preflight(c, "/events", "GET").status_code != 403
+        assert preflight(c, "/events/abc123", "GET").status_code != 403
         r = c.get("/api/me/follows", headers={"Origin": PREVIEW})
         assert "access-control-allow-origin" not in r.headers
         # another host's preview, or plain http, is nobody
