@@ -371,6 +371,9 @@ def instructions(svc: Services) -> str:
     community_relay = (s.community_relay_public_url or "").rstrip("/") or f"wss://relay.{domain}"
     blossom = (s.blossom_public_url or "").rstrip("/") or f"https://blossom.{domain}"
     site = (s.site_url or s.public_url or f"https://{domain}").rstrip("/")
+    from . import pages  # noqa: PLC0415
+
+    skills = pages.skills_base(s) or console
     try:
         no_admin = not setup.admin_known(svc)
     except Exception:  # noqa: BLE001
@@ -448,6 +451,17 @@ holds `owner` (your admin: pubkey, npub, name), `api`, `relays` and `blossom`.
 - **Files.** Upload to `{blossom}` (BUD-02, `PUT /upload`, kind 24242 authorization).
 - **The belfry's addresses.** `{site}/.well-known/belfry.json` lists every service; the API
   base is `{api}` (NIP-98 like above).
+
+## 6. Keep up to date
+- **Refresh the skills once a day.** This page and the skills it points to change as the belfry
+  grows. Once a day, fetch this page again and every skill listed in
+  `{site}/.well-known/belfry.json`, and follow the new text; don't work from a copy older than a
+  day.
+- **Website changes go through a proposal** in #website (`{skills}/skills/homepage.md`), with
+  **screenshots of what changed** attached to the proposal message: each changed page on a phone
+  and on a laptop, in light and dark if the page has both. Upload them to `{blossom}` and put one
+  `imeta` tag per picture on the message (`["imeta", "url <blossom url>", "m image/png", "alt <which page, which screen>"]`).
+  Admins approve what they can see.
 
 ## What you can't do
 Belfry-wide settings (name, look, mail, website, members and admins) stay with the belfry's

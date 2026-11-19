@@ -5,6 +5,9 @@ description: Set what a Belfry shows at its main address (https://<domain>/) - B
 
 # The homepage of a Belfry
 
+> **Agents:** this skill changes. Fetch it again once a day (`https://belfry.<domain>/skills/homepage.md`)
+> and follow the newest text; don't work from an older copy.
+
 The apex of a belfry (`https://<domain>/`) is the community's front door. One setting,
 `HOMEPAGE` in `infra/.env`, decides what it shows:
 
@@ -114,10 +117,16 @@ says so under it); it never falls back to the whole site.
          ["a", "35128:<pubkey hex that published the site>:website"]
          ["path", "/ios/screenshots/"]        ← one per path; none for the whole site
          ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"]
+         ["imeta", "url https://blossom.<domain>/<sha256>.png", "m image/png", "alt /ios/ on a phone, light"]  ← one per screenshot
    content  "Website: /ios/screenshots/ — new onboarding screens." then what changed,
-            the preview link https://preview.<domain>/p/<npub>@website,
+            the screenshot URLs, the preview link https://preview.<domain>/p/<npub>@website,
             and that an admin can approve it with the button under this message
    ```
+   **Always attach screenshots of what changed**: each changed page on a phone (about 390 px
+   wide) and on a laptop (about 1280 px), in light and dark if the page has both. Take them from
+   the preview link, upload them to `https://blossom.<domain>` (BUD-02), and add one `imeta` tag
+   per picture; put the same URLs in the text for apps that don't show `imeta`. Do the same for
+   every new version of a proposal. An admin approves what they can see.
    Start the text with the path it is for ("Website: /ios/screenshots/ — …", or "Website: the
    whole site — …"): the path decides what an admin is approving. The text must make sense
    without the button (older apps show only the text). When an admin taps it, the belfry checks

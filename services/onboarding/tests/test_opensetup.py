@@ -191,6 +191,8 @@ def test_an_agent_asks_and_an_admin_lets_it_in(world):
         md = c.get("/console/agents.md").text
         assert "POST https://belfry.belfry.test/api/v1/agent-requests" in md
         assert "kind 9007" in md and "/agents" in md
+        assert "Refresh the skills once a day" in md and "https://belfry.belfry.test/skills/homepage.md" in md
+        assert "screenshots of what changed" in md and "imeta" in md
         doc = c.get("/.well-known/belfry.json").json()
         assert doc["agents_join"] == {
             "instructions": "https://belfry.belfry.test/agents.md",
