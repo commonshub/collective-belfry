@@ -792,3 +792,27 @@ def test_hosted_by_shows_names_and_never_a_key(rsvc, world, monkeypatch):
     )
     assert '<a href="https://belfry.sh">digital belfry</a>' in out and "&lt;b&gt;" in out
     assert 'href="//evil' not in out
+
+
+def test_parallel_readers_share_one_relay_answer_and_a_slow_relay_is_tried_again(monkeypatch):
+    """A page that asks for a dozen events at once makes one relay read per question, and a
+    connection that times out once is tried again (in production these were 500s)."""
+    import threading
+
+    monkeypatch.setattr(events, "READ_SECONDS", 2.0)
+    events.forget_reads()
+    calls = []
+
+    def fetch():
+        calls.append(1)
+        if len(calls) == 1:
+            raise TimeoutError("timed out while waiting for handshake response")
+        return [{"id": "a"}]
+
+    got = []
+    ts = [threading.Thread(target=lambda: got.append(events._shared("k", fetch))) for _ in range(12)]
+    [t.start() for t in ts]
+    [t.join() for t in ts]
+    assert got == [[{"id": "a"}]] * 12 and len(calls) == 2  # one failure, one read for all twelve
+    events.forget_reads()  # a publish empties it
+    assert events._shared("k", fetch) == [{"id": "a"}] and len(calls) == 3

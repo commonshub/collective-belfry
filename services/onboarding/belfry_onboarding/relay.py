@@ -22,6 +22,10 @@ Signer = Callable[[dict[str, Any]], dict[str, Any]]
 AUTH_KIND = 22242
 
 
+# Called on every publish through a Relay (events.py's shared reads register here).
+PUBLISHED: list[Any] = []
+
+
 class RelayError(RuntimeError):
     pass
 
@@ -33,6 +37,8 @@ class RelayPublisher:
 
     def publish(self, event: dict[str, Any], sign: Signer) -> None:
         """Send ``event`` and wait for its OK; answer an AUTH challenge once if the relay asks."""
+        for told in PUBLISHED:  # readers that share answers for a moment drop them
+            told()
         with connect(self.url, open_timeout=self.timeout, close_timeout=self.timeout) as ws:
             ws.send(json.dumps(["EVENT", event]))
             auth_id: str | None = None

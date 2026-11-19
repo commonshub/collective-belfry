@@ -436,6 +436,24 @@ def create_app(services: Services | None = None) -> FastAPI:
             return HTMLResponse(claim.error_page(400), status_code=400)
         return await request_validation_exception_handler(request, exc)
 
+    async def relay_busy(request: Request, exc: Exception):
+        """A relay did not answer in time. Handled here (not by the catch-all below, which runs
+        outside every middleware) so that an API answer keeps its CORS headers: a browser on
+        the website then sees "try again", not a blocked request."""
+        log.warning("relay not answering for %s: %r", request.url.path, exc)
+        if is_page(request):
+            return HTMLResponse(claim.error_page(500), status_code=503)
+        return JSONResponse(
+            {"error": "unavailable", "message": "Try again in a moment."},
+            status_code=503,
+            headers={"Retry-After": "2", "Cache-Control": "no-store"},
+        )
+
+    from .relay import RelayError
+
+    app.add_exception_handler(TimeoutError, relay_busy)
+    app.add_exception_handler(RelayError, relay_busy)
+
     @app.exception_handler(Exception)
     async def html_server_error(request: Request, exc: Exception):
         """Unhandled errors (Starlette re-raises them afterwards, so the traceback is still logged):

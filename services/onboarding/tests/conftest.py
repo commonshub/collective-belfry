@@ -25,6 +25,16 @@ HOOK_TOKEN = "hook-secret"
 STRIPE_SECRET = "whsec_test_secret"
 
 
+@pytest.fixture(autouse=True)
+def _no_shared_reads(monkeypatch):
+    """events.py shares a relay answer between requests for a moment; tests change the fake
+    relay behind its back, so they read it fresh every time (test_events covers the sharing)."""
+    from belfry_onboarding import events
+
+    monkeypatch.setattr(events, "READ_SECONDS", 0.0)
+    events.forget_reads()
+
+
 @pytest.fixture
 def settings(tmp_path) -> Settings:
     return Settings(

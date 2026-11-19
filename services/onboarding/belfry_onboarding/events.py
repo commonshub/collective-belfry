@@ -161,11 +161,61 @@ def store(svc: Services) -> Store:
 
 
 # ── the relays ──────────────────────────────────────────────────────────────────────────────
+# A public page asks for many events at once (a programme: a dozen requests in one page load),
+# and every read opened its own connection to a relay: the handshakes timed out and the answers
+# were 500s. So reads are shared: the same question within READ_SECONDS gets the same answer
+# (one flight per question), at most READ_SLOTS connections are open at a time, and a read that
+# fails on the connection is tried once more. Own writes (publish) empty the cache.
+READ_SECONDS = 2.0
+READ_SLOTS = threading.BoundedSemaphore(4)
+_reads: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+_read_locks: dict[str, threading.Lock] = {}
+_reads_lock = threading.Lock()
+
+
+def forget_reads() -> None:
+    with _reads_lock:
+        _reads.clear()
+
+
+from . import relay as _relay_mod  # noqa: E402 — after forget_reads, which it calls
+
+if forget_reads not in _relay_mod.PUBLISHED:
+    _relay_mod.PUBLISHED.append(forget_reads)
+
+
+def _shared(key: str, fetch: Any) -> list[dict[str, Any]]:
+    now = time.monotonic()
+    with _reads_lock:
+        hit = _reads.get(key)
+        if hit and hit[0] > now:
+            return list(hit[1])
+        lock = _read_locks.setdefault(key, threading.Lock())
+        if len(_reads) > 500:  # old questions: the cache stays small
+            for k in [k for k, v in _reads.items() if v[0] <= now]:
+                del _reads[k]
+    with lock:
+        with _reads_lock:
+            hit = _reads.get(key)
+            if hit and hit[0] > time.monotonic():
+                return list(hit[1])
+        with READ_SLOTS:
+            try:
+                got = fetch()
+            except (TimeoutError, OSError):
+                time.sleep(0.2)
+                got = fetch()
+        with _reads_lock:
+            _reads[key] = (time.monotonic() + READ_SECONDS, got)
+        return list(got)
+
+
 def community(svc: Services, filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The community relay, read with the belfry's key (members-only relay)."""
     from . import community as c
 
-    return c.query(svc, filters)
+    key = "c" + json.dumps(filters, sort_keys=True)
+    return _shared(key, lambda: c.query(svc, filters))
 
 
 def groups(svc: Services, filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -176,7 +226,8 @@ def groups(svc: Services, filters: list[dict[str, Any]]) -> list[dict[str, Any]]
     if got is None:
         return []
     relay, sign = got
-    return relay.query(filters, sign)
+    key = "g" + json.dumps(filters, sort_keys=True)
+    return _shared(key, lambda: relay.query(filters, sign))
 
 
 def publish(svc: Services, kind: int, tags: list[list[str]], content: str = "") -> bool:
@@ -192,6 +243,7 @@ def publish(svc: Services, kind: int, tags: list[list[str]], content: str = "") 
             sign({"kind": kind, "created_at": int(time.time()), "tags": tags, "content": content}),
             sign,
         )
+        forget_reads()  # the next read sees it
         return True
     except Exception as exc:  # noqa: BLE001 — the caller says so
         log.warning("events: kind %s not published: %s", kind, exc)
