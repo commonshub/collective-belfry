@@ -62,9 +62,9 @@ at most 100 characters; `before` = a unix time (only threads made before it); `l
   given again, also when older threads are deleted. (Threads made in the same second are
   numbered in the order of their ids.) Every message at the top of the channel is a thread and
   takes a number, also one that is not public: public numbers can have gaps.
-- `kind`: `in_kind` for a thread started by `POST /offers`, else `other`. `sponsored` is kept
-  for sponsored-pass requests: none are made yet. `label`, `days`, `percent_asked` come from the
-  offer (`null` for `other`, or when the offer has none).
+- `kind`: for a thread started by `POST /offers`, what the offer said: `in_kind` (the default)
+  or `sponsored`; else `other`. `label` never says sponsored. `label`, `days`, `percent_asked`
+  come from the offer (`null` for `other`, or when the offer has none).
 - `state`: `approved` / `declined` once an admin decided the offer (that wins over a label);
   else `closed` when the members' latest label on it in the chat says closed (NIP-32
   `belfry/inbox`); else `open`. `percent_approved` and `approved_by` only when approved.
@@ -109,6 +109,15 @@ The item of §1, plus:
   this. It is the console's "Where people buy tickets" address when that is one page for
   everything (no `{link}` / `{id}` in it); absent otherwise, and for anyone not approved. The
   author types the code from their mail there.
+- **An offer for an event ticket** (docs/sales.md §10) says more in `me`:
+  `{"author": true, "offer": "f_…", "ticket": "<the ticket's d>", "event": "<the event's link>",
+  "state": "open" | "accepted" | "declined", "redeemed": false, "ticket_url"?}`. `redeemed`:
+  an order holds the approval (made with it, paid or still to pay; false again when that order
+  ends unpaid). `ticket_url`, once accepted and when the console's "Where people buy tickets"
+  template is set: the template filled for that event and ticket (`{link}`, `{id}`) with
+  `offer=<offer id>` appended (`&offer=`, or `?offer=` when the address has no query). The page
+  there sends `POST /checkout {"ticket", "offer", …}` with the same proof (the key, or
+  `X-Thread-Key`): no code to type. Never a code in this answer.
 
 ## 3. `POST /requests/<id>/comments`
 
@@ -131,7 +140,7 @@ Query: `type` = `tickets` | `requests` | `program` (default: everything); `befor
 in §1.
 
 ```json
-{"stats": {"villagers": 131, "open_requests": 12, "in_kind_passes": 5},
+{"stats": {"villagers": 131, "open_requests": 12, "in_kind_passes": 5, "sponsored_passes": 2},
  "items": [
   {"type": "ticket", "at": 1795003700, "who": {"name": null}, "ticket": {"title": "Day pass"}},
   {"type": "request_approved", "at": 1795003600, "who": {"name": "Kim Cook"}, "percent": 75,
@@ -154,8 +163,10 @@ in §1.
 - **`program`**: nothing yet (no source exists); the filter answers no items.
 - **`stats`** (whatever the filter and the page): `villagers` = people with a paid ticket of
   the event or of its day events (each once); `open_requests` = public threads that are open;
-  `in_kind_passes` = approved offers. The last two are 0 on an event the requests don't belong
-  to.
+  `in_kind_passes` = approved offers in kind, `sponsored_passes` = approved offers of kind
+  `sponsored`. The last three are 0 on an event the requests don't belong to. An offer for an
+  event **ticket** belongs to that ticket's event (and to the event its day events point to),
+  wherever the other requests belong: its items and its counts show there and nowhere else.
 
 ### The privacy rule
 
@@ -212,7 +223,7 @@ back; links of the `<page>/thread?id=…` shape are then the website's to handle
 
 ## Not in this version
 
-- `program` items; `sponsored` requests.
+- `program` items.
 - Tickets taken for free on an event's page (no order) are not in the activity; nor are
   membership passes bought as products (only event tickets are).
 - Editing or closing a request from the web; comments by anyone but the author (members answer

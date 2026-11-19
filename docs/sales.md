@@ -307,16 +307,21 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 `requests` with the slug `requests` when there is none). No requests channel → `POST /offers`
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
-`POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent",
-"erase_after_event"?, "public_name"?, "label"?, "days"?}` (`percent` 50–100, 50 when left out;
+`POST /offers` — NIP-98 (any key). `{"product" | "ticket", "name", "email", "offer": "…",
+"percent", "kind"?, "erase_after_event"?, "public_name"?, "label"?, "days"?}` (exactly one of
+`product` and `ticket`, else 422 `invalid`; `ticket` = an event ticket's d tag: §10 "A ticket
+against a contribution"; `kind`: `in_kind` (the default) or `sponsored`, anything else 422
+`invalid`: what the public list says the request is, nothing more; `percent` 50–100, 50 when
+left out;
 the website's form shows 50% by
 default; `erase_after_event` as for `/checkout`: a JSON boolean or 422 `invalid`, kept on the
 offer, carried to the order made with the offer's code; `public_name` as for `/checkout`: the
 requester's name may show on the event's activity; `label`: `volunteer` | `food` | `workshop` |
 `other`; `days`: up to 31 dates `YYYY-MM-DD`, kept sorted, each once; anything else for
 `label` or `days` is 422 `invalid`) → 201
-`{"offer": "f_…", "state": "confirm", "product", "erase_after_event", "public_name", "label",
-"days"}`. `label` and `days` are also tags on the thread's message (`["offer-label", label]`,
+`{"offer": "f_…", "state": "confirm", "kind", "product", "erase_after_event", "public_name",
+"label", "days"}` (`product` is null for a ticket's offer, which has `ticket`, `event` and
+`event_link` instead). `label` and `days` are also tags on the thread's message (`["offer-label", label]`,
 `["offer-days", day, …]`); the thread's HTML page and the console show them. It goes through the requests page's own path for a thread
 from outside: the confirmation mail must be answered (the address must be theirs) before
 anything is public; the page's limits apply, and 3 a day per key and per IP, 3 open per key.
@@ -329,8 +334,8 @@ answer in the thread in the chat; the requester comments with their link; replie
 back to them (webthreads.py).
 
 `GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
-"declined", "product", "erase_after_event", "public_name", "label", "days", "url"?, "my_url"?,
-"percent"?}`: `url` is the public thread, `my_url` the
+"declined", "kind", "product", "ticket"?, "event"?, "event_link"?, "erase_after_event",
+"public_name", "label", "days", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
 requester's own link (to comment), only in this answer and in their mail.
 
 The requests as JSON for the community's own website (the list, one thread with its timeline,
@@ -341,7 +346,10 @@ Deciding: the belfry's admins only, in the console (any percent 50–100 or no, 
 with the card's buttons in the chat. A decision posts a public reply in the thread ("Approved:
 75% off." or "Not this time.", with the note); the personal code goes **only** in the private
 mail to the requester. That code is bound to the requester's key **and** address: the checkout
-takes it from that key, or from an account proven with that address; one use, that product.
+takes it from that key, or from an account proven with that address; one use, that product
+(or that ticket: §10). The requester can also name the offer itself at the checkout instead of
+typing the code: `POST /checkout {"offer": "f_…", …}` (§10; it works for a product's offer
+too).
 Admins over the API: `POST /offers/<id>/decide {"percent": 0|50–100, "note"}`.
 
 `POST /codes` — NIP-98, admins. `{"percent", "product"?, "uses": 1, "count": 1, "expires"?,
@@ -545,7 +553,8 @@ Errors, in the order they are checked:
 | | |
 |---|---|
 | 422 `invalid` | both `product` and `ticket`, or `ticket` not a string |
-| 422 `code_not_for_tickets` | a `code` with a `ticket` (codes are for products in this version) |
+| 422 `invalid` | `code` and `offer` together |
+| 404 `not_found`, 403 `not_author`, 409 `not_approved` | `offer`: no such offer; the request does not prove its author; not approved (below) |
 | 404 `unknown_ticket` | no such event, or no such ticket of it by one of its hosts (the rule `GET /events/<link>` shows tickets by) |
 | 409 `event_over` | the event is cancelled or over |
 | 409 `free` | the ticket has no price (it is taken with `/join`) |
@@ -556,6 +565,7 @@ Errors, in the order they are checked:
 | 403 `members_only` | a members' ticket (or a members' event) and the key is no member or host |
 | 409 `already` | this account holds a ticket of the event, or this key paid for another ticket of it |
 | 409 `sold_out` | no place left |
+| 404 `unknown_code`, 409 `code_used` | the `code` (or the offer's) is not for this ticket and this buyer; its one use is taken |
 | 409 `test_not_set_up`, `cannot_sell` | as in §4, for tickets |
 
 **Price.** The ticket's current price when the order is made (`price_at` rows, else `price`),
@@ -633,7 +643,50 @@ makes each ticket whose `can_pay` (without a viewer) is true a link to the fille
 when every ticket of the event has a price its main button ("Get tickets") goes to the first
 of them; otherwise the page is as before. The page never shows anything from the request URL.
 
-Not in this version: several tickets in one order, codes for tickets, a ticket that also gives
+**A ticket against a contribution** (offers for tickets; tests `tests/test_ticket_offers.py`).
+A community that sells its passes as tickets takes requests on them the way §4 takes them on
+products:
+
+- `POST /offers {"ticket": "<the 30402's d tag>", …}` instead of `product`. The ticket must be
+  one the checkout could sell: 404 `unknown_ticket`, 409 `event_over`, `free`, `currency`,
+  `needs_application` (the rules above). It need **not** be on sale now, and the switch need
+  not be on: a request can be made before sales open. `"kind": "sponsored"` marks a request
+  for a sponsored pass (shown as such in `GET /requests`, the console and the activity's
+  stats; nothing else differs).
+- The thread's title: "<name>: <percent>% off <ticket> · <event>", followed by ", <date>" when
+  the event is on one day (written as the event's page writes dates). Its tags: `["offer",
+  id]`, `["ticket", <d>]` (instead of `product`), `["percent", n]`, `["p", key]`,
+  `["offer-kind", "sponsored"]` when it is one, and the admins' buttons.
+- The offer keeps `ticket` and `event` (the event's d); `GET /offers/<id>` gives them with
+  `event_link` (the event's slug, else its d) and `kind`.
+- **Approved**: the same personal code as for a product (the requester's key and address, one
+  use, the approved percent), for **that ticket alone**. The mail names the ticket and the
+  event; its button opens the thread (the website's own page when the channel was handed over).
+- **`POST /checkout` with `ticket`** takes that `code`. Any other code (a product's, one for
+  any product, another ticket's, someone else's) is 404 `unknown_code`, as a wrong code is for
+  a product. Or `"offer": "<offer id>"` instead of `code`: the server uses the approved offer's
+  code itself. Allowed when the request proves the offer's author: the NIP-98 key is the key
+  that made the offer, **or** the header `X-Thread-Key` carries the key of the offer's own
+  thread link (requests.md §2). Else 403 `not_author`; 404 `not_found` for no such offer; 409
+  `not_approved` (waiting, or declined); 409 `code_used` once an order holds it; 422 `invalid`
+  with `code` too. An offer for another ticket: 404 `unknown_code`.
+- The percent is taken off the ticket's price as this buyer is invoiced: for a person off the
+  total with its VAT, for an organisation off the net, the VAT on top of what is left (50 +
+  21% at 50% off: net 25.00, VAT 5.25, total 30.25 for both).
+- **100%**: nothing to pay; the order is active at once and the person is admitted, exactly as
+  a 100% code opens a product's pass: no confirmation mail first, a new person's address stays
+  unverified until its link or a sign-in proves it. It goes through **while the switch is off**
+  (nothing is sold). Below 100% the switch and `cannot_sell` apply as for any ticket.
+- The admission's 9000 carries `["paid", "offer"]` when the offer covered all of it, `["paid",
+  "paid"]` when something was paid. Nothing reads the tag's value to decide: holding the
+  ticket (the 9000 with its `ticket` tag) is what "Show my ticket" and the check-in go by.
+- An approved offer takes a place like any order: 409 `sold_out` when none is left (the
+  approval is not used up by that). A tester's order with it is a test order: no place, none
+  of the code's real uses.
+- The order keeps `offer` (the offer's id), also when the code was typed.
+
+Not in this version: several tickets in one order, codes for tickets made by hand in the
+console (only an approved offer's), `POST /codes/check` for a ticket, a ticket that also gives
 a membership pass (a two-week ticket giving a village pass for its dates is an open question),
 removing someone automatically on a refund, tickets in the phone apps (they show the server's
 message), tickets on a belfry that keeps its register in Odoo.

@@ -216,7 +216,8 @@ Belfry takes the money for a ticket only when the belfry's admins turned on "Sel
 through the checkout" (docs/sales.md §10; off by default) and the price is in the sales currency
 (`EUR`): the ticket is then bought with `POST /api/v1/checkout {"ticket": "<the ticket's d
 tag>", …}`, by card or against an invoice, and the paid order admits the buyer with the same
-9000 (`["paid", "paid"]`, `["by", "checkout"]`, by the groups key). Otherwise (the switch off,
+9000 (`["paid", "paid"]`, `["by", "checkout"]`, by the groups key; `["paid", "offer"]` when an
+approved request covered all of the price, docs/sales.md §10). Otherwise (the switch off,
 a price in hours or in an own label, a `closed` ticket) the person and the host settle it
 between them as above. Each ticket in `GET /events/<link>` says which it is:
 
