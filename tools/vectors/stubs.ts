@@ -16,3 +16,13 @@ export const LABEL_NS = 'osv/member-label'
 export const THEME = 'osv'
 export const getBackend = () => 'demo'
 export const TZ = 'UTC'
+// guestjoin.ts (guest-signin.json)
+export const replaceHash = () => {}
+export const guestInfo = () => null
+export const setGuestInfo = () => {}
+export const demoSession = (email: string) => ({ backend: 'demo', email, clientSecret: '', membership: { status: 'active' } })
+export const guestChanged = () => {}
+export const addEvents = () => {}
+export const signedFetch = async () => { throw new Error('no network') }
+export const demoRoles = () => {}
+export const setDemoRole = () => {}

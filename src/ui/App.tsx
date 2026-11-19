@@ -9,6 +9,8 @@ import { SearchView } from './Search'
 import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
+import { takeSignedInAs } from '../core/signedin'
+import { CheckIcon } from './icons'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
 import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
@@ -110,8 +112,8 @@ export function App() {
     location.reload()
   }
 
-  // An address proven in guest mode had an account already (GuestJoin.tsx): this guest session
-  // goes, and the person signs in; the channel opens after.
+  // An address proven in guest mode had an account that holds its own key (409 taken): this
+  // guest session goes, and the person signs in; the channel opens after.
   const signInInstead = async (channel: string, moved: boolean) => {
     const s = phase.p === 'in' ? phase.s : undefined
     if (s?.backend === 'demo') { setGuestInfo(null); closeJoin(); await clearSession(); await wipe(); location.hash = ''; return location.reload() }
@@ -233,6 +235,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     )
   }, [ready, route.join('/')])
   useEffect(() => { if (!joined) return; const t = setTimeout(() => setJoined(''), 6000); return () => clearTimeout(t) }, [joined])
+  // just signed in by a guest's code: "Signed in as <address>" for 3 s (said once)
+  const [signedAs, setSignedAs] = useState(takeSignedInAs)
+  useEffect(() => { if (!signedAs) return; const t = setTimeout(() => setSignedAs(''), 3000); return () => clearTimeout(t) }, [signedAs])
   // signed in from an event's page: back to it; an application that got a place: done waiting
   useEffect(() => {
     if (!ready) return
@@ -243,7 +248,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
     if (ch) { setOpenAfterSignIn(''); go('c/' + encodeURIComponent(ch)) }
   }, [ready])
   useEffect(() => { if (status.access === 'ok' && pendingApplication()) setPendingApplication(null) }, [status.access])
-  const toast = <>{joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null}<GuestJoinHost onSignIn={onSignIn} /></>
+  const toast = <>{joined ? <div className="toast" role="status"><span>{joined}</span><button onClick={() => setJoined('')}>OK</button></div> : null}{signedAs ? <div className="toast signed-as" role="status"><CheckIcon /><span>Signed in as {signedAs}</span></div> : null}<GuestJoinHost onSignIn={onSignIn} /></>
   if (opening) return null // under the guest link's loading screen: nothing else is drawn
   if (error)
     return (

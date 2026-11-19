@@ -66,4 +66,29 @@ for (const c of vec('ticket-prices.json').cases) {
   check(`ticket-prices ${c.name}`, eq(got, c.out) && line === c.line, { got, line, want: c.out, wantLine: c.line })
 }
 console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
+
+// guest-signin.json (belfry-ios 5d1ea9a, docs/guests.md "An address that has an account"): the verify body and each answer's next step
+{
+  const gout = path.join(root, 'tools/vectors/.guestjoin.mjs')
+  await build({
+    entryPoints: [path.join(root, 'src/core/guestjoin.ts')], bundle: true, platform: 'node', format: 'esm', outfile: gout, logLevel: 'error',
+    plugins: [{ name: 'stubs', setup(b) { b.onResolve({ filter: /^(\.\/(store|sync|nav|guestmode|roles|auth)|\.\.\/config)$/ }, () => ({ path: stubs })) } }],
+  })
+  const G = await import(gout + '?' + Date.now())
+  const v = vec('guest-signin.json')
+  const t = v.request.typed
+  check('guest-signin body', eq(G.verifyBody(t.email, t.code, t.name, t.session_key, t.client), v.request.body), G.verifyBody(t.email, t.code, t.name, t.session_key, t.client))
+  check('guest-signin body without name', eq(G.verifyBody(t.email, t.code, undefined, t.session_key, t.client), v.request.body_without_name), G.verifyBody(t.email, t.code, undefined, t.session_key, t.client))
+  for (const a of v.answers) {
+    const next = G.verifyNext(a.status, a.body)
+    let extra = true, got = { next }
+    if (a.next === 'signed_in') {
+      const r = G.signedInFrom(a.body, new Uint8Array(32), t.email, v.domain)
+      got = { next, address: r.address, open: r.open, moved: r.moved, pubkey: r.session.pubkey, bunker: r.session.bunkerUrl }
+      extra = r.address === a.address && r.open === a.open && r.moved === a.moved && r.session.pubkey === a.body.pubkey && r.session.bunkerUrl === a.body.bunker_url
+    }
+    if (a.next === 'sign_in_instead') extra = (a.body.moved === true) === a.moved
+    check(`guest-signin ${a.name}`, next === a.next && extra, got)
+  }
+}
 process.exit(bad ? 1 : 0)

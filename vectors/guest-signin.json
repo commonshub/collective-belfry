@@ -1,0 +1,165 @@
+{
+  "about": "A guest gives an address that already has an account here: the right code signs them in (collective-belfry docs/guests.md, \"An address that has an account: the right code signs you in\", 2026-11-19; canvas onboarding/guest-code). The device makes a NEW session key (the guest session key stays bound to the guest account) and sends its PUBLIC key with the code: POST /api/v1/guest/save/verify, NIP-98 by the guest as before. `request`: what is typed and the body sent (email and code trimmed; name only when the sheet asked for one; session_key = 64 lower-case hex; client = the app's own id). `answers`: each HTTP answer and `next`, what the app does: signed_in = drop the guest session and its key, store the new session (bunker_url + the new key's secret) like any sign-in, open `channel` (null: home) and say \"Signed in as <address>\" (address = nip05 when it is name@<domain>, else the e-mail typed) for 3 s, no second code; saved = the guest is saved as before (no account had the address); sign_in_instead = the old path: the account holds its own key or the server is older, sign in with the address (moved says whether the channel went to that account); same_code = the code is not spent: make another session key and send the same code again; new_key_new_code = make another session key and ask for a new code; new_code = ask for a new code (the code is spent); wrong_code / expired / too_many / not_guest as before. A 200 with signed_in true whose bunker_url is not a bunker address or whose pubkey is not 64 hex is never stored: `failed`.",
+  "domain": "riverside.example",
+  "request": {
+    "typed": {
+      "email": " lina@example.org ",
+      "code": " 427193 ",
+      "name": "Lina  Haddad",
+      "session_key": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+      "client": "belfry-ios"
+    },
+    "body": {
+      "email": "lina@example.org",
+      "code": "427193",
+      "name": "Lina Haddad",
+      "session_key": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+      "client": "belfry-ios"
+    },
+    "body_without_name": {
+      "email": "lina@example.org",
+      "code": "427193",
+      "session_key": "3bf0c63fcb93463407af97a5e5ee64fa883d107ef9e558472c4eb9aaaefa459d",
+      "client": "belfry-ios"
+    }
+  },
+  "answers": [
+    {
+      "name": "the address is another account's: signed in",
+      "status": 200,
+      "body": {
+        "signed_in": true,
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": "lina@riverside.example",
+        "moved": true,
+        "channel": "garden-3f2a"
+      },
+      "next": "signed_in",
+      "address": "lina@riverside.example",
+      "open": "garden-3f2a",
+      "moved": true
+    },
+    {
+      "name": "signed in, no channel to open, no nip05: the e-mail typed is the address said",
+      "status": 200,
+      "body": {
+        "signed_in": true,
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "npub": "npub15242et8lucmkmxpxmzy7tc5c2wq7m2mhjf8wa3gm3ckz2de6t5nsxutcxl",
+        "nip05": null,
+        "moved": false,
+        "channel": null
+      },
+      "next": "signed_in",
+      "address": "lina@example.org",
+      "open": null,
+      "moved": false
+    },
+    {
+      "name": "signed in, a nip05 of another domain is not said",
+      "status": 200,
+      "body": {
+        "signed_in": true,
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
+        "nip05": "lina@elsewhere.example",
+        "moved": false,
+        "channel": "general"
+      },
+      "next": "signed_in",
+      "address": "lina@example.org",
+      "open": "general",
+      "moved": false
+    },
+    {
+      "name": "nobody had the address: the guest is saved, as before",
+      "status": 200,
+      "body": {
+        "joined": true
+      },
+      "next": "saved"
+    },
+    {
+      "name": "signed_in without a bunker address is never stored",
+      "status": 200,
+      "body": {
+        "signed_in": true,
+        "bunker_url": "https://riverside.example/",
+        "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27"
+      },
+      "next": "failed"
+    },
+    {
+      "name": "signed_in with a pubkey that is not a key is never stored",
+      "status": 200,
+      "body": {
+        "signed_in": true,
+        "bunker_url": "bunker://959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd?relay=wss%3A%2F%2Frelay.riverside.example&secret=4f6b1d2c9a",
+        "pubkey": "lina"
+      },
+      "next": "failed"
+    },
+    {
+      "name": "taken: the account holds its own key, or an older server",
+      "status": 409,
+      "body": {
+        "error": "taken",
+        "message": "This address already has an account here.",
+        "moved": true,
+        "nip05": "lina@riverside.example"
+      },
+      "next": "sign_in_instead",
+      "moved": true
+    },
+    {
+      "name": "invalid session key: the code is not spent",
+      "status": 422,
+      "body": {
+        "error": "invalid"
+      },
+      "next": "same_code"
+    },
+    {
+      "name": "the session key is linked to another account",
+      "status": 409,
+      "body": {
+        "error": "key_taken"
+      },
+      "next": "new_key_new_code"
+    },
+    {
+      "name": "the signer did not answer: the code is spent",
+      "status": 503,
+      "body": {
+        "error": "signer"
+      },
+      "next": "new_code"
+    },
+    {
+      "name": "a wrong code, as before",
+      "status": 400,
+      "body": {
+        "error": "wrong_code",
+        "tries_left": 3
+      },
+      "next": "wrong_code"
+    },
+    {
+      "name": "an expired code, as before",
+      "status": 410,
+      "body": {
+        "error": "expired"
+      },
+      "next": "expired"
+    },
+    {
+      "name": "anything else",
+      "status": 500,
+      "body": null,
+      "next": "failed"
+    }
+  ]
+}

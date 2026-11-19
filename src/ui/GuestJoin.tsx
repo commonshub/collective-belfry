@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
 import { JoinFailed, joinErrorText, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
+import { switchToSignedIn } from '../core/signedin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
 import { channelIcon, group, nameOf } from '../core/model'
 import { touch } from '../core/store'
@@ -132,7 +133,9 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
     if (busy) return
     setBusy(true); setError(''); setNote('')
     try {
-      await verifyJoinCode(sentTo.current, c, askName ? name : undefined, again)
+      const r = await verifyJoinCode(sentTo.current, c, askName ? name : undefined, again)
+      // the address has an account: the right code signs in as it (no second code)
+      if (r) { await switchToSignedIn(r); return }
       // a co-host link waiting for a proven e-mail: now it makes them a host
       const cohost = coHostToken()
       if (cohost) { try { await joinWithAccount(cohost); setCoHostToken('') } catch { /* the link again later */ } }
@@ -142,7 +145,7 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
     } catch (e) {
       // a wrong or expired code is cleared; a connection that failed keeps the digits for Try again
       const f = e instanceof JoinFailed ? e.code : 'failed'
-      if (f === 'wrong_code' || f === 'expired') setCode('')
+      if (f === 'wrong_code' || f === 'expired' || f === 'key_taken' || f === 'signer') setCode('')
       else retryable.current = c
       fail(e)
     } finally { setBusy(false) }
