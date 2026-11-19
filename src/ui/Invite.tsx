@@ -233,8 +233,8 @@ function InviteMember({ id }: { id: string }) {
   const kind = (pk: string) => { const o = agentOwner(pk); return o ? (o === me() ? 'Your agent · ' : `${displayName(o)}'s agent · `) : isGuest(pk) ? (isAgent(pk) ? 'Agent, a guest · ' : 'Guest · ') : '' }
   return (
     <div className="invite-member">
-      <label className="field" style={{ marginBottom: 6 }}><span>Invite someone already in the community</span>
-        <input className="input" placeholder="Type a name" value={q} autoCapitalize="none" autoCorrect="off" onChange={(e) => { setQ(e.target.value); setError('') }} /></label>
+      <label className="field" style={{ marginBottom: 6 }}><span>Invite a community member:</span>
+        <input className="input" placeholder="Invite a community member" value={q} autoCapitalize="none" autoCorrect="off" onChange={(e) => { setQ(e.target.value); setError('') }} /></label>
       {list.map((pk) => {
         const here = inChannel(g, pk)
         return (
