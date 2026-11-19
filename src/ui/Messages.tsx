@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import type React from 'react'
+import { openProfile } from './Profile'
 import { MailIcon } from './icons'
 import { Markdown } from './markdown'
 import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
@@ -112,8 +114,9 @@ export function MessageThread({ conv }: { conv: Conv }) {
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button>
-        <Who conv={conv} size={30} />
-        <h1>{title}{sub && <small>{sub}</small>}</h1>
+        {!mail && peers(conv).length === 1
+          ? <PersonHead pubkey={peers(conv)[0]} />
+          : <><Who conv={conv} size={30} /><h1>{title}{sub && <small>{sub}</small>}</h1></>}
         {mail && !isNewMail(conv) && <button className="icon-btn" aria-label={`New e-mail to ${who}`} title="New e-mail (a new thread)" onClick={() => go('dm/' + enc('m:' + addr))}>＋</button>}
       </div>
       <div className="scroll" ref={scroller}>
@@ -122,7 +125,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
           {list.map((d) => {
             const dd = fmtDay(new Date(d.at * 1000))
             const sep = dd !== day ? (day = dd) : ''
-            return <div key={d.rid}>{sep && <div className="day">{sep}</div>}<Bubble d={d} head={mail ? title : ''} /></div>
+            return <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
           })}
         </div>
       </div>
@@ -135,10 +138,42 @@ export function MessageThread({ conv }: { conv: Conv }) {
 // (Xavier, 2026-11-11: "Don't repeat the subject of emails in each message").
 const sameSubject = (a?: string, b?: string) => baseSubject(a).toLowerCase().replace(/\s+/g, ' ') === baseSubject(b).toLowerCase().replace(/\s+/g, ' ')
 
-function Bubble({ d, head }: { d: Dm; head: string }) {
+/** Board home/conversation (2026-11-19): the other person's face and name at the top, a tap
+ *  pushes their profile. */
+function PersonHead({ pubkey }: { pubkey: string }) {
+  const name = displayName(pubkey)
+  return (
+    <button className="dm-person" aria-label={`Open ${name}’s profile`} onClick={() => openProfile(pubkey)}>
+      <Avatar pubkey={pubkey} size={34} />
+      <span className="n">{name} <span className="chev" aria-hidden="true">›</span></span>
+    </button>
+  )
+}
+
+/** A message and, under it on its side, its reactions (the same chips as in channels). A hold or
+ *  a right-click on the bubble opens the reactions row; e-mail has none. */
+function DmItem({ d, head }: { d: Dm; head: string }) {
+  const [picking, setPicking] = useState(false)
+  const can = d.kind !== 1301 && !d.pending && !d.failed
+  const t = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clear = () => { if (t.current) clearTimeout(t.current); t.current = null }
+  const hold = can ? {
+    onPointerDown: (e: React.PointerEvent) => { if (e.pointerType === 'mouse') return; clear(); t.current = setTimeout(() => setPicking(true), 500) },
+    onPointerUp: clear, onPointerLeave: clear, onPointerCancel: clear, onPointerMove: (e: React.PointerEvent) => { if (Math.abs(e.movementY) > 4) clear() },
+    onContextMenu: (e: React.MouseEvent) => { if ((e.target as HTMLElement).closest('a')) return; e.preventDefault(); clear(); setPicking(true) },
+  } : {}
+  return (
+    <>
+      <Bubble d={d} head={head} hold={hold} />
+      {d.kind !== 1301 && <DmReactions d={d} picking={picking} setPicking={setPicking} />}
+    </>
+  )
+}
+
+function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttributes<HTMLDivElement> }) {
   const r = d.mine ? report(d.emailId) : undefined
   return (
-    <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')}>
+    <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
       {d.kind === 1301 && d.subject && !sameSubject(d.subject, head) && <div className="dm-subject">{d.subject}</div>}
       {d.text ? <Markdown text={d.text} className="dm-text" /> : <div className="dm-text">{d.attachments?.length ? '' : '(empty)'}</div>}
@@ -148,14 +183,12 @@ function Bubble({ d, head }: { d: Dm; head: string }) {
         {d.kind === 1301 && !d.mine && !d.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
         {d.mine && <DmState d={d} r={r} />}
       </div>
-      {/* reactions (#issues 2026-11-15): e-mail has none, a message still in the outbox not yet */}
-      {d.kind !== 1301 && <DmReactions d={d} />}
     </div>
   )
 }
 
-function DmReactions({ d }: { d: Dm }) {
-  const [picking, setPicking] = useState(false)
+// reactions (#issues 2026-11-15): e-mail has none, a message still in the outbox not yet
+function DmReactions({ d, picking, setPicking }: { d: Dm; picking: boolean; setPicking: (on: boolean) => void }) {
   const rx = dmReactions(d.rid)
   const off = !!d.pending || !!d.failed
   return (

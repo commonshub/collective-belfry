@@ -414,6 +414,14 @@ a.chip { text-decoration: none; color: inherit; }
 .dm-file small { opacity: 0.7; margin-left: 4px; }
 .dm-subject-input { margin: 0 0 6px; width: 100%; box-sizing: border-box; }
 .dm-list > div { display: flex; flex-direction: column; min-width: 0; }
+/* board home/conversation: reactions under the bubble, on its side; the person at the top */
+.dm-item { position: relative; }
+.dm-item > .reactions { align-self: flex-start; margin: 0 0 4px; max-width: 82%; }
+.dm-item.mine > .reactions { align-self: flex-end; justify-content: flex-end; }
+.dm { -webkit-touch-callout: none; }
+.dm-person { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 2px; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; margin-right: 44px; }
+.dm-person .n { font-size: 13px; line-height: 17px; font-weight: 650; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dm-person .chev { color: var(--faint); font-weight: 400; }
 
 /* a member's message that came by e-mail */
 .via-mail { margin-left: 6px; font-size: 12px; font-weight: 400; color: var(--faint); }
@@ -1217,9 +1225,9 @@ div.settings-row { cursor: default; }
    on hover (laptops); phones hold the message instead */
 .reactions.rx-empty { display: none; position: absolute; left: 60px; bottom: -13px; margin: 0; z-index: 3; }
 .reactions.rx-empty .react-add { background: var(--bg); box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-@media (hover: hover) and (pointer: fine) { .msg:hover .reactions.rx-empty, .dm:hover .reactions.rx-empty { display: flex; } }
-.dm .reactions.rx-empty { left: 8px; }
-.dm.mine .reactions.rx-empty { left: auto; right: 8px; }
+@media (hover: hover) and (pointer: fine) { .msg:hover .reactions.rx-empty, .dm-item:hover .reactions.rx-empty { display: flex; } }
+.dm-item .reactions.rx-empty { left: 8px; bottom: -10px; }
+.dm-item.mine .reactions.rx-empty { left: auto; right: 8px; }
 .dm { position: relative; }
 .dm .reactions { margin-top: 6px; }
 .who-reacted { display: flex; flex-direction: column; gap: 10px; padding: 4px 0 8px; }
