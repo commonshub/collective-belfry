@@ -902,7 +902,8 @@ def become_member(svc: Services, pubkey: str, inv: dict[str, Any]) -> bool:
         rid = roles.default_role(svc)
         if rid == roles.ADMIN:
             return False
-    made = roles.make_member(svc, pubkey, rid, days)
+    # the welcome mail waits for the name and username they pick next (welcome.py)
+    made = roles.make_member(svc, pubkey, rid, days, hold_welcome=True)
     if made and partner:
         testers.mark(svc, partner)
     return made

@@ -34,6 +34,7 @@ API (belfry.<domain>/api/v1/…, NIP-98):
 - ``POST /applications``:
   - ``{"list": true, "state"?: "new"|"all"}`` → ``{"applications": [{"id", "name",
     "motivation", "kind", "state", "created", "vouches", "vouched"}], "accept", "needed"}``.
+    A verified request also has ``username``: the one they asked for (applyverified.py).
     Admins see every request (with ``email``); members see the ones waiting, without e-mail
     (#issues 2026-11-15: any member can vouch, whatever the setting).
   - ``{"decide": <id>, "approve": true|false}`` (admins) → ``{"application"}``.
@@ -185,6 +186,7 @@ FIELDS = [
     "verified",
     "client",
     "member_partner",
+    "username",  # the one they asked for; after the acceptance, the one they got
 ]
 
 
@@ -217,6 +219,8 @@ def _row(svc: Services, r: dict[str, Any], caller: str, admin: bool) -> dict[str
         # the address is proven: accepting makes them a member at once (applyverified.py)
         "verified": bool(r.get("verified")),
     }
+    if r.get("verified"):
+        out["username"] = r.get("username") or ""
     if r.get("kind") == "guest":
         out["pubkey"] = r.get("pubkey") or ""
         out["since"] = r.get("since") or ""

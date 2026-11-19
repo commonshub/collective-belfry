@@ -3,7 +3,8 @@ provider in the settings (SMTP_*, MAIL_FROM). Used by the register (register.py)
 runs without Odoo; with Odoo, Odoo's mail templates send them.
 
 Plain, small HTML with a text part: the community's name, a few paragraphs and at most one
-button. Every value that comes from a person is escaped here."""
+button. Every value that comes from a person is escaped here. A paragraph is a string, or a list
+of strings and ``(label, url)`` links (the text part then reads "label (url)")."""
 
 from __future__ import annotations
 
@@ -16,6 +17,26 @@ from html import escape
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+Paragraph = str | list[Any]  # a text, or parts: texts and (label, url) links
+
+
+def _text(p: Paragraph) -> str:
+    if isinstance(p, str):
+        return p
+    return "".join(x if isinstance(x, str) else f"{x[0]} ({x[1]})" for x in p)
+
+
+def _para(p: Paragraph) -> str:
+    if isinstance(p, str):
+        return escape(p).replace(chr(10), "<br>")
+    return "".join(
+        escape(x)
+        if isinstance(x, str)
+        else f'<a href="{escape(x[1])}" style="color:inherit;">{escape(x[0])}</a>'
+        for x in p
+    )
+
 
 SENT: list[EmailMessage] = []  # tests: mails are kept here when there is no SMTP host
 SENT_MAX = 200  # …and only the last ones: a belfry without a mail provider must not grow
@@ -56,14 +77,15 @@ class Mailer:
         self,
         to: str | list[str],
         subject: str,
-        paragraphs: list[str],
+        paragraphs: list[Paragraph],
         button: tuple[str, str] | None = None,
         footer: str = "",
         headers: dict[str, str] | None = None,
         attachments: list[tuple[str, bytes, str]] | None = None,
+        after: list[Paragraph] | None = None,
     ) -> bool:
-        """PARAGRAPHS and FOOTER are plain text (escaped here); BUTTON is (url, label);
-        ATTACHMENTS are (file name, bytes, media type)."""
+        """PARAGRAPHS and FOOTER are plain text (escaped here); BUTTON is (url, label); AFTER:
+        more paragraphs, under the button; ATTACHMENTS are (file name, bytes, media type)."""
         rcpts = [to] if isinstance(to, str) else list(to)
         rcpts = [r for r in rcpts if r and "@" in r]
         if not rcpts:
@@ -76,13 +98,15 @@ class Mailer:
         msg["Message-ID"] = email.utils.make_msgid(domain=self.s.nip05_domain or "localhost")
         for k, v in (headers or {}).items():
             msg[k] = one_line(v)
-        text = "\n\n".join(paragraphs)
+        text = "\n\n".join(_text(x) for x in paragraphs)
         if button:
             text += f"\n\n{button[1]}: {button[0]}"
+        for x in after or []:
+            text += "\n\n" + _text(x)
         if footer:
             text += f"\n\n-- \n{footer}"
         msg.set_content(text + "\n")
-        msg.add_alternative(self._html(paragraphs, button, footer), subtype="html")
+        msg.add_alternative(self._html(paragraphs, button, footer, after), subtype="html")
         for fname, data, mime in attachments or []:
             main, _, sub = mime.partition("/")
             msg.add_attachment(data, maintype=main, subtype=sub or "octet-stream", filename=fname)
@@ -141,14 +165,17 @@ class Mailer:
                 conn.login(s.smtp_user, s.smtp_password)
             conn.send_message(msg, to_addrs=rcpts)
 
-    def _html(self, paragraphs: list[str], button: tuple[str, str] | None, footer: str) -> str:
+    def _html(
+        self,
+        paragraphs: list[Paragraph],
+        button: tuple[str, str] | None,
+        footer: str,
+        after: list[Paragraph] | None = None,
+    ) -> str:
         from . import branding
 
         color = branding.primary()
-        p = "".join(
-            f'<p style="margin:0 0 14px;">{escape(x).replace(chr(10), "<br>")}</p>'
-            for x in paragraphs
-        )
+        p = "".join(f'<p style="margin:0 0 14px;">{_para(x)}</p>' for x in paragraphs)
         if button:
             p += (
                 f'<p style="margin:20px 0;"><a href="{escape(button[0])}" '
@@ -156,6 +183,7 @@ class Mailer:
                 f"background:{color};color:#fff;font-weight:600;padding:12px 20px;"
                 f'text-decoration:none;border-radius:10px;">{escape(button[1])}</a></p>'
             )
+        p += "".join(f'<p style="margin:0 0 14px;">{_para(x)}</p>' for x in after or [])
         foot = (
             f'<p style="margin:24px 0 0;color:#71717a;font-size:13px;">{escape(footer)}</p>'
             if footer

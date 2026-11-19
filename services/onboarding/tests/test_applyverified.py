@@ -24,9 +24,13 @@ WHY = "I fix bikes on Saturdays."
 
 @pytest.fixture(autouse=True)
 def fresh_limits():
+    from belfry_onboarding import usernames
+
     applyverified.PER_IP._seen.clear()
+    usernames._taken.clear()
     yield
     applyverified.PER_IP._seen.clear()
+    usernames._taken.clear()
 
 
 @pytest.fixture
@@ -198,7 +202,7 @@ def test_status_and_an_approval_that_makes_a_member_at_once(belfry, monkeypatch)
     with TestClient(create_app(rsvc)) as c:
         assert call(c, nora, "/apply/status", {}).json() == {"state": "none"}
         assert apply(c, nora, rule, name="Nora New").json() == {"state": "pending"}
-        assert call(c, nora, "/apply/status", {}).json() == {"state": "pending"}
+        assert call(c, nora, "/apply/status", {}).json()["state"] == "pending"
         assert call(c, stranger, "/apply/status", {}).json() == {"state": "none"}
         assert bound == [], "no signer call while the request waits"
         [row] = apps_of(rsvc)
@@ -277,7 +281,7 @@ def test_a_declined_request_says_so_and_they_may_ask_again(belfry):
         assert call(c, nora, "/apply/status", {}).json() == {"state": "declined"}
         assert not rsvc.odoo.search_read("belfry.pass", [["partner_id.email", "=", NORA]], ["id"])
         assert apply(c, nora, rule).json() == {"state": "pending"}
-        assert call(c, nora, "/apply/status", {}).json() == {"state": "pending"}
+        assert call(c, nora, "/apply/status", {}).json()["state"] == "pending"
         assert [a["state"] for a in apps_of(rsvc)] == ["declined", "new"]
 
 
@@ -368,7 +372,7 @@ def test_login_mails_a_code_to_any_address_and_an_unknown_one_gets_a_proof(belfr
         assert not to(NORA)
         [row] = apps_of(rsvc)
         assert row["verified"] is True and row["client"] == pk(nora) and row["name"] == "nora"
-        assert call(c, nora, "/apply/status", {}).json() == {"state": "pending"}
+        assert call(c, nora, "/apply/status", {}).json()["state"] == "pending"
         # again: the same answer, nothing new
         r = call(c, nora, "/apply/start", {**form, "proof": proof})
         assert r.json() == {"state": "pending"} and len(apps_of(rsvc)) == 1
@@ -382,7 +386,7 @@ def test_login_with_a_request_that_waits_moves_it_to_this_browser(belfry, monkey
         apply(c, first, rule)
         r = login(c, second, NORA)
         assert r.status_code == 200 and r.json() == {"state": "pending"}
-        assert call(c, second, "/apply/status", {}).json() == {"state": "pending"}
+        assert call(c, second, "/apply/status", {}).json()["state"] == "pending"
         assert call(c, first, "/apply/status", {}).json() == {"state": "none"}
         [row] = apps_of(rsvc)
         call(c, ada, "/applications", {"decide": row["id"], "approve": True})
@@ -413,6 +417,125 @@ def test_login_signs_a_member_in_and_never_adopts_a_request_nobody_proved(belfry
         assert got["state"] == "unknown" and got["proof"]
         [row] = apps_of(rsvc)
         assert not row.get("verified") and row.get("client") != pk(olga)
+
+
+# ── a name and a username with the request ──────────────────────────────────────────────────
+def test_applying_with_a_name_and_a_username(belfry):
+    rsvc, keycast, ada, rule, _g = belfry
+    nora = PrivateKey()
+    form = {"email": NORA, "motivation": WHY, "agreed": [rule]}
+    keycast.users["someone"] = {"pubkey": "ab" * 32, "username": "lina"}
+    with TestClient(create_app(rsvc)) as c:
+        mailer.SENT.clear()
+        r = call(c, nora, "/apply/start", {**form, "username": "nora"})
+        assert r.status_code == 400 and r.json()["error"] == "missing"  # a username, no name
+        for bad, reason in (("admin", "reserved"), ("no ra", "chars"), ("n" * 31, "long")):
+            r = call(c, nora, "/apply/start", {**form, "name": "Nora New", "username": bad})
+            assert r.status_code == 422 and r.json()["error"] == "username_invalid", bad
+            assert r.json()["reason"] == reason
+        r = call(c, nora, "/apply/start", {**form, "name": "Lina Moreau", "username": "Lina"})
+        assert r.status_code == 409 and r.json()["error"] == "username_taken"
+        assert r.json()["suggestions"] == ["lina-moreau", "lina-2", "lina-3"]
+        assert not mailer.SENT, "no code before the form is right"
+        # stored with the request once the code is proven; shown back to the applicant only
+        r = apply(c, nora, rule, name=" Nora  New ", username=" Nora ")
+        assert r.json() == {"state": "pending"}
+        [row] = rsvc.odoo.search_read("belfry.application", [], ["name", "username"])
+        assert (row["name"], row["username"]) == ("Nora New", "nora")
+        assert call(c, nora, "/apply/status", {}).json() == {
+            "state": "pending",
+            "name": "Nora New",
+            "username": "nora",
+            "email": NORA,
+            "motivation": WHY,
+        }
+        assert call(c, PrivateKey(), "/apply/status", {}).json() == {"state": "none"}
+        # the stewards' list has the username they asked for
+        [item] = call(c, ada, "/applications", {"list": True}).json()["applications"]
+        assert (item["name"], item["username"]) == ("Nora New", "nora")
+        # it is not reserved while the request waits
+        r = call(c, PrivateKey(), "/username/check", {"username": "nora"})
+        assert r.json()["state"] == "available"
+
+
+def test_an_approval_gives_the_name_and_the_username_they_asked_for(belfry):
+    rsvc, keycast, ada, rule, _g = belfry
+    nora = PrivateKey()
+    with TestClient(create_app(rsvc)) as c:
+        apply(c, nora, rule, name="Nora New", username="nora")
+        [row] = apps_of(rsvc)
+        mailer.SENT.clear()
+        r = call(c, ada, "/applications", {"decide": row["id"], "approve": True})
+        assert r.status_code == 200 and r.json()["application"]["state"] == "accepted", r.text
+        [p] = rsvc.odoo.search_read(
+            "belfry.pass", [["partner_id.email", "=", NORA]], ["partner_id", "keycast_pubkey"]
+        )
+        assert p["partner_id"][1] == "Nora New"
+        names = {u["pubkey"]: u["username"] for u in keycast.users.values()}
+        assert names[p["keycast_pubkey"]] == "nora"
+        # one mail, the welcome, with the address they have
+        [welcome] = to(NORA)
+        text = welcome.get_body(preferencelist=("plain",)).get_content()
+        assert text.startswith("Hi Nora,\n\nYou're a member now. Your address here is ")
+        assert "Your address here is nora@belfry.test." in text
+        assert "log in with nora@belfry.test on the Android (https://belfry.sh/android)" in text
+        assert "iPhone app (https://belfry.sh/iphone)" in text
+        assert f"We send a 6-digit code to this e-mail address, {NORA}, each time" in text
+        got = call(c, nora, "/apply/status", {}).json()
+        assert got["state"] == "approved" and got["nip05"] == "nora@belfry.test"
+        assert len(to(NORA)) == 1
+
+
+def test_an_approval_never_fails_over_a_username_taken_meanwhile(belfry):
+    rsvc, keycast, ada, rule, _g = belfry
+    nora = PrivateKey()
+    with TestClient(create_app(rsvc)) as c:
+        apply(c, nora, rule, name="Nora New", username="nora")
+        [row] = apps_of(rsvc)
+        keycast.users["someone"] = {"pubkey": "ab" * 32, "username": "nora"}  # taken since
+        mailer.SENT.clear()
+        r = call(c, ada, "/applications", {"decide": row["id"], "approve": True})
+        assert r.status_code == 200 and r.json()["application"]["state"] == "accepted", r.text
+        # the first free suggestion: first-last
+        [welcome] = to(NORA)
+        text = welcome.get_body(preferencelist=("plain",)).get_content()
+        assert "Your address here is nora-new@belfry.test." in text
+        got = call(c, nora, "/apply/status", {}).json()
+        assert got["state"] == "approved" and got["nip05"] == "nora-new@belfry.test"
+        # the list shows the one they got
+        rows = call(c, ada, "/applications", {"list": True, "state": "all"}).json()
+        assert [a["username"] for a in rows["applications"]] == ["nora-new"]
+
+
+def test_login_with_the_address_here_mails_the_members_own_address(belfry, monkeypatch):
+    rsvc, _k, ada, rule, _g = belfry
+    bound = bound_keys(rsvc, monkeypatch)
+    nora, phone, stranger = PrivateKey(), PrivateKey(), PrivateKey()
+    with TestClient(create_app(rsvc)) as c:
+        apply(c, nora, rule, name="Nora New", username="nora")
+        [row] = apps_of(rsvc)
+        call(c, ada, "/applications", {"decide": row["id"], "approve": True})
+        mailer.SENT.clear()
+        r = call(c, phone, "/login/start", {"email": "Nora@belfry.test"})
+        assert r.status_code == 202 and r.json() == {"sent": True}
+        # the code went to her own address, nothing to the address at the belfry
+        assert [str(m["To"]) for m in mailer.SENT] == [NORA]
+        code = _code()
+        # the code is the key's that asked
+        r = call(c, stranger, "/login/verify", {"email": "Nora@belfry.test", "code": code})
+        assert r.status_code == 410
+        r = call(c, phone, "/login/verify", {"email": "Nora@belfry.test", "code": code})
+        got = r.json()
+        assert r.status_code == 200 and got["state"] == "signed_in", got
+        assert got["nip05"] == "nora@belfry.test" and bound == [("Chat", pk(phone))]
+        # a username nobody has: the same answer, and no member gets anything
+        mailer.SENT.clear()
+        r = call(c, stranger, "/login/start", {"email": "nobody@belfry.test"})
+        assert r.status_code == 202 and r.json() == {"sent": True}
+        assert not to(NORA) and not to("admin@belfry.test")
+        r = call(c, stranger, "/login/verify", {"email": "nobody@belfry.test", "code": "000000"})
+        assert r.status_code == 422 and r.json()["error"] == "wrong_code"
+        assert len(bound) == 1
 
 
 def test_without_the_own_register_the_endpoints_say_so(services, monkeypatch):

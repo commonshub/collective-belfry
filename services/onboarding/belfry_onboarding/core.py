@@ -974,7 +974,12 @@ def _finish_activation(
             from . import usernames
 
             username = usernames.give_default(
-                svc, user_token, partner.get("name") or "", member_number
+                svc,
+                user_token,
+                partner.get("name") or "",
+                member_number,
+                # the username they asked for when they applied (applyverified.accept)
+                str(partner.get("belfry_wanted_username") or ""),
             )
         publish_profile(svc, user_token, pubkey, partner, username)
         if tier != "guest" and not unproven and username != member_number.lower():
@@ -1099,7 +1104,7 @@ def activate_free_pass(svc: Services, pass_id: int) -> str:
                 "belfry_npub",
                 "belfry_key_version",
                 "belfry_key_custody",
-                *(["belfry_pending_email"] if _own_register(svc) else []),
+                *(["belfry_pending_email", "belfry_wanted_username"] if _own_register(svc) else []),
             ],
         )[0]
         tier = row.get("tier") or "member"

@@ -88,6 +88,7 @@ from . import (
     webrequests,
     website,
     webthreads,
+    welcome,
     whois,
 )
 from .clients.authentik import AuthentikClient
@@ -277,6 +278,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     charter.register(app)  # /api/charter: the belfry's agreements, for guests (charter.py)
     vouches.register(app)  # /api/group-requests/check: groups accept by vouches (vouches.py)
     usernames.register(app)  # /api/username: a member changes their address (usernames.py)
+    welcome.register(app)  # /api/welcome: a new member's name and username (welcome.py)
     website.register(app)  # /api/website/publish: an admin makes a shared preview the website
     mail.register(app)  # /internal/mail/*: mail for name@ and channel@<domain> (mail.py)
     mailforward.register(app)  # /api/mail-forward, /mail-forward/<token> (mailforward.py)

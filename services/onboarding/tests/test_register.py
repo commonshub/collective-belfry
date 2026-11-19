@@ -8,7 +8,7 @@ import re
 import pytest
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import core, mailer, steward
+from belfry_onboarding import core, mailer, register, steward
 from belfry_onboarding.app import create_app
 from belfry_onboarding.clients.odoo import OdooError
 from belfry_onboarding.register import Register
@@ -297,7 +297,17 @@ def test_the_welcome_mail_of_a_belfry_with_its_own_sign_in(rsvc, reg, authentik,
         assert "chat.belfry.test" in part and "https://chat.belfry.test/" in part
         assert "Chat with the community" in part and "6-digit code" in part
         assert "bo-brown@belfry.test" in part  # their identity, from their name
-    assert "You can chat with the community at chat.belfry.test" in text
+        assert "Your address here is bo-brown@belfry.test." in part
+        assert register.ANDROID_APP in part and register.IOS_APP in part
+        assert "this e-mail address, bo@example.org, each time you log in on a new device" in part
+    assert text.startswith("Hi Bo,\n\nYou're a member now.") and "or go to chat.belfry.test" in text
+    assert text.index("Chat with the community: https://chat.belfry.test/") < text.index("or go to")
+    assert (
+        "You can now log in with bo-brown@belfry.test on the Android (https://belfry.sh/android)"
+        " or iPhone app (https://belfry.sh/iphone)." in text
+    )
+    assert '<a href="https://belfry.sh/android" style="color:inherit;">Android</a>' in html
+    assert '<a href="https://belfry.sh/iphone" style="color:inherit;">iPhone app</a>' in html
     # the old setup keeps its mail
     rsvc.settings.pass_signin = "authentik"
     steward.steward_pass(rsvc, "cy@example.org", "Cy")

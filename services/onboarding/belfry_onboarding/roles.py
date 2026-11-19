@@ -346,10 +346,14 @@ def after_admin_change(svc: Services, pubkey: str, admin: bool) -> None:
         svc.odoo.write("res.partner", [pid], {"belfry_role": default_role(svc)})
 
 
-def make_member(svc: Services, pubkey: str, role: str, days: int = 0) -> bool:
+def make_member(
+    svc: Services, pubkey: str, role: str, days: int = 0, hold_welcome: bool = False
+) -> bool:
     """A guest who saved their account (an e-mail on it) becomes a member: the same key, a
     membership of ROLE for DAYS days (0: no end), their guest passes closed (they stay in their
-    channels, guests.became_member). False when PUBKEY is a member already (nothing changes)."""
+    channels, guests.became_member). False when PUBKEY is a member already (nothing changes).
+    With HOLD_WELCOME the welcome mail waits for the name and username they choose
+    (welcome.py: ``POST /api/welcome``, or ten minutes)."""
     from . import apps, console, core, guests
     from .holder_invites import ApiError
     from .places import member_key
@@ -384,6 +388,7 @@ def make_member(svc: Services, pubkey: str, role: str, days: int = 0) -> bool:
                 "tier": "member",
                 "membership_days": int(days) or False,
                 "manual_paid_by": "member invite",
+                **({"welcome_hold": True} if hold_welcome and own(svc) else {}),
             },
         )
         core.activate_free_pass(svc, pass_id)

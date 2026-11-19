@@ -5,21 +5,29 @@ The chat makes a key in the browser (the *applicant key*) and signs every reques
 (NIP-98). A 6-digit code mailed to an address is the only proof of that address; a session is
 only ever bound to the key that signed the request.
 
-- ``POST /api/apply/start`` ``{"email", "motivation", "name"?, "agreed": [...]}`` → a code to
-  the address, 202 ``{"sent": true}``. With ``"proof"`` (from ``/api/login/verify``) no code is
-  mailed and the answer is the one of ``/api/apply/verify``.
+- ``POST /api/apply/start`` ``{"email", "motivation", "name", "username"?, "agreed": [...]}`` →
+  a code to the address, 202 ``{"sent": true}``. With ``"proof"`` (from ``/api/login/verify``)
+  no code is mailed and the answer is the one of ``/api/apply/verify``. ``username``: the
+  address they would like here (usernames.py; 422 ``username_invalid``, 409 ``username_taken``
+  with ``suggestions``; needs ``name``); kept with the request, not reserved while it waits.
+  Older chats send neither: the name then comes from the address.
 - ``POST /api/apply/verify`` ``{"email", "code"}`` → ``{"state": "signed_in", …}`` when the
   address has an account here, else the application is stored (address verified, applicant key)
   and the admins are told once → ``{"state": "pending"}``.
 - ``POST /api/apply/status`` ``{}`` → ``{"state": "none" | "pending" | "declined" |
-  "approved"}``; approved: a session on the new member's key, bound to the applicant key.
+  "approved"}``; pending: also ``name``, ``username``, ``email``, ``motivation`` (their own,
+  shown back to them); approved: a session on the new member's key, bound to the applicant key.
 - ``POST /api/login/start`` ``{"email"}`` → a code to any address, 202 ``{"sent": true}``.
+  ``email`` may be ``<username>@<this belfry's domain>``: the code then goes to that member's
+  own e-mail address (``verify`` takes the same words); a username nobody has is an address
+  like any other.
 - ``POST /api/login/verify`` ``{"email", "code"}`` → ``signed_in`` (an account), ``pending``
   (an application that waits: this key becomes its applicant key) or ``unknown`` with a
   ``proof`` for ``/api/apply/start``.
 
 Accepting such an application (membership.accept: an admin, or enough vouches) makes the person a
-member at once: contact, free membership, their ticked agreements signed, one welcome mail. No
+member at once: contact (their name), free membership, the username they asked for when it is
+still free (else the first free suggestion), their ticked agreements signed, one welcome mail. No
 invite. Needs the belfry's own register (REGISTER=belfry): 409 ``unsupported`` otherwise.
 """
 
@@ -178,7 +186,12 @@ def store(svc: Services, email: str, key: str, form: dict[str, Any]) -> dict[str
             vals: dict[str, Any] = {"client": key, "verified": True}
             if not mine.get("verified"):
                 # asked before on the old form, unproven: the proven person's words stand
-                vals.update(name=form["name"], motivation=form["motivation"], agreed=form["agreed"])
+                vals.update(
+                    name=form["name"],
+                    motivation=form["motivation"],
+                    agreed=form["agreed"],
+                    username=form.get("username") or False,
+                )
             svc.odoo.write("belfry.application", [mine["id"]], vals)
             return {"state": "pending"}
         aid = svc.odoo.create(
@@ -195,6 +208,7 @@ def store(svc: Services, email: str, key: str, form: dict[str, Any]) -> dict[str
                 "vouched_by": [],
                 "verified": True,
                 "client": key,
+                "username": form.get("username") or False,
             },
         )
     log.info("apply: request %s from %s (key %s…)", aid, masked([email]), key[:8])
@@ -243,7 +257,8 @@ def proven(svc: Services, email: str, key: str, form: dict[str, Any], client: st
 
 # ── the form ────────────────────────────────────────────────────────────────────────────────
 def _form(svc: Services, body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-    """(e-mail, {"name", "motivation", "agreed"}) of a request, checked as /api/apply checks."""
+    """(e-mail, {"name", "motivation", "agreed", "username"}) of a request, checked as
+    /api/apply checks. ``username`` is as typed here: ``start`` checks it."""
     from . import apply, charter
 
     email = str(body.get("email") or "").strip()
@@ -258,8 +273,13 @@ def _form(svc: Services, body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     if {r["id"] for r in rules} - set(ticked):
         raise ApiError(400, "unticked", apply.UNTICKED)
     known = {r["id"] for r in rules}
-    name = " ".join(str(body.get("name") or "").split()) or email.split("@")[0]
+    name = " ".join(str(body.get("name") or "").split())
+    username = str(body.get("username") or "").strip()
+    if username and not name:
+        raise ApiError(400, "missing", "Please give your name.")
+    name = name or email.split("@")[0]  # older chats: no name, no username
     return email, {
+        "username": username[:64],
         "name": name[:200],
         "motivation": motivation[:MOTIVATION_MAX],
         "agreed": charter.clean_ids([t for t in ticked if t in known]) or [],
@@ -301,6 +321,11 @@ def start(svc: Services, key: str, body: dict[str, Any], ip: str) -> tuple[dict[
         log.info("apply: honeypot filled, dropped")
         return {"sent": True}, 202
     email, form = _form(svc, body)
+    if form["username"]:
+        from . import usernames
+
+        # 422 username_invalid, 409 username_taken (with suggestions)
+        form["username"] = usernames.require(svc, form["username"], form["name"])
     if body.get("proof") is not None:
         if not check_proof(svc, body.get("proof"), email, key):
             raise ApiError(422, "proof", "Confirm your e-mail address with a code.")
@@ -318,20 +343,56 @@ def verify(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
         "name": str(form.get("name") or email.split("@")[0])[:200],
         "motivation": str(form["motivation"])[:MOTIVATION_MAX],
         "agreed": [a for a in form.get("agreed") or [] if isinstance(a, str)],
+        "username": str(form.get("username") or "")[:64],
     }
     return proven(svc, email, key, form, str(body.get("client") or ""))
+
+
+def own_address(svc: Services, typed: str) -> str:
+    """The e-mail address TYPED stands for when logging in: itself, or, for ``<username>@<this
+    belfry's domain>`` that is no account's e-mail address, the own e-mail address of the member
+    with that username (the code goes there, never to the belfry mailbox). A username nobody
+    has is an address like any other."""
+    from . import apps, usernames
+
+    local, _, domain = typed.partition("@")
+    name = usernames.clean(local)
+    if domain.lower() != (svc.settings.nip05_domain or "").lower() or not name:
+        return typed
+    if usernames.problem(name) in ("long", "chars") or apps.member_by_email(svc, typed):
+        return typed
+    try:
+        pubkey = svc.keycast.pubkey_for_name(name)
+    except Exception as exc:  # noqa: BLE001 — as an address nobody has
+        log.info("login: the signer did not answer for a name: %s", exc)
+        return typed
+    if not pubkey:
+        return typed
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        ["partner_id"],
+        limit=1,
+    )
+    pid = rows[0].get("partner_id") if rows else None
+    pid = pid[0] if isinstance(pid, list) else pid
+    partner = svc.odoo.read_one("res.partner", int(pid), ["email"]) if pid else None
+    email = str((partner or {}).get("email") or "").strip()
+    return email if EMAIL.match(email) else typed
 
 
 def login_start(svc: Services, key: str, body: dict[str, Any], ip: str) -> dict[str, Any]:
     email = str(body.get("email") or "").strip()
     if not EMAIL.match(email) or len(email) > 200:
         raise ApiError(422, "invalid", "That is not an e-mail address.")
-    _send(svc, email, key, "login", False, ip)
+    _send(svc, own_address(svc, email), key, "login", False, ip)
     return {"sent": True}
 
 
 def login_verify(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
     email = str(body.get("email") or "").strip()
+    if EMAIL.match(email) and len(email) <= 200:
+        email = own_address(svc, email)
     _check(svc, email, key, str(body.get("code") or ""), "login")
     opened = sign_in(svc, email, key, str(body.get("client") or ""))
     if opened is not None:
@@ -359,7 +420,14 @@ def status(svc: Services, key: str, client: str = "") -> dict[str, Any]:
     row = rows[0]
     state = row.get("state")
     if state == "new":
-        return {"state": "pending"}
+        # their own words, shown back to the browser that holds the applicant key
+        return {
+            "state": "pending",
+            "name": row.get("name") or "",
+            "username": row.get("username") or "",
+            "email": row.get("email") or "",
+            "motivation": row.get("motivation") or "",
+        }
     if state == "declined":
         return {"state": "declined"}
     pid = row.get("member_partner")
@@ -399,21 +467,35 @@ def accept(svc: Services, row: dict[str, Any], by: str) -> None:
     """The applicant becomes a member now: their contact and a free membership (the activation
     an accepted invite ends in: default role, username from the name, the welcome mail), then
     the agreements they ticked are signed for them. No invite and no other mail."""
-    from . import apps, core, guestapply, roles
+    from . import apps, core, guestapply, guests, roles
     from .places import member_key
 
     email = (row.get("email") or "").strip()
+    # the name and the username they gave (the newer form); the activation gives the username
+    # when it is still free, else the first free suggestion (usernames.give_default)
+    theirs: dict[str, Any] = {}
+    if row.get("username"):
+        theirs = {
+            "belfry_wanted_username": str(row["username"]),
+            "name": str(row.get("name") or "").strip()[:100] or email,
+        }
     pid: int | None = None
     try:
         account = apps.member_by_email(svc, email)
         if account is not None and member_key(svc, account["pubkey"]) is None:
             # a guest with this address since they asked: a member on the same key
-            roles.make_member(svc, account["pubkey"], roles.default_role(svc), 0)
             pid = int(account["partner"])
+            if theirs:
+                svc.odoo.write("res.partner", [pid], theirs)
+            roles.make_member(svc, account["pubkey"], roles.default_role(svc), 0)
+            if theirs:
+                _profile_name(svc, pid, account["pubkey"], theirs["name"])
         else:
             made = svc.odoo.application_pass(int(row["id"]))
             pid = int(made["partner_id"])
             if made["state"] != "active":
+                if theirs:
+                    svc.odoo.write("res.partner", [pid], theirs)
                 core.activate_free_pass(svc, made["pass_id"])
             state = (svc.odoo.read_one("belfry.pass", made["pass_id"], ["state"]) or {}).get(
                 "state"
@@ -428,21 +510,42 @@ def accept(svc: Services, row: dict[str, Any], by: str) -> None:
         raise ApiError(
             503, "failed", "The membership could not be opened just now. Try again."
         ) from exc
-    svc.odoo.write(
-        "belfry.application",
-        [row["id"]],
-        {
-            "state": guestapply.ACCEPTED,
-            "handled_by": by,
-            "handled_at": _stamp(),
-            "member_partner": pid,
-        },
-    )
+    vals: dict[str, Any] = {
+        "state": guestapply.ACCEPTED,
+        "handled_by": by,
+        "handled_at": _stamp(),
+        "member_partner": pid,
+    }
+    if theirs and (got := guests._account_nip05(svc, pid)):
+        vals["username"] = got.split("@")[0]  # the one they got
+    svc.odoo.write("belfry.application", [row["id"]], vals)
     log.info("apply: request %s accepted (%s): partner %s is a member", row["id"], by, pid)
     try:
         guestapply.ticks(svc, row, pid)
     except Exception:  # noqa: BLE001 — they can tick them in the app
         log.exception("apply: request %s: charter ticks not published", row["id"])
+
+
+def _profile_name(svc: Services, partner: int, pubkey: str, name: str) -> None:
+    """A guest who had a profile already: it gets the name they applied with (best effort)."""
+    from . import community, usernames
+
+    try:
+        found = community.member_token(svc, partner)
+        if not found or found[0] != pubkey:
+            return
+        token = found[1]
+        username = usernames.current(svc, token)
+        if username:
+            usernames.publish_nip05(
+                svc,
+                pubkey,
+                lambda u: svc.keycast.sign_event(token, {"pubkey": pubkey, **u}),
+                username,
+                {"name": name, "display_name": name},
+            )
+    except Exception as exc:  # noqa: BLE001 — theirs to set in their profile
+        log.info("apply: profile of partner %s not renamed: %s", partner, exc)
 
 
 # ── the API ─────────────────────────────────────────────────────────────────────────────────

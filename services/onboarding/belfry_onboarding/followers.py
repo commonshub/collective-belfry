@@ -526,6 +526,7 @@ def tick(svc: Services) -> None:
     from .drops import ensure_profile
     from .events import watch as events_watch
     from .sales import tick as sales_tick
+    from .welcome import tick as welcome_mails
 
     for job in (
         expire_passes,
@@ -536,6 +537,7 @@ def tick(svc: Services) -> None:
         events_watch,
         membership_round,
         sales_tick,
+        welcome_mails,
     ):
         try:
             job(svc)

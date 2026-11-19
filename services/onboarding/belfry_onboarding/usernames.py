@@ -9,6 +9,12 @@ channels, which have a mailbox too), ``not_member`` (403: guests and agents have
 ``own_key`` (409: a member who holds their own key sets NIP-05 in their own profile).
 
 The profile (kind 0) on the community relay gets the new ``nip05`` and keeps everything else.
+
+Choosing one while joining (2026-11-19; docs/membership.md "A name and a username"):
+``POST /api/username/check`` (belfry.<domain>/api/v1/username/check), NIP-98 by any key (an
+applicant's browser key, a guest's, a member's): ``{"username"}`` → ``{"username", "state":
+"available" | "taken" | "invalid", "reason"?, "suggestions"}``; ``{"name"}`` alone →
+``{"suggested", "suggestions"}``. Suggestions: the first name, first-last, then first-2, -3…
 """
 
 from __future__ import annotations
@@ -25,10 +31,18 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from .core import Services
+from .events import Limiter
 
 log = logging.getLogger(__name__)
 
 PATH = "/api/username"
+CHECK = "/api/username/check"
+CHECKS = Limiter(60, 60)  # availability checks a minute, per key and per address of the network
+TAKEN_SECONDS = 5  # how long "taken" is remembered (a form that checks while someone types)
+INVALID = (
+    "A username is 1 to 30 lowercase letters, digits, dots, dashes or underscores, "
+    "starting and ending with a letter or a digit."
+)
 MAX = 30
 VALID = re.compile(r"^[a-z0-9](?:[a-z0-9._-]{0,28}[a-z0-9])?$")
 # addresses with a meaning of their own (mail.py, nostr.json) or that could pass for the belfry
@@ -66,6 +80,124 @@ def slug(name: str) -> str:
     return out
 
 
+def clean(wanted: Any) -> str:
+    return str(wanted or "").strip().lower().removeprefix("@")
+
+
+def problem(name: str) -> str | None:
+    """Why NAME can't be a username (VALID, MAX, RESERVED): ``short`` (nothing), ``long``,
+    ``chars``, ``reserved``; None: it can."""
+    if not name:
+        return "short"
+    if len(name) > MAX:
+        return "long"
+    if not VALID.fullmatch(name):
+        return "chars"
+    if name in RESERVED:
+        return "reserved"
+    return None
+
+
+_taken: dict[str, tuple[float, str]] = {}
+
+
+def holder(svc: Services, name: str) -> str:
+    """Who has NAME: an account's key (its username in the signer), ``#`` (a channel: it has a
+    mailbox too), or nobody (""). One signer lookup and the check of ``_free``; "taken" is
+    remembered for a few seconds. Best effort: the signer still refuses a taken name."""
+    held = _taken.get(name)
+    if held and time.monotonic() - held[0] < TAKEN_SECONDS:
+        return held[1]
+    who = ""
+    try:
+        who = str(svc.keycast.pubkey_for_name(name) or "").lower()
+    except Exception as exc:  # noqa: BLE001
+        log.info("usernames: signer not asked about a name: %s", exc)
+    if not who and not _free(svc, name):
+        who = "#"
+    if who:
+        if len(_taken) > 2000:
+            _taken.clear()
+        _taken[name] = (time.monotonic(), who)
+    return who
+
+
+def candidates(name: str) -> list[str]:
+    """Usernames to offer for NAME, best first: the first name, first-last, first-2, -3…"""
+    words = [w for w in slug(name).split("-") if w]
+    if not words:
+        return []
+    first = words[0]
+    out = [first]
+    if len(words) > 1:
+        out.append(f"{first}-{words[-1]}"[:MAX].strip("-"))
+    for n in range(2, 10):
+        tail = f"-{n}"
+        out.append(first[: MAX - len(tail)] + tail)
+    return out
+
+
+def suggestions(svc: Services, name: str, mine: str = "", limit: int = 3) -> list[str]:
+    """Up to LIMIT of ``candidates`` that are valid and free (or the caller's own, MINE)."""
+    out: list[str] = []
+    for c in candidates(name):
+        if c in out or problem(c) or DEFAULT.fullmatch(c):
+            continue
+        if holder(svc, c) not in ("", mine):
+            continue
+        out.append(c)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def require(svc: Services, raw: Any, name: str = "", mine: str = "") -> str:
+    """RAW as a username someone may ask for: 422 ``username_invalid`` (with ``reason``), 409
+    ``username_taken`` (with ``suggestions``, from NAME when given)."""
+    from .holder_invites import ApiError
+
+    wanted = clean(raw)
+    reason = problem(wanted)
+    if reason:
+        exc = ApiError(422, "username_invalid", INVALID)
+        exc.extra["reason"] = reason
+        raise exc
+    if holder(svc, wanted) not in ("", mine):
+        exc = ApiError(409, "username_taken", "That name is taken.")
+        exc.extra["suggestions"] = suggestions(svc, name or wanted, mine)
+        raise exc
+    return wanted
+
+
+def check(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
+    """The answer of ``POST /api/username/check`` for the key that signed."""
+    from .holder_invites import ApiError
+
+    name = " ".join(str(body.get("name") or "").split())[:200]
+    raw = body.get("username")
+    if raw is None or (not str(raw).strip() and name):
+        if not name:
+            raise ApiError(400, "missing", 'Send {"username": "<name>"} or {"name": "<name>"}.')
+        found = suggestions(svc, name, key)
+        return {"suggested": found[0] if found else "", "suggestions": found}
+    wanted = clean(raw)[:64]
+    reason = problem(wanted)
+    if reason:
+        return {
+            "username": wanted,
+            "state": "invalid",
+            "reason": reason,
+            "suggestions": suggestions(svc, name or wanted, key),
+        }
+    if holder(svc, wanted) in ("", key):
+        return {"username": wanted, "state": "available", "suggestions": []}
+    return {
+        "username": wanted,
+        "state": "taken",
+        "suggestions": suggestions(svc, name or wanted, key),
+    }
+
+
 def _free(svc: Services, name: str) -> bool:
     """Not reserved and not the name of a channel (channels receive mail at <channel>@)."""
     if name in RESERVED or not VALID.fullmatch(name):
@@ -87,37 +219,46 @@ def current(svc: Services, token: str) -> str:
         return ""
 
 
-def give_default(svc: Services, token: str, name: str, fallback: str) -> str:
+def give_default(svc: Services, token: str, name: str, fallback: str, wanted: str = "") -> str:
     """The account's username after making sure it is not a bare number: a member who never chose
-    one gets their name as a slug (with -2, -3… when taken). Returns the username the account
-    has now; FALLBACK when nothing could be read or set (best effort: the account works)."""
+    one gets their name as a slug (with -2, -3… when taken); with WANTED (the username they
+    asked for when they applied) that one when it is free, else the first free of
+    ``candidates``. Returns the username the account has now; FALLBACK when nothing could be
+    read or set (best effort: the account works)."""
     fallback = fallback.lower()
     if not token:
         return fallback
     have = current(svc, token)
     if have and not DEFAULT.fullmatch(have):
         return have  # chosen already (by them, or an earlier default)
+    tries: list[str] = []
+    wanted = clean(wanted)
+    if wanted:
+        tries = [wanted, *candidates(name)]
     base = slug(name)
-    if not base or DEFAULT.fullmatch(base):
-        return have or fallback
-    for n in range(1, 30):
-        tail = "" if n == 1 else f"-{n}"
-        wanted = base[: MAX - len(tail)].strip("-") + tail
-        if not _free(svc, wanted):
+    if base and not DEFAULT.fullmatch(base):
+        for n in range(1, 30):
+            tail = "" if n == 1 else f"-{n}"
+            tries.append(base[: MAX - len(tail)].strip("-") + tail)
+    for name_ in dict.fromkeys(tries):
+        if DEFAULT.fullmatch(name_) or not _free(svc, name_):
             continue
         try:
-            svc.keycast.set_username(token, wanted)
-            return wanted
+            svc.keycast.set_username(token, name_)
+            return name_
         except ValueError:  # taken
             continue
         except Exception as exc:  # noqa: BLE001
-            log.warning("usernames: %s not set: %s", wanted, exc)
+            log.warning("usernames: %s not set: %s", name_, exc)
             break
     return have or fallback
 
 
-def publish_nip05(svc: Services, pubkey: str, sign: Any, username: str) -> bool:
-    """The member's profile with the new address; everything else in it stays."""
+def publish_nip05(
+    svc: Services, pubkey: str, sign: Any, username: str, more: dict[str, str] | None = None
+) -> bool:
+    """The member's profile with the new address (and MORE: ``name``, ``display_name``);
+    everything else in it stays."""
     from . import community
 
     if svc.relay is None:
@@ -132,13 +273,13 @@ def publish_nip05(svc: Services, pubkey: str, sign: Any, username: str) -> bool:
                 content = {}
         if not isinstance(content, dict):
             content = {}
-        nip05 = f"{username}@{svc.settings.nip05_domain}"
-        if found and content.get("nip05") == nip05:
+        new = {**(more or {}), "nip05": f"{username}@{svc.settings.nip05_domain}"}
+        if found and all(content.get(k) == v for k, v in new.items()):
             return False
-        content["nip05"] = nip05
-        event = sign(
-            {"kind": 0, "created_at": int(time.time()), "tags": [], "content": json.dumps(content)}
-        )
+        content.update(new)
+        # never the second of the profile it replaces (a tie is settled by the events' ids)
+        at = max(int(time.time()), int(found[0].get("created_at") or 0) + 1 if found else 0)
+        event = sign({"kind": 0, "created_at": at, "tags": [], "content": json.dumps(content)})
         svc.relay.publish(event, sign)
         return True
     except Exception as exc:  # noqa: BLE001 — the address works without the profile line
@@ -185,14 +326,9 @@ def change(svc: Services, pubkey: str, wanted: str) -> dict[str, str]:
     from .holder_invites import ApiError
     from .places import member_key
 
-    wanted = (wanted or "").strip().lower().removeprefix("@")
+    wanted = clean(wanted)
     if not VALID.fullmatch(wanted):
-        raise ApiError(
-            422,
-            "invalid",
-            "A username is 1 to 30 lowercase letters, digits, dots, dashes or underscores, "
-            "starting and ending with a letter or a digit.",
-        )
+        raise ApiError(422, "invalid", INVALID)
     row = member_key(svc, pubkey)
     partner = core.m2o_id(row.get("partner_id")) if row else None
     if not partner:
@@ -223,6 +359,7 @@ def change(svc: Services, pubkey: str, wanted: str) -> dict[str, str]:
     )
     with mail._lock:
         mail._cache.clear()  # the old and the new address resolve afresh
+    _taken.pop(wanted, None)
     log.info("usernames: partner %s is now %s", partner, wanted)
     return {"username": wanted, "nip05": f"{wanted}@{domain}"}
 
@@ -244,4 +381,24 @@ def register(app: FastAPI) -> None:
         if not isinstance(data, dict):
             raise ApiError(400, "invalid_json", 'Send {"username": "<name>"}.')
         out = await run_in_threadpool(change, s, pubkey, str(data.get("username") or ""))
+        return JSONResponse(out, headers={"Cache-Control": "no-store"})
+
+    @app.post(CHECK)
+    async def check_username(request: Request) -> JSONResponse:
+        from .sales import client_ip
+
+        s = request.app.state.services
+        body = await request.body()
+        key = authenticate(
+            s, request.app.state.api_seen, request.headers.get("authorization"), "POST", CHECK, body
+        )
+        if not CHECKS.allow("key:" + key) or not CHECKS.allow("ip:" + client_ip(request)):
+            raise ApiError(429, "too_many", "Too many requests for now. Try again in a minute.")
+        try:
+            data: Any = json.loads(body or b"{}")
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            raise ApiError(400, "invalid_json", 'Send {"username": "<name>"}.')
+        out = await run_in_threadpool(check, s, key, data)
         return JSONResponse(out, headers={"Cache-Control": "no-store"})

@@ -30,11 +30,17 @@ A membership is free and has no invoice (`tier` `member`, no end date: 2099-12-3
   (accounts, key, welcome mail).
 - The welcome mail (`register.py` `_mail_welcome`), sent when a free membership starts on a
   belfry with its own sign-in (`PASS_SIGNIN=belfry`, the default): subject "Welcome to
-  <community>"; you are a member now and have an identity in <community>'s belfry
-  (`<username>@<domain>`, when the account has a username); "You can chat with the community at
-  chat.<domain>" with the address written out; a button "Chat with the community" →
-  `https://chat.<domain>/`; "On a new device, choose Log in and enter this e-mail address: we
-  send you a 6-digit code." No sign-in link, nothing pointing at `login.<domain>` or
+  <community>"; "Hi <first name>,"; "You're a member now. Your address here is
+  <username>@<domain>."; a button "Chat with the community" → `https://chat.<domain>/` and the
+  line "or go to chat.<domain>"; "You can now log in with <username>@<domain> on the Android or
+  iPhone app." with Android → `https://belfry.sh/android` and iPhone app →
+  `https://belfry.sh/iphone` (`register.ANDROID_APP`, `IOS_APP`; the text part writes the links
+  in brackets); "We send a 6-digit code to this e-mail address, <their e-mail>, each time you
+  log in on a new device. No password." The username is the one they have when the mail is
+  sent: for someone who came with a member link the mail waits for `POST /welcome` (their name
+  and username), at most ten minutes (`welcome.py`, pass field `welcome_hold`,
+  `belfry_welcome_release`). An account without a username of its own gets the mail without the
+  address. No sign-in link, nothing pointing at `login.<domain>` or
   `pass.<domain>`. A guest with an address gets the same shape for their channel ("Open
   #channel"). Old mails' `/signin/<token>` and `/welcome/<token>` links answer a 303 to
   `https://chat.<domain>/` there. With `PASS_SIGNIN=authentik` (the first belfry's old setup)

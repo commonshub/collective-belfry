@@ -81,6 +81,9 @@ INVITE_DAYS = 14
 INVITES_PER_MEMBER = 3
 CODE_MINUTES, CODE_TRIES, CODES_PER_EMAIL, CODES_PER_KEY, CODE_WINDOW = 10, 5, 5, 10, 30
 WELCOME_HOURS = 24
+# the phone apps, as the welcome mail links them
+ANDROID_APP = "https://belfry.sh/android"
+IOS_APP = "https://belfry.sh/iphone"
 FOLLOW_ASKS_PER_DAY = 3
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -417,6 +420,8 @@ class Register(OdooApi):
             return
         first = (partner.get("name") or "").split(" ")[0] or "there"
         if self._own_signin():
+            if rec.get("welcome_hold") and rec.get("tier") != "guest":
+                return  # after the name and username they pick (belfry_welcome_release)
             self._mail_welcome(rec, partner, first)
             return
         until = (rec.get("login_setup_expires_at") or "")[:16]
@@ -464,23 +469,51 @@ class Register(OdooApi):
                 again,
             ]
             button = ("https://" + link, f"Open #{channel}" if channel else "Open the chat")
+            after = None
         else:
             username = str(rec.get("nip05_name") or "")
-            identity = (
-                f" and have an identity in {name}'s belfry: {username}@{domain}"
-                if username
-                else f" and have an identity in {name}'s belfry."
-            )
+            address = f"{username}@{domain}" if username else ""
             lines = [
-                f"Hello {first},",
-                f"You are a member of {name} now{identity}",
-                f"You can chat with the community at chat.{domain}",
-                again,
+                f"Hi {first},",
+                "You're a member now." + (f" Your address here is {address}." if address else ""),
             ]
             button = (chat, "Chat with the community")
-        sent = self.mailer.send(partner["email"], f"Welcome to {name}", lines, button=button)
+            after = [
+                f"or go to chat.{domain}",
+                [
+                    f"You can now log in with {address} on the " if address else "Log in on the ",
+                    ("Android", ANDROID_APP),
+                    " or ",
+                    ("iPhone app", IOS_APP),
+                    ".",
+                ],
+                f"We send a 6-digit code to this e-mail address, {partner['email']}, each time "
+                "you log in on a new device. No password.",
+            ]
+        sent = self.mailer.send(
+            partner["email"], f"Welcome to {name}", lines, button=button, after=after
+        )
         if sent:
             self._write("belfry.pass", [rec["id"]], {"login_mail_sent_at": stamp()})
+
+    def _m_belfry_welcome_release(self, model, pass_id, username=False, *_a, **_k):
+        """The welcome mail that waited for the member's own name and username (a member link:
+        roles.make_member ``hold_welcome``, welcome.py) goes out now, with USERNAME as their
+        address. Once: True when this call sent it."""
+        rec = self._get("belfry.pass", int(pass_id))
+        if rec is None or not rec.get("welcome_hold"):
+            return False
+        vals: dict[str, Any] = {"welcome_hold": False}
+        if username:
+            vals["nip05_name"] = str(username)
+        self._write("belfry.pass", [rec["id"]], vals)
+        rec = self._get("belfry.pass", rec["id"]) or rec
+        partner = self._get("res.partner", rec.get("partner_id") or 0) or {}
+        if rec.get("state") != "active" or not partner.get("email"):
+            return False
+        first = (partner.get("name") or "").split(" ")[0] or "there"
+        self._mail_welcome(rec, partner, first)
+        return True
 
     def _by_token(self, field: str, token: str) -> dict[str, Any] | None:
         if not token or len(token) < 20:

@@ -70,11 +70,11 @@ e-mail code here); a session is only ever bound to the key that signed the reque
 
 | Request | Answer |
 |---|---|
-| `POST /apply/start` `{"email", "motivation", "name"?, "agreed": [<agreement id>…]}` | 202 `{"sent": true}`: a code is mailed ("Your code to apply to <community>: 123456"), the same answer whether the address is known or not. Checked as `/api/apply`: 400 `missing` (e-mail or motivation), 400 `unticked` (every agreement of the charter must be ticked), 422 `invalid` (not an address); the hidden field `website` filled in → 202 and nothing happens. 429 `too_many` (5 codes per address and 10 per key in 30 minutes, 20 per network address an hour). |
+| `POST /apply/start` `{"email", "motivation", "name", "username"?, "agreed": [<agreement id>…]}` | `name` is expected; `username` is the address they would like here (below, "A name and a username"): 400 `missing` when it comes without a name, 422 `username_invalid` (with `reason`), 409 `username_taken` (with `suggestions`); it is kept with the request and **not reserved** while the request waits. Older chat builds send neither: the name is then the part before the @. 202 `{"sent": true}`: a code is mailed ("Your code to apply to <community>: 123456"), the same answer whether the address is known or not. Checked as `/api/apply`: 400 `missing` (e-mail or motivation), 400 `unticked` (every agreement of the charter must be ticked), 422 `invalid` (not an address); the hidden field `website` filled in → 202 and nothing happens. 429 `too_many` (5 codes per address and 10 per key in 30 minutes, 20 per network address an hour). |
 | `POST /apply/start` with `"proof"` (from `/login/verify`, same `email`, same key) | no code is mailed: 200 with the answer of `/apply/verify`. Invalid or expired proof: 422 `proof` (the chat falls back to the code). |
-| `POST /apply/verify` `{"email", "code"}` | 422 `wrong_code` with `tries_left`; 410 `expired`. Right code, and the address has an account here (a member, or a guest who saved it): 200 `{"state": "signed_in", "bunker_url", "pubkey", "npub", "nip05"}`, a session on that account bound to the applicant key (as `guests.md`, "An address that has an account"); an account that holds its own key: 409 `taken` with `nip05`; 409 `key_taken`; 503 `signer`. Otherwise the application is stored (`verified`, the applicant key, the name or the part before the @, the motivation, the ticked agreements) and the admins get the mail and push of a request to join, once: 200 `{"state": "pending"}`. A request that waits already for this address or this key: the same answer, no second request, no second mail (the key that proved the address last is its applicant key). |
-| `POST /apply/status` `{}` | `{"state": "none" \| "pending" \| "declined" \| "approved"}` for the latest request of this key. `approved` comes with `"signed_in": true, "bunker_url", "pubkey", "npub", "nip05"`: a session on the new member's key, bound to the applicant key, made on this call. Once it was handed out (or the signer knows the key already) the answer is `{"state": "approved", "signed_in": false, "nip05"}`: the chat shows Log in with the address filled in. One register lookup while the request waits: made to be asked every 5 seconds. |
-| `POST /login/start` `{"email"}` | 202 `{"sent": true}` for any address that looks like one, known or not ("Your code for <community>: 123456"); 422 `invalid`; 429 `too_many` (the same limits). |
+| `POST /apply/verify` `{"email", "code"}` | 422 `wrong_code` with `tries_left`; 410 `expired`. Right code, and the address has an account here (a member, or a guest who saved it): 200 `{"state": "signed_in", "bunker_url", "pubkey", "npub", "nip05"}`, a session on that account bound to the applicant key (as `guests.md`, "An address that has an account"); an account that holds its own key: 409 `taken` with `nip05`; 409 `key_taken`; 503 `signer`. Otherwise the application is stored (`verified`, the applicant key, the name, the username they asked for, the motivation, the ticked agreements) and the admins get the mail and push of a request to join, once: 200 `{"state": "pending"}`. A request that waits already for this address or this key: the same answer, no second request, no second mail (the key that proved the address last is its applicant key). |
+| `POST /apply/status` `{}` | `{"state": "none" \| "pending" \| "declined" \| "approved"}` for the latest request of this key. `pending` also carries what they sent, shown back to the browser that holds the applicant key and to nobody else: `"name", "username", "email", "motivation"`. `declined` is the state alone (a decline has no note here). `approved` comes with `"signed_in": true, "bunker_url", "pubkey", "npub", "nip05"`: a session on the new member's key, bound to the applicant key, made on this call. Once it was handed out (or the signer knows the key already) the answer is `{"state": "approved", "signed_in": false, "nip05"}`: the chat shows Log in with the address filled in. One register lookup while the request waits: made to be asked every 5 seconds. |
+| `POST /login/start` `{"email"}` | 202 `{"sent": true}` for any address that looks like one, known or not ("Your code for <community>: 123456"); 422 `invalid`; 429 `too_many` (the same limits). `email` may be the member's address here, `<username>@<domain>`: the code then goes to that member's own e-mail address, never to the belfry mailbox. An address at the belfry's domain that is an account's own e-mail address stays that; a username nobody has is treated as any unknown address (the same 202; the code is mailed to the address as typed, which no member reads). `/login/verify` takes the same words as `/login/start`. |
 | `POST /login/verify` `{"email", "code"}` | 422 `wrong_code` (`tries_left`), 410 `expired`. Right code: the address has an account (also a request that was approved meanwhile) → `{"state": "signed_in", …}` as above (409 `taken` + `nip05`, 409 `key_taken`, 503 `signer`); a request for it waits → `{"state": "pending"}` and this key is its applicant key from now on (`/apply/status` answers for this browser; the earlier key gets `none`); nobody knows it → `{"state": "unknown", "proof"}`. |
 
 `proof` is `<expiry>.<HMAC-SHA256>` over the lower-cased address, the applicant key and the
@@ -83,18 +83,59 @@ for that key and that address only. A code sent for applying is not taken by `/l
 the other way round.
 
 **Accepted** (an admin's `decide`, or enough vouches): the person is a member at once. Their
-contact and a free membership (the activation an accepted invite ends in: default role, a
-username from their name), the agreements they ticked signed for them (`charter.md`), and one
+contact with the name of the request and a free membership (the activation an accepted invite
+ends in: default role; the username they asked for when it is still free and valid, else the
+first free suggestion, else the usual one from their name: an approval never fails over a
+username), the agreements they ticked signed for them (`charter.md`), and one
 mail: the welcome mail (`register.md`). No invite, no confirmation mail, no sign-in link. State
 `accepted`. A browser that still waits gets its session from `/apply/status`; anyone else opens
 the mail's button and logs in with the address. **Declined**: the usual mail; `/apply/status`
 says `declined`, and they may ask again.
 
 List rows of `POST /applications` carry `"verified": true` for these requests (false for the
-others). The older ways keep their invite: the form on `pass.<domain>/apply` and `POST
+others) and, next to `name`, `username`: the one they asked for (after the acceptance, the one
+they got; "" when they sent none). The older ways keep their invite: the form on `pass.<domain>/apply` and `POST
 /api/apply` (older chat builds) store an unproven request, and accepting it mails an invite. If
 the person later proves that address (`/apply/verify` or `/login/verify`), the request that waits
 becomes a verified one.
+
+## A name and a username (2026-11-19)
+
+The username is the person's address here, `<username>@<domain>`: they log in with it, people
+mention them with it, and it receives direct messages and e-mails. They pick it when they apply
+(with their name), or right after the code when they sign up from a member invitation. Rules:
+`usernames.py` (1 to 30 of `a-z 0-9 . _ -`, starting and ending with a letter or digit; the
+reserved names; a channel's name counts as taken: it has a mailbox).
+
+`POST /username/check` (NIP-98 by **any** key: an applicant key with no account, a guest's, a
+member's), 60 calls a minute per key and per network address (429 `too_many`):
+
+- `{"username", "name"?}` → `{"username": "<lower-cased, trimmed>", "state": "available" |
+  "taken" | "invalid", "reason"?: "short" | "long" | "chars" | "reserved", "suggestions": [up to
+  3]}`. The caller's own username is `available`. `suggestions` is empty for `available`.
+- `{"name"}` alone → `{"suggested": "<the first suggestion, or empty>", "suggestions": [up to
+  3, the suggested one first]}`.
+- Suggestions, valid and free ones only, in this order: the first name (`lina` for "Lina
+  Moreau"), first-last (`lina-moreau`), then `lina-2`, `lina-3`… From `name` when sent, else
+  from the username itself.
+- "taken" is remembered for 5 seconds. One signer lookup (its `nostr.json`) and the channel
+  check per name asked.
+
+**A member invitation** (`guests.md`): `/guest/save` and `/guest/save/verify` are unchanged (an
+e-mail and its code; the name starts from the address). The chat then asks for both and sends
+
+`POST /welcome` `{"name", "username"}`, NIP-98 by the new member's own key →
+`{"name", "username", "nip05"}`. The contact gets the name, the signer the username, and the
+profile (kind 0) `name`, `display_name` and `nip05`; its picture and about stay. Allowed while
+the username is still a default one (a number, `member-N`, `guest-N`) or the first membership
+started less than 24 hours ago; later 409 `already_set` (the profile screen: `POST /username`).
+Errors: 400 `missing`, 403 `not_member` (guests, agents, no account), 403 `unverified`, 409
+`own_key`, 422 `username_invalid` (`reason`), 409 `username_taken` (`suggestions`).
+
+The welcome mail (`register.md`) of someone who came with a member link waits for this call, so
+it names the address they picked; when the call never comes it leaves ten minutes after the
+membership started (`welcome.tick` on the 5-minute round, so 10 to 15 minutes). One welcome
+mail either way. An applicant's welcome mail leaves at the approval.
 
 ## Groups that accept by vouches
 
