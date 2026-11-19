@@ -352,3 +352,29 @@ def test_the_invite_page_ends_on_the_chat_with_its_own_sign_in(rsvc, reg):
         assert 'href="https://chat.belfry.test/"' in done.text and "/signin/" not in done.text
         _msg, text = last_mail()
         assert "/signin/" not in text and "chat.belfry.test" in text
+
+
+def test_a_long_subject_with_a_dot_keeps_whole_words_and_a_light_button_gets_dark_text():
+    """Python folded "… Day pass · Open Source Village · …" into "pass =?utf-8?q??= · Open…"."""
+    import email
+    from email.message import EmailMessage
+
+    from belfry_onboarding import mailer
+
+    subject = (
+        "Confirm your thread: Xavier (TEST): 50% off Day pass · Open Source Village · "
+        "Thu 28 Jan · CHAOSS Conf, Thursday 28 January 2027"
+    )
+    msg = EmailMessage(policy=mailer.POLICY)
+    msg["Subject"] = subject
+    msg["To"] = "a@example.org"
+    msg.set_content("x")
+    raw = msg.as_bytes()
+    assert b"=?utf-8?q??=" not in raw
+    back = email.message_from_bytes(raw, policy=email.policy.default)
+    assert back["Subject"] == subject
+    plain = EmailMessage(policy=mailer.POLICY)
+    plain["Subject"] = "Welcome to Belfry"
+    assert b"Subject: Welcome to Belfry" in plain.as_bytes()
+    assert mailer.text_on("#d6ff52") == "#111" and mailer.text_on("#2b3a31") == "#fff"
+    assert mailer.text_on("#fff") == "#111" and mailer.text_on("nonsense") == "#fff"

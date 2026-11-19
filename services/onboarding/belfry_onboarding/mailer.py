@@ -12,6 +12,7 @@ import email.utils
 import logging
 import smtplib
 import ssl
+import email.policy
 from email.message import EmailMessage
 from html import escape
 from typing import Any
@@ -36,6 +37,42 @@ def _para(p: Paragraph) -> str:
         else f'<a href="{escape(x[1])}" style="color:inherit;">{escape(x[0])}</a>'
         for x in p
     )
+
+
+class _Policy(email.policy.EmailPolicy):
+    """Python's own folding of a long Subject with a non-ASCII character can leave an empty
+    encoded word in the middle of it (``=?utf-8?q??=``, shown as such by mail apps: seen on a
+    request's confirmation mail, "…Day pass · Open Source Village · …"). The Subject is folded
+    by ``email.header.Header`` instead, which splits it into whole encoded words."""
+
+    def _fold(self, name, value, refold_binary=False):  # noqa: ANN001
+        if name.lower() == "subject" and not str(value).isascii():
+            from email.header import Header
+
+            folded = Header(str(value), "utf-8", header_name=name).encode(linesep=self.linesep)
+            return f"{name}: {folded}{self.linesep}"
+        return super()._fold(name, value, refold_binary)
+
+
+POLICY = _Policy()
+
+
+def text_on(color: str) -> str:
+    """Black or white, whichever reads better on COLOR (``#rrggbb``): a button in a light
+    brand colour (a lime, a yellow) gets dark words."""
+    c = (color or "").lstrip("#")
+    if len(c) == 3:
+        c = "".join(ch * 2 for ch in c)
+    try:
+        r, g, b = (int(c[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    except ValueError:
+        return "#fff"
+
+    def lin(v: float) -> float:
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    lum = 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+    return "#111" if (lum + 0.05) / 0.05 > 1.05 / (lum + 0.05) else "#fff"
 
 
 SENT: list[EmailMessage] = []  # tests: mails are kept here when there is no SMTP host
@@ -90,7 +127,7 @@ class Mailer:
         rcpts = [r for r in rcpts if r and "@" in r]
         if not rcpts:
             return False
-        msg = EmailMessage()
+        msg = EmailMessage(policy=POLICY)
         msg["From"] = self.sender()
         msg["To"] = ", ".join(rcpts)
         msg["Subject"] = one_line(subject)[:200]
@@ -130,7 +167,7 @@ class Mailer:
         plain part, else the HTML without its tags."""
         import re
 
-        msg = EmailMessage()
+        msg = EmailMessage(policy=POLICY)
         msg["From"] = self.sender()
         msg["To"] = to
         msg["Subject"] = one_line(subject)[:200]
@@ -180,7 +217,7 @@ class Mailer:
             p += (
                 f'<p style="margin:20px 0;"><a href="{escape(button[0])}" '
                 'style="display:inline-block;'
-                f"background:{color};color:#fff;font-weight:600;padding:12px 20px;"
+                f"background:{color};color:{text_on(color)};font-weight:600;padding:12px 20px;"
                 f'text-decoration:none;border-radius:10px;">{escape(button[1])}</a></p>'
             )
         p += "".join(f'<p style="margin:0 0 14px;">{_para(x)}</p>' for x in after or [])
