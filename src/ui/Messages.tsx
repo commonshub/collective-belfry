@@ -3,6 +3,9 @@ import type React from 'react'
 import { openProfile } from './Profile'
 import { MailIcon } from './icons'
 import { Markdown } from './markdown'
+import { RefText } from './Topics'
+import { RefPreview } from './Refs'
+import { endRef } from '../core/refs'
 import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, profiles } from '../core/model'
@@ -172,11 +175,14 @@ function DmItem({ d, head }: { d: Dm; head: string }) {
 
 function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttributes<HTMLDivElement> }) {
   const r = d.mine ? report(d.emailId) : undefined
+  const end = d.kind === 1301 ? undefined : endRef(d.text) // a reference at the end: its preview box
   return (
     <div className={'dm' + (d.mine ? ' mine' : '') + (d.pending ? ' pending' : '')} {...hold}>
       {!d.mine && d.kind !== 1301 && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
       {d.kind === 1301 && d.subject && !sameSubject(d.subject, head) && <div className="dm-subject">{d.subject}</div>}
-      {d.text ? <Markdown text={d.text} className="dm-text" /> : <div className="dm-text">{d.attachments?.length ? '' : '(empty)'}</div>}
+      {d.kind === 1301 ? (d.text ? <Markdown text={d.text} className="dm-text" /> : <div className="dm-text">{d.attachments?.length ? '' : '(empty)'}</div>)
+        : end ? <>{end.rest && <RefText text={end.rest} className="dm-text" />}<RefPreview r={end.ref} /></>
+        : d.text ? <RefText text={d.text} className="dm-text" /> : <div className="dm-text">(empty)</div>}
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>

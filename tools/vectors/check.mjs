@@ -1,4 +1,4 @@
-// The web chat against the shared vectors (vectors/*.json, copied byte for byte from belfry-ios):
+// The web chat against the shared vectors (vectors/*.json, copied byte for byte from belfry-ios / belfry-android):
 // bundles src/core/model.ts for Node with the browser modules stubbed, then checks every case.
 //   node tools/vectors/check.mjs
 import { build } from 'esbuild'
@@ -54,5 +54,8 @@ for (const c of vec('reply-reactions.json').cases) {
     check(`reply-reactions write: k ${w.target_kind}`, eq(tags, w.tags), { tags, want: w.tags })
   }
 }
+// references.json (SPEC 19.44): names inside the text, the box at the end
+const refs = vec('references.json')
+for (const c of refs.cases) { const got = M.parts(c.text, refs.domain); check(`references ${c.name}`, eq(got, c.parts), { got, want: c.parts }) }
 console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
 process.exit(bad ? 1 : 0)

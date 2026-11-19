@@ -1,0 +1,304 @@
+{
+  "about": "References in a message (SPEC 19.44): this belfry's chat link https://chat.<domain>/#/c/<id> (also https://<domain>/chat/#/c/<id>, never with /m/<event>), its event pages https://chat.<domain>/events/<link> and https://<domain>/events/<slug-or-d> (not /t/<code>), and nostr:naddr1… of kind 39000 (group id), 31922/31923 (event coord), 30023 (proposal coord). parts: {text}, {ref} = shown inside the text as its name, {box} = the last reference when the text, trimmed of trailing white space, ends with it: taken out (with the white space before it) and shown as a preview box under the text; a text that is only a reference = the box alone. A group is typed when shown (channel, group, an event's chat = its event, prop-… = its proposal). Anything else stays as written.",
+  "generated_by": "tools/vectors/references.mjs (nostr-tools from village-app)",
+  "domain": "riverside.example",
+  "cases": [
+    {
+      "name": "a channel link at the end",
+      "text": "Seed talk carries on here https://chat.riverside.example/#/c/garden",
+      "parts": [
+        {
+          "text": "Seed talk carries on here"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "garden"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a channel naddr at the end",
+      "text": "Seed talk carries on here nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqxvashyer9dcxeg57c",
+      "parts": [
+        {
+          "text": "Seed talk carries on here"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "garden"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a group (pod) naddr, trailing spaces and a new line",
+      "text": "If you want to help, ask to join nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qq0wphkgtt8v9exgetw943hyethksmxkn  \n",
+      "parts": [
+        {
+          "text": "If you want to help, ask to join"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "pod-garden-crew"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the event page people share (slug)",
+      "text": "Bring anything broken! https://riverside.example/events/repair-cafe",
+      "parts": [
+        {
+          "text": "Bring anything broken!"
+        },
+        {
+          "box": {
+            "type": "event",
+            "link": "repair-cafe"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the event page by its d",
+      "text": "https://riverside.example/events/2026-ab12cd",
+      "parts": [
+        {
+          "box": {
+            "type": "event",
+            "link": "2026-ab12cd"
+          }
+        }
+      ]
+    },
+    {
+      "name": "the chat host event link",
+      "text": "See https://chat.riverside.example/events/repair-cafe",
+      "parts": [
+        {
+          "text": "See"
+        },
+        {
+          "box": {
+            "type": "event",
+            "link": "repair-cafe"
+          }
+        }
+      ]
+    },
+    {
+      "name": "an event naddr",
+      "text": "Bring anything broken! nostr:naddr1qvzqqqrukvpzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqtxgcryd3dv93rzvnrvs6kul3c",
+      "parts": [
+        {
+          "text": "Bring anything broken!"
+        },
+        {
+          "box": {
+            "type": "event",
+            "coord": "31923:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:2026-ab12cd"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a proposal naddr",
+      "text": "Please vote before Friday nostr:naddr1qvzqqqr4gupzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqtw96kjet5945x7atjwvx0lc6s",
+      "parts": [
+        {
+          "text": "Please vote before Friday"
+        },
+        {
+          "box": {
+            "type": "proposal",
+            "coord": "30023:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:quiet-hours"
+          }
+        }
+      ]
+    },
+    {
+      "name": "only a reference: the box alone",
+      "text": "  nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqxvashyer9dcxeg57c ",
+      "parts": [
+        {
+          "box": {
+            "type": "group",
+            "id": "garden"
+          }
+        }
+      ]
+    },
+    {
+      "name": "inside the text: names",
+      "text": "Ask nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qq0wphkgtt8v9exgetw943hyethksmxkn about the seeds, then add them to nostr:naddr1qvzqqqrukvpzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqtxgcryd3dv93rzvnrvs6kul3c and vote on nostr:naddr1qvzqqqr4gupzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqtw96kjet5945x7atjwvx0lc6s by Friday.",
+      "parts": [
+        {
+          "text": "Ask "
+        },
+        {
+          "ref": {
+            "type": "group",
+            "id": "pod-garden-crew"
+          }
+        },
+        {
+          "text": " about the seeds, then add them to "
+        },
+        {
+          "ref": {
+            "type": "event",
+            "coord": "31923:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:2026-ab12cd"
+          }
+        },
+        {
+          "text": " and vote on "
+        },
+        {
+          "ref": {
+            "type": "proposal",
+            "coord": "30023:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:quiet-hours"
+          }
+        },
+        {
+          "text": " by Friday."
+        }
+      ]
+    },
+    {
+      "name": "two references: the last one is the box",
+      "text": "Moved from nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqxvashyer9dcxeg57c to https://chat.riverside.example/#/c/pod-garden-crew",
+      "parts": [
+        {
+          "text": "Moved from "
+        },
+        {
+          "ref": {
+            "type": "group",
+            "id": "garden"
+          }
+        },
+        {
+          "text": " to"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "pod-garden-crew"
+          }
+        }
+      ]
+    },
+    {
+      "name": "a message link (/m/) is not a reference",
+      "text": "Read this https://chat.riverside.example/#/c/garden/m/abababababababababababababababababababababababababababababababab",
+      "parts": [
+        {
+          "text": "Read this https://chat.riverside.example/#/c/garden/m/abababababababababababababababababababababababababababababababab"
+        }
+      ]
+    },
+    {
+      "name": "another belfry stays a link",
+      "text": "Look https://chat.elsewhere.example/#/c/garden",
+      "parts": [
+        {
+          "text": "Look https://chat.elsewhere.example/#/c/garden"
+        }
+      ]
+    },
+    {
+      "name": "a ticket link stays a link",
+      "text": "My ticket https://chat.riverside.example/events/repair-cafe/t/abcdefghijklmnop",
+      "parts": [
+        {
+          "text": "My ticket https://chat.riverside.example/events/repair-cafe/t/abcdefghijklmnop"
+        }
+      ]
+    },
+    {
+      "name": "the /chat/ path of the main host",
+      "text": "Here https://riverside.example/chat/#/c/garden",
+      "parts": [
+        {
+          "text": "Here"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "garden"
+          }
+        }
+      ]
+    },
+    {
+      "name": "an encoded channel id",
+      "text": "Ici https://chat.riverside.example/#/c/g%C3%A9n%C3%A9ral",
+      "parts": [
+        {
+          "text": "Ici"
+        },
+        {
+          "box": {
+            "type": "group",
+            "id": "général"
+          }
+        }
+      ]
+    },
+    {
+      "name": "punctuation after a link: not at the end",
+      "text": "Is it https://chat.riverside.example/#/c/garden?",
+      "parts": [
+        {
+          "text": "Is it "
+        },
+        {
+          "ref": {
+            "type": "group",
+            "id": "garden"
+          }
+        },
+        {
+          "text": "?"
+        }
+      ]
+    },
+    {
+      "name": "another kind of naddr stays as written",
+      "text": "My list nostr:naddr1qvzqqqr4xypzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqyd35hxaq9zx9pm",
+      "parts": [
+        {
+          "text": "My list nostr:naddr1qvzqqqr4xypzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqyd35hxaq9zx9pm"
+        }
+      ]
+    },
+    {
+      "name": "a reference then more text",
+      "text": "nostr:naddr1qvzqqqyctqpzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqxvashyer9dcxeg57c is where it happens",
+      "parts": [
+        {
+          "ref": {
+            "type": "group",
+            "id": "garden"
+          }
+        },
+        {
+          "text": " is where it happens"
+        }
+      ]
+    },
+    {
+      "name": "no reference",
+      "text": "Just words, https://example.org/page and #garden typed by hand",
+      "parts": [
+        {
+          "text": "Just words, https://example.org/page and #garden typed by hand"
+        }
+      ]
+    }
+  ]
+}

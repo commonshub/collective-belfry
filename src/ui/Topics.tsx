@@ -6,6 +6,8 @@ import { ANNOUNCE, channelIcon, channelOfNaddr, displayName, group, isAnnounceme
 import { go } from './common'
 import { me } from '../core/sync'
 import { Markdown } from './markdown'
+import { RefName } from './Refs'
+import { target } from '../core/refs'
 import { BELFRY } from '../config'
 import { useVersion } from '../core/store'
 import { Sheet } from './common'
@@ -79,9 +81,10 @@ export function RichText({ text, groupId, onOpen }: { text: string; groupId: str
         if (m.index! > last) out.push(t.slice(last, m.index))
         out.push(<Mention key={`${key}-m${n++}`} npub={m[3]} />)
         last = m.index! + m[0].length
-      } else if (m[6]) { // a channel picked after "#": a chip that opens it
+      } else if (m[6]) { // a channel picked after "#", or another reference: its name (Refs.tsx)
         if (m.index! > last) out.push(t.slice(last, m.index))
-        out.push(<ChannelRef key={`${key}-c${n++}`} naddr={m[6]} />)
+        const r = target(m[0])
+        out.push(r ? <RefName key={`${key}-c${n++}`} r={r} /> : m[0])
         last = m.index! + m[0].length
       } else {
         const at = m.index! + m[4].length
@@ -93,14 +96,36 @@ export function RichText({ text, groupId, onOpen }: { text: string; groupId: str
     if (last < t.length) out.push(t.slice(last))
     return out
   }
-  return <Markdown text={text} className="text" plain={plain} />
+  return <Markdown text={text} className="text" plain={withRefLinks(plain)} />
 }
 
-function ChannelRef({ naddr }: { naddr: string }) {
-  const id = channelOfNaddr(naddr)
-  if (!id) return <>{'nostr:' + naddr}</>
-  const g = group(id)
-  return <button type="button" className="mention channel-ref" onClick={(e) => { e.stopPropagation(); go('c/' + encodeURIComponent(id)) }}>{channelIcon(g)}{refName(id)}</button>
+/** This belfry's chat links inside the text become the thing's name (Refs.tsx). */
+export function withRefLinks(plain: (t: string, key: string) => ReactNode[]) {
+  return Object.assign(plain, {
+    link: (url: string, key: string) => {
+      const r = target(url)
+      return r ? <RefName key={key} r={r} /> : null
+    },
+  })
+}
+
+/** Text with references only (direct messages: no topics, no mentions to resolve here). */
+export function RefText({ text, className }: { text: string; className?: string }) {
+  const plain = (t: string, key: string): ReactNode[] => {
+    const out: ReactNode[] = []
+    let last = 0
+    let n = 0
+    for (const m of t.matchAll(/nostr:(naddr1[02-9ac-hj-np-z]{20,400})/g)) {
+      const r = target(m[0])
+      if (!r) continue
+      if (m.index! > last) out.push(t.slice(last, m.index))
+      out.push(<RefName key={`${key}-r${n++}`} r={r} />)
+      last = m.index! + m[0].length
+    }
+    if (last < t.length) out.push(t.slice(last))
+    return out
+  }
+  return <Markdown text={text} className={className} plain={withRefLinks(plain)} />
 }
 
 function Mention({ npub }: { npub: string }) {

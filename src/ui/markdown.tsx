@@ -7,7 +7,7 @@ import type { ReactNode } from 'react'
 const SAFE_URL = /^(https?:\/\/|mailto:)/i
 
 /** How plain text inside the Markdown is shown: as is, or with #topics and @mentions. */
-type Plain = (text: string, key: string) => ReactNode[]
+type Plain = ((text: string, key: string) => ReactNode[]) & { link?: (url: string, key: string) => ReactNode | null }
 const asIs: Plain = (t) => [t]
 
 /** A bare http(s) link in text: ends before spaces, < > ( ), and never on a final . , ; : ! ? ' "
@@ -48,6 +48,7 @@ function inline(text: string, key: string, plain: Plain = asIs): ReactNode[] {
         ? <a key={k} href={m[7]} target="_blank" rel="noreferrer noopener">{inline(m[6], k)}</a>
         : m[0])
     } else if (m[8] ?? m[9]) out.push(<em key={k}>{inline(m[8] ?? m[9], k, plain)}</em>)
+    else if (m[10] && plain.link?.(m[10], k)) out.push(plain.link(m[10], k))
     else if (m[10]) out.push(<a key={k} href={m[10]} target="_blank" rel="noreferrer noopener" onClick={(e) => e.stopPropagation()}>{m[10]}</a>)
     last = m.index + m[0].length
   }

@@ -16,6 +16,8 @@ import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
+import { RefPreview } from './Refs'
+import { endRef, parts, refCoords, type Ref } from '../core/refs'
 import { MeetingSheet } from './Meeting'
 import { RecorderSheet, RecordingBar } from './Recorder'
 import { canRecord } from '../core/recorder'
@@ -66,7 +68,9 @@ function guestLine() {
 /** The `a` tags of the events a message's text links to (https://<domain>/events/<link>): the
  *  ones this device knows, or the belfry told it about. Receivers resolve the rest themselves. */
 function eventTags(text: string): string[][] {
-  return eventLinksIn(text).map((l) => eventByLinkAny(l).e?.coord).filter((c): c is string => !!c).map((c) => ['a', c, BELFRY.mainRelay])
+  // and every event or proposal coordinate its references name (SPEC 19.44; readers parse the text)
+  const coords = new Set([...eventLinksIn(text).map((l) => eventByLinkAny(l).e?.coord).filter((c): c is string => !!c), ...refCoords(text)])
+  return [...coords].map((c) => ['a', c, BELFRY.mainRelay])
 }
 
 // ---- channel list (the "server sidebar", full screen on a phone) ------------
@@ -1039,6 +1043,13 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
   const cards: { key: string; coord?: string; link?: string }[] = []
   if (!legacy) {
     const seen = new Set<string>()
+    // an event the text names is shown there (its name, or the box at the end: SPEC 19.44)
+    for (const p of parts(m.text)) {
+      const r: Ref | undefined = 'ref' in p ? p.ref : 'box' in p ? p.box : undefined
+      if (r?.type !== 'event') continue
+      if (r.coord) seen.add(r.coord.split(':')[2])
+      if (r.link) seen.add(eventByLinkLocal(r.link)?.d ?? r.link)
+    }
     for (const c of eventCoordsOf(m.ev)) {
       const d = c.split(':')[2]
       if (seen.has(d)) continue
@@ -1052,6 +1063,8 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
       cards.push({ key: l, link: l })
     }
   }
+  // a reference to a channel, group, event or proposal at the very end: a preview box (Refs.tsx)
+  const end = mail ? undefined : endRef(m.text)
   const isCard = !!(legacy || podOf(m.ev) || proposalOf(m.ev)) // a card always says who made it
   const frozen = !!group(groupId)?.archived // an archived group: no menu, no reacting
   // press and hold (phones) or right-click: react, reply, edit or delete your own
@@ -1072,7 +1085,9 @@ function Row({ m, prev, prevAt, name, groupId, reactions: rx, onAct, topic, onTo
           {(first || announce || mail || isCard) && <div className="who"><button className="who-name" onClick={() => openProfile(m.ev.pubkey)}>{name}</button><AgentTag pk={m.ev.pubkey} /><time>{fmtTime(m.ev.created_at)}</time>{m.edited && <span className="edited" title={`Edited ${fmtTime(m.edited)}`}>edited</span>}{mail && <ViaMail />}{tag}{announce && <span className="badge announce-badge">📣 Announcement</span>}</div>}
           {mail?.subject && <div className="mail-subject">{mail.subject}</div>}
           {(legacy || podOf(m.ev) || proposalOf(m.ev)) && <div className="created-line">Created {legacy ? 'an event' : podOf(m.ev) ? 'the group' : 'a proposal'}</div>}
-          {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : m.text && <RichText text={mail ? mailText(m.text, mail) : m.text} groupId={groupId} onOpen={onTopic} />}
+          {legacy ? <EventCard coord={legacy} fallback={m.text} /> : podOf(m.ev) ? <PodCard id={podOf(m.ev)!} fallback={m.text} /> : proposalOf(m.ev) ? <ProposalCard id={proposalOf(m.ev)!} fallback={m.text} /> : mail ? m.text && <RichText text={mailText(m.text, mail)} groupId={groupId} onOpen={onTopic} />
+            : end ? <>{end.rest && <RichText text={end.rest} groupId={groupId} onOpen={onTopic} />}<RefPreview r={end.ref} /></>
+            : m.text && <RichText text={m.text} groupId={groupId} onOpen={onTopic} />}
           <MessageButtons ev={m.ev} groupId={groupId} disabled={!!p || frozen} />
           {cards.length > 0 && <div className="ev-cards">{cards.slice(0, 3).map((c) => <EventCard key={c.key} coord={c.coord} link={c.link} fallback="" />)}</div>}
           {extra.length > 0 && <div className="msg-topics">{extra.map((t) => <button key={t} onClick={() => onTopic?.(t)}>#{t}</button>)}</div>}
