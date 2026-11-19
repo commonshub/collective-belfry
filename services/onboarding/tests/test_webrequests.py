@@ -457,6 +457,9 @@ def test_a_page_on_the_website_takes_the_channel_over(reqs, monkeypatch):
         for path in ("/requests", "/requests?state=closed", "/requests/thread", "/requests/x/y"):
             r = c.get(path, headers=APEX)
             assert "wt-head" not in r.text and "Open an issue" not in r.text, path
+        # the preview host shows a proposed site's own page there too: no redirect to the apex
+        r = c.get("/requests", headers={"host": "preview.belfry.test"}, follow_redirects=False)
+        assert r.status_code != 301 and "location" not in r.headers
         r = c.post(
             "/requests",
             data={"title": "T", "text": "x", "name": "N", "email": "n@x.org"},

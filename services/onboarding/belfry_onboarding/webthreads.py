@@ -1082,6 +1082,10 @@ def install(app: FastAPI) -> None:
         # one address: the public website's (<domain>/<slug>); the service's hosts send there
         home = urlsplit(s.settings.site_url or "")
         host = request.headers.get("host", "").lower()
+        if site.get("page") and host == f"preview.{s.settings.nip05_domain}".lower():
+            # handed to the website (docs/requests.md): a proposed version of the site shows
+            # its own page for this channel on the preview host too
+            return await call_next(request)
         if home.netloc and host != home.netloc.lower():
             if request.method not in ("GET", "HEAD"):
                 return await call_next(request)
