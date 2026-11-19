@@ -14,7 +14,7 @@ import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLi
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
-import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName } from './common'
+import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName, SheetOrPopover, takeAnchor } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { RefPreview } from './Refs'
 import { NEW_TODO_EVENT, openNewTodo, TodoField, todoOver } from './TodoField'
@@ -1166,6 +1166,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   // long press / right-click / "More": one line of emojis, then what you can do (Discord's menu).
   // The add-reaction button opens the emojis alone.
   const [more, setMore] = useState(emojiOnly)
+  const [anchor] = useState(takeAnchor) // laptops: next to the button (or right-click) that opened it
   const [confirming, setConfirming] = useState(false) // "Delete message" asks first, in the same sheet
   const g = group(groupId)
   const isPinned = canAdmin(g) && pinned(groupId, mayPin(g)).some((x) => x.ev.id === m.ev.id)
@@ -1203,7 +1204,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
     </Sheet>
   )
   return (
-    <Sheet title={emojiOnly ? 'Add a reaction' : 'Message'} hideTitle={!emojiOnly} onClose={onClose}>
+    <SheetOrPopover title={emojiOnly ? 'Add a reaction' : 'Message'} hideTitle={!emojiOnly} onClose={onClose} anchor={anchor}>
       <div className="emoji-row">
         {topEmojis(5).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} aria-label={`React with ${e}`} onClick={() => pick(e)}>{e}</button>)}
         <button aria-label="More emojis" aria-expanded={more} className={'more' + (more ? ' on' : '')} onClick={() => setMore(!more)}><SmilePlusIcon /></button>
@@ -1237,7 +1238,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
           )}
         </>
       )}
-    </Sheet>
+    </SheetOrPopover>
   )
 }
 

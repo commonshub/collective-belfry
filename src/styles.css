@@ -1929,3 +1929,11 @@ button.chan-line.todo-line { width: 100%; text-align: left; color: inherit; font
 .chan-line.todo-line .line-text b { display: block; line-height: 20px; }
 .chan-line.todo-line .todo-parts { display: block; font-size: 14px; line-height: 19px; color: var(--muted); }
 .chan-line.todo-line .line-chev { flex: none; color: var(--muted); display: grid; place-items: center; }
+
+/* a popover next to the button that opened it (laptops: the reaction picker, the message menu) */
+.popover { position: fixed; z-index: 60; min-width: 220px; max-width: min(420px, calc(100vw - 16px)); overflow-y: auto; box-sizing: border-box;
+  padding: 10px; border-radius: 16px; background: var(--bg); border: 1px solid var(--line); box-shadow: 0 10px 34px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08); }
+.popover h3 { margin: 2px 4px 8px; font-size: 15px; }
+.popover .emoji-row { margin: 0; }
+.popover .emoji-grid { margin-top: 8px; }
+.popover .act-group { margin-top: 8px; }

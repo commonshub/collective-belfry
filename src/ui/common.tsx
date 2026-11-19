@@ -1,7 +1,7 @@
 import { nameLoading } from '../core/names'
 import { replaceHash } from '../core/nav'
 import { Drawer } from 'vaul'
-import { Component, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
+import { Component, useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 
 /** Busy on it now: a ring that fills clockwise over the hour (one minute = 6°), "1h", "2h"… in it
@@ -299,6 +299,72 @@ export function Sheet({ title, onClose, children, hideTitle = false }: { title: 
       </Drawer.Portal>
     </Drawer.Root>
   )
+}
+
+// ---- a popover next to the button that opened it (laptops; to-do 2fd1780f, Xavier: "travel
+// distance with the mouse is too high between clicking on add an emoji reaction and picking it"):
+// below or above the button, its left or right edge on the button's, kept in the window; an
+// outside click or Esc closes it and the focus goes back to the button. Phones keep the sheet.
+export type Anchor = { rect: () => DOMRect; el?: HTMLElement; point?: boolean }
+let lastAnchor: { a: Anchor; at: number } | null = null
+if (typeof addEventListener === 'function') {
+  addEventListener('click', (e) => { const b = (e.target as Element | null)?.closest?.('button, [role=button]') as HTMLElement | null; if (b) lastAnchor = { a: { rect: () => b.getBoundingClientRect(), el: b }, at: Date.now() } }, true)
+  // a right-click: where the pointer was (no element to give the focus back to)
+  addEventListener('contextmenu', (e) => { const x = e.clientX, y = e.clientY; const at = document.activeElement as HTMLElement | null; lastAnchor = { a: { rect: () => new DOMRect(x, y, 0, 0), el: at ?? undefined, point: true }, at: Date.now() } }, true)
+}
+/** What opened the popover being made now: the button just clicked or the right-click's spot. */
+export function takeAnchor(): Anchor | null {
+  const l = lastAnchor
+  lastAnchor = null
+  if (!l || Date.now() - l.at > 1500 || (!l.a.point && !l.a.el?.isConnected)) return null
+  return l.a
+}
+
+const GAP = 6, EDGE = 8
+export function Popover({ title, anchor, onClose, children, hideTitle = true }: { title: string; anchor: Anchor; onClose: () => void; children: ReactNode; hideTitle?: boolean }) {
+  const box = useRef<HTMLDivElement>(null)
+  const [pos, setPos] = useState<{ left: number; top: number; maxHeight: number; above: boolean } | null>(null)
+  const place = () => {
+    const el = box.current
+    if (!el) return
+    const r = anchor.rect(), w = el.offsetWidth, h = el.scrollHeight
+    const below = innerHeight - r.bottom - GAP - EDGE, above = r.top - GAP - EDGE
+    const up = h > below && above > below
+    const room = up ? above : below
+    const top = up ? Math.max(EDGE, r.top - GAP - Math.min(h, room)) : r.bottom + GAP
+    let left = r.left
+    if (left + w > innerWidth - EDGE) left = r.right - w
+    left = Math.max(EDGE, Math.min(left, innerWidth - EDGE - w))
+    setPos({ left, top, maxHeight: room, above: up })
+  }
+  useLayoutEffect(place, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    const prev = anchor.el
+    box.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus({ preventScroll: true })
+    const down = (e: PointerEvent) => { if (!box.current?.contains(e.target as Node)) onClose() }
+    const key = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() } }
+    const re = () => place()
+    addEventListener('pointerdown', down, true); addEventListener('keydown', key, true); addEventListener('resize', re)
+    return () => {
+      removeEventListener('pointerdown', down, true); removeEventListener('keydown', key, true); removeEventListener('resize', re)
+      if (prev?.isConnected) prev.focus({ preventScroll: true }) // back to the button that opened it
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // grows (More emojis): placed again
+  useEffect(() => { const el = box.current; if (!el || typeof ResizeObserver !== 'function') return; const o = new ResizeObserver(() => place()); o.observe(el); return () => o.disconnect() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return createPortal(
+    <div ref={box} className={'popover' + (pos?.above ? ' above' : '')} role="dialog" aria-label={title}
+      style={pos ? { left: pos.left, top: pos.top, maxHeight: pos.maxHeight } : { left: -9999, top: 0, visibility: 'hidden' }}>
+      {!hideTitle && <h3>{title}</h3>}
+      {children}
+    </div>, document.body)
+}
+
+/** A sheet on a phone; on a laptop, a popover next to ANCHOR when there is one, else the dialog. */
+export function SheetOrPopover({ anchor, ...p }: { title: string; onClose: () => void; children: ReactNode; hideTitle?: boolean; anchor: Anchor | null }) {
+  const wide = useWide()
+  if (wide && anchor) return <Popover anchor={anchor} {...p} hideTitle />
+  return <Sheet {...p} />
 }
 
 /** A sheet's second screen: ‹ and its title on one line (‹ is this sheet's own step, no history). */

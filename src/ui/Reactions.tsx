@@ -5,7 +5,7 @@ import type React from 'react'
 import { useRef, useState } from 'react'
 import { topEmojis } from '../core/actions'
 import { displayName } from '../core/model'
-import { Avatar, fmtDay, fmtTime, Sheet } from './common'
+import { Avatar, fmtDay, fmtTime, Sheet, SheetOrPopover, takeAnchor } from './common'
 import { SmilePlusIcon } from './icons'
 
 export const MORE_EMOJIS = [
@@ -77,14 +77,15 @@ export function WhoReacted({ chip, onClose }: { chip: Chip; onClose: () => void 
 /** Pick an emoji: the ones used most, then all of them. */
 export function EmojiSheet({ onPick, onClose, isOn = () => false }: { onPick: (emoji: string) => void; onClose: () => void; isOn?: (emoji: string) => boolean }) {
   const [more, setMore] = useState(false)
+  const [anchor] = useState(takeAnchor) // laptops: next to the button that opened it
   const pick = (e: string) => { onClose(); onPick(e) }
   return (
-    <Sheet title="Add a reaction" onClose={onClose}>
+    <SheetOrPopover title="Add a reaction" onClose={onClose} anchor={anchor}>
       <div className="emoji-row">
         {topEmojis(5).map((e) => <button key={e} className={isOn(e) ? 'on' : ''} aria-label={`React with ${e}`} onClick={() => pick(e)}>{e}</button>)}
         <button aria-label="More emojis" aria-expanded={more} className={'more' + (more ? ' on' : '')} onClick={() => setMore(!more)}><SmilePlusIcon /></button>
       </div>
       {more && <div className="emoji-grid">{MORE_EMOJIS.map((e) => <button key={e} className={isOn(e) ? 'on' : ''} aria-label={`React with ${e}`} onClick={() => pick(e)}>{e}</button>)}</div>}
-    </Sheet>
+    </SheetOrPopover>
   )
 }
