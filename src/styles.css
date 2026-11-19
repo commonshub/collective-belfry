@@ -1958,3 +1958,10 @@ a.buy .ico { width: 14px; height: 14px; }
 .start .spinner { margin: 24px auto; }
 .start h2 { overflow-wrap: anywhere; text-align: center; font-size: 26px; line-height: 1.2; max-width: 100%; }
 .start > .hint, .start > p { text-align: center; max-width: 420px; }
+/* invite sheet (boards inviting/sheet-external v45-v48): the line that says what the link does, with Edit */
+.invite-line { font-size: 14px; line-height: 1.4; margin: 12px 2px 4px; color: var(--text); }
+.invite-line .link { font-size: 14px; padding: 0 2px; }
+.invite-only-stewards { font-size: 13px; margin: 0 2px 8px; }
+.invite-as { margin-bottom: 4px; }
+.invite-edit { margin-top: 8px; }
+.invite-agent { margin-top: 4px; }
