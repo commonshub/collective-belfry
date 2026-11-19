@@ -1096,3 +1096,35 @@ export function guestJoins(groupId: string): GuestJoin[] {
   }
   return out.filter((j) => wrote.has(j.pubkey) || (gone.get(j.pubkey) ?? 0) < j.at).sort((a, b) => a.at - b.at)
 }
+
+// ---- a channel's to-dos in parts (board channels/header-todos, to-do 8ec8c3b5, 2026-11-19):
+// "6 to-dos" / "2 unclaimed, 1 up next, 2 in progress, 1 closed today". Unclaimed: open, nobody's;
+// up next: assigned, not started; in progress: claimed (or working) and not put down; closed today:
+// done since the viewer's midnight. The total is the sum of the parts; a part at 0 is left out.
+/** "Up next" is DRAFT until Xavier confirms assign = up next / claim = working now: until then an
+ *  assigned, not started to-do counts as unclaimed. */
+export const UP_NEXT = false
+export interface TodoParts { total: number; unclaimed: number; upNext: number; inProgress: number; closedToday: number }
+export function todoParts(tasks: Task[], now = Date.now(), upNext = UP_NEXT): TodoParts {
+  const midnight = new Date(now); midnight.setHours(0, 0, 0, 0)
+  const since = Math.floor(+midnight / 1000)
+  const p: TodoParts = { total: 0, unclaimed: 0, upNext: 0, inProgress: 0, closedToday: 0 }
+  for (const t of tasks) {
+    if (t.done) {
+      const at = [...t.history].reverse().find((s) => s.what === 'done')?.at ?? 0
+      if (at >= since) p.closedToday++
+      continue
+    }
+    const last = [...t.history].reverse().find((s) => ['claim', 'unclaim', 'assign', 'unassign', 'idle', 'working'].includes(s.what))?.what
+    const started = last === 'claim' || last === 'working'
+    if (t.assignee && started) p.inProgress++
+    else if (t.assignee && upNext) p.upNext++
+    else p.unclaimed++
+  }
+  p.total = p.unclaimed + p.upNext + p.inProgress + p.closedToday
+  return p
+}
+export const todoPartsText = (p: TodoParts) => [
+  [p.unclaimed, 'unclaimed'], [p.upNext, 'up next'], [p.inProgress, 'in progress'], [p.closedToday, 'closed today'],
+].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}`).join(', ')
+export const todoTotalText = (p: TodoParts) => `${p.total} ${p.total === 1 ? 'to-do' : 'to-dos'}`

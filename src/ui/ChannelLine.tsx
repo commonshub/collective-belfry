@@ -4,14 +4,14 @@ import { TodoField, todoOver } from './TodoField'
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
-import { ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus } from '../core/model'
+import { todoParts, todoPartsText, todoTotalText, ANNOUNCE, displayName, plainRefs, group, groups, pinned, proposalFor, tasklist, isWorking, workingSince, taskTally, messages, type Task, type Group, type Media, type Message, type Proposal, type ProposalStatus } from '../core/model'
 import { all, touch, useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { Avatar, Btn, Form, fmtDay, go, Lightbox, useMediaUrl, useNow, WorkRing } from './common'
 import { openProfile } from './Profile'
 import { going, openEvent, stateLabel, upcoming, when } from './Calendar'
 import { TopicsBar } from './Topics'
-import { CalendarIcon, ChevronDownIcon, ChevronUpIcon, DocIcon, ImageIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
+import { CalendarIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, DocIcon, ImageIcon, PeopleIcon, PushPinIcon as PinIcon, PodShape, TodoIcon } from './icons'
 import { RichText } from './Topics'
 import { Markdown } from './markdown'
 import { visibilityText } from './ChannelHeader'
@@ -60,8 +60,7 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
   const pin = f.pins.find((m) => !hidden.includes(m.ev.id))
   const unanswered = f.events.find((e) => !stateLabel(e) && e.status !== 'cancelled')
   const toVote = f.proposals.find(f.needsVote)
-  const mine = f.todos.filter((t) => t.assignee === me())
-  const nobody = f.todos.filter((t) => !t.assignee)
+  const parts = todoParts(f.allTasks)
 
   let icon: ReactNode = null
   let text: ReactNode = null
@@ -82,13 +81,19 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
     say(<CalendarIcon />, <><b>{day(unanswered.start)}{at(unanswered)}</b> · {unanswered.title}</>, ask('RSVP', () => openEvent(unanswered)))
   } else if (pin) {
     say(<PinIcon />, plain(pin))
-  } else if (mine.length) {
-    say(<TodoIcon />, mine.length === 1 ? <><b>On you:</b> {mine[0].title}</> : <><b>{mine.length} to-dos on you</b> · {mine[0].title}</>, ask('To-dos', () => go(`c/${encodeURIComponent(id)}/todos`)))
-  } else if (nobody.length) {
-    say(<TodoIcon />, nobody.length === 1 ? <><b>Nobody on it:</b> {nobody[0].title}</> : <><b>{nobody.length} to-dos nobody took</b> · {nobody[0].title}</>, ask('To-dos', () => go(`c/${encodeURIComponent(id)}/todos`)))
   }
-  if (!text) return null
+  // the channel's to-dos in parts (board channels/header-todos): under any line above (a vote first)
+  const todoLine = !topic && parts.total > 0 && (
+    <button className="chan-line todo-line" onClick={() => go(`c/${encodeURIComponent(id)}/todos`)}
+      aria-label={`Open the to-dos: ${todoTotalText(parts)}, ${todoPartsText(parts)}`}>
+      <span className="line-ico"><TodoIcon /></span>
+      <span className="line-text"><b>{todoTotalText(parts)}</b><span className="todo-parts">{todoPartsText(parts)}</span></span>
+      <span className="line-chev" aria-hidden="true"><ChevronRightIcon /></span>
+    </button>
+  )
+  if (!text) return todoLine || null
   return (
+    <>
     <div className={'chan-line' + (open ? ' open' : '')} {...pull}>
       <button className="line-main" onClick={onToggle} aria-expanded={open}>
         <span className="line-ico">{icon}</span>
@@ -99,6 +104,8 @@ export function SummaryLine({ id, open, onToggle, topic, onTopic, pull }: { id: 
         <span className="line-chev">{open ? <ChevronUpIcon /> : <ChevronDownIcon />}</span>
       </button>
     </div>
+    {todoLine}
+    </>
   )
 }
 

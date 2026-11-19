@@ -1919,3 +1919,10 @@ button.ref-pv { cursor: pointer; }
 .todo-limit.count { text-align: right; color: var(--muted); }
 .todo-limit.error { color: var(--danger); }
 .todo-add { align-items: flex-start; }
+
+/* board channels/header-todos: "6 to-dos" over "2 unclaimed, 2 in progress, 1 closed today" */
+button.chan-line.todo-line { width: 100%; text-align: left; color: inherit; font: inherit; border-left: 0; border-right: 0; border-top: 0; padding: 6px 12px 6px 16px; cursor: pointer; }
+.chan-line.todo-line .line-text { white-space: normal; }
+.chan-line.todo-line .line-text b { display: block; line-height: 20px; }
+.chan-line.todo-line .todo-parts { display: block; font-size: 14px; line-height: 19px; color: var(--muted); }
+.chan-line.todo-line .line-chev { flex: none; color: var(--muted); display: grid; place-items: center; }

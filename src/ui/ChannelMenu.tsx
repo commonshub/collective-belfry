@@ -14,7 +14,7 @@ import { canAdmin } from '../core/access'
 import { groupRole } from '../core/checkin'
 import { reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
-import { channelIcon, displayName, dropLinks, group, isPublicChannel, messages, recentlyActive, topics, ANNOUNCE, isAnnouncement, type Group } from '../core/model'
+import { todoParts, todoPartsText, channelIcon, displayName, dropLinks, group, isPublicChannel, messages, recentlyActive, topics, ANNOUNCE, isAnnouncement, type Group } from '../core/model'
 import { leaveGroup } from '../core/actions'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
@@ -85,7 +85,7 @@ export function ChannelMenu({ id, onPick }: { id: string; onPick: () => void }) 
     { page: 'pinned', icon: <PushPinIcon />, title: 'Pinned', n: f.pins.length },
     { page: 'events', icon: <CalendarIcon />, title: 'Events', n: f.events.length, hint: f.events.find((e) => !stateLabel(e) && e.status !== 'cancelled') ? 'Not answered yet' : undefined },
     { page: 'proposals', icon: <DocIcon />, title: 'To decide', n: f.proposals.length, hint: f.proposals.some(f.needsVote) ? 'Your vote' : undefined },
-    { page: 'todos', icon: <TodoIcon />, title: 'To-dos', n: f.allTasks.length ? openTodos : 0, hint: f.allTasks.length ? `${f.tally.done}/${f.tally.total} done` : undefined },
+    { page: 'todos', icon: <TodoIcon />, title: 'To-dos', n: f.allTasks.length ? openTodos : 0, hint: todoPartsText(todoParts(f.allTasks)) || undefined }, // board channels/header-todos
     { page: 'photos', icon: <ImageIcon />, title: 'Photos', n: c.photos },
     { page: 'files', icon: <LinkIcon />, title: 'Files', n: c.files },
     { page: 'groups', icon: <PodShape members={6} size={20} />, title: 'Groups', n: f.pods.length },

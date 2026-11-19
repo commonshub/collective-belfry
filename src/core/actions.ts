@@ -187,7 +187,7 @@ export const deleteMessage = (groupId: string, id: string) =>
 // ---- reactions: one tap adds, a second removes; the emojis you use most come first ------
 
 const USAGE = 'belfry-emoji-usage'
-export const DEFAULT_EMOJIS = ['👍', '❤️', '😂', '🎉', '🙏', '👀']
+export const DEFAULT_EMOJIS = ['👍', '❤️', '🔥', '😂', '🎉', '🙏', '👀'] // 🔥 after the heart (board channels/message-menu, to-do c76b680c)
 
 function usage(): Record<string, number> {
   try { return JSON.parse(localStorage.getItem(USAGE) ?? '{}') } catch { return {} }
