@@ -202,6 +202,24 @@ def _state(t: dict[str, Any]) -> str:
     return "closed" if t["labels"] and t["labels"][-1][1] == "closed" else "open"
 
 
+def _asked(svc: Services, f: dict[str, Any] | None) -> dict[str, Any]:
+    none = {"ticket": None, "ticket_title": None, "event_link": None, "event_title": None}
+    if not f or not f.get("ticket"):
+        return none
+    from . import ticketsales
+
+    try:
+        link = ticketsales.link(svc, f["event"])
+    except Exception:  # noqa: BLE001 — the event's own id opens it too
+        link = f.get("event")
+    return {
+        "ticket": f["ticket"],
+        "ticket_title": str(f.get("ticket_title") or "")[:200] or None,
+        "event_link": link or None,
+        "event_title": str(f.get("event_title") or "")[:200] or None,
+    }
+
+
 def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = False) -> dict:
     root, f = _root(snap, t, mine), t["offer"]
     comments = _comments(snap, t, mine)
@@ -216,6 +234,8 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
         "label": f.get("label") if f else None,
         "days": (f.get("days") or None) if f else None,
         "percent_asked": int(f["percent"]) if f else None,
+        # which ticket of which event is asked for (null for a product's offer or a plain thread)
+        **_asked(svc, f),
         "state": state,
         "percent_approved": int(f.get("decided_percent") or 0) if state == "approved" else None,
         "approved_by": {"name": _name(f.get("decided_by"))} if state == "approved" else None,

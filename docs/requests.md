@@ -288,3 +288,9 @@ page shows an edited title or text with a small "edited" mark.
 - Closing a request from the web; comments by anyone but the author (members answer in the
   chat); edits of anything but the author's own title, text and comments.
 - Nothing here was run against a live relay or a real website yet.
+
+### Which ticket a request asks for (2026-11-20)
+
+Every item (list and detail) carries `ticket` (the 30402's d tag), `ticket_title`, `event_link`
+(the event's address: its slug, else its id) and `event_title`; all four are null for a
+product's offer and for a plain thread.
