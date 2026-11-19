@@ -121,10 +121,14 @@ CORS (discovery.py, `api_cors` middleware; not Caddy): the apex `https://<domain
 previews, `https://preview.<domain>`, show anyone's draft site, so they get CORS **only** on the
 buyer's sales endpoints: `GET /products`, `POST /codes/check`, `POST /checkout`,
 `GET /checkout/<order>`, `POST /checkout/<order>/pay`, `GET /billing`, `POST /offers`,
-`GET /offers/<id>` (and their preflights). Same methods and headers as the apex
-(`GET, POST, PUT`; `Authorization, Content-Type`), never `Access-Control-Allow-Credentials`:
+`GET /offers/<id>` (and their preflights), plus reading events and the public requests
+(`GET /events`, `/events/<link>`, `/events/<link>/activity`, `/requests`, `/requests/<id>`:
+[requests.md](requests.md)). Same methods and headers as the apex
+(`GET, POST, PUT`; `Authorization, Content-Type, X-Thread-Key`), never
+`Access-Control-Allow-Credentials`:
 these calls are signed per request (NIP-98) by the page's own key, no cookie is involved.
-`POST /codes` and `POST /offers/<id>/decide` (admins) and every other endpoint refuse the
+`POST /codes`, `POST /offers/<id>/decide` (admins), `POST /requests/<id>/comments` (a request's
+author, from the real site) and every other endpoint refuse the
 preview's preflight (403) and answer without CORS headers.
 
 Unknown fields in a request body are ignored (`/checkout`, `/offers` and the others read only
@@ -178,6 +182,11 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
   pass moves to the existing account of the same address, the request goes along. The answer
   (and `GET /checkout/<order>`) always carries it. **Only recorded: the run that exports the
   person's data to them and erases it after the event is not built yet.**
+- `public_name` (optional, default `false`): the buyer agrees that their name shows on the
+  event's public activity (`GET /events/<link>/activity`, [requests.md](requests.md)). A JSON
+  boolean or 422 `invalid`. Kept on the order; asking again for the same open order with
+  `true` adds it, `false` never takes it back. Without it the activity says nobody's name.
+  The answer (and `GET /checkout/<order>`) always carries it.
 
 - `return_url` must be `https://` with the hostname exactly the belfry's domain or a subdomain
   of it, no port, user info, query, fragment, backslash, whitespace or control characters;
@@ -299,10 +308,16 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
 `POST /offers` — NIP-98 (any key). `{"product", "name", "email", "offer": "…", "percent",
-"erase_after_event"?}` (`percent` 50–100, 50 when left out; the website's form shows 50% by
+"erase_after_event"?, "public_name"?, "label"?, "days"?}` (`percent` 50–100, 50 when left out;
+the website's form shows 50% by
 default; `erase_after_event` as for `/checkout`: a JSON boolean or 422 `invalid`, kept on the
-offer, carried to the order made with the offer's code) → 201
-`{"offer": "f_…", "state": "confirm", "product", "erase_after_event"}`. It goes through the requests page's own path for a thread
+offer, carried to the order made with the offer's code; `public_name` as for `/checkout`: the
+requester's name may show on the event's activity; `label`: `volunteer` | `food` | `workshop` |
+`other`; `days`: up to 31 dates `YYYY-MM-DD`, kept sorted, each once; anything else for
+`label` or `days` is 422 `invalid`) → 201
+`{"offer": "f_…", "state": "confirm", "product", "erase_after_event", "public_name", "label",
+"days"}`. `label` and `days` are also tags on the thread's message (`["offer-label", label]`,
+`["offer-days", day, …]`); the thread's HTML page and the console show them. It goes through the requests page's own path for a thread
 from outside: the confirmation mail must be answered (the address must be theirs) before
 anything is public; the page's limits apply, and 3 a day per key and per IP, 3 open per key.
 The form and the confirmation mail say in plain words that the request and the name will be
@@ -314,8 +329,13 @@ answer in the thread in the chat; the requester comments with their link; replie
 back to them (webthreads.py).
 
 `GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
-"declined", "product", "erase_after_event", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
+"declined", "product", "erase_after_event", "public_name", "label", "days", "url"?, "my_url"?,
+"percent"?}`: `url` is the public thread, `my_url` the
 requester's own link (to comment), only in this answer and in their mail.
+
+The requests as JSON for the community's own website (the list, one thread with its timeline,
+the author's comment, an event's public activity), and handing the page `/<slug>` over to the
+website: **[requests.md](requests.md)**.
 
 Deciding: the belfry's admins only, in the console (any percent 50–100 or no, with a note) or
 with the card's buttons in the chat. A decision posts a public reply in the thread ("Approved:

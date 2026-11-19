@@ -210,6 +210,9 @@ class Store:
                 next_at INTEGER, UNIQUE (kind, ref));
             CREATE TABLE IF NOT EXISTS hits (
                 key TEXT NOT NULL, at INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS request_numbers (
+                channel TEXT NOT NULL, id TEXT NOT NULL, number INTEGER NOT NULL,
+                PRIMARY KEY (channel, id));
             CREATE INDEX IF NOT EXISTS hits_key ON hits (key, at);
             """
         )
@@ -400,6 +403,29 @@ class Store:
         with self._lock:
             rows = self._db.execute(sql + " ORDER BY created DESC", args).fetchall()
         return [json.loads(r[0]) for r in rows]
+
+    # the public requests' numbers (webrequests.py): "#42", given once, never reused
+    def request_numbers(self, channel: str, ids: list[str]) -> dict[str, int]:
+        """Each thread's number in CHANNEL. IDS in creation order: one seen for the first time
+        gets the next number; a number stays its thread's also when older threads are gone
+        (rows are never removed)."""
+        with self.tx() as db:
+            have = {
+                r[0]: r[1]
+                for r in db.execute(
+                    "SELECT id, number FROM request_numbers WHERE channel = ?", (channel,)
+                )
+            }
+            last = max(have.values(), default=0)
+            for i in ids:
+                if i not in have:
+                    last += 1
+                    have[i] = last
+                    db.execute(
+                        "INSERT INTO request_numbers (channel, id, number) VALUES (?, ?, ?)",
+                        (channel, i, last),
+                    )
+        return have
 
     # Stripe's events, confirmation links, mails sent once
     def first_event(self, event_id: str) -> bool:
@@ -1511,6 +1537,7 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
         "pay_url": None,
         "hold_until": o.get("hold_until"),
         "erase_after_event": bool(o.get("erase_after_event")),
+        "public_name": bool(o.get("public_name")),
         # a tester's order (docs/sales.md §9): Stripe's test mode and the test Odoo, no real
         # money; the buying page shows a banner
         "test": env_of(o) == "test",
@@ -1555,6 +1582,19 @@ def erase_flag(data: dict[str, Any]) -> bool:
     v = data["erase_after_event"]
     if not isinstance(v, bool):
         raise ApiError(422, "invalid", "erase_after_event: true or false.")
+    return v
+
+
+def public_name_flag(data: dict[str, Any]) -> bool:
+    """The body's ``public_name``: the buyer or requester agrees that their name shows on the
+    event's public activity (docs/requests.md). Absent → False; a JSON boolean; else 422."""
+    from .holder_invites import ApiError
+
+    if "public_name" not in data:
+        return False
+    v = data["public_name"]
+    if not isinstance(v, bool):
+        raise ApiError(422, "invalid", "public_name: true or false.")
     return v
 
 
@@ -1654,6 +1694,7 @@ def _checkout(
     if pay not in ("card", "invoice"):
         raise ApiError(422, "invalid", 'pay: "card" or "invoice".')
     erase = erase_flag(data)
+    public_name = public_name_flag(data)
     code = norm_code(data.get("code")) if data.get("code") else ""
     return_url = _own_url(svc, data.get("return_url"))
     ipt = ip_tag(svc, ip)
@@ -1678,6 +1719,8 @@ def _checkout(
                 o = st.update(o["id"], erase_after_event=True, erase_after_event_at=iso(now()))
                 if o["state"] == "active":
                     mark_erase(svc, o.get("partner_id"), o)
+            if public_name and not o.get("public_name"):
+                o = st.update(o["id"], public_name=True)  # consent given on the retry: kept
             return answer(svc, o, key), 200
     # an account whose address is not proven has one address: the one it waits to prove
     acct = account_of(svc, key)
@@ -1825,6 +1868,7 @@ def _checkout(
             "return_url": return_url,
             "erase_after_event": erase,
             "erase_after_event_at": iso(created) if erase else None,
+            "public_name": public_name,
             "total": total,
             "state": "confirm" if gate else "pending",
             # Xavier, 2026-11-17: an invoice only once paid (card) or once the buyer asked
@@ -2468,6 +2512,9 @@ def offer_answer(f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
         "state": f["state"],
         "product": f["product"],
         "erase_after_event": bool(f.get("erase_after_event")),
+        "public_name": bool(f.get("public_name")),
+        "label": f.get("label"),
+        "days": f.get("days"),
     }
     if f.get("url"):
         out["url"] = f["url"]
@@ -2485,6 +2532,44 @@ def offer_buttons() -> list[list[str]]:
         ["button", "offer-100", "100% off", "primary", "belfry:offer-decide"],
         ["button", "offer-no", "Decline", "danger", "belfry:offer-decide"],
     ]
+
+
+OFFER_LABELS = ("volunteer", "food", "workshop", "other")
+OFFER_DAYS_MAX = 31
+
+
+def offer_label(data: dict[str, Any]) -> str | None:
+    """The body's ``label``: what kind of help the offer is; absent or null → None; else one of
+    OFFER_LABELS or 422."""
+    from .holder_invites import ApiError
+
+    v = data.get("label")
+    if v is None:
+        return None
+    if not isinstance(v, str) or v not in OFFER_LABELS:
+        raise ApiError(422, "invalid", "label: " + ", ".join(OFFER_LABELS) + ".")
+    return v
+
+
+def offer_days(data: dict[str, Any]) -> list[str] | None:
+    """The body's ``days``: the days the offer is for, up to 31 ISO dates (YYYY-MM-DD); absent
+    or null → None; kept sorted, each once; anything else 422."""
+    from .holder_invites import ApiError
+
+    v = data.get("days")
+    if v is None:
+        return None
+    bad = ApiError(422, "invalid", f"days: up to {OFFER_DAYS_MAX} dates, YYYY-MM-DD.")
+    if not isinstance(v, list) or len(v) > OFFER_DAYS_MAX:
+        raise bad
+    for d in v:
+        if not isinstance(d, str) or not DATE_RE.match(d):
+            raise bad
+        try:
+            dt.date.fromisoformat(d)
+        except ValueError:
+            raise bad from None
+    return sorted(set(v))
 
 
 def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> dict[str, Any]:
@@ -2517,6 +2602,9 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     if not 50 <= percent <= 100:
         raise ApiError(422, "invalid", "percent: 50 to 100.")
     erase = erase_flag(data)
+    public_name = public_name_flag(data)
+    label = offer_label(data)
+    days = offer_days(data)
     st = store(svc)
     mine = [f for f in st.offers(key) if f["state"] in ("confirm", "open")]
     if (
@@ -2532,6 +2620,8 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         ["product", p["id"]],
         ["percent", str(percent)],
         ["p", key],
+        *([["offer-label", label]] if label else []),
+        *([["offer-days", *days]] if days else []),
         *offer_buttons(),
     ]
     token = webthreads.start_thread(
@@ -2559,6 +2649,9 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         "percent": percent,
         "erase_after_event": erase,
         "erase_after_event_at": iso(now()) if erase else None,
+        "public_name": public_name,
+        "label": label,
+        "days": days,
         "state": "confirm",
         "channel": site["channel"],
         "slug": slug,
@@ -2577,6 +2670,15 @@ def offer_posted(svc: Services, fid: str, event: dict[str, Any], url: str, my_ur
         return
     f.update(state="open", card=event["id"], url=url, my_url=my_url)
     st.put_offer(f)
+    _requests_changed()
+
+
+def _requests_changed() -> None:
+    """The public requests' JSON (webrequests.py) is kept a few seconds: not across a change
+    made here."""
+    from . import webrequests
+
+    webrequests.forget()
 
 
 def offer_chat_link(svc: Services, f: dict[str, Any]) -> str:
@@ -2653,6 +2755,7 @@ def _decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> 
         (f"Approved: {percent}% off." if percent else "Not this time.")
         + (f" {note}" if note else ""),
     )
+    _requests_changed()
     from . import salesmail
 
     salesmail.offer_answer(svc, f)

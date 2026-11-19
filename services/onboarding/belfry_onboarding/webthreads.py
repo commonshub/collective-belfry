@@ -19,6 +19,11 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
   was public: the page shows only what was posted then (moving a channel is never retroactive).
   Only the latest setting by an admin of that channel (39001) or of the belfry counts; a slug
   taken by an earlier channel, or one of the service's own paths, is ignored.
+  ``"page": "https://<domain>/…"`` (docs/requests.md, 2026-11-19): the community's own website
+  renders the list and the threads there, from the JSON of webrequests.py. The belfry then
+  answers no HTML at ``/<slug>`` (only the mailed confirmation link, and old thread links move
+  to the page), and every link it builds points to ``<page>`` and
+  ``<page>/thread?id=<id>#k=<key>``.
 - **The page** ``<domain>/<slug>`` (two templates, #issues 2026-11-13): a public channel is
   **issues**: like GitHub issues, every thread listed, Open / Closed (the members' label on it in
   the chat), author and their role (admin, member, agent, guest, from outside), replies, last
@@ -210,6 +215,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
                 ch,
                 {
                     "slug": slug,
+                    "page": _own_page(svc, ch, conf.get("page")),
                     "list": "own" if _members_only(conf) else "public",
                     "periods": _periods(conf),
                     "posts": conf.get("posts")
@@ -225,6 +231,7 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
         name, about = names.get(ch, (ch, ""))
         out[conf["slug"]] = {
             "channel": ch,
+            "page": conf["page"],
             "list": conf["list"],
             "periods": conf["periods"],
             "posts": conf["posts"],
@@ -232,6 +239,45 @@ def _read_sites(svc: Services, relay: Any, sign: Any) -> dict[str, dict[str, Any
             "about": about,
         }
     return out
+
+
+_bad_pages: set[tuple[str, str]] = set()  # logged once each
+
+
+def _own_page(svc: Services, channel: str, raw: Any) -> str:
+    """The setting's ``page``: where the community's website shows this channel's threads. Only
+    https on the belfry's own domain (the apex), no port, query or fragment; anything else is
+    ignored ("": the belfry serves the page itself) and logged once. Checked here, where the
+    setting is read: clients write it."""
+    if raw in (None, ""):
+        return ""
+    from . import sales
+
+    url = sales._own_url(svc, raw)
+    domain = (svc.settings.nip05_domain or "").lower().strip(".")
+    if url is None or urlsplit(url).netloc != domain:
+        mark = (channel, hashlib.sha256(repr(raw).encode()).hexdigest()[:12])
+        if mark not in _bad_pages:
+            _bad_pages.add(mark)
+            log.warning("webthreads: %s: its page is not on this domain; ignored", channel)
+        return ""
+    return url.rstrip("/")
+
+
+def list_url(svc: Services, slug: str, site: dict[str, Any] | None) -> str:
+    """Where the channel's threads are listed: the website's own page when it took them over."""
+    return (site or {}).get("page") or f"{_public_base(svc)}/{quote(slug)}"
+
+
+def thread_url(
+    svc: Services, slug: str, site: dict[str, Any] | None, root_id: str, key: str = ""
+) -> str:
+    """A thread's address, with its author's KEY when it is their link. On the website's own
+    page the key rides in the fragment: never sent to a server, never in a log."""
+    page = (site or {}).get("page")
+    if page:
+        return f"{page}/thread?id={root_id}" + (f"#k={key}" if key else "")
+    return f"{_public_base(svc)}/{slug}/{root_id}" + (f"?k={key}" if key else "")
 
 
 RANDOM_END = re.compile(r"-[a-z0-9]{4}$")
@@ -448,9 +494,9 @@ def _form(
 <button class="btn" type="submit">{E(button)}</button></form>"""
 
 
-def _states(svc: Services, channel: str) -> dict[str, str]:
-    """Each thread's state, open or closed: the members' latest label on it in the chat (NIP-32,
-    namespace ``belfry/inbox``, as e-mail cards have)."""
+def _labels(svc: Services, channel: str) -> dict[str, list[tuple[int, str, str]]]:
+    """Per thread, the members' open / closed labels on it in the chat, oldest first, as
+    (when, label, who): NIP-32, namespace ``belfry/inbox``, as e-mail cards have."""
     got = _relay(svc)
     if got is None:
         return {}
@@ -459,8 +505,8 @@ def _states(svc: Services, channel: str) -> dict[str, str]:
         evs = relay.query([{"kinds": [1985], "#h": [channel], "limit": 2000}], sign) or []
     except Exception:  # noqa: BLE001
         return {}
-    out: dict[str, tuple[int, str]] = {}
-    for e in evs:
+    out: dict[str, list[tuple[int, str, str]]] = {}
+    for e in sorted(evs, key=lambda e: e["created_at"]):
         if ["L", "belfry/inbox"] not in [t[:2] for t in e.get("tags", [])]:
             continue
         lab = next(
@@ -468,9 +514,14 @@ def _states(svc: Services, channel: str) -> dict[str, str]:
             "",
         )
         card = _tag(e, "e")
-        if lab in ("open", "closed") and card and e["created_at"] >= out.get(card, (0, ""))[0]:
-            out[card] = (e["created_at"], lab)
-    return {k: v for k, (_at, v) in out.items()}
+        if lab in ("open", "closed") and card:
+            out.setdefault(card, []).append((e["created_at"], lab, e["pubkey"]))
+    return out
+
+
+def _states(svc: Services, channel: str) -> dict[str, str]:
+    """Each thread's state, open or closed: the latest label on it."""
+    return {card: labs[-1][1] for card, labs in _labels(svc, channel).items()}
 
 
 def _chat_link(svc: Services, channel: str) -> str:
@@ -620,6 +671,7 @@ def thread_page(
     body = (
         f'<p class="wt-note"><a href="/{E(slug)}">← {E(site["name"])}</a></p><h1>{E(_title(root))}</h1>'
         + (f'<p class="notice" role="status">{E(note)}</p>' if note else "")
+        + _offer_details(root)
         + card(root)
         + "".join(card(c) for c in comments)
     )
@@ -630,6 +682,25 @@ def thread_page(
     else:
         body += '<p class="wt-note">Members answer in the chat. Opened this thread? Comment through the link we mailed you.</p>'
     return _page(_title(root), body)
+
+
+OFFER_LABELS = {"volunteer": "Volunteer", "food": "Food", "workshop": "Workshop", "other": "Other"}
+
+
+def _offer_details(root: dict[str, Any]) -> str:
+    """What an offer in kind says besides its text (sales.py's tags on the message): the kind
+    of help and the days."""
+    import datetime as dt
+
+    label = OFFER_LABELS.get(_tag(root, "offer-label"), "")
+    days = []
+    for t in root.get("tags", []):
+        if t[:1] == ["offer-days"]:
+            for d in t[1:32]:
+                with contextlib.suppress(ValueError, TypeError):
+                    days.append(dt.date.fromisoformat(d).strftime("%-d %b %Y"))
+    parts = [x for x in (label, ", ".join(days)) if x]
+    return f'<p class="wt-note wt-offer">{E(" · ".join(parts))}</p>' if parts else ""
 
 
 # ── who writes from the web: an account like everyone's ───────────────────────────────────
@@ -763,7 +834,7 @@ def start_thread(
     ]
     if public_note:
         lines.append(
-            f"Your request and your name will be public on {_public_base(svc)}/{slug}, like "
+            f"Your request and your name will be public on {list_url(svc, slug, site)}, like "
             "the others there. Your e-mail address is never shown on the public page."
         )
     _mailer(svc).send(
@@ -776,7 +847,9 @@ def start_thread(
     return token
 
 
-def confirm(svc: Services, slug: str, token: str) -> Response:
+def confirm(svc: Services, slug: str, token: str, site: dict[str, Any] | None = None) -> Response:
+    """SITE: the channel's setting when its page lives on the community's website (``page``):
+    the thread's links then point there."""
     from . import drops
 
     raw = (
@@ -792,9 +865,10 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
         return _page("Link used", "<h1>This link was used already or is too old</h1>", 404)
     if p.get("posted"):
         owner = p.get("owner") or p["email"]
-        return RedirectResponse(
-            f"/{slug}/{p['posted']}?k={thread_key(svc, p['posted'], owner)}", 303
-        )
+        k = thread_key(svc, p["posted"], owner)
+        if (site or {}).get("page"):
+            return RedirectResponse(thread_url(svc, slug, site, p["posted"], k), 303)
+        return RedirectResponse(f"/{slug}/{p['posted']}?k={k}", 303)
     if time.time() - p.get("at", 0) > PENDING_SECONDS:
         return _page(
             "Link too old", "<h1>This link is too old</h1><p>Send the thread again.</p>", 410
@@ -818,13 +892,13 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
     p["posted"], p["owner"] = event["id"], owner
     _set_param(svc, "belfry.web.pending." + token, json.dumps(p))
     k = thread_key(svc, event["id"], owner)
-    url = f"{_public_base(svc)}/{slug}/{event['id']}?k={k}"
+    url = thread_url(svc, slug, site, event["id"], k)
     hook = p.get("hook") or {}
     if hook.get("kind") == "offer":
         from . import sales
 
         try:
-            sales.offer_posted(svc, hook["id"], event, f"{_public_base(svc)}/{slug}/{event['id']}", url)
+            sales.offer_posted(svc, hook["id"], event, thread_url(svc, slug, site, event["id"]), url)
         except Exception:  # noqa: BLE001 — the thread is posted; the console shows the offer
             log.exception("webthreads: offer %s not marked posted", hook.get("id"))
     _mailer(svc).send(
@@ -837,24 +911,52 @@ def confirm(svc: Services, slug: str, token: str) -> Response:
         (url, "Open your thread"),
         "Keep this mail: the link is how you come back.",
     )
+    if (site or {}).get("page"):
+        return RedirectResponse(url, 303)
     return RedirectResponse(f"/{slug}/{event['id']}?k={k}&new=1", 303)
 
 
 def comment(
     svc: Services, slug: str, site: dict[str, Any], root_id: str, k: str, text: str
 ) -> Response:
+    got = add_comment(svc, site, root_id, (text or "").strip()[:COMMENT_MAX], k)
+    if got == "not_author":
+        return _page("Not allowed", "<h1>Only the thread's author comments here</h1>", 403)
+    if got == "too_many":
+        return _page("Slow down", "<h1>Too many comments in a short time</h1>", 429)
+    if got == "unavailable":
+        return _page("Not now", "<h1>Something went wrong</h1><p>Try again in a minute.</p>", 503)
+    return RedirectResponse(f"/{slug}/{root_id}?k={k}", 303)
+
+
+COMMENT_MAX = 8000
+
+
+def is_author(svc: Services, root: dict[str, Any] | None, k: str) -> bool:
+    """Whether K is the key of this thread's own link (the one mailed to its author)."""
+    owner = _owner(svc, root)
+    return bool(owner and root) and hmac.compare_digest(
+        (k or "").encode(), thread_key(svc, root["id"], owner).encode()
+    )
+
+
+def add_comment(
+    svc: Services, site: dict[str, Any], root_id: str, text: str, k: str = "", proven: bool = False
+) -> str:
+    """The author's comment under their own thread: by the key of their link (K), or PROVEN
+    another way by the caller (webrequests.py: the key that made the offer). "ok", "empty",
+    "not_author", "too_many" or "unavailable" (the signer)."""
     from . import community, mail
 
     roots, _ = _events(svc, site["channel"])
     root = next((e for e in roots if e["id"] == root_id), None)
     owner = _owner(svc, root)
-    if not owner or not hmac.compare_digest(k or "", thread_key(svc, root_id, owner)):
-        return _page("Not allowed", "<h1>Only the thread's author comments here</h1>", 403)
-    text = (text or "").strip()[:8000]
+    if not owner or not (proven or is_author(svc, root, k)):
+        return "not_author"
     if not text:
-        return RedirectResponse(f"/{slug}/{root_id}?k={k}", 303)
+        return "empty"
     if mail._limited("web-comment:" + owner, 20, 3600):
-        return _page("Slow down", "<h1>Too many comments in a short time</h1>", 429)
+        return "too_many"
     relay, api_sign = _relay(svc)
     author = root["pubkey"]
     tags = [
@@ -872,15 +974,16 @@ def comment(
         pid = _partner_of_key(svc, author)
         found = community.member_signer(svc, pid) if pid else None
         if found is None:
-            return _page(
-                "Not now", "<h1>Something went wrong</h1><p>Try again in a minute.</p>", 503
-            )
+            return "unavailable"
         sign = found[1]
     else:  # an older card: the groups key writes for the address
         tags += [["mail-from", owner], ["mail-name", _tag(root, "mail-name")]]
     event = sign({"kind": 1111, "created_at": int(time.time()), "content": text, "tags": tags})
     relay.publish(event, sign)
-    return RedirectResponse(f"/{slug}/{root_id}?k={k}", 303)
+    from . import webrequests
+
+    webrequests.forget()  # the JSON of this thread is kept a few seconds: not across this
+    return "ok"
 
 
 # ── members' replies, mailed to the author from outside ───────────────────────────────────
@@ -924,10 +1027,10 @@ def notify(svc: Services, now: int | None = None) -> int:
             for r in sorted(rs, key=lambda x: x["created_at"]):
                 lines.append(f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}")
             if len(items) > 1:
-                link = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], _owner(svc, root))}"
+                link = thread_url(svc, slug, site, root["id"], thread_key(svc, root["id"], _owner(svc, root)))
                 lines.append(f"Open it: {link}")
         slug, site, root, rs = items[0]
-        url = f"{_public_base(svc)}/{slug}/{root['id']}?k={thread_key(svc, root['id'], _owner(svc, root))}"
+        url = thread_url(svc, slug, site, root["id"], thread_key(svc, root["id"], _owner(svc, root)))
         n = sum(len(x[3]) for x in items)
         if len(items) == 1:
             subject = f"Re: {_title(root)[:150]}"
@@ -988,6 +1091,23 @@ def install(app: FastAPI) -> None:
             request.client.host if request.client else ""
         )
         m = request.method
+        if site.get("page"):
+            # the community's website shows this channel itself (docs/requests.md): no HTML
+            # from here. Two links people hold in a mail still work: the confirmation link
+            # (it posts the thread), and an older thread link, which moves to the page
+            if len(parts) == 3 and parts[1] == "confirm" and m in ("GET", "HEAD"):
+                try:
+                    return await run_in_threadpool(confirm, s, slug, parts[2], site)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("webthreads: confirm on %s failed: %r", slug, exc, exc_info=True)
+                    return _page(
+                        "Not now", "<h1>Something went wrong</h1><p>Try again in a minute.</p>", 503
+                    )
+            if len(parts) == 2 and re.match(r"^[0-9a-f]{64}$", parts[1]) and m in ("GET", "HEAD"):
+                k = request.query_params.get("k", "")
+                k = k if re.match(r"^[0-9a-f]{24}$", k) else ""
+                return RedirectResponse(thread_url(s, slug, site, parts[1], k), 302)
+            return await call_next(request)
         try:
             if len(parts) == 1 and m in ("GET", "HEAD"):
                 st = "closed" if request.query_params.get("state") == "closed" else "open"
@@ -1036,4 +1156,8 @@ async def running(app: FastAPI):
 
 
 def page_url(svc: Services, slug: str) -> str:
-    return f"{_public_base(svc)}/{quote(slug)}"
+    try:
+        site = sites(svc).get(slug)
+    except Exception:  # noqa: BLE001
+        site = None
+    return list_url(svc, slug, site)

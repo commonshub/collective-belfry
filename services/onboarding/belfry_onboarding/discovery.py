@@ -281,7 +281,10 @@ def allowed_origin(settings: Any, origin: str | None, svc: Services | None = Non
 # /api/<name> by then (console.map_host runs first).
 PREVIEW_PATHS = re.compile(
     r"^/api/(?:products|codes/check|checkout|checkout/[^/]+|checkout/[^/]+/pay"
-    r"|billing|offers|offers/[^/]+|events|events/[^/]+)$"
+    r"|billing|offers|offers/[^/]+|events|events/[^/]+"
+    # reading the public requests and an event's activity (webrequests.py); a comment is the
+    # author's own, from the real site only: /requests/<id>/comments never matches
+    r"|requests|requests/[^/]+|events/[^/]+/activity)$"
 )
 
 
@@ -299,7 +302,7 @@ def cors_headers(origin: str) -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": origin,
         "Access-Control-Allow-Methods": "GET, POST, PUT",
-        "Access-Control-Allow-Headers": "Authorization, Content-Type",
+        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Thread-Key",
         "Access-Control-Max-Age": "600",
         "Vary": "Origin",
     }

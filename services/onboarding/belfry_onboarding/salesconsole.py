@@ -344,7 +344,10 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             )
         chat = sales.offer_chat_link(svc, f)
         link = f' · <a href="{E(chat)}">the thread in the chat</a>' if chat else ""
-        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(f["product"])} · asks {f["percent"]}% off · {E(f["created"][:10])}</span>{link}</p>
+        more = "".join(
+            f" · {E(x)}" for x in (f.get("label") or "", ", ".join(f.get("days") or [])) if x
+        )
+        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(f["product"])} · asks {f["percent"]}% off{more} · {E(f["created"][:10])}</span>{link}</p>
 <p>{E(f["offer"])}</p>{act}</div>"""
     chans = sales.public_channels(svc)
     current = st.get("requests_channel") or ""

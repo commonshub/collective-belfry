@@ -586,3 +586,54 @@ def test_a_nice_page_address_is_for_belfry_admins(world):
     assert "ideas-x7k2" in webthreads.sites(svc, fresh=True)
     setting(relay, ADMIN, slug="ideas", at=new + 2)
     assert "ideas" in webthreads.sites(svc, fresh=True)
+
+
+def test_a_page_on_the_website_is_taken_only_on_the_belfrys_own_domain(world, caplog):
+    """The setting's ``page`` (docs/requests.md) is written by clients: checked where it is
+    read. Anything but https on the apex is ignored: the belfry keeps serving the page."""
+    svc, relay = world
+
+    def page(value, at):
+        relay.events.append(
+            {
+                "id": f"p{at}",
+                "kind": 30078,
+                "pubkey": MEMBER,
+                "created_at": at,
+                "content": json.dumps(
+                    {"on": True, "slug": "ideas", "list": "public", "page": value}
+                ),
+                "tags": [["d", "belfry:web:props"], ["h", "props"], ["t", "belfry-web"]],
+            }
+        )
+        return webthreads.sites(svc, fresh=True)["ideas"]
+
+    with TestClient(create_app(svc), base_url="https://belfry.test") as c:
+        at = 20
+        for bad in (
+            "https://evil.test/requests",
+            "http://belfry.test/requests",
+            "https://chat.belfry.test/requests",
+            "https://belfry.test.evil.test/x",
+            "https://belfry.test@evil.test/x",
+            "https://belfry.test:8443/x",
+            "https://belfry.test/x?y=1",
+            "https://belfry.test/x#k",
+            "//belfry.test/x",
+            "/requests",
+            "javascript:alert(1)",
+            ["https://belfry.test/x"],
+            {"a": 1},
+            7,
+        ):
+            at += 1
+            assert page(bad, at)["page"] == "", bad
+            assert "Open an issue" in c.get("/ideas").text, bad  # served here, as before
+        assert "its page is not on this domain" in caplog.text
+        said = caplog.text.count("its page is not on this domain")
+        webthreads.sites(svc, fresh=True)
+        assert caplog.text.count("its page is not on this domain") == said  # logged once
+        assert page("", at + 1)["page"] == ""
+        assert page("https://belfry.test/in-kind/", at + 2)["page"] == "https://belfry.test/in-kind"
+        r = c.get("/ideas")
+        assert "Open an issue" not in r.text and "wt-head" not in r.text  # the website's now

@@ -72,6 +72,7 @@ def test_the_preview_may_call_the_sales_api_without_credentials(shop):
             assert r.status_code == 204, path
             assert r.headers["access-control-allow-origin"] == PREVIEW
             assert "Authorization" in r.headers["access-control-allow-headers"]
+            assert "X-Thread-Key" in r.headers["access-control-allow-headers"]
             assert "POST" in r.headers["access-control-allow-methods"]
             assert "access-control-allow-credentials" not in r.headers
         # the answers themselves, errors too (so the page can read why)
@@ -109,6 +110,11 @@ def test_the_preview_gets_nothing_else(shop):
             ("/events/abc123/join", "POST"),
             ("/events/abc123/slug", "PUT"),
             ("/admins", "POST"),
+            # the public requests are read from a preview; a comment is its author's, from
+            # the real site only
+            ("/requests/" + "a" * 64 + "/comments", "POST"),
+            ("/requests/1/comments", "POST"),
+            ("/events/abc123/activity/x", "GET"),
         ):
             assert preflight(c, path, method).status_code == 403, path
         r = c.get("/api/v1/roles", headers={**HOST, "Origin": PREVIEW})
@@ -116,6 +122,23 @@ def test_the_preview_gets_nothing_else(shop):
         # reading events (a checkout page lists their tickets) is allowed, nothing under them
         assert preflight(c, "/events", "GET").status_code != 403
         assert preflight(c, "/events/abc123", "GET").status_code != 403
+        # …and the public requests and an event's activity (docs/requests.md), reading only
+        for path in (
+            "/requests",
+            "/requests/12",
+            "/requests/" + "a" * 64,
+            "/events/abc123/activity",
+        ):
+            r = preflight(c, path, "GET")
+            assert r.status_code == 204, path
+            assert r.headers["access-control-allow-origin"] == PREVIEW
+            assert "access-control-allow-credentials" not in r.headers
+        r = c.get("/api/v1/requests", headers={**HOST, "Origin": PREVIEW})
+        assert r.headers["access-control-allow-origin"] == PREVIEW  # (404 none: still readable)
+        r = c.post(
+            "/api/v1/requests/1/comments", json={"text": "x"}, headers={**HOST, "Origin": PREVIEW}
+        )
+        assert "access-control-allow-origin" not in r.headers
         r = c.get("/api/me/follows", headers={"Origin": PREVIEW})
         assert "access-control-allow-origin" not in r.headers
         # another host's preview, or plain http, is nobody
