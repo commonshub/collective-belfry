@@ -202,8 +202,8 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
         "id": root["id"],
         "number": t["number"],
         "title": webthreads._title(root),
-        # "sponsored" is kept for requests that are not offers in kind: none are made yet
-        "kind": "in_kind" if f else "other",
+        # an offer says which it is: in kind, or a sponsored pass asked for (sales.OFFER_KINDS)
+        "kind": sales.offer_kind(f) if f else "other",
         "label": f.get("label") if f else None,
         "days": (f.get("days") or None) if f else None,
         "percent_asked": int(f["percent"]) if f else None,
@@ -317,8 +317,21 @@ def ticket_url(svc: Services, f: dict[str, Any] | None) -> str | None:
     (no ``{link}`` / ``{id}`` to fill: those are an event ticket's)."""
     if not f or f["state"] != "accepted":
         return None
+    if f.get("ticket"):
+        # an offer for an event ticket: the template filled for it, with the offer's id (the
+        # page sends it back as POST /checkout's "offer")
+        from . import ticketsales
+
+        return ticketsales.offer_url(svc, f) or None
     url = sales.settings(svc).get("checkout_url") or ""
     return url if url and "{" not in url else None
+
+
+def _redeemed(svc: Services, f: dict[str, Any]) -> bool:
+    """Whether an order holds the offer's approval (its code's one use): made, paid or not. An
+    order that ends unpaid gives it back."""
+    c = sales.store(svc).code(f["code"]) if f.get("code") else None
+    return bool(c and len(c["used"]) >= int(c["uses"]))
 
 
 def detail(svc: Services, ref: str, signer: str | None, thread_key: str) -> dict[str, Any]:
@@ -334,6 +347,17 @@ def detail(svc: Services, ref: str, signer: str | None, thread_key: str) -> dict
     out["timeline"] = _timeline(svc, snap, t, mine)
     if mine:
         out["me"] = {"author": True}
+        f = t["offer"]
+        if f and f.get("ticket"):
+            from . import ticketsales
+
+            out["me"].update(
+                offer=f["id"],
+                ticket=f["ticket"],
+                event=ticketsales.link(svc, f["event"]),
+                state=f["state"],
+                redeemed=_redeemed(svc, f),
+            )
         url = ticket_url(svc, t["offer"])
         if url:
             out["me"]["ticket_url"] = url
@@ -416,7 +440,8 @@ def _read_activity(svc: Services, ev: events.Event) -> dict[str, Any]:
     family, owns_requests = _family(svc, ev)
     over = ev.ended()
     items: list[dict[str, Any]] = []
-    stats = {"villagers": 0, "open_requests": 0, "in_kind_passes": 0}
+    stats = {"villagers": 0, "open_requests": 0, "in_kind_passes": 0, "sponsored_passes": 0}
+    ds = {e.d for e in family}
     if sales.own(svc):
         orders = _ticket_rows(svc, ev, family)
         stats["villagers"] = len(
@@ -436,15 +461,20 @@ def _read_activity(svc: Services, ev: events.Event) -> dict[str, Any]:
                 }
             )
     snap = None
-    if owns_requests and sales.own(svc) and sales.requests_site(svc) is not None:
+    if sales.own(svc) and sales.requests_site(svc) is not None:
         snap = snapshot(svc)
     for t in snap["threads"] if snap else []:
         if not t["public"]:
             continue
         f, root = t["offer"], t["root"]
+        # an offer for a ticket belongs to that ticket's event (and to the event its day
+        # events point to); every other request to the event that owns the requests
+        if not (f["event"] in ds if f and f.get("event") else owns_requests):
+            continue
         state = _state(t)
+        sponsored = bool(f) and sales.offer_kind(f) == "sponsored"
         stats["open_requests"] += state == "open"
-        stats["in_kind_passes"] += state == "approved"
+        stats["sponsored_passes" if sponsored else "in_kind_passes"] += state == "approved"
         if f and f.get("erase_after_event") and over:
             continue
         consent = bool(f and f.get("public_name"))

@@ -1010,7 +1010,11 @@ def make_codes(
     offer: str | None = None,
     bound_key: str = "",
     bound_email: str = "",
+    ticket: str | None = None,
+    ticket_name: str = "",
 ) -> list[dict[str, Any]]:
+    """TICKET (a 30402's d tag, with its name for the console): a code for that event ticket
+    alone, as an approved offer for a ticket gets (never with PRODUCT_ID)."""
     from .holder_invites import ApiError
 
     try:
@@ -1021,7 +1025,9 @@ def make_codes(
         raise ApiError(422, "invalid", "percent: 1 to 100.")
     if not 1 <= uses <= 1000 or not 1 <= count <= 500:
         raise ApiError(422, "invalid", "uses: 1 to 1000; count: 1 to 500.")
-    if product_id and product(svc, product_id) is None:
+    if ticket:
+        product_id = "ticket:" + ticket  # ticketsales.PREFIX: what a ticket's order is of
+    elif product_id and product(svc, product_id) is None:
         raise ApiError(404, "unknown_product", "No such product.")
     if expires:
         try:
@@ -1039,6 +1045,7 @@ def make_codes(
                 "code": code,
                 "percent": percent,
                 "product": product_id or None,
+                **({"ticket_name": ticket_name[:200]} if ticket else {}),
                 "uses": uses,
                 "used": [],  # order ids holding a use
                 "expires": str(expires) if expires else None,
@@ -1069,20 +1076,27 @@ def code_row(c: dict[str, Any]) -> dict[str, Any]:
 
 
 def _usable(
-    c: dict[str, Any] | None, pid: str, key: str = "", verified_email: str = ""
+    c: dict[str, Any] | None,
+    pid: str,
+    key: str = "",
+    verified_email: str = "",
+    author: bool = False,
 ) -> str | None:
     """Why the code can't be used for product PID by KEY (whose account has VERIFIED_EMAIL
     proven, if any), or None. A personal code (an offer's) works only for the requester's key or
-    an account proven with the requester's address."""
+    an account proven with the requester's address (AUTHOR: the checkout named the offer and
+    proved its author). An event ticket (PID "ticket:<d>") takes only a code made for it."""
     if c is None or c.get("revoked"):
         return "unknown_code"
-    if c.get("bound_key") or c.get("bound_email"):
+    if (c.get("bound_key") or c.get("bound_email")) and not author:
         mine = key and key == c.get("bound_key")
         theirs = verified_email and verified_email.lower() == (c.get("bound_email") or "").lower()
         if not (mine or theirs):
             return "unknown_code"
     if c.get("product") and c["product"] != pid:
         return "unknown_code"
+    if pid.startswith("ticket:") and c.get("product") != pid:
+        return "unknown_code"  # a code for any product is for passes, never for tickets
     if c.get("expires") and dt.date.fromisoformat(c["expires"]) < today():
         return "unknown_code"
     if len(c["used"]) >= int(c["uses"]):
@@ -1642,10 +1656,11 @@ def erase_of(svc: Services, partner_id: int | None) -> bool:
 
 
 def checkout(
-    svc: Services, key: str, data: dict[str, Any], ip: str = ""
+    svc: Services, key: str, data: dict[str, Any], ip: str = "", thread_key: str = ""
 ) -> tuple[dict[str, Any], int]:
     """POST /checkout. Returns (the order's answer, HTTP status). Refused checkouts count per
-    IP on their own (FAILS_PER_IP_HOUR), apart from the orders made."""
+    IP on their own (FAILS_PER_IP_HOUR), apart from the orders made. THREAD_KEY: the request's
+    ``X-Thread-Key`` (proves the author of the offer the body names)."""
     from .holder_invites import ApiError
 
     st = store(svc)
@@ -1653,15 +1668,51 @@ def checkout(
     if st.hits_count(fails, 3600) >= FAILS_PER_IP_HOUR:
         raise ApiError(429, "too_many", "Too many refused tries from here. Try again in an hour.")
     try:
-        return _checkout(svc, key, data, ip)
+        return _checkout(svc, key, data, ip, thread_key)
     except ApiError as exc:
         if exc.status != 429 and exc.error not in ("unsupported", "cannot_sell", "accounting"):
             st.hit(fails, 10**9, 3600)  # recorded, never refused here
         raise
 
 
+def _offer_author(svc: Services, f: dict[str, Any], thread_key: str) -> bool:
+    """Whether THREAD_KEY is the key of the offer's own thread link (the one mailed to its
+    author, webthreads.thread_key)."""
+    from . import followers, webthreads
+    from .holder_invites import ApiError
+
+    if not re.fullmatch(r"[0-9a-f]{24}", thread_key or "") or not f.get("card"):
+        return False
+    try:
+        got = followers._relay(svc)
+        relay, sign = got if got is not None else (None, None)
+        found = (relay.query([{"ids": [f["card"]]}], sign) or []) if relay is not None else None
+    except Exception as exc:  # noqa: BLE001 — the relay
+        log.warning("sales: an offer's thread could not be read: %s", type(exc).__name__)
+        found = None
+    if found is None:
+        raise ApiError(503, "unavailable", "The request can't be read just now. Try again.")
+    root = next((e for e in found if e.get("id") == f["card"]), None)
+    return webthreads.is_author(svc, root, thread_key)
+
+
+def _offer_code(svc: Services, key: str, fid: Any, thread_key: str) -> str:
+    """POST /checkout ``"offer"``: the code of that approved offer, for its proven author (the
+    key that made the offer signs, or the request carries the thread's own key)."""
+    from .holder_invites import ApiError
+
+    f = store(svc).offer(fid) if isinstance(fid, str) and OFFER_RE.match(fid) else None
+    if f is None:
+        raise ApiError(404, "not_found", "No such offer.")
+    if key != f["key"] and not _offer_author(svc, f, thread_key):
+        raise ApiError(403, "not_author", "Only the request's author uses its approval.")
+    if f["state"] != "accepted" or not f.get("code"):
+        raise ApiError(409, "not_approved", "This request is not approved.")
+    return f["code"]
+
+
 def _checkout(
-    svc: Services, key: str, data: dict[str, Any], ip: str = ""
+    svc: Services, key: str, data: dict[str, Any], ip: str = "", thread_key: str = ""
 ) -> tuple[dict[str, Any], int]:
     from .holder_invites import ApiError
 
@@ -1673,8 +1724,6 @@ def _checkout(
 
         if data.get("product") is not None or not isinstance(data["ticket"], str):
             raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
-        if data.get("code"):
-            raise ApiError(422, "code_not_for_tickets", "Codes are for passes, not for tickets.")
         wanted = ticketsales.find(svc, data["ticket"])
         p = ticketsales.as_product(wanted)
         pid = p["id"]
@@ -1696,6 +1745,11 @@ def _checkout(
     erase = erase_flag(data)
     public_name = public_name_flag(data)
     code = norm_code(data.get("code")) if data.get("code") else ""
+    by_offer = data.get("offer") is not None  # the approved offer itself instead of its code
+    if by_offer:
+        if code:
+            raise ApiError(422, "invalid", 'Send "code" or "offer", one of them.')
+        code = _offer_code(svc, key, data["offer"], thread_key)
     return_url = _own_url(svc, data.get("return_url"))
     ipt = ip_tag(svc, ip)
     st = store(svc)
@@ -1741,9 +1795,18 @@ def _checkout(
     flags: list[str] = []
     vat_valid = False
     sells = can_sell
+    proven = acct["email"] if acct and acct["verified"] else ""
     if wanted is not None:
-        # the switch, who may have it, and whether tickets can be invoiced at all
-        ticketsales.check(svc, wanted, key, env, tester, owner)
+        # the switch, who may have it, and whether tickets can be invoiced at all. An approved
+        # offer at 100% goes through while the switch is off: nothing is sold
+        c = st.code(code) if code else None
+        given = bool(
+            c
+            and c.get("offer")
+            and int(c["percent"]) == 100
+            and _usable(c, pid, key, proven, by_offer) in (None, "code_used")
+        )
+        ticketsales.check(svc, wanted, key, env, tester, owner, switch=not given)
         sells = ticketsales.can_sell
     if (
         billing["kind"] == "organisation"
@@ -1776,7 +1839,7 @@ def _checkout(
             raise ApiError(429, "too_many", "Too many orders for this address. Try again later.")
         if p.get("quantity") is not None and st.open_for("ip", ipt, pid) >= HOLDS_PER_IP:
             raise ApiError(429, "too_many", "Pay the orders you have before holding more places.")
-        if code and not CODE_CHECKS.allow("key:" + key):
+        if code and not by_offer and not CODE_CHECKS.allow("key:" + key):
             raise ApiError(429, "too_many", "Too many codes tried. Try again in an hour.")
         if wanted is not None:
             # the ticket's price now, as this buyer is invoiced (a person: the amount with its
@@ -1794,10 +1857,11 @@ def _checkout(
             secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16)
         )
         percent = 0
+        offer_id = None
         with st.tx() as db:
             if code:
                 c = st.code(code, db)
-                why = _usable(c, pid, key, acct["email"] if acct and acct["verified"] else "")
+                why = _usable(c, pid, key, proven, by_offer)
                 if why:
                     raise ApiError(
                         404 if why == "unknown_code" else 409,
@@ -1807,6 +1871,7 @@ def _checkout(
                         else "That code is used up.",
                     )
                 percent = int(c["percent"])
+                offer_id = c.get("offer")
                 if c.get("offer") and not erase:
                     # asked with the offer in kind this code answers
                     erase = bool((st.offer(c["offer"]) or {}).get("erase_after_event"))
@@ -1862,6 +1927,7 @@ def _checkout(
             "name": name or billing.get("name") or email.split("@")[0],
             "email": email,
             "code": code or None,
+            "offer": offer_id,  # the offer (in kind, sponsored) the code answers
             "pay": pay,
             "billing": billing,
             "vat_valid": vat_valid,
@@ -2506,16 +2572,38 @@ def public_channels(svc: Services) -> list[dict[str, str]]:
     ]
 
 
-def offer_answer(f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
+OFFER_KINDS = ("in_kind", "sponsored")
+
+
+def offer_kind(f: dict[str, Any]) -> str:
+    return f.get("kind") or "in_kind"
+
+
+def offer_what(f: dict[str, Any]) -> str:
+    """What an offer asks for, by name: "<ticket> · <event>" (as the invoice names a ticket),
+    or the product's id for an offer made for a product."""
+    if f.get("ticket"):
+        return f"{f.get('ticket_title') or 'Ticket'} · {f.get('event_title') or 'Event'}"
+    return str(f.get("product") or "")
+
+
+def offer_answer(svc: Services, f: dict[str, Any], mine: bool = False) -> dict[str, Any]:
     out: dict[str, Any] = {
         "offer": f["id"],
         "state": f["state"],
-        "product": f["product"],
+        "kind": offer_kind(f),
+        "product": f.get("product"),
         "erase_after_event": bool(f.get("erase_after_event")),
         "public_name": bool(f.get("public_name")),
         "label": f.get("label"),
         "days": f.get("days"),
     }
+    if f.get("ticket"):  # an offer for an event ticket (docs/sales.md §10)
+        from . import ticketsales
+
+        out.update(
+            ticket=f["ticket"], event=f["event"], event_link=ticketsales.link(svc, f["event"])
+        )
     if f.get("url"):
         out["url"] = f["url"]
     if mine and f.get("my_url"):
@@ -2583,11 +2671,26 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     if found is None:
         raise ApiError(409, "no_requests_channel", "This belfry takes no offers in kind yet.")
     slug, site = found
-    p = product(svc, str(data.get("product") or ""))
-    if p is None:
-        raise ApiError(404, "unknown_product", "No such product.")
-    if not p.get("on_sale"):
-        raise ApiError(409, "not_on_sale", "This product is not on sale.")
+    wanted = None  # an event ticket instead of a product (ticketsales.py)
+    if (data.get("product") is None) == (data.get("ticket") is None):
+        raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
+    if data.get("ticket") is not None:
+        from . import ticketsales
+
+        if not isinstance(data["ticket"], str):
+            raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
+        # the ticket need not be on sale yet, nor the checkout's switch on: only asked for
+        wanted = ticketsales.find(svc, data["ticket"], offer=True)
+        p = {"id": ticketsales.PREFIX + wanted.t.d, "name": ticketsales.name(wanted)}
+    else:
+        p = product(svc, str(data.get("product") or ""))
+        if p is None:
+            raise ApiError(404, "unknown_product", "No such product.")
+        if not p.get("on_sale"):
+            raise ApiError(409, "not_on_sale", "This product is not on sale.")
+    kind = data.get("kind", "in_kind")
+    if kind not in OFFER_KINDS:
+        raise ApiError(422, "invalid", "kind: " + ", ".join(OFFER_KINDS) + ".")
     name = " ".join(str(data.get("name") or "").split())[:100]
     email = str(data.get("email") or "").strip()
     if not webthreads.EMAIL.match(email) or len(email) > 254:  # the requests page's own rule
@@ -2614,12 +2717,17 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     ):
         raise ApiError(429, "too_many", "Too many offers for now.")
     fid = "f_" + "".join(secrets.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(16))
-    title = f"{name}: {percent}% off {p['name']} in kind"
+    if wanted is not None:
+        day = ticketsales.one_day(wanted.ev)
+        title = f"{name}: {percent}% off {p['name']}" + (f", {day}" if day else "")
+    else:
+        title = f"{name}: {percent}% off {p['name']} in kind"
     extra = [
         ["offer", fid],
-        ["product", p["id"]],
+        ["ticket", wanted.t.d] if wanted is not None else ["product", p["id"]],
         ["percent", str(percent)],
         ["p", key],
+        *([["offer-kind", kind]] if kind != "in_kind" else []),
         *([["offer-label", label]] if label else []),
         *([["offer-days", *days]] if days else []),
         *offer_buttons(),
@@ -2642,7 +2750,9 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     f = {
         "id": fid,
         "key": key,
-        "product": p["id"],
+        "product": p["id"] if wanted is None else None,
+        **(ticketsales.order_fields(wanted) if wanted is not None else {}),
+        "kind": kind,
         "name": name,
         "email": email,
         "offer": text,
@@ -2730,7 +2840,7 @@ def _decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> 
         code = make_codes(
             svc,
             percent,
-            f["product"],
+            f.get("product"),
             1,
             1,
             None,
@@ -2739,6 +2849,8 @@ def _decide_offer(svc: Services, fid: str, percent: Any, note: str, by: str) -> 
             fid,
             bound_key=f["key"],
             bound_email=f["email"],
+            ticket=f.get("ticket"),  # a ticket's offer: a code for that ticket alone
+            ticket_name=offer_what(f) if f.get("ticket") else "",
         )[0]["code"]
     f.update(
         state="accepted" if percent else "declined",
@@ -2910,7 +3022,9 @@ def register(app: FastAPI) -> None:
     @app.post(API + "/checkout")
     async def api_checkout(request: Request) -> JSONResponse:
         s, key, data = await _signed(request)
-        out, status = await run_in_threadpool(checkout, s, key, data, client_ip(request))
+        out, status = await run_in_threadpool(
+            checkout, s, key, data, client_ip(request), request.headers.get("x-thread-key") or ""
+        )
         return JSONResponse(out, status_code=status, headers=NO_STORE)
 
     @app.get(API + "/checkout/{oid}")
@@ -2949,7 +3063,7 @@ def register(app: FastAPI) -> None:
     async def api_offer(request: Request) -> JSONResponse:
         s, key, data = await _signed(request)
         f = await run_in_threadpool(make_offer, s, key, data, client_ip(request))
-        return JSONResponse(offer_answer(f), status_code=201, headers=NO_STORE)
+        return JSONResponse(offer_answer(s, f), status_code=201, headers=NO_STORE)
 
     @app.get(API + "/offers/{fid}")
     async def api_offer_get(fid: str, request: Request) -> JSONResponse:
@@ -2957,7 +3071,7 @@ def register(app: FastAPI) -> None:
         f = store(s).offer(fid) if OFFER_RE.match(fid) else None
         if f is None or f["key"] != key:
             raise ApiError(404, "not_found", "No such offer.")
-        return JSONResponse(offer_answer(f, mine=True), headers=NO_STORE)
+        return JSONResponse(offer_answer(s, f, mine=True), headers=NO_STORE)
 
     @app.post(API + "/offers/{fid}/decide")
     async def api_offer_decide(fid: str, request: Request) -> JSONResponse:
@@ -2968,7 +3082,7 @@ def register(app: FastAPI) -> None:
         f = await run_in_threadpool(
             decide_offer, s, fid, data.get("percent"), str(data.get("note") or ""), by
         )
-        return JSONResponse(offer_answer(f), headers=NO_STORE)
+        return JSONResponse(offer_answer(s, f), headers=NO_STORE)
 
 
 # ── the buyer's pages on belfry.<domain> (fixed text and the order's own details only) ──────

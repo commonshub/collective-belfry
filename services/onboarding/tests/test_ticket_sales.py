@@ -105,11 +105,11 @@ def test_a_ticket_paid_by_card_admits_a_new_person(fair, keycast):
         r = order(c, me)
         assert r.status_code == 409 and r.json()["error"] == "tickets_off"
         sales.save_settings(rsvc, {"tickets": True})
-        # one of product / ticket; codes are for passes
+        # one of product / ticket; a ticket takes only a code made for it (an offer's)
         r = call(c, me, "/checkout", {"ticket": DAY, "product": "village-2027", "email": "a@b.co"})
         assert r.status_code == 422 and r.json()["error"] == "invalid"
         r = order(c, me, code="ABCD-EFGH")
-        assert r.status_code == 422 and r.json()["error"] == "code_not_for_tickets"
+        assert r.status_code == 404 and r.json()["error"] == "unknown_code"
         r = order(c, me, return_url="https://belfry.test/tickets/thanks")
         assert r.status_code == 201, r.text
         got = r.json()

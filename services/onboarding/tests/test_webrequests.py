@@ -548,7 +548,12 @@ def test_an_events_activity_says_names_only_with_consent(fair, reqs, keycast, mo
         assert r.headers["cache-control"] == "public, max-age=15"
         got = r.json()
         seen.append(got)
-        assert got["stats"] == {"villagers": 3, "open_requests": 1, "in_kind_passes": 1}
+        assert got["stats"] == {
+            "villagers": 3,
+            "open_requests": 1,
+            "in_kind_passes": 1,
+            "sponsored_passes": 0,
+        }
         assert got["next"] is None
         assert [x["at"] for x in got["items"]] == sorted(
             (x["at"] for x in got["items"]), reverse=True
@@ -655,7 +660,12 @@ def test_day_events_count_on_the_village_event_and_members_only_is_unknown(fair,
         webrequests.forget()
         # the village event: its day events' tickets, and the requests
         got = get(c, f"/events/{D}/activity").json()
-        assert got["stats"] == {"villagers": 1, "open_requests": 1, "in_kind_passes": 0}
+        assert got["stats"] == {
+            "villagers": 1,
+            "open_requests": 1,
+            "in_kind_passes": 0,
+            "sponsored_passes": 0,
+        }
         assert [x["type"] for x in got["items"]] == ["request_opened", "ticket"] or [
             x["type"] for x in got["items"]
         ] == ["ticket", "request_opened"]
@@ -663,7 +673,12 @@ def test_day_events_count_on_the_village_event_and_members_only_is_unknown(fair,
         assert t["ticket"] == {"title": "Day pass"} and t["who"] == {"name": "Gus Guest"}
         # the day event: its own ticket; the requests belong to the event it points to
         got = get(c, f"/events/{day}/activity").json()
-        assert got["stats"] == {"villagers": 1, "open_requests": 0, "in_kind_passes": 0}
+        assert got["stats"] == {
+            "villagers": 1,
+            "open_requests": 0,
+            "in_kind_passes": 0,
+            "sponsored_passes": 0,
+        }
         assert [x["type"] for x in got["items"]] == ["ticket"]
         # a members-only event, or none: nothing to see
         for link in (hidden, "nope12", "x"):

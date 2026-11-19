@@ -20,6 +20,7 @@ through while it is off.
 
 from __future__ import annotations
 
+import datetime as dt
 import logging
 import re
 from collections import Counter
@@ -277,8 +278,31 @@ def _load(svc: Services, d: str) -> Wanted | None:
     return Wanted(ev, t) if t is not None else None
 
 
-def find(svc: Services, d: str) -> Wanted:
-    """The ticket ``POST /checkout`` names, when the checkout sells it; ApiError otherwise."""
+def _why_no_offer(ev: events.Event, t: events.Ticket, currency: str) -> str | None:
+    """Why nobody can ask for this ticket against a contribution (``POST /offers``): the rules
+    of ``_why_not`` but the time. A ticket whose sale has not started can be asked for."""
+    if ev.status == "cancelled" or ev.ended():
+        return "event_over"
+    if t.implicit or not t.priced:
+        return "free"
+    if t.on_sale and t.amount:
+        if t.currency != currency:
+            return "currency"
+        try:
+            if sales.cents(t.amount) <= 0:
+                return "free"
+        except (ValueError, ArithmeticError):
+            pass
+    elif t.prices and not any(r.get("currency") == currency for r in t.prices):
+        return "currency"
+    if t.closed:
+        return "needs_application"
+    return None
+
+
+def find(svc: Services, d: str, offer: bool = False) -> Wanted:
+    """The ticket ``POST /checkout`` names, when the checkout sells it; ApiError otherwise.
+    OFFER: the ticket ``POST /offers`` names (it need not be on sale now)."""
     from .holder_invites import ApiError
 
     if not sales.own(svc):
@@ -290,7 +314,8 @@ def find(svc: Services, d: str) -> Wanted:
         raise ApiError(503, "unavailable", "The event can't be read just now.") from exc
     if w is None:
         raise ApiError(404, "unknown_ticket", "No such ticket.")
-    why = _why_not(svc, w.ev, w.t, sales.settings(svc)["currency"])
+    currency = sales.settings(svc)["currency"]
+    why = _why_no_offer(w.ev, w.t, currency) if offer else _why_not(svc, w.ev, w.t, currency)
     if why:
         status, text = {
             "event_over": (409, "This event is over or cancelled."),
@@ -303,13 +328,18 @@ def find(svc: Services, d: str) -> Wanted:
     return w
 
 
+def name(w: Wanted) -> str:
+    """The ticket by name: "<ticket> · <event>"."""
+    return f"{w.t.title} · {w.ev.title}"[:200]
+
+
 def as_product(w: Wanted) -> dict[str, Any]:
     """The ticket in the shape the checkout knows a product by. The name is the invoice's and
     Stripe's line: "<ticket> · <event>"."""
     _net, _gross, rate = amounts(w.t)
     return {
         "id": PREFIX + w.t.d,
-        "name": f"{w.t.title} · {w.ev.title}"[:200],
+        "name": name(w),
         "tier": "ticket",
         "role": None,
         "valid_from": None,
@@ -318,6 +348,39 @@ def as_product(w: Wanted) -> dict[str, Any]:
         "quantity": w.t.quantity,
         "on_sale": True,
     }
+
+
+def link(svc: Services, d: str) -> str:
+    """An event's address by its d (events.link_of, without reading the event)."""
+    return events.store(svc).current_slug(d) or d
+
+
+def one_day(ev: events.Event) -> str:
+    """The event's date as the event page writes one (events.when_text), when the event is on
+    one day; "" otherwise."""
+    if ev.start is None:
+        return ""
+    if isinstance(ev.start, dt.datetime):
+        tz = events._zone(ev.tz)
+        s = ev.start.astimezone(tz)
+        if isinstance(ev.end, dt.datetime) and ev.end.astimezone(tz).date() != s.date():
+            return ""
+        return s.strftime("%A %-d %B %Y")
+    if isinstance(ev.end, dt.date) and ev.end != ev.start:
+        return ""
+    return events.when_text(ev)
+
+
+def offer_url(svc: Services, f: dict[str, Any]) -> str:
+    """Where the author of an approved offer for a ticket goes on: the console's template
+    filled for the offer's event and ticket, with ``offer=<id>`` ("" when none is set)."""
+    template = sales.settings(svc)["checkout_url"]
+    if not template or not f.get("ticket") or not f.get("event"):
+        return ""
+    url = template.replace("{link}", quote(link(svc, f["event"]), safe="")).replace(
+        "{id}", quote(f["ticket"], safe="")
+    )
+    return url + ("&" if "?" in url else "?") + "offer=" + quote(f["id"], safe="")
 
 
 def order_fields(w: Wanted) -> dict[str, Any]:
@@ -351,12 +414,14 @@ def check(
     env: str,
     tester: int | None,
     owner: dict[str, Any] | None,
+    switch: bool = True,
 ) -> None:
     """Whether this buyer may order the ticket: the switch (a tester's test order passes while
-    it is off), members-only tickets, one ticket of an event per person."""
+    it is off; SWITCH false: an approved offer at 100%, where nothing is sold), members-only
+    tickets, one ticket of an event per person."""
     from .holder_invites import ApiError
 
-    if env == "live" and not on(svc):
+    if switch and env == "live" and not on(svc):
         raise ApiError(409, "tickets_off", "Tickets of events are not sold here yet.")
     if _members_only(w.ev, w.t) and tester is None:
         if not (key in w.ev.hosts or events.is_member(svc, key)):
@@ -402,6 +467,9 @@ def _admit(
         tags = events._ticket_tags(
             ev, pubkey, t, [["by", "checkout"], *([["e", app["id"]]] if app else []), *extra]
         )
+        if o.get("offer") and o["total"]["percent_off"] == 100:
+            # an approved request (in kind, sponsored) settled it, not a payment
+            tags = [["paid", "offer"] if x[:1] == ["paid"] else x for x in tags]
         if not events.publish(svc, 9000, tags):
             raise RuntimeError("the event's group could not be reached")
     return "admitted"

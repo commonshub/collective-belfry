@@ -327,17 +327,19 @@ def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
     if f is None or f["state"] not in ("accepted", "declined"):
         return None
     name = _mailer(svc).name
+    thanks = "request" if sales.offer_kind(f) == "sponsored" else "offer"
+    what = f" {sales.offer_what(f)}" if f.get("ticket") else ""  # the ticket and its event
     if f.get("code"):
         lines = [
             f"Hello {_first(f['name'])},",
-            f"Thank you for your offer. {name} gives you {f['decided_percent']}% off.",
+            f"Thank you for your {thanks}. {name} gives you {f['decided_percent']}% off{what}.",
             f"Your personal code: {f['code']}",
-            "Type it when you get your pass. It works once.",
+            f"Type it when you get your {'ticket' if f.get('ticket') else 'pass'}. It works once.",
         ]
     else:
         lines = [
             f"Hello {_first(f['name'])},",
-            f"Thank you for your offer. {name} can't take it this time.",
+            f"Thank you for your {thanks}. {name} can't take it this time.",
         ]
     if f.get("note"):
         lines.append(f["note"])
@@ -346,7 +348,7 @@ def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
         "mail, and works only for you."
     )
     button = (f["my_url"], "Open your request") if f.get("my_url") else None
-    return f"Your offer to {name}", lines, button, []
+    return f"Your {thanks} to {name}", lines, button, []
 
 
 BUILD = {

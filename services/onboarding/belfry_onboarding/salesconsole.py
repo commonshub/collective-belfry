@@ -310,7 +310,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         )
         crow += (
             f"<tr><td><code>{E(r['code'])}</code></td><td>{r['percent']}% off</td>"
-            f"<td>{E(r['product'] or 'any product')}</td><td>used {users} of {r['uses']}</td>"
+            f"<td>{E(c.get('ticket_name') or r['product'] or 'any product')}</td><td>used {users} of {r['uses']}</td>"
             f"<td>{'until ' + E(r['expires']) if r['expires'] else ''}</td><td>{E(r['note'])}</td><td>{act}</td></tr>"
         )
     codes = f"""<h2>Codes</h2><details><summary>Make codes</summary>
@@ -345,9 +345,15 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         chat = sales.offer_chat_link(svc, f)
         link = f' · <a href="{E(chat)}">the thread in the chat</a>' if chat else ""
         more = "".join(
-            f" · {E(x)}" for x in (f.get("label") or "", ", ".join(f.get("days") or [])) if x
+            f" · {E(x)}"
+            for x in (
+                "sponsored" if sales.offer_kind(f) == "sponsored" else "",
+                f.get("label") or "",
+                ", ".join(f.get("days") or []),
+            )
+            if x
         )
-        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(f["product"])} · asks {f["percent"]}% off{more} · {E(f["created"][:10])}</span>{link}</p>
+        orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(sales.offer_what(f))} · asks {f["percent"]}% off{more} · {E(f["created"][:10])}</span>{link}</p>
 <p>{E(f["offer"])}</p>{act}</div>"""
     chans = sales.public_channels(svc)
     current = st.get("requests_channel") or ""
