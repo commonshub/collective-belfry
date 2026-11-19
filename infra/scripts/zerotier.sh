@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# The admin network: ZeroTier on the VM, so the admin pages (Odoo's back office, Authentik's
-# admin, the steward pages) answer only over it (ADMIN_NETS in infra/.env, proxy/Caddyfile).
+# The admin network: ZeroTier on the VM, so the admin pages (Odoo's back office, the steward
+# pages) answer only over it (ADMIN_NETS in infra/.env, proxy/Caddyfile).
 # Run on the VM as the deploy user (uses sudo). The network itself lives in ZeroTier Central
 # (my.zerotier.com): create it there as private, then authorise the VM and each admin device.
 #

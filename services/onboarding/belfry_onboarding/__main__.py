@@ -1,11 +1,14 @@
-"""CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``,
-``... sync-participants``; ``... login-link <pass id>`` for a new one-time sign-in link and
+"""CLI for cron: ``python -m belfry_onboarding reconcile``, ``... expire``, ``... sync-relay``;
+``... login-link <pass id>`` for a new one-time sign-in link and
 ``... add-steward <e-mail> [name]`` to let someone use the steward pages (/steward) and give them
 their free pass, ``... steward-passes`` for the passes of all stewards;
 ``... publish-starter-events`` to backfill profiles, follow and relay lists on the relay;
 ``... sync-programme`` for the programme and room bookings as calendar events (programme.py);
 ``... accounting-check`` for the ticket seller's Odoo and its ids, ``... accounting-book [pass id]``
-to book paid tickets there (accounting.py)."""
+to book paid tickets there (accounting.py); ``... restore-keys`` to recreate the signer's
+accounts from Odoo. The move from Keycast and Authentik (2026-11-19, ``infra/scripts/
+migrate-from-keycast.sh``): ``... import-keycast`` reads Keycast's sealed keys as JSON lines on
+stdin, ``... import-stewards`` the stewards' e-mail addresses, one per line."""
 
 from __future__ import annotations
 
@@ -26,20 +29,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser("expire", help="expire active passes whose date_end has passed")
     sub.add_parser("sync-relay", help="rewrite the relay whitelist from the active passes")
-    sub.add_parser(
-        "sync-participants",
-        help="make the Authentik participants group equal to the holders of active passes",
-    )
     link = sub.add_parser(
         "login-link", help="mint and store a new one-time sign-in link for an active pass"
     )
     link.add_argument("pass_id", type=int)
     add = sub.add_parser(
-        "add-steward", help="create or find the Authentik user and add it to the stewards group"
+        "add-steward", help="mark the contact with this e-mail a steward and give them a free pass"
     )
     add.add_argument("email")
     add.add_argument("name", nargs="?", default="")
-    sub.add_parser("steward-passes", help="give every member of the stewards group their free pass")
+    sub.add_parser("steward-passes", help="give every steward their free pass")
     sub.add_parser(
         "publish-starter-events",
         help="publish the missing profile, follow and relay lists of every active pass",
@@ -50,7 +49,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser(
         "restore-keys",
-        help="recreate every partner's Keycast account from Odoo (custody seed unlocked)",
+        help="recreate every partner's signer account from Odoo (custody seed unlocked)",
+    )
+    sub.add_parser(
+        "import-keycast",
+        help="import Keycast's sealed keys into the signer (JSON lines vine_id, pubkey, sealed)",
+    )
+    sub.add_parser(
+        "import-stewards",
+        help="mark the contacts with these e-mail addresses (stdin, one per line) stewards",
     )
     sub.add_parser(
         "accounting-check",
@@ -73,8 +80,6 @@ def main(argv: list[str] | None = None) -> int:
             print("RELAY_CONFIG_PATH is not set", file=sys.stderr)
             return 2
         result = core.sync_relay_whitelist(services, strict=True)
-    elif args.command == "sync-participants":
-        result = core.sync_participants(services, strict=True)
     elif args.command == "publish-starter-events":
         if services.relay is None:
             print("RELAY_URL is not set", file=sys.stderr)
@@ -90,6 +95,18 @@ def main(argv: list[str] | None = None) -> int:
         result = programme.sync(services)
     elif args.command == "restore-keys":
         result = core.restore_keys(services)
+    elif args.command == "import-keycast":
+        rows = [json.loads(line) for line in sys.stdin if line.strip()]
+        results = services.signer.import_sealed(rows) if rows else []
+        result = {"imported": results}
+    elif args.command == "import-stewards":
+        result = {
+            "stewards": [
+                services.odoo.call("res.partner", "belfry_make_steward", [line.strip(), False])
+                for line in sys.stdin
+                if "@" in line
+            ]
+        }
     elif args.command in ("accounting-check", "accounting-book"):
         if services.accounting is None:
             print(

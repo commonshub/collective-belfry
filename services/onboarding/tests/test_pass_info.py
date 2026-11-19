@@ -78,11 +78,9 @@ def test_no_claim_link_for_a_revoked_pass(web, odoo):
 def test_active_passes_for_the_vote_service(web, odoo):
     partner = odoo.add("res.partner", name="Alice", email="alice@example.org")
     active = odoo.add(
-        "belfry.pass", partner_id=partner, tier="week", state="active", keycast_pubkey="aa" * 32
+        "belfry.pass", partner_id=partner, tier="week", state="active", nostr_pubkey="aa" * 32
     )
-    odoo.add(
-        "belfry.pass", partner_id=partner, tier="day", state="revoked", keycast_pubkey="bb" * 32
-    )
+    odoo.add("belfry.pass", partner_id=partner, tier="day", state="revoked", nostr_pubkey="bb" * 32)
     odoo.add("belfry.pass", partner_id=partner, tier="day", state="active")  # no key yet
     assert web.get("/admin/active-passes").status_code == 401
     r = web.get("/admin/active-passes", headers=auth())

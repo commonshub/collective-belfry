@@ -1,8 +1,8 @@
 """Core operations: activate, revoke, reactivate, reconcile, expire.
 
 Every operation is idempotent and resumable: it re-reads state from Odoo, re-runs the external
-steps (which are idempotent on their side: Authentik lookup before create, Keycast preload keyed
-on ``vine_id``, status PUTs) and writes back to Odoo last. All state lives in Odoo.
+steps (which are idempotent on their side: the signer's account is keyed on ``vine_id``, status
+calls) and writes back to Odoo last. All state lives in Odoo.
 """
 
 from __future__ import annotations
@@ -14,19 +14,15 @@ import re
 import secrets
 import threading
 import time
-import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
-
 from . import accounting, avatar
 from .accounting import Accounting
-from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
-from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
+from .clients.signer import SignerClient, SignerError, vine_id
 from .clients.verifier import VerifierClient
 from .eudi import RegistryCerts
 from .git_members import GitMembers
@@ -52,8 +48,7 @@ PASS_FIELDS = [
     "date_end",
     "state",
     "npub",
-    "keycast_pubkey",
-    "authentik_user_id",
+    "nostr_pubkey",
     "stripe_dispute_id",
     "claim_token",
     "credential_status_index",
@@ -70,8 +65,7 @@ OWN_KEY_PROOF_KIND = 27235
 @dataclass
 class Services:
     odoo: OdooApi
-    authentik: AuthentikClient
-    keycast: KeycastClient
+    signer: SignerClient
     settings: Settings
     relay: RelayPublisher | None = None
     whitelist: RelayWhitelist | None = None
@@ -80,7 +74,9 @@ class Services:
     verifier: VerifierClient | None = None
     issuer_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs status lists
     issuer_x5c: list[str] = field(default_factory=list)
-    bridge_jwk: dict[str, Any] = field(default_factory=dict)  # private JWK, signs ID tokens
+    bridge_jwk: dict[str, Any] = field(
+        default_factory=dict
+    )  # private JWK, signs the issuer's ID tokens
     # WRPAC and registration certificate from the EUDI registrar (eudi.py); None without them
     eudi: RegistryCerts | None = None
     mint: MintClient | None = None  # tokens; None when MINT_URL is unset
@@ -313,99 +309,11 @@ def issue_missing_tokens(svc: Services) -> dict[int, int]:
     return issued
 
 
-def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number: str) -> int:
-    ak = svc.authentik
-    email = partner.get("email") or None
-    users = ak.find_users_by_attribute("belfry_member_number", member_number)
-    if not users and email:
-        users = ak.find_users_by_email(email)
-    if users:
-        user = users[0]
-    else:
-        user = ak.create_user(
-            username=member_number.lower(),
-            name=partner.get("name") or member_number,
-            email=email,
-            attributes={"belfry_member_number": member_number, "odoo_partner_id": partner["id"]},
-            path=svc.settings.authentik_user_path,
-        )
-    user_pk = int(user["pk"])
-    slug = svc.settings.authentik_source_slug
-    # Pre-linking the pass-bridge source is best effort: authentik 2026.8.5 does not let the API
-    # create UserOAuthSourceConnection rows (``user`` is read-only, see infra/README.md), so the
-    # participant links the pass once while signed in. A failure here must not block activation.
-    try:
-        if not ak.find_source_connections(user_pk, slug):
-            ak.create_source_connection(user_pk, slug, member_number)
-    except httpx.HTTPStatusError as exc:
-        log.warning(
-            "authentik: could not pre-link source %s for user %s (%s); link must be made by the "
-            "participant from user settings",
-            slug,
-            user_pk,
-            exc.response.status_code,
-        )
-    return user_pk
-
-
-def _set_participant(svc: Services, user_pk: int, member: bool) -> None:
-    """Add the Authentik user to (or remove it from) the participants group, which gates the
-    Keycast login (blueprint belfry-keycast-provider). Idempotent; raises if the group is
-    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran."""
-    name = svc.settings.authentik_participants_group
-    group = svc.authentik.find_group(name)
-    if group is None:
-        raise RuntimeError(f"authentik group {name!r} does not exist (blueprint not applied?)")
-    if member:
-        svc.authentik.add_user_to_group(group["pk"], user_pk)
-    else:
-        svc.authentik.remove_user_from_group(group["pk"], user_pk)
-
-
-def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | None:
-    """Make the participants group equal to the Authentik users of all active passes.
-
-    Run at startup and by reconcile, so passes activated before the group existed (or a missed
-    group call) converge. Best effort unless ``strict``."""
-    name = svc.settings.authentik_participants_group
-    try:
-        group = svc.authentik.find_group(name)
-        if group is None:
-            raise RuntimeError(f"authentik group {name!r} does not exist (blueprint not applied?)")
-        rows = svc.odoo.search_read(
-            "belfry.pass",
-            [["state", "=", "active"], ["authentik_user_id", "!=", False]],
-            ["authentik_user_id"],
-        )
-        wanted = {int(r["authentik_user_id"]) for r in rows if r.get("authentik_user_id")}
-        current = svc.authentik.group_member_pks(name)
-        for user_pk in sorted(wanted - current):
-            svc.authentik.add_user_to_group(group["pk"], user_pk)
-        for user_pk in sorted(current - wanted):
-            svc.authentik.remove_user_from_group(group["pk"], user_pk)
-        result = {
-            "members": len(wanted),
-            "added": sorted(wanted - current),
-            "removed": sorted(current - wanted),
-        }
-        if result["added"] or result["removed"]:
-            log.info("participants group %s synced: %s", name, result)
-        return result
-    except Exception as exc:
-        if strict:
-            raise
-        log.warning("participants group not synced: %s", exc)
-        return None
-
-
 def _login_link(svc: Services) -> dict[str, Any]:
     """The pass fields of a new one-time sign-in link: ``login_setup_url``, its expiry and secret.
 
-    The link is Belfry's own (``<PUBLIC_URL>/signin/<secret>``, signin.py): authentik keeps one
-    recovery token per user, so a link minted for the welcome page after paying would kill a
-    mailed authentik link. signin.py mints the authentik link (recovery flow, blueprint
-    belfry-account-setup-flow: signs the pending user in, no password) only when the secret is
-    used, and redirects there. A new link replaces the pass's earlier secret.
+    The link is ``<PUBLIC_URL>/signin/<secret>`` (signin.py): spending the secret signs the
+    browser in (Belfry's session cookie). A new link replaces the pass's earlier secret.
     """
     days = svc.settings.login_link_days
     token = secrets.token_urlsafe(32)
@@ -418,53 +326,47 @@ def _login_link(svc: Services) -> dict[str, Any]:
     }
 
 
-def authentik_signin_url(svc: Services, user_pk: int) -> str:
-    """A fresh one-time authentik sign-in link for the user, valid a few minutes (signin.py
-    redirects to it at once). authentik builds it from the host the service called, so its
-    origin is replaced with AUTHENTIK_PUBLIC_URL. Raises when the brand has no recovery flow."""
-    link = svc.authentik.create_recovery_link(user_pk, "minutes=10")
-    given = urllib.parse.urlsplit(link)
-    public = urllib.parse.urlsplit(svc.settings.authentik_public_url.rstrip("/"))
-    return urllib.parse.urlunsplit(
-        (public.scheme, public.netloc, public.path.rstrip("/") + given.path, given.query, "")
-    )
-
-
 def send_login_link(svc: Services, pass_id: int) -> str:
     """Mint a new one-time sign-in link for the holder of an active pass and store it on the pass.
     Odoo mails it: ``belfry.pass.write`` sends the activation template whenever the link changes
-    on an active pass. Returns ``sent``, ``not_active``, ``no_user`` or ``not_found``."""
+    on an active pass. Returns ``sent``, ``not_active`` or ``not_found``."""
     pass_row = svc.odoo.read_one("belfry.pass", pass_id, PASS_FIELDS)
     if pass_row is None:
         return "not_found"
     if pass_row.get("state") != "active":
         log.info("send_login_link: pass %s is %s, no link", pass_id, pass_row.get("state"))
         return "not_active"
-    user_pk = _authentik_user_for(svc, pass_row)
-    if user_pk is None:
-        log.warning("send_login_link: pass %s has no Authentik user", pass_id)
-        return "no_user"
     svc.odoo.write("belfry.pass", [pass_id], _login_link(svc))
-    log.info("send_login_link: new link for pass %s (Authentik user %s)", pass_id, user_pk)
+    log.info("send_login_link: new link for pass %s", pass_id)
     return "sent"
 
 
-def _ensure_keycast_user(
-    svc: Services, partner: dict[str, Any], member_number: str, own_pubkey: str | None = None
-) -> tuple[str, str, str]:
-    """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored.
+def _ensure_signer_account(
+    svc: Services, partner: dict[str, Any], own_pubkey: str | None = None
+) -> tuple[str, str]:
+    """The partner's account at the signer, active. Returns (pubkey hex, npub).
     ``own_pubkey``: the participant joins with their own key, so the account gets no key of
     Belfry's (a keyless account, as for a self-custody participant)."""
-    result = svc.keycast.preload_user(
-        vine_id=f"odoo-partner-{partner['id']}",
-        username=member_number.lower(),
-        display_name=partner.get("name") or member_number,
-        key_version=int(partner.get("belfry_key_version") or 0),
-        pubkey=own_pubkey,
+    vid = vine_id(partner["id"])
+    account = svc.signer.ensure_account(
+        vid, key_version=int(partner.get("belfry_key_version") or 0), own_pubkey=own_pubkey
     )
-    pubkey = result["pubkey"]
-    svc.keycast.set_user_status(pubkey, "active")
-    return pubkey, hex_to_npub(pubkey), result.get("token", "")
+    svc.signer.set_status(vid, "active")
+    pubkey = account["pubkey"]
+    return pubkey, hex_to_npub(pubkey)
+
+
+def steward_emails(svc: Services) -> list[str]:
+    """The stewards' e-mail addresses (Odoo: res.partner.belfry_steward), for the report,
+    application, feedback and shift mails."""
+    return list(svc.odoo.call("res.partner", "belfry_steward_emails", []) or [])
+
+
+def is_steward(svc: Services, partner_id: int | None) -> bool:
+    if not partner_id:
+        return False
+    partner = svc.odoo.read_one("res.partner", int(partner_id), ["belfry_steward"])
+    return bool(partner and partner.get("belfry_steward"))
 
 
 def own_key_of(pass_row: dict[str, Any]) -> str | None:
@@ -496,38 +398,39 @@ def own_key_of(pass_row: dict[str, Any]) -> str | None:
 
 
 def active_passes(svc: Services) -> list[dict[str, Any]]:
-    """Id, partner and Keycast pubkey of every active pass (the vote service's electorate; the
+    """Id, partner and Nostr pubkey of every active pass (the vote service's electorate; the
     village server finds the partner behind a signed request, for the Shifts tab)."""
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey", "partner_id"],
+        [["state", "=", "active"], ["nostr_pubkey", "!=", False]],
+        ["nostr_pubkey", "partner_id"],
     )
     return [
         {
             "pass_id": r["id"],
             "partner_id": m2o_id(r.get("partner_id")),
-            "pubkey": r["keycast_pubkey"],
+            "pubkey": r["nostr_pubkey"],
         }
         for r in rows
-        if r.get("keycast_pubkey")
+        if r.get("nostr_pubkey")
     ]
 
 
 def active_pubkeys(svc: Services) -> list[str]:
-    """Keycast pubkeys of every active pass: the relay whitelist, derived from Odoo."""
+    """Nostr pubkeys of every active pass: the relay whitelist, derived from Odoo."""
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey"],
+        [["state", "=", "active"], ["nostr_pubkey", "!=", False]],
+        ["nostr_pubkey"],
     )
-    return [r["keycast_pubkey"] for r in rows if r.get("keycast_pubkey")]
+    return [r["nostr_pubkey"] for r in rows if r.get("nostr_pubkey")]
 
 
 def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -> str:
-    """Keycast's self-custody hook (Keycast patch 0012). The same key: the participant took
-    custody, nothing moves. Another key: the partner's passes and npub move to it and the relay
-    whitelist follows (the votes key on the pass id, the NIP-05 name moved inside Keycast)."""
+    """After a self-custody move on the account page (account.py; the signer already holds no
+    key for the partner any more). The same key: nothing moves. Another key: the partner's
+    passes and npub move to it and the relay whitelist follows (the votes key on the pass id;
+    the NIP-05 name is served from Odoo, so it follows too)."""
     hexkey = re.compile(r"^[0-9a-f]{64}$")
     if not (hexkey.match(old_pubkey or "") and hexkey.match(new_pubkey or "")):
         raise ValueError("pubkeys must be 64 hex characters")
@@ -541,12 +444,12 @@ def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -
     npub = hex_to_npub(new_pubkey)
     passes = svc.odoo.search_read(
         "belfry.pass",
-        [["partner_id", "=", partner_id], ["keycast_pubkey", "=", old_pubkey]],
+        [["partner_id", "=", partner_id], ["nostr_pubkey", "=", old_pubkey]],
         ["id"],
     )
     if passes:
         svc.odoo.write(
-            "belfry.pass", [p["id"] for p in passes], {"keycast_pubkey": new_pubkey, "npub": npub}
+            "belfry.pass", [p["id"] for p in passes], {"nostr_pubkey": new_pubkey, "npub": npub}
         )
     svc.odoo.write("res.partner", [partner_id], {"belfry_npub": npub, "belfry_key_custody": "self"})
     sync_relay_whitelist(svc)
@@ -561,12 +464,12 @@ def key_changed(svc: Services, vine_id: str, old_pubkey: str, new_pubkey: str) -
 
 
 def restore_keys(svc: Services) -> dict[str, Any]:
-    """Recovery (Keycast patch 0014): recreate every partner's Keycast account from Odoo after
-    Keycast's database or key storage was lost. With the custody seed unlocked, a derived key comes
-    back from the partner's key version with the same npub; a partner who holds their own key gets
-    a keyless account with their npub. Idempotent: existing accounts are left as they are.
-    Returns per member number: ok (present or restored), own_key, or mismatch (a random key
-    from before the custody seed, which cannot be recomputed)."""
+    """Recovery: recreate every partner's signer account from Odoo after the signer's data was
+    lost. With the custody seed unlocked, a derived key comes back from the partner's key
+    version with the same npub; a partner who holds their own key gets a keyless account with
+    their npub. Idempotent: existing accounts are left as they are. Returns per member number:
+    ok (present or restored), own_key, mismatch (a random key from before the custody seed,
+    which cannot be recomputed: restore it from the signer's backup) or locked (no seed)."""
     partners = svc.odoo.search_read(
         "res.partner",
         [["belfry_member_number", "!=", False], ["belfry_npub", "!=", False]],
@@ -577,28 +480,34 @@ def restore_keys(svc: Services) -> dict[str, Any]:
         number = partner["belfry_member_number"]
         passes = svc.odoo.search_read(
             "belfry.pass",
-            [["partner_id", "=", partner["id"]], ["keycast_pubkey", "!=", False]],
-            ["keycast_pubkey", "state"],
+            [["partner_id", "=", partner["id"]], ["nostr_pubkey", "!=", False]],
+            ["nostr_pubkey", "state"],
             order="id desc",
         )
         if not passes:
             continue
-        expected = passes[0]["keycast_pubkey"]
+        expected = passes[0]["nostr_pubkey"]
         own = partner.get("belfry_key_custody") == "self"
-        result = svc.keycast.preload_user(
-            vine_id=f"odoo-partner-{partner['id']}",
-            username=number.lower(),
-            display_name=partner.get("name") or number,
-            key_version=int(partner.get("belfry_key_version") or 0),
-            pubkey=expected if own else None,
-        )
-        got = result["pubkey"]
-        if got != expected:
+        vid = vine_id(partner["id"])
+        try:
+            account = svc.signer.ensure_account(
+                vid,
+                key_version=int(partner.get("belfry_key_version") or 0),
+                own_pubkey=expected if own else None,
+                expect_pubkey=None if own else expected,
+            )
+        except SignerError as exc:
+            if exc.code in ("mismatch", "seed_locked"):
+                report[number] = "mismatch" if exc.code == "mismatch" else "locked"
+                log.error("restore-keys: %s: %s", number, exc)
+                continue
+            raise
+        if account["pubkey"] != expected:
             report[number] = "mismatch"
-            log.error("restore-keys: %s got %s, Odoo has %s", number, got, expected)
+            log.error("restore-keys: %s has %s, Odoo has %s", number, account["pubkey"], expected)
             continue
         active = any(p.get("state") == "active" for p in passes)
-        svc.keycast.set_user_status(got, "active" if active else "suspended", "pass closed")
+        svc.signer.set_status(vid, "active" if active else "suspended")
         report[number] = "own_key" if own else "ok"
     return {"partners": report}
 
@@ -696,7 +605,7 @@ def starter_events(
 
 def publish_profile(
     svc: Services,
-    token: str,
+    account: str,
     pubkey: str,
     partner: dict[str, Any],
     member_number: str,
@@ -706,8 +615,9 @@ def publish_profile(
     only the kinds the relay does not have yet for this key: a participant's own profile, follows
     or relay choices made in an app are never overwritten (reactivation, backfill). With
     ``add_missing_picture`` (the backfill) a profile without a picture is republished with the
-    default avatar added and everything else kept. Best effort; returns the kinds published."""
-    if svc.relay is None or not token:
+    default avatar added and everything else kept. Signed by the signer as ``account``
+    (``odoo-partner-<id>``). Best effort; returns the kinds published."""
+    if svc.relay is None or not account:
         return []
     name = partner.get("name") or member_number
     relay_url = svc.settings.community_relay_public_url or svc.relay.url
@@ -715,7 +625,7 @@ def publish_profile(
     wanted = starter_events(name, member_number, svc.settings.nip05_domain, relay_url, picture)
 
     def sign(unsigned: dict[str, Any]) -> dict[str, Any]:
-        return svc.keycast.sign_event(token, {"pubkey": pubkey, **unsigned})
+        return svc.signer.sign(account, {"pubkey": pubkey, **unsigned})
 
     published: list[int] = []
     try:
@@ -759,12 +669,12 @@ def publish_profile(
 
 def publish_starter_events(svc: Services) -> dict[str, Any]:
     """Backfill ``starter_events`` for every active pass (participants activated before the relay
-    lists or the default avatar existed; a profile without a picture gets the avatar). Keycast's
-    preload is idempotent per partner and hands out a fresh UCAN."""
+    lists or the default avatar existed; a profile without a picture gets the avatar). The
+    signer's account is ensured per partner (idempotent)."""
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "!=", False]],
-        ["partner_id", "keycast_pubkey"],
+        [["state", "=", "active"], ["nostr_pubkey", "!=", False]],
+        ["partner_id", "nostr_pubkey"],
     )
     done: dict[str, list[int]] = {}
     for row in rows:
@@ -778,12 +688,15 @@ def publish_starter_events(svc: Services) -> dict[str, Any]:
         # a participant with their own key publishes their own profile; Belfry cannot sign it
         if not member_number or partner.get("belfry_key_custody") == "self":
             continue
-        pubkey, _npub, token = _ensure_keycast_user(svc, partner, member_number)
-        if pubkey != row["keycast_pubkey"]:
-            log.warning("pass of %s: Keycast pubkey differs from Odoo's, skipped", member_number)
+        partner = {"id": partner_id, **partner}
+        pubkey, _npub = _ensure_signer_account(svc, partner)
+        if pubkey != row["nostr_pubkey"]:
+            log.warning(
+                "pass of %s: the signer's pubkey differs from Odoo's, skipped", member_number
+            )
             continue
         done[member_number] = publish_profile(
-            svc, token, pubkey, {"id": partner_id, **partner}, member_number, True
+            svc, vine_id(partner_id), pubkey, partner, member_number, True
         )
     return {"published": done}
 
@@ -879,7 +792,6 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
             "name",
             "email",
             "belfry_member_number",
-            "belfry_authentik_user_id",
             "belfry_npub",
             "belfry_key_version",
             "belfry_key_custody",
@@ -936,35 +848,31 @@ def _finish_activation(
     # Belfry signs nothing for a participant who holds their own key (joined with it, or moved to
     # it with an earlier pass): no profile, no relay or follow lists.
     own_custody = bool(own_pubkey) or partner.get("belfry_key_custody") == "self"
-    authentik_user_id = _ensure_authentik_user(svc, partner, member_number)
-    pubkey, npub, user_token = _ensure_keycast_user(svc, partner, member_number, own_pubkey)
-    if own_pubkey and pubkey != own_pubkey:
-        # the partner has a Keycast account with another key already (the invite page refuses
-        # that for known partners; this is the race of two passes in flight)
-        raise RuntimeError(
-            f"pass {pass_row['id']}: partner {partner_id} has the key {pubkey}, not {own_pubkey}"
-        )
-    # Lets the participant sign in to Keycast through Authentik (the Keycast account exists now).
-    _set_participant(svc, authentik_user_id, True)
+    if own_pubkey:
+        account = svc.signer.account(vine_id(partner_id))
+        if account and account["pubkey"] != own_pubkey:
+            # the partner has a signer account with another key already (the invite page refuses
+            # that for known partners; this is the race of two passes in flight)
+            raise RuntimeError(
+                f"pass {pass_row['id']}: partner {partner_id} has the key {account['pubkey']}, "
+                f"not {own_pubkey}"
+            )
+    pubkey, npub = _ensure_signer_account(svc, partner, own_pubkey)
     # Participants never get a password: Odoo mails this one-time sign-in link with the activation.
     login_vals = _login_link(svc)
     # The relay only accepts whitelisted pubkeys, so the whitelist must carry the new key before
     # the profile is published (the pass is still pending in Odoo at this point).
     sync_relay_whitelist(svc, include=[pubkey])
     if not own_custody:
-        publish_profile(svc, user_token, pubkey, partner, member_number)
+        publish_profile(svc, vine_id(partner_id), pubkey, partner, member_number)
 
-    partner_vals: dict[str, Any] = {
-        "belfry_authentik_user_id": authentik_user_id,
-        "belfry_npub": npub,
-    }
+    partner_vals: dict[str, Any] = {"belfry_npub": npub}
     if own_pubkey:
         partner_vals["belfry_key_custody"] = "self"
     svc.odoo.write("res.partner", [partner_id], partner_vals)
     vals: dict[str, Any] = {
         "npub": npub,
-        "keycast_pubkey": pubkey,
-        "authentik_user_id": authentik_user_id,
+        "nostr_pubkey": pubkey,
         "date_start": date_start.isoformat(),
         "date_end": date_end.isoformat(),
         "activated_at": now_utc_str(),
@@ -1011,8 +919,8 @@ def _partner_has_other_active_pass(svc: Services, partner_id: int, except_pass_i
     return bool(rows)
 
 
-def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
-    pubkey = pass_row.get("keycast_pubkey")
+def _nostr_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
+    pubkey = pass_row.get("nostr_pubkey")
     if pubkey:
         return pubkey
     partner_id = m2o_id(pass_row.get("partner_id"))
@@ -1020,64 +928,44 @@ def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
         return None
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["partner_id", "=", partner_id], ["keycast_pubkey", "!=", False]],
-        ["keycast_pubkey"],
+        [["partner_id", "=", partner_id], ["nostr_pubkey", "!=", False]],
+        ["nostr_pubkey"],
         limit=1,
         order="id desc",
     )
-    return rows[0]["keycast_pubkey"] if rows else None
+    return rows[0]["nostr_pubkey"] if rows else None
 
 
-def _authentik_user_for(svc: Services, pass_row: dict[str, Any]) -> int | None:
-    user_id = pass_row.get("authentik_user_id")
-    if user_id:
-        return int(user_id)
-    partner_id = m2o_id(pass_row.get("partner_id"))
-    if partner_id is None:
-        return None
-    partner = svc.odoo.read_one("res.partner", partner_id, ["belfry_authentik_user_id"])
-    value = partner.get("belfry_authentik_user_id") if partner else None
-    return int(value) if value else None
-
-
-def _authentik_user_has_other_active_pass(svc: Services, user_pk: int, except_pass_id: int) -> bool:
-    # Two partners can share one Authentik user (matched by e-mail), so the group is decided per
-    # Authentik user, not per partner.
-    rows = svc.odoo.search_read(
-        "belfry.pass",
-        [
-            ["authentik_user_id", "=", user_pk],
-            ["state", "=", "active"],
-            ["id", "!=", except_pass_id],
-        ],
-        ["id"],
-        limit=1,
-    )
-    return bool(rows)
+def _set_signer_status(svc: Services, partner_id: int, status: str) -> bool:
+    """Suspend or reactivate the partner's signer account; False when there is none."""
+    try:
+        svc.signer.set_status(vine_id(partner_id), status)
+        return True
+    except SignerError as exc:
+        if exc.status == 404:
+            log.info("partner %s has no signer account, nothing to %s", partner_id, status)
+            return False
+        raise
 
 
 def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason: str) -> bool:
-    """Suspend the Keycast user unless the partner has another active pass, and drop the
-    Authentik user from the participants group unless it holds another active pass.
+    """Suspend the partner's signer account unless the partner has another active pass: nothing
+    is signed for them any more, over the API and NIP-46 alike. Their sign-in ends too (the login
+    page and the apps' sign-in ask Odoo for an active pass).
 
-    Returns True if the Keycast suspension was sent.
+    Returns True if the suspension was sent.
     """
-    suspended = False
     partner_id = m2o_id(pass_row.get("partner_id"))
-    if partner_id is None or not _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
-        pubkey = _keycast_pubkey_for(svc, pass_row)
-        if pubkey:
-            svc.keycast.set_user_status(
-                pubkey, "suspended", reason=f"pass {pass_row['id']}: {reason}"
-            )
-            suspended = True
-        else:
-            log.info("pass %s has no Keycast pubkey, nothing to suspend", pass_row["id"])
-    user_pk = _authentik_user_for(svc, pass_row)
-    if user_pk is not None and not _authentik_user_has_other_active_pass(
-        svc, user_pk, pass_row["id"]
-    ):
-        _set_participant(svc, user_pk, False)
+    if partner_id is None or _partner_has_other_active_pass(svc, partner_id, pass_row["id"]):
+        return False
+    suspended = _set_signer_status(svc, partner_id, "suspended")
+    if suspended:
+        log.info(
+            "pass %s: signer account of partner %s suspended (%s)",
+            pass_row["id"],
+            partner_id,
+            reason,
+        )
     return suspended
 
 
@@ -1092,10 +980,10 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
     else:
         result = f"already_{state}"
     pass_row = dict(pass_row, state=state)
-    # Relay access first (derived from the state just written), then the signer: a Keycast
+    # Relay access first (derived from the state just written), then the signer: a signer
     # failure must not leave the pubkey on the relay whitelist.
     sync_relay_whitelist(svc)
-    # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
+    # Always re-evaluate the suspension so a retry after a failed signer call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
     return result
 
@@ -1174,12 +1062,9 @@ def reactivate_pass(svc: Services, pass_id: int) -> str:
         result = "reactivated"
     else:
         result = "already_active"
-    pubkey = _keycast_pubkey_for(svc, pass_row)
-    if pubkey:
-        svc.keycast.set_user_status(pubkey, "active")
-    user_pk = _authentik_user_for(svc, pass_row)
-    if user_pk is not None:
-        _set_participant(svc, user_pk, True)
+    partner_id = m2o_id(pass_row.get("partner_id"))
+    if partner_id is not None:
+        _set_signer_status(svc, partner_id, "active")
     sync_relay_whitelist(svc)
     return result
 
@@ -1275,7 +1160,6 @@ def reconcile(svc: Services) -> dict[str, Any]:
     result = {
         "activated": activated,
         "revoked": revoked,
-        "participants": sync_participants(svc),
         "tokens": issue_missing_tokens(svc),
     }
     if svc.accounting is not None:

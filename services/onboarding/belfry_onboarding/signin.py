@@ -1,20 +1,17 @@
 """One-time sign-in links and the page after paying: ``/signin/<secret>``, ``/welcome/<secret>``.
 
 The activation mail's button and the page the payer lands on after paying both sign the browser
-in to Open Source Village. authentik keeps one recovery token per user, so the two cannot both
-carry an authentik link: a second link would make the first one useless. Each carries a secret of
-Belfry's own instead (Odoo ``belfry.pass``: ``signin_token``, ``welcome_token``, models/
-belfry_welcome.py), spent once; spending it mints a short-lived authentik link (core.
-authentik_signin_url) and redirects there. A sign-in that no app asked for ends on the apps page
-(the brand's default application, blueprint belfry-keycast-provider).
+in to Open Source Village. Each carries a secret (Odoo ``belfry.pass``: ``signin_token``,
+``welcome_token``, models/belfry_welcome.py), spent once; spending it sets Belfry's session
+cookie (session.py; until 2026-11-19 it minted an Authentik link). A sign-in that no app asked
+for ends on the account page with the apps.
 
 Mail scanners open links without running scripts, so the GET only shows a page whose script
 sends the POST that spends the secret (a button without scripts).
 
 A pass ordered by an app with a ``return_url`` (Odoo's pass API) comes back to the app instead
-(2026-11-01): the welcome page waits for the activation, signs in by script and the sign-in link
-carries ``belfry_return``, which the account-setup flow turns into its final redirect (blueprint
-belfry-account-setup-flow). Then the app's "Sign in with Open Source Village" finds a session.
+(2026-11-01): the welcome page waits for the activation, signs in by script and redirects to
+the app. Then the app's "Sign in with Open Source Village" finds a session.
 When signing in is not possible (the secret used or stale, the pass not active within two
 minutes, a payment still processing), the payer goes back to the app without a session.
 """
@@ -30,8 +27,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
+from . import session
 from .claim import page
-from .core import Services, authentik_signin_url
+from .core import Services
 
 log = logging.getLogger(__name__)
 E = html.escape
@@ -73,11 +71,6 @@ def waiting_page(token: str, target: str, wait: int) -> str:
 <p class="muted small"><a href="{E(target)}">Back to {host} now</a></p>
 </div>"""
     return page("Welcome to Open Source Village", body)
-
-
-def with_return(link: str, target: str) -> str:
-    """The authentik sign-in link, ending at the app (policy belfry-account-setup-return)."""
-    return link + ("&" if "?" in link else "?") + urllib.parse.urlencode({"belfry_return": target})
 
 
 def _apps_button(svc: Services) -> str:
@@ -188,11 +181,11 @@ def register(app: FastAPI) -> None:
             return no_store(
                 HTMLResponse(problem_page(services, str(result.get("result"))), status_code=410)
             )
-        url = await run_in_threadpool(
-            authentik_signin_url, services, int(result["authentik_user_id"])
-        )
         log.info("%s link used for pass %s", kind, result.get("pass_id"))
-        return no_store(RedirectResponse(with_return(url, target) if target else url, 303))
+        # the order's return_url was checked by Odoo when the app placed the order
+        response = RedirectResponse(target or services.settings.account_url, 303)
+        session.set_cookie(response, services.settings, int(result["partner_id"]), kind)
+        return no_store(response)
 
     @app.get("/signin/{token}", response_class=HTMLResponse)
     async def signin_page(token: str):

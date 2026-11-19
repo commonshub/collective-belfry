@@ -1,13 +1,13 @@
 """NIP-46 client check: connect to a ``bunker://`` URL the way a Nostr app does.
 
-Keycast hands out ``bunker://<bunker pubkey>?relay=<url>&secret=<secret>`` (OAuth token response,
+The signer hands out ``bunker://<bunker pubkey>?relay=<url>&secret=<secret>`` (OAuth token response,
 "create bunker", nostr-login). This module is the smoke test's remote-signing client: it opens the
 relay named in the URL, sends ``connect`` with the secret, asks ``get_public_key``, has a kind-1
 event signed and checks that a kind outside the policy is refused. Requests and responses are
 NIP-44 v2 encrypted (the signer mirrors the request's encryption); the client key is throwaway.
 
     python -m belfry_onboarding.nip46check "<bunker url>" --expect-pubkey <hex>
-        [--refused-kind 9735] [--map localhost:3080=keycast-relay:8080] [--timeout 20]
+        [--refused-kind 9735] [--map localhost:3080=bunker-relay:8080] [--timeout 20]
 
 ``--map`` rewrites the relay host (the public relay URL in the bunker URL is not reachable from
 inside the Compose network). Exit code 0 when every step passed; the steps are printed.
@@ -279,8 +279,8 @@ def run_check(
             failures += 1
 
     try:
-        # Like real clients, retry the connect: for 30 s after a Keycast instance died without
-        # leaving the signer hashring, requests hashed to it are dropped without an answer.
+        # Like real clients, retry the connect: a request sent while the signer (re)subscribes to
+        # the relay after a restart goes unanswered.
         for attempt in range(1, 4):
             try:
                 reply = client.call("connect", [client.bunker_pubkey, client.secret or "", ""])

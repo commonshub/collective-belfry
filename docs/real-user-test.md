@@ -32,8 +32,9 @@ before the event).
 A week before:
 
 - [ ] **Mail check.** Two test passes with a Gmail and an Outlook address (yours or a helper's):
-  the activation mail and a magic link reach the inbox, not spam, and the links work. If they land
-  in spam, check SPF and DKIM for the sender domain (`MAIL_FROM`, `../infra/DEPLOY.md`).
+  the activation mail and a sign-in mail (link and code) reach the inbox, not spam, and the links
+  work. If they land in spam, check SPF and DKIM for the sender domain (`MAIL_FROM`,
+  `../infra/DEPLOY.md`).
 - [ ] **Pass dates and the test notice.** The passes must be valid on the test days, otherwise
   `/check` answers "not valid yet" (the event is in January 2027). A pass starts on the later of
   its payment day and `EVENT_START`, so in the VM's `infra/.env` set `EVENT_START` to the test day
@@ -80,7 +81,7 @@ screenshot (see "Reporting a problem").
 
 | Testers | They should see | Steward |
 | --- | --- | --- |
-| Open the activation mail and click **Sign in to Open Source Village**. | Signed in without a password; the account page at `apps.belfry.tofauti.net` with the pass card and the community apps. | Helps whoever has no mail: spam folder, then **New sign-in link** on `/steward`. |
+| Open the activation mail and click **Sign in to Open Source Village**. | Signed in without a password; the account page at `pass.belfry.tofauti.net/account` with the pass card and the community apps. | Helps whoever has no mail: spam folder, then **New sign-in link** on `/steward`. |
 | Open **Directory**, then **Your entry**: name, **About you**, tick **List me in the directory**, save. | An avatar appears even without a picture of their own; after saving, their entry is in the list. | |
 | Look at the others in the directory. | Everyone who chose to be listed. | |
 
@@ -116,7 +117,7 @@ The steward pairs the testers (A and B). Each pair does all four, in any order.
 | Each reports one thing with **Report** (an entry in the directory, an offer or a photo) and gives a reason. | "Thank you. The stewards will look at it." | On `/steward`, **Reports**: picks one and **Hide content**. |
 | Reload the reported page. | The hidden item is gone in the directory, market and photos. | |
 | In any app: **Log out**. Then open another app. | Logged out everywhere; the other app asks to sign in. | |
-| On the phone: open https://apps.belfry.tofauti.net, **Sign in with Open Source Village**, enter the e-mail, open the mailed link **in the same browser on the phone**. | Signed in on the phone. | Helps where the mail app opens links in its own browser: copy the link into the browser where the sign-in started. |
+| On the phone: open https://pass.belfry.tofauti.net/login, enter the e-mail, then type the mailed 6-digit code on that page (or open the mailed link). | Signed in on the phone. | Helps where the mail app opens the link in its own browser: that browser is then signed in, not the one where the sign-in started; the code avoids that. |
 | On `/me`: **invite a friend** (up to 3). Send the link only to someone who wants to take part in the test. | A personal invite link; the count of invites left. | |
 
 ### Feedback round
@@ -174,7 +175,7 @@ The observer, on the VM (`../docs/runbook.md` has the variables):
 ```bash
 cd ~/belfry
 C="docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml --profile app"
-$C logs -f --since 5m onboarding keycast authentik-server authentik-worker odoo village vote mint \
+$C logs -f --since 5m onboarding signer odoo village vote mint \
   | grep -iE 'error|exception|traceback|refus|denied| 5[0-9][0-9] |timeout'
 ```
 
@@ -190,14 +191,14 @@ text or a screenshot. The observer matches it with the logs.
 
 ## Known limits
 
-- A magic link must be opened in the browser where the sign-in started; mail apps on phones often
-  open links in a browser of their own. A link opened elsewhere ends on a page with a button to
-  sign in again. The 6-digit code in the same mail avoids that: type it on the sign-in page.
+- The mailed link signs in the browser that opens it; mail apps on phones often open links in a
+  browser of their own, which is then signed in instead of the one where the sign-in started. The
+  6-digit code in the same mail avoids that: type it on the sign-in page.
 - Polls show results only after they close; there is no early close (the shortest is 15 minutes).
 - The chat's private messages had not been tested between two real people before this test.
 - The wallet pass works with walt.id's web wallet; national EUDI wallets and the EUDI reference
   wallet are not expected to accept Belfry as an issuer yet.
-- Admin pages (`/steward`, Odoo's back office, Authentik's admin) answer only over ZeroTier.
+- Admin pages (`/steward`, Odoo's back office) answer only over ZeroTier.
 
 ## Results
 

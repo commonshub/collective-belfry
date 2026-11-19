@@ -70,8 +70,8 @@ def test_me_for_a_member(services, odoo, client):
     assert me["passes"][0]["tokens"] == 350
 
 
-def test_me_for_a_steward(services, odoo, client, authentik):
-    key, _ = holder(services, odoo, authentik, steward_group=True)
+def test_me_for_a_steward(services, odoo, client):
+    key, _ = holder(services, odoo, steward_group=True)
     assert get(client, key, "/api/me").json()["steward"] is True
 
 

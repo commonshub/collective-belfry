@@ -3,8 +3,8 @@
 #
 #   infra/scripts/prod-env.sh <domain> <acme e-mail>
 #
-# Hostnames (proxy/Caddyfile): shop. (Odoo; ODOO_HOST_PREFIX=odoo keeps the old name), login., apps., relay., bunker., issuer., verifier.,
-# pass., calendar.<domain>; NIP-05 names are <member>@<domain>. Re-run gen-secrets.sh afterwards so the
+# Hostnames (proxy/Caddyfile): shop. (Odoo; ODOO_HOST_PREFIX=odoo keeps the old name), relay., bunker., issuer., verifier.,
+# pass. (sign-in, account page), calendar.<domain> (login. and apps. lead to pass.); NIP-05 names are <member>@<domain>. Re-run gen-secrets.sh afterwards so the
 # issuer and verifier certificates carry the public hostnames, then bootstrap.
 set -euo pipefail
 DOMAIN=${1:?domain, e.g. belfry.example}
@@ -30,9 +30,6 @@ values = {
     "ACME_EMAIL": acme,
     "ODOO_HOST_PREFIX": shop,
     "ODOO_PUBLIC_URL": f"https://{shop}.{domain}",
-    "AUTHENTIK_PUBLIC_URL": f"https://login.{domain}",
-    "KEYCAST_APP_URL": f"https://apps.{domain}",
-    "KEYCAST_TENANT_DOMAIN": f"apps.{domain}",
     "BUNKER_PUBLIC_RELAYS": f"wss://bunker.{domain}",
     "NIP05_DOMAIN": domain,
     "ISSUER_PUBLIC_URL": f"https://issuer.{domain}",
@@ -46,7 +43,7 @@ values = {
     "MAIL_FROM": mail_from,
     "BLOSSOM_PUBLIC_DOMAIN": f"blossom.{domain}",
     "COMMUNITY_RELAY_URL": f"wss://relay.{domain}",
-    # Keycast patch 0014: the custody seed lives in memory only (scripts/custody-seed.sh unlock)
+    # the signer's custody seed lives in memory only (scripts/custody-seed.sh unlock)
     "CUSTODY_SEED_DIR": "/run/belfry",
     "CALENDAR_PUBLIC_URL": f"https://calendar.{domain}",
     "BLOSSOM_PUBLIC_URL": f"https://blossom.{domain}",

@@ -67,8 +67,8 @@ class BelfryReport(models.Model):
 
     def _pass_for_pubkey(self, pubkey):
         Pass = self.env['belfry.pass'].sudo()
-        active = Pass.search([('keycast_pubkey', '=', pubkey), ('state', '=', 'active')], limit=1)
-        return active or Pass.search([('keycast_pubkey', '=', pubkey)], order='id desc', limit=1)
+        active = Pass.search([('nostr_pubkey', '=', pubkey), ('state', '=', 'active')], limit=1)
+        return active or Pass.search([('nostr_pubkey', '=', pubkey)], order='id desc', limit=1)
 
     @api.model
     def belfry_report_create(self, vals, steward_emails=None):

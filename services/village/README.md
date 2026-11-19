@@ -10,7 +10,7 @@ Four community apps of Open Source Village:
 - **Programme** at `programme.<domain>`: what is on, as a list for the phone (see "Programme" below).
 
 All are browser apps that read and write the community relay with the participant's own signer
-("Sign in with Open Source Village" through Keycast, silent once per tab, or a browser extension or
+("Sign in with Open Source Village" through Belfry's sign-in at `pass.<domain>`, silent once per tab, or a browser extension or
 bunker URL after self-custody). One Node process serves them (ports 8080, 8081, 8082 and 8083) and
 answers one question: which keys hold an active pass.
 
@@ -62,9 +62,9 @@ answers one question: which keys hold an active pass.
   app filters it out (lists, pages, comments, "What's new"), except for the author, who sees a
   notice instead. The content itself stays on the relay.
 
-Kinds signed: 0, 5, 7, 20, 1111, 22242, 24242, 27235, 30078, 30402 (all in the `belfry-event`
-policy). Keycast clients `belfry-people`, `belfry-market` and `belfry-photos`, registered by
-bootstrap with `<URL>/oauth/callback` and trusted (`KEYCAST_TRUSTED_CLIENTS`).
+Kinds signed: 0, 5, 7, 20, 1111, 22242, 24242, 27235, 30078, 30402 (the signer signs any kind).
+OAuth clients `belfry-people`, `belfry-market` and `belfry-photos` with `<URL>/oauth/callback`,
+Belfry's own apps (`OAUTH_CLIENTS` in `docker-compose.yml`: no consent screen).
 
 ## Programme
 
@@ -119,8 +119,8 @@ other apps point at it:
 | Add to my calendar | an .ics file made in the browser, with a reminder 15 minutes before | the phone's own calendar |
 
 Sessions of participants and comments can be reported (`session`, `comment`); the programme's
-own events cannot. No new kinds in the policy (31923, 31925, 1111, 20 and 9321 were in).
-Keycast client `belfry-programme`.
+own events cannot. Kinds signed: 31923, 31925, 1111, 20 and 9321. OAuth client
+`belfry-programme`.
 
 **Shifts** (`#/shifts`). Volunteers earn their pass with shifts, which live in Odoo, never on the
 relay (docs/NEXT_STEPS.md §3zh). This app's server answers `GET /api/shifts` and
@@ -148,7 +148,7 @@ offer pages); deleted events are dropped. The rules are `activityFromEvent` in `
 
 ## Build and run
 
-Node 24, no framework, like `services/vote` (whose NIP-98 check and Keycast sign-in are copied
+Node 24, no framework, like `services/vote` (whose NIP-98 check and sign-in are copied
 here): `server/` (node:http), `web/shared` (sign-in, signer, relay with NIP-42 AUTH, the event
 formats in `model.js`), `web/people`, `web/market`, `web/photos`, `web/programme` (vanilla JS,
 Vite; `APP=people|market|photos|programme vite build -c web/vite.config.js`). Compose service
@@ -158,7 +158,7 @@ Vite; `APP=people|market|photos|programme vite build -c web/vite.config.js`). Co
 
 | Build arg | Meaning |
 | --- | --- |
-| `VITE_KEYCAST_URL`, `VITE_APPS_URL` | Keycast (sign-in, the app bar's home) |
+| `VITE_KEYCAST_URL`, `VITE_APPS_URL` | the sign-in (`ONBOARDING_PUBLIC_URL`; the name is Keycast's, whose paths the onboarding service serves) and the app bar's home (`<ONBOARDING_PUBLIC_URL>/account`, the account page) |
 | `VITE_RELAY_URL` | the community relay (`COMMUNITY_RELAY_URL`) |
 | `VITE_BLOSSOM_URL` | Blossom for listing photos and the photos app (`BLOSSOM_PUBLIC_URL`) |
 | `VITE_CHAT_URL`, `VITE_WALLET_URL`, `VITE_PEOPLE_URL`, `VITE_PHOTOS_URL`, `VITE_PROGRAMME_URL` | links between the apps |

@@ -13,7 +13,7 @@ is not a wallet.
     python -m belfry_onboarding.testwallet metadata https://issuer.<domain>/openid4vci
 
 The sign-in variant (authorization-code offer with issuer_state, as DIDroom uses it) is split in
-two, because the browser part (Issuer2's login at Authentik) happens outside the wallet:
+two, because the browser part (Issuer2's login at Belfry, oidc.py) happens outside the wallet:
 
     python -m belfry_onboarding.testwallet signin-start '<offer>' --state s.json   # prints the URL
     # ... a browser opens that URL and ends at <redirect_uri>?code=...&state=...

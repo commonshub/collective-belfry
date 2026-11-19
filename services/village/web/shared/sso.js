@@ -1,6 +1,8 @@
-// "Sign in with Open Source Village" through Keycast's OAuth (authorization code + PKCE), copied from
-// services/vote: the token response's bunker URL connects the app over NIP-46. prompt=none once per
-// tab on load; logout revokes the authorization and ends the Keycast and Authentik sessions.
+// "Sign in with Open Source Village" through Belfry's sign-in (the onboarding service, the same
+// OAuth shape Keycast had until 2026-11-19: authorization code + PKCE): the token response carries
+// a bunker:// URL for NIP-46. prompt=none once per tab on load; logout revokes this app's sign-in
+// and ends Belfry's session (/api/auth/oidc/logout), or the silent check would sign back in.
+// VITE_KEYCAST_URL keeps its name: it is the sign-in's URL (pass.<domain>).
 const KEYCAST_URL = (import.meta.env.VITE_KEYCAST_URL || "").replace(/\/$/, "")
 const CLIENT_ID = import.meta.env.VITE_OAUTH_CLIENT_ID
 const SCOPE = "policy:belfry-event"
@@ -60,7 +62,7 @@ export async function finishSso(search) {
   const returnTo = pending?.returnTo || "#/"
   if (!pending || params.get("state") !== pending.state) return { ok: false, error: "state_mismatch", returnTo }
   if (params.get("error")) {
-    // error_description=self_custody (Keycast patch 0012): the participant holds their own key
+    // error_description=self_custody: the participant holds their own key
     // now, so the app signs in with their own signer instead.
     return { ok: false, error: params.get("error"), description: params.get("error_description"), returnTo }
   }

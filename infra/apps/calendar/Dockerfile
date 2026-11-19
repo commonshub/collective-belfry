@@ -21,21 +21,24 @@ COPY brand/apps/calendar-180.png public/apple-touch-icon.png
 COPY brand/osv-bar.js public/osv-bar.js
 RUN pnpm install --frozen-lockfile
 # The community relay (NIP-42 whitelist of active passes) is the only relay for reading and
-# writing; VITE_TEST_RELAY is the app's single-relay switch. VITE_SIGNER_RELAYS: Keycast's NIP-46
-# relay for "nostrconnect" logins. VITE_MAIL_API_BASE_URL empty: no lookups at api.formstr.app.
+# writing; VITE_TEST_RELAY is the app's single-relay switch. VITE_SIGNER_RELAYS: the signer's NIP-46
+# relay (bunker-relay) for "nostrconnect" logins. VITE_MAIL_API_BASE_URL empty: no lookups at api.formstr.app.
 ARG VITE_TEST_RELAY=ws://localhost:3090
 ARG VITE_SIGNER_RELAYS=ws://localhost:3080
 ARG VITE_BRAND_URL=http://localhost:8100/brand
-# The sidebar's Apps link (Keycast's apps page, where participants copy their bunker URL) and
-# About link; with VITE_APPS_URL set, Formstr's privacy policy and contact form are hidden.
-ARG VITE_APPS_URL=http://localhost:3000
+# The sidebar's Apps link (the account page, pass.<domain>/account, where participants copy a
+# bunker URL) and About link; with VITE_APPS_URL set, Formstr's privacy policy and contact form
+# are hidden.
+ARG VITE_APPS_URL=http://localhost:8100/account
 ARG VITE_ABOUT_URL=https://opensourcevillage.org
-# The app bar's links to the other apps (Name|URL|Description;..., as Keycast's
-# BELFRY_COMMUNITY_APPS); the bar's home link is VITE_APPS_URL.
+# The app bar's links to the other apps (Name|URL|Description;..., as the onboarding
+# service's BELFRY_COMMUNITY_APPS); the bar's home link is VITE_APPS_URL.
 ARG VITE_COMMUNITY_APPS=""
-# "Sign in with Open Source Village": Keycast's OAuth (client belfry-calendar, redirect URI
-# <origin>/oauth/callback) yields the bunker URL; empty disables the button and the silent check.
-ARG VITE_KEYCAST_URL=http://localhost:3000
+# "Sign in with Open Source Village": Belfry's OAuth at the onboarding service (client
+# belfry-calendar, redirect URI <origin>/oauth/callback) yields the bunker URL; the name is
+# Keycast's, which served the same paths before 2026-11-19 (Compose passes ONBOARDING_PUBLIC_URL).
+# Empty disables the button and the silent check.
+ARG VITE_KEYCAST_URL=http://localhost:8100
 # The programme key (PROGRAMME_PUBKEY): its public calendar events on the community relay are the
 # sidebar's "Open Source Village" calendars (programme and rooms, patch 0004); empty hides them.
 ARG VITE_PROGRAMME_PUBKEY=""

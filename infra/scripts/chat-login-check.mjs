@@ -9,13 +9,13 @@
 // (SAVE_BUNKER_URL=<file> make smoke). Exit code 0 on success; the page's console errors and a
 // screenshot help otherwise.
 //
-// Sign in with Open Source Village (Keycast patch 0008): pass "-" as the bunker URL.
-//   COOKIE_JAR=<curl jar of the participant's Authentik session> (SAVE_AK_JAR=<file> make smoke):
+// Sign in with Open Source Village (Belfry's sign-in): pass "-" as the bunker URL.
+//   COOKIE_JAR=<curl jar of the participant's Belfry session> (SAVE_SESSION_JAR=<file> make smoke):
 //     opening the app signs in silently, no click; the session for <pubkey> appears.
 //   without COOKIE_JAR: the silent attempt fails and the login screen offers the button.
-//   COOKIE_JAR and LOGOUT=1: then logs out (/logout, Keycast patch 0010): the app comes back to
-//     its login screen without signing in again, and the Authentik session has ended
-//     (AK_URL, default http://localhost:9000). The jar's session is ended by this.
+//   COOKIE_JAR and LOGOUT=1: then logs out (/logout): the app comes back to its login screen
+//     without signing in again, and Belfry's session has ended (PASS_URL, default
+//     http://localhost:8100). The jar's session is ended by this.
 import {spawn} from "node:child_process"
 import {readFileSync, writeFileSync} from "node:fs"
 
@@ -96,7 +96,7 @@ const sessionFor = `Object.values(localStorage).some(v => typeof v === "string" 
 
 const visited = []
 const logoutCheck = async () => {
-  const akUrl = (process.env.AK_URL || "http://localhost:9000").replace(/\/$/, "")
+  const passUrl = (process.env.PASS_URL || "http://localhost:8100").replace(/\/$/, "")
   ws.addEventListener("message", e => {
     const m = JSON.parse(e.data)
     if (m.method === "Page.frameNavigated" && !m.params.frame.parentId) visited.push(m.params.frame.url)
@@ -111,11 +111,10 @@ const logoutCheck = async () => {
   const hosts = visited.map(u => new URL(u).host + new URL(u).pathname.replace(/\/(if\/flow\/[^/]+|api\/auth\/oidc\/[a-z-]+).*/, "/$1")).join(" -> ")
   console.log(`  ok   logout: back in the app signed out, no silent sign-in (${hosts})`)
   if (await evaluate(sessionFor)) throw new Error("the session is still in localStorage after the logout")
-  await send("Page.navigate", {url: akUrl + "/api/v3/core/users/me/"})
+  await send("Page.navigate", {url: passUrl + "/account"})
   await sleep(1500)
-  const me = await evaluate("document.body.innerText")
-  if (me.includes('"username"') && !me.includes("AnonymousUser")) throw new Error("Authentik still has a session: " + me.slice(0, 120))
-  console.log("  ok   logout: the Authentik session has ended")
+  if ((await evaluate("location.pathname")) !== "/login") throw new Error("Belfry still has a session after the logout")
+  console.log("  ok   logout: Belfry's sign-in has ended (the account page asks to sign in)")
 }
 
 const ssoCheck = async () => {

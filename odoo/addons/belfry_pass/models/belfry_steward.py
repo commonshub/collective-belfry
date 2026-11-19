@@ -8,7 +8,7 @@ _logger = logging.getLogger(__name__)
 
 def _check_service_caller(env):
     """The steward pages (onboarding service, /steward) call these methods as the service user,
-    which is a Belfry admin; the steward has signed in through Authentik there. Stewards with an
+    which is a Belfry admin; the steward has signed in with Belfry's sign-in there. Stewards with an
     Odoo login use the back office instead."""
     if not env.user.has_group('belfry_pass.group_admin'):
         raise AccessError("Only Belfry admins (the onboarding service) may act for stewards.")

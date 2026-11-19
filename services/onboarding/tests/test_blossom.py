@@ -71,7 +71,7 @@ def test_delete_needs_the_delete_verb():
         blossom.check_event(signed_event(key, verb="upload"), "DELETE", [], now=NOW)
 
 
-def test_gate_endpoint_requires_an_active_pass(client, services, odoo, keycast, monkeypatch):
+def test_gate_endpoint_requires_an_active_pass(client, services, odoo, signer, monkeypatch):
     monkeypatch.setattr(blossom.time, "time", lambda: NOW)
     key = PrivateKey()
     pubkey = key.public_key_xonly.format().hex()
@@ -84,8 +84,7 @@ def test_gate_endpoint_requires_an_active_pass(client, services, odoo, keycast, 
     p = next(
         p for p in odoo.tables["belfry.pass"].values() if p.get("invoice_id") == ids["invoice"]
     )
-    p["keycast_pubkey"] = pubkey  # the fake Keycast key becomes this test key
-    keycast.status[pubkey] = "active"  # so the later revoke can suspend it
+    p["nostr_pubkey"] = pubkey  # the fake signer's key becomes this test key
     r = client.get(
         "/blossom/auth",
         headers={"Authorization": header(signed_event(key)), "X-Forwarded-Method": "PUT"},

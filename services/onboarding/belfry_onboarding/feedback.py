@@ -2,9 +2,9 @@
 
 Every app links here (the app bar's "Feedback", the footer of these pages) with ``?from=<page>``.
 The form asks what happened and what was expected, with an optional screenshot; it works without
-signing in. When the pass page's session cookie is there (mypass.py), the feedback names the
+signing in. When Belfry's session cookie is there (session.py), the feedback names the
 participant, otherwise an optional e-mail address. Stored in Odoo (``belfry.feedback``) and
-mailed to every member of the stewards group; stewards read it on the steward pages.
+mailed to every steward; stewards read it on the steward pages.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import mypass
+from . import core, session
 from .claim import page
 from .core import Services
 
@@ -93,7 +93,7 @@ def submit(svc: Services, vals: dict[str, Any], shot: bytes | None, shot_type: s
     if shot is not None and (shot_type not in SCREENSHOT_TYPES or len(shot) > SCREENSHOT_MAX_BYTES):
         raise FeedbackError("The screenshot must be a PNG, JPEG or WebP image of at most 5 MB.")
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = core.steward_emails(svc)
     except Exception:  # noqa: BLE001 - feedback counts even when the mail cannot be addressed
         log.exception("feedback: could not list the stewards' e-mail addresses")
         stewards = []
@@ -116,10 +116,8 @@ def register(app: FastAPI) -> None:
         return request.app.state.services
 
     def partner_of(request: Request, services: Services) -> int | None:
-        if not mypass.enabled(services):
-            return None
-        sess = mypass._verify(services, request.cookies.get(mypass.SESSION_COOKIE), "session")
-        return int(sess["partner"]) if sess else None
+        current = session.current(request)
+        return current.partner_id if current else None
 
     @app.get("/feedback", response_class=HTMLResponse)
     async def feedback_form(request: Request):

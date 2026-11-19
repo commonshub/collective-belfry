@@ -1,12 +1,12 @@
 // Drives the village wallet (infra/apps/wallet) in headless Chromium, as two participants:
 //
-//   1. A opens the wallet with their Authentik session (COOKIE_JAR): silent sign-in, the seed and
+//   1. A opens the wallet with their Belfry session (COOKIE_JAR): silent sign-in, the seed and
 //      the nutzap key derive from A's Nostr key, kind 10019 is published ("others can send you
 //      tokens"); with PASS_TOKENS=<n> the pass's n tokens come in on their own (and only once);
 //      a token link (TOKEN=cashuB…, e.g. from the pass's tokens page) is received; Receive shows
 //      the pay-link QR; with PICK=1, A sends 1 token to the first participant listed in the
 //      directory (after village-check.mjs, that is B).
-//   2. With SECOND_JAR (B's Authentik session) and SECOND_PUB (B's pubkey hex): B opens the
+//   2. With SECOND_JAR (B's Belfry session) and SECOND_PUB (B's pubkey hex): B opens the
 //      wallet too, A sends B 5 tokens with "Send to a participant" (a NIP-61 nutzap), and B's
 //      wallet redeems it.
 //
@@ -14,7 +14,7 @@
 //   COOKIE_JAR=a.jar TOKEN=cashuB… [SECOND_JAR=b.jar SECOND_PUB=<hex>] \
 //   node infra/scripts/wallet-check.mjs http://localhost:3400 [shot-prefix]
 //
-// The jars are curl cookie jars (SAVE_AK_JAR=<file> make smoke, twice for two participants).
+// The jars are curl cookie jars (SAVE_SESSION_JAR=<file> make smoke, twice for two participants).
 import {spawn} from "node:child_process"
 import {readFileSync, writeFileSync} from "node:fs"
 

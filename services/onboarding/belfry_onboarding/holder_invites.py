@@ -1,10 +1,10 @@
 """Invites by e-mail or as a link, for a pass holder or an agent acting for them: ``/api/invites``.
 
 There is no API key. Every request carries a NIP-98 authorization (kind 27235) signed with the
-holder's Nostr key, through a Keycast bunker or the holder's own signer, exactly as the relays
+holder's Nostr key, through a bunker of Belfry's signer or the holder's own signer, as the relays
 and Blossom check the same key. The key must hold an active pass, and the holder's rights apply:
-a participant's invites count against ``belfry.invites_per_participant``, a steward's (a member of
-``STEWARD_GROUP`` in Authentik) do not. Belfry mails the invite link to the invitee
+a participant's invites count against ``belfry.invites_per_participant``, a steward's (Odoo:
+``res.partner.belfry_steward``) do not. Belfry mails the invite link to the invitee
 (``belfry_holder_invites.py`` in Odoo); without an e-mail the answer's link (``url``, the code at
 its end) is for the holder to pass on, nothing is mailed. The invitee chooses and pays, and the
 invite shows the new participant's npub once the pass is active.
@@ -93,7 +93,7 @@ def holder(svc: Services, pubkey: str) -> dict[str, Any]:
     """The partner behind an active pass of ``pubkey``, and whether they are a steward."""
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        [["state", "=", "active"], ["nostr_pubkey", "=", pubkey]],
         ["partner_id"],
         limit=1,
     )
@@ -101,13 +101,9 @@ def holder(svc: Services, pubkey: str) -> dict[str, Any]:
     if not partner_id:
         raise ApiError(403, "no_pass", "This key holds no active pass.")
     partner = (
-        svc.odoo.read_one("res.partner", partner_id, ["name", "email", "belfry_authentik_user_id"])
-        or {}
+        svc.odoo.read_one("res.partner", partner_id, ["name", "email", "belfry_steward"]) or {}
     )
-    user_pk = partner.get("belfry_authentik_user_id")
-    steward = bool(user_pk) and int(user_pk) in svc.authentik.group_member_pks(
-        svc.settings.steward_group
-    )
+    steward = bool(partner.get("belfry_steward"))
     return {"partner_id": partner_id, "email": partner.get("email") or "", "steward": steward}
 
 

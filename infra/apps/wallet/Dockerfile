@@ -17,16 +17,19 @@ COPY brand/osv-bar.js public/osv-bar.js
 COPY brand/fonts.css public/belfry/fonts.css
 COPY brand/fonts public/belfry/fonts
 COPY infra/apps/wallet/brand.mjs /tmp/brand.mjs
-# The village mint (unit "osv"), Keycast for "Sign in with Open Source Village" (client
-# belfry-wallet, redirect URI <origin>/oauth/callback; derive_secret for the seed and the nutzap
-# key) and the community relay (NIP-61 nutzaps, NIP-42 AUTH signed by Keycast).
+# The village mint (unit "osv"), Belfry's sign-in for "Sign in with Open Source Village" (the
+# onboarding service; client belfry-wallet, redirect URI <origin>/oauth/callback; derive_secret
+# for the seed and the nutzap key; BELFRY_KEYCAST_URL keeps Keycast's name, which served the same
+# paths before 2026-11-19) and the community relay (NIP-61 nutzaps, NIP-42 AUTH signed through
+# the onboarding service's HTTP RPC).
 ARG BELFRY_MINT_URL=http://localhost:3338
-ARG BELFRY_KEYCAST_URL=http://localhost:3000
+ARG BELFRY_KEYCAST_URL=http://localhost:8100
 ARG BELFRY_COMMUNITY_RELAY=ws://localhost:3090
 # The onboarding service: the pass's tokens after signing in (GET /wallet/pass-tokens).
 ARG BELFRY_PASS_URL=http://localhost:8100
-# The app bar: home link (Keycast's apps page) and the other apps (Name|URL|Description;...).
-ARG APPS_URL=http://localhost:3000
+# The app bar: home link (the account page, pass.<domain>/account) and the other apps
+# (Name|URL|Description;...).
+ARG APPS_URL=http://localhost:8100/account
 ARG COMMUNITY_APPS=""
 RUN node /tmp/brand.mjs "$APPS_URL" "$COMMUNITY_APPS"
 ENV BELFRY_MINT_URL=$BELFRY_MINT_URL BELFRY_KEYCAST_URL=$BELFRY_KEYCAST_URL \

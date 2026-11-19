@@ -203,7 +203,7 @@ PASS_STATE_ORDER = {"active": 0, "pending": 1, "expired": 2, "revoked": 3}
 
 
 def pass_info(svc: Services, partner_id: int) -> dict[str, Any] | None:
-    """The partner's pass as the community apps show it (Keycast's "Your pass" card): the active
+    """The partner's pass as the account page shows it: the active
     pass if there is one, else the newest. None when the partner has no pass."""
     rows = svc.odoo.search_read(
         "belfry.pass",

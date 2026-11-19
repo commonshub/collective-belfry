@@ -10,11 +10,10 @@ class ResPartner(models.Model):
         readonly=True,
         index=True,
         help="Immutable member identifier (OSV-0001). Assigned when the partner first gets a pass. "
-             "Used as the subject of the pass bridge and the Authentik source link.",
+             "The member's NIP-05 name (lower case) and the subject of the pass sign-in.",
     )
-    belfry_authentik_user_id = fields.Integer(string="Authentik user id", copy=False, index=True)
     belfry_npub = fields.Char(string="Nostr npub", copy=False, index=True)
-    # Keycast patch 0014: Belfry derives the partner's key from its custody seed with this
+    # Belfry's signer (services/signer) derives the partner's key from the custody seed with this
     # version (raise it to replace a leaked key); after a self-custody move the partner holds
     # their own key and recovery recreates a keyless account for it.
     belfry_key_version = fields.Integer(string="Key version", default=0, copy=False)

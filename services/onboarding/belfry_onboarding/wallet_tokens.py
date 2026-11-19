@@ -67,7 +67,7 @@ def pass_tokens(svc: Services, pubkey: str) -> list[dict[str, Any]]:
         return []
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["cashu_token", "!=", False]],
+        [["state", "=", "active"], ["nostr_pubkey", "=", pubkey], ["cashu_token", "!=", False]],
         ["id", "cashu_token", "cashu_amount", "tier"],
     )
     out = []

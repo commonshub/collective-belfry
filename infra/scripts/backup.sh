@@ -28,7 +28,7 @@
 #                           belfry-drill), compare with the backup's manifest, remove it again
 #
 # Never in a backup: the custody seed in plain (only custody-seed.age, if copied to
-# infra/secrets/), Caddy's certificates (Let's Encrypt issues new ones), Redis, the NIP-46 relay.
+# infra/secrets/), Caddy's certificates (Let's Encrypt issues new ones), the NIP-46 relay.
 #
 # Settings (infra/.env or the environment):
 #   BACKUP_RECIPIENTS  age recipients, space separated (age1…; a second, offline key is a good idea)
@@ -67,10 +67,14 @@ compose() {
 }
 project() { compose config --format json | jq -r .name; }
 
-# What a backup holds. Volumes: state that is not derived from Odoo (the relay whitelist config,
-# the NIP-46 relay and Redis are). The SQLite and LMDB volumes are paused while they are copied.
-VOLUMES=(odoo-data mint-data vote-data blossom-data community-relay-data authentik-media git-data)
-PAUSE=(mint vote blossom relay git)
+# What a backup holds. Volumes: state that is not derived from Odoo (the relay whitelist config
+# and the NIP-46 relay are). The signer's data holds the members' keys sealed with
+# secrets/signer_master_key (in the files below): keys from before the custody seed exist only
+# there. The SQLite and LMDB volumes are paused while they are copied.
+VOLUMES=(odoo-data mint-data vote-data blossom-data community-relay-data signer-data git-data)
+PAUSE=(mint vote blossom relay signer git)
+# infra/keycast/master.key: Keycast's master key, as long as a deployment from before the move
+# (2026-11-19) still has it; secrets/signer_master_key is the same key.
 FILES=(infra/.env infra/keycast/master.key infra/issuer/keys infra/odoo/odoo.conf
   infra/issuer/config/issuer2-profiles.conf infra/issuer/config/issuer-service.conf
   infra/issuer/config/authentication-service.conf infra/verifier/config/verifier-service.conf
@@ -340,9 +344,9 @@ cmd_drill() {
   diff=$(jq -n --argjson a "$(jq .databases "$dir/manifest.json")" --argjson b "$now" \
     '[$a | to_entries[] | .key as $db | .value | to_entries[] | select($b[$db][.key] != .value)
       | "\($db).\(.key): \(.value) at backup, \($b[$db][.key] // "missing") restored"]')
-  local key_tables='^(odoo\.public\.(belfry_pass|res_partner|account_move)|keycast\.public\.(users|personal_keys|oidc_identities)|authentik\.public\.authentik_core_user):'
+  local key_tables='^(odoo\.public\.(belfry_pass|res_partner|account_move|belfry_login_code)):'
   say "databases: $(jq -n --argjson b "$now" '[$b[]|length]|add') tables in $(jq -n --argjson b "$now" '$b|keys|join(", ")')"
-  for k in odoo.public.belfry_pass odoo.public.res_partner keycast.public.users keycast.public.personal_keys authentik.public.authentik_core_user; do
+  for k in odoo.public.belfry_pass odoo.public.res_partner; do
     say "  ${k#*.public.}: $(jq -n --argjson b "$now" --arg db "${k%%.*}" --arg t "public.${k##*.public.}" '$b[$db][$t] // "missing"')"
   done
   if [[ "$(jq length <<<"$diff")" != 0 ]]; then

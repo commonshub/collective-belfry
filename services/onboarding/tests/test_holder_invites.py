@@ -34,17 +34,16 @@ def nip98(key: PrivateKey, url: str, method: str = "GET", body: bytes = b"", **o
     return "Nostr " + base64.b64encode(json.dumps(event).encode()).decode()
 
 
-def holder(services, odoo, authentik=None, steward_group=False) -> tuple[PrivateKey, int]:
-    """An active pass with a Keycast key; with ``steward_group`` its holder is a steward."""
+def holder(services, odoo, steward_group=False) -> tuple[PrivateKey, int]:
+    """An active pass with the holder's key; with ``steward_group`` its holder is a steward."""
     services.settings.public_url = BASE
     ids = seed_paid_invoice(odoo, tier="week")
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     p = next(p for p in odoo.tables["belfry.pass"].values() if p["invoice_id"] == ids["invoice"])
     key = PrivateKey()
-    p["keycast_pubkey"] = key.public_key_xonly.format().hex()
+    p["nostr_pubkey"] = key.public_key_xonly.format().hex()
     if steward_group:
-        user_pk = odoo.tables["res.partner"][ids["partner"]]["belfry_authentik_user_id"]
-        authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": {user_pk}}
+        odoo.tables["res.partner"][ids["partner"]]["belfry_steward"] = True
     return key, ids["partner"]
 
 
@@ -125,8 +124,8 @@ def test_holder_invite_as_a_link(services, odoo, client):
     assert {invite["id"], second.json()["id"]} <= {i["id"] for i in listed["invites"]}
 
 
-def test_steward_invites_without_limit(services, odoo, authentik, client):
-    key, partner = holder(services, odoo, authentik, steward_group=True)
+def test_steward_invites_without_limit(services, odoo, client):
+    key, partner = holder(services, odoo, steward_group=True)
     rows = [post(client, key, "/api/invites", {"email": f"s{i}@example.org"}) for i in range(5)]
     assert [r.status_code for r in rows] == [201] * 5
     stored = odoo.tables["belfry.invite"][rows[0].json()["id"]]
@@ -156,8 +155,7 @@ def test_requests_must_be_signed_by_a_pass_holder(services, odoo, client):
     assert bad.status_code == 422
 
 
-def test_add_steward_gives_a_free_pass_once(services, odoo, authentik):
-    authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": set()}
+def test_add_steward_gives_a_free_pass_once(services, odoo):
     first = steward.add_steward(services, "sam@belfry.test", "Steward Sam")
     assert first["pass"]["result"] == "activated"
     p = odoo.tables["belfry.pass"][first["pass"]["pass_id"]]

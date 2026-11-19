@@ -6,14 +6,15 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
 
 ## How participants use it
 
-1. Open the calendar. A participant who is signed in to Open Source Village (Authentik, or
-   Keycast within 24 h) is signed in without a click: on load the app tries Keycast's OAuth with
-   `prompt=none` once per tab and connects with the bunker URL the token response carries.
+1. Open the calendar. A participant who is signed in to Open Source Village (a session on
+   `pass.<domain>`) is signed in without a click: on load the app tries Belfry's OAuth
+   (`pass.<domain>/api/oauth/authorize`) with `prompt=none` once per tab and connects with the
+   bunker URL the token response carries.
 2. Otherwise the dialog offers **Sign in with Open Source Village** (the same OAuth, with the
-   e-mail link or the pass at Authentik when needed) and, below it, the manual way: on the apps
-   page (`apps.<domain>`) **Connect to Nostr App**, copy the bunker URL, paste it under
-   **Connect with Remote Signer (NIP-46)**. One bunker per app: Keycast binds the first client
-   that connects with its secret.
+   e-mail link and code or the pass on Belfry's login page when needed) and, below it, the manual
+   way: on the account page (`pass.<domain>/account`) **Connect a Nostr app**, copy the bunker
+   URL, paste it under **Connect with Remote Signer (NIP-46)**. One bunker per app: the signer
+   binds the first client that connects with its secret.
 3. Create a calendar first ("Create Calendar"), then events. Events are private by default
    (gift-wrapped to the invited participants). A public event is visible to anyone who opens
    its link (the app shows other people's public events only through links and invitations).
@@ -35,8 +36,8 @@ served as a static site at `calendar.<domain>` (locally http://localhost:3200).
    subscription; a failed participants request is retried after 30 seconds.
 
 Reading and writing go to the community relay only (NIP-42 AUTH as a participant with an active
-pass); the app signs through Keycast with the `belfry-event` policy (`infra/keycast/policy.sql`),
-which allows any kind since 2026-11-01. The app signs 0, 3, 5, 13, 1059, 10002, 22242, 30078,
+pass); the app signs through Belfry's signer, which signs any kind for the participant's
+connections. The app signs 0, 3, 5, 13, 1059, 10002, 22242, 30078,
 31923, 31925, 31926, 31927, 32069, 32123, 32678, 32680.
 
 ## Build
@@ -45,22 +46,23 @@ which allows any kind since 2026-11-01. The app signs 0, 3, 5, 13, 1059, 10002, 
 the OSV logo and mark from `brand/` and builds with pnpm 10. The URLs are build arguments, baked
 into the bundle (rebuild after changing them): `VITE_TEST_RELAY` (`COMMUNITY_RELAY_URL`, the
 app's single-relay switch), `VITE_SIGNER_RELAYS` (`BUNKER_PUBLIC_RELAYS`), `VITE_BRAND_URL`
-(`<ONBOARDING_PUBLIC_URL>/brand`, fonts and favicon), `VITE_APPS_URL` (`KEYCAST_APP_URL`),
-`VITE_ABOUT_URL`, `VITE_KEYCAST_URL` (`KEYCAST_APP_URL`; empty disables "Sign in with Open
-Source Village"). Keycast must know the client `belfry-calendar` with the redirect URI
-`<CALENDAR_PUBLIC_URL>/oauth/callback` and trust it (no consent screen; Keycast patch 0008,
-bootstrap). `VITE_MAIL_API_BASE_URL` is empty, so the app never calls Formstr's mail API.
+(`<ONBOARDING_PUBLIC_URL>/brand`, fonts and favicon), `VITE_APPS_URL`
+(`<ONBOARDING_PUBLIC_URL>/account`, the account page), `VITE_ABOUT_URL`, `VITE_KEYCAST_URL`
+(`ONBOARDING_PUBLIC_URL`, Belfry's sign-in; the patch kept Keycast's name, and the onboarding
+service serves the same paths; empty disables "Sign in with Open Source Village"). The client
+`belfry-calendar` with the redirect URI `<CALENDAR_PUBLIC_URL>/oauth/callback` is one of
+Belfry's own apps (`OAUTH_CLIENTS` in `docker-compose.yml`: no consent screen). `VITE_MAIL_API_BASE_URL` is empty, so the app never calls Formstr's mail API.
 
 Patch `0001-...patch`:
 
 - OSV palette, lime accent and dark mode as defaults, Geist and favicon from `/brand`, OSV
   logo, titles and manifest.
 - Sign in with Open Source Village (`src/belfry/sso.ts`): authorization code + PKCE against
-  Keycast, silent attempt on load (`prompt=none`, once per tab), callback `/oauth/callback`
+  Belfry's sign-in, silent attempt on load (`prompt=none`, once per tab), callback `/oauth/callback`
   exchanges the code and logs in with the bunker URL; any error opens the dialog.
 - Sign-in dialog: Sign in with Open Source Village first, then the remote signer with the
-  apps-page hint; "Existing Key" and "Create
-  Account" only with `VITE_LOCAL_KEYS=true` (participants have a managed key in Keycast).
+  account-page hint; "Existing Key" and "Create
+  Account" only with `VITE_LOCAL_KEYS=true` (participants have a managed key in Belfry's signer).
 - Sidebar: Apps and About point to the deployment; Formstr's privacy policy and contact form are
   hidden.
 - `@formstr/local-relay` raised from 0.6.0 to 0.6.5: 0.6.0 never answers NIP-42 AUTH challenges,
@@ -69,15 +71,15 @@ Patch `0001-...patch`:
 Patch `0002-...patch`: the Open Source Village app bar (`brand/osv-bar.js`, see
 `brand/README.md`) in `index.html` with `VITE_APPS_URL` as its home and `VITE_COMMUNITY_APPS` as
 its links; `html.osv-bar` sets `--safe-area-top`, which every top offset of the app reads, to the
-bar's height, and the desktop sidebar pads by it; the sidebar's Apps entry opens the apps page in
+bar's height, and the desktop sidebar pads by it; the sidebar's Apps entry opens the account page in
 the same tab; the PWA manifest uses the bar's dark green and the calendar's own icons from
 `brand/apps/` (copied by the Dockerfile), with a separate maskable icon and `apple-touch-icon.png`.
 
 Patch `0003-...patch`: logout ends the sign-in everywhere. The token exchange keeps
 the refresh token (localStorage); after the app's own logout `endSsoSession()` revokes it at
-Keycast (`POST /api/oauth/revoke`), sets the silent-try flag and goes through Keycast's
-`/api/auth/oidc/logout?return_to=<origin>/` (Keycast patch 0010), which ends the Keycast and
-Authentik sessions and comes back to the signed-out calendar. Check: `calendar-check.mjs` with
+Belfry's sign-in (`POST /api/oauth/revoke`), sets the silent-try flag and goes through
+`/api/auth/oidc/logout?return_to=<origin>/`, which ends the Belfry session and comes back to the
+signed-out calendar. Check: `calendar-check.mjs` with
 `SSO=1 LOGOUT=1`.
 
 Patch `0005-...patch`: the phone layout. Upstream shows "Calendar by" plus a small square logo;
@@ -101,5 +103,5 @@ calendar and an event and reads them back from a fresh browser profile:
 
     node infra/scripts/calendar-check.mjs http://localhost:3200/ <file with a bunker URL> /tmp/cal
 
-(a bunker URL from "Connect to Nostr App" on the apps page, used once: Keycast binds it to the
-first client; `CALENDAR=<name> CREATE=1 TITLE=<title>` also creates them).
+(a bunker URL from "Connect a Nostr app" on the account page, used once: the signer binds it to
+the first client; `CALENDAR=<name> CREATE=1 TITLE=<title>` also creates them).

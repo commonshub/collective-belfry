@@ -22,9 +22,9 @@ class TestReports(BelfryCase):
         })
         cls.bob = cls.env['res.partner'].create({'name': "Bob Author", 'email': 'bob@example.org'})
         cls.reporter_pass = cls.env['belfry.pass'].create({
-            'partner_id': cls.alice.id, 'tier': 'week', 'state': 'active', 'keycast_pubkey': REPORTER})
+            'partner_id': cls.alice.id, 'tier': 'week', 'state': 'active', 'nostr_pubkey': REPORTER})
         cls.author_pass = cls.env['belfry.pass'].create({
-            'partner_id': cls.bob.id, 'tier': 'day', 'state': 'active', 'keycast_pubkey': AUTHOR})
+            'partner_id': cls.bob.id, 'tier': 'day', 'state': 'active', 'nostr_pubkey': AUTHOR})
         cls.Report = cls.env['belfry.report'].with_user(cls.service_user)
 
     def _vals(self, **kw):

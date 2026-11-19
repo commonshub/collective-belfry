@@ -1,13 +1,13 @@
 // Browser check of the Open Source Village calendar (infra/apps/calendar): headless Chromium
-// (Playwright's build in ~/.cache/ms-playwright) signs in with a Keycast bunker URL, optionally
+// (Playwright's build in ~/.cache/ms-playwright) signs in with a bunker URL, optionally
 // creates a calendar (CALENDAR=<name>) and an event (CREATE=1 TITLE=<title>), and prints the
 // relay frames (OK/CLOSED/AUTH) and console errors. Screenshots: <out prefix>-*.png.
 // Usage: node calendar-check.mjs <app url> <file with a bunker URL> <out prefix>
 //   LOGOUT=1 (with SSO=1): log out from the account menu; expects the signed-out app and no
-//   silent sign-in afterwards (Keycast and Authentik sessions ended).
-//   SSO=1: no bunker URL (pass "-"): load COOKIE_JAR (a curl jar with the participant's Authentik
+//   silent sign-in afterwards (Belfry's session ended).
+//   SSO=1: no bunker URL (pass "-"): load COOKIE_JAR (a curl jar with the participant's Belfry
 //   session) into the browser and expect the silent "Sign in with Open Source Village" on load
-//   (Keycast prompt=none -> Authentik -> bunker URL) to sign in without the dialog.
+//   (prompt=none at Belfry's sign-in -> bunker URL) to sign in without the dialog.
 import { spawn } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 const [url, bunkerFile, out] = process.argv.slice(2);

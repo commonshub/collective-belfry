@@ -1,8 +1,9 @@
 #!/bin/sh
 # Renders Coracle's build-time .env for Belfry (Vite inlines VITE_* into the bundle).
 # Inputs (build args): CHAT_PUBLIC_URL, COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS, BLOSSOM_PUBLIC_URL,
-# KEYCAST_APP_URL (the signer for "Sign in with Open Source Village"; empty turns the button and the
-# silent sign-in off).
+# KEYCAST_APP_URL (Belfry's sign-in, the onboarding service, for "Sign in with Open Source Village";
+# the name is Keycast's, which served the same paths before 2026-11-19; empty turns the button and
+# the silent sign-in off).
 # Palette: brand/tokens.css (Open Source Village, dark only; the light theme gets the same values).
 set -eu
 : "${CHAT_PUBLIC_URL:?}" "${COMMUNITY_RELAY_URL:?}" "${BUNKER_PUBLIC_RELAYS:?}" "${BLOSSOM_PUBLIC_URL:?}"

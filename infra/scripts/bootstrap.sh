@@ -1,18 +1,17 @@
 #!/usr/bin/env bash
 # Bootstraps a running Belfry stack. Idempotent: every step checks before it changes.
 #
-#  1. waits for Odoo, Authentik and Keycast health
+#  1. waits for Odoo, the signer, the issuer and the verifier
 #  2. initialises the Odoo database "odoo" (belfry_pass when the module exists, else the
 #     standard modules it depends on), sets the admin password
 #  3. creates the Odoo technical user for the onboarding service and an API key for it
 #     (odoo shell, because res.users.apikeys.generate needs an existing key), stores the
 #     belfry.onboarding_url / belfry.hook_token config parameters
-#  4. bootstraps the Keycast admin (register with the ALLOWED_PUBKEYS key, verify through the
-#     dev inbox, login, fetch the admin token) and inserts the belfry-event policy
-#  5. waits for the Authentik bootstrap token and the Belfry blueprints (pass bridge, Keycast
-#     provider, sign-in link, magic-link login) and writes the SMTP settings into the
-#     magic-link e-mail stage
-#  6. writes ODOO_API_KEY, KEYCAST_ADMIN_TOKEN, AUTHENTIK_TOKEN into infra/secrets/ (scripts/secrets.sh)
+#  4. checks the signer (its API answers with the token, the custody seed's state)
+#  5. writes ODOO_API_KEY into infra/secrets/ (scripts/secrets.sh)
+# Sign-in, the apps' OAuth clients and the stewards need no setup here: the onboarding service
+# serves the sign-in, its clients come from docker-compose.yml (OAUTH_CLIENTS) and the stewards
+# are Odoo contacts (python -m belfry_onboarding add-steward).
 #
 # Usage: infra/scripts/bootstrap.sh   (needs curl, jq, python3, docker compose)
 set -euo pipefail
@@ -22,8 +21,6 @@ REPO_DIR="$(cd "$INFRA_DIR/.." && pwd)"
 ENV_FILE="$INFRA_DIR/.env"
 COMPOSE=(docker compose -f "$INFRA_DIR/docker-compose.yml")
 ODOO_URL=${ODOO_URL:-http://localhost:8069}
-AK_URL=${AK_URL:-http://localhost:9000}
-KC_URL=${KC_URL:-http://localhost:3000}
 ODOO_DB=odoo
 ODOO_STD_MODULES="base,sale_management,account_payment,payment_stripe,payment_mollie,loyalty,sale_loyalty,base_automation,portal"
 ODOO_LOG="$INFRA_DIR/.bootstrap-odoo.log"   # full output of the odoo CLI runs (gitignored with .env*)
@@ -78,10 +75,8 @@ odoo_exec() {
 }
 
 # ---------- 1. health ----------
-log "1/6 waiting for services"
+log "1/5 waiting for services"
 wait_for odoo "$ODOO_URL/web/health"
-wait_for authentik "$AK_URL/-/health/ready/"
-wait_for keycast "$KC_URL/health"
 # Issuer2's own metadata: behind the proxy the credential issuer metadata comes through the
 # onboarding service, which starts only after bootstrap.
 wait_for issuer "${ISSUER_PUBLIC_URL:-http://localhost:7005}/.well-known/oauth-authorization-server/openid4vci"
@@ -99,7 +94,7 @@ SQL
 echo "groups relay database: zooid"
 
 # ---------- 2. Odoo database ----------
-log "2/6 Odoo database"
+log "2/5 Odoo database"
 mkdir -p "$REPO_DIR/odoo/addons"
 psql_odoo() { "${COMPOSE[@]}" exec -T postgres psql -U postgres -d "$ODOO_DB" -tAc "$1" 2>/dev/null || true; }
 # odoo_cli ARGS: run the odoo CLI in the running container; full log to $ODOO_LOG, errors to the terminal.
@@ -162,14 +157,14 @@ fi
 ADMIN_PW="$ODOO_ADMIN_PASSWORD"
 
 # ---------- 3. onboarding user, API key, config parameters ----------
-log "3/6 Odoo onboarding user and API key"
+log "3/5 Odoo onboarding user and API key"
 xmlid_res_id() { # module name -> res_id or empty
   odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.model.data search_read \
     "[[[\"module\",\"=\",\"$1\"],[\"name\",\"=\",\"$2\"]]]" '{"fields":["res_id"],"limit":1}' | jq -r '.[0].res_id // empty'
 }
 # Least privilege for the service: an internal user with the Belfry admin group (belfry.*
 # plus read on invoices and payment transactions, see the module's ACL) and contact
-# management (member numbers, Authentik id and npub are written on res.partner). Everything
+# management (member numbers and npub are written on res.partner). Everything
 # the smoke test does beyond that runs as admin.
 GROUP_IDS=()
 for xid in base.group_user base.group_partner_manager belfry_pass.group_admin; do
@@ -215,8 +210,8 @@ odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.onbo
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.hook_token\",\"$HOOK_TOKEN\"]" >/dev/null
 # set_param leaves unchanged values alone, so webhooks new in a module upgrade get their URLs here
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter belfry_sync_webhook_urls "[]" >/dev/null
-odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${KEYCAST_APP_URL:-http://localhost:3000}\"]" >/dev/null
-odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.login_url\",\"${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}\"]" >/dev/null
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.apps_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account\"]" >/dev/null
+odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.login_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/login\"]" >/dev/null
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "[\"belfry.public_url\",\"${ONBOARDING_PUBLIC_URL:-http://localhost:8100}\"]" >/dev/null
 # the organisation that invoices the tickets (onboarding's accounting.py); empty: Belfry's own invoice
 odoo_exec "$ADMIN_UID" "$ADMIN_PW" ir.config_parameter set_param "$(jq -cn --arg v "${ACCOUNTING_ISSUER:-}" '["belfry.invoice_issuer", (if $v == "" then false else $v end)]')" >/dev/null
@@ -370,265 +365,27 @@ VAT_IDS=$(odoo_exec "$ADMIN_UID" "$ADMIN_PW" product.template belfry_setup_vat "
   || die "could not set up VAT on the pass products"
 echo "VAT ${PASS_VAT_RATE:-21}% on the passes (included, excluded tax ids: $VAT_IDS)"
 
-# ---------- 4. Keycast ----------
-log "4/6 Keycast admin and policy"
-# Keycast is called inside its container: behind the public proxy /api/admin/* and /api/dev/*
-# are denied, and the tenant is the Host header (ALLOWED_TENANT_DOMAINS). Paths are relative.
-kc() { "${COMPOSE[@]}" exec -T keycast curl -sS -H 'Content-Type: application/json' -H "Origin: $KEYCAST_APP_URL" -H "Host: ${KEYCAST_TENANT_DOMAIN:-localhost}" "${@/#\//http://localhost:3000/}"; }
-kc_is_admin() { [[ "$(kc /api/admin/status -H "Authorization: Bearer $1" | jq -r '.is_admin // false' 2>/dev/null)" == true ]]; }
-
-# The admin UCAN is signed by SERVER_NSEC, so it stays valid even after the database was wiped;
-# also require the admin's user row, otherwise re-register (web login needs the row).
-kc_admin_row() { "${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from users where pubkey='$KEYCAST_ADMIN_PUBKEY'" | grep -q 1; }
-if [[ -n "${KEYCAST_ADMIN_TOKEN:-}" ]] && kc_is_admin "$KEYCAST_ADMIN_TOKEN" && kc_admin_row; then
-  echo "KEYCAST_ADMIN_TOKEN still works and the admin user exists"
-else
-  reg=$(kc -X POST /api/auth/register \
-    -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\",\"nsec\":\"$KEYCAST_ADMIN_NSEC\"}")
-  echo "register: $(jq -c 'del(.token)' <<<"$reg" 2>/dev/null || echo "$reg")"
-  kc_login() { # prints the response headers and body; the session cookie is read from Set-Cookie
-    kc -D - -X POST /api/auth/login -d "{\"email\":\"$KEYCAST_ADMIN_EMAIL\",\"password\":\"$KEYCAST_ADMIN_PASSWORD\"}"
-  }
-  login_out=$(kc_login)
-  if grep -q EMAIL_NOT_VERIFIED <<<"$login_out"; then
-    vtoken=$(kc /api/dev/emails | jq -r --arg to "$KEYCAST_ADMIN_EMAIL" \
-      '[.[] | select((.to // .recipient // "") | test($to)) | .verification_url // empty] | last // empty' | sed 's/.*token=//')
-    [[ -n "$vtoken" ]] || die "no verification mail for $KEYCAST_ADMIN_EMAIL in /api/dev/emails"
-    kc -X POST /api/auth/verify-email -d "{\"token\":\"$vtoken\"}" >/dev/null
-    echo "admin e-mail verified through the dev inbox"
-    login_out=$(kc_login)
-  fi
-  SESSION=$(sed -n 's/^[Ss]et-[Cc]ookie: keycast_session=\([^;]*\).*/\1/p' <<<"$login_out" | tr -d '\r' | tail -n1)
-  [[ -n "$SESSION" ]] || { echo "$login_out" | tail -n 3 >&2; die "Keycast login failed"; }
-  kc_is_admin "$SESSION" || die "the Keycast admin session is not an admin; is KEYCAST_ADMIN_PUBKEY in ALLOWED_PUBKEYS?"
-  tok=$(kc /api/admin/token -H "Authorization: Bearer $SESSION")
-  ADMIN_TOKEN=$(jq -r '.token // .admin_token // empty' <<<"$tok")
-  [[ -n "$ADMIN_TOKEN" ]] || { echo "$tok" >&2; die "no admin token returned"; }
-  kc_is_admin "$ADMIN_TOKEN" || die "the fetched admin token does not pass /api/admin/status"
-  set_secret KEYCAST_ADMIN_TOKEN "$ADMIN_TOKEN"
-  echo "KEYCAST_ADMIN_TOKEN written to infra/secrets/keycast_admin_token"
+# ---------- 4. the signer ----------
+log "4/5 signer"
+# The signer is on an internal network of its own (no published port); its binary checks itself
+# inside the container, and the seed's state is the file the container sees.
+for i in $(seq 1 60); do
+  "${COMPOSE[@]}" exec -T signer belfry-signer healthcheck && break
+  [[ $i -eq 60 ]] && die "the signer is not up (docker compose logs signer)"
+  sleep 2
+done
+if [[ -s "$INFRA_DIR/secrets/custody/custody-seed" || -n "${CUSTODY_SEED_DIR:-}" ]]; then
+  echo "signer up; custody seed: $("${COMPOSE[@]}" exec -T signer sh -c 'test -s /run/belfry/custody-seed && echo unlocked || echo "LOCKED (new accounts wait: scripts/custody-seed.sh unlock)"' 2>/dev/null || echo unknown)"
 fi
-
-# policy.sql is idempotent and updates the allowed kinds of an existing permission, so apply it
-# on every run.
-"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q \
-  -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" < "$INFRA_DIR/keycast/policy.sql"
-echo "policy belfry-event applied: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select config from permissions where identifier='allowed_kinds_belfry_event'")"
-kc /api/policies | jq -e '.policies | map(select(.slug == "belfry-event")) | length == 1' >/dev/null \
-  || die "GET /api/policies does not list belfry-event"
-
-# Belfry's own apps as registered OAuth clients: Keycast then accepts only their own redirect URI,
-# and KEYCAST_TRUSTED_CLIENTS (compose) lets them skip the consent screen and sign in silently
-# (prompt=none, Keycast patch 0008). The URIs follow the public URLs, so re-run after changing them.
-"${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -v ON_ERROR_STOP=1 -q \
-  -v chat_cb="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" \
-  -v cal_cb="${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback" \
-  -v vote_cb="${VOTE_PUBLIC_URL:-http://localhost:3500}/oauth/callback" \
-  -v wallet_cb="${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback" \
-  -v people_cb="${PEOPLE_PUBLIC_URL:-http://localhost:3600}/oauth/callback" \
-  -v market_cb="${MARKET_PUBLIC_URL:-http://localhost:3700}/oauth/callback" \
-  -v photos_cb="${PHOTOS_PUBLIC_URL:-http://localhost:3800}/oauth/callback" \
-  -v programme_cb="${PROGRAMME_PUBLIC_URL:-http://localhost:3900}/oauth/callback" \
-  -v groups_cb="${GROUPS_PUBLIC_URL:-http://localhost:3150}/oauth/callback" \
-  -v tenant="${KEYCAST_TENANT_DOMAIN:-localhost}" <<'SQL'
--- Keycast resolves the tenant from the Host header (KEYCAST_TENANT_DOMAIN), not the seed tenant 1.
-INSERT INTO registered_clients (tenant_id, client_id, name, allowed_redirect_uris)
-SELECT t.id, c.client_id, c.name, ARRAY[c.cb]::TEXT[]
-FROM tenants t,
-     (VALUES ('belfry-chat', 'Open Source Village chat', :'chat_cb'),
-             ('belfry-calendar', 'Open Source Village calendar', :'cal_cb'),
-             ('belfry-vote', 'Open Source Village polls', :'vote_cb'),
-             ('belfry-wallet', 'Open Source Village wallet', :'wallet_cb'),
-             ('belfry-people', 'Open Source Village directory', :'people_cb'),
-             ('belfry-market', 'Open Source Village marketplace', :'market_cb'),
-             ('belfry-photos', 'Open Source Village photos', :'photos_cb'),
-             ('belfry-programme', 'Open Source Village programme', :'programme_cb'),
-             ('belfry-groups', 'Open Source Village groups', :'groups_cb')) AS c(client_id, name, cb)
-WHERE t.domain = :'tenant'
-ON CONFLICT (tenant_id, client_id) DO UPDATE
-SET name = EXCLUDED.name, allowed_redirect_uris = EXCLUDED.allowed_redirect_uris, updated_at = NOW()
-WHERE registered_clients.allowed_redirect_uris IS DISTINCT FROM EXCLUDED.allowed_redirect_uris
-   OR registered_clients.name IS DISTINCT FROM EXCLUDED.name;
-SQL
-echo "registered clients: $("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select string_agg(client_id || ' ' || array_to_string(allowed_redirect_uris, ','), '; ' order by client_id) from registered_clients where client_id like 'belfry-%' and tenant_id = (select id from tenants where domain = '${KEYCAST_TENANT_DOMAIN:-localhost}')")"
-[[ -n "$("${COMPOSE[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select 1 from registered_clients r join tenants t on t.id = r.tenant_id where t.domain = '${KEYCAST_TENANT_DOMAIN:-localhost}' and r.client_id = 'belfry-chat'")" ]] \
-  || die "belfry-chat is not registered for tenant ${KEYCAST_TENANT_DOMAIN:-localhost} (no tenant row yet?)"
-
-# ---------- 5. Authentik ----------
-log "5/6 Authentik"
-# the token goes in as a header file, not as an argument (arguments are visible to everyone in ps)
-ak() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$AUTHENTIK_BOOTSTRAP_TOKEN") -H 'Content-Type: application/json' "$@"; }
-i=0
-until ak -f -o /dev/null "$AK_URL/api/v3/admin/version/" 2>/dev/null; do
-  (( i += 5 )); [[ $i -ge 180 ]] && die "the Authentik bootstrap token does not work after 180s (worker not done, or infra/secrets/authentik_bootstrap_token changed after first start)"
-  printf '.'; sleep 5
-done
-echo "bootstrap token works"
-i=0
-while :; do
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-pass-bridge-source" | jq -c '.results[0] // empty')
-  status=$(jq -r '.status // empty' <<<"$bp")
-  [[ "$status" == successful ]] && break
-  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-pass-bridge-source status '$status'"; }
-  printf '.'; sleep 5
-done
-echo "blueprint belfry-pass-bridge-source: successful"
-ak "$AK_URL/api/v3/sources/oauth/?slug=pass-bridge" | jq -e '.pagination.count == 1' >/dev/null || die "source pass-bridge missing"
-ak "$AK_URL/api/v3/core/groups/?name=belfry-participants" | jq -e '.pagination.count == 1' >/dev/null || die "group belfry-participants missing"
-echo "source pass-bridge and group belfry-participants present"
-# The Keycast provider blueprint binds the application to belfry-participants, so it fails when
-# the worker applies it before the pass-bridge blueprint; apply it again once that one is done.
-i=0
-while :; do
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-keycast-provider" | jq -c '.results[0] // empty')
-  status=$(jq -r '.status // empty' <<<"$bp")
-  [[ "$status" == successful ]] && break
-  if [[ -n "$bp" && "$status" != unknown ]]; then
-    ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$(jq -r .pk <<<"$bp")/apply/" || true
-  fi
-  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-keycast-provider status '$status'"; }
-  printf '.'; sleep 5
-done
-echo "blueprint belfry-keycast-provider: successful"
-
-# Participants and stewards are external users (2026-10-26): no authentik portal, and a sign-in
-# with no app waiting ends on the apps page (brand default application). Users created before
-# were internal; move them over (akadmin and other users outside belfry/ stay as they are).
-for ak_path in "${AUTHENTIK_USER_PATH:-belfry/participants}" belfry/stewards; do
-  ak "$AK_URL/api/v3/core/users/?path=$ak_path&type=internal&page_size=500" | jq -r '.results[].pk' |
-    while read -r pk; do
-      ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/core/users/$pk/" -d '{"type":"external"}' \
-        || die "could not make authentik user $pk external"
-      echo "authentik user $pk ($ak_path): now external"
-    done
-done
-# Blueprints read client secrets with !File and store a placeholder when the file was missing at
-# that moment (the worker applies a changed blueprint as soon as git updates it, possibly before
-# gen-secrets wrote the secret): re-apply every Belfry blueprint until no provider keeps one.
-i=0
-while ak "$AK_URL/api/v3/providers/oauth2/?page_size=100" | jq -e '[.results[] | select((.client_secret // "") | startswith("placeholder"))] | length > 0' >/dev/null; do
-  (( i += 5 )); [[ $i -ge 60 ]] && die "Authentik providers still have placeholder client secrets: $(ak "$AK_URL/api/v3/providers/oauth2/?page_size=100" | jq -r '[.results[] | select((.client_secret // "") | startswith("placeholder")) | .name] | join(", ")') (check infra/secrets/ and the worker's /run/secrets)"
-  for pk in $(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-&page_size=100" | jq -r '.results[].pk'); do
-    ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$pk/apply/" || true
-  done
-  printf '.'; sleep 5
-done
-echo "Authentik providers: client secrets from infra/secrets/"
-ak "$AK_URL/application/o/keycast/.well-known/openid-configuration" | jq -e '.issuer | endswith("/application/o/keycast/")' >/dev/null \
-  || die "Keycast OIDC application not served at /application/o/keycast/"
-echo "Keycast OIDC issuer: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/"
-# The account-setup flow (participants choose a password through the link mailed at activation)
-# must be the default brand's recovery flow, otherwise the onboarding service cannot mint links.
-i=0
-while :; do
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-account-setup-flow" | jq -c '.results[0] // empty')
-  status=$(jq -r '.status // empty' <<<"$bp")
-  [[ "$status" == successful ]] && break
-  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-account-setup-flow status '$status'"; }
-  printf '.'; sleep 5
-done
-SETUP_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-account-setup/" | jq -r '.pk // empty')
-[[ -n "$SETUP_FLOW" ]] || die "flow belfry-account-setup missing"
-ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$SETUP_FLOW" '[.results[] | select(.flow_recovery == $f and .default)] | length >= 1' >/dev/null \
-  || die "no default brand carries the recovery flow belfry-account-setup (blueprint belfry-account-setup-flow)"
-echo "blueprint belfry-account-setup-flow: successful, default brand recovery flow set"
-# Branding (blueprint belfry-brand): the worker may have applied the file before the container
-# had BELFRY_BRAND_URL (then the !Env fallback, localhost, is stored), so re-apply when the
-# brand's logo does not point at the configured brand URL.
-BRAND_URL="${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand"
-BRAND_BP=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-brand" | jq -r '.results[] | select(.name|test("belfry-brand")) | .pk' | head -n1)
-[[ -n "$BRAND_BP" ]] || die "blueprint belfry-brand not found (infra/authentik/blueprints/belfry-brand.yaml)"
-brand_logo() { ak "$AK_URL/api/v3/core/brands/" | jq -r '.results[] | select(.domain=="authentik-default") | .branding_logo'; }
-if [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; then
-  ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$BRAND_BP/apply/" || die "could not re-apply blueprint belfry-brand"
-  i=0; while [[ "$(brand_logo)" != "$BRAND_URL/"* ]]; do (( i += 3 )); [[ $i -ge 90 ]] && die "brand logo still not under $BRAND_URL after re-applying belfry-brand"; printf '.'; sleep 3; done
-fi
-echo "blueprint belfry-brand: Open Source Village branding from $BRAND_URL"
-# No avatars on Authentik's pages: after the e-mail is typed, every step shows the pending user's
-# avatar, also to someone who typed another participant's address; a picture from the Nostr key
-# would link the address to that identity, and the default (gravatar,initials) sends a hash of
-# the address to gravatar.com. "none" shows no picture at all.
-ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/admin/settings/" -d '{"avatars":"none"}' || die "could not set Authentik's avatars to none"
-echo "authentik: no avatars"
-# Participants sign in by magic link (blueprint belfry-magic-link-flow): the flow must be the
-# default brand's authentication flow, and its e-mail stage gets the SMTP settings here (the
-# blueprint leaves them out so a re-apply never resets them; same values as Odoo's mail server).
-i=0
-while :; do
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=belfry-magic-link-flow" | jq -c '.results[0] // empty')
-  status=$(jq -r '.status // empty' <<<"$bp")
-  [[ "$status" == successful ]] && break
-  (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint belfry-magic-link-flow status '$status'"; }
-  printf '.'; sleep 5
-done
-LOGIN_FLOW=$(ak "$AK_URL/api/v3/flows/instances/belfry-magic-link/" | jq -r '.pk // empty')
-[[ -n "$LOGIN_FLOW" ]] || die "flow belfry-magic-link missing"
-ak "$AK_URL/api/v3/core/brands/" | jq -e --arg f "$LOGIN_FLOW" '[.results[] | select(.flow_authentication == $f and .default)] | length >= 1' >/dev/null \
-  || die "the default brand's authentication flow is not belfry-magic-link (blueprint belfry-magic-link-flow)"
-EMAIL_STAGE=$(ak "$AK_URL/api/v3/stages/email/?name=belfry-magic-link-email" | jq -r '.results[0].pk // empty')
-[[ -n "$EMAIL_STAGE" ]] || die "e-mail stage belfry-magic-link-email missing"
-STAGE_SMTP=$(jq -cn --arg host "${SMTP_HOST:-mailpit}" --argjson port "${SMTP_PORT:-1025}" \
-  --arg user "${SMTP_USER:-}" --arg enc "${SMTP_ENCRYPTION:-none}" \
-  --arg from "${MAIL_FROM:-belfry@belfry.local}" \
-  '{use_global_settings: false, host: $host, port: $port, username: $user, password: $ENV.SMTP_PASSWORD,
-    use_tls: ($enc == "starttls"), use_ssl: ($enc == "ssl"), timeout: 30, from_address: $from}')
-ak -f -o /dev/null -X PATCH "$AK_URL/api/v3/stages/email/$EMAIL_STAGE/" --data-binary @- <<<"$STAGE_SMTP" \
-  || die "could not write the SMTP settings into the e-mail stage"
-echo "blueprint belfry-magic-link-flow: successful, brand login flow set, magic links sent via ${SMTP_HOST:-mailpit}:${SMTP_PORT:-1025}"
-# Blueprints that read a client secret (!Env) are applied once more on every run: the worker
-# applies a new blueprint file as soon as it appears, possibly before the container has the
-# secret, and then keeps the placeholder. The apply runs asynchronously: wait for a newer
-# last_applied, not just for "successful".
-reapply_blueprint() {
-  local name=$1 bp before status i=0
-  bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=$name" | jq -c '.results[0] // empty')
-  before=$(jq -r '.last_applied // empty' <<<"$bp")
-  [[ -n "$bp" ]] && ak -f -o /dev/null -X POST "$AK_URL/api/v3/managed/blueprints/$(jq -r .pk <<<"$bp")/apply/" || true
-  while :; do
-    bp=$(ak "$AK_URL/api/v3/managed/blueprints/?search=$name" | jq -c '.results[0] // empty')
-    status=$(jq -r '.status // empty' <<<"$bp")
-    [[ "$status" == successful && "$(jq -r '.last_applied // empty' <<<"$bp")" != "$before" ]] && break
-    (( i += 5 )); [[ $i -ge 120 ]] && { echo "$bp" | jq '.' >&2; die "blueprint $name status '$status'"; }
-    printf '.'; sleep 5
-  done
-}
-# Link and code (2026-10-26): the flow's code stage mails both; the e-mail stage only holds the
-# SMTP settings. Apply the flow again (the worker does not always notice an edited file) and
-# remove the e-mail stage's binding that installs from before still have.
-reapply_blueprint belfry-magic-link-flow
-for b in $(ak "$AK_URL/api/v3/flows/bindings/?target=$LOGIN_FLOW&stage=$EMAIL_STAGE" | jq -r '.results[].pk'); do
-  ak -f -o /dev/null -X DELETE "$AK_URL/api/v3/flows/bindings/$b/" || die "could not unbind the e-mail stage"
-  echo "magic-link flow: e-mail stage unbound (link and code are mailed by the code stage)"
-done
-ak "$AK_URL/api/v3/flows/bindings/?target=$LOGIN_FLOW" | jq -e '[.results[].stage_obj.name] | index("belfry-magic-link-code")' >/dev/null \
-  || die "flow belfry-magic-link has no code stage (blueprint belfry-magic-link-flow)"
-# Steward pages (/steward in the onboarding service): their OIDC application and the group.
-reapply_blueprint belfry-steward-app
-# The brand's custom CSS changes with the repo (mobile fixes 2026-10-24); the worker does not
-# always notice an edited file, so apply it on every run.
-reapply_blueprint belfry-brand
-ak "$AK_URL/api/v3/core/groups/?name=belfry-stewards" | jq -e '.results | length == 1' >/dev/null || die "group belfry-stewards missing"
-echo "blueprint belfry-steward-app: successful (add stewards: docker compose exec onboarding python -m belfry_onboarding add-steward <e-mail> [name])"
-# The pass on the phone (/me): participants sign in to it like to the apps.
-reapply_blueprint belfry-pass-app
-ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-pass" \
-  | jq -e --arg s "${PASS_PAGE_OIDC_CLIENT_SECRET:-}" '.results[0].client_secret == $s and $s != ""' >/dev/null \
-  || die "provider belfry-pass missing or without PASS_PAGE_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
-echo "blueprint belfry-pass-app: successful (the pass on the phone at /me)"
-# Issuer2's login for authorization-code pass offers (DIDroom and other wallets that sign in).
-reapply_blueprint belfry-issuer-app
-ak "$AK_URL/api/v3/providers/oauth2/?client_id=belfry-issuer" \
-  | jq -e --arg s "${ISSUER_OIDC_CLIENT_SECRET:-}" '.results[0].client_secret == $s and $s != ""' >/dev/null \
-  || die "provider belfry-issuer missing or without ISSUER_OIDC_CLIENT_SECRET (run gen-secrets.sh, recreate authentik)"
-echo "blueprint belfry-issuer-app: successful (issuer sign-in for authorization-code offers)"
-set_secret AUTHENTIK_TOKEN "$AUTHENTIK_BOOTSTRAP_TOKEN"
+[[ -s "$INFRA_DIR/secrets/signer_token" && -s "$INFRA_DIR/secrets/signer_master_key" ]] \
+  || die "infra/secrets/signer_token or signer_master_key missing: run scripts/gen-secrets.sh"
 
 # ---------- 6. summary ----------
-log "6/6 done"
+log "5/5 done"
 cat <<EOF
 Odoo        $ODOO_URL  admin / ODOO_ADMIN_PASSWORD; RPC user $ODOO_ONBOARDING_LOGIN with ODOO_API_KEY
-Authentik   $AK_URL  akadmin / AUTHENTIK_BOOTSTRAP_PASSWORD; API token AUTHENTIK_TOKEN
-Keycast     $KC_URL  $KEYCAST_ADMIN_EMAIL / KEYCAST_ADMIN_PASSWORD; admin UCAN KEYCAST_ADMIN_TOKEN (30 days)
+Sign-in     ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/login (the onboarding service; stewards: add-steward)
+Signer      internal only (services/signer); API token SIGNER_TOKEN
 Tokens are in infra/secrets/. Restart the onboarding service to pick up new ones:
   docker compose -f infra/docker-compose.yml --profile app up -d
 EOF

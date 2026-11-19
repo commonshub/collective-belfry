@@ -16,8 +16,8 @@
 //   PEOPLE_URL=http://localhost:3600 MARKET_URL=http://localhost:3700 WALLET_URL=http://localhost:3400 \
 //   node infra/scripts/village-check.mjs [shot-prefix]
 //
-// The jars are curl cookie jars of the participants' Authentik sessions
-// (SMOKE_KEEP_PASS=1 SAVE_AK_JAR=<file> make smoke, once per participant). The smoke test redeems
+// The jars are curl cookie jars of the participants' Belfry sessions
+// (SMOKE_KEEP_PASS=1 SAVE_SESSION_JAR=<file> make smoke, once per participant). The smoke test redeems
 // the pass's own tokens, so mint fresh ones for TOKEN_A:
 //   docker compose -f infra/docker-compose.yml exec -T onboarding python -c 'import os
 //   from belfry_onboarding.clients.mint import MintClient

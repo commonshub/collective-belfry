@@ -1,26 +1,23 @@
-"""The pass on the phone (/me, /check): sign-in through Authentik, renewing QR, door check."""
+"""The pass on the phone (/me, /check): Belfry's sign-in, renewing QR, door check."""
 
 from __future__ import annotations
 
 import datetime as dt
-import urllib.parse
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from belfry_onboarding import mypass
 from belfry_onboarding.app import create_app
 
-from .conftest import AUTHENTIK_URL
+from .conftest import sign_in
 
 TODAY = dt.datetime.now(dt.UTC).date()
 
 
 @pytest.fixture
 def passing(services, router, odoo):
-    """Pass page configured, one participant with an active pass, Authentik mocked."""
-    services.settings.pass_page_oidc_client_secret = "pass-secret"
+    """Pass page configured, one participant with an active pass."""
     services.settings.pass_page_secret = "p" * 32
     partner = odoo.add("res.partner", name="Alice", email="alice@example.org")
     pass_id = odoo.add(
@@ -32,14 +29,7 @@ def passing(services, router, odoo):
         date_end=str(TODAY + dt.timedelta(days=5)),
         claim_token="c" * 32,
     )
-    user = {"sub": "x", "keycast_vine_id": f"odoo-partner-{partner}"}
-    router.post(f"{AUTHENTIK_URL}/application/o/token/").mock(
-        return_value=httpx.Response(200, json={"access_token": "at", "token_type": "Bearer"})
-    )
-    router.get(f"{AUTHENTIK_URL}/application/o/userinfo/").mock(
-        side_effect=lambda request: httpx.Response(200, json=user)
-    )
-    return {"partner": partner, "pass": pass_id, "user": user}
+    return {"partner": partner, "pass": pass_id}
 
 
 @pytest.fixture
@@ -52,14 +42,10 @@ def login(web) -> None:
     start = web.get("/me", follow_redirects=False)
     assert start.status_code == 303 and start.headers["location"] == "/me/login"
     start = web.get("/me/login", follow_redirects=False)
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(start.headers["location"]).query)
-    assert query["client_id"] == ["belfry-pass"]
-    assert query["scope"] == ["openid keycast"]
-    assert query["redirect_uri"] == ["https://belfry.test/me/callback"]
-    back = web.get(
-        "/me/callback", params={"code": "c", "state": query["state"][0]}, follow_redirects=False
-    )
-    assert back.status_code == 303 and back.headers["location"] == "/me", back.text
+    assert start.headers["location"] == "/login?next=%2Fme"
+    odoo = web.app.state.services.odoo
+    partner = next(p["id"] for p in odoo.tables["res.partner"].values() if p["name"] == "Alice")
+    sign_in(web, partner)
 
 
 def test_disabled_without_secrets(web):
@@ -78,18 +64,10 @@ def test_signed_in_participant_sees_a_qr(web, passing):
     assert qr["svg"].startswith("data:image/svg+xml") and qr["expires"] > 0
 
 
-def test_account_without_partner_is_refused(web, passing):
-    passing["user"].pop("keycast_vine_id")
-    start = web.get("/me/login", follow_redirects=False)
-    state = urllib.parse.parse_qs(urllib.parse.urlsplit(start.headers["location"]).query)["state"]
-    r = web.get("/me/callback", params={"code": "c", "state": state[0]}, follow_redirects=False)
-    assert r.status_code == 403 and "no pass" in r.text
-
-
-def test_forged_state_is_refused(web, passing):
-    web.get("/me/login", follow_redirects=False)
-    r = web.get("/me/callback", params={"code": "c", "state": "forged"}, follow_redirects=False)
-    assert r.status_code == 400
+def test_a_forged_session_is_not_signed_in(web, passing):
+    web.cookies.set("belfry_session", "forged")
+    r = web.get("/me", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/me/login"
 
 
 def test_revoked_pass_shows_no_qr(web, passing, odoo):

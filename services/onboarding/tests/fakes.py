@@ -1,4 +1,4 @@
-"""In-memory stand-ins for Odoo, Authentik and Keycast. They support only what the code calls."""
+"""In-memory stand-ins for Odoo and Belfry's signer. They support only what the code calls."""
 
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ M2O: dict[str, set[str]] = {
     "product.product": set(),
     "res.partner": set(),
     "belfry.key.code": set(),
+    "belfry.login.code": {"partner_id"},
 }
 UNIQUE: dict[str, list[str]] = {
     "belfry.pass": ["invoice_id", "stripe_payment_intent", "claim_token"],
@@ -55,6 +56,9 @@ class FakeOdoo(OdooApi):
         self.legacy_module = legacy_module  # simulate a module without the public RPC methods
         self.calls: list[tuple[str, str]] = []
         self._seq = 0
+        self._login_seq = 0
+        # sign-in mails: (model, address, code, link secret)
+        self.mails: list[tuple[str, str, str, str]] = []
 
     # -- seeding ------------------------------------------------------------------------------
 
@@ -444,7 +448,103 @@ class FakeOdoo(OdooApi):
         if kind == "signin" and (p.get("login_setup_expires_at") or "") < "2000":
             return {"result": "expired"}
         p[used] = "2026-10-26 12:00:00"
-        return {"result": "ok", "authentik_user_id": p["authentik_user_id"], "pass_id": p["id"]}
+        return {"result": "ok", "partner_id": p["partner_id"], "pass_id": p["id"]}
+
+    # -- sign-in by e-mail (models/belfry_login.py) and stewards ------------------------------
+
+    def may_sign_in(self, partner_id: int) -> bool:
+        partner = self.tables["res.partner"].get(int(partner_id))
+        if partner is None:
+            return False
+        return bool(partner.get("belfry_steward")) or any(
+            p.get("partner_id") == int(partner_id) and p.get("state") == "active"
+            for p in self.tables["belfry.pass"].values()
+        )
+
+    def _login(self, method: str, args: list[Any]) -> Any:
+        codes = self.tables["belfry.login.code"]
+        if method == "belfry_may_sign_in":
+            return self.may_sign_in(args[0])
+        if method == "belfry_login_send":
+            email = (args[0] or "").strip()
+            if "@" not in email:
+                raise OdooError("A valid e-mail address is required.")
+            partner = next(
+                (
+                    p
+                    for p in self.tables["res.partner"].values()
+                    if (p.get("email") or "").lower() == email.lower() and self.may_sign_in(p["id"])
+                ),
+                None,
+            )
+            if partner is None:
+                return {"state": "sent"}
+            self._login_seq += 1
+            n = self._login_seq
+            code, secret = f"{100000 + n}", f"link-secret-{n:04d}-xxxxxxxxxxxxxxxx"
+            self.add(
+                "belfry.login.code",
+                email=email,
+                partner_id=partner["id"],
+                code=code,
+                secret=secret,
+                next_url=args[1] if len(args) > 1 else False,
+                used=False,
+                tries=0,
+            )
+            self.mails.append(("belfry.login.code", email, code, secret))
+            return {"state": "sent"}
+        if method == "belfry_login_verify":
+            email, code = args
+            rec = next(
+                (
+                    r
+                    for r in reversed(list(codes.values()))
+                    if r["email"].lower() == email.lower() and not r["used"]
+                ),
+                None,
+            )
+            if rec is None or rec["tries"] >= 5:
+                return {"state": "expired"}
+            rec["tries"] += 1
+            if str(code).replace(" ", "") != rec["code"]:
+                return {"state": "wrong_code", "tries_left": 5 - rec["tries"]}
+            rec["used"] = True
+            if not self.may_sign_in(rec["partner_id"]):
+                return {"state": "not_active"}
+            return {"state": "ok", "partner_id": rec["partner_id"], "next_url": rec["next_url"]}
+        if method == "belfry_login_use_link":
+            rec = next((r for r in codes.values() if r["secret"] == args[0]), None)
+            if rec is None:
+                return {"state": "not_found"}
+            if rec["used"]:
+                return {"state": "used"}
+            rec["used"] = True
+            if not self.may_sign_in(rec["partner_id"]):
+                return {"state": "not_active"}
+            return {"state": "ok", "partner_id": rec["partner_id"], "next_url": rec["next_url"]}
+        raise OdooError(f"belfry.login.code has no method {method}")
+
+    def _stewards(self, method: str, args: list[Any]) -> Any:
+        partners = self.tables["res.partner"]
+        if method == "belfry_steward_emails":
+            return sorted(
+                {
+                    p["email"]
+                    for p in partners.values()
+                    if p.get("belfry_steward") and p.get("email")
+                }
+            )
+        email = args[0].strip()
+        partner = next(
+            (p for p in partners.values() if (p.get("email") or "").lower() == email.lower()), None
+        )
+        created = partner is None
+        if created:
+            pid = self.add("res.partner", name=(len(args) > 1 and args[1]) or email, email=email)
+            partner = partners[pid]
+        partner["belfry_steward"] = True
+        return {"partner_id": partner["id"], "created": created}
 
     # -- execute_kw ---------------------------------------------------------------------------
 
@@ -488,6 +588,10 @@ class FakeOdoo(OdooApi):
                     partner["belfry_member_number"] = f"OSV-{self._seq:04d}"
                 out.append(partner["belfry_member_number"])
             return out
+        if model == "belfry.login.code":
+            return self._login(method, args)
+        if model == "res.partner" and method in ("belfry_steward_emails", "belfry_make_steward"):
+            return self._stewards(method, args)
         if model == "belfry.pass" and method in ("belfry_use_signin", "belfry_welcome_info"):
             return self._signin(method, *args)
         if model == "belfry.pass" and method == "belfry_find_or_create_for_invoice":
@@ -519,7 +623,7 @@ class FakeOdoo(OdooApi):
             )
         if model == "belfry.report" and method == "belfry_report_create":
             vals, emails = args[0], args[1] if len(args) > 1 else []
-            by_key = {p.get("keycast_pubkey"): p["id"] for p in self.tables["belfry.pass"].values()}
+            by_key = {p.get("nostr_pubkey"): p["id"] for p in self.tables["belfry.pass"].values()}
             rid = self.add(
                 "belfry.report",
                 **vals,
@@ -699,194 +803,206 @@ class FakeOdoo(OdooApi):
         return out
 
 
-class FakeAuthentik:
-    """respx routes for the Authentik calls the service makes; counts calls."""
+class FakeSigner:
+    """respx stand-in for Belfry's signer (services/signer): accounts keyed by vine_id, status,
+    signing, derived secrets, bunker connections. ``derived=True`` makes pubkeys depend on
+    (vine_id, key_version) like the custody seed; ``seed_locked`` refuses new accounts."""
 
-    def __init__(self, router: respx.MockRouter, base_url: str = "http://authentik.test"):
-        self.users: list[dict[str, Any]] = []
-        self.connections: list[dict[str, Any]] = []
-        self.user_creates = 0
-        self.connection_creates = 0
-        # authentik 2026.8.5 refuses API-created source connections; set to emulate that.
-        self.reject_connections = False
-        # Groups by name -> {"pk": uuid, "members": set of user pks}; the blueprint creates
-        # belfry-participants, so it exists unless a test deletes it.
-        self.groups: dict[str, dict[str, Any]] = {
-            "belfry-participants": {"pk": "0000-participants", "members": set()}
-        }
-        self.group_calls: list[tuple[str, str, int]] = []
-        # Account-setup (recovery) links: (user pk, token_duration) per call; the link carries
-        # this fake's own origin, like authentik builds it from the request host.
-        self.recovery_links: list[tuple[int, str]] = []
-        # Emulate a brand without a recovery flow (blueprint belfry-account-setup-flow missing).
-        self.recovery_flow_missing = False
-        base = base_url.rstrip("/")
-        self.base = base
-        router.post(url__regex=rf"{re.escape(base)}/api/v3/core/users/(?P<pk>\d+)/recovery/").mock(
-            side_effect=self._recovery_link
-        )
-        router.get(f"{base}/api/v3/core/groups/").mock(side_effect=self._list_groups)
-        router.post(
-            url__regex=rf"{re.escape(base)}/api/v3/core/groups/(?P<gpk>[^/]+)/(?P<op>add_user|remove_user)/"
-        ).mock(side_effect=self._group_member)
-        router.get(f"{base}/api/v3/core/users/").mock(side_effect=self._list_users)
-        router.post(f"{base}/api/v3/core/users/").mock(side_effect=self._create_user)
-        router.get(f"{base}/api/v3/sources/user_connections/oauth/").mock(
-            side_effect=self._list_connections
-        )
-        router.post(f"{base}/api/v3/sources/user_connections/oauth/").mock(
-            side_effect=self._create_connection
-        )
-
-    def _recovery_link(self, request: httpx.Request, pk: str) -> httpx.Response:
-        if self.recovery_flow_missing:
-            return httpx.Response(400, json={"non_field_errors": "No recovery flow set."})
-        if not any(u["pk"] == int(pk) for u in self.users):
-            return httpx.Response(404, json={"detail": "Not found."})
-        body = json.loads(request.content or b"{}")
-        self.recovery_links.append((int(pk), body.get("token_duration", "hours=1")))
-        token = f"tok{len(self.recovery_links):03d}"
-        return httpx.Response(
-            200, json={"link": f"{self.base}/if/flow/belfry-account-setup/?flow_token={token}"}
-        )
-
-    def _list_users(self, request: httpx.Request) -> httpx.Response:
-        params = request.url.params
-        results = self.users
-        if "attributes" in params:
-            wanted = json.loads(params["attributes"])
-            results = [
-                u for u in results if all(u["attributes"].get(k) == v for k, v in wanted.items())
-            ]
-        if "email" in params:
-            results = [u for u in results if u.get("email") == params["email"]]
-        if "groups_by_name" in params:
-            members = self.groups.get(params["groups_by_name"], {}).get("members", set())
-            results = [u for u in results if u["pk"] in members]
-        return httpx.Response(
-            200, json={"pagination": {"count": len(results), "next": 0}, "results": results}
-        )
-
-    def members(self, name: str = "belfry-participants") -> set[int]:
-        return set(self.groups[name]["members"])
-
-    def _list_groups(self, request: httpx.Request) -> httpx.Response:
-        name = request.url.params.get("name")
-        results = [{"pk": g["pk"], "name": n} for n, g in self.groups.items() if name in (None, n)]
-        return httpx.Response(200, json={"pagination": {"count": len(results)}, "results": results})
-
-    def _group_member(self, request: httpx.Request, gpk: str, op: str) -> httpx.Response:
-        group = next((g for g in self.groups.values() if g["pk"] == gpk), None)
-        user_pk = json.loads(request.content)["pk"]
-        if group is None or not any(u["pk"] == user_pk for u in self.users):
-            return httpx.Response(404, json={"detail": "Not found."})
-        self.group_calls.append((op, gpk, user_pk))
-        if op == "add_user":
-            group["members"].add(user_pk)
-        else:
-            group["members"].discard(user_pk)
-        return httpx.Response(204)
-
-    def _create_user(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        if any(u["username"] == body["username"] for u in self.users):
-            return httpx.Response(
-                400, json={"username": ["user with this username already exists."]}
-            )
-        user = {"pk": len(self.users) + 1, **body}
-        self.users.append(user)
-        self.user_creates += 1
-        return httpx.Response(201, json=user)
-
-    def _list_connections(self, request: httpx.Request) -> httpx.Response:
-        params = request.url.params
-        results = [
-            c
-            for c in self.connections
-            if str(c["user"]) == params.get("user") and c["source"] == params.get("source__slug")
-        ]
-        return httpx.Response(200, json={"pagination": {"count": len(results)}, "results": results})
-
-    def _create_connection(self, request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        if self.reject_connections:
-            return httpx.Response(400, json={"source": ["Object with slug= does not exist."]})
-        conn = {"pk": len(self.connections) + 1, **body}
-        self.connections.append(conn)
-        self.connection_creates += 1
-        return httpx.Response(201, json=conn)
-
-
-class FakeKeycast:
-    """respx routes for preload-user (idempotent on vine_id) and the status endpoint."""
-
-    def __init__(self, router: respx.MockRouter, base_url: str = "http://keycast.test"):
-        self.users: dict[str, dict[str, Any]] = {}  # vine_id -> user
-        self.status: dict[str, str] = {}  # pubkey -> status
-        self.preloads = 0
-        self.preload_bodies: list[dict[str, Any]] = []
-        # derived=True: pubkeys depend on (vine_id, key_version) like Keycast patch 0014
+    def __init__(self, router: respx.MockRouter, base_url: str = "http://signer.test"):
+        self.accounts: dict[str, dict[str, Any]] = {}
+        self.connections: dict[str, dict[str, Any]] = {}
         self.derived = False
+        self.seed_locked = False
+        self.fail = False  # every account creation answers 500
+        self.creates = 0
         self.status_calls: list[tuple[str, str]] = []
         self.signed: list[dict[str, Any]] = []
-        base = base_url.rstrip("/")
-        self.preload_route = router.post(f"{base}/api/admin/preload-user").mock(
-            side_effect=self._preload
-        )
-        router.post(f"{base}/api/nostr").mock(side_effect=self._sign)
-        router.put(
-            url__regex=rf"{re.escape(base)}/api/admin/users/(?P<pubkey>[0-9a-f]+)/status"
-        ).mock(side_effect=self._set_status)
+        self.imported: list[dict[str, Any]] = []
+        base = re.escape(base_url.rstrip("/"))
+        acc = rf"{base}/accounts/(?P<vid>[A-Za-z0-9_-]+)"
+        router.put(url__regex=acc + "$").mock(side_effect=self._ensure)
+        router.get(url__regex=acc + "$").mock(side_effect=self._get)
+        router.post(url__regex=acc + "/status$").mock(side_effect=self._status)
+        router.post(url__regex=acc + "/sign$").mock(side_effect=self._sign)
+        router.post(url__regex=acc + "/(?P<op>encrypt|decrypt)$").mock(side_effect=self._crypt)
+        router.post(url__regex=acc + "/derive$").mock(side_effect=self._derive)
+        router.post(url__regex=acc + "/export$").mock(side_effect=self._export)
+        router.post(url__regex=acc + "/connections$").mock(side_effect=self._connect)
+        router.get(url__regex=acc + "/connections$").mock(side_effect=self._list)
+        router.post(url__regex=acc + "/connections/revoke$").mock(side_effect=self._revoke)
+        router.post(url__regex=rf"{base}/import$").mock(side_effect=self._import)
 
-    def _preload(self, request: httpx.Request) -> httpx.Response:
-        self.preloads += 1
-        body = json.loads(request.content)
-        self.preload_bodies.append(body)
-        vine_id = body["vine_id"]
-        if vine_id not in self.users:
-            if any(u["username"].lower() == body["username"].lower() for u in self.users.values()):
-                return httpx.Response(
-                    409, json={"error": f"User with username {body['username']} already exists"}
-                )
-            if body.get("pubkey"):
-                pubkey = body["pubkey"]
-            elif self.derived:
-                seed = f"{vine_id}/{body.get('key_version', 0)}".encode()
-                pubkey = hashlib.sha256(seed).hexdigest()
-            else:
-                pubkey = f"{len(self.users) + 1:064x}"
-            self.users[vine_id] = {"pubkey": pubkey, "username": body["username"]}
-            self.status[pubkey] = "active"
-        return httpx.Response(
-            200, json={"pubkey": self.users[vine_id]["pubkey"], "token": "ucan-token"}
-        )
+    @staticmethod
+    def _err(status: int, code: str, message: str = "") -> httpx.Response:
+        return httpx.Response(status, json={"error": code, "message": message or code})
 
-    def _sign(self, request: httpx.Request) -> httpx.Response:
+    def _ensure(self, request: httpx.Request, vid: str) -> httpx.Response:
+        body = json.loads(request.content or b"{}")
+        own = body.get("own_pubkey")
+        acc = self.accounts.get(vid)
+        if own:
+            if acc is None or acc["pubkey"] != own:
+                self.accounts[vid] = {
+                    **(acc or {"status": "active", "key_version": 0}),
+                    "pubkey": own,
+                    "custody": "own",
+                }
+                for c in self.connections.values():
+                    if c["vine_id"] == vid:
+                        c["revoked"] = True
+            return httpx.Response(200, json={"vine_id": vid, **self.accounts[vid]})
+        if acc is not None:
+            return httpx.Response(200, json={"vine_id": vid, **acc})
+        if self.fail:
+            return self._err(500, "internal", "boom")
+        if self.seed_locked:
+            return self._err(503, "seed_locked")
+        version = int(body.get("key_version") or 0)
+        if self.derived:
+            pubkey = hashlib.sha256(f"{vid}/{version}".encode()).hexdigest()
+        else:
+            pubkey = f"{len(self.accounts) + 1:064x}"
+        if body.get("expect_pubkey") and body["expect_pubkey"] != pubkey:
+            return self._err(409, "mismatch")
+        self.creates += 1
+        self.accounts[vid] = {
+            "pubkey": pubkey,
+            "custody": "derived",
+            "key_version": version,
+            "status": "active",
+        }
+        return httpx.Response(200, json={"vine_id": vid, **self.accounts[vid]})
+
+    def _get(self, request: httpx.Request, vid: str) -> httpx.Response:
+        if vid not in self.accounts:
+            return self._err(404, "not_found")
+        return httpx.Response(200, json={"vine_id": vid, **self.accounts[vid]})
+
+    def _status(self, request: httpx.Request, vid: str) -> httpx.Response:
+        if vid not in self.accounts:
+            return self._err(404, "not_found")
+        status = json.loads(request.content)["status"]
+        self.accounts[vid]["status"] = status
+        self.status_calls.append((vid, status))
+        return httpx.Response(200, json={"ok": True})
+
+    def _usable(self, vid: str, body: dict[str, Any]) -> httpx.Response | None:
+        acc = self.accounts.get(vid)
+        if acc is None:
+            return self._err(404, "not_found")
+        if acc["status"] != "active":
+            return self._err(403, "suspended")
+        if acc["custody"] == "own":
+            return self._err(409, "own_key")
+        conn = body.get("connection")
+        if conn and (conn not in self.connections or self.connections[conn]["revoked"]):
+            return self._err(403, "forbidden", "this connection has been revoked")
+        return None
+
+    def _sign(self, request: httpx.Request, vid: str) -> httpx.Response:
         body = json.loads(request.content)
-        if request.headers.get("Authorization") != "Bearer ucan-token":
-            return httpx.Response(401, json={"error": "unauthorized"})
-        if body["method"] != "sign_event":
-            return httpx.Response(400, json={"error": f"unsupported {body['method']}"})
-        event = dict(body["params"][0])
-        if "pubkey" not in event:
-            return httpx.Response(400, json={"error": "event must include pubkey"})
+        refused = self._usable(vid, body)
+        if refused is not None:
+            return refused
+        event = dict(body["event"])
+        event["pubkey"] = self.accounts[vid]["pubkey"]
+        event.setdefault("created_at", 1700000000)
+        event.setdefault("tags", [])
+        event.setdefault("content", "")
         event["id"] = f"{len(self.signed) + 1:064x}"
         event["sig"] = "fake-sig"
         self.signed.append(event)
-        return httpx.Response(200, json={"result": event})
+        return httpx.Response(200, json={"event": event})
 
-    def _set_status(self, request: httpx.Request, pubkey: str) -> httpx.Response:
-        if pubkey not in self.status:
-            return httpx.Response(404, json={"error": "user not found"})
+    def _crypt(self, request: httpx.Request, vid: str, op: str) -> httpx.Response:
         body = json.loads(request.content)
-        if body["status"] in ("suspended", "banned") and not body.get("reason"):
-            # Verified 2026-10-23 against Keycast fe9c6460.
-            return httpx.Response(
-                400, json={"error": "reason is required when status is suspended or banned"}
-            )
-        self.status[pubkey] = body["status"]
-        self.status_calls.append((pubkey, body["status"]))
-        return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})
+        refused = self._usable(vid, body)
+        if refused is not None:
+            return refused
+        text = body["text"]
+        result = f"enc:{text}" if op == "encrypt" else text.removeprefix("enc:")
+        return httpx.Response(200, json={"result": result})
+
+    def _derive(self, request: httpx.Request, vid: str) -> httpx.Response:
+        body = json.loads(request.content)
+        refused = self._usable(vid, body)
+        if refused is not None:
+            return refused
+        conn = self.connections.get(body.get("connection") or "")
+        if conn and body["purpose"] not in conn["derive"]:
+            return self._err(403, "forbidden", "this app may not derive that")
+        secret = hashlib.sha256(f"{vid}/{body['purpose']}".encode()).hexdigest()
+        return httpx.Response(200, json={"secret": secret})
+
+    def _export(self, request: httpx.Request, vid: str) -> httpx.Response:
+        refused = self._usable(vid, {})
+        if refused is not None:
+            return refused
+        return httpx.Response(200, json={"nsec": "nsec1fake" + self.accounts[vid]["pubkey"][:8]})
+
+    def _connect(self, request: httpx.Request, vid: str) -> httpx.Response:
+        body = json.loads(request.content)
+        refused = self._usable(vid, {})
+        if refused is not None:
+            return refused
+        cid = f"conn{len(self.connections) + 1:03d}"
+        self.connections[cid] = {
+            "id": cid,
+            "vine_id": vid,
+            "app": body["app"],
+            "label": body.get("label") or body["app"],
+            "derive": body.get("derive") or [],
+            "keep": body.get("keep"),
+            "created_at": 1700000000 + len(self.connections),
+            "last_used_at": None,
+            "revoked": False,
+        }
+        return httpx.Response(
+            200,
+            json={
+                "id": cid,
+                "bunker_url": f"bunker://{'b' * 64}?relay=wss%3A%2F%2Fbunker.test&secret=s{cid}",
+                "bunker_pubkey": "b" * 64,
+                "pubkey": self.accounts[vid]["pubkey"],
+            },
+        )
+
+    def live(self, vid: str) -> list[dict[str, Any]]:
+        return [c for c in self.connections.values() if c["vine_id"] == vid and not c["revoked"]]
+
+    def _list(self, request: httpx.Request, vid: str) -> httpx.Response:
+        if vid not in self.accounts:
+            return self._err(404, "not_found")
+        rows = [{k: v for k, v in c.items() if k != "revoked"} for c in self.live(vid)]
+        return httpx.Response(200, json=rows)
+
+    def _revoke(self, request: httpx.Request, vid: str) -> httpx.Response:
+        body = json.loads(request.content or b"{}")
+        n = 0
+        for c in self.live(vid):
+            if (body.get("id") and c["id"] == body["id"]) or (
+                not body.get("id") and (not body.get("app") or c["app"] == body["app"])
+            ):
+                c["revoked"] = True
+                n += 1
+        return httpx.Response(200, json={"revoked": n})
+
+    def _import(self, request: httpx.Request) -> httpx.Response:
+        rows = json.loads(request.content)["accounts"]
+        self.imported.extend(rows)
+        results = []
+        for row in rows:
+            if row["vine_id"] in self.accounts:
+                results.append({"vine_id": row["vine_id"], "result": "exists"})
+                continue
+            self.accounts[row["vine_id"]] = {
+                "pubkey": row["pubkey"],
+                "custody": "imported",
+                "key_version": 0,
+                "status": "active",
+            }
+            results.append({"vine_id": row["vine_id"], "result": "imported"})
+        return httpx.Response(200, json={"results": results})
 
 
 class FakeIssuer:

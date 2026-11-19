@@ -10,14 +10,14 @@ Belfry pass registry for Open Source Village (slice 1, Phase 1 onboarding).
 - Steward invite links with a public billing page that ends on an Odoo payment link
 - belfry.pass registry (one row per purchased pass), belfry.stripe.event log
 - Automation rules that notify the onboarding service when an invoice is paid or a refund is done
-- Activation mail with the one-time Authentik login setup link (Phase 2), "Send new login link" button
+- Activation mail with the one-time sign-in link (Phase 2), "Send new login link" button; sign-in by e-mail link and code (belfry.login.code); stewards (res.partner.belfry_steward)
 - Pass certificate claim link and status list index (Phase 3), "Revoke pass" button
 - Mollie next to Stripe: refunds from Odoo, refunds and chargebacks from Mollie's webhook
 - Invites from participants (a limited number per active pass), belfry.feedback from the feedback page
 - Odoo's frontend error pages in the Open Source Village look
 - belfry.report: participants' reports of content in the community apps, handled by stewards
 """,
-    'version': '19.0.1.28.0',
+    'version': '19.0.1.29.0',
     'category': 'Sales/Sales',
     'license': 'LGPL-3',
     'author': 'Belfry',

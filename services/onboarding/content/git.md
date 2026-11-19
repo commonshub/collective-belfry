@@ -14,7 +14,7 @@ active pass can read or write. Without a pass you see this page and nothing else
 ## Getting started
 
 1. Sign in with your key, once: `ngit account login`. With the key Belfry keeps for you, add
-   `--bunker-url 'bunker://…'` from your account page (**Connect to Nostr App**).
+   `--bunker-url 'bunker://…'` from your account page (**Connect a Nostr app**).
 2. Put a repository here: `ngit init --name "My project" --grasp-server {{git_host}} --private`
 3. Send your work: `git push -u origin main`
 4. Get someone's repository: `git clone nostr://<their npub>/<repository>`

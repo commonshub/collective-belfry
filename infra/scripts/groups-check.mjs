@@ -1,9 +1,9 @@
 // Browser check of the groups app (Flotilla, infra/apps/groups) on the groups relay (zooid,
 // infra/groups-relay) in headless Chromium over the DevTools protocol: silent sign-in with the
-// participant's Authentik session, the village space with its members, a new room opened by the
+// participant's Belfry session, the village space with its members, a new room opened by the
 // participant (any member may, Belfry's zooid patch), a message posted there and read back, and
 // the room's admin rights for its creator.
-// Usage: COOKIE_JAR=<curl jar with the Authentik session> node groups-check.mjs <app url> <out prefix>
+// Usage: COOKIE_JAR=<curl jar with the Belfry session> node groups-check.mjs <app url> <out prefix>
 //   CHROME: the Chromium binary (default: Playwright's); WIDTH (1280; the rooms list is a side
 //   menu below 768), WAIT (ms per step, 15000).
 import { spawn } from "node:child_process"
@@ -53,7 +53,7 @@ for (const line of (process.env.COOKIE_JAR ? readFileSync(process.env.COOKIE_JAR
   await send("Network.setCookie", { name: f[5], value: f[6], domain: f[0].replace(/^\./, ""), path: f[2], httpOnly: line.startsWith("#HttpOnly_") })
 }
 
-// 1. Silent sign-in: the app goes to Keycast with prompt=none and comes back signed in.
+// 1. Silent sign-in: the app goes to Belfry's sign-in with prompt=none and comes back signed in.
 await send("Page.navigate", { url })
 if (!(await until(`${visible("Create room")} || /Members\\s*\\n?\\s*\\d+/.test(document.body.innerText) || ${visible("Join Space")}`, 3 * wait))) await fail("not signed in to the space")
 console.log("ok   signed in silently, at", await ev("location.href"))

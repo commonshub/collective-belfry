@@ -35,7 +35,7 @@ function conventional(domain) {
     },
     relays: { community: `wss://relay.${domain}` },
     mint: { url: `https://mint.${domain}`, unit: "osv" },
-    sign_in: { keycast: `https://apps.${domain}` },
+    sign_in: { connect: `https://pass.${domain}`, keycast: `https://pass.${domain}` },
     apps: [{ name: "Wallet", url: `https://wallet.${domain}` }],
   };
 }

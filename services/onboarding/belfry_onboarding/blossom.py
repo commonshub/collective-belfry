@@ -116,7 +116,7 @@ def check_event(
 def pubkey_has_active_pass(svc: Services, pubkey: str) -> bool:
     rows = svc.odoo.search_read(
         "belfry.pass",
-        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        [["state", "=", "active"], ["nostr_pubkey", "=", pubkey]],
         ["id"],
         limit=1,
     )

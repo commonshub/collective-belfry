@@ -9,7 +9,7 @@
 //      pass's tokens) is received.
 //   2. Device 2 (a fresh browser profile): the same signer finds the backup, so the wallet has the
 //      same seed and restores the tokens from the mint.
-//   3. With SECOND_JAR (the Authentik session of a participant with a managed key): device 2 sends
+//   3. With SECOND_JAR (the Belfry session of a participant with a managed key): device 2 sends
 //      that participant 2 tokens as a nutzap, signed by the own signer; they redeem it and send 1
 //      back, which device 2 redeems.
 //
@@ -171,7 +171,7 @@ const own = (await signerCall("getPublicKey", [])).value
 async function openWithOwnSigner(name) {
   const b = await browser(name, true)
   await b.send("Page.navigate", {url: walletUrl})
-  // the silent sign-in with Keycast comes back without a session first
+  // the silent sign-in at Belfry comes back without a session first
   await b.waitFor(`!!document.querySelector('[data-testid="village-own-signer"]')`, 60000, "the own-signer button")
   await b.evaluate(`document.querySelector('[data-testid="village-own-signer"]').click()`)
   await b.waitFor(READY, 60000, "the signed-in card (backup read or made, 10019 published)")

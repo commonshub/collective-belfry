@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Writes infra/.env (settings) from infra/.env.example, the secrets as one file each in
-# infra/secrets/ (SECRETS below), and infra/keycast/master.key. Containers get their secrets as
+# Writes infra/.env (settings) from infra/.env.example and the secrets as one file each in
+# infra/secrets/ (SECRETS below). Containers get their secrets as
 # Compose secrets (/run/secrets/<name>), never as environment variables; host scripts read them
 # with scripts/secrets.sh. infra/README.md, "Secrets".
 # Safe to re-run: existing files are kept (--force rewrites .env from the example, a backup is
@@ -13,7 +13,9 @@ INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$INFRA_DIR/.env"
 EXAMPLE="$INFRA_DIR/.env.example"
 SECRETS_DIR="$INFRA_DIR/secrets"
-MASTER_KEY="$INFRA_DIR/keycast/master.key"
+# Keycast's master key (until 2026-11-19): the signer takes it over as its own, so the keys
+# migrated from Keycast's database open with it (scripts/migrate-from-keycast.sh).
+KEYCAST_MASTER_KEY="$INFRA_DIR/keycast/master.key"
 
 MODE=write
 if [[ -f "$ENV_FILE" && "${1:-}" != "--force" ]]; then
@@ -24,17 +26,17 @@ elif [[ -f "$ENV_FILE" ]]; then
   chmod 600 "$ENV_FILE".bak.*
 fi
 
-admin_keys=$(python3 "$INFRA_DIR/scripts/nostr_keys.py")
-server_nsec=$(python3 "$INFRA_DIR/scripts/nostr_keys.py" | python3 -c 'import json,sys;print(json.load(sys.stdin)["secret_hex"])')
-
 mkdir -p "$SECRETS_DIR"
 chmod 700 "$SECRETS_DIR"
-python3 - "$EXAMPLE" "$ENV_FILE" "$MODE" "$SECRETS_DIR" "$admin_keys" "$server_nsec" "$(id -u)" "$(id -g)" <<'PYEOF'
-import json, os, re, secrets, subprocess, sys
+if [[ ! -s "$SECRETS_DIR/signer_master_key" && -s "$KEYCAST_MASTER_KEY" ]]; then
+  install -m 640 "$KEYCAST_MASTER_KEY" "$SECRETS_DIR/signer_master_key"
+  echo "took over $KEYCAST_MASTER_KEY as secrets/signer_master_key (the migrated keys open with it)"
+fi
+python3 - "$EXAMPLE" "$ENV_FILE" "$MODE" "$SECRETS_DIR" "$(id -u)" "$(id -g)" <<'PYEOF'
+import base64, json, os, re, secrets, subprocess, sys
 
-example, target, mode, secrets_dir, admin_keys, server_nsec, uid, gid = sys.argv[1:9]
+example, target, mode, secrets_dir, uid, gid = sys.argv[1:7]
 scripts_dir = os.path.join(os.path.dirname(secrets_dir), "scripts")
-admin = json.loads(admin_keys)
 rand = lambda n=24: secrets.token_hex(n)
 
 # Every secret, by its variable name; the file is infra/secrets/<name in lower case>. None: no
@@ -43,29 +45,19 @@ rand = lambda n=24: secrets.token_hex(n)
 SECRETS = {
     "POSTGRES_PASSWORD": rand(),               # superuser "postgres"
     "ODOO_DB_PASSWORD": rand(),                # role "odoo" (CREATEDB for test databases)
-    "AUTHENTIK_DB_PASSWORD": rand(),
-    "KEYCAST_DB_PASSWORD": rand(),
     "ODOO_ADMIN_PASSWORD": rand(16),           # Odoo user "admin", set by bootstrap
     "ODOO_MASTER_PASSWORD": rand(24),          # database management; odoo.conf holds its hash
     "ODOO_API_KEY": None,                      # bootstrap: the onboarding service's Odoo user
-    "AUTHENTIK_SECRET_KEY": rand(48),          # Django secret key; changing it ends sessions
-    "AUTHENTIK_BOOTSTRAP_PASSWORD": rand(16),  # akadmin, applied on the first start only
-    "AUTHENTIK_BOOTSTRAP_TOKEN": rand(32),     # akadmin's API token, first start only
-    "AUTHENTIK_TOKEN": None,                   # bootstrap: the API token the services use
-    "BRIDGE_CLIENT_SECRET": rand(24),          # Authentik's pass-bridge source at the bridge
-    "KEYCAST_OIDC_CLIENT_SECRET": rand(24),
-    "STEWARD_OIDC_CLIENT_SECRET": rand(24),
+    # the signer: seals the stored keys (32 bytes, base64; Keycast's master.key format, taken
+    # over from infra/keycast/master.key when there is one); back it up
+    "SIGNER_MASTER_KEY": base64.b64encode(secrets.token_bytes(32)).decode(),
+    "SIGNER_TOKEN": rand(32),                  # the onboarding service at the signer's API
+    "SESSION_SECRET": rand(32),                # signs Belfry's sign-in sessions and app tokens
     "STEWARD_SESSION_SECRET": rand(32),
-    "PASS_PAGE_OIDC_CLIENT_SECRET": rand(24),
     "PASS_PAGE_SECRET": rand(32),
-    "ISSUER_OIDC_CLIENT_SECRET": rand(24),
-    "KEYCAST_SERVER_NSEC": server_nsec,        # signs server-issued UCANs
-    "KEYCAST_ADMIN_NSEC": admin["secret_hex"], # registers the Keycast admin (bootstrap)
-    "KEYCAST_ADMIN_PASSWORD": rand(16),
-    "KEYCAST_SERVICE_TOKEN": rand(32),
-    "KEYCAST_ADMIN_TOKEN": None,               # bootstrap
-    "HOOK_TOKEN": rand(32),                    # Odoo's and Keycast's webhooks
-    "PASS_INFO_TOKEN": rand(32),               # Keycast and the apps at /admin/*
+    "ISSUER_OIDC_CLIENT_SECRET": rand(24),     # Issuer2's sign-in at the onboarding service
+    "HOOK_TOKEN": rand(32),                    # Odoo's webhooks
+    "PASS_INFO_TOKEN": rand(32),               # the apps' servers at /admin/*
     "MINT_SEED": rand(32),                     # the token mint's keys; back it up
     "PROGRAMME_NSEC": rand(32),                # signs the programme's calendar events (hex key)
     "POLLS_NSEC": rand(32),                    # signs the polls' notes on Nostr (vote service, hex key)
@@ -77,7 +69,7 @@ SECRETS = {
     "ACCOUNTING_ODOO_API_KEY": None,           # put-secret.sh: the ticket seller's Odoo (API key)
     "SMTP_PASSWORD": None,                     # put-secret.sh smtp_password
 }
-generated = {"KEYCAST_ADMIN_PUBKEY": admin["pubkey_hex"], "HOST_UID": uid, "HOST_GID": gid}
+generated = {"HOST_UID": uid, "HOST_GID": gid}
 line_re = re.compile(r"^([A-Z0-9_]+)=(\S*)(\s*#.*)?$")
 path = lambda name: os.path.join(secrets_dir, name.lower())
 
@@ -106,9 +98,9 @@ for name, value in SECRETS.items():
     os.chmod(path(name), 0o640)
 if new:
     print("generated in infra/secrets/: " + ", ".join(new))
-# Public keys (settings) always follow their secret keys: the admin's is Keycast's
-# ALLOWED_PUBKEYS, the programme key's tells the calendar app whose events are the programme.
-PUBKEYS = {"KEYCAST_ADMIN_PUBKEY": "KEYCAST_ADMIN_NSEC", "PROGRAMME_PUBKEY": "PROGRAMME_NSEC",
+# Public keys (settings) always follow their secret keys: the programme key's tells the calendar
+# app whose events are the programme.
+PUBKEYS = {"PROGRAMME_PUBKEY": "PROGRAMME_NSEC",
            "POLLS_PUBKEY": "POLLS_NSEC", "GROUPS_API_PUBKEY": "GROUPS_API_NSEC"}
 for pub, sec in PUBKEYS.items():
     nsec = open(path(sec)).read().strip()
@@ -145,22 +137,13 @@ else:
 PYEOF
 chmod 600 "$ENV_FILE"
 
-# Local development only: the custody seed in a file (Keycast patch 0014). A deployment keeps it
+# Local development only: the custody seed in a file (services/signer). A deployment keeps it
 # off the disk (CUSTODY_SEED_DIR=/run/belfry, scripts/custody-seed.sh).
 CUSTODY_SEED="$INFRA_DIR/secrets/custody/custody-seed"
 if [[ ! -f "$CUSTODY_SEED" && "$(grep -s '^CUSTODY_SEED_DIR=' "$ENV_FILE" | cut -d= -f2)" == "" ]]; then
   mkdir -p "$(dirname "$CUSTODY_SEED")" && chmod 700 "$(dirname "$CUSTODY_SEED")"
   openssl rand -hex 32 > "$CUSTODY_SEED" && chmod 600 "$CUSTODY_SEED"
   echo "wrote $CUSTODY_SEED (local development; deployments unlock it from YubiKeys)"
-fi
-
-if [[ -f "$MASTER_KEY" ]]; then
-  echo "$MASTER_KEY exists; keeping it (deleting it makes every stored Keycast key unreadable)."
-else
-  mkdir -p "$(dirname "$MASTER_KEY")"
-  openssl rand 32 | base64 | tr -d '\n' > "$MASTER_KEY"
-  chmod 600 "$MASTER_KEY"
-  echo "wrote $MASTER_KEY"
 fi
 
 # Odoo config (odoo.conf is gitignored). It carries only a PBKDF2 hash of the master password,

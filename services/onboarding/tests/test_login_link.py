@@ -1,14 +1,10 @@
-"""Sign-in links (Phase 2 login, reworked 2026-10-26): the pass carries Belfry's own one-time
-secret (``/signin/<secret>``) for Odoo to mail; spending it mints the authentik recovery link and
-redirects there. The welcome page after paying has a secret of its own, so using one never makes
-the other useless (authentik keeps one recovery token per user)."""
+"""Sign-in links (Phase 2 login, reworked 2026-10-26 and 2026-11-19): the pass carries a one-time
+secret (``/signin/<secret>``) for Odoo to mail; spending it sets Belfry's session cookie. The
+welcome page after paying has a secret of its own, so using one never makes the other useless."""
 
 from __future__ import annotations
 
-import httpx
-import pytest
-
-from belfry_onboarding import core
+from belfry_onboarding import core, session
 
 from .conftest import HOOK_TOKEN, seed_paid_invoice
 
@@ -17,20 +13,26 @@ def pass_for(odoo, invoice_id):
     return next(p for p in odoo.tables["belfry.pass"].values() if p.get("invoice_id") == invoice_id)
 
 
-def test_activation_stores_a_belfry_link_once(services, odoo, authentik):
+def signed_in_as(client, response) -> int | None:
+    """The partner of the session cookie a response set."""
+    cookie = response.cookies.get(session.COOKIE)
+    found = session.decode(client.app.state.services.settings, cookie)
+    return found.partner_id if found else None
+
+
+def test_activation_stores_a_belfry_link_once(services, odoo):
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     p = pass_for(odoo, ids["invoice"])
     assert p["login_setup_url"] == f"https://belfry.test/signin/{p['signin_token']}"
     assert len(p["signin_token"]) >= 40
     assert p["login_setup_expires_at"] > p["activated_at"]
-    assert authentik.recovery_links == [], "authentik's link is minted only when the link is used"
     # a replayed webhook returns early: the stored link stays valid
     assert core.activate_pass(services, ids["invoice"]) == "already_active"
     assert pass_for(odoo, ids["invoice"])["login_setup_url"] == p["login_setup_url"]
 
 
-def test_using_the_link_redirects_to_authentik_once(client, services, odoo, authentik):
+def test_using_the_link_signs_in_once(client, services, odoo):
     ids = seed_paid_invoice(odoo)
     core.activate_pass(services, ids["invoice"])
     p = pass_for(odoo, ids["invoice"])
@@ -38,21 +40,20 @@ def test_using_the_link_redirects_to_authentik_once(client, services, odoo, auth
     page = client.get(path)
     assert page.status_code == 200
     assert f'action="{path}"' in page.text, "the page's script sends the POST (scanners do not)"
-    assert authentik.recovery_links == [], "opening the page spends nothing"
+    assert session.COOKIE not in page.cookies, "opening the page spends nothing"
     r = client.post(path, follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == (
-        "https://login.belfry.test/if/flow/belfry-account-setup/?flow_token=tok001"
-    )
-    assert authentik.recovery_links == [(p["authentik_user_id"], "minutes=10")]
+    assert r.headers["location"] == "https://belfry.test/account"
+    assert signed_in_as(client, r) == ids["partner"]
+    client.cookies.clear()
     again = client.post(path, follow_redirects=False)
     assert again.status_code == 410
     assert "used already" in again.text
-    assert len(authentik.recovery_links) == 1
+    assert session.COOKIE not in again.cookies
     assert client.post("/signin/not-a-real-token-at-all-xxxxxxxx").status_code == 410
 
 
-def test_welcome_page_and_mail_link_are_independent(client, services, odoo, authentik):
+def test_welcome_page_and_mail_link_are_independent(client, services, odoo):
     ids = seed_paid_invoice(odoo)
     core.activate_pass(services, ids["invoice"])
     p = pass_for(odoo, ids["invoice"])
@@ -61,12 +62,12 @@ def test_welcome_page_and_mail_link_are_independent(client, services, odoo, auth
     assert page.status_code == 200
     assert "Welcome, Alice!" in page.text and "Open the apps" in page.text
     r = client.post(f"/welcome/{'w' * 43}", follow_redirects=False)
-    assert r.status_code == 303 and "flow_token=tok001" in r.headers["location"]
+    assert r.status_code == 303 and signed_in_as(client, r) == ids["partner"]
     page = client.get(f"/welcome/{'w' * 43}")
     assert "Open the apps" not in page.text, "the welcome page signs in once"
     # the mail's link still works
     r = client.post(f"/signin/{p['signin_token']}", follow_redirects=False)
-    assert r.status_code == 303 and "flow_token=tok002" in r.headers["location"]
+    assert r.status_code == 303 and signed_in_as(client, r) == ids["partner"]
     assert client.get("/welcome/unknown").status_code == 404
 
 
@@ -84,15 +85,6 @@ def test_welcome_page_waits_for_the_activation(client, odoo):
     assert page.status_code == 200
     assert "Open the apps" not in page.text
     assert client.post(f"/welcome/{'p' * 43}", follow_redirects=False).status_code == 410
-
-
-def test_missing_recovery_flow_fails_at_use_not_at_activation(client, services, odoo, authentik):
-    authentik.recovery_flow_missing = True
-    ids = seed_paid_invoice(odoo)
-    assert core.activate_pass(services, ids["invoice"]) == "activated"
-    p = pass_for(odoo, ids["invoice"])
-    with pytest.raises(httpx.HTTPStatusError):
-        client.post(f"/signin/{p['signin_token']}", follow_redirects=False)
 
 
 def test_send_login_link_replaces_the_link_of_an_active_pass(services, odoo):
@@ -133,9 +125,9 @@ def test_admin_endpoint(client, odoo, services):
     assert r.json() == {"result": "not_found", "pass_id": 424242}
 
 
-def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo, authentik):
-    """A pass ordered by an app with a return_url: the welcome page waits, signs in by script,
-    and the authentik link ends at the app (belfry_return); otherwise straight back to the app."""
+def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo):
+    """A pass ordered by an app with a return_url: the welcome page waits, signs in by script and
+    goes back to the app; otherwise straight back to the app."""
     ids = seed_paid_invoice(odoo)
     pid = odoo.add(
         "belfry.pass",
@@ -161,10 +153,9 @@ def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo, au
     assert f'action="{path}"' in page.text and "go back to localhost:8080" in page.text
     r = client.post(path, follow_redirects=False)
     assert r.status_code == 303
-    assert r.headers["location"] == (
-        "https://login.belfry.test/if/flow/belfry-account-setup/?flow_token=tok001"
-        "&belfry_return=http%3A%2F%2Flocalhost%3A8080%2F%3Finvite%3Dabc"
-    )
+    assert r.headers["location"] == "http://localhost:8080/?invite=abc"
+    assert signed_in_as(client, r) == ids["partner"]
+    client.cookies.clear()
     # used: the welcome page and its POST both go back to the app without signing in again
     for again in (
         client.get(path, follow_redirects=False),
@@ -172,4 +163,4 @@ def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo, au
     ):
         assert again.status_code == 303
         assert again.headers["location"] == "http://localhost:8080/?invite=abc"
-    assert len(authentik.recovery_links) == 1
+        assert session.COOKIE not in again.cookies

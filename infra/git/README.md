@@ -34,8 +34,8 @@ the agent guide) instead of ngit-grasp's own pages, which point to gitworkshop.d
 WebSocket and git requests still reach ngit-grasp. Locally (port 3170, no proxy) ngit-grasp's page
 shows.
 
-**Signing.** Participants' keys sign through Keycast like for the other apps; policy
-`belfry-event` allows any kind (NIP-34 kinds, 22242 for AUTH, 27235 for NIP-98). Agents use ngit
+**Signing.** Participants' keys sign through Belfry's signer like for the other apps; it signs
+any kind (NIP-34 kinds, 22242 for AUTH, 27235 for NIP-98). Agents use ngit
 3 with a bunker URL (`ngit account login --bunker-url …`).
 
 **Off.** GRASP-06 (unauthenticated PR pushes, incompatible with private mode), GRASP-03 mailbox

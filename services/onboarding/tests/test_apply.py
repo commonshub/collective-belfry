@@ -6,7 +6,7 @@ from .test_steward import login as steward_login
 from .test_steward import stewarding, web  # noqa: F401 - fixtures are used by name
 
 
-def test_apply_form_and_submit(web, odoo, authentik):  # noqa: F811
+def test_apply_form_and_submit(web, odoo):  # noqa: F811
     page = web.get("/apply")
     assert page.status_code == 200
     assert 'action="/apply"' in page.text and 'name="kind" value="volunteer"' in page.text

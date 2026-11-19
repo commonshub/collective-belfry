@@ -16,7 +16,8 @@
                     <group>
                         <field name="belfry_member_number"/>
                         <field name="belfry_npub"/>
-                        <field name="belfry_authentik_user_id"/>
+                        <field name="belfry_steward"/>
+                        <field name="belfry_key_custody"/>
                     </group>
                 </page>
             </xpath>

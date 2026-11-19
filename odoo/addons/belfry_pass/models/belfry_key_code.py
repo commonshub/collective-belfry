@@ -135,7 +135,7 @@ class BelfryKeyCode(models.Model):
         taken = Partner.search_count(
             ['|', ('belfry_npub', '=', key_npub), ('belfry_verified_pubkey', '=', self.pubkey)] + others, limit=1,
         ) or self.env['belfry.pass'].sudo().search_count(
-            ['|', ('keycast_pubkey', '=', self.pubkey), ('own_pubkey', '=', self.pubkey),
+            ['|', ('nostr_pubkey', '=', self.pubkey), ('own_pubkey', '=', self.pubkey),
              ('state', 'in', ('pending', 'active'))]
             + ([('partner_id', '!=', partner.id)] if partner else []), limit=1,
         )

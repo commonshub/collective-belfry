@@ -2,12 +2,9 @@
 # Smoke test for slice 1 (docs/slice-1-onboarding.md, "Infra"): invite -> pay -> accounts
 # created exactly once, replay-safe.
 #
-# STATUS (2026-10-23): ran green end to end against the full stack (slice 1, relay, Keycast
-# login, login setup links, pass certificates: claim, door check, pass sign-in, revocation). The Authentik
-# source link (POST /api/v3/sources/user_connections/oauth/) cannot be created over the API on
-# authentik 2026.8.5 ("user" is read-only), so the service logs a warning and the participant
-# links the pass once from user settings; this script reports the missing link as a note, and
-# only fails if a link count changes between replays.
+# Since 2026-11-19 the sign-in is Belfry's own (onboarding service: /login, /account,
+# /api/oauth/*) and the keys are held by Belfry's signer (services/signer); the browser steps are
+# driven with curl and a cookie jar.
 # Assumptions checked against the module (override with the variables below if they change):
 #   - the invite form posts fields name, email, company_name, vat, product_id, promo_code
 #   - the belfry_pass products carry xmlids belfry_pass.product_day/week/full
@@ -22,12 +19,10 @@ set -euo pipefail
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 set -a; . "$INFRA_DIR/.env"; set +a
 . "$INFRA_DIR/scripts/secrets.sh"
-# Public deployment: set the public URLs (ODOO_URL, AK_URL, KC_URL, ONB_URL, BLOSSOM_URL),
+# Public deployment: set the public URLs (ODOO_URL, ONB_URL, BLOSSOM_URL),
 # WALLET_MAP="" (the test wallet then uses the public hostnames) and ONB_ADMIN_EXEC=1; MAILPIT_URL
 # is optional there (the activation mail to the fake smoke address is refused by a real relay).
 ODOO_URL=${ODOO_URL:-http://localhost:8069}
-AK_URL=${AK_URL:-http://localhost:9000}
-KC_URL=${KC_URL:-http://localhost:3000}
 ONB_URL=${ONB_URL:-http://localhost:8100}
 WALLET_MAP=${WALLET_MAP-localhost:7005=issuer:7005,localhost:7004=verifier:7004,localhost:8100=onboarding:8100}
 # ONB_ADMIN_EXEC=1: the public proxy denies /admin/* and /hooks/odoo/*, so those calls run inside
@@ -66,7 +61,7 @@ FORM_FIELD_PRODUCT=${FORM_FIELD_PRODUCT:-product_id}
 FORM_FIELD_PROMO=${FORM_FIELD_PROMO:-promo_code}
 TIER_XMLID=${TIER_XMLID:-product_week}
 
-for v in ODOO_API_KEY AUTHENTIK_TOKEN KEYCAST_ADMIN_TOKEN HOOK_TOKEN; do
+for v in ODOO_API_KEY SIGNER_TOKEN HOOK_TOKEN; do
   [[ -n "${!v:-}" ]] || { echo "$v is empty (infra/secrets/); run bootstrap first" >&2; exit 1; }
 done
 
@@ -99,7 +94,6 @@ osvc() { # same as ox, as the onboarding service's user (methods for the steward
   jq -c '.result' <<<"$out"
 }
 xmlid() { ox ir.model.data search_read "[[[\"module\",\"=\",\"$1\"],[\"name\",\"=\",\"$2\"]]]" '{"fields":["res_id"],"limit":1}' | jq -r '.[0].res_id // empty'; }
-ak() { curl -sS -H @<(printf 'Authorization: Bearer %s\n' "$AUTHENTIK_TOKEN") "$@"; }
 
 STAMP=$(date +%s)
 EMAIL="smoke-$STAMP@belfry.local"
@@ -189,7 +183,7 @@ PSTATE=$(ox account.move read "[[$INV_ID]]" '{"fields":["payment_state"]}' | jq 
 
 step "5. wait for the onboarding webhook to activate the pass"
 for i in $(seq 1 30); do
-  PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
+  PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","nostr_pubkey","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
   [[ "$(jq -r .state <<<"$PASS")" == active ]] && break
   sleep 2
 done
@@ -197,7 +191,7 @@ if [[ "$(jq -r .state <<<"$PASS")" != active ]]; then
   echo "  pass still $(jq -r .state <<<"$PASS") after 60s; calling the webhook directly"
   onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke\"}" >/dev/null || true
   sleep 3
-  PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
+  PASS=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","nostr_pubkey","date_start","date_end","stripe_payment_intent"]}' | jq -c '.[0]')
 fi
 [[ "$(jq -r .state <<<"$PASS")" == active ]] && ok "pass active: $PASS" || die "pass not active: $PASS"
 [[ "$(ox belfry.invite read "[[$INVITE_ID]]" '{"fields":["state"]}' | jq -r '.[0].state')" == used ]] && ok "invite used once the pass is active" || bad "invite not marked used"
@@ -216,52 +210,56 @@ if [[ -n "${ACCOUNTING_ODOO_URL:-}" ]]; then
     [[ "$N" -ge 1 ]] && ok "the activation mail leaves the invoice to $ACCOUNTING_ISSUER" || bad "activation mail without the issuer's note ($N)"
   fi
 fi
-NPUB=$(jq -r .npub <<<"$PASS"); KC_PUB=$(jq -r .keycast_pubkey <<<"$PASS"); AK_UID=$(jq -r .authentik_user_id <<<"$PASS")
-MEMBER=$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_member_number","belfry_npub","belfry_authentik_user_id"]}' | jq -r '.[0].belfry_member_number')
+NPUB=$(jq -r .npub <<<"$PASS"); MEMBER_PUB=$(jq -r .nostr_pubkey <<<"$PASS")
+MEMBER=$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_member_number","belfry_npub"]}' | jq -r '.[0].belfry_member_number')
 [[ -n "$MEMBER" && "$MEMBER" != null ]] && ok "member number $MEMBER" || bad "no member number on the partner"
 USERNAME=$(tr '[:upper:]' '[:lower:]' <<<"$MEMBER")
 
-step "6. check Authentik, source link and Keycast"
-AKU=$(ak "$AK_URL/api/v3/core/users/?username=$USERNAME" | jq -c '.results')
-[[ "$(jq length <<<"$AKU")" == 1 && "$(jq -r '.[0].pk' <<<"$AKU")" == "$AK_UID" ]] && ok "one Authentik user $USERNAME (pk $AK_UID)" || bad "Authentik users for $USERNAME: $AKU"
-AKC=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq -c '.results')
-if [[ "$(jq length <<<"$AKC")" == 1 && "$(jq -r '.[0].identifier' <<<"$AKC")" == "$MEMBER" ]]; then ok "one pass-bridge link, identifier $MEMBER"; else echo "  note source link not pre-created (expected on authentik 2026.8.5; participant links once): $AKC"; fi
-LINKS_BEFORE=$(jq length <<<"$AKC")
-KCP=$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')
-[[ "$KCP" == "$KC_PUB" ]] && ok "Keycast NIP-05 $USERNAME -> $KC_PUB" || bad "Keycast pubkey for $USERNAME: '$KCP' (pass has $KC_PUB)"
+COMPOSE=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app)
+
+step "6. check the signer account and the NIP-05 name"
+SIGNER_ACC=$("${COMPOSE[@]}" exec -T onboarding python -c '
+import json, sys
+from belfry_onboarding.app import build_services
+from belfry_onboarding.settings import Settings
+print(json.dumps(build_services(Settings()).signer.account(sys.argv[1])))' "odoo-partner-$PARTNER_ID" 2>/dev/null | tail -n1)
+[[ "$(jq -r .pubkey <<<"$SIGNER_ACC" 2>/dev/null)" == "$MEMBER_PUB" && "$(jq -r .status <<<"$SIGNER_ACC")" == active ]] \
+  && ok "one signer account odoo-partner-$PARTNER_ID ($(jq -r .custody <<<"$SIGNER_ACC"), active) with the pass's key" || bad "signer account: $SIGNER_ACC"
+NIP05P=$(curl -sS "$ONB_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')
+[[ "$NIP05P" == "$MEMBER_PUB" ]] && ok "NIP-05 $USERNAME -> $MEMBER_PUB (from Odoo)" || bad "NIP-05 pubkey for $USERNAME: '$NIP05P' (pass has $MEMBER_PUB)"
+[[ "$(curl -sS "$ONB_URL/.well-known/nostr.json" | jq -c .names)" == "{}" ]] && ok "nostr.json without a name lists nobody" || bad "nostr.json lists names without being asked"
 
 step "6b. community relay: whitelist rendered and the kind-0 profile stored"
 COMPOSE=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app)
 RELAY_CONF=$("${COMPOSE[@]}" exec -T relay cat /rnostr/config/rnostr.toml 2>/dev/null || true)
 WL_LINES=$(grep -c "^pubkey_whitelist = \[.*belfry:whitelist" <<<"$RELAY_CONF" || true)
 [[ "$WL_LINES" == 2 ]] && ok "relay config has the two whitelist lines (req and event)" || bad "relay config whitelist lines: $WL_LINES"
-[[ "$(grep -c "\"$KC_PUB\"" <<<"$RELAY_CONF")" == 2 ]] && ok "pubkey $KC_PUB whitelisted for req and event" || bad "pubkey not in both whitelists"
+[[ "$(grep -c "\"$MEMBER_PUB\"" <<<"$RELAY_CONF")" == 2 ]] && ok "pubkey $MEMBER_PUB whitelisted for req and event" || bad "pubkey not in both whitelists"
 # Count instead of grep -q: an early grep exit makes docker logs die of SIGPIPE, and pipefail
 # then reports a failure once the log is long.
 RELOADS=$("${COMPOSE[@]}" logs --no-log-prefix relay 2>/dev/null | grep -ci "reload config success" || true)
 [[ "${RELOADS:-0}" -gt 0 ]] && ok "rnostr reloaded its config ($RELOADS reloads logged)" || bad "no reload in the relay log"
-PROFILE=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$KC_PUB\"],\"kinds\":[0]}" 2>/dev/null | head -n1 || true)
+PROFILE=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$MEMBER_PUB\"],\"kinds\":[0]}" 2>/dev/null | head -n1 || true)
 if [[ -n "$PROFILE" ]]; then
   CONTENT=$(jq -r '.content' <<<"$PROFILE")
   [[ "$(jq -r .nip05 <<<"$CONTENT")" == "$USERNAME@"* && "$(jq -r .name <<<"$CONTENT")" == "$NAME" ]] && ok "kind-0 profile on the relay: $CONTENT" || bad "unexpected profile content: $CONTENT"
   [[ "$(jq -r 'keys | join(",")' <<<"$CONTENT")" == "display_name,name,nip05,picture" ]] && ok "profile carries only name, display_name, nip05, picture" || bad "profile has extra fields: $(jq -c keys <<<"$CONTENT")"
   PICTURE=$(jq -r .picture <<<"$CONTENT")
-  [[ "$PICTURE" == */avatar/$KC_PUB.png ]] && ok "picture is the default avatar: $PICTURE" || bad "picture: $PICTURE"
-  AV=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$ONB_URL/avatar/$KC_PUB.png")
+  [[ "$PICTURE" == */avatar/$MEMBER_PUB.png ]] && ok "picture is the default avatar: $PICTURE" || bad "picture: $PICTURE"
+  AV=$(curl -sS -o /dev/null -w '%{http_code} %{content_type}' "$ONB_URL/avatar/$MEMBER_PUB.png")
   [[ "$AV" == "200 image/png" ]] && ok "default avatar served as PNG" || bad "avatar: $AV"
 else
-  bad "no kind-0 event for $KC_PUB on the relay (check the onboarding log for 'not published')"
+  bad "no kind-0 event for $MEMBER_PUB on the relay (check the onboarding log for 'not published')"
 fi
 # Coracle waits for profile, follows and relays after sign-in; NIP-17 senders need the DM relays.
-LISTS=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$KC_PUB\"],\"kinds\":[3,10002,10050]}" 2>/dev/null | jq -sc 'map({kind, tags}) | sort_by(.kind)' || true)
+LISTS=$("${COMPOSE[@]}" exec -T relay rnostr export /rnostr/data/events -f "{\"authors\":[\"$MEMBER_PUB\"],\"kinds\":[3,10002,10050]}" 2>/dev/null | jq -sc 'map({kind, tags}) | sort_by(.kind)' || true)
 [[ "$(jq -c 'map(.kind)' <<<"${LISTS:-[]}")" == "[3,10002,10050]" ]] && ok "follow, relay and DM relay lists on the relay: $LISTS" || bad "starter lists missing on the relay: ${LISTS:-none}"
 SYNC=$("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding sync-relay 2>/dev/null || true)
 [[ "$(jq -r '.changed' <<<"$SYNC" 2>/dev/null)" == false ]] && ok "sync-relay CLI: whitelist already up to date ($(jq -r .pubkeys <<<"$SYNC") pubkeys)" || bad "sync-relay CLI: $SYNC"
 
-step "6c. sign-in link: mailed by Odoo, signs the browser in through Authentik (no password)"
-# Participants never get an Authentik password: activation stores a one-time sign-in link on the
-# pass and Odoo mails it. The link is Belfry's (<PUBLIC_URL>/signin/<secret>, signin.py); using it
-# mints the authentik link (recovery flow belfry-account-setup) and redirects there.
+step "6c. sign-in link: mailed by Odoo, signs the browser in (no password)"
+# Participants never get a password: activation stores a one-time sign-in link on the pass and
+# Odoo mails it (<PUBLIC_URL>/signin/<secret>, signin.py); using it sets Belfry's session cookie.
 PASS_LOGIN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["login_setup_url","login_setup_expires_at","login_mail_sent_at"]}' | jq -c '.[0]')
 SETUP_URL=$(jq -r '.login_setup_url // empty' <<<"$PASS_LOGIN")
 [[ "$SETUP_URL" == "$ONB_URL/signin/"* ]] \
@@ -269,11 +267,19 @@ SETUP_URL=$(jq -r '.login_setup_url // empty' <<<"$PASS_LOGIN")
   || bad "login_setup_url: '$SETUP_URL'"
 SIGNIN_PAGE=$(curl -sS "$SETUP_URL")
 grep -q "action=\"/signin/" <<<"$SIGNIN_PAGE" && ok "opening the link shows a page that signs in by script (mail scanners spend nothing)" || bad "sign-in page: $(head -c 200 <<<"$SIGNIN_PAGE")"
-AK_LINK=$(curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$SETUP_URL")
-[[ "$AK_LINK" == "${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-account-setup/?flow_token="* ]] \
-  && ok "using it redirects to a fresh authentik sign-in link" || bad "sign-in link redirect: '$AK_LINK'"
+SESSION_JAR=$(mktemp)   # the participant's browser; the steps below continue in it
+SIGNED=$(curl -sS -b "$SESSION_JAR" -c "$SESSION_JAR" -o /dev/null -w '%{http_code} %{redirect_url}' -X POST "$SETUP_URL")
+[[ "$SIGNED" == "303 $ONB_URL/account" ]] && grep -q belfry_session "$SESSION_JAR" \
+  && ok "using it signs the browser in and lands on the account page" || bad "sign-in link: '$SIGNED'"
+# SAVE_SESSION_JAR=<file>: keep the participant's session for the browser checks of the apps'
+# silent sign-in (chat-login-check.mjs, calendar-check.mjs with COOKIE_JAR).
+[[ -n "${SAVE_SESSION_JAR:-}" ]] && cp "$SESSION_JAR" "$SAVE_SESSION_JAR"
 AGAIN=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$SETUP_URL")
 [[ "$AGAIN" == 410 ]] && ok "the link works once (second use -> 410)" || bad "second use -> $AGAIN"
+ACCOUNT=$(curl -sS -b "$SESSION_JAR" "$ONB_URL/account")
+[[ "$ACCOUNT" == *"$NPUB"* && "$ACCOUNT" == *"$USERNAME@"* && "$ACCOUNT" == *"Community apps"* ]] \
+  && ok "account page: npub, NIP-05 name and the community apps" || bad "account page: $(head -c 300 <<<"$ACCOUNT")"
+[[ "$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/account")" == *"/login?next=%2Faccount" ]] && ok "the account page without a session goes to the login page" || bad "account page without a session"
 # The page the payer lands on after paying (Odoo's payment status page forwards there): its own
 # secret, so signing in there leaves the mail's link usable.
 WELCOME_TOKEN=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["welcome_token"]}' | jq -r '.[0].welcome_token // empty')
@@ -297,215 +303,197 @@ MP=$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/search?query=to:$EMAIL" 2>/dev/n
 if [[ -z "$(jq -r '.messages_count // empty' <<<"$MP")" ]]; then
   echo "  note Mailpit not reachable at $MAILPIT_URL (a real SMTP relay in production); mail state: $(ox mail.mail read "[$(jq -c 'map(.id)' <<<"$MAILS")]" '{"fields":["state","failure_reason"]}' | jq -c 'map({state, failure_reason})')"
 elif [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]]; then
-  # the activation mail, among others to the same address (the ticket seller's invoice, say)
   for MP_ID in $(jq -r '.messages[:5][].ID' <<<"$MP"); do
     MP_BODY=$(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.HTML // .Text')
     grep -q "$SETUP_URL" <<<"$MP_BODY" && break
   done
-  grep -q "$SETUP_URL" <<<"$MP_BODY" && ok "mail delivered over SMTP to Mailpit with the setup link (from $(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.From.Address'))" || bad "delivered mail lacks the setup link"
+  grep -q "$SETUP_URL" <<<"$MP_BODY" && ok "mail delivered over SMTP to Mailpit with the sign-in link (from $(curl -sS "$MAILPIT_URL/api/v1/message/$MP_ID" | jq -r '.From.Address'))" || bad "delivered mail lacks the sign-in link"
 else
   bad "no mail for $EMAIL in Mailpit: $(jq -c '{messages_count}' <<<"$MP")"
 fi
-
-# Drive the link like the browser: the flow only signs the pending user in (remember-me choice).
-FLOW_TOKEN=${AK_LINK#*flow_token=}
-SETUP_EXEC="$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=flow_token%3D$FLOW_TOKEN"
-run_setup_flow() { # cookie jar [executor URL] -> prints the final component (FLOW_TO: its target)
-  local jar=$1 exec=${2:-$SETUP_EXEC} ch comp body
-  ch=$(curl -sS -b "$jar" -c "$jar" "$exec")
-  for _ in 1 2 3; do
-    comp=$(jq -r '.component // empty' <<<"$ch")
-    case "$comp" in
-      ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
-      *) break ;;
-    esac
-    ch=$(curl -sS -b "$jar" -c "$jar" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$exec")
-  done
-  jq -r '.to // empty' <<<"$ch" > "$jar.to"
-  jq -r '.component // "none"' <<<"$ch"
-}
-AK_SESSION=$(mktemp)   # the participant's browser; 6d continues in it
-FINAL=$(run_setup_flow "$AK_SESSION")
-# SAVE_AK_JAR=<file>: keep the participant's Authentik session for the browser checks of the
-# apps' silent sign-in (chat-login-check.mjs, calendar-check.mjs with COOKIE_JAR).
-[[ -n "${SAVE_AK_JAR:-}" ]] && cp "$AK_SESSION" "$SAVE_AK_JAR"
-ME=$(curl -sS -b "$AK_SESSION" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-[[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "sign-in link: browser signed in as Authentik user $AK_UID, no password asked" || bad "sign-in flow ended with '$FINAL', session user '$ME'"
-# No app asked for this sign-in: authentik's root sends external users (participants) to the
-# brand's default application, Keycast's sign-in start, i.e. the apps page signed in.
-ROOT_TO=$(curl -sS -b "$AK_SESSION" -o /dev/null -w '%{redirect_url}' "$AK_URL/")
-LAUNCH_TO=$(curl -sS -b "$AK_SESSION" -o /dev/null -w '%{redirect_url}' "$ROOT_TO")
-[[ "$LAUNCH_TO" == "${KEYCAST_APP_URL:-http://localhost:3000}/api/auth/oidc/start?"* ]] \
-  && ok "after the sign-in link the participant lands on the apps page (Keycast sign-in), not authentik's portal" \
-  || bad "after sign-in: $AK_URL/ -> '$ROOT_TO' -> '$LAUNCH_TO'"
-# Ordered by an app with a return_url: the welcome page signs in by script and the sign-in ends
-# back in the app (policy belfry-account-setup-return), not on the apps page.
+# Ordered by an app with a return_url: the welcome page signs in and goes back to the app.
 RETURN_URL="http://localhost:8080/?invite=smoke-$STAMP"
 ox belfry.pass write "[[$PASS_ID],{\"return_url\":\"$RETURN_URL\"}]" >/dev/null
 WELCOME=$(curl -sS "$ONB_URL/welcome/$WELCOME_TOKEN")
-WELCOME_LINK=$(curl -sS -o /dev/null -w '%{redirect_url}' -X POST "$ONB_URL/welcome/$WELCOME_TOKEN")
 RJAR=$(mktemp)
-RQUERY=$(jq -rn --arg q "${WELCOME_LINK#*\?}" '$q | @uri')
-RFINAL=$(run_setup_flow "$RJAR" "$AK_URL/api/v3/flows/executor/belfry-account-setup/?query=$RQUERY")
-RME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-[[ "$WELCOME" == *'action="/welcome/'* && "$RFINAL" == xak-flow-redirect && "$(cat "$RJAR.to")" == "$RETURN_URL" && "$RME" == "$AK_UID" ]] \
+WELCOME_TO=$(curl -sS -b "$RJAR" -c "$RJAR" -o /dev/null -w '%{redirect_url}' -X POST "$ONB_URL/welcome/$WELCOME_TOKEN")
+[[ "$WELCOME" == *'action="/welcome/'* && "$WELCOME_TO" == "$RETURN_URL" ]] && grep -q belfry_session "$RJAR" \
   && ok "with the order's return_url the welcome page signs in and returns to the app" \
-  || bad "return to the app: page $(head -c 80 <<<"$WELCOME"), link '$WELCOME_LINK', flow '$RFINAL' to '$(cat "$RJAR.to")', user '$RME'"
+  || bad "return to the app: page $(head -c 80 <<<"$WELCOME"), redirect '$WELCOME_TO'"
 AGAIN_TO=$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/welcome/$WELCOME_TOKEN")
 [[ "$AGAIN_TO" == "$RETURN_URL" ]] && ok "used once: the welcome page goes back to the app without signing in" || bad "welcome again -> '$AGAIN_TO'"
 ox belfry.pass write "[[$PASS_ID],{\"return_url\":false}]" >/dev/null
-rm -f "$RJAR" "$RJAR.to"
-AK_PW_LOGIN=$(curl -sS -c /dev/null "$AK_URL/api/v3/flows/executor/belfry-magic-link/" | jq -r '[.password_fields // false] | .[0]')
-[[ "$AK_PW_LOGIN" == false ]] && ok "the login page asks for no password (magic link or pass)" || bad "login page offers a password field"
-# The link is one-time: a second use must not sign anyone in.
-SJAR=$(mktemp)
-FINAL=$(run_setup_flow "$SJAR")
-ME2=$(curl -sS -b "$SJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-[[ "$FINAL" != xak-flow-redirect && -z "$ME2" ]] && ok "consumed link is refused ($FINAL, no session)" || bad "consumed link ended with '$FINAL', session user '$ME2'"
-rm -f "$SJAR"
+rm -f "$RJAR"
+LOGIN_PAGE=$(curl -sS "$ONB_URL/login")
+[[ "$LOGIN_PAGE" == *'action="/login/email"'* && "$LOGIN_PAGE" != *'type="password"'* ]] && ok "the login page asks for an e-mail address, no password" || bad "login page: $(head -c 200 <<<"$LOGIN_PAGE")"
 
-step "6d. Keycast sign-in through Authentik (OIDC) in the browser the sign-in link opened"
-if OUT=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" EXPECT_EMAIL="$EMAIL" EXPECT_MEMBER="$MEMBER" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
-  KC_TOKEN=$(sed -n 's/^ACCESS_TOKEN=//p' <<<"$OUT"); KC_BUNKER=$(sed -n 's/^BUNKER_URL=//p' <<<"$OUT"); OUT=$(grep -v '^ACCESS_TOKEN=\|^BUNKER_URL=' <<<"$OUT")
-  sed 's/^/  /' <<<"$OUT"; ok "Authentik login opens a Keycast session for $KC_PUB and signs"
-else
-  sed 's/^/  /' <<<"$OUT" >&2; bad "Keycast OIDC login"
-fi
-CB_STATUS=$(curl -sS -o /dev/null -w '%{http_code}' "$KC_URL/api/auth/oidc/callback?code=x&state=y")
-[[ "$CB_STATUS" == 400 ]] && ok "callback without the flow cookie -> 400" || bad "callback without the flow cookie -> $CB_STATUS"
+# The apps' sign-in, as an app does it (connect.py): authorize with PKCE in the participant's
+# browser, then the token call from the app.
+pkce() { PKCE_V=$(openssl rand -hex 32); PKCE_C=$(printf %s "$PKCE_V" | openssl dgst -sha256 -binary | base64 | tr '+/' '-_' | tr -d '='); }
+qparam() { python3 -c 'import sys, urllib.parse as u; print((u.parse_qs(u.urlsplit(sys.argv[1]).query).get(sys.argv[2]) or [""])[0])' "$1" "$2"; }
+app_connect() { # jar client_id redirect_uri [prompt] -> CONNECT (token response) and CONNECT_LOC (the redirect)
+  local q code
+  pkce
+  q="client_id=$2&redirect_uri=$(jq -rn --arg v "$3" '$v|@uri')&scope=policy%3Abelfry-event&code_challenge=$PKCE_C&code_challenge_method=S256&state=smoke${4:+&prompt=$4}"
+  CONNECT_LOC=$(curl -sS -b "$1" -c "$1" -o /dev/null -w '%{redirect_url}' "$ONB_URL/api/oauth/authorize?$q")
+  CONNECT=""
+  code=$(qparam "$CONNECT_LOC" code)
+  [[ -n "$code" ]] || return 0
+  CONNECT=$(curl -sS -X POST "$ONB_URL/api/oauth/token" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg c "$code" --arg id "$2" --arg r "$3" --arg v "$PKCE_V" '{grant_type:"authorization_code", code:$c, client_id:$id, redirect_uri:$r, code_verifier:$v}')")
+}
+app_rpc() { # access token, method, params (JSON) -> the response
+  curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+    -d "$(jq -nc --arg m "$2" --argjson p "$3" '{method:$m, params:$p}')"
+}
+new_bunker() { # label -> a bunker URL from the account page's "Connect a Nostr app"
+  curl -sS -b "$SESSION_JAR" -X POST "$ONB_URL/account/connections" --data-urlencode "label=$1" \
+    | grep -o 'bunker://[^<"]*' | head -n1 | sed 's/&amp;/\&/g'
+}
+CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback"
+WALLET_CB="${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback"
 
-step "6l. silent sign-in for Belfry's apps: prompt=none through Keycast and Authentik, no consent for trusted apps"
-# Keycast patch 0008; the apps (chat, calendar) redirect once per tab with prompt=none and show
-# "Sign in with Open Source Village" on login_required. Same browser as 6c/6d (AK_SESSION).
-if OUT=$(KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
-  sed 's/^/  /' <<<"$OUT"; ok "silent sign-in and the sign-in button work for the chat app's client"
-else
-  sed 's/^/  /' <<<"$OUT" >&2; bad "silent sign-in"
-fi
+step "6d. apps sign in with Open Source Village: a bunker URL and tokens from Belfry's sign-in"
+app_connect "$SESSION_JAR" belfry-chat "$CHAT_CB"
+APP_TOKEN=$(jq -r '.access_token // empty' <<<"$CONNECT" 2>/dev/null); APP_BUNKER=$(jq -r '.bunker_url // empty' <<<"$CONNECT" 2>/dev/null)
+APP_REFRESH=$(jq -r '.refresh_token // empty' <<<"$CONNECT" 2>/dev/null)
+[[ "$CONNECT_LOC" == "$CHAT_CB?code="* && "$(qparam "$CONNECT_LOC" state)" == smoke ]] && ok "the chat (an own app) gets a code without a consent screen" || bad "authorize for the chat: '$CONNECT_LOC'"
+[[ -n "$APP_TOKEN" && "$APP_BUNKER" == bunker://* && "$(jq -r .pubkey <<<"$CONNECT")" == "$MEMBER_PUB" ]] \
+  && ok "token response: access and refresh token, bunker URL, the member's pubkey" || bad "token response: $CONNECT"
+R=$(app_rpc "$APP_TOKEN" get_public_key '[]')
+[[ "$(jq -r .result <<<"$R")" == "$MEMBER_PUB" ]] && ok "HTTP RPC get_public_key" || bad "get_public_key: $R"
+R=$(app_rpc "$APP_TOKEN" sign_event "$(jq -nc --arg pk "$MEMBER_PUB" '[{pubkey:$pk, kind:1, content:"smoke", tags:[], created_at:now|floor}]')")
+[[ "$(jq -r .result.pubkey <<<"$R")" == "$MEMBER_PUB" && -n "$(jq -r '.result.sig // empty' <<<"$R")" ]] && ok "HTTP RPC sign_event signs as the member" || bad "sign_event: $R"
+R=$(app_rpc "$APP_TOKEN" derive_secret '["cashu-wallet-v1"]')
+[[ "$(jq -r '.result // empty' <<<"$R")" == "" ]] && ok "the chat may not derive the wallet's secrets" || bad "chat derived a wallet secret: $R"
+NOCOOKIE=$(mktemp)
+app_connect "$NOCOOKIE" belfry-chat "$CHAT_CB" none
+[[ "$(qparam "$CONNECT_LOC" error)" == login_required ]] && ok "silent sign-in without a session -> login_required" || bad "silent sign-in without a session: '$CONNECT_LOC'"
+app_connect "$NOCOOKIE" belfry-chat "$CHAT_CB"
+[[ "$CONNECT_LOC" == *"/login?next=%2Fapi%2Foauth%2Fauthorize"* ]] && ok "the sign-in button without a session goes to the login page and back" || bad "sign-in without a session: '$CONNECT_LOC'"
+rm -f "$NOCOOKIE"
+app_connect "$SESSION_JAR" village-notes "https://notes.example/callback" none
+[[ "$(qparam "$CONNECT_LOC" error)" == consent_required ]] && ok "an outside app cannot sign in silently (consent_required)" || bad "outside app silently: '$CONNECT_LOC'"
+CONSENT=$(curl -sS -b "$SESSION_JAR" "$ONB_URL/api/oauth/authorize?client_id=village-notes&redirect_uri=https%3A%2F%2Fnotes.example%2Fcallback&code_challenge=x&code_challenge_method=S256&state=s")
+[[ "$CONSENT" == *"notes.example"* && "$CONSENT" == *'name="answer" value="allow"'* ]] && ok "an outside app gets the consent screen" || bad "consent screen: $(head -c 200 <<<"$CONSENT")"
+
+step "6l. silent sign-in for Belfry's apps: prompt=none with a session, no consent for own apps"
+app_connect "$SESSION_JAR" belfry-calendar "${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback" none
+[[ -n "$(jq -r '.bunker_url // empty' <<<"$CONNECT" 2>/dev/null)" ]] && ok "the calendar signs in silently" || bad "silent sign-in of the calendar: '$CONNECT_LOC' $CONNECT"
+for _ in 1 2 3 4 5 6; do app_connect "$SESSION_JAR" belfry-calendar "${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback" none; done
+CONNS=$(curl -sS -b "$SESSION_JAR" "$ONB_URL/account" | grep -o '<strong>belfry-calendar</strong>' | wc -l)
+[[ "$CONNS" -le 5 ]] && ok "each own app keeps at most five connections ($CONNS listed for the calendar)" || bad "calendar connections listed: $CONNS"
 
 step "6o. village wallet: signs in silently, derives its seed and nutzap key from the participant's key"
-if OUT=$(WALLET_ONLY=1 CLIENT_ID=belfry-wallet KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
-  sed 's/^/  /' <<<"$OUT"; ok "the wallet's keys derive from the participant's Nostr key"
+app_connect "$SESSION_JAR" belfry-wallet "$WALLET_CB" none
+WALLET_TOKEN=$(jq -r '.access_token // empty' <<<"$CONNECT" 2>/dev/null)
+W1=$(app_rpc "$WALLET_TOKEN" derive_secret '["cashu-wallet-v1"]' | jq -r '.result // empty')
+W2=$(app_rpc "$WALLET_TOKEN" derive_secret '["cashu-nutzap-v1"]' | jq -r '.result // empty')
+[[ ${#W1} == 64 && ${#W2} == 64 && "$W1" != "$W2" ]] && ok "the wallet derives its seed and nutzap secret" || bad "wallet derive_secret: '$W1' '$W2'"
+R=$(app_rpc "$WALLET_TOKEN" derive_secret '["something-else"]')
+[[ -z "$(jq -r '.result // empty' <<<"$R")" ]] && ok "other purposes are refused" || bad "derive_secret of another purpose: $R"
+# the key export (fresh sign-in) lets the test check the derivation is Keycast's, byte for byte
+NSEC=$(curl -sS -b "$SESSION_JAR" -X POST "$ONB_URL/account/export" | grep -o 'nsec1[a-z0-9]*' | head -n1)
+if [[ -n "$NSEC" ]]; then
+  CHECK=$(python3 - "$NSEC" "$W1" "$W2" "$MEMBER_PUB" "$INFRA_DIR/scripts" <<'PY'
+import hashlib, hmac, sys
+nsec, w1, w2, pub, scripts = sys.argv[1:]
+sys.path.insert(0, scripts)
+CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+data = [CHARSET.index(c) for c in nsec[nsec.rindex("1") + 1:-6]]
+acc = bits = 0; out = []
+for v in data:
+    acc = (acc << 5) | v; bits += 5
+    while bits >= 8:
+        bits -= 8; out.append((acc >> bits) & 0xFF)
+sk = bytes(out[:32])
+import nostr_keys
+derived_pub = nostr_keys.pubkey_hex(sk.hex())
+def derive(purpose):  # HKDF-SHA256, salt "keycast/derive/v1", L = 32: one HMAC block
+    prk = hmac.new(b"keycast/derive/v1", sk, hashlib.sha256).digest()
+    return hmac.new(prk, purpose.encode() + b"\x01", hashlib.sha256).hexdigest()
+print("ok" if derive("cashu-wallet-v1") == w1 and derive("cashu-nutzap-v1") == w2 and derived_pub == pub else "differs")
+PY
+)
+  [[ "$CHECK" == ok ]] && ok "the exported key gives exactly the wallet's secrets (Keycast's derivation, so wallets keep their tokens)" || bad "derivation check: $CHECK"
 else
-  sed 's/^/  /' <<<"$OUT" >&2; bad "wallet sign-in and derive_secret"
+  bad "no key export from the account page (fresh sign-in)"
 fi
 WCODE=$(curl -sS -o /dev/null -w '%{http_code}' "${WALLET_PUBLIC_URL:-http://localhost:3400}/")
 [[ "$WCODE" == 200 ]] && ok "wallet app served (${WALLET_PUBLIC_URL:-http://localhost:3400})" || bad "wallet app -> $WCODE"
 
-step "6h. magic link and code: the login page mails a one-time link and a 6-digit code; either signs the participant in"
-MAGIC_EXEC="$AK_URL/api/v3/flows/executor/belfry-magic-link/"
-magic_request() { # cookie jar, e-mail -> component after the identification stage
-  curl -sS -b "$1" -c "$1" "$MAGIC_EXEC" >/dev/null
-  curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" \
-    --data "$(jq -nc --arg e "$2" '{component:"ak-stage-identification",uid_field:$e}')" "$MAGIC_EXEC" | jq -c '{component, response_errors}'
-}
-magic_open() { # cookie jar, flow token -> final component (authentik asks to confirm before it uses the token)
-  local q ch comp body
-  q="query=$(jq -rn --arg v "flow_token=$2" '$v|@uri')"
-  ch=$(curl -sS -b "$1" -c "$1" "$MAGIC_EXEC?$q")
-  for _ in 1 2 3; do
-    comp=$(jq -r '.component // empty' <<<"$ch")
-    case "$comp" in
-      ak-stage-consent) body=$(jq -c '{component:"ak-stage-consent", token}' <<<"$ch") ;;
-      ak-stage-user-login) body='{"component":"ak-stage-user-login","remember_me":false}' ;;
-      *) break ;;
-    esac
-    ch=$(curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data "$body" "$MAGIC_EXEC?$q")
-  done
-  jq -r '.component // "none"' <<<"$ch"
-}
-MJAR=$(mktemp)
-UNKNOWN=$(magic_request "$MJAR" "nobody-$STAMP@example.org")
-[[ "$(jq -r '.component' <<<"$UNKNOWN")" == ak-stage-identification && "$UNKNOWN" == *"Failed to authenticate"* ]] \
-  && ok "unknown address refused, no mail sent" || bad "unknown address: $UNKNOWN"
-if [[ -n "$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/messages?limit=1" 2>/dev/null | jq -r '.total // empty' 2>/dev/null)" ]]; then
-  rm -f "$MJAR"; MJAR=$(mktemp)
-  REQ=$(magic_request "$MJAR" "$EMAIL")
-  [[ "$(jq -r .component <<<"$REQ")" == ak-stage-prompt ]] && ok "link and code requested for $EMAIL (the page asks for the code)" || bad "magic-link request: $REQ"
-  ML=""
-  for _ in 1 2 3 4 5 6; do
-    sleep 1
-    MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=$(jq -rn --arg v "to:$EMAIL subject:\"sign-in link\"" '$v|@uri')")
-    [[ "$(jq -r '.messages_count // 0' <<<"$MP")" -ge 1 ]] || continue
-    # The text part has CRLF line ends: strip them before taking the token.
-    ML=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r' | grep -o 'flow_token=[A-Za-z0-9]*' | head -n1 | cut -d= -f2)
-    [[ -n "$ML" ]] && break
-  done
-  if [[ -n "$ML" ]]; then
-    ok "magic-link mail delivered (subject 'Your Open Source Village sign-in link')"
-    # The same mail carries the code for a device without the mailbox.
-    MCODE=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r' | grep -oE '^ +[0-9]{6}$' | tr -d ' ')
-    [[ "$MCODE" =~ ^[0-9]{6}$ ]] && ok "the mail carries a 6-digit code" || bad "no code in the sign-in mail"
-    FINAL=$(magic_open "$MJAR" "$ML")
-    ME=$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-    [[ "$FINAL" == xak-flow-redirect && "$ME" == "$AK_UID" ]] && ok "magic link signed the browser in as Authentik user $AK_UID" || bad "magic link ended with '$FINAL', session user '$ME'"
-    RJAR=$(mktemp); FINAL=$(magic_open "$RJAR" "$ML")
-    ME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-    [[ -z "$ME" ]] && ok "the magic link works once ($FINAL on reuse)" || bad "reused magic link signed in user $ME"
-    rm -f "$RJAR"
-    WJAR=$(mktemp); REQ=$(magic_request "$WJAR" "$EMAIL"); sleep 2
-    MP=$(curl -sS "$MAILPIT_URL/api/v1/search?query=$(jq -rn --arg v "to:$EMAIL subject:\"sign-in link\"" '$v|@uri')")
-    MTXT=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$MP")" | jq -r '.Text' | tr -d '\r')
-    MCODE2=$(grep -oE '^ +[0-9]{6}$' <<<"$MTXT" | tr -d ' '); ML2=$(grep -o 'flow_token=[A-Za-z0-9]*' <<<"$MTXT" | head -n1 | cut -d= -f2)
-    code_post() { curl -sS -b "$1" -c "$1" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" \
-      --data "$(jq -nc --arg c "$2" '{component:"ak-stage-prompt",code:$c}')" "$MAGIC_EXEC"; }
-    WRONG=$( [[ "$MCODE2" == 000000 ]] && echo 000001 || echo 000000 )
-    R=$(code_post "$WJAR" "$WRONG")
-    [[ "$(jq -r .component <<<"$R")" == ak-stage-prompt && "$R" == *"not right"* ]] && ok "a wrong code is refused" || bad "wrong code: $(jq -c '{component,response_errors}' <<<"$R")"
-    R=$(code_post "$WJAR" "$MCODE2")
-    [[ "$(jq -r .component <<<"$R")" == ak-stage-user-login ]] \
-      && R=$(curl -sS -b "$WJAR" -c "$WJAR" -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data '{"component":"ak-stage-user-login","remember_me":false}' "$MAGIC_EXEC")
-    ME=$(curl -sS -b "$WJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-    [[ "$ME" == "$AK_UID" ]] && ok "the code signed the waiting browser in (no mailbox on that device)" || bad "code sign-in ended with '$(jq -r .component <<<"$R")', session user '$ME'"
-    RJAR=$(mktemp); FINAL=$(magic_open "$RJAR" "$ML2")
-    ME=$(curl -sS -b "$RJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-    [[ -z "$ME" ]] && ok "after the code, the link of the same mail no longer works" || bad "link after code signed in user $ME"
-    rm -f "$RJAR" "$WJAR"
-  else
-    bad "no magic-link mail for $EMAIL in Mailpit"
+step "6h. login page: Odoo mails a one-time link and a 6-digit code; either signs the participant in"
+login_mail() { # address -> "code secret" of the newest sign-in mail (Odoo's queue, else Mailpit)
+  local m
+  m=$(ox mail.mail search_read "[[[\"model\",\"=\",\"belfry.login.code\"],[\"email_to\",\"=\",\"$1\"]]]" '{"fields":["subject","body_html"],"order":"id desc","limit":1}' 2>/dev/null)
+  if [[ "$(jq length <<<"$m")" == 1 ]]; then
+    printf '%s %s\n' "$(jq -r '.[0].subject' <<<"$m" | grep -oE '^[0-9]{6}')" "$(jq -r '.[0].body_html' <<<"$m" | grep -o '/login/link/[A-Za-z0-9_-]*' | head -n1 | cut -d/ -f4)"
+    return
   fi
-else
-  echo "  note Mailpit not reachable at $MAILPIT_URL: the mail round trip is checked by hand on a public deployment"
-fi
-# Mail flooding: per account, at most five links in 30 minutes (deny stage before the mail stage).
-SENT=0; DENIED=""
-for _ in 1 2 3 4 5 6 7; do
-  LJAR=$(mktemp); REQ=$(magic_request "$LJAR" "$EMAIL"); rm -f "$LJAR"
-  case "$(jq -r .component <<<"$REQ")" in
-    ak-stage-prompt) SENT=$((SENT + 1)) ;;
-    ak-stage-access-denied) DENIED=$REQ; break ;;
-    *) DENIED="unexpected: $REQ"; break ;;
-  esac
+  m=$(curl -sS --max-time 5 "$MAILPIT_URL/api/v1/search?query=$(jq -rn --arg v "to:$1 subject:\"sign-in code\"" '$v|@uri')" 2>/dev/null)
+  [[ "$(jq -r '.messages_count // 0' <<<"$m" 2>/dev/null)" -ge 1 ]] || return 0
+  local body; body=$(curl -sS "$MAILPIT_URL/api/v1/message/$(jq -r '.messages[0].ID' <<<"$m")" | jq -r '.HTML')
+  printf '%s %s\n' "$(jq -r '.messages[0].Subject' <<<"$m" | grep -oE '^[0-9]{6}')" "$(grep -o '/login/link/[A-Za-z0-9_-]*' <<<"$body" | head -n1 | cut -d/ -f4)"
+}
+SENT=$(curl -sS -X POST "$ONB_URL/login/email" --data-urlencode "email=nobody-$STAMP@example.org" --data-urlencode "next=/account")
+[[ "$SENT" == *"Check your mail"* && -z "$(login_mail "nobody-$STAMP@example.org")" ]] && ok "unknown address: the same answer, no mail" || bad "unknown address: $(head -c 120 <<<"$SENT")"
+LJAR=$(mktemp)
+SENT=$(curl -sS -b "$LJAR" -c "$LJAR" -X POST "$ONB_URL/login/email" --data-urlencode "email=$EMAIL" --data-urlencode "next=/me")
+read -r LCODE LSECRET <<<"$(login_mail "$EMAIL")"
+[[ "$SENT" == *"Check your mail"* && "$LCODE" =~ ^[0-9]{6}$ && -n "$LSECRET" ]] && ok "link and code mailed to $EMAIL" || bad "sign-in mail: code '$LCODE', link '$LSECRET'"
+WRONG=$( [[ "$LCODE" == 000000 ]] && echo 000001 || echo 000000 )
+R=$(curl -sS -b "$LJAR" -c "$LJAR" -X POST "$ONB_URL/login/code" --data-urlencode "email=$EMAIL" --data-urlencode "code=$WRONG" --data-urlencode "next=/me")
+[[ "$R" == *"not right"* ]] && ok "a wrong code is refused" || bad "wrong code: $(head -c 120 <<<"$R")"
+R=$(curl -sS -b "$LJAR" -c "$LJAR" -o /dev/null -w '%{http_code} %{redirect_url}' -X POST "$ONB_URL/login/code" --data-urlencode "email=$EMAIL" --data-urlencode "code=$LCODE" --data-urlencode "next=/me")
+[[ "$R" == "303 /me" || "$R" == "303 $ONB_URL/me" ]] && grep -q belfry_session "$LJAR" && ok "the code signs the waiting browser in and goes on to where it was going" || bad "code sign-in: '$R'"
+R=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/login/link/$LSECRET")
+[[ "$R" == 410 ]] && ok "after the code, the link of the same mail no longer works" || bad "link after code: $R"
+curl -sS -X POST "$ONB_URL/login/email" --data-urlencode "email=$EMAIL" >/dev/null
+read -r LCODE LSECRET <<<"$(login_mail "$EMAIL")"
+KJAR=$(mktemp)
+[[ "$(curl -sS "$ONB_URL/login/link/$LSECRET")" == *"/login/link/$LSECRET"* ]] && ok "opening the mail's link shows a page that signs in by script" || bad "link page"
+R=$(curl -sS -b "$KJAR" -c "$KJAR" -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/login/link/$LSECRET")
+[[ "$R" == 303 ]] && grep -q belfry_session "$KJAR" && ok "the mail's link signs in any browser that opens it" || bad "link sign-in: $R"
+R=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/login/link/$LSECRET")
+[[ "$R" == 410 ]] && ok "the link works once" || bad "link reuse: $R"
+rm -f "$KJAR"
+# Mail flooding: at most five sign-in mails per address in 30 minutes (Odoo, belfry.login.code).
+LIMITED=""
+for _ in 1 2 3 4 5 6; do
+  R=$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$ONB_URL/login/email" --data-urlencode "email=$EMAIL")
+  [[ "$R" == 429 ]] && { LIMITED=yes; break; }
 done
-[[ "$DENIED" == *"Too many sign-in links"* || "$(jq -r .component <<<"$DENIED" 2>/dev/null)" == ak-stage-access-denied ]] \
-  && ok "sign-in links are limited per account: denied after $SENT more (at most five in 30 minutes)" || bad "magic-link limit: $SENT sent, then '$DENIED'"
-step "6m. logout from an app ends the Keycast and the Authentik session (no silent sign-in after it)"
-# In 6h's magic-link browser: the logout ends that Authentik session, and AK_SESSION is still
-# needed (8b).
-if [[ -n "${MJAR:-}" && -s "$MJAR" ]] && [[ -n "$(curl -sS -b "$MJAR" "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty' 2>/dev/null)" ]]; then
-  if OUT=$(LOGOUT_ONLY=1 LOGOUT_JAR="$MJAR" KC_URL="$KC_URL" AK_URL="$AK_URL" REDIRECT_URI="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/silent-signin-check.sh" "$AK_SESSION" "$KC_PUB" 2>&1); then
-    sed 's/^/  /' <<<"$OUT"; ok "logout from an app signs the participant out everywhere"
-  else
-    sed 's/^/  /' <<<"$OUT" >&2; bad "logout"
-  fi
-else
-  echo "    (skipped: no magic-link session from 6h)"
-fi
-rm -f "$MJAR"
+[[ -n "$LIMITED" ]] && ok "sign-in mails are limited per address (429 after five in half an hour)" || bad "no limit on sign-in mails"
+
+step "6m. logout from an app ends the sign-in everywhere (no silent sign-in after it)"
+app_connect "$LJAR" belfry-chat "$CHAT_CB" none
+LREFRESH=$(jq -r '.refresh_token // empty' <<<"$CONNECT" 2>/dev/null); LACCESS=$(jq -r '.access_token // empty' <<<"$CONNECT" 2>/dev/null)
+[[ -n "$LREFRESH" ]] && ok "the chat signed in silently in the code's browser" || bad "silent sign-in after the code: '$CONNECT_LOC'"
+R=$(curl -sS -X POST "$ONB_URL/api/oauth/revoke" -H 'Content-Type: application/json' -d "$(jq -nc --arg t "$LREFRESH" '{token:$t, client_id:"belfry-chat"}')")
+[[ "$(jq -r .ok <<<"$R")" == true ]] && ok "the app revokes its sign-in" || bad "revoke: $R"
+R=$(app_rpc "$LACCESS" get_public_key '[]')
+[[ -z "$(jq -r '.result // empty' <<<"$R")" ]] && ok "a revoked sign-in's token gets nothing" || bad "revoked token still answers: $R"
+OUT_TO=$(curl -sS -b "$LJAR" -c "$LJAR" -o /dev/null -w '%{http_code} %{redirect_url}' "$ONB_URL/api/auth/oidc/logout?return_to=$(jq -rn --arg v "${CHAT_PUBLIC_URL:-http://localhost:3300}/" '$v|@uri')")
+[[ "$OUT_TO" == "303 ${CHAT_PUBLIC_URL:-http://localhost:3300}/" ]] && ok "logout returns to the app" || bad "logout: '$OUT_TO'"
+app_connect "$LJAR" belfry-chat "$CHAT_CB" none
+[[ "$(qparam "$CONNECT_LOC" error)" == login_required ]] && ok "after the logout the apps no longer sign in silently" || bad "silent sign-in after logout: '$CONNECT_LOC'"
+OUT_TO=$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/logout?return_to=https%3A%2F%2Fevil.example%2F")
+[[ "$OUT_TO" == *"/login?logged_out=1" ]] && ok "logout goes back only to Belfry's own apps" || bad "logout to another site: '$OUT_TO'"
+rm -f "$LJAR"
 
 step "6f. Blossom: uploads need a signed BUD-11 event from a key with an active pass"
 BLOSSOM_URL=${BLOSSOM_URL:-http://localhost:3100}
-blossom_auth() { # verb [sha256] -> Authorization header value, signed through Keycast with the participant's key
+blossom_auth() { # verb [sha256] -> Authorization header value, signed by the signer with the participant's key
   # BUD-02: an upload/delete token names the blob it is for in an "x" tag.
-  local ev; ev=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg v "$1" --arg x "${2:-}" --arg s "${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}" \
+  local ev; ev=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --arg v "$1" --arg x "${2:-}" --arg s "${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}" \
     '{pubkey:$pk, created_at:$t, kind:24242, tags:([["t",$v],["expiration",(($t+300)|tostring)],["server",$s]] + (if $x != "" then [["x",$x]] else [] end)), content:("Authorize "+$v)}')
-  curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' \
+  curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' \
     -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')" | jq -r '.result | @base64'
 }
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   BLOB=$(mktemp); printf 'belfry smoke %s' "$STAMP" > "$BLOB"; SHA=$(sha256sum "$BLOB" | cut -c1-64)
   BAUTH=$(blossom_auth upload "$SHA")
-  [[ -n "$BAUTH" && "$BAUTH" != bnVsbA== ]] && ok "kind-24242 auth event signed through Keycast (policy allows it)" || bad "could not sign a kind-24242 event through Keycast: $BAUTH"
+  [[ -n "$BAUTH" && "$BAUTH" != bnVsbA== ]] && ok "kind-24242 auth event signed by the signer" || bad "could not sign a kind-24242 event: $BAUTH"
   NOAUTH=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/upload" -H 'Content-Type: text/plain' --data-binary "@$BLOB")
   [[ "$NOAUTH" == 401 ]] && ok "upload without authorization -> 401" || bad "upload without authorization -> $NOAUTH"
   UP=$(curl -sS -X PUT "$BLOSSOM_URL/upload" -H "Authorization: Nostr $BAUTH" -H 'Content-Type: text/plain' --data-binary "@$BLOB")
@@ -515,41 +503,39 @@ if [[ -n "${KC_TOKEN:-}" ]]; then
   DEL=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$BLOSSOM_URL/$SHA" -H "Authorization: Nostr $BAUTH")
   [[ "$DEL" == 403 ]] && ok "delete with an upload token -> 403 (verb check)" || bad "delete with upload token -> $DEL"
 else
-  bad "no Keycast access token from step 6d"
+  bad "no app access token from step 6d"
 fi
 
 step "6g. policy kinds: any kind signs (calendar, photos, proposals, NIP-17 chat, tasks, zaps)"
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   kc_sign() { # kind [tags json] -> "ok" or the error
-    local ev; ev=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$1" --argjson tags "${2:-[]}" '{pubkey:$pk, created_at:$t, kind:$k, tags:$tags, content:"smoke"}')
-    local r; r=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')")
+    local ev; ev=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --argjson k "$1" --argjson tags "${2:-[]}" '{pubkey:$pk, created_at:$t, kind:$k, tags:$tags, content:"smoke"}')
+    local r; r=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$ev" '{method:"sign_event", params:[$e]}')")
     [[ -n "$(jq -r '.result.sig // empty' <<<"$r")" ]] && echo ok || jq -r '.error // .message // .' <<<"$r" | head -c 120
   }
   for spec in "31923:calendar event (NIP-52)" "31925:calendar RSVP" "20:picture (NIP-68)" "1068:poll (NIP-88)" "1018:poll response" "1111:comment (NIP-22)" "13:chat seal (NIP-17)" "10050:DM relay list" "30402:marketplace offer (NIP-99)" "30078:directory consent (NIP-78)" "2100:task (tasklist.sh)" "9735:zap receipt (outside the old list)"; do
     k=${spec%%:*}; name=${spec#*:}; res=$(kc_sign "$k")
     [[ "$res" == ok ]] && ok "kind $k ($name) signed" || bad "kind $k ($name): $res"
   done
-  ENC=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$KC_PUB" '{method:"nip44_encrypt", params:[$pk, "hello village"]}')")
+  ENC=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$MEMBER_PUB" '{method:"nip44_encrypt", params:[$pk, "hello village"]}')")
   CT=$(jq -r '.result // empty' <<<"$ENC")
   [[ -n "$CT" ]] && ok "nip44_encrypt through the signer works (NIP-17 chat)" || bad "nip44_encrypt: $ENC"
-  DEC=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$KC_PUB" --arg ct "$CT" '{method:"nip44_decrypt", params:[$pk, $ct]}')")
+  DEC=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --arg pk "$MEMBER_PUB" --arg ct "$CT" '{method:"nip44_decrypt", params:[$pk, $ct]}')")
   [[ "$(jq -r '.result // empty' <<<"$DEC")" == "hello village" ]] && ok "nip44_decrypt round trip" || bad "nip44_decrypt: $DEC"
 else
-  bad "no Keycast access token from step 6d"
+  bad "no app access token from step 6d"
 fi
 
 step "6i. NIP-46: the bunker URL names the public relay and a remote-signing client connects through it"
-# The relay inside bunker:// URLs and NIP-05 discovery is BUNKER_PUBLIC_RELAYS (Keycast patch 0007);
-# the signer keeps the Compose-internal one. The client runs inside the onboarding container, so
-# BUNKER_MAP rewrites the public host (empty on a public deployment, like WALLET_MAP).
-BUNKER_MAP=${BUNKER_MAP-localhost:3080=keycast-relay:8080}
+# The relay inside bunker:// URLs is BUNKER_PUBLIC_RELAYS; the signer listens on the Compose-internal
+# one. The client runs inside the onboarding container, so BUNKER_MAP rewrites the public host
+# (empty on a public deployment, like WALLET_MAP).
+BUNKER_MAP=${BUNKER_MAP-localhost:3080=bunker-relay:8080}
 PUBLIC_RELAY=${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
-DISC_RELAY=$(curl -sS "$KC_URL/.well-known/nostr.json" | jq -r '.nip46.relay // empty')
-[[ "$DISC_RELAY" == "$PUBLIC_RELAY" ]] && ok "NIP-05 discovery advertises the public relay $DISC_RELAY" || bad "NIP-05 discovery relay is '$DISC_RELAY', expected $PUBLIC_RELAY"
-if [[ -n "${KC_BUNKER:-}" ]]; then
-  BUNKER_RELAY=$(python3 -c 'import sys, urllib.parse as u; print((u.parse_qs(u.urlsplit(sys.argv[1]).query).get("relay") or [""])[0])' "$KC_BUNKER")
+if [[ -n "${APP_BUNKER:-}" ]]; then
+  BUNKER_RELAY=$(python3 -c 'import sys, urllib.parse as u; print((u.parse_qs(u.urlsplit(sys.argv[1]).query).get("relay") or [""])[0])' "$APP_BUNKER")
   [[ "$BUNKER_RELAY" == "$PUBLIC_RELAY" ]] && ok "the OAuth bunker URL names the public relay $BUNKER_RELAY" || bad "bunker URL relay is '$BUNKER_RELAY', expected $PUBLIC_RELAY"
-  NIP46=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.nip46check "$KC_BUNKER" --expect-pubkey "$KC_PUB")
+  NIP46=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -m belfry_onboarding.nip46check "$APP_BUNKER" --expect-pubkey "$MEMBER_PUB")
   [[ -n "$BUNKER_MAP" ]] && NIP46+=(--map "$BUNKER_MAP")
   if OUT=$("${NIP46[@]}" 2>&1); then sed 's/^/  /' <<<"$OUT"; ok "NIP-46 client: connect, get_public_key, sign_event through the bunker relay"
   else sed 's/^/  /' <<<"$OUT" >&2; bad "NIP-46 client through the bunker relay"; fi
@@ -571,7 +557,7 @@ if [[ -n "$CHAT_JS" ]]; then
 else
   bad "no index bundle in the chat page"
 fi
-[[ -n "${SAVE_BUNKER_URL:-}" && -n "${KC_BUNKER:-}" ]] && printf '%s\n' "$KC_BUNKER" > "$SAVE_BUNKER_URL"
+[[ -n "${SAVE_BUNKER_URL:-}" && -n "${APP_BUNKER:-}" ]] && printf '%s\n' "$APP_BUNKER" > "$SAVE_BUNKER_URL"
 echo "  note the browser login is a separate check: infra/scripts/chat-login-check.mjs (needs Chromium)"
 
 step "6k. calendar app (Calendar by Form*): served, built against the community relay and the bunker relay"
@@ -630,12 +616,12 @@ const ev = finalizeEvent({ kind: 27235, created_at: Math.floor(Date.now() / 1000
 const r = await fetch("http://127.0.0.1:8080/api/participants", { headers: { Authorization: "Nostr " + Buffer.from(JSON.stringify(ev)).toString("base64") } })
 console.log(r.status)' 2>/dev/null || true)
 [[ "$NOPASS" == 403 ]] && ok "participants list for a key without an active pass: 403" || bad "key without a pass: ${NOPASS:-no answer}"
-if [[ -n "${KC_TOKEN:-}" ]]; then
-  # the participant's own NIP-98 token, signed by Keycast like the app does
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
-  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+if [[ -n "${APP_TOKEN:-}" ]]; then
+  # the participant's own NIP-98 token, signed by the signer like the app does
+  EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
   LIST=$(curl -sS -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PEOPLE_URL/api/participants")
-  jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list ($(jq '.pubkeys | length' <<<"$LIST") active keys)" || bad "participants list for the participant: $(head -c 200 <<<"$LIST")"
+  jq -e --arg pk "$MEMBER_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list ($(jq '.pubkeys | length' <<<"$LIST") active keys)" || bad "participants list for the participant: $(head -c 200 <<<"$LIST")"
 fi
 echo "  note the browser check (directory opt-in, an offer with a photo, paying it through the wallet) is infra/scripts/village-check.mjs"
 
@@ -656,30 +642,30 @@ JS=$(grep -o '/assets/index-[^"]*\.js' <<<"$H" | head -1)
 BUNDLE=$(curl -sS "$PHOTOS_URL$JS")
 [[ "$BUNDLE" == *"belfry-photos"* && "$BUNDLE" == *"${BLOSSOM_PUBLIC_URL:-http://localhost:3100}"* ]] && ok "bundle signs in as belfry-photos and uploads to ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}" || bad "photos bundle lacks the client id or the Blossom URL"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PHOTOS_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
-if [[ -n "${KC_TOKEN:-}" ]]; then
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
-  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+if [[ -n "${APP_TOKEN:-}" ]]; then
+  EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
   LIST=$(curl -sS -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")
-  jq -e --arg pk "$KC_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list from the photos host" || bad "participants list from the photos host: $(head -c 200 <<<"$LIST")"
+  jq -e --arg pk "$MEMBER_PUB" '.pubkeys | index($pk) != null' <<<"$LIST" >/dev/null && ok "the participant gets the list from the photos host" || bad "participants list from the photos host: $(head -c 200 <<<"$LIST")"
   # a token signed for the directory's URL is refused here (NIP-98 names the host)
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
-  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+  EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --arg u "${PEOPLE_URL%/}/api/participants" '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","GET"]], content:""}')
+  SIGNED=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
   [[ "$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" "$PHOTOS_URL/api/participants")" == 401 ]] && ok "a NIP-98 token for another app's URL: 401" || bad "photos accepted a token for the directory's URL"
   for k in 20 7 1111; do
-    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
-    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
-    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (picture, like, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+    EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
+    R=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "the signer signs kind $k (picture, like, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
   done
 fi
 echo "  note the browser check (upload, share, like, comment, tip through the wallet) is infra/scripts/photos-check.mjs"
 
 step "6r. reports: a participant reports a photo, Odoo stores it, a steward hides it, the apps learn it"
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   R_REF=$(openssl rand -hex 32); R_AUTHOR=$(openssl rand -hex 32)
   R_BODY=$(jq -nc --arg r "$R_REF" --arg a "$R_AUTHOR" '{target_kind:"photo", target_ref:$r, target_pubkey:$a, reason:"spam", note:"smoke test report", target_excerpt:"Buy now"}')
-  EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/report" --arg h "$(printf '%s' "$R_BODY" | sha256sum | cut -c1-64)" \
+  EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --arg u "${PHOTOS_URL%/}/api/report" --arg h "$(printf '%s' "$R_BODY" | sha256sum | cut -c1-64)" \
     '{pubkey:$pk, created_at:$t, kind:27235, tags:[["u",$u],["method","POST"],["payload",$h]], content:""}')
-  SIGNED=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
+  SIGNED=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')" | jq -c '.result')
   RES=$(curl -sS -X POST "$PHOTOS_URL/api/report" -H "Authorization: Nostr $(printf '%s' "$SIGNED" | base64 -w0)" -H 'Content-Type: application/json' --data-binary "$R_BODY")
   R_ID=$(jq -r '.id // empty' <<<"$RES")
   [[ -n "$R_ID" ]] && ok "report sent through the photos app (report $R_ID)" || bad "report: $RES"
@@ -706,11 +692,11 @@ if [[ -n "${PROGRAMME_PUBKEY:-}" ]]; then
   [[ "$BUNDLE" == *"$PROGRAMME_PUBKEY"* ]] && ok "bundle follows the programme key" || bad "programme bundle lacks PROGRAMME_PUBKEY (rebuild village after gen-secrets)"
 fi
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$PROGRAMME_URL/api/participants")" == 401 ]] && ok "participants list without NIP-98 auth: 401" || bad "participants list not refused without auth"
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   for k in 31925 1111; do
-    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
-    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
-    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (RSVP, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+    EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[], content:"smoke"}')
+    R=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "the signer signs kind $k (RSVP, comment)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
   done
 fi
 [[ "$BUNDLE" == *"$VOTE_URL"* ]] && ok "bundle links the polls app ($VOTE_URL)" || bad "programme bundle lacks the polls app's URL"
@@ -744,14 +730,14 @@ from belfry_onboarding.settings import Settings
 g = build_services(Settings()).groups
 print("yes" if g and sys.argv[1] in g.members() else "no")' "$1" 2>/dev/null | tail -n1
 }
-if [[ -n "${KC_PUB:-}" ]]; then
-  [[ "$(groups_member "$KC_PUB")" == yes ]] && ok "the participant is a member of the groups relay" || bad "participant $KC_PUB not a member of the groups relay"
+if [[ -n "${MEMBER_PUB:-}" ]]; then
+  [[ "$(groups_member "$MEMBER_PUB")" == yes ]] && ok "the participant is a member of the groups relay" || bad "participant $MEMBER_PUB not a member of the groups relay"
 fi
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   for k in 9 9007 9021 28934; do
-    EV=$(jq -nc --arg pk "$KC_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[["h","smoke"]], content:""}')
-    R=$(curl -sS -X POST "$KC_URL/api/nostr" -H "Authorization: Bearer $KC_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
-    jq -e '.result.sig' <<<"$R" >/dev/null && ok "Keycast signs kind $k (groups)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
+    EV=$(jq -nc --arg pk "$MEMBER_PUB" --argjson t "$(date +%s)" --argjson k "$k" '{pubkey:$pk, created_at:$t, kind:$k, tags:[["h","smoke"]], content:""}')
+    R=$(curl -sS -X POST "$ONB_URL/api/nostr" -H "Authorization: Bearer $APP_TOKEN" -H 'Content-Type: application/json' -d "$(jq -nc --argjson e "$EV" '{method:"sign_event", params:[$e]}')")
+    jq -e '.result.sig' <<<"$R" >/dev/null && ok "the signer signs kind $k (groups)" || bad "kind $k refused: $(head -c 200 <<<"$R")"
   done
 fi
 echo "  note the browser check (silent sign-in, a room of one's own, a message read back) is infra/scripts/groups-check.mjs"
@@ -761,12 +747,12 @@ step "6v. an agent acts for the participant with nothing but the bunker URL: inv
 # /api/invites (NIP-98), a photo on Blossom, a note, reply, reaction and repost on the community
 # relay, a private group with a member and a public group on the groups relay. AGENT_MAP rewrites
 # public hosts for the transport inside the onboarding container (empty on a public deployment).
-AGENT_MAP=${AGENT_MAP-localhost:8069=odoo:8069,localhost:3080=keycast-relay:8080,localhost:3090=relay:8080,localhost:3190=groups-relay:3334,localhost:3100=blossom-gate:80}
+AGENT_MAP=${AGENT_MAP-localhost:8069=odoo:8069,localhost:3080=bunker-relay:8080,localhost:3090=relay:8080,localhost:3190=groups-relay:3334,localhost:3100=blossom-gate:80}
 AGENT_INVITEE="agent-invitee-$(date +%s)@example.org"
 # The agent gets a bunker of its own: a bunker secret binds to the first client key that connects
-# (step 6i used the app's), so the participant connects one more app, as on the account page.
-AGENT_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
-if [[ -n "$AGENT_BUNKER" && "$AGENT_BUNKER" != "${KC_BUNKER:-}" ]]; then
+# (step 6i used the app's), so the participant connects one more app on the account page.
+AGENT_BUNKER=$(new_bunker "Smoke agent")
+if [[ -n "$AGENT_BUNKER" && "$AGENT_BUNKER" != "${APP_BUNKER:-}" ]]; then
   AGENT=("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding.agentcheck "$AGENT_BUNKER"
     --pass-url "${ONBOARDING_PUBLIC_URL:-http://localhost:8100}" --relay "${COMMUNITY_RELAY_URL:-ws://localhost:3090}"
     --groups-relay "${GROUPS_RELAY_URL:-ws://localhost:3190}" --blossom "${BLOSSOM_PUBLIC_URL:-http://localhost:3100}"
@@ -785,7 +771,7 @@ else
 fi
 # The one-action command (belfry_onboarding.agent) keeps its client key between runs, so one
 # bunker URL serves every call: me, invite, status, revoke, each a separate connection.
-CLI_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
+CLI_BUNKER=$(new_bunker "Smoke agent command")
 if [[ -n "$CLI_BUNKER" ]]; then
   CLI_KEY="/tmp/belfry-agent-$(date +%s).key"
   cli() { "${COMPOSE[@]}" exec -T -e BELFRY_BUNKER="$CLI_BUNKER" onboarding python -m belfry_onboarding.agent \
@@ -815,10 +801,10 @@ if [[ "$GIT_URL" == https://* ]]; then  # behind the proxy: browsers get Belfry'
   [[ "$H" == *"<title>Git server</title>"* ]] && ok "repository pages show the same page to browsers" || bad "git repository page for browsers: $(head -c 200 <<<"$H")"
 fi
 GIT_MEMBERS=$("${COMPOSE[@]}" exec -T onboarding sh -c 'cat /git-members/members.txt' 2>/dev/null)
-[[ -n "${KC_PUB:-}" ]] && { grep -qx "$KC_PUB" <<<"$GIT_MEMBERS" && ok "the participant is in the git server's members file ($(grep -c '^[0-9a-f]' <<<"$GIT_MEMBERS") keys)" || bad "participant $KC_PUB not in the git members file"; }
-# The agent signs through a bunker of its own (one more "Connect to Nostr App", as in 6v).
-GIT_MAP=${GIT_MAP-localhost:3170=git:7334,localhost:3080=keycast-relay:8080}
-GIT_BUNKER=$(PRINT_TOKEN=1 KC_URL="$KC_URL" AK_URL="$AK_URL" "$INFRA_DIR/scripts/keycast-oidc-login.sh" "$AK_SESSION" "$KC_PUB" 2>/dev/null | sed -n 's/^BUNKER_URL=//p')
+[[ -n "${MEMBER_PUB:-}" ]] && { grep -qx "$MEMBER_PUB" <<<"$GIT_MEMBERS" && ok "the participant is in the git server's members file ($(grep -c '^[0-9a-f]' <<<"$GIT_MEMBERS") keys)" || bad "participant $MEMBER_PUB not in the git members file"; }
+# The agent signs through a bunker of its own (one more "Connect a Nostr app", as in 6v).
+GIT_MAP=${GIT_MAP-localhost:3170=git:7334,localhost:3080=bunker-relay:8080}
+GIT_BUNKER=$(new_bunker "Smoke git agent")
 if [[ -n "$GIT_BUNKER" ]]; then
   GITCHECK=("${COMPOSE[@]}" exec -T onboarding python -m belfry_onboarding.gitcheck "$GIT_BUNKER" --git "$GIT_URL")
   [[ -n "$GIT_MAP" ]] && GITCHECK+=(--map "$GIT_MAP")
@@ -843,17 +829,19 @@ if [[ -n "$SP_ID" ]]; then
   SREV=$(onb_post "/admin/passes/$SP_ID/revoke?token=$HOOK_TOKEN")
   [[ "$(jq -r .result <<<"$SREV")" == revoked ]] && ok "smoke steward's pass revoked again" || bad "steward pass cleanup: $SREV"
 fi
-# the smoke steward leaves the stewards group again (steward-passes would give it a pass back)
-SGONE=$("${COMPOSE[@]}" exec -T onboarding python -c '
-import sys
+# the steward signs in to the steward pages with Belfry's sign-in (a fresh sign-in link)
+SPARTNER=$(jq -r '.partner_id // empty' <<<"$OUT")
+[[ -n "$SPARTNER" && "$(ox res.partner read "[[$SPARTNER]]" '{"fields":["belfry_steward"]}' | jq -r '.[0].belfry_steward')" == true ]] \
+  && ok "the steward is an Odoo contact marked steward (partner $SPARTNER)" || bad "steward contact: $OUT"
+# the smoke steward is no steward any more (steward-passes would give it a pass back)
+ox res.partner write "[[${SPARTNER:-0}],{\"belfry_steward\":false}]" >/dev/null 2>&1 || true
+[[ "$("${COMPOSE[@]}" exec -T onboarding python -c '
+from belfry_onboarding import core
 from belfry_onboarding.app import build_services
 from belfry_onboarding.settings import Settings
-s = build_services(Settings()); ak = s.authentik
-group = ak.find_group(s.settings.steward_group)
-for u in ak.find_users_by_email(sys.argv[1]):
-    ak.remove_user_from_group(group["pk"], int(u["pk"]))
-print(sys.argv[1] in ak.group_member_emails(s.settings.steward_group))' "$STEWARD_EMAIL" 2>/dev/null | tail -n1)
-[[ "$SGONE" == False ]] && ok "smoke steward removed from the stewards group" || bad "smoke steward still a steward ($SGONE)"
+import sys
+print(sys.argv[1] in core.steward_emails(build_services(Settings())))' "$STEWARD_EMAIL" 2>/dev/null | tail -n1)" == False ]] \
+  && ok "smoke steward is no steward any more" || bad "smoke steward still a steward"
 
 step "6e. steward asks for a new login link (admin endpoint behind the Odoo button)"
 RESEND=$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN")
@@ -886,7 +874,7 @@ OFFER_URL=$(jq -r '.credential_offer // empty' <<<"$OFFER")
 CRED=$("${WALLET[@]}" receive "$OFFER_URL" --out /tmp/smoke-wallet.json 2>&1) || die "wallet receive failed: $CRED"
 CRED=$(tail -n1 <<<"$CRED")
 [[ "$(jq -r .header.typ <<<"$CRED")" == "dc+sd-jwt" && "$(jq -r '.header.x5c|length' <<<"$CRED")" == 2 ]] && ok "SD-JWT VC received, x5c chain of 2" || bad "credential header: $(jq -c .header <<<"$CRED")"
-[[ "$(jq -r .payload.vct <<<"$CRED")" == "${AUTHENTIK_PUBLIC_URL%:9000}:8100/vct/village-pass/v1" || "$(jq -r .payload.vct <<<"$CRED")" == *"/vct/village-pass/v1" ]] && ok "vct $(jq -r .payload.vct <<<"$CRED")" || bad "vct: $(jq -r .payload.vct <<<"$CRED")"
+[[ "$(jq -r .payload.vct <<<"$CRED")" == "${ONBOARDING_PUBLIC_URL:-$ONB_URL}/vct/village-pass/v1" || "$(jq -r .payload.vct <<<"$CRED")" == *"/vct/village-pass/v1" ]] && ok "vct $(jq -r .payload.vct <<<"$CRED")" || bad "vct: $(jq -r .payload.vct <<<"$CRED")"
 [[ "$(jq -r .payload.pass_tier <<<"$CRED")" == week && "$(jq -r .disclosed.member_number <<<"$CRED")" == "$MEMBER" && "$(jq -r .disclosed.npub <<<"$CRED")" == "$NPUB" ]] && ok "claims: tier week, member $MEMBER, npub (disclosable)" || bad "claims: $(jq -c '{p: .payload.pass_tier, d: .disclosed}' <<<"$CRED")"
 [[ "$(jq -r .payload.status.status_list.idx <<<"$CRED")" == "$PASS_ID" ]] && ok "status list index = pass id" || bad "status idx $(jq -c .payload.status <<<"$CRED")"
 VCTM=$(curl -sS "$ONB_URL/vct/village-pass/v1" | jq -r .vct); [[ "$VCTM" == "$(jq -r .payload.vct <<<"$CRED")" ]] && ok "type metadata served at the vct URL" || bad "vctm: $VCTM"
@@ -930,17 +918,17 @@ if [[ "${MINT_PUBLIC_URL:-}" == https://* ]]; then
   [[ "$CODE" == 403 ]] && ok "public mint: minting closed (403)" || bad "public mint quote -> $CODE"
 fi
 
-step "8b. sign-in offer (authorization code + issuer_state, as DIDroom uses it): Issuer2 login at Authentik"
+step "8b. sign-in offer (authorization code + issuer_state, as DIDroom uses it): Issuer2's login at Belfry"
 SOFFER=$(curl -sS "$ONB_URL/claim/$CLAIM_TOKEN/offer?signin=1" | jq -r '.credential_offer // empty')
 [[ "$(python3 -c 'import sys,urllib.parse; print(urllib.parse.unquote(sys.argv[1]))' "$SOFFER")" == *'"issuer_state"'* ]] \
   && ok "sign-in offer carries issuer_state" || bad "sign-in offer: $SOFFER"
-# The wallet pushes the authorization request; a browser (the participant's Authentik session from
-# 6c) follows the redirects through Issuer2's login at Authentik back to the wallet's redirect URI.
+# The wallet pushes the authorization request; a browser (the participant's session from 6c)
+# follows the redirects through Issuer2's login at Belfry (/oidc/authorize) back to the wallet.
 SIGNIN_STATE=/tmp/smoke-signin.json
 AUTHZ_URL=$("${WALLET[@]}" signin-start "$SOFFER" --state "$SIGNIN_STATE" 2>&1) || die "signin-start failed: $AUTHZ_URL"
 AUTHZ_URL=$(tail -n1 <<<"$AUTHZ_URL")
 ok "PAR accepted, browser sent to $(sed 's/?.*//' <<<"$AUTHZ_URL")"
-BROWSER=$(mktemp); cp "$AK_SESSION" "$BROWSER"
+BROWSER=$(mktemp); cp "$SESSION_JAR" "$BROWSER"
 URL=$AUTHZ_URL; HOPS=""
 for _ in $(seq 12); do
   read -r LAST_STATUS NEXT < <(curl -sS -b "$BROWSER" -c "$BROWSER" -o "$BROWSER.body" -w '%{http_code} %{redirect_url}\n' "$URL")
@@ -950,9 +938,9 @@ for _ in $(seq 12); do
   [[ "$URL" == https://wallet.belfry.test/* ]] && break
 done
 rm -f "$BROWSER" "$BROWSER.body"
-[[ "$URL" == https://wallet.belfry.test/callback\?*code=* ]] && ok "Issuer2 login at Authentik -> wallet redirect with a code" \
+[[ "$URL" == https://wallet.belfry.test/callback\?*code=* ]] && ok "Issuer2's login at Belfry -> wallet redirect with a code" \
   || die "sign-in flow ended at '$URL' (hops: $HOPS)"
-[[ "$HOPS" == *"/application/o/authorize/"* ]] && ok "the participant passed Authentik (application belfry-issuer)" || bad "no Authentik hop: $HOPS"
+[[ "$HOPS" == *"/oidc/authorize"* ]] && ok "the participant passed Belfry's sign-in (client belfry-issuer), signed in already" || bad "no hop through Belfry's sign-in: $HOPS"
 SCRED=$("${WALLET[@]}" signin-finish "$URL" --state "$SIGNIN_STATE" --out /tmp/smoke-wallet-signin.json 2>&1) || die "signin-finish failed: $SCRED"
 SCRED=$(tail -n1 <<<"$SCRED")
 [[ "$(jq -r .payload.pass_tier <<<"$SCRED")" == week && "$(jq -r .disclosed.member_number <<<"$SCRED")" == "$MEMBER" && "$(jq -r .payload.status.status_list.idx <<<"$SCRED")" == "$PASS_ID" ]] \
@@ -981,10 +969,10 @@ for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq 
 [[ "$(jq -r .status <<<"$RES")" == valid && "$(jq -r .tier <<<"$RES")" == week ]] && ok "door: valid pass, tier week, until $(jq -r .valid_until <<<"$RES")" || bad "door result: $RES"
 curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/door" | grep -q 200 && ok "GET /door -> 200 (QR page)" || bad "door page"
 
-step "9b. the pass on the phone without a wallet: /me signs in through Authentik, /check at the door"
-MEJAR=$(mktemp); cp "$AK_SESSION" "$MEJAR"
+step "9b. the pass on the phone without a wallet: /me with Belfry's session, /check at the door"
+MEJAR=$(mktemp); cp "$SESSION_JAR" "$MEJAR"
 ME_PAGE=$(curl -sS -L -b "$MEJAR" -c "$MEJAR" "$ONB_URL/me")
-[[ "$ME_PAGE" == *'id="qr"'* && "$ME_PAGE" == *"Week pass"* ]] && ok "/me: signed in through Authentik without a click, shows the renewing QR" || bad "/me: $(grep -o '<h1>[^<]*</h1>\|class="bad">[^<]*' <<<"$ME_PAGE" | head -2 | tr '\n' ' ')"
+[[ "$ME_PAGE" == *'id="qr"'* && "$ME_PAGE" == *"Week pass"* ]] && ok "/me: signed in without a click, shows the renewing QR" || bad "/me: $(grep -o '<h1>[^<]*</h1>\|class="bad">[^<]*' <<<"$ME_PAGE" | head -2 | tr '\n' ' ')"
 [[ "$(curl -sS -b "$MEJAR" "$ONB_URL/me/qr" | jq -r '.svg // empty' | cut -c1-18)" == data:image/svg+xml ]] && ok "/me/qr renews the code" || bad "/me/qr gave no code"
 [[ "$(curl -sS -o /dev/null -w '%{redirect_url}' "$ONB_URL/me")" == */me/login ]] && ok "/me without a session goes to the sign-in" || bad "/me without a session not redirected"
 qr_token() { docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app exec -T onboarding python -c "from belfry_onboarding import mypass; from belfry_onboarding.settings import Settings; from types import SimpleNamespace as N; print(mypass.qr_token(N(settings=Settings()), int('$1'))[0])"; }
@@ -1049,74 +1037,74 @@ VREV=$(onb_post "/admin/passes/$VOL_PASS/revoke?token=$HOOK_TOKEN")
 osvc belfry.shift belfry_steward_shift_cancel "[[$(IFS=,; echo "${SHIFT_IDS[*]}")]]" >/dev/null
 [[ "$(jq -r .result <<<"$VREV")" == revoked ]] && ok "smoke volunteer revoked, shifts removed" || bad "volunteer cleanup: $VREV"
 
-step "10. sign in to Authentik by presenting the pass (OpenID4VP-to-OIDC bridge)"
+step "10. sign in by presenting the pass (OpenID4VP, from the login page)"
 PJAR=$(mktemp); pj() { curl -sS -b "$PJAR" -c "$PJAR" "$@"; }
-pj -o /dev/null "$AK_URL/if/flow/default-authentication-flow/"
-LOGIN=$(pj -o /dev/null -w '%{redirect_url}' "$AK_URL/source/oauth/login/pass-bridge/")
-[[ "$LOGIN" == "$ONB_URL/bridge/authorize?"* ]] && ok "Authentik sends the browser to the bridge" || die "source login redirected to '$LOGIN'"
-BPAGE=$(pj "$LOGIN"); BSID=$(sed -n 's/.*data-sid="\([^"]*\)".*/\1/p' <<<"$BPAGE" | head -n1)
-[[ -n "$BSID" ]] && ok "bridge shows the QR page (login $BSID)" || die "no bridge session in the page"
+BPAGE=$(pj "$ONB_URL/login/pass?next=%2Fme"); BSID=$(sed -n 's/.*data-sid="\([^"]*\)".*/\1/p' <<<"$BPAGE" | head -n1)
+[[ -n "$BSID" ]] && ok "the login page shows the pass QR (sign-in $BSID)" || die "no pass sign-in in the page: $(head -c 200 <<<"$BPAGE")"
 BREQ=$(sed -n 's/.*<a class="btn" href="\([^"]*\)">Open the wallet.*/\1/p' <<<"$BPAGE" | head -n1 | sed 's/&amp;/\&/g')
 PRES=$("${WALLET[@]}" present "$BREQ" --wallet /tmp/smoke-wallet.json --disclose member_number,npub,pass_tier 2>&1 | tail -n1)
 [[ "$(jq -r .status <<<"$PRES")" == 200 ]] && ok "wallet presented member number, npub and tier" || bad "present: $PRES"
-for i in 1 2 3 4 5; do POLL=$(curl -sS "$ONB_URL/bridge/poll/$BSID"); [[ "$(jq -r .status <<<"$POLL")" != pending ]] && break; sleep 1; done
-[[ "$(jq -r .status <<<"$POLL")" == done ]] && ok "bridge verified the pass and issued a code" || die "bridge poll: $POLL"
-CB=$(jq -r .redirect <<<"$POLL")
-read -r CB_CODE CB_NEXT < <(pj -o /dev/null -w '%{http_code} %{redirect_url}\n' "$CB")
-[[ "$CB_CODE" == 302 && "$CB_NEXT" == *"/if/flow/default-source-authentication/"* ]] && ok "Authentik accepted the code (token + userinfo through the bridge)" || bad "callback -> $CB_CODE $CB_NEXT"
-# The executor answers 302 once the plan is in the session; following it runs the user_write
-# and user_login stages and ends in the xak-flow-redirect challenge.
-EXEC="$AK_URL/api/v3/flows/executor/default-source-authentication/?query="
-CH=$(pj -L "$EXEC")
-for _ in 1 2 3; do
-  case "$(jq -r '.component // empty' <<<"$CH")" in
-    ak-stage-user-login) CH=$(pj -L -H 'Content-Type: application/json' -H "Referer: $AK_URL/" --data '{"component":"ak-stage-user-login","remember_me":false}' "$EXEC") ;;
-    *) break ;;
-  esac
-done
-ME=$(pj "$AK_URL/api/v3/core/users/me/" | jq -r '.user.pk // empty')
-[[ "$ME" == "$AK_UID" ]] && ok "signed in to Authentik as the participant (user $AK_UID) with the pass, no password" || bad "session user '$ME' after flow $(jq -c '{component, response_errors}' <<<"$CH")"
-LINKS=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq -c '.results | map(.identifier)')
-[[ "$LINKS" == "[\"$MEMBER\"]" ]] && ok "pass-bridge link created with identifier $MEMBER" || bad "links: $LINKS"
+for i in 1 2 3 4 5; do POLL=$(curl -sS "$ONB_URL/login/pass/poll/$BSID"); [[ "$(jq -r .status <<<"$POLL")" != pending ]] && break; sleep 1; done
+[[ "$(jq -r .status <<<"$POLL")" == done ]] && ok "the pass is verified (Belfry's issuer, not revoked)" || die "pass sign-in poll: $POLL"
+DONE_URL="$ONB_URL$(jq -r .redirect <<<"$POLL")"
+[[ "$(curl -sS -o /dev/null -w '%{http_code}' "$DONE_URL")" == 400 ]] && ok "another browser cannot finish the sign-in" || bad "pass sign-in finished in another browser"
+R=$(pj -o /dev/null -w '%{http_code} %{redirect_url}' "$DONE_URL")
+[[ "$R" == "303 $ONB_URL/me" ]] && grep -q belfry_session "$PJAR" && ok "signed in with the pass, no password, on to /me" || bad "pass sign-in: '$R'"
+[[ "$(pj "$ONB_URL/me")" == *'id="qr"'* ]] && ok "the pass's session opens /me" || bad "/me after the pass sign-in"
 rm -f "$PJAR"
 
 step "10a. derived keys: the participant's key comes from the custody seed and comes back after loss"
-# Keycast patch 0014. Needs the seed unlocked in Keycast (locally secrets/custody, written by
-# gen-secrets.sh; on a deployment /run/belfry, scripts/custody-seed.sh unlock).
+# Needs the seed unlocked (locally secrets/custody, written by gen-secrets.sh; on a deployment
+# /run/belfry, scripts/custody-seed.sh unlock).
 DC=(docker compose -f "$INFRA_DIR/docker-compose.yml" --profile app)
-DERIVED=""
-if "${DC[@]}" exec -T keycast test -s /run/belfry/custody-seed 2>/dev/null; then
-  DERIVED=1
-  VINE="odoo-partner-$PARTNER_ID"
-  # Keycast's database row for the participant is lost (the account, its key, its links) ...
-  "${DC[@]}" exec -T postgres psql -U keycast -d keycast -qtAc "DELETE FROM users WHERE vine_id = '$VINE'" >/dev/null
-  [[ -z "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" ]] \
-    && ok "Keycast account of $USERNAME deleted (simulated loss)" || bad "account still resolves after the delete"
-  # ... and comes back from the seed and Odoo with the same key.
+if "${DC[@]}" exec -T signer test -s /run/belfry/custody-seed 2>/dev/null; then
+  KEYV=$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_key_version"]}' | jq -r '.[0].belfry_key_version // 0')
+  SEEDPUB=$("${DC[@]}" exec -T signer belfry-signer derive "odoo-partner-$PARTNER_ID" "$KEYV" 2>/dev/null | tr -d '\r')
+  [[ "$SEEDPUB" == "$MEMBER_PUB" ]] && ok "the seed gives the participant's key again (odoo-partner-$PARTNER_ID, version $KEYV)" || bad "the seed gives '$SEEDPUB', the pass has $MEMBER_PUB"
   REST=$("${DC[@]}" exec -T onboarding python -m belfry_onboarding restore-keys 2>/dev/null | tail -n1)
-  [[ "$(jq -r --arg m "$MEMBER" '.partners[$m] // empty' <<<"$REST")" == ok ]] && ok "restore-keys: $MEMBER ok" || bad "restore-keys: $REST"
-  [[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n] // empty')" == "$KC_PUB" ]] \
-    && ok "same npub after recovery (derived from the custody seed)" || bad "npub after recovery differs"
+  [[ "$(jq -r --arg m "$MEMBER" '.partners[$m] // empty' <<<"$REST")" == ok ]] && ok "restore-keys: $MEMBER ok (the signer's account matches Odoo)" || bad "restore-keys: $REST"
 else
-  echo "  note the custody seed is locked or not configured in Keycast: derived keys not checked"
+  echo "  note the custody seed is locked or not configured: derived keys not checked"
 fi
 
-step "10b. self-custody: the participant takes their key, then moves to a key of their own"
+step "10b. self-custody: the participant moves to a key of their own"
 # Irreversible for the smoke participant, so it runs after everything that signs with the managed
-# key. Signing (export, challenge) happens in the onboarding container (onboarding-sign.sh).
+# key. The move needs a fresh sign-in: the new sign-in link from 6e. The new key and its
+# signature are made in the onboarding container (coincurve).
 # SMOKE_KEEP_PASS skips it: the kept participant is for browser checks with "Sign in with Open
 # Source Village", which a self-custodial account no longer has.
 if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then
   echo "  note SMOKE_KEEP_PASS set: self-custody not tested (the participant stays managed for browser checks)"
-elif OUT=$(DERIVED="$DERIVED" SIGN="$INFRA_DIR/scripts/onboarding-sign.sh" KC_URL="$KC_URL" AK_URL="$AK_URL" CHAT_CB="${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback" "$INFRA_DIR/scripts/self-custody-check.sh" "$AK_SESSION" "$KC_PUB" "$USERNAME" 2>&1); then
-  grep -v '^NEW_PUBKEY=' <<<"$OUT" | sed 's/^/  /'; ok "take over and bring a new key"
-  NEW_PUB=$(sed -n 's/^NEW_PUBKEY=//p' <<<"$OUT")
-  PASS_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["keycast_pubkey"]}' | jq -r '.[0].keycast_pubkey')
-  [[ "$PASS_KEY" == "$NEW_PUB" ]] && ok "the pass carries the new key (relay whitelist follows)" || bad "pass key after the move: $PASS_KEY"
-  KC_PUB=$NEW_PUB
-  NPUB=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["npub"]}' | jq -r '.[0].npub')  # step 7's baseline
 else
-  sed 's/^/  /' <<<"$OUT" >&2; bad "self-custody"
+  FJAR=$(mktemp)
+  curl -sS -b "$FJAR" -c "$FJAR" -o /dev/null -X POST "$SETUP_URL2"
+  NSEC2=$(curl -sS -b "$FJAR" -X POST "$ONB_URL/account/export" | grep -o 'nsec1[a-z0-9]*' | head -n1)
+  [[ -n "$NSEC2" ]] && ok "after a fresh sign-in the key can be exported" || bad "no key export after a fresh sign-in"
+  CHALLENGE=$(curl -sS -b "$FJAR" "$ONB_URL/account/self-custody/challenge" | jq -r '.challenge // empty')
+  MOVE=$("${DC[@]}" exec -T onboarding python - "$CHALLENGE" <<'PY'
+import json, sys, time
+from coincurve import PrivateKey
+from belfry_onboarding.blossom import event_id
+key = PrivateKey()
+ev = {"pubkey": key.public_key_xonly.format().hex(), "created_at": int(time.time()), "kind": 27235,
+      "tags": [["challenge", sys.argv[1]]], "content": ""}
+ev["id"] = event_id(ev)
+ev["sig"] = key.sign_schnorr(bytes.fromhex(ev["id"])).hex()
+print(json.dumps({"event": ev}))
+PY
+)
+  NEW_PUB=$(jq -r .event.pubkey <<<"$MOVE")
+  R=$(curl -sS -b "$FJAR" -X POST "$ONB_URL/account/self-custody" -H 'Content-Type: application/json' -d "$MOVE")
+  [[ "$(jq -r .outcome <<<"$R")" == moved_to_own_key && "$(jq -r .pubkey <<<"$R")" == "$NEW_PUB" ]] && ok "moved to a key of the participant's own" || bad "self-custody: $R"
+  PASS_KEY=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["nostr_pubkey"]}' | jq -r '.[0].nostr_pubkey')
+  [[ "$PASS_KEY" == "$NEW_PUB" ]] && ok "the pass carries the new key (relay whitelist follows)" || bad "pass key after the move: $PASS_KEY"
+  [[ "$(ox res.partner read "[[$PARTNER_ID]]" '{"fields":["belfry_key_custody"]}' | jq -r '.[0].belfry_key_custody')" == self ]] && ok "the partner holds their own key (custody self)" || bad "custody after the move"
+  app_connect "$FJAR" belfry-chat "$CHAT_CB" none
+  [[ "$(qparam "$CONNECT_LOC" error_description)" == self_custody ]] && ok "apps are told to use the participant's own signer (access_denied, self_custody)" || bad "authorize after the move: '$CONNECT_LOC'"
+  [[ "$(curl -sS -b "$FJAR" "$ONB_URL/account")" == *"You hold this key yourself"* ]] && ok "the account page says the participant holds the key" || bad "account page after the move"
+  rm -f "$FJAR"
+  MEMBER_PUB=$NEW_PUB
+  NPUB=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["npub"]}' | jq -r '.[0].npub')  # step 7's baseline
 fi
 
 step "10c. joining with an own Nostr key: a signed proof on the invite page, a keyless signer account"
@@ -1164,15 +1152,19 @@ ox payment.transaction create "[{\"provider_id\":$PROVIDER_ID,${PM_ID:+\"payment
 WIZ=$(ox account.payment.register create '[{}]' "{\"context\":{\"active_model\":\"account.move\",\"active_ids\":[$OWN_INV]}}")
 ox account.payment.register action_create_payments "[[$WIZ]]" >/dev/null
 for i in $(seq 1 30); do
-  OWN_ROW=$(ox belfry.pass read "[[$OWN_PASS_ID]]" '{"fields":["state","keycast_pubkey","npub"]}' | jq -c '.[0]')
+  OWN_ROW=$(ox belfry.pass read "[[$OWN_PASS_ID]]" '{"fields":["state","nostr_pubkey","npub"]}' | jq -c '.[0]')
   [[ "$(jq -r .state <<<"$OWN_ROW")" == active ]] && break
   [[ $i == 20 ]] && onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$OWN_INV,\"_action\":\"smoke\"}" >/dev/null || true
   sleep 2
 done
-[[ "$(jq -r '.state + " " + .keycast_pubkey' <<<"$OWN_ROW")" == "active $OWN_PUB" ]] && ok "active with the participant's own key" || bad "own-key pass: $OWN_ROW"
+[[ "$(jq -r '.state + " " + .nostr_pubkey' <<<"$OWN_ROW")" == "active $OWN_PUB" ]] && ok "active with the participant's own key" || bad "own-key pass: $OWN_ROW"
 [[ "$(ox res.partner read "[[$OWN_PARTNER]]" '{"fields":["belfry_key_custody"]}' | jq -r '.[0].belfry_key_custody')" == self ]] && ok "partner holds their own key (custody self)" || bad "partner custody not self"
-KEYS=$("${DC[@]}" exec -T postgres psql -U keycast -d keycast -tAc "select (select count(*) from users where pubkey='$OWN_PUB') || ' ' || (select count(*) from personal_keys where user_pubkey='$OWN_PUB')")
-[[ "$KEYS" == "1 0" ]] && ok "signer account without a key of Belfry's" || bad "Keycast users/keys for the own key: $KEYS"
+OWN_ACC=$("${DC[@]}" exec -T onboarding python -c '
+import json, sys
+from belfry_onboarding.app import build_services
+from belfry_onboarding.settings import Settings
+print(json.dumps(build_services(Settings()).signer.account(sys.argv[1])))' "odoo-partner-$OWN_PARTNER" 2>/dev/null | tail -n1)
+[[ "$(jq -r '.custody + " " + .pubkey' <<<"$OWN_ACC" 2>/dev/null)" == "own $OWN_PUB" ]] && ok "signer account without a key of Belfry's" || bad "signer account for the own key: $OWN_ACC"
 "${DC[@]}" exec -T relay cat /rnostr/config/rnostr.toml | grep -q "$OWN_PUB" && ok "own key on the relay whitelist" || bad "own key not whitelisted"
 if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then
   if [[ -n "${SAVE_OWN_KEY:-}" ]]; then
@@ -1200,14 +1192,14 @@ DOOR=$(curl -sS -X POST "$ONB_URL/door/sessions"); DSID=$(jq -r .session_id <<<"
 for i in 1 2 3 4 5; do RES=$(curl -sS "$ONB_URL/door/sessions/$DSID"); [[ "$(jq -r .status <<<"$RES")" != pending ]] && break; sleep 1; done
 [[ "$(jq -r .status <<<"$RES")" == invalid ]] && jq -e '.failed | index("credential-status")' <<<"$RES" >/dev/null && ok "door refuses the revoked certificate (credential-status)" || bad "door after revoke: $RES"
 [[ "$(curl -sS -o /dev/null -w '%{http_code}' "$ONB_URL/claim/$CLAIM_TOKEN/offer")" == 410 ]] && ok "claim page of a revoked pass -> 410" || bad "claim after revoke"
-[[ "$(groups_member "$KC_PUB")" == no ]] && ok "a revoked pass leaves the groups relay" || bad "revoked participant still a member of the groups relay"
+[[ "$(groups_member "$MEMBER_PUB")" == no ]] && ok "a revoked pass leaves the groups relay" || bad "revoked participant still a member of the groups relay"
 CHECK=$(curl -sS -H 'Accept: application/json' "$ONB_URL/check/$(qr_token "$PASS_ID")")
 [[ "$(jq -r .valid <<<"$CHECK")" == false && "$(jq -r .reason <<<"$CHECK")" == *revoked* ]] && ok "/check: the phone pass of a revoked pass is refused at once" || bad "/check after revoke: $CHECK"
 [[ "$(onb_post "/admin/passes/$PASS_ID/login-link?token=$HOOK_TOKEN" | jq -r .result)" == not_active ]] && ok "no login link for a revoked pass" || bad "login link after revoke"
-if [[ -n "${KC_TOKEN:-}" ]]; then
+if [[ -n "${APP_TOKEN:-}" ]]; then
   # The signer is suspended and the pass is gone: a fresh Blossom token is refused twice over.
   BAUTH2=$(blossom_auth upload "$(printf 'again' | sha256sum | cut -c1-64)")
-  if [[ -z "$BAUTH2" || "$BAUTH2" == bnVsbA== ]]; then ok "revoked key can no longer sign a Blossom auth event (Keycast suspended)"; else
+  if [[ -z "$BAUTH2" || "$BAUTH2" == bnVsbA== ]]; then ok "revoked key can no longer sign a Blossom auth event (signer suspended, connections ended)"; else
     UP2=$(curl -sS -o /dev/null -w '%{http_code}' -X PUT "$BLOSSOM_URL/upload" -H "Authorization: Nostr $BAUTH2" -H 'Content-Type: text/plain' --data-binary 'again')
     [[ "$UP2" == 403 ]] && ok "upload with a revoked pass -> 403 (gate)" || bad "upload after revoke -> $UP2"; fi
 fi
@@ -1215,18 +1207,19 @@ fi
 fi
 
 step "7. replay the webhook three times and check nothing was duplicated"
-# step 10 linked the pass-bridge source, so count the links as they are now
-LINKS_BEFORE_REPLAY=$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')
 for i in 1 2 3; do
   echo "  replay $i -> $(onb_post "/hooks/odoo/invoice-paid?token=$HOOK_TOKEN" "{\"_model\":\"account.move\",\"_id\":$INV_ID,\"_action\":\"smoke-replay\"}" | jq -r .result)"
 done
 sleep 2
-PASS2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","keycast_pubkey","authentik_user_id"]}' | jq -c '.[0]')
-[[ "$(jq -r .npub <<<"$PASS2")" == "$NPUB" && "$(jq -r .authentik_user_id <<<"$PASS2")" == "$AK_UID" ]] && ok "pass unchanged after replay" || bad "pass changed: $PASS2"
+PASS2=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","npub","nostr_pubkey"]}' | jq -c '.[0]')
+[[ "$(jq -r .npub <<<"$PASS2")" == "$NPUB" && "$(jq -r .nostr_pubkey <<<"$PASS2")" == "$MEMBER_PUB" ]] && ok "pass unchanged after replay" || bad "pass changed: $PASS2"
 [[ "$(ox belfry.pass search_count "[[[\"invoice_id\",\"=\",$INV_ID]]]")" == 1 ]] && ok "one pass for the invoice" || bad "more than one pass for invoice $INV_ID"
-[[ "$(ak "$AK_URL/api/v3/core/users/?username=$USERNAME" | jq '.pagination.count')" == 1 ]] && ok "still one Authentik user" || bad "Authentik user count changed"
-[[ "$(ak "$AK_URL/api/v3/sources/user_connections/oauth/?user=$AK_UID&source__slug=pass-bridge" | jq '.results | length')" == "$LINKS_BEFORE_REPLAY" ]] && ok "source link count unchanged ($LINKS_BEFORE_REPLAY)" || bad "source link count changed"
-[[ "$(curl -sS "$KC_URL/.well-known/nostr.json?name=$USERNAME" | jq -r --arg n "$USERNAME" '.names[$n]')" == "$KC_PUB" ]] && ok "same Keycast pubkey" || bad "Keycast pubkey changed"
+SIGNER_ACC2=$("${COMPOSE[@]}" exec -T onboarding python -c '
+import json, sys
+from belfry_onboarding.app import build_services
+from belfry_onboarding.settings import Settings
+print(json.dumps(build_services(Settings()).signer.account(sys.argv[1])))' "odoo-partner-$PARTNER_ID" 2>/dev/null | tail -n1)
+[[ "$(jq -r .pubkey <<<"$SIGNER_ACC2" 2>/dev/null)" == "$MEMBER_PUB" ]] && ok "same key at the signer" || bad "signer account changed: $SIGNER_ACC2"
 
 if [[ -n "${ACCOUNTING_ODOO_URL:-}" ]]; then
   step "12. a full refund becomes a credit note at the ticket seller"

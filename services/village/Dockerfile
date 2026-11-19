@@ -26,9 +26,10 @@ COPY brand/apps/programme-512.png web/programme/public/icon-512.png
 COPY brand/apps/programme-maskable-512.png web/programme/public/icon-maskable-512.png
 COPY brand/apps/programme-180.png web/programme/public/apple-touch-icon.png
 RUN npm test
-# Sign-in through Keycast, the community relay, Blossom for listing photos and the photos app, links into the chat,
-# the wallet and between the two apps, the app bar.
-ARG VITE_KEYCAST_URL=http://localhost:3000
+# Sign-in through Belfry's onboarding service (VITE_KEYCAST_URL keeps Keycast's name, which
+# served the same paths before 2026-11-19), the community relay, Blossom for listing photos and
+# the photos app, links into the chat, the wallet and between the two apps, the app bar.
+ARG VITE_KEYCAST_URL=http://localhost:8100
 ARG VITE_RELAY_URL=ws://localhost:3090
 ARG VITE_BLOSSOM_URL=http://localhost:3100
 ARG VITE_CHAT_URL=http://localhost:3300
@@ -46,7 +47,7 @@ ARG VITE_EVENT_TZ=Europe/Brussels
 ARG VITE_VOTE_URL=http://localhost:3500
 # the polls app's key (POLLS_PUBKEY): its notes show in What's new
 ARG VITE_POLLS_PUBKEY=""
-ARG VITE_APPS_URL=http://localhost:3000
+ARG VITE_APPS_URL=http://localhost:8100/account
 ARG VITE_COMMUNITY_APPS=""
 ARG VITE_BRAND_URL=http://localhost:8100/brand
 ENV VITE_KEYCAST_URL=$VITE_KEYCAST_URL VITE_RELAY_URL=$VITE_RELAY_URL VITE_BLOSSOM_URL=$VITE_BLOSSOM_URL \

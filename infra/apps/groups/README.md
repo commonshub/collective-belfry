@@ -11,9 +11,9 @@ Blossom directly.
 | Piece | Where |
 | --- | --- |
 | Image | `Dockerfile`: clones upstream at `FLOTILLA_COMMIT`, applies `patches/`, copies the groups icon (`brand/apps/groups-maskable-512.png`) as the platform logo, appends `osv.css`, adds the app bar to `src/app.html`, renders `.env` with `make-env.sh`, runs upstream's `scripts/build/web.sh` and fails the build if a third-party host is left in it; nginx (`nginx.conf`) serves `build/` with the SPA fallback. |
-| Build args | `GROUPS_PUBLIC_URL`, `GROUPS_RELAY_URL`, `COMMUNITY_RELAY_URL`, `BUNKER_PUBLIC_RELAYS`, `BLOSSOM_PUBLIC_URL`, `KEYCAST_APP_URL`, `SITE_URL`, `COMMUNITY_APPS`. A change needs `docker compose build groups`. |
+| Build args | `GROUPS_PUBLIC_URL`, `GROUPS_RELAY_URL`, `COMMUNITY_RELAY_URL`, `BUNKER_PUBLIC_RELAYS`, `BLOSSOM_PUBLIC_URL`, `KEYCAST_APP_URL` (Belfry's sign-in: the patch kept Keycast's name, Compose sets it to `ONBOARDING_PUBLIC_URL`, which serves the same paths), `SITE_URL`, `COMMUNITY_APPS`. A change needs `docker compose build groups`. |
 | Settings compiled in | Platform relay = the groups relay; default, indexer and messaging relays = the community relay; signer relays = the bunker relay; Blossom = Belfry's; no default follows or spaces, no push server or bridge, no link-preview proxy, no thumbnails, no Pomade e-mail signers, no hosting backend; the village palette (`osv.css`, Flotilla's `nature` tokens set to the OSV colours in light and dark). |
-| Compose | service `groups` (`--profile app`), host port 3150 locally, none in production; Caddy `groups.<domain>` → `groups:80`. Keycast client `belfry-groups` (bootstrap, trusted). |
+| Compose | service `groups` (`--profile app`), host port 3150 locally, none in production; Caddy `groups.<domain>` → `groups:80`. OAuth client `belfry-groups` (`OAUTH_CLIENTS` in `docker-compose.yml`: no consent screen, silent sign-in). |
 
 **Patches.**
 
@@ -23,9 +23,10 @@ Blossom directly.
   `VITE_MEMBERS_CREATE_ROOMS=true` every member of the space sees "Create room" (the relay
   decides, see the groups relay's patch).
 - `0002-…` "Sign in with Open Source Village" (`src/belfry/sso.ts`, as in the chat): OAuth code +
-  PKCE against Keycast, the token response's bunker URL over NIP-46, a silent `prompt=none` try
-  once per tab before the app starts, the login dialog when it does not work out; logout revokes
-  the app's authorization and ends the sign-in everywhere (Keycast patch 0010).
+  PKCE against Belfry's sign-in (`pass.<domain>/api/oauth/*`), the token response's bunker URL
+  over NIP-46, a silent `prompt=none` try once per tab before the app starts, the login dialog
+  when it does not work out; logout revokes the app's connection and ends the sign-in everywhere
+  (`/api/auth/oidc/logout`).
 - `0003-…` the village space joins itself (no "Join Space" dialog; it stays as the fallback when
   access fails), no notifications toggle without a push server, the landing page offers the
   village sign-in first and "No pass yet? Ask for an invite" (`SITE_URL`) instead of creating an
@@ -35,8 +36,8 @@ Blossom directly.
 
 **Checks.** Smoke step 6u (app, bundle, relay NIP-11, the participant on the member list, the
 group kinds signed; step 11: a revoked pass leaves the relay). `infra/scripts/groups-check.mjs`
-in Chromium (`WIDTH=390` for a phone): silent sign-in with the participant's Authentik session
-(`SAVE_AK_JAR` from the smoke test), the space with its members, a room created by the
+in Chromium (`WIDTH=390` for a phone): silent sign-in with the participant's Belfry session
+(`SAVE_SESSION_JAR` from the smoke test), the space with its members, a room created by the
 participant who then administers it ("Create invite"), a message posted and read back after a
 reload.
 

@@ -1,6 +1,6 @@
 # Community relay (rnostr)
 
-The relay the community apps talk to. Participants only: reading and writing need a NIP-42 AUTH as a pubkey on the whitelist, and the whitelist is derived from Odoo (`belfry.pass` in state `active`), never edited by hand. The Keycast NIP-46 relay (`keycast-relay`) is a different service and stays open.
+The relay the community apps talk to. Participants only: reading and writing need a NIP-42 AUTH as a pubkey on the whitelist, and the whitelist is derived from Odoo (`belfry.pass` in state `active`), never edited by hand. The signer's NIP-46 relay (`bunker-relay`, `bunker.<domain>`) is a different service and stays open.
 
 | | |
 | --- | --- |
@@ -11,7 +11,7 @@ The relay the community apps talk to. Participants only: reading and writing nee
 
 ## Whitelist sync
 
-`services/onboarding` (`belfry_onboarding/relay_whitelist.py`) renders the template: every line that ends in `# belfry:whitelist` gets `pubkey_whitelist = ["<hex>", ...]` with the `keycast_pubkey` of every active pass plus `RELAY_EXTRA_PUBKEYS` (comma separated, for Belfry's own announcement or steward keys). It runs
+`services/onboarding` (`belfry_onboarding/relay_whitelist.py`) renders the template: every line that ends in `# belfry:whitelist` gets `pubkey_whitelist = ["<hex>", ...]` with the `nostr_pubkey` of every active pass plus `RELAY_EXTRA_PUBKEYS` (comma separated, for Belfry's own announcement or steward keys). It runs
 
 - at activation, with the new pubkey included before the kind-0 profile is published,
 - after a revoke, expiry or reactivation,

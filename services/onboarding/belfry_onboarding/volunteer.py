@@ -77,7 +77,6 @@ def _activate_volunteer(svc: Services, pass_id: int) -> str:
             "name",
             "email",
             "belfry_member_number",
-            "belfry_authentik_user_id",
             "belfry_npub",
             "belfry_key_version",
             "belfry_key_custody",
@@ -188,7 +187,7 @@ Times are in Brussels time. Keep this page's link private: it is your shift page
 
 
 def role_of(svc: Services, partner_id: int) -> tuple[str | None, dict[str, Any] | None]:
-    """``volunteer`` (active volunteer pass), ``steward`` (e-mail in the stewards group) or None."""
+    """``volunteer`` (active volunteer pass), ``steward`` (e-mail of a steward) or None."""
     info = svc.odoo.call("belfry.shift", "belfry_volunteer_of_partner", [partner_id])
     if info and info.get("state") == "active":
         return "volunteer", info
@@ -196,10 +195,8 @@ def role_of(svc: Services, partner_id: int) -> tuple[str | None, dict[str, Any] 
     email = (partner[0].get("email") or "").lower() if partner else ""
     if email:
         try:
-            stewards = {
-                e.lower() for e in svc.authentik.group_member_emails(svc.settings.steward_group)
-            }
-        except Exception:  # noqa: BLE001 - no steward role when authentik does not answer
+            stewards = {e.lower() for e in core.steward_emails(svc)}
+        except Exception:  # noqa: BLE001 - no steward role when Odoo does not answer
             log.exception("shifts: could not list the stewards")
             stewards = set()
         if email in stewards:
@@ -216,7 +213,7 @@ def signup(svc: Services, partner_id: int, shift_id: int) -> dict[str, Any]:
 
 def leave(svc: Services, partner_id: int, shift_id: int) -> dict[str, Any]:
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = core.steward_emails(svc)
     except Exception:  # noqa: BLE001 - the mail to the stewards is best effort
         stewards = []
     return svc.odoo.call("belfry.shift", "belfry_shift_leave", [partner_id, shift_id, stewards])

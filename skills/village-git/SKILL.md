@@ -31,7 +31,7 @@ the bunker URL and the village's other services.
 ## What you need
 
 - **The holder's bunker URL** (`bunker://…`), from their account page at
-  `https://pass.<domain>/me`. It signs as the holder: what you write carries their name. Keep it
+  `https://pass.<domain>/account` (**Connect a Nostr app**). It signs as the holder: what you write carries their name. Keep it
   out of command lines, logs and repositories.
 - **An active pass** on that key. Without one, nothing on the server answers. Check with
   `GET https://pass.<domain>/api/me` (see the general skill) when in doubt.
