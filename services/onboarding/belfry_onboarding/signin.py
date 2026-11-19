@@ -17,6 +17,10 @@ carries ``belfry_return``, which the account-setup flow turns into its final red
 belfry-account-setup-flow). Then the app's "Sign in with Open Source Village" finds a session.
 When signing in is not possible (the secret used or stale, the pass not active within two
 minutes, a payment still processing), the payer goes back to the app without a session.
+
+A belfry with its own sign-in (PASS_SIGNIN=belfry, passlogin.py) mints no authentik link: there
+both paths answer a 303 to ``https://chat.<domain>/`` (the chat signs in with an e-mail code), so
+links in mails sent before 2026-11-19 keep working. Nothing is spent.
 """
 
 from __future__ import annotations
@@ -176,7 +180,19 @@ def register(app: FastAPI) -> None:
         response.headers["Referrer-Policy"] = "no-referrer"
         return response
 
+    def chat(services: Services) -> Response | None:
+        """A belfry with its own sign-in (PASS_SIGNIN=belfry) has no authentik link to mint: old
+        mails' links land on the chat, which signs in with an e-mail code."""
+        from . import passlogin
+
+        if not passlogin.own(services):
+            return None
+        url = f"https://chat.{services.settings.nip05_domain}/"
+        return no_store(RedirectResponse(url, status_code=303))
+
     async def spend(services: Services, kind: str, token: str) -> Response:
+        if (to_chat := chat(services)) is not None:
+            return to_chat
         result = await run_in_threadpool(
             services.odoo.call, "belfry.pass", "belfry_use_signin", [kind, token]
         )
@@ -195,7 +211,9 @@ def register(app: FastAPI) -> None:
         return no_store(RedirectResponse(with_return(url, target) if target else url, 303))
 
     @app.get("/signin/{token}", response_class=HTMLResponse)
-    async def signin_page(token: str):
+    async def signin_page(request: Request, token: str):
+        if (to_chat := chat(svc(request))) is not None:
+            return to_chat
         return no_store(
             HTMLResponse(
                 spend_page(
@@ -219,6 +237,8 @@ def register(app: FastAPI) -> None:
         )
         if info.get("result") != "ok":
             return no_store(HTMLResponse(problem_page(services, "not_found"), status_code=404))
+        if (to_chat := chat(services)) is not None:
+            return to_chat
         target = info.get("return_url")
         if target:
             step = welcome_next(info, wait)

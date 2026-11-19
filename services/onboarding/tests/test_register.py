@@ -280,3 +280,65 @@ def test_unsent_mails_are_not_kept_for_ever(reg):
     for _ in range(mailer.SENT_MAX + 5):
         reg.mailer.send("ana@example.org", "Hello", ["Hi"])
     assert len(mailer.SENT) == mailer.SENT_MAX
+
+
+# ── a belfry with its own sign-in (PASS_SIGNIN=belfry): no authentik, no dead ends ───────────
+def test_the_welcome_mail_of_a_belfry_with_its_own_sign_in(rsvc, reg, authentik, keycast):
+    rsvc.settings.pass_signin = "belfry"
+    rsvc.settings.nip05_domain = "belfry.test"
+    made = steward.steward_pass(rsvc, "bo@example.org", "Bo Brown")
+    assert made["result"] == "activated"
+    msg, text = last_mail()
+    html = msg.get_body(preferencelist=("html",)).get_content()
+    assert msg["To"] == "bo@example.org"
+    assert msg["Subject"] == f"Welcome to {rsvc.settings.community_name}"
+    for part in (text, html):
+        assert "/signin/" not in part and "login." not in part and "pass." not in part
+        assert "chat.belfry.test" in part and "https://chat.belfry.test/" in part
+        assert "Chat with the community" in part and "6-digit code" in part
+        assert "bo-brown@belfry.test" in part  # their identity, from their name
+    assert "You can chat with the community at chat.belfry.test" in text
+    # the old setup keeps its mail
+    rsvc.settings.pass_signin = "authentik"
+    steward.steward_pass(rsvc, "cy@example.org", "Cy")
+    _msg, text = last_mail()
+    assert "/signin/" in text and "Chat with the community" not in text
+
+
+def test_old_sign_in_links_land_on_the_chat(rsvc, reg, authentik, keycast):
+    rsvc.settings.nip05_domain = "belfry.test"
+    made = steward.steward_pass(rsvc, "bo@example.org", "Bo Brown")
+    row = reg.read_one("belfry.pass", made["pass_id"], ["signin_token"])
+    reg.write("belfry.pass", [made["pass_id"]], {"welcome_token": "w" * 43})
+    path = f"/signin/{row['signin_token']}"
+    with TestClient(create_app(rsvc)) as c:
+        rsvc.settings.pass_signin = "belfry"
+        for r in (
+            c.get(path, follow_redirects=False),
+            c.post(path, follow_redirects=False),
+            c.post("/signin/" + "x" * 43, follow_redirects=False),
+            c.get(f"/welcome/{'w' * 43}", follow_redirects=False),
+            c.post(f"/welcome/{'w' * 43}", follow_redirects=False),
+        ):
+            assert r.status_code == 303 and r.headers["location"] == "https://chat.belfry.test/"
+        assert authentik.recovery_links == [], "no authentik link is ever minted"
+        # unchanged with authentik's sign-in: the page, then the one-time link
+        rsvc.settings.pass_signin = "authentik"
+        assert f'action="{path}"' in c.get(path).text
+        r = c.post(path, follow_redirects=False)
+        assert r.status_code == 303 and "login.belfry.test" in r.headers["location"]
+
+
+def test_the_invite_page_ends_on_the_chat_with_its_own_sign_in(rsvc, reg):
+    rsvc.settings.pass_signin = "belfry"
+    rsvc.settings.nip05_domain = "belfry.test"
+    made = reg.call("belfry.invite", "belfry_steward_create", ["admin@belfry.test", "", "Ada"])
+    with TestClient(create_app(rsvc)) as c:
+        c.post(f"/invite/{made['token']}", data={"name": "Bo Brown", "email": "bo@example.org"})
+        _msg, text = last_mail()
+        link = re.search(r"https?://\S+/confirm/\S+", text).group(0)
+        done = c.get("/" + link.split("://", 1)[1].split("/", 1)[1])
+        assert done.status_code == 200 and "You are a member now" in done.text
+        assert 'href="https://chat.belfry.test/"' in done.text and "/signin/" not in done.text
+        _msg, text = last_mail()
+        assert "/signin/" not in text and "chat.belfry.test" in text

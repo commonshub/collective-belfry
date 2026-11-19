@@ -6,8 +6,7 @@
   its answer time; the deployed code and the last change (the changelog).
 - ``/members``: the members (people with an active pass) with their role. Members see names; the
   belfry's admins (the stewards group) also see e-mail addresses and add, edit and remove members
-  by e-mail: adding gives a free pass (activated at once, so the welcome mail with the sign-in link
-  goes out), the admin role is the stewards group, removing revokes the pass.
+  by e-mail: adding gives a free pass (activated at once, so the welcome mail goes out), the admin role is the stewards group, removing revokes the pass.
 - ``/website``: what the apex shows, and the website versions members proposed: a member publishes
   their version as an nsite with their own key (NIP-5A, named site ``website`` or a root site) on
   this belfry's relay and Blossom server, and proposes it (a ``/proposals`` note tagged
@@ -1293,7 +1292,7 @@ def members_html(mem: list[dict[str, Any]], who: dict[str, Any] | None, msg: str
 <p class="meta role-admin" hidden>An admin can add and remove members and approve the website.</p>
 <p class="meta tester-why" hidden>{E(TESTER_WHY)}</p>
 <p><button class="btn" type="submit">Add</button></p>
-<p class="meta">They get a pass at once and an e-mail with a sign-in link. Removing someone ends their pass; their Nostr key stays theirs.</p></form></section>
+<p class="meta">They get a pass at once and a welcome e-mail. Removing someone ends their pass; their Nostr key stays theirs.</p></form></section>
 </dialog>{ADD_SCRIPT}"""
     note = (f'<p class="ok">{E(msg)}</p>' if msg else "") + (
         f'<p class="bad">{E(err)}</p>' if err else ""
@@ -1699,8 +1698,8 @@ def register(app: FastAPI) -> None:
             )
         log.info("console: an admin added a member (role %s)", role or "member")
         if role == "tester":
-            return back("/members", msg=f"{added} is a tester now and got a sign-in link.")
-        return back("/members", msg=f"{added} is a member now and got a sign-in link.")
+            return back("/members", msg=f"{added} is a tester now and got a welcome e-mail.")
+        return back("/members", msg=f"{added} is a member now and got a welcome e-mail.")
 
     @app.post("/console/members/link")
     async def members_link(

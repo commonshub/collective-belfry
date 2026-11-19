@@ -416,6 +416,9 @@ class Register(OdooApi):
             log.warning("register: pass %s has no e-mail; sign-in link not mailed", rec["id"])
             return
         first = (partner.get("name") or "").split(" ")[0] or "there"
+        if self._own_signin():
+            self._mail_welcome(rec, partner, first)
+            return
         until = (rec.get("login_setup_expires_at") or "")[:16]
         sent = self.mailer.send(
             partner["email"],
@@ -431,6 +434,51 @@ class Register(OdooApi):
             ],
             button=(rec["login_setup_url"], f"Sign in to {self.mailer.name}"),
         )
+        if sent:
+            self._write("belfry.pass", [rec["id"]], {"login_mail_sent_at": stamp()})
+
+    def _own_signin(self) -> bool:
+        """PASS_SIGNIN=belfry (passlogin.own): people sign in on the chat with an e-mail code."""
+        return (getattr(self.settings, "pass_signin", "") or "belfry").strip().lower() != (
+            "authentik"
+        )
+
+    def _mail_welcome(self, rec: dict[str, Any], partner: dict[str, Any], first: str) -> None:
+        """The welcome mail of a belfry with its own sign-in: where the chat is and how to come
+        back, no sign-in link (nothing here leads to another login page)."""
+        name = self.mailer.name
+        domain = self.settings.nip05_domain
+        chat = f"https://chat.{domain}/"
+        again = (
+            "On a new device, choose Log in and enter this e-mail address: we send you a "
+            "6-digit code."
+        )
+        channel = rec.get("guest_channel")
+        if rec.get("tier") == "guest":
+            where = f"#{channel} in {name}" if channel else name
+            link = f"chat.{domain}/#/c/{channel}" if channel else f"chat.{domain}"
+            lines = [
+                f"Hello {first},",
+                f"You are a guest of {where} now.",
+                f"You can chat there at {link}",
+                again,
+            ]
+            button = ("https://" + link, f"Open #{channel}" if channel else "Open the chat")
+        else:
+            username = str(rec.get("nip05_name") or "")
+            identity = (
+                f" and have an identity in {name}'s belfry: {username}@{domain}"
+                if username
+                else f" and have an identity in {name}'s belfry."
+            )
+            lines = [
+                f"Hello {first},",
+                f"You are a member of {name} now{identity}",
+                f"You can chat with the community at chat.{domain}",
+                again,
+            ]
+            button = (chat, "Chat with the community")
+        sent = self.mailer.send(partner["email"], f"Welcome to {name}", lines, button=button)
         if sent:
             self._write("belfry.pass", [rec["id"]], {"login_mail_sent_at": stamp()})
 

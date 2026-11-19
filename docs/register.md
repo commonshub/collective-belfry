@@ -27,7 +27,18 @@ A membership is free and has no invoice (`tier` `member`, no end date: 2099-12-3
 - An admin's membership: `belfry_steward_pass`, opened by `core.activate_free_pass`.
 - An invite link (`https://belfry.<domain>/invite/<token>`: `CONSOLE_URL`, else `PUBLIC_URL`;
   `invite.py`): name and e-mail, a confirmation link by mail, then the membership opens
-  (accounts, key, sign-in link mailed).
+  (accounts, key, welcome mail).
+- The welcome mail (`register.py` `_mail_welcome`), sent when a free membership starts on a
+  belfry with its own sign-in (`PASS_SIGNIN=belfry`, the default): subject "Welcome to
+  <community>"; you are a member now and have an identity in <community>'s belfry
+  (`<username>@<domain>`, when the account has a username); "You can chat with the community at
+  chat.<domain>" with the address written out; a button "Chat with the community" →
+  `https://chat.<domain>/`; "On a new device, choose Log in and enter this e-mail address: we
+  send you a 6-digit code." No sign-in link, nothing pointing at `login.<domain>` or
+  `pass.<domain>`. A guest with an address gets the same shape for their channel ("Open
+  #channel"). Old mails' `/signin/<token>` and `/welcome/<token>` links answer a 303 to
+  `https://chat.<domain>/` there. With `PASS_SIGNIN=authentik` (the first belfry's old setup)
+  the mail keeps its one-time sign-in link and `signin.py` mints authentik's.
 - System mails (sign-in links, codes, invites, alerts, digests) go through the mail provider
   (`SMTP_*`, `MAIL_FROM`; `mailer.py`).
 

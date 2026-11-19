@@ -242,6 +242,18 @@ def register(app: FastAPI) -> None:
                 "with your e-mail address: we send you a code.</p>"
                 f'<p><a class="button" href="{chat}">Open #{E(inv["guest_channel"])}</a></p>',
             )
+        from . import passlogin
+
+        if passlogin.own(services):  # no sign-in link: the chat signs in with an e-mail code
+            domain = services.settings.nip05_domain
+            return _page(
+                f"Welcome to {name}",
+                f"<h1>Welcome to {E(name)}</h1><p>You are a member now. You can chat with the "
+                f"community at chat.{E(domain)}: choose Log in and enter your e-mail address, we "
+                "send you a 6-digit code.</p>"
+                f'<p><a class="button" href="https://chat.{E(domain)}/">Chat with the community'
+                "</a></p>",
+            )
         url = row.get("login_setup_url") or "/me/login"
         return _page(
             f"Welcome to {name}",

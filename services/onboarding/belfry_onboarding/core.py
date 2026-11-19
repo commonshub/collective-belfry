@@ -1008,6 +1008,13 @@ def _finish_activation(
         "state": "active",
     }
     vals.update(extra)
+    if (
+        _own_register(svc)
+        and not own_custody
+        and tier != "guest"
+        and username.lower() != member_number.lower()
+    ):
+        vals["nip05_name"] = username  # the welcome mail names their address (register.py)
     # Tokens ride the same write, so the activation mail carries the tokens link.
     if not pass_row.get("cashu_amount"):
         vals.update(
