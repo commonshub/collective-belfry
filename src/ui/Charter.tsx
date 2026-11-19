@@ -1,6 +1,6 @@
 // The charter (board Charter, Join-Member 1–3; iOS SPEC 19.32): #/charter, #/charter/who/<id>,
-// and a new member's first minutes (#/welcome: Welcome → the charter one tick at a time → name
-// and photo). Members tick for themselves; stewards write, change, reorder and remove the
+// and a new member's first minutes (#/welcome: Welcome → the charter one tick at a time → the
+// first channel). Members tick for themselves; stewards write, change, reorder and remove the
 // agreements and see who agreed. Guests read them (from the belfry: they can't read the group)
 // and tick them when they apply (Places.tsx ApplyScreen).
 import { replaceHash } from '../core/nav'
@@ -12,11 +12,11 @@ import { agentOwner, belfryAdminKeys, demoSetAdmins } from '../core/access'
 import { addAgreement, agree, agreedAt, charter, editAgreement, isStale, listIdForCharter, loadRemoteCharter, moveAgreement, parseCharter, remoteAgreements, removeAgreement, toAgree, type Agreement } from '../core/charter'
 import { useBranding } from '../core/branding'
 import { isGuest, isAgent } from '../core/invite'
-import { displayName, group, profiles } from '../core/model'
-import { isBelfryAdmin, saveProfile, aboutOf } from '../core/people'
+import { displayName, group } from '../core/model'
+import { isBelfryAdmin } from '../core/people'
 import { CHARTER_ID } from '../core/places'
 import { addEvents, all, useVersion, type Ev } from '../core/store'
-import { me, setAvatar } from '../core/sync'
+import { me } from '../core/sync'
 import { Avatar, back, Btn, Form, go, Sheet, up } from './common'
 import { useCommunityName } from './community'
 import { CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, ChevronUpIcon, DocIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon } from './icons'
@@ -241,13 +241,15 @@ export function WelcomeFlow() {
   useVersion()
   const community = useCommunityName(NAME)
   const brand = useBranding()
-  const [step, setStep] = useState<'hello' | 'charter' | 'profile'>('hello')
+  const [step, setStep] = useState<'hello' | 'charter'>('hello')
   const rules = charter()
   const [ticked, setTicked] = useState<Set<string>>(() => new Set(rules.filter((r) => r.agreed.has(me())).map((r) => r.id)))
-  const [name, setName] = useState(profiles().get(me())?.name ?? '')
   const [error, setError] = useState('')
   const inviter = welcomeInviter()
-  const finish = () => { doneWelcome(); replaceHash('#/home') }
+  // no profile step (board onboarding/welcome-profile, Xavier 19 Nov: "the sooner they get to the
+  // chat the better"): the belfry's first channel, ready to write. The name is the one given when
+  // joining, else the address's name part (displayName); the photo the initial.
+  const finish = () => { doneWelcome(); replaceHash('#/c/general') }
   if (step === 'hello') return (
     <div className="screen welcome">
       <div className="scroll pad center">
@@ -257,7 +259,7 @@ export function WelcomeFlow() {
         {inviter && <p className="welcome-by"><Avatar pubkey={inviter} size={24} /> {displayName(inviter)} let you in</p>}
         {rules.length > 0 && <p className="hint small">Next: {community}’s charter, {rules.length === 1 ? 'one short agreement' : `${rules.length} short agreements`}.</p>}
       </div>
-      <div className="pad"><button className="btn" onClick={() => setStep(rules.length ? 'charter' : 'profile')}>Continue</button></div>
+      <div className="pad"><button className="btn" onClick={() => (rules.length ? setStep('charter') : finish())}>Continue</button></div>
     </div>
   )
   if (step === 'charter') {
@@ -281,30 +283,13 @@ export function WelcomeFlow() {
         <div className="pad">
           <Btn className="btn" disabled={!all_} onClick={async () => {
             setError('')
-            try { for (const r of rules) if (!r.agreed.has(me())) await agree(r, true); setStep('profile') } catch (x) { setError(x instanceof Error ? x.message : String(x)) }
+            try { for (const r of rules) if (!r.agreed.has(me())) await agree(r, true); finish() } catch (x) { setError(x instanceof Error ? x.message : String(x)) }
           }}>{all_ ? 'Continue' : `${ticked.size} of ${rules.length} agreed`}</Btn>
         </div>
       </div>
     )
   }
-  return (
-    <div className="screen welcome">
-      <div className="topbar"><h1>Your profile</h1><button className="btn small ghost" onClick={finish}>Skip</button></div>
-      <div className="scroll pad center">
-        <label className="avatar-edit big" aria-label="Add a photo">
-          <Avatar pubkey={me()} size={96} />
-          <input type="file" accept="image/*" hidden onChange={async (e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; try { await setAvatar(f) } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }} />
-          <span className="link">Add a photo</span>
-        </label>
-        <Form onSubmit={async (e) => { e.preventDefault(); setError(''); try { if (name.trim() && name.trim() !== profiles().get(me())?.name) await saveProfile({ name, about: aboutOf(me()) }); finish() } catch (x) { setError(x instanceof Error ? x.message : String(x)) } }}>
-          <label className="field" style={{ textAlign: 'left' }}><span>Name</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label>
-          <p className="hint" style={{ textAlign: 'left' }}>This is how people in {community} see you. About, place and tags can wait: they're in your profile whenever you want.</p>
-          {error && <div className="error" role="alert">{error}</div>}
-          <button className="btn">Done</button>
-        </Form>
-      </div>
-    </div>
-  )
+  return null
 }
 
 /** Who let me in: the member whose 9000 put me in the Square (its `invited-by`), when known. */
