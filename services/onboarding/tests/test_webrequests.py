@@ -373,11 +373,14 @@ def test_only_the_author_comments(reqs):
             assert r.status_code == 422 and r.json()["error"] == "invalid", bad
         r = c.post("/api/v1" + path, content=b"[", headers=ok)
         assert r.status_code == 400
-        # only by its id, only a thread there is
-        assert (
-            c.post("/api/v1/requests/1/comments", json={"text": "Hi"}, headers=ok).status_code
-            == 404
-        )
+        # by its number too, only a thread there is
+        r = c.post("/api/v1/requests/1/comments", json={"text": "By number"}, headers=ok)
+        assert r.status_code == 201
+        assert [e for e in relay.events if e["kind"] == 1111][-1]["content"] == "By number"
+        r = c.post("/api/v1/requests/2/comments", json={"text": "Hi"}, headers=ok)
+        assert r.status_code == 403  # the other thread: not this key's
+        r = c.post("/api/v1/requests/9/comments", json={"text": "Hi"}, headers=ok)
+        assert r.status_code == 404 and r.json()["error"] == "unknown"
         r = c.post(f"/api/v1/requests/{'0' * 64}/comments", json={"text": "Hi"}, headers=ok)
         assert r.status_code == 404 and r.json()["error"] == "unknown"
         # the page's own limit: 20 an hour
@@ -387,7 +390,7 @@ def test_only_the_author_comments(reqs):
             assert r.status_code == 201, i
         r = c.post("/api/v1" + path, json={"text": "again"}, headers=ok)
         assert r.status_code == 429 and r.json()["error"] == "too_many"
-        assert get(c, f"/requests/{card['id']}").json()["comments"] == 21
+        assert get(c, f"/requests/{card['id']}").json()["comments"] == 22
 
 
 def test_offers_take_a_label_days_and_the_consent(reqs):
@@ -481,13 +484,14 @@ def test_a_page_on_the_website_takes_the_channel_over(reqs, monkeypatch):
         there = r.headers["location"]
         k = there.rsplit("#k=", 1)[1]
         # the key rides in the fragment: never in a query string
-        assert there == f"{page}/thread?id={card['id']}#k={k}" and re.fullmatch("[0-9a-f]{24}", k)
+        # the list's own page, the request's number
+        assert there == f"{page}?id=1#k={k}" and re.fullmatch("[0-9a-f]{24}", k)
         assert there in body(mailer.SENT[-1])
         assert "?k=" not in body(mailer.SENT[-1])
         again = c.get(link, headers=APEX, follow_redirects=False)
         assert again.status_code == 303 and again.headers["location"] == there
         got = call(c, me, f"/offers/{fid}", method="GET").json()
-        assert got["url"] == f"{page}/thread?id={card['id']}" and got["my_url"] == there
+        assert got["url"] == f"{page}?id=1" and got["my_url"] == there
         # that key is the one the API takes
         webrequests.forget()
         assert get(c, f"/requests/{card['id']}", **{"X-Thread-Key": k}).json()["me"]
@@ -495,7 +499,11 @@ def test_a_page_on_the_website_takes_the_channel_over(reqs, monkeypatch):
         r = c.get(f"/requests/{card['id']}?k={k}", headers=APEX, follow_redirects=False)
         assert r.status_code == 302 and r.headers["location"] == there
         r = c.get(f"/requests/{card['id']}?k=<script>", headers=APEX, follow_redirects=False)
-        assert r.headers["location"] == f"{page}/thread?id={card['id']}"
+        assert r.headers["location"] == f"{page}?id=1"
+        # a thread the belfry has no number for keeps its id in the link
+        r = c.get(f"/requests/{'0' * 64}", headers=APEX, follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == f"{page}?id={'0' * 64}"
+        assert get(c, "/requests/1").json()["id"] == card["id"]
         # the answer's mail and the hourly replies point there too
         mailer.SENT.clear()
         sales.decide_offer(rsvc, fid, 50, "", "Ada")
@@ -694,7 +702,7 @@ def test_a_relay_that_is_down_is_a_503(reqs, monkeypatch):
     def down(svc, channel):
         raise RuntimeError("relay down")
 
-    monkeypatch.setattr(webthreads, "_events", down)
+    monkeypatch.setattr(webthreads, "_read", down)
     with TestClient(create_app(rsvc), raise_server_exceptions=False) as c:
         for path in ("/requests", "/requests/1"):
             r = get(c, path)

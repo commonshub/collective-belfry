@@ -3,8 +3,8 @@
 For a community's own website (the nsite on the apex), which renders three pages itself, in its
 own look: the list of requests (like GitHub issues), one request's thread with its approval, and
 an event's public activity log. The data is on the groups relay, which wants authentication even
-for public channels, so a browser can't read it: the belfry serves it, read only, plus the one
-thing a request's author does from the web, a comment. Code: `webrequests.py` (the reading and
+for public channels, so a browser can't read it: the belfry serves it, read only, plus what a
+request's author does from the web: a comment, and editing their own title, text and comments. Code: `webrequests.py` (the reading and
 the permissions are `webthreads.py`'s, the HTML pages of the same channel); offers and orders:
 `sales.py`, [sales.md](sales.md).
 
@@ -18,12 +18,12 @@ wrote it: never HTML. The website renders it and must escape it.
 
 **CORS.** The apex (`https://<domain>`) may call everything, with the request headers
 `Authorization, Content-Type, X-Thread-Key`. The website's previews (`https://preview.<domain>`)
-may call the three `GET`s only, never the comment.
+may call the three `GET`s only, never the comment or the edit.
 
-**Limits.** 120 calls a minute per IP over these four endpoints (429 `too_many`). What is read
+**Limits.** 120 calls a minute per IP over these five endpoints (429 `too_many`). What is read
 from the relay is kept 15 seconds in the service; the list and the activity say
 `Cache-Control: public, max-age=15`, one request says `no-store` (the same address answers its
-author with more). A comment or a decision made through the belfry shows at once.
+author with more). A comment, an edit or a decision made through the belfry shows at once.
 
 ## 1. `GET /requests`
 
@@ -33,8 +33,8 @@ public (webthreads' `periods`). 404 `none` when there is no such channel, or its
 members only.
 
 Query: `state` = `open` | `approved` | `closed` | `all` (default `all`; `closed` covers declined
-and closed); `q` = words looked for in the title and the body, whatever the case or the accents,
-at most 100 characters; `before` = a unix time (only threads made before it); `limit` = 1–100
+and closed); `q` = words looked for in the title and the body as they are now (after their author's
+edits), whatever the case or the accents, at most 100 characters; `before` = a unix time (only threads made before it); `limit` = 1–100
 (default 30). Anything else: 422 `invalid`.
 
 ```json
@@ -47,7 +47,7 @@ at most 100 characters; `before` = a unix time (only threads made before it); `l
    "percent_asked": 50,
    "state": "approved", "percent_approved": 75, "approved_by": {"name": "Ada"},
    "author": {"name": "Kim Cook", "role": "guest"},
-   "created_at": 1795000000, "comments": 3, "last_at": 1795003600}],
+   "created_at": 1795000000, "edited_at": null, "comments": 3, "last_at": 1795003600}],
  "next": 1795000000}
 ```
 
@@ -62,6 +62,9 @@ at most 100 characters; `before` = a unix time (only threads made before it); `l
   given again, also when older threads are deleted. (Threads made in the same second are
   numbered in the order of their ids.) Every message at the top of the channel is a thread and
   takes a number, also one that is not public: public numbers can have gaps.
+- `title`: the title the thread has now: the person's own (`"title"` of `POST /offers`,
+  [sales.md](sales.md) §4) or the generated one, after its author's edits (§4). `edited_at`:
+  when the author last edited the title or the text (unix), else `null`.
 - `kind`: for a thread started by `POST /offers`, what the offer said: `in_kind` (the default)
   or `sponsored`; else `other`. `label` never says sponsored. `label`, `days`, `percent_asked`
   come from the offer (`null` for `other`, or when the offer has none).
@@ -78,12 +81,16 @@ at most 100 characters; `before` = a unix time (only threads made before it); `l
 The item of §1, plus:
 
 ```json
-{"body": "I cook for 40 people on two evenings.",
+{"body": "I cook for 40 people on two evenings.", "edited_at": 1795000050,
  "timeline": [
-  {"type": "comment", "author": {"name": "Mia", "role": "member"}, "at": 1795000100,
-   "text": "Which evenings?"},
-  {"type": "comment", "author": {"name": "Kim Cook", "role": "author"}, "at": 1795000200,
-   "text": "Tuesday and Friday."},
+  {"type": "edited", "field": "title", "by": {"name": "Kim Cook"}, "at": 1795000050,
+   "title": "Dinner for forty"},
+  {"type": "comment", "id": "<64 hex>", "author": {"name": "Mia", "role": "member"},
+   "at": 1795000100, "edited_at": null, "text": "Which evenings?"},
+  {"type": "comment", "id": "<64 hex>", "author": {"name": "Kim Cook", "role": "author"},
+   "at": 1795000200, "edited_at": 1795000300, "text": "Tuesday and Friday.", "mine": true},
+  {"type": "edited", "field": "comment", "by": {"name": "Kim Cook"}, "at": 1795000300,
+   "comment": "<64 hex>"},
   {"type": "approved", "by": {"name": "Ada"}, "percent": 75, "note": "See you there.",
    "at": 1795003600},
   {"type": "closed", "by": {"name": "Mia"}, "at": 1795090000},
@@ -95,6 +102,14 @@ The item of §1, plus:
   the thread, else as in §1. `approved` (with `percent`) / `declined`: the admin's decision, by
   the admin's name; `note` (optional) is the admin's public note. `closed` / `reopened`: the
   members' labels in the chat (a label that changes nothing is left out).
+- `title`, `body` and a comment's `text` are the current ones. `edited_at` (the opening post:
+  its title or text; a comment: its text) is when its author last edited it, else `null`.
+  A comment's `id` is an opaque identifier (for §4). `"mine": true` marks the comments the
+  author may edit, **only** in an answer proven as the author's (see `me`); never otherwise.
+- `edited` entries, one per change: `field` = `title` (with the new `title`), `body` or
+  `comment` (with the `comment`'s id); `by`: who wrote the message. An edit of the title and
+  the text at once gives two entries with the same `at`. Older versions are not in any answer
+  (they stay on the relay: the first message and each edit).
 - 404 `unknown`: no such thread, or one that is not public (asked without its author's proof).
 - **`me`**, only when the request proves it comes from the thread's author:
   - a NIP-98 `Authorization` signed by the key that made the offer (`POST /offers`), or
@@ -119,11 +134,11 @@ The item of §1, plus:
   there sends `POST /checkout {"ticket", "offer", …}` with the same proof (the key, or
   `X-Thread-Key`): no code to type. Never a code in this answer.
 
-## 3. `POST /requests/<id>/comments`
+## 3. `POST /requests/<id or number>/comments`
 
 `{"text": "…"}` (1–8000 characters), by the thread's author only, proven as for `me`: NIP-98 by
-the offer's key (with the `payload` tag), or `X-Thread-Key`. By the thread's **id** (not its
-number). The comment is posted as the web page posts it: by the author's own account when the
+the offer's key (with the `payload` tag), or `X-Thread-Key`. By the thread's id or its number.
+The comment is posted as the web page posts it: by the author's own account when the
 thread was opened by one, else by the groups key for their address. → 201 `{"ok": true}`.
 
 Errors: 403 `not_author` (no proof, or someone else's); 401 `unauthorized` (an `Authorization`
@@ -131,7 +146,45 @@ that is not a valid NIP-98); 404 `unknown`; 422 `invalid` (no text, or too long)
 `invalid_json`; 429 `too_many` (the page's own limit: 20 comments an hour per author); 503
 `unavailable` (the signer).
 
-## 4. `GET /events/<link>/activity`
+## 4. `POST /requests/<id or number>/edit`
+
+The author changes their request, proven as for a comment (NIP-98 by the offer's key, or
+`X-Thread-Key`). Exactly one of:
+
+- `{"title"?: "…", "body"?: "…"}`, at least one: the thread's title (one line, 1–120
+  characters once trimmed, control characters taken out: the rule of `POST /offers`'s `title`)
+  and / or its opening text (1–8000 characters);
+- `{"comment": "<comment id>", "text": "…"}` (1–8000 characters): one of the author's **own**
+  comments: a reply signed by the key that signed the thread (on an older card, which the
+  belfry's posting key wrote: one for the author's address). Never an organiser's or a
+  member's.
+
+→ 200 `{"ok": true, "changed": true}`; `"changed": false` when the edit changes nothing (no
+event is published, and it does not count towards the limit).
+
+Errors: 403 `not_author` (no proof, or someone else's); 403 `not_yours` (a comment that is not
+the author's); 404 `unknown` (no such thread, no such comment under it); 422 `invalid`
+(neither or both forms, a title or text outside its rule); 409 `archived` (the channel is
+archived); 429 `too_many` (20 edits an hour per thread); 401, 400, 503 as in §3.
+
+A closed, declined or approved request can still be edited, like an issue. An approval stays;
+the organisers' console says "edited after approval" on that request's row.
+
+**On the relay** an edit is what the chat's "Edit message" is: a kind 1010 event in the
+channel, `["h", <channel>]`, `["e", <the message's id>]`, `["k", "9" | "1111"]`, the whole new
+text as content, signed by the key that signed the message (the author's own account, or the
+belfry's posting key for an older card); only that key's edits count, the latest wins. The
+message's other tags ride along (whose thread, which offer; never the buttons). A thread's
+title is its `subject` tag **and** the bold first line of its text (`**<title>**`, a blank
+line, the text): an edit sets both, so the page and the chat read the same title. An edit made
+in the chat (which sends no `subject`) is read by its bold first line. Members in the chat see
+the new text; the first version and every edit stay on the relay.
+
+As for everything else on the page, moving the channel is never retroactive: an edit made
+while the channel was members only shows to the author (with their proof) and in the chat,
+not in the public answers, which keep the last version written while it was public.
+
+## 5. `GET /events/<link>/activity`
 
 The public activity of a **public** event (`<link>`: its address or its id), newest first.
 A members-only event, one seen only by its link, or none: 404 `not_found`.
@@ -185,7 +238,7 @@ the name an offer's title starts with. Never an e-mail address, never an amount.
 - The requests page itself (§1, §2) is public by its own rule: a requester is told, before
   anything is posted, that the request and their name will be public there.
 
-## 5. Handing the page over to the website
+## 6. Handing the page over to the website
 
 By default the belfry serves the channel's page itself, as HTML: `<domain>/<slug>` and
 `<domain>/<slug>/<thread id>` (webthreads.py). The channel's web setting (the JSON of the
@@ -205,27 +258,33 @@ and the belfry keeps serving the page. A trailing `/` is dropped. With a valid `
   - `GET /<slug>/confirm/<token>`, the confirmation link, stays the belfry's (it posts the
     thread) and then sends the person to their thread on the website;
   - `GET /<slug>/<64-hex thread id>`, a thread link mailed before the hand-over, answers 302 to
-    the thread on the website (its `?k=` moved to the fragment).
+    the thread on the website, in the shape below (its `?k=` moved to the fragment).
 
   So the website must not use those two shapes of path under `/<slug>` for its own pages.
-- Every link the belfry builds for the channel points to the website: the list is `<page>`, a
-  thread is `<page>/thread?id=<id>`, and its author's own link is
-  `<page>/thread?id=<id>#k=<thread key>`. The key rides in the **fragment**, so it is never
-  sent to a server or written in a log; the page reads it and sends it as `X-Thread-Key`
-  (§2, §3). This covers the confirmation mail, the "your thread is open" mail, the hourly mail
+- Every link the belfry builds for the channel points to the website, on the list's own page:
+  the list is `<page>`, a thread is `<page>?id=<number>` (the request's number, §1), and its
+  author's own link is `<page>?id=<number>#k=<thread key>`. The page asks
+  `GET /requests/<number>`. The key rides in the **fragment**, so it is never sent to a server
+  or written in a log; the page reads it and sends it as `X-Thread-Key` (§2–§4). (A thread
+  the belfry has no number for, in a channel that is not the requests channel, keeps its id:
+  `<page>?id=<64 hex>`.) This covers the confirmation mail, the "your thread is open" mail, the hourly mail
   with members' replies, the answer to an offer, and `url` / `my_url` of `GET /offers/<id>`.
 - The channel stays the sales requests channel; `GET /products` keeps `"offers": true`;
   `POST /offers` works as before.
 
 Links stored before the hand-over (`url` / `my_url` of an older offer) keep their old shape;
-they still work through the 302 above. Taking `page` out of the setting gives the HTML pages
-back; links of the `<page>/thread?id=…` shape are then the website's to handle.
+they still work through the 302 above. Links made until 2026-11-19 had the shape
+`<page>/thread?id=<64 hex>#k=…`: the belfry never serves those (the path is the website's), so
+the website keeps answering them, or sends them to `<page>?id=…`. Taking `page` out of the
+setting gives the HTML pages back; links of the `<page>?id=…` shape are then the website's to
+handle. Without a `page`, links are as they were (`<domain>/<slug>/<id>`, `?k=`); that HTML
+page shows an edited title or text with a small "edited" mark.
 
 ## Not in this version
 
 - `program` items.
 - Tickets taken for free on an event's page (no order) are not in the activity; nor are
   membership passes bought as products (only event tickets are).
-- Editing or closing a request from the web; comments by anyone but the author (members answer
-  in the chat).
+- Closing a request from the web; comments by anyone but the author (members answer in the
+  chat); edits of anything but the author's own title, text and comments.
 - Nothing here was run against a live relay or a real website yet.

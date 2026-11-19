@@ -23,7 +23,9 @@ The e-mail half is the shared inbox (mail.py, ``E-mails from anyone``). This is 
   renders the list and the threads there, from the JSON of webrequests.py. The belfry then
   answers no HTML at ``/<slug>`` (only the mailed confirmation link, and old thread links move
   to the page), and every link it builds points to ``<page>`` and
-  ``<page>/thread?id=<id>#k=<key>``.
+  ``<page>?id=<number>#k=<key>``.
+- **Edits** (docs/requests.md §4): the author changes the title, the text or a comment of their
+  own; a kind 1010 by the key that signed the message, as the chat edits a message.
 - **The page** ``<domain>/<slug>`` (two templates, #issues 2026-11-13): a public channel is
   **issues**: like GitHub issues, every thread listed, Open / Closed (the members' label on it in
   the chat), author and their role (admin, member, agent, guest, from outside), replies, last
@@ -269,14 +271,36 @@ def list_url(svc: Services, slug: str, site: dict[str, Any] | None) -> str:
     return (site or {}).get("page") or f"{_public_base(svc)}/{quote(slug)}"
 
 
+def thread_number(svc: Services, site: dict[str, Any], root_id: str) -> int | None:
+    """The thread's short number ("#42", docs/requests.md §1) when its channel is the requests
+    channel: given here as webrequests.py gives it, in the order the threads were made. None
+    for another channel, or when it can't be read."""
+    from . import sales
+
+    try:
+        channel = site["channel"]
+        if not sales.own(svc) or sales.settings(svc).get("requests_channel") != channel:
+            return None
+        roots, _ = _events(svc, channel)
+        ids = [e["id"] for e in sorted(roots, key=lambda e: (e["created_at"], e["id"]))]
+        if root_id not in ids:
+            return None
+        return sales.store(svc).request_numbers(channel, ids).get(root_id)
+    except Exception as exc:  # noqa: BLE001 — the link then names the thread by its id
+        log.warning("webthreads: no number for a thread: %s", type(exc).__name__)
+        return None
+
+
 def thread_url(
     svc: Services, slug: str, site: dict[str, Any] | None, root_id: str, key: str = ""
 ) -> str:
     """A thread's address, with its author's KEY when it is their link. On the website's own
-    page the key rides in the fragment: never sent to a server, never in a log."""
+    page it is the list's page with the request's number (its id when it has none), and the key
+    rides in the fragment: never sent to a server, never in a log."""
     page = (site or {}).get("page")
     if page:
-        return f"{page}/thread?id={root_id}" + (f"#k={key}" if key else "")
+        ref = thread_number(svc, site or {}, root_id) or root_id
+        return f"{page}?id={ref}" + (f"#k={key}" if key else "")
     return f"{_public_base(svc)}/{slug}/{root_id}" + (f"?k={key}" if key else "")
 
 
@@ -356,13 +380,27 @@ def _mailer(svc: Services):
 
 
 # ── reading the channel ────────────────────────────────────────────────────────────────────
+EDIT_KIND = 1010  # the chat's message edits: ``e`` = the message, content = the new text
+
+
 def _events(svc: Services, channel: str) -> tuple[list[dict], list[dict]]:
-    """(root messages, replies) of CHANNEL, without deleted ones."""
+    """(root messages, replies) of CHANNEL, without deleted ones, as they were first written."""
+    roots, replies, _edits = _read(svc, channel)
+    return roots, replies
+
+
+def _read(svc: Services, channel: str) -> tuple[list[dict], list[dict], dict[str, list[dict]]]:
+    """(root messages, replies, edits) of CHANNEL, without deleted ones. Edits: per message, its
+    author's kind 1010 events, oldest first (the chat's rule: only the key that signed a message
+    edits it, the latest counts)."""
     got = _relay(svc)
     if got is None:
-        return [], []
+        return [], [], {}
     relay, sign = got
-    evs = relay.query([{"kinds": [9, 1111, 5], "#h": [channel], "limit": 2000}], sign) or []
+    evs = (
+        relay.query([{"kinds": [9, 1111, 5, EDIT_KIND], "#h": [channel], "limit": 2000}], sign)
+        or []
+    )
     gone = {
         t[1] for e in evs if e["kind"] == 5 for t in e.get("tags", []) if t[0] == "e" and len(t) > 1
     }
@@ -373,7 +411,50 @@ def _events(svc: Services, channel: str) -> tuple[list[dict], list[dict]]:
     replies += [
         e for e in evs if e["kind"] == 9 and _tag(e, "e") and _tag(e, "client") == "belfry-mail-out"
     ]
-    return roots, replies
+    by_id = {e["id"]: e for e in [*roots, *replies]}
+    edits: dict[str, list[dict]] = {}
+    for x in sorted(evs, key=lambda e: (e["created_at"], e["id"])):
+        if x["kind"] != EDIT_KIND or x["id"] in gone:
+            continue
+        target = by_id.get(_tag(x, "e"))
+        if target is not None and target["pubkey"] == x["pubkey"]:
+            edits.setdefault(target["id"], []).append(x)
+    return roots, replies, edits
+
+
+BOLD_LINE = re.compile(r"^\*\*([^\n]+?)\*\*[ \t]*(?:\n|$)")
+
+
+def _apply(e: dict[str, Any], x: dict[str, Any]) -> dict[str, Any]:
+    """E as its edit X says it: X's text, and X's title (its ``subject`` tag; an edit made in
+    the chat has none: the bold first line then, as the thread was posted). Every other tag
+    stays the original's (whose thread, which offer). ``edited_at``: when."""
+    content = x.get("content") or ""
+    was = _tag(e, "subject")
+    subject = _tag(x, "subject")
+    if was and not subject:
+        m = BOLD_LINE.match(content)
+        subject = m.group(1).strip() if m else was
+    tags = [["subject", subject] if t[:1] == ["subject"] and subject else t for t in e["tags"]]
+    if subject and not was:
+        tags.append(["subject", subject])
+    return {**e, "content": content, "tags": tags, "edited_at": x["created_at"]}
+
+
+def edited(
+    e: dict[str, Any],
+    edits: dict[str, list[dict]],
+    site: dict[str, Any] | None = None,
+    mine: bool = True,
+) -> dict[str, Any]:
+    """E as its author's latest edit says it (``edited_at`` set), or E itself. For anyone but
+    the author (MINE false) only the edits made while the channel was public count, as for
+    everything else on the page."""
+    out = e
+    for x in edits.get(e["id"], []):
+        if mine or site is None or public_at(site, x["created_at"]):
+            out = _apply(out, x)
+    return out
 
 
 def _root_of(e: dict[str, Any]) -> str:
@@ -562,9 +643,9 @@ def list_page(
         if site.get("posts") in ("", None, "request"):
             body += signin + _form(slug, error, values, "Send a request", "Send")
     if site.get("periods"):
-        roots, replies = _events(svc, site["channel"])
+        roots, replies, edits = _read(svc, site["channel"])
         # only what was posted while the channel was public (never retroactive)
-        roots = [e for e in roots if public_at(site, e["created_at"])]
+        roots = [edited(e, edits, site, False) for e in roots if public_at(site, e["created_at"])]
         replies = [r for r in replies if public_at(site, r["created_at"])]
         count: dict[str, int] = {}
         last: dict[str, int] = {}
@@ -639,12 +720,13 @@ def thread_page(
 ) -> HTMLResponse:
     from . import followers
 
-    roots, replies = _events(svc, site["channel"])
+    roots, replies, edits = _read(svc, site["channel"])
     root = next((e for e in roots if e["id"] == root_id), None)
     if root is None:
         return _page("Not found", "<h1>No such thread</h1>", 404)
     owner = _owner(svc, root)
     mine = bool(owner) and hmac.compare_digest(k or "", thread_key(svc, root_id, owner))
+    root = edited(root, edits, site, mine)
     if not public_at(site, root["created_at"]) and not mine:
         return _page(
             "Private thread",
@@ -653,7 +735,7 @@ def thread_page(
         )
     comments = sorted(
         (
-            r
+            edited(r, edits, site, mine)
             for r in replies
             if _root_of(r) == root_id and (mine or public_at(site, r["created_at"]))
         ),
@@ -663,8 +745,9 @@ def thread_page(
 
     def card(e: dict[str, Any]) -> str:
         who, role = _author(svc, e, names, roles)
+        mark = ' · <span class="wt-edited">edited</span>' if e.get("edited_at") else ""
         return (
-            f'<div class="wt-c"><div class="h"><b>{E(who)}</b>{_role(role)} · {_ago(e["created_at"])}</div>'
+            f'<div class="wt-c"><div class="h"><b>{E(who)}</b>{_role(role)} · {_ago(e["created_at"])}{mark}</div>'
             f'<div class="b">{followers.text_html(_body(e))}</div></div>'
         )
 
@@ -803,12 +886,13 @@ def start_thread(
     extra: list[list[str]] | None = None,
     hook: dict[str, str] | None = None,
     public_note: bool = False,
+    subject: str = "",
 ) -> str | None:
     """A thread from outside, waiting for its author's address: the confirmation link is mailed;
     nothing is posted before it is pressed. EXTRA: more tags on the message (sales.py's offers);
     HOOK ``{"kind": "offer", "id"}``: told when the thread is posted. PUBLIC_NOTE: the mail says
-    the thread and the name will be public, the address never. Returns the token, or None when
-    the limits say no."""
+    the thread and the name will be public, the address never. SUBJECT: the confirmation mail's own
+    subject (sales.py's requests). Returns the token, or None when the limits say no."""
     from . import mail
 
     email = email.strip().lower()
@@ -839,7 +923,7 @@ def start_thread(
         )
     _mailer(svc).send(
         email,
-        f"Confirm your thread: {title[:120]}",
+        subject or f"Confirm your thread: {title[:120]}",
         lines,
         (link, "Confirm and open the thread"),
         "If you did not ask for this, ignore this mail: nothing is posted without your confirmation.",
@@ -946,7 +1030,7 @@ def add_comment(
     """The author's comment under their own thread: by the key of their link (K), or PROVEN
     another way by the caller (webrequests.py: the key that made the offer). "ok", "empty",
     "not_author", "too_many" or "unavailable" (the signer)."""
-    from . import community, mail
+    from . import mail
 
     roots, _ = _events(svc, site["channel"])
     root = next((e for e in roots if e["id"] == root_id), None)
@@ -957,7 +1041,7 @@ def add_comment(
         return "empty"
     if mail._limited("web-comment:" + owner, 20, 3600):
         return "too_many"
-    relay, api_sign = _relay(svc)
+    relay, _api_sign = _relay(svc)
     author = root["pubkey"]
     tags = [
         ["h", site["channel"]],
@@ -969,14 +1053,10 @@ def add_comment(
         ["p", author],
         ["client", TAG],
     ]
-    sign = api_sign
-    if owner == author:  # their own account: the comment is theirs, signed by the signer
-        pid = _partner_of_key(svc, author)
-        found = community.member_signer(svc, pid) if pid else None
-        if found is None:
-            return "unavailable"
-        sign = found[1]
-    else:  # an older card: the groups key writes for the address
+    sign = _author_sign(svc, root, owner)
+    if sign is None:
+        return "unavailable"
+    if owner != author:  # an older card: the groups key writes for the address
         tags += [["mail-from", owner], ["mail-name", _tag(root, "mail-name")]]
     event = sign({"kind": 1111, "created_at": int(time.time()), "content": text, "tags": tags})
     relay.publish(event, sign)
@@ -984,6 +1064,112 @@ def add_comment(
 
     webrequests.forget()  # the JSON of this thread is kept a few seconds: not across this
     return "ok"
+
+
+def _author_sign(svc: Services, root: dict[str, Any], owner: str) -> Any:
+    """What signs for the thread's author: the signer for their own account (the thread is by
+    their key), the groups key for an older card (it wrote the card for their address). None
+    when the signer can't."""
+    from . import community
+
+    if owner != root["pubkey"]:
+        return _relay(svc)[1]
+    pid = _partner_of_key(svc, root["pubkey"])
+    found = community.member_signer(svc, pid) if pid else None
+    return found[1] if found is not None else None
+
+
+def own_comment(svc: Services, root: dict[str, Any], c: dict[str, Any]) -> bool:
+    """Whether the reply C is by the thread's author: signed by the key that signed the thread
+    and, on an older card (the groups key writes for everyone from outside), for the same
+    address."""
+    owner = _owner(svc, root)
+    if not owner or c["kind"] != 1111 or c["pubkey"] != root["pubkey"]:
+        return False
+    return owner == root["pubkey"] or _tag(c, "mail-from").lower() == owner.lower()
+
+
+EDITS_PER_HOUR = 20
+# tags an edit never carries over: the three it sets itself, the title (set again), and the
+# buttons (docs/actions.md: an edit never changes them)
+EDIT_DROPS = ("h", "e", "k", "subject", "button")
+
+
+def edit(
+    svc: Services,
+    site: dict[str, Any],
+    root_id: str,
+    k: str = "",
+    proven: bool = False,
+    title: str | None = None,
+    body: str | None = None,
+    comment_id: str = "",
+    text: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """The author's edit of their thread (TITLE and / or BODY) or of one of their own comments
+    (COMMENT_ID, TEXT), proven as for a comment. Published as the chat reads edits: a kind 1010
+    in the channel by the key that signed the message, ``e`` = the message, ``k`` = its kind,
+    the new text as content; the message's other tags ride along, the thread's title in
+    ``subject`` and as the bold first line (where the page and the chat read it). The first
+    version and every edit stay on the relay. → ("ok", {"title", "body"} as they are now),
+    ("same", …) when nothing changes (no event), or "not_author", "unknown", "not_yours",
+    "too_many", "unavailable"."""
+    roots, replies, edits = _read(svc, site["channel"])
+    root = next((e for e in roots if e["id"] == root_id), None)
+    owner = _owner(svc, root)
+    if root is None or not owner or not (proven or is_author(svc, root, k)):
+        return "not_author", {}
+    now_root = edited(root, edits)
+    if comment_id:
+        target = next(
+            (r for r in replies if r["id"] == comment_id and _root_of(r) == root_id), None
+        )
+        if target is None:
+            return "unknown", {}
+        if not own_comment(svc, root, target):
+            return "not_yours", {}
+        content = text or ""
+        same = edited(target, edits).get("content") == content
+        subject = ""
+    else:
+        target = root
+        subject = title if title is not None else _tag(now_root, "subject")
+        new_body = body if body is not None else _body(now_root)
+        same = subject == _tag(now_root, "subject") and new_body == _body(now_root)
+        content = f"**{subject}**\n\n{new_body}" if subject else new_body
+    now = {"title": subject, "body": new_body} if not comment_id else {}
+    if same:
+        return "same", now
+    from . import mail
+
+    if mail._limited("web-edit:" + root_id, EDITS_PER_HOUR, 3600):
+        return "too_many", {}
+    sign = _author_sign(svc, root, owner)
+    if sign is None:
+        return "unavailable", {}
+    tags = [
+        ["h", site["channel"]],
+        ["e", target["id"]],
+        ["k", str(target["kind"])],
+        *([["subject", subject]] if subject else []),
+        *(t for t in target.get("tags", []) if t and t[0] not in EDIT_DROPS),
+    ]
+    # after the message and after its last edit, whatever the clocks: the latest counts
+    last = max([target["created_at"], *(x["created_at"] for x in edits.get(target["id"], []))])
+    event = sign(
+        {
+            "kind": EDIT_KIND,
+            "created_at": max(int(time.time()), last + 1),
+            "content": content,
+            "tags": tags,
+        }
+    )
+    relay, _api_sign = _relay(svc)
+    relay.publish(event, sign)
+    from . import webrequests
+
+    webrequests.forget()
+    return "ok", now
 
 
 # ── members' replies, mailed to the author from outside ───────────────────────────────────
@@ -999,8 +1185,9 @@ def notify(svc: Services, now: int | None = None) -> int:
     # address → [(slug, site, root, replies)]
     news: dict[str, list[tuple[str, dict[str, Any], dict[str, Any], list[dict]]]] = {}
     for slug, site in sites(svc).items():
-        roots, replies = _events(svc, site["channel"])
-        by_id = {e["id"]: e for e in roots if _tag(e, "client") == TAG}
+        roots, replies, edits = _read(svc, site["channel"])
+        # the thread by the title it has now (its author may have edited it)
+        by_id = {e["id"]: edited(e, edits) for e in roots if _tag(e, "client") == TAG}
         new: dict[str, list[dict]] = {}
         for r in replies:
             root = by_id.get(_root_of(r))
@@ -1110,7 +1297,8 @@ def install(app: FastAPI) -> None:
             if len(parts) == 2 and re.match(r"^[0-9a-f]{64}$", parts[1]) and m in ("GET", "HEAD"):
                 k = request.query_params.get("k", "")
                 k = k if re.match(r"^[0-9a-f]{24}$", k) else ""
-                return RedirectResponse(thread_url(s, slug, site, parts[1], k), 302)
+                there = await run_in_threadpool(thread_url, s, slug, site, parts[1], k)
+                return RedirectResponse(there, 302)
             return await call_next(request)
         try:
             if len(parts) == 1 and m in ("GET", "HEAD"):

@@ -44,6 +44,7 @@ import secrets
 import sqlite3
 import threading
 import time
+import unicodedata
 from collections import defaultdict, deque
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
@@ -2604,6 +2605,8 @@ def offer_answer(svc: Services, f: dict[str, Any], mine: bool = False) -> dict[s
         out.update(
             ticket=f["ticket"], event=f["event"], event_link=ticketsales.link(svc, f["event"])
         )
+    if f.get("title"):
+        out["title"] = f["title"]  # the thread's title: the person's own, or the generated one
     if f.get("url"):
         out["url"] = f["url"]
     if mine and f.get("my_url"):
@@ -2660,6 +2663,35 @@ def offer_days(data: dict[str, Any]) -> list[str] | None:
     return sorted(set(v))
 
 
+TITLE_MAX = 120
+SUBJECT_TITLE_MAX = 80
+
+
+def request_title(v: Any) -> str:
+    """A request's title as its author wrote it: one line, control characters out, trimmed, 1
+    to 120 characters; anything else 422."""
+    from .holder_invites import ApiError
+
+    bad = ApiError(422, "invalid", f"title: one line, 1 to {TITLE_MAX} characters.")
+    if not isinstance(v, str):
+        raise bad
+    line = "".join(
+        " " if ch.isspace() else ch
+        for ch in v
+        if ch.isspace() or not unicodedata.category(ch).startswith("C")
+    )
+    title = " ".join(line.split())
+    if not 1 <= len(title) <= TITLE_MAX:
+        raise bad
+    return title
+
+
+def title_in_subject(title: str) -> str:
+    """A title in a mail's subject: cut at 80 characters."""
+    title = " ".join(str(title or "").split())
+    return title if len(title) <= SUBJECT_TITLE_MAX else title[:SUBJECT_TITLE_MAX].rstrip() + "…"
+
+
 def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> dict[str, Any]:
     """POST /offers: a public request, posted once its author confirmed the mailed link."""
     from . import webthreads
@@ -2708,6 +2740,7 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
     public_name = public_name_flag(data)
     label = offer_label(data)
     days = offer_days(data)
+    own_title = request_title(data["title"]) if data.get("title") is not None else None
     st = store(svc)
     mine = [f for f in st.offers(key) if f["state"] in ("confirm", "open")]
     if (
@@ -2722,6 +2755,8 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         title = f"{name}: {percent}% off {p['name']}" + (f", {day}" if day else "")
     else:
         title = f"{name}: {percent}% off {p['name']} in kind"
+    if own_title:
+        title = own_title  # the person's own words are the thread's title, as written
     extra = [
         ["offer", fid],
         ["ticket", wanted.t.d] if wanted is not None else ["product", p["id"]],
@@ -2744,6 +2779,7 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         extra=extra,
         hook={"kind": "offer", "id": fid},
         public_note=True,
+        subject=f"Confirm your request: {title_in_subject(title)}",
     )
     if token is None:
         raise ApiError(429, "too_many", "Too many requests in a short time: try in an hour.")
@@ -2755,6 +2791,8 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         "kind": kind,
         "name": name,
         "email": email,
+        "title": title,
+        "own_title": bool(own_title),
         "offer": text,
         "percent": percent,
         "erase_after_event": erase,
@@ -2781,6 +2819,32 @@ def offer_posted(svc: Services, fid: str, event: dict[str, Any], url: str, my_ur
     f.update(state="open", card=event["id"], url=url, my_url=my_url)
     st.put_offer(f)
     _requests_changed()
+
+
+def offer_edited(svc: Services, fid: str, title: str | None, body: str | None) -> None:
+    """webrequests: the author edited their request's title or text (docs/requests.md §4). The
+    offer says what the thread says now; a decision made before stays (the console shows
+    "edited after approval")."""
+    st = store(svc)
+    f = st.offer(fid)
+    if f is None:
+        return
+    if title is not None:
+        f["title"] = title
+    if body is not None:
+        f["offer"] = body
+    f["edited_at"] = iso(now())
+    st.put_offer(f)
+
+
+def edited_after_decision(f: dict[str, Any]) -> bool:
+    """Whether the request's title or text changed after the organisers' answer."""
+    if f.get("state") not in ("accepted", "declined") or not f.get("edited_at"):
+        return False
+    try:
+        return parse_iso(f["edited_at"]) > parse_iso(f["decided_at"])
+    except (KeyError, ValueError, TypeError):
+        return False
 
 
 def _requests_changed() -> None:

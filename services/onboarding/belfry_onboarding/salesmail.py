@@ -348,7 +348,11 @@ def _offer_answer(svc: Services, ref: str, address: str) -> Mail | None:
         "mail, and works only for you."
     )
     button = (f["my_url"], "Open your request") if f.get("my_url") else None
-    return f"Your {thanks} to {name}", lines, button, []
+    subject = f"Your {thanks} to {name}"
+    if f.get("title"):  # short, and says which request (older offers kept no title)
+        answer = "is approved" if f.get("code") else "has an answer"
+        subject = f"Your request {answer}: {sales.title_in_subject(f['title'])}"
+    return subject, lines, button, []
 
 
 BUILD = {

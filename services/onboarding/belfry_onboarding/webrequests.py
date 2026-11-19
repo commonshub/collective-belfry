@@ -8,7 +8,9 @@ one thing an author does from the web, a comment under their own request.
 
 - ``GET /api/v1/requests``: the threads of the sales requests channel (sales.requests_site).
 - ``GET /api/v1/requests/<id or number>``: one thread with its timeline; ``me`` for its author.
-- ``POST /api/v1/requests/<id>/comments``: the author's comment.
+- ``POST /api/v1/requests/<id or number>/comments``: the author's comment.
+- ``POST /api/v1/requests/<id or number>/edit``: the author's edit of the title, the text or
+  one of their own comments (a kind 1010, as the chat edits a message).
 - ``GET /api/v1/events/<link>/activity``: tickets bought and requests, newest first.
 
 Reading and permissions are webthreads.py's (the HTML pages of the same channel): what was
@@ -104,7 +106,7 @@ def _site(svc: Services) -> tuple[str, dict[str, Any]]:
 
 def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
     channel = site["channel"]
-    roots, replies = webthreads._events(svc, channel)
+    roots, replies, edits = webthreads._read(svc, channel)
     labels = webthreads._labels(svc, channel)
     roots.sort(key=lambda e: (e["created_at"], e["id"]))
     st = sales.store(svc)
@@ -125,6 +127,7 @@ def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
                 "number": numbers[root["id"]],
                 "offer": offers.get(root["id"]),
                 "replies": by_root.get(root["id"], []),
+                "edits": edits,
                 "labels": labels.get(root["id"], []),
                 "public": webthreads.public_at(site, root["created_at"]),
             }
@@ -174,10 +177,16 @@ def _is_decision(snap: dict[str, Any], e: dict[str, Any]) -> bool:
     return e["pubkey"] == snap["gk"] and webthreads._tag(e, "client") == "belfry-sales"
 
 
+def _root(snap: dict[str, Any], t: dict[str, Any], mine: bool = False) -> dict[str, Any]:
+    """The thread's opening message as it reads now (its author's latest edit)."""
+    return webthreads.edited(t["root"], t["edits"], snap["site"], mine)
+
+
 def _comments(snap: dict[str, Any], t: dict[str, Any], mine: bool = False) -> list[dict]:
+    """The thread's comments as they read now, oldest first."""
     site = snap["site"]
     return [
-        r
+        webthreads.edited(r, t["edits"], site, mine)
         for r in t["replies"]
         if not (t["offer"] and _is_decision(snap, r))
         and (mine or webthreads.public_at(site, r["created_at"]))
@@ -194,7 +203,7 @@ def _state(t: dict[str, Any]) -> str:
 
 
 def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = False) -> dict:
-    root, f = t["root"], t["offer"]
+    root, f = _root(snap, t, mine), t["offer"]
     comments = _comments(snap, t, mine)
     state = _state(t)
     decided = _unix(f.get("decided_at")) if f and state in ("approved", "declined") else None
@@ -212,6 +221,7 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
         "approved_by": {"name": _name(f.get("decided_by"))} if state == "approved" else None,
         "author": _person(svc, snap, root),
         "created_at": root["created_at"],
+        "edited_at": root.get("edited_at"),  # the title or the text, by its author
         "comments": len(comments),
         "last_at": max([root["created_at"], decided or 0, *(c["created_at"] for c in comments)]),
     }
@@ -219,14 +229,59 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
 
 def _timeline(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool) -> list[dict]:
     root, f = t["root"], t["offer"]
+    site = snap["site"]
     out: list[dict[str, Any]] = []
+    author = {"name": _person(svc, snap, root)["name"]}
+
+    def versions(e: dict[str, Any]) -> Any:
+        """(the edit, E before it, E after it) for each edit of E that shows."""
+        was = e
+        for x in t["edits"].get(e["id"], []):
+            if mine or webthreads.public_at(site, x["created_at"]):
+                now = webthreads._apply(was, x)
+                yield x, was, now
+                was = now
+
+    for x, was, now in versions(root):
+        if webthreads._title(was) != webthreads._title(now):
+            out.append(
+                {
+                    "type": "edited",
+                    "field": "title",
+                    "by": author,
+                    "at": x["created_at"],
+                    "title": webthreads._title(now),
+                }
+            )
+        if webthreads._body(was) != webthreads._body(now):
+            out.append({"type": "edited", "field": "body", "by": author, "at": x["created_at"]})
+    first = {r["id"]: r for r in t["replies"]}  # as they were first written
     for c in _comments(snap, t, mine):
         who = _person(svc, snap, c)
         if _same_author(snap, root, c):
             who["role"] = "author"
-        out.append(
-            {"type": "comment", "author": who, "at": c["created_at"], "text": webthreads._body(c)}
-        )
+        entry = {
+            "type": "comment",
+            "id": c["id"],
+            "author": who,
+            "at": c["created_at"],
+            "edited_at": c.get("edited_at"),
+            "text": webthreads._body(c),
+        }
+        if mine and webthreads.own_comment(svc, root, c):
+            entry["mine"] = True  # the author may edit it (POST …/edit)
+        out.append(entry)
+        for x, was, now in versions(first[c["id"]]):
+            if was.get("content") != now.get("content"):
+                out.append(
+                    {
+                        "type": "edited",
+                        "field": "comment",
+                        "by": {"name": who["name"]},
+                        "at": x["created_at"],
+                        "comment": c["id"],
+                    }
+                )
     if f and f["state"] in ("accepted", "declined"):
         entry: dict[str, Any] = {
             "type": "approved" if f["state"] == "accepted" else "declined",
@@ -272,7 +327,7 @@ def listing(svc: Services, state: str, q: str, before: int | None, limit: int) -
     for t in snap["threads"]:
         if not t["public"]:
             continue
-        root = t["root"]
+        root = _root(snap, t)
         if needle and needle not in fold(webthreads._title(root) + "\n" + webthreads._body(root)):
             continue
         rows.append(item(svc, snap, t))
@@ -343,7 +398,7 @@ def detail(svc: Services, ref: str, signer: str | None, thread_key: str) -> dict
     if t is None or not (t["public"] or mine):
         raise ApiError(404, "unknown", "No such request.")
     out = item(svc, snap, t, mine)
-    out["body"] = webthreads._body(t["root"])
+    out["body"] = webthreads._body(_root(snap, t, mine))
     out["timeline"] = _timeline(svc, snap, t, mine)
     if mine:
         out["me"] = {"author": True}
@@ -368,7 +423,7 @@ def comment(svc: Services, ref: str, signer: str | None, thread_key: str, text: 
     from .holder_invites import ApiError
 
     snap = snapshot(svc)
-    t = _find(snap, ref) if ID_RE.match(ref) else None
+    t = _find(snap, ref)
     if t is None:
         raise ApiError(404, "unknown", "No such request.")
     by_offer = bool(signer and t["offer"] and t["offer"].get("key") == signer)
@@ -386,6 +441,69 @@ def comment(svc: Services, ref: str, signer: str | None, thread_key: str, text: 
         raise ApiError(429, "too_many", "Too many comments in a short time.")
     if got != "ok":
         raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+
+
+def edit(
+    svc: Services, ref: str, signer: str | None, thread_key: str, data: dict[str, Any]
+) -> dict[str, Any]:
+    """POST /requests/<id or number>/edit: the author changes the title and / or the text of
+    their request, or one of their own comments."""
+    from . import checkin
+    from .holder_invites import ApiError
+
+    snap = snapshot(svc)
+    t = _find(snap, ref)
+    if t is None:
+        raise ApiError(404, "unknown", "No such request.")
+    by_offer = bool(signer and t["offer"] and t["offer"].get("key") == signer)
+    if not by_offer and not _proven(svc, t, None, thread_key):
+        raise ApiError(403, "not_author", "Only the request's author edits it.")
+    title = body = text = None
+    comment_id = ""
+    if "comment" in data or "text" in data:
+        comment_id, text = data.get("comment"), data.get("text")
+        if set(data) - {"comment", "text"}:
+            raise ApiError(422, "invalid", "Send the title and the body, or a comment: not both.")
+        if not isinstance(comment_id, str) or not ID_RE.match(comment_id):
+            raise ApiError(404, "unknown", "No such comment.")
+        text = text.strip() if isinstance(text, str) else ""
+        if not text or len(text) > webthreads.COMMENT_MAX:
+            raise ApiError(422, "invalid", f"text: 1 to {webthreads.COMMENT_MAX} characters.")
+    else:
+        if data.get("title") is not None:
+            title = sales.request_title(data["title"])
+        if data.get("body") is not None:
+            body = data["body"].strip() if isinstance(data["body"], str) else ""
+            if not body or len(body) > webthreads.COMMENT_MAX:
+                raise ApiError(422, "invalid", f"body: 1 to {webthreads.COMMENT_MAX} characters.")
+        if title is None and body is None:
+            raise ApiError(422, "invalid", "Send a title, a body, or a comment and its text.")
+    checkin.refuse_archived(svc, snap["site"]["channel"])
+    got, now = webthreads.edit(
+        svc,
+        snap["site"],
+        t["root"]["id"],
+        thread_key if not by_offer else "",
+        by_offer,
+        title,
+        body,
+        comment_id or "",
+        text,
+    )
+    if got == "not_author":
+        raise ApiError(403, "not_author", "Only the request's author edits it.")
+    if got == "unknown":
+        raise ApiError(404, "unknown", "No such comment.")
+    if got == "not_yours":
+        raise ApiError(403, "not_yours", "Only your own comments can be edited here.")
+    if got == "too_many":
+        raise ApiError(429, "too_many", "Too many edits in a short time.")
+    if got not in ("ok", "same"):
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+    if got == "ok" and t["offer"] and not comment_id:
+        # the offer says what its thread says now (the console, the mails' subjects)
+        sales.offer_edited(svc, t["offer"]["id"], now["title"] if title is not None else None, body)
+    return {"ok": True, "changed": got == "ok"}
 
 
 # ── an event's public activity ──────────────────────────────────────────────────────────────
@@ -478,7 +596,7 @@ def _read_activity(svc: Services, ev: events.Event) -> dict[str, Any]:
         if f and f.get("erase_after_event") and over:
             continue
         consent = bool(f and f.get("public_name"))
-        title = webthreads._title(root)
+        title = webthreads._title(_root(snap, t))
         if f and not consent and title.startswith(f"{f['name']}: "):
             title = title[len(f["name"]) + 2 :]  # an offer's title starts with its author's name
         ref = {
@@ -620,9 +738,8 @@ def register(app: FastAPI) -> None:
         out = await _run(detail, s, ref, signer, key)
         return answer(out, NO_STORE)  # the same address answers its author with more
 
-    @app.post(API + "/requests/{ref}/comments")
-    async def requests_comment(request: Request, ref: str) -> JSONResponse:
-        _allow(request)
+    async def _posted(request: Request) -> tuple[Any, str | None, str, dict[str, Any]]:
+        """(services, the NIP-98 signer if any, the thread key if any, the JSON body)."""
         s = request.app.state.services
         body = await request.body()
         signer = None
@@ -641,9 +758,21 @@ def register(app: FastAPI) -> None:
             data = None
         if not isinstance(data, dict):
             raise ApiError(400, "invalid_json", "Send a JSON object.")
-        key = request.headers.get("x-thread-key") or ""
+        return s, signer, request.headers.get("x-thread-key") or "", data
+
+    @app.post(API + "/requests/{ref}/comments")
+    async def requests_comment(request: Request, ref: str) -> JSONResponse:
+        _allow(request)
+        s, signer, key, data = await _posted(request)
         await _run(comment, s, ref, signer, key, data.get("text"))
         return answer({"ok": True}, NO_STORE, 201)
+
+    @app.post(API + "/requests/{ref}/edit")
+    async def requests_edit(request: Request, ref: str) -> JSONResponse:
+        _allow(request)
+        s, signer, key, data = await _posted(request)
+        out = await _run(edit, s, ref, signer, key, data)
+        return answer(out, NO_STORE)
 
     @app.get(API + "/events/{link}/activity")
     async def event_activity(request: Request, link: str) -> JSONResponse:
@@ -657,4 +786,4 @@ def register(app: FastAPI) -> None:
         return answer(out, SHORT)
 
 
-__all__ = ["register", "forget", "snapshot", "listing", "detail", "comment", "activity"]
+__all__ = ["register", "forget", "snapshot", "listing", "detail", "comment", "edit", "activity"]

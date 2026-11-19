@@ -127,7 +127,7 @@ buyer's sales endpoints: `GET /products`, `POST /codes/check`, `POST /checkout`,
 (`GET, POST, PUT`; `Authorization, Content-Type, X-Thread-Key`), never
 `Access-Control-Allow-Credentials`:
 these calls are signed per request (NIP-98) by the page's own key, no cookie is involved.
-`POST /codes`, `POST /offers/<id>/decide` (admins), `POST /requests/<id>/comments` (a request's
+`POST /codes`, `POST /offers/<id>/decide` (admins), `POST /requests/<id>/comments` and `/edit` (a request's
 author, from the real site) and every other endpoint refuse the
 preview's preflight (403) and answer without CORS headers.
 
@@ -308,7 +308,7 @@ belfry's **requests channel**: a channel whose web page is on and public (webthr
 answers 409 `no_requests_channel` and `GET /products` says `"offers": false`.
 
 `POST /offers` — NIP-98 (any key). `{"product" | "ticket", "name", "email", "offer": "…",
-"percent", "kind"?, "erase_after_event"?, "public_name"?, "label"?, "days"?}` (exactly one of
+"percent", "title"?, "kind"?, "erase_after_event"?, "public_name"?, "label"?, "days"?}` (exactly one of
 `product` and `ticket`, else 422 `invalid`; `ticket` = an event ticket's d tag: §10 "A ticket
 against a contribution"; `kind`: `in_kind` (the default) or `sponsored`, anything else 422
 `invalid`: what the public list says the request is, nothing more; `percent` 50–100, 50 when
@@ -318,9 +318,10 @@ default; `erase_after_event` as for `/checkout`: a JSON boolean or 422 `invalid`
 offer, carried to the order made with the offer's code; `public_name` as for `/checkout`: the
 requester's name may show on the event's activity; `label`: `volunteer` | `food` | `workshop` |
 `other`; `days`: up to 31 dates `YYYY-MM-DD`, kept sorted, each once; anything else for
-`label` or `days` is 422 `invalid`) → 201
+`label` or `days` is 422 `invalid`; `title`: the request's title in the person's own words,
+see below) → 201
 `{"offer": "f_…", "state": "confirm", "kind", "product", "erase_after_event", "public_name",
-"label", "days"}` (`product` is null for a ticket's offer, which has `ticket`, `event` and
+"label", "days", "title"}` (`product` is null for a ticket's offer, which has `ticket`, `event` and
 `event_link` instead). `label` and `days` are also tags on the thread's message (`["offer-label", label]`,
 `["offer-days", day, …]`); the thread's HTML page and the console show them. It goes through the requests page's own path for a thread
 from outside: the confirmation mail must be answered (the address must be theirs) before
@@ -333,9 +334,24 @@ belfry's admins (docs/actions.md, `belfry:offer-decide`: 50%, 75%, 100%, Decline
 answer in the thread in the chat; the requester comments with their link; replies are mailed
 back to them (webthreads.py).
 
+**The person's own title** (2026-11-19). `"title"` (optional): one line, 1–120 characters once
+trimmed (line breaks and tabs become spaces, control characters are taken out); longer, empty
+or not a string: 422 `invalid`. When given it **is** the thread's title, as written: no name,
+percent, product or ticket is added to it (they stay the offer's own fields and the message's
+tags: `percent`, `product` / `ticket`, `offer-kind`, `offer-label`, `offer-days`; the
+thread's text is the offer's text, as before). Without it the generated title above stays.
+The answers of `POST /offers` and `GET /offers/<id>` carry `title` (offers made before this
+have none), and so do the requests' JSON ([requests.md](requests.md)). The mails' subjects
+name the request and stay short (the title is cut at 80 characters with "…"): "Confirm your
+request: <title>", then "Your request is approved: <title>" (declined: "Your request has an
+answer: <title>"). The author can change the title and the text later
+([requests.md](requests.md) §4): the offer then says what the thread says (`title`, and the
+text the console shows); an approval given before stays, and the console's row says "edited
+after approval".
+
 `GET /offers/<id>` by the same key → `{"offer", "state": "confirm" | "open" | "accepted" |
 "declined", "kind", "product", "ticket"?, "event"?, "event_link"?, "erase_after_event",
-"public_name", "label", "days", "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
+"public_name", "label", "days", "title"?, "url"?, "my_url"?, "percent"?}`: `url` is the public thread, `my_url` the
 requester's own link (to comment), only in this answer and in their mail.
 
 The requests as JSON for the community's own website (the list, one thread with its timeline,
@@ -653,8 +669,9 @@ products:
   not be on: a request can be made before sales open. `"kind": "sponsored"` marks a request
   for a sponsored pass (shown as such in `GET /requests`, the console and the activity's
   stats; nothing else differs).
-- The thread's title: "<name>: <percent>% off <ticket> · <event>", followed by ", <date>" when
-  the event is on one day (written as the event's page writes dates). Its tags: `["offer",
+- The thread's title, unless the person gave their own (`title`, §4): "<name>: <percent>% off
+  <ticket> · <event>", followed by ", <date>" when the event is on one day (written as the
+  event's page writes dates). Its tags: `["offer",
   id]`, `["ticket", <d>]` (instead of `product`), `["percent", n]`, `["p", key]`,
   `["offer-kind", "sponsored"]` when it is one, and the admins' buttons.
 - The offer keeps `ticket` and `event` (the event's d); `GET /offers/<id>` gives them with

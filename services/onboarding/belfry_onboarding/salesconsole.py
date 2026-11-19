@@ -340,6 +340,11 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             act = (
                 f"<p>{E(f['state'])}"
                 + (f", {f.get('decided_percent')}% off" if f.get("decided_percent") else "")
+                + (
+                    ' · <span class="hint">edited after approval</span>'
+                    if f["state"] == "accepted" and sales.edited_after_decision(f)
+                    else ""
+                )
                 + "</p>"
             )
         chat = sales.offer_chat_link(svc, f)
@@ -354,7 +359,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             if x
         )
         orow += f"""<div class="card"><p><b>{E(f["name"])}</b> · <span class="hint">{E(f["email"])} · {E(sales.offer_what(f))} · asks {f["percent"]}% off{more} · {E(f["created"][:10])}</span>{link}</p>
-<p>{E(f["offer"])}</p>{act}</div>"""
+{f"<p><b>{E(f['title'])}</b></p>" if f.get("own_title") else ""}<p>{E(f["offer"])}</p>{act}</div>"""
     chans = sales.public_channels(svc)
     current = st.get("requests_channel") or ""
     if chans:
