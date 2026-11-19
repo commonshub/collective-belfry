@@ -14,6 +14,7 @@ import { PersonPlusIcon } from './icons'
 import { useVersion } from '../core/store'
 import { Avatar, back } from './common'
 import { useCommunityName } from './community'
+import { me } from '../core/sync'
 import { openProfile } from './Profile'
 import { RequestSections } from './Requests'
 import { membersName, placesOn } from './Places'
@@ -56,7 +57,7 @@ export function MembersDirectory() {
             {m.agents.map((a) => (
               <button key={a.pubkey} className="dir-row agent" onClick={() => openProfile(a.pubkey)}>
                 <Avatar pubkey={a.pubkey} size={28} />
-                <span className="t"><b>{nameOf(a.pubkey, a.name)}</b><small>🤖 {m.shown}'s agent</small></span>
+                <span className="t"><b>{nameOf(a.pubkey, a.name)}</b><small>🤖 {m.pubkey === me() ? 'Your agent' : `${m.shown}'s agent`}</small></span>
               </button>
             ))}
           </div>

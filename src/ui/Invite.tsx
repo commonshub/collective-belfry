@@ -230,7 +230,7 @@ function InviteMember({ id }: { id: string }) {
   }, [words]) // eslint-disable-line react-hooks/exhaustive-deps
   const SAID: Record<string, string> = { admitted: 'Added · link sent', asked: 'Link sent · they apply', sent: 'Link sent', guest: 'Added as a guest' }
   // what someone is, when not a plain member: a member's agent, or a guest of another channel
-  const kind = (pk: string) => { const o = agentOwner(pk); return o ? `${displayName(o)}'s agent · ` : isGuest(pk) ? (isAgent(pk) ? 'Agent, a guest · ' : 'Guest · ') : '' }
+  const kind = (pk: string) => { const o = agentOwner(pk); return o ? (o === me() ? 'Your agent · ' : `${displayName(o)}'s agent · `) : isGuest(pk) ? (isAgent(pk) ? 'Agent, a guest · ' : 'Guest · ') : '' }
   return (
     <div className="invite-member">
       <label className="field" style={{ marginBottom: 6 }}><span>Invite someone already in the community</span>
