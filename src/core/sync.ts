@@ -6,7 +6,7 @@ import { ACCESS_KINDS, BELFRY, CLIENT_TAG, PLACE, getBackend } from '../config'
 import type { Signer } from './auth'
 import { GUEST_MODE, askToJoin, reading } from './guestmode'
 import { db, type Attachment, type OutboxItem, type Target } from './db'
-import { addEvents, all, dropOutbox, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
+import { addEvents, all, dropOutbox, hasEvent, latestCreatedAt, outboxItems, putOutbox, setRelay, setStatus, status } from './store'
 
 // Offline first: every write lands in the outbox (IndexedDB) and shows in the UI
 // at once. A flush loop signs, uploads attachments and publishes when it can.
@@ -370,7 +370,7 @@ async function relay(target: Target): Promise<Relay> {
   r._onauth = () => {
     setRelay(url, 'auth')
     r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-      .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = true; resubscribe(target) })
+      .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = !replayed[target]; resubscribe(target) })
       .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
   }
   r.onclose = () => {
@@ -412,7 +412,7 @@ async function publish(target: Target, ev: NostrEvent) {
       if (!msg.startsWith('auth-required')) throw e
       await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
       // signed in only now: the live subscription had the public part only
-      authed[target] = true; replay[target] = true; resubscribe(target)
+      authed[target] = true; replay[target] = !replayed[target]; resubscribe(target)
       await within(r.publish(ev), 15000, 'the relay did not answer')
     }
   } catch (e) {
@@ -487,7 +487,21 @@ export function onEose(f: (target: Target) => void) { eoseListeners.add(f) }
 // before the sign-in was only what anyone may read, and its newer timestamps must not become the
 // `since` that hides the members-only events (Xavier, 2026-11-18: channels missing, the charter's
 // older agreement missing).
+// Only once per page load (the lead, 2026-11-19, from an iOS bug): resent from 0 on every
+// reconnect, live events queued behind a 2000-event replay (the 15 s watchdog makes reconnects
+// frequent on a phone). Later connections still resend after AUTH, from the mark.
 const replay: Partial<Record<Target, boolean>> = {}
+const replayed: Partial<Record<Target, boolean>> = {} // a replay's EOSE came, signed in, this page load
+// groups known at this page's first answer: one learned later gets its own history from 0
+const knownGroups = new Set<string>()
+let groupsAnswered = false
+function learnGroup(e: NostrEvent) {
+  const d = e.tags.find((t) => t[0] === 'd')?.[1]
+  if (!d || knownGroups.has(d)) return
+  knownGroups.add(d)
+  if (!groupsAnswered) return
+  void queryOnce('groups', { kinds: KINDS_GROUPS, '#h': [d], limit: 2000 }, 10000).then(addEvents).catch(() => {})
+}
 // signed in to that relay (NIP-42) on its current connection: only then does an empty answer mean
 // "it has nothing" (groupstate.ts), not "you may not see it yet"
 const authed: Partial<Record<Target, boolean>> = {}
@@ -541,11 +555,17 @@ function resubscribe(target: Target) {
   if (!r) return
   subs[target]?.close()
   const fs = filters(target)
+  const wasReplay = !!replay[target]
   replay[target] = false
   subs[target] = r.subscribe(fs, {
-    onevent: (e) => addEvents([e]),
+    alreadyHaveEvent: hasEvent, // known events skipped before the signature check
+    onevent: (e) => { if (target === 'groups' && e.kind === 39000) learnGroup(e); addEvents([e]) },
     oneose: () => {
-      if (relayAuthed(target)) moveMark(target)
+      if (relayAuthed(target)) { moveMark(target); if (wasReplay) replayed[target] = true }
+      if (target === 'groups' && !groupsAnswered && relayAuthed(target)) {
+        for (const e of all()) if (e.kind === 39000) { const d = e.tags.find((t) => t[0] === 'd')?.[1]; if (d) knownGroups.add(d) }
+        groupsAnswered = true
+      }
       eoseListeners.forEach((f) => f(target))
       if (target !== 'groups') return
       if (status.access !== 'ok') setStatus({ access: 'ok', accessReason: '' })

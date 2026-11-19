@@ -47,6 +47,9 @@ export async function loadAll() {
 const writeQueue: NostrEvent[] = []
 let writeTimer: ReturnType<typeof setTimeout> | null = null
 
+/** Already held (a relay's copy of it is skipped before its signature is checked: sync.ts). */
+export const hasEvent = (id: string) => events.has(id)
+
 export function addEvents(list: NostrEvent[]) {
   let changed = false
   for (const e of list) {
