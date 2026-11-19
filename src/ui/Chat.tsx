@@ -52,7 +52,7 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
-import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate, CREATE_EVENT } from './Places'
+import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate, CREATE_EVENT, TO_NEWEST } from './Places'
 import { MEMBERS, SECTION_TITLE } from '../core/places'
 import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
@@ -801,6 +801,17 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     }
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
+  // Town tapped while here (Places.tsx tapTown): down to the newest message
+  useEffect(() => {
+    const on = (e: Event) => {
+      const el = scroller.current
+      if ((e as CustomEvent).detail !== id || !el) return
+      stick.current = true
+      el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    }
+    addEventListener(TO_NEWEST, on)
+    return () => removeEventListener(TO_NEWEST, on)
+  }, [id])
   // a link to a message that isn't here (deleted, unknown, not readable for me): the channel, with
   // a fixed grey line at the top until I scroll (board channels/message-link). Given a few seconds
   // to arrive first.

@@ -69,18 +69,15 @@ export function placeOf(route: string[]): Place | undefined {
   return undefined
 }
 
-const LAST_TOWN = 'belfry-last-town'
-/** Where Town opens: the town channel I was last in (unless gone or archived), else the Square. */
-export function townPath(): string {
-  let id = ''
-  try { id = sessionStorage.getItem(LAST_TOWN) ?? '' } catch { /* private mode */ }
-  const g = id ? group(id) : undefined
-  return 'c/' + encodeURIComponent(g && !g.archived && isTownChannel(id) ? id : 'general')
+/** Where Town opens: always the belfry's main channel, never the last one open (the owner,
+ *  2026-11-19: "tapping on 'Town' brings you always back to the Townhall channel"). */
+export function townPath(): string { return 'c/general' }
+/** Town tapped while already on the main channel: it scrolls to the newest message (Chat.tsx). */
+export const TO_NEWEST = 'belfry-to-newest'
+function tapTown(route: string[]) {
+  if (route[0] === 'c' && route[1] === 'general' && route.length === 2) dispatchEvent(new CustomEvent(TO_NEWEST, { detail: 'general' }))
+  else go(townPath())
 }
-addEventListener('hashchange', () => {
-  const m = /^#\/c\/([^/]+)$/.exec(location.hash)
-  if (m && isTownChannel(decodeURIComponent(m[1]))) try { sessionStorage.setItem(LAST_TOWN, decodeURIComponent(m[1])) } catch { /* ignore */ }
-})
 
 // ---- Create: one sheet; each row opens its form in the chosen channel -----------------------
 
@@ -170,7 +167,7 @@ export function TabBar({ place }: { place?: Place }) {
   const here = route[0] === 'c' ? route[1] : undefined
   const first: CreateKind | undefined = place === 'calendar' ? 'event' : place === 'groups' ? 'group' : undefined
   const Tab = ({ p, label, icon: I, to, n }: { p: Place; label: string; icon: () => JSX.Element; to: string; n?: number }) => (
-    <button className={'tab' + (place === p ? ' on' : '')} aria-current={place === p ? 'page' : undefined} onClick={() => { if (place !== p) go(to) }}>
+    <button className={'tab' + (place === p ? ' on' : '')} aria-current={place === p ? 'page' : undefined} onClick={() => { if (p === 'town') tapTown(route); else if (place !== p) go(to) }}>
       <span className="tab-ico"><I />{n ? <span className="tab-n" aria-hidden="true">{n > 99 ? '99+' : n}</span> : null}</span>
       <span>{label}</span>
     </button>
@@ -196,7 +193,7 @@ export function SidePlaces({ place }: { place?: Place }) {
   const route = useRoute()
   const here = route[0] === 'c' ? route[1] : undefined
   const Row = ({ p, label, icon: I, to, n }: { p: Place; label: string; icon: () => JSX.Element; to: string; n?: number }) => (
-    <button className={'chan side-place' + (place === p ? ' on' : '')} aria-current={place === p ? 'page' : undefined} onClick={() => go(to)}>
+    <button className={'chan side-place' + (place === p ? ' on' : '')} aria-current={place === p ? 'page' : undefined} onClick={() => { if (p === 'town') tapTown(route); else go(to) }}>
       <span className="hash"><I /></span><span className="t"><b>{label}</b></span>
       {n ? <span className="badge lime">{n > 99 ? '99+' : n}</span> : null}
     </button>
