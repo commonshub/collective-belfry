@@ -1937,3 +1937,8 @@ button.chan-line.todo-line { width: 100%; text-align: left; color: inherit; font
 .popover .emoji-row { margin: 0; }
 .popover .emoji-grid { margin-top: 8px; }
 .popover .act-group { margin-top: 8px; }
+
+/* files dragged over an open conversation (drop.ts): a clear target */
+.screen.drop-on, .thread-pane.drop-on { position: relative; }
+.screen.drop-on::after, .thread-pane.drop-on::after { content: "Drop to add to your message"; position: absolute; inset: 8px; z-index: 80; display: grid; place-items: center;
+  border: 2px dashed var(--accent); border-radius: 18px; background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: 18px; font-weight: 650; color: var(--text); pointer-events: none; }

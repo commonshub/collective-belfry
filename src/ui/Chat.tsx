@@ -17,6 +17,7 @@ import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName, SheetOrPopover, takeAnchor } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { RefPreview } from './Refs'
+import { ADD_FILES } from './drop'
 import { NEW_TODO_EVENT, openNewTodo, TodoField, todoOver } from './TodoField'
 import { endRef, parts, refCoords, type Ref } from '../core/refs'
 import { MeetingSheet } from './Meeting'
@@ -1380,8 +1381,17 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
     } finally { setBusy(false) }
   }
 
+  // photos and files dropped on the conversation (drop.ts), as ＋ → Photos or files does
+  const box = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const el = box.current
+    if (!el || plain) return
+    const on = (e: Event) => setFiles((now) => [...now, ...(e as CustomEvent<File[]>).detail])
+    el.addEventListener(ADD_FILES, on)
+    return () => el.removeEventListener(ADD_FILES, on)
+  }, [plain])
   return (
-    <div className={'composer' + (compact ? ' compact' : '') + (className ? ' ' + className : '')}>
+    <div ref={box} data-files={plain ? undefined : ''} className={'composer' + (compact ? ' compact' : '') + (className ? ' ' + className : '')}>
       {above}
       {canAnnounce && ann && (
         <div className="announce-mode">
@@ -1437,6 +1447,12 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
         <span className="comp-field">
         <textarea ref={ta} rows={1} placeholder={canAnnounce && ann ? 'Announcement' : placeholder} value={text}
           onScroll={(e) => { if (marksRef.current) marksRef.current.scrollTop = e.currentTarget.scrollTop }}
+          onPaste={(e) => { // a pasted image or file: added like ＋ → Photos or files (text pastes as text)
+            const pasted = plain ? [] : [...e.clipboardData.files]
+            if (!pasted.length) return
+            if (!e.clipboardData.getData('text/plain')) e.preventDefault()
+            setFiles((now) => [...now, ...pasted])
+          }}
           onChange={(e) => { setText(e.target.value); setCaret(e.target.selectionStart ?? e.target.value.length) }}
           onSelect={(e) => setCaret((e.target as HTMLTextAreaElement).selectionStart ?? 0)}
           onKeyDown={(e) => {
