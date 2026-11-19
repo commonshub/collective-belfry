@@ -1054,6 +1054,20 @@ def _unnamed(svc: Services, pubkey: str) -> bool | None:
 SESSION_KEY = re.compile(r"^[0-9a-f]{64}$")
 
 
+def name_from_address(email: str) -> str:
+    """A name for someone who gave an address only (a member link): the part before the @, its
+    words (split on . _ -) capitalised. Theirs to change in their profile."""
+    local = (email or "").strip().split("@")[0]
+    words = [w for w in re.split(r"[._-]+", local) if w]
+    return (" ".join(w.capitalize() for w in words) or local)[:100]
+
+
+def _address_names(svc: Services, pubkey: str) -> bool:
+    """A guest in guest mode who came with a member link joins with an e-mail alone: the name
+    comes from the address. Guest links keep asking for the name (``name_needed``)."""
+    return member_invite_of(svc, pubkey) is not None
+
+
 def _reading_channel(svc: Services, pubkey: str) -> str | None:
     """The channel a guest's key is in (the first of them), to open after signing in."""
     rows = svc.odoo.search_read(
@@ -1308,7 +1322,8 @@ def register_join_routes(app: FastAPI) -> None:
     @app.post("/api/guest/save")
     async def guest_save(request: Request) -> JSONResponse:
         """``{"email", "name"?}``: a 6-digit code to that address, for the signed-in guest's key.
-        A guest in guest mode (no name yet) must send their name too, here and with the code."""
+        A guest in guest mode (no name yet) must send their name too, here and with the code;
+        not when they came with a member link (the name then comes from the address)."""
         from .holder_invites import ApiError
 
         s, pubkey, data = await guest_of(request, "/api/guest/save", await request.body())
@@ -1318,7 +1333,11 @@ def register_join_routes(app: FastAPI) -> None:
         unnamed = await run_in_threadpool(_unnamed, s, pubkey)
         if unnamed is None:
             raise ApiError(409, "not_guest", "This key holds no guest pass.")
-        if unnamed and not " ".join(str(data.get("name") or "").split()):
+        if (
+            unnamed
+            and not " ".join(str(data.get("name") or "").split())
+            and not await run_in_threadpool(_address_names, s, pubkey)
+        ):
             raise ApiError(422, "name_needed", "Tell us your name.")
         row = await run_in_threadpool(
             s.odoo.call,
@@ -1344,12 +1363,19 @@ def register_join_routes(app: FastAPI) -> None:
         session_key = str(data.get("session_key") or "").lower()
         if session_key and (not SESSION_KEY.match(session_key) or session_key == pubkey):
             raise ApiError(422, "invalid", "session_key is a new key of this device, as hex.")
+        name = " ".join(str(data.get("name") or "").split())[:100]
+        if (
+            not name
+            and await run_in_threadpool(_unnamed, s, pubkey)
+            and await run_in_threadpool(_address_names, s, pubkey)
+        ):
+            name = name_from_address(str(data.get("email") or ""))  # a member link: e-mail only
         out = await run_in_threadpool(
             s.odoo.save_guest_email,
             pubkey,
             str(data.get("email") or ""),
             str(data.get("code") or ""),
-            " ".join(str(data.get("name") or "").split())[:100],
+            name,
         )
         state = out.get("state")
         if state == "name_needed":

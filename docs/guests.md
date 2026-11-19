@@ -78,6 +78,13 @@ A member link (docs/roles.md) adds to these answers: the join answer has `"as": 
 `"email_needed": true` until they joined; `/guest/save/verify` answers `"member": true, "role"`
 once the membership opened. An agent's key can't use a member link (403 `agent`).
 
+**A member link asks for an e-mail only** (since 2026-11-19): in guest mode after a member link,
+`/guest/save` and `/guest/save/verify` take `{"email"}` / `{"email", "code"}` without `name` and
+never answer `name_needed`. The name is then the part of the address before the @, its words
+(split on `.` `_` `-`) capitalised, at most 100 characters (`jane.doe@…` → "Jane Doe"); they
+change it in their profile. A name that is sent is used as before. Guest links (not member
+links) keep `name_needed`.
+
 ## An address that has an account: the right code signs you in
 
 (2026-11-19; canvas onboarding/guest-code.) A guest who gives an address that is another

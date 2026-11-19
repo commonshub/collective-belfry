@@ -272,6 +272,41 @@ def test_a_member_link_makes_a_member_once_they_join_with_an_e_mail(world):
     assert not any(k == 9001 for k, _t in published)  # still in the channel
 
 
+def test_a_member_link_asks_for_an_e_mail_only(world):
+    """No name: it comes from the address. A guest link still asks for the name."""
+    rsvc, published, keycast, ada, _ada_id, _s = world
+    assert guests.name_from_address("jane.doe_van-dam@example.org") == "Jane Doe Van Dam"
+    assert guests.name_from_address("X@example.org") == "X"
+    assert len(guests.name_from_address("a" * 300 + "@example.org")) == 100
+    with TestClient(create_app(rsvc)) as c:
+        r = call(c, ada, "/channel-invites", {"channel": "garden", "as": "member"})
+        token = r.json()["url"].rsplit("/", 1)[1]
+        me, r = _saved_reader(rsvc, keycast, c, token, "jane.doe@example.org", None)
+        assert r.status_code == 200, r.text
+        assert r.json() == {"saved": True, "joined": True, "member": True, "role": "member"}
+        row = member_key(rsvc, pk(me))
+        assert row is not None and row["tier"] == "member"
+        partner = rsvc.odoo.read_one("res.partner", core.m2o_id(row["partner_id"]), ["name"])
+        assert partner["name"] == "Jane Doe"
+        # the join line carries that name
+        assert any(k == 9000 and ["name", "Jane Doe"] in t for k, t in published)
+        # a guest link: the name is still asked for, by both steps
+        r = call(c, ada, "/channel-invites", {"channel": "garden"})
+        gtoken = r.json()["url"].rsplit("/", 1)[1]
+        got = _join(c, gtoken, PrivateKey())
+        gus = PrivateKey()
+        p = rsvc.odoo.search_read(
+            "belfry.pass", [["keycast_pubkey", "=", got.json()["pubkey"]]], ["id"]
+        )[0]
+        rsvc.odoo.write("belfry.pass", [p["id"]], {"keycast_pubkey": pk(gus)})
+        r = call(c, gus, "/guest/save", {"email": "gus@example.org"})
+        assert r.status_code == 422 and r.json()["error"] == "name_needed"
+        r = call(c, gus, "/guest/save", {"email": "gus@example.org", "name": "G"})
+        assert r.status_code == 202
+        r = call(c, gus, "/guest/save/verify", {"email": "gus@example.org", "code": _code()})
+        assert r.status_code == 422 and r.json()["error"] == "name_needed"
+
+
 def _saved_reader(rsvc, keycast, c, token, email, name):
     """Open TOKEN with a new key and save EMAIL: (key, the verify answer)."""
     got = _join(c, token, PrivateKey())
@@ -284,9 +319,10 @@ def _saved_reader(rsvc, keycast, c, token, email, name):
     keycast.status[pk(me)] = "active"
     keycast.users[f"odoo-partner-{core.m2o_id(p['partner_id'])}"]["pubkey"] = pk(me)
     mailer.SENT.clear()
-    assert call(c, me, "/guest/save", {"email": email, "name": name}).status_code == 202
+    named = {"name": name} if name is not None else {}  # None: an e-mail alone
+    assert call(c, me, "/guest/save", {"email": email, **named}).status_code == 202
     time.sleep(1.1)
-    return me, call(c, me, "/guest/save/verify", {"email": email, "code": _code(), "name": name})
+    return me, call(c, me, "/guest/save/verify", {"email": email, "code": _code(), **named})
 
 
 def test_a_member_link_signed_up_with_the_address_of_a_guest_makes_that_guest_a_member(world):
