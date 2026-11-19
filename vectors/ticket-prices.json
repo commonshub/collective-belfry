@@ -1,0 +1,832 @@
+{
+  "about": "What a ticket type (kind 30402) costs now (collective-belfry docs/checkin.md \"Ticket prices\"). tags in, at `now` (unix seconds); out: priced (false = free: self-served unless closed), amount (decimal string; empty = priced but unreadable, or not on sale), currency (an ISO code in capitals, HOUR, or the host's own label as written), vat (percent, only on an ISO currency; empty = none stated), vat_included, until (when the current price ends or the next one starts, else null), on_sale (false = dated prices and none of them now), and line = the words shown (the server's Ticket.price_text without its \"· until <day>\" end; \"Free\" is the apps' word for a ticket without a price). A priced ticket is never self-served: the person asks, the host admits once it is settled.",
+  "generated_by": "tools/vectors/ticket-prices.py in belfry-ios, running the server's price_of (collective-belfry 09086a9)",
+  "cases": [
+    {
+      "name": "no price tag: free",
+      "now": 1795000000,
+      "tags": [
+        [
+          "title",
+          "Workshop seat"
+        ]
+      ],
+      "out": {
+        "priced": false,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Free"
+    },
+    {
+      "name": "a price in euros",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "50",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€50"
+    },
+    {
+      "name": "cents, a lower-case code",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "15.50",
+          "eur"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "15.50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€15.50"
+    },
+    {
+      "name": "leading zeros and a trailing zero",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "007.10",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "7.10",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€7.10"
+    },
+    {
+      "name": "one decimal reads as two",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "12.5",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "12.50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€12.50"
+    },
+    {
+      "name": "zero is free",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "0",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": false,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Free"
+    },
+    {
+      "name": "0.00 is free",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "0.00",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": false,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Free"
+    },
+    {
+      "name": "another currency",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "20",
+          "usd"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "20",
+        "currency": "USD",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "20 USD"
+    },
+    {
+      "name": "hours",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "2",
+          "hours"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "2",
+        "currency": "HOUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "2 hours"
+    },
+    {
+      "name": "one hour",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "1",
+          "HOUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "1",
+        "currency": "HOUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "1 hour"
+    },
+    {
+      "name": "the host's own label, as written",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "3",
+          "Time credits"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "3",
+        "currency": "Time credits",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "3 Time credits"
+    },
+    {
+      "name": "a label of 13 characters can't be read: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "3",
+          "Thirteen char"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "no currency: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "5"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "not a number: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "lots",
+          "<b>"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "three decimals: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "5.123",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "a comma: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "5,50",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "VAT on top",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "50",
+          "EUR"
+        ],
+        [
+          "vat",
+          "21"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "21",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€50 + 21% VAT"
+    },
+    {
+      "name": "VAT included",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "60.50",
+          "EUR"
+        ],
+        [
+          "vat",
+          "21",
+          "included"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "60.50",
+        "currency": "EUR",
+        "vat": "21",
+        "vat_included": true,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€60.50 incl. 21% VAT"
+    },
+    {
+      "name": "a VAT rate with zeros",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "12.5",
+          "EUR"
+        ],
+        [
+          "vat",
+          "6.00",
+          "included"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "12.50",
+        "currency": "EUR",
+        "vat": "6",
+        "vat_included": true,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€12.50 incl. 6% VAT"
+    },
+    {
+      "name": "a VAT rate with a decimal",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "10",
+          "EUR"
+        ],
+        [
+          "vat",
+          "5.5"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "10",
+        "currency": "EUR",
+        "vat": "5.5",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€10 + 5.5% VAT"
+    },
+    {
+      "name": "no VAT on hours",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "2",
+          "HOUR"
+        ],
+        [
+          "vat",
+          "21"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "2",
+        "currency": "HOUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "2 hours"
+    },
+    {
+      "name": "no VAT on an own label",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "3",
+          "tokens"
+        ],
+        [
+          "vat",
+          "21"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "3",
+        "currency": "tokens",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "3 tokens"
+    },
+    {
+      "name": "an unreadable VAT rate is no VAT",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price",
+          "50",
+          "EUR"
+        ],
+        [
+          "vat",
+          "a lot"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€50"
+    },
+    {
+      "name": "early bird: the dated price while it lasts",
+      "now": 1798761590,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "",
+          "1798761600"
+        ],
+        [
+          "price",
+          "75",
+          "EUR"
+        ],
+        [
+          "vat",
+          "21"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "21",
+        "vat_included": false,
+        "until": 1798761600,
+        "on_sale": true
+      },
+      "line": "€50 + 21% VAT"
+    },
+    {
+      "name": "early bird over: the plain price",
+      "now": 1798761600,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "",
+          "1798761600"
+        ],
+        [
+          "price",
+          "75",
+          "EUR"
+        ],
+        [
+          "vat",
+          "21"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "75",
+        "currency": "EUR",
+        "vat": "21",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€75 + 21% VAT"
+    },
+    {
+      "name": "the plain price holds until a later dated one starts",
+      "now": 1798761590,
+      "tags": [
+        [
+          "price",
+          "50",
+          "EUR"
+        ],
+        [
+          "price_at",
+          "75",
+          "EUR",
+          "1798761600",
+          ""
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": 1798761600,
+        "on_sale": true
+      },
+      "line": "€50"
+    },
+    {
+      "name": "the later dated price has started",
+      "now": 1798761605,
+      "tags": [
+        [
+          "price",
+          "50",
+          "EUR"
+        ],
+        [
+          "price_at",
+          "75",
+          "EUR",
+          "1798761600",
+          ""
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "75",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "€75"
+    },
+    {
+      "name": "two dated prices: the first whose time it is",
+      "now": 1798761590,
+      "tags": [
+        [
+          "price_at",
+          "40",
+          "EUR",
+          "",
+          "1798761600"
+        ],
+        [
+          "price_at",
+          "45",
+          "EUR",
+          "",
+          "1798848000"
+        ],
+        [
+          "price",
+          "60",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "40",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": 1798761600,
+        "on_sale": true
+      },
+      "line": "€40"
+    },
+    {
+      "name": "two dated prices: the second once the first ended",
+      "now": 1798761610,
+      "tags": [
+        [
+          "price_at",
+          "40",
+          "EUR",
+          "",
+          "1798761600"
+        ],
+        [
+          "price_at",
+          "45",
+          "EUR",
+          "",
+          "1798848000"
+        ],
+        [
+          "price",
+          "60",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "45",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": 1798848000,
+        "on_sale": true
+      },
+      "line": "€45"
+    },
+    {
+      "name": "dated prices only, none now: not on sale",
+      "now": 1798761601,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "",
+          "1798761600"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": false
+      },
+      "line": "Not on sale now"
+    },
+    {
+      "name": "dated prices only, not started yet: not on sale",
+      "now": 1798761599,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "1798761600",
+          ""
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": false
+      },
+      "line": "Not on sale now"
+    },
+    {
+      "name": "a dated price only, current",
+      "now": 1798761550,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "1798761500",
+          "1798761600"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "50",
+        "currency": "EUR",
+        "vat": "",
+        "vat_included": false,
+        "until": 1798761600,
+        "on_sale": true
+      },
+      "line": "€50"
+    },
+    {
+      "name": "an unreadable date: priced, no amount",
+      "now": 1795000000,
+      "tags": [
+        [
+          "price_at",
+          "50",
+          "EUR",
+          "soon",
+          ""
+        ],
+        [
+          "price",
+          "75",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": true,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Paid"
+    },
+    {
+      "name": "a dated zero now: free",
+      "now": 1798761590,
+      "tags": [
+        [
+          "price_at",
+          "0",
+          "EUR",
+          "",
+          "1798761600"
+        ],
+        [
+          "price",
+          "20",
+          "EUR"
+        ]
+      ],
+      "out": {
+        "priced": false,
+        "amount": "",
+        "currency": "",
+        "vat": "",
+        "vat_included": false,
+        "until": null,
+        "on_sale": true
+      },
+      "line": "Free"
+    }
+  ]
+}

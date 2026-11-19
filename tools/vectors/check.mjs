@@ -57,5 +57,13 @@ for (const c of vec('reply-reactions.json').cases) {
 // references.json (SPEC 19.44): names inside the text, the box at the end
 const refs = vec('references.json')
 for (const c of refs.cases) { const got = M.parts(c.text, refs.domain); check(`references ${c.name}`, eq(got, c.parts), { got, want: c.parts }) }
+// ticket-prices.json (from belfry-ios, the server's price_of as reference): the price now, and its words
+for (const c of vec('ticket-prices.json').cases) {
+  const r = M.pricesOf(c.tags, c.now)
+  const p = r.price
+  const got = { priced: r.priced, amount: p?.amount ?? '', currency: p?.currency ?? '', vat: p?.vat ?? '', vat_included: !!p?.vatIncluded, until: p?.until ?? null, on_sale: r.onSale }
+  const line = !r.priced ? 'Free' : r.onSale === false ? 'Not on sale now' : p ? M.priceFull(p) : 'Paid'
+  check(`ticket-prices ${c.name}`, eq(got, c.out) && line === c.line, { got, line, want: c.out, wantLine: c.line })
+}
 console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
 process.exit(bad ? 1 : 0)

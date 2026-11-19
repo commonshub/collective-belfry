@@ -128,55 +128,11 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
 
 // ---- tickets and the people of an event ---------------------------------------------------
 
-/** A ticket's price (NIP-99 ["price", amount, currency]; Xavier, 2026-11-18): an ISO 4217 code (EUR),
- *  HOUR for time, or the host's own short label. No tag: free. A priced ticket is never self-served:
- *  people ask, the hosts mark it paid and admit them (the belfry agent's contract, belfry-sh). */
-export interface Price { amount: string; currency: string; /** VAT rate in %, money only */ vat?: string; vatIncluded?: boolean; /** unix: this price ends then (or the next starts) */ until?: number }
-/** One price of a ticket: without dates (["price", …]) or for a while (["price_at", amount, CUR, from, until]). */
-export interface PriceRow { amount: string; currency: string; from?: number; until?: number }
+export * from './prices'
+import { isMoney, PRICE_AMOUNT, PRICE_LABEL, pricesOf, VAT_RATE, type Price, type PriceRow } from './prices'
 export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev
   /** the price now (none: free, or not on sale when `priced`) */ price?: Price; /** it has a price at all */ priced?: boolean; prices?: PriceRow[]; /** false: priced, but no price is on now */ onSale?: boolean }
 
-export const PRICE_AMOUNT = /^\d{1,7}(\.\d{1,2})?$/
-export const PRICE_LABEL = /^[\p{L}\p{N} ]{1,12}$/u
-/** "€15", "2 hours", "3 tokens". */
-export function priceLabel(p: Price): string {
-  const n = Number(p.amount)
-  if (/^[A-Z]{3}$/.test(p.currency) && p.currency !== 'HOU') {
-    try { return new Intl.NumberFormat(undefined, { style: 'currency', currency: p.currency, minimumFractionDigits: Number.isInteger(n) ? 0 : 2 }).format(n) } catch { /* not a currency the browser knows */ }
-  }
-  if (p.currency === 'HOUR') return `${p.amount} ${n === 1 ? 'hour' : 'hours'}`
-  return `${p.amount} ${p.currency}`
-}
-export const isMoney = (currency: string) => /^[A-Z]{3}$/.test(currency)
-export const VAT_RATE = /^\d{1,2}(\.\d{1,2})?$/
-/** "€50 + 21% VAT", "€50 incl. 21% VAT", "2 hours". */
-export const priceFull = (p: Price) => priceLabel(p) + (p.vat && isMoney(p.currency) ? (p.vatIncluded ? ` incl. ${p.vat}% VAT` : ` + ${p.vat}% VAT`) : '')
-const dayFmt = (t: number) => new Date(t * 1000).toLocaleDateString([], { day: 'numeric', month: 'long', year: 'numeric' })
-/** Under a ticket's name: "€50 + 21% VAT · until 1 January 2027", or "Not on sale now". */
-export const priceLine = (t: Pick<Ticket, 'price' | 'priced' | 'onSale'>) =>
-  t.priced && t.onSale === false ? 'Not on sale now' : t.price ? priceFull(t.price) + (t.price.until ? ` · until ${dayFmt(t.price.until)}` : '') : ''
-/** The tags' prices and the one on now (docs/checkin.md "VAT and prices for a while"): the first
- *  price_at whose window holds now, else the plain price; a priced ticket with neither is not on sale. */
-export function pricesOf(tags: string[][], now = Date.now() / 1000): Pick<Ticket, 'price' | 'priced' | 'prices' | 'onSale'> {
-  const ok = (a?: string) => !!a && PRICE_AMOUNT.test(a) && Number(a) > 0
-  const num = (v?: string) => (v && /^\d+$/.test(v) ? Number(v) : undefined)
-  const rows: PriceRow[] = []
-  for (const t of tags) if (t[0] === 'price_at' && ok(t[1]) && t[2]) rows.push({ amount: t[1], currency: t[2], from: num(t[3]), until: num(t[4]) })
-  const plain = tags.find((t) => t[0] === 'price')
-  const base = plain && ok(plain[1]) && plain[2] ? { amount: plain[1], currency: plain[2] } : undefined
-  const priced = rows.length > 0 || !!plain
-  const v = tags.find((t) => t[0] === 'vat' && VAT_RATE.test(t[1] ?? ''))
-  const vat = (c: string) => (v && isMoney(c) ? { vat: v[1], vatIncluded: v[2] === 'included' } : {})
-  const on = rows.find((r) => (r.from === undefined || r.from <= now) && (r.until === undefined || now < r.until))
-  let price: Price | undefined
-  if (on) price = { amount: on.amount, currency: on.currency, ...vat(on.currency), until: on.until }
-  else if (base) {
-    const next = rows.map((r) => r.from).filter((f): f is number => f !== undefined && f > now).sort((a, b) => a - b)[0]
-    price = { ...base, ...vat(base.currency), until: next }
-  }
-  return { price, priced, prices: base ? [...rows, base] : rows, onSale: !priced || !!price }
-}
 /** People ask for this ticket (an application, a price) instead of taking it in one tap. */
 export const asks = (t: { closed: boolean; price?: unknown; priced?: boolean }) => t.closed || !!t.price || !!t.priced
 
