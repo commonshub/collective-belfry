@@ -77,3 +77,32 @@ Guests who never join end with their pass, like every guest.
 A member link (docs/roles.md) adds to these answers: the join answer has `"as": "member"` and
 `"email_needed": true` until they joined; `/guest/save/verify` answers `"member": true, "role"`
 once the membership opened. An agent's key can't use a member link (403 `agent`).
+
+## An address that has an account: the right code signs you in
+
+(2026-11-19; canvas onboarding/guest-code.) A guest who gives an address that is another
+account's here is not sent to sign in a second time. The device makes a **new session key** (its
+guest session key is bound to the guest account: one key, one identity) and sends its public key
+with the code:
+
+    POST /api/v1/guest/save/verify      (NIP-98 by the guest, as before)
+    {"email", "code", "name"?, "session_key": "<64 hex: the new key's public key>",
+     "client": "belfry-ios" | "belfry-android" | "belfry-web"}
+
+- The code is right and the address is another account's →
+  `200 {"signed_in": true, "bunker_url", "pubkey", "npub", "nip05", "moved", "channel"}`:
+  a session on **that account's** signer, bound to `session_key` when it is made (the address
+  alone opens nothing), named after `client` ("Belfry for iPhone", "Belfry for Android", else
+  "Chat"). `pubkey` / `nip05` are the account's. `moved` as before (a guest in guest mode: the
+  account got the channel and the anonymous guest pass is closed). `channel` = the channel the
+  guest was in, to open next (null when none). The device drops its guest session and key,
+  stores the new session like any sign-in, and says "Signed in as <address>". No second code.
+- Without `session_key` (older apps), or when that account can't be signed in by the belfry
+  (it holds its own key): `409 taken` with `moved` and `nip05`, as before.
+- `session_key` that is not 64 hex, or is the guest's own key: `422 invalid`, checked before the
+  code is spent. `409 key_taken`: that key is linked to another account (make a new one and ask
+  for a new code). `503 signer`: try again (the code is spent: ask for a new one).
+- Whether the address has an account is still said only after the code is proven: `/guest/save`
+  answers 202 either way, and the mail reads the same.
+- The proof is the same as the e-mail-code sign-in's (a 6-digit code mailed to the address, the
+  same tries), so this opens nothing a sign-in would not.

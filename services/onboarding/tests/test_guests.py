@@ -468,6 +468,49 @@ def test_a_reading_guest_whose_address_has_an_account_is_sent_to_sign_in(
         assert (9000, True) in [(k, ["p", ada_pk, "member"] in t) for k, t in kinds]
         assert (9001, True) in [(k, ["p", me_pk] in t) for k, t in kinds]
         assert rsvc.odoo.read_one("belfry.pass", p["id"], ["state"])["state"] == "revoked"
+
+
+def test_the_right_code_signs_an_existing_account_in_on_a_new_session_key(
+    rsvc, published, keycast, monkeypatch
+):
+    """With a session key of its own, the device that proved the address is signed in as the
+    account that owns it: one code, no second one. The session is bound to that key."""
+    link, join = _guest_link(rsvc, monkeypatch)
+    bound = []
+    real = rsvc.keycast.create_bunker
+
+    def create(token, label, client_pubkey=None):
+        bound.append((label, client_pubkey))
+        return real(token, label, client_pubkey)
+
+    monkeypatch.setattr(rsvc.keycast, "create_bunker", create)
+    with TestClient(create_app(rsvc)) as c:
+        token, me, me_pk, p = _reading_guest(rsvc, keycast, c, link, join)
+        fresh = PrivateKey().public_key_xonly.format().hex()
+        r = _signed(c, me, "/guest/save", {"email": "admin@belfry.test", "name": "Ada"})
+        assert r.status_code == 202
+        time.sleep(1.1)
+        body = {"email": "admin@belfry.test", "code": _code(), "name": "Ada"}
+        # not a key, or the guest's own key: refused before anything is opened
+        r = _signed(c, me, "/guest/save/verify", {**body, "session_key": "nope"})
+        assert r.status_code == 422 and r.json()["error"] == "invalid"
+        bound.clear()
+        r = _signed(
+            c,
+            me,
+            "/guest/save/verify",
+            {**body, "session_key": fresh, "client": "belfry-android"},
+        )
+        got = r.json()
+        assert r.status_code == 200, got
+        assert got["signed_in"] is True and got["moved"] is True
+        # the account's key as the signer holds it (the fixture's signer has its own)
+        assert re.fullmatch(r"[0-9a-f]{64}", got["pubkey"]) and got["pubkey"] != me_pk
+        assert got["bunker_url"].startswith("bunker://")
+        assert got["nip05"].endswith("@" + rsvc.settings.nip05_domain)
+        assert got["channel"] == "garden"
+        assert bound == [("Belfry for Android", fresh)]
+        assert rsvc.odoo.read_one("belfry.pass", p["id"], ["state"])["state"] == "revoked"
         # the member's contact is untouched
         ada = rsvc.odoo.search_read("res.partner", [["email", "=", "admin@belfry.test"]], ["name"])
         assert [a["name"] for a in ada] == ["Ada Admin"]

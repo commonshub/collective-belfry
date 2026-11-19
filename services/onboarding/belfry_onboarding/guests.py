@@ -1051,6 +1051,19 @@ def _unnamed(svc: Services, pubkey: str) -> bool | None:
     return False if rows else None
 
 
+SESSION_KEY = re.compile(r"^[0-9a-f]{64}$")
+
+
+def _reading_channel(svc: Services, pubkey: str) -> str | None:
+    """The channel a guest's key is in (the first of them), to open after signing in."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey], ["tier", "=", "guest"]],
+        ["guest_channel"],
+    )
+    return next((str(r["guest_channel"]) for r in rows if r.get("guest_channel")), None)
+
+
 def _account_nip05(svc: Services, partner: int) -> str:
     """name@domain of a member's account ("" when it can't be read)."""
     from . import community, usernames
@@ -1123,6 +1136,53 @@ def _move_to_account(svc: Services, pubkey: str, other_partner: int) -> bool:
         except Exception:  # noqa: BLE001 — they have the channel; an admin can still add them
             log.exception("guest save: the member link's membership was not given")
     return bool(mine)
+
+
+def _sign_in_as(
+    svc: Services, other_partner: int, session_key: str, client: str
+) -> dict[str, Any] | None:
+    """A session on the account that owns a proven address, for the device that proved it: the
+    right code is the same proof the e-mail-code sign-in asks for, so the person is not asked a
+    second time. SESSION_KEY is a key the device just made (its guest session key is bound to
+    the guest account: one key, one identity); the session is bound to it when it is made, so
+    the address in the answer opens nothing for anyone else. None when that account can't be
+    signed in here (no key in the signer: it holds its own key, or has no pass); ApiError 409
+    ``key_taken`` / 503 ``signer``."""
+    from . import apps as apps_mod
+    from . import community, nostr, usernames
+    from .clients.keycast import ClientKeyTaken
+    from .holder_invites import ApiError
+
+    try:
+        found = community.member_token(svc, other_partner)
+    except Exception as exc:  # noqa: BLE001
+        raise ApiError(503, "signer", "The signer isn't answering: try again in a moment.") from exc
+    if not found:
+        return None  # they hold their own key: their own signer signs them in
+    pubkey, token = found
+    name = usernames.current(svc, token)
+    if not name:  # no name, no session: they sign in the usual way
+        return None
+    label = apps_mod.NATIVE_CLIENTS.get(client, "Chat")
+    try:
+        bunker = svc.keycast.create_bunker(token, label, session_key)
+    except ClientKeyTaken as exc:
+        raise ApiError(
+            409, "key_taken", "This device's key is linked to another account: start again."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        status = getattr(getattr(exc, "response", None), "status_code", 0)
+        if 400 <= status < 500:
+            return None
+        raise ApiError(503, "signer", "The signer isn't answering: try again in a moment.") from exc
+    log.info("guest save: signed in %s with key %s", name, session_key[:12])
+    return {
+        "signed_in": True,
+        "bunker_url": bunker["bunker_url"],
+        "pubkey": pubkey,
+        "npub": nostr.hex_to_npub(pubkey),
+        "nip05": f"{name}@{svc.settings.nip05_domain}",
+    }
 
 
 def saved_label(svc: Services, pubkey: str, channel: str) -> None:
@@ -1278,6 +1338,12 @@ def register_join_routes(app: FastAPI) -> None:
         from .holder_invites import ApiError
 
         s, pubkey, data = await guest_of(request, "/api/guest/save/verify", await request.body())
+        # the device may ask to be signed in as the account the code proves (docs/guests.md
+        # "An address that has an account"): a fresh session key of its own, as hex. Checked
+        # before the code is spent.
+        session_key = str(data.get("session_key") or "").lower()
+        if session_key and (not SESSION_KEY.match(session_key) or session_key == pubkey):
+            raise ApiError(422, "invalid", "session_key is a new key of this device, as hex.")
         out = await run_in_threadpool(
             s.odoo.save_guest_email,
             pubkey,
@@ -1300,11 +1366,20 @@ def register_join_routes(app: FastAPI) -> None:
             raise ApiError(410, "expired", "That code expired. Send a new one.")
         if state == "taken":
             moved = False
+            reading = await run_in_threadpool(_reading_channel, s, pubkey)
             if out.get("unnamed") and out.get("other"):
                 try:
                     moved = await run_in_threadpool(_move_to_account, s, pubkey, int(out["other"]))
                 except Exception:  # noqa: BLE001 — they can still sign in; the link may be spent
                     log.exception("guest save: moving the channel to the account failed")
+            if session_key and out.get("other"):
+                opened = await run_in_threadpool(
+                    _sign_in_as, s, int(out["other"]), session_key, str(data.get("client") or "")
+                )
+                if opened:
+                    opened["moved"] = moved
+                    opened["channel"] = reading
+                    return JSONResponse(opened)
             answer: dict[str, Any] = {
                 "error": "taken",
                 "message": "This address has an account here already: sign in with it.",
