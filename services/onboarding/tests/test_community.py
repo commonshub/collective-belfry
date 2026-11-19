@@ -126,7 +126,7 @@ def test_monitor_names_from_profiles(web, belfry, odoo, relay):
         }
     )
     names = web.get(f"/monitor/names?p={pk},{'d' * 64},notakey").json()
-    assert names[pk] == "Carol" and names["d" * 64] == "Unknown"
+    assert names[pk] == "Carol" and names["d" * 64] == "Somebody"
 
 
 def test_monitor_stream_answers_auth_and_forwards_events(belfry, monkeypatch):

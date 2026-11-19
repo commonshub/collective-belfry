@@ -775,15 +775,15 @@ def test_hosted_by_shows_names_and_never_a_key(rsvc, world, monkeypatch):
     make_event(world, ada)
     monkeypatch.setattr(checkin, "groups_pubkey", lambda svc: pk(world.gkey))
     world.admins(GROUP, [pk(ada), pk(world.gkey)])  # the relay lists the belfry's own key too
-    monkeypatch.setattr(community, "names_for", lambda svc, keys: {k: "Unknown" for k in keys})
+    monkeypatch.setattr(community, "names_for", lambda svc, keys: {k: "Somebody" for k in keys})
     ev = events.load(rsvc, D)
     assert events.shown_hosts(rsvc, ev) == [pk(ada)]  # not the groups key
     html_ = community.people_html(rsvc, [pk(ada)])
-    assert html_.startswith('<span title="npub1') and html_.endswith(">unknown</span>")
-    named = {pk(ada): "Ada", "b" * 64: "Unknown", "c" * 64: "Unknown"}
+    assert html_ == "somebody"
+    named = {pk(ada): "Ada", "b" * 64: "Somebody", "c" * 64: "Somebody"}
     monkeypatch.setattr(community, "names_for", lambda svc, keys: {k: named[k] for k in keys})
     html_ = community.people_html(rsvc, [pk(ada), "b" * 64, "c" * 64])
-    assert html_.startswith("Ada and <span title=") and ">2 others</span>" in html_
+    assert html_ == "Ada and 2 others"
     with TestClient(create_app(rsvc)) as c:
         page = c.get(f"/events/{D}").text
         assert "Hosted by Ada" in page and "npub1" not in page.split("Hosted by")[1][:200]

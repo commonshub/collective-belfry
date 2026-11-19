@@ -134,13 +134,13 @@ def query(svc: Services, filters: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return svc.relay.query(filters, belfry_signer(svc))
 
 
-UNKNOWN = "Unknown"
+UNKNOWN = "Somebody"
 
 
 def people_html(svc: Services, pubkeys: list[str]) -> str:
     """Names for a line of people, as HTML: those with a profile name, then whoever has none
-    folded into "and one other" / "and N others" (their npubs only in the hover title); nobody
-    named: "unknown" or "N people". An npub is never shown."""
+    folded into "and one other" / "and N others"; nobody named: "somebody" or "N people". An
+    npub is never shown, not even in a hover title."""
     from html import escape as E
 
     keys = list(dict.fromkeys(pubkeys))
@@ -150,18 +150,16 @@ def people_html(svc: Services, pubkeys: list[str]) -> str:
         got = {}
     named = [got[k] for k in keys if got.get(k) and got[k] != UNKNOWN]
     rest = [k for k in keys if not got.get(k) or got[k] == UNKNOWN]
-    title = E(", ".join(nostr.hex_to_npub(k) for k in rest))
     if not rest:
         return E(", ".join(named))
     if not named:
-        word = "unknown" if len(rest) == 1 else f"{len(rest)} people"
-        return f'<span title="{title}">{word}</span>'
+        return "somebody" if len(rest) == 1 else f"{len(rest)} people"
     word = "one other" if len(rest) == 1 else f"{len(rest)} others"
-    return f'{E(", ".join(named))} and <span title="{title}">{word}</span>'
+    return f'{E(", ".join(named))} and {word}'
 
 
 def names_for(svc: Services, pubkeys: list[str]) -> dict[str, str]:
-    """Display names from kind-0 profiles; "Unknown" when there is none (never an npub)."""
+    """Display names from kind-0 profiles; "Somebody" when there is none (never an npub)."""
     pubkeys = sorted(set(pubkeys))[:200]
     names: dict[str, tuple[int, str]] = {}
     if pubkeys:
