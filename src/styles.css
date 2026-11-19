@@ -1948,3 +1948,13 @@ button.chan-line.todo-line { width: 100%; text-align: left; color: inherit; font
 a.buy { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
 a.buy .ico { width: 14px; height: 14px; }
 .rsvp a.buy.on { justify-content: center; }
+/* the chat's start screen (boards onboarding/start, login, apply*, Xavier 19 Nov) */
+.start .start-apply { align-self: center; margin-top: 14px; font-size: 14px; }
+.start .start-line { text-align: center; margin: 0 0 18px; }
+.start .start-form { width: 100%; max-width: 420px; display: flex; flex-direction: column; gap: 10px; }
+.start .start-form .link { align-self: center; }
+.start h3 { margin: 6px 0 8px; text-align: center; }
+.start .start-why { margin: 10px 0; padding: 10px 14px; border-left: 0; border-radius: 12px; background: var(--surface); white-space: pre-wrap; max-width: 420px; }
+.start .spinner { margin: 24px auto; }
+.start h2 { overflow-wrap: anywhere; text-align: center; font-size: 26px; line-height: 1.2; max-width: 100%; }
+.start > .hint, .start > p { text-align: center; max-width: 420px; }

@@ -10,6 +10,8 @@ import { recheckAccess } from '../core/sync'
 import { BELFRY, NAME, PLACE, THEME, type Backend } from '../config'
 import { loadRemoteCharter, type RemoteAgreement } from '../core/charter'
 import { CheckCircleIcon } from './icons'
+import { StartScreen } from './Join'
+import type { SignedIn } from '../core/guestjoin'
 
 // The arms: a tower over water on a shield (the Belfry mark).
 export const Arms = ({ size = 18 }: { size?: number }) => (
@@ -107,7 +109,11 @@ function BackToAccounts() {
   )
 }
 
-export function WelcomeScreen({ backend, error, onDemo, invited }: { backend: Backend; error?: string; onDemo: (email: string) => void; invited?: boolean }) {
+export function WelcomeScreen({ backend, error, onDemo, invited, onIn }: { backend: Backend; error?: string; onDemo: (email: string) => void; invited?: boolean; /** signed in from the start screen (Log in, or an application accepted) */ onIn: (r: SignedIn) => Promise<void> | void }) {
+  // the chat's own start screen (Xavier 19 Nov: Log in, or Apply to join, all on chat.<domain>);
+  // demo: with ?direct (the tests)
+  if (THEME === 'belfry' && !savedCode() && (backend !== 'demo' || new URLSearchParams(location.search).has('direct')))
+    return <StartScreen onIn={onIn} invited={invited} error={error} />
   const [busy, setBusy] = useState(false)
   const [invite, setInvite] = useState(!!savedCode())
   const [code, setCode] = useState(savedCode())

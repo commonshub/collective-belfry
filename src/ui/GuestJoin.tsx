@@ -26,25 +26,38 @@ export function OpeningScreen({ name }: { name?: string }) {
   )
 }
 
-/** A belfry member link (#issues 2026-11-18): no channel behind it, only "log in or sign up".
- *  Both open the Join sheet: a new e-mail makes the account (the link makes it a member), the
- *  e-mail of an account that exists already signs in with it. */
+/** A belfry member link (board onboarding/member-link, Xavier 19 Nov): no channel behind it.
+ *  "You're invited to <community>", the e-mail, Send me a code → the six boxes → in the chat. No
+ *  name (the belfry takes it from the address), no Sign up / log in choice, no profile step; an
+ *  address that has an account already signs in with it (guest-code). */
 export function MemberInviteScreen() {
   useGuestMode()
   const community = useCommunityName(NAME)
   const member = guestInfo()?.member
+  const [email, setEmail] = useState('')
+  const [error, setError] = useState('')
   if (!member) return null
+  const stay = member.membership === 'permanent' || !member.membership ? '' : member.membership === 'year' ? ' for a year' : ' for a month'
   return (
     <div className="screen login member-invite">
       <h2>You’re invited to {community}</h2>
-      <p>Join as {asWho(member.label)}{member.membership === 'permanent' || !member.membership ? '' : member.membership === 'year' ? ', for a year' : ', for a month'}. No password: a 6-digit code by e-mail.</p>
-      <div className="login-ctas">
-        <button className="btn" onClick={askToJoin}>Sign up</button>
-        <button className="btn ghost" onClick={askToJoin}>I have an account: log in</button>
-      </div>
+      <p>You’re invited as {asWho(member.label)}{stay}. Enter your e-mail: we send a 6-digit code, and you’re in.</p>
+      <Form className="join-sheet start-form" onSubmit={async () => {
+        setError('')
+        try { await sendJoinCode(email); handOff.email = email.trim(); askToJoin() } catch (e) { setError(joinErrorText(e instanceof JoinFailed ? e : new JoinFailed('failed'))) }
+      }}>
+        <label className="field"><span>E-mail</span>
+          <input className="input" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required autoFocus
+            placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
+        {error && <div className="error" role="alert">{error}</div>}
+        <button className="btn" disabled={!/^\S+@\S+\.\S+$/.test(email.trim())}>Send me a code</button>
+      </Form>
     </div>
   )
 }
+
+/** The member link screen sent the code already: the Join sheet opens on the six boxes. */
+const handOff: { email: string } = { email: '' }
 
 /** Where the composer would be: you are reading; Join opens the sheet. */
 export function GuestBar({ groupId }: { groupId: string }) {
@@ -80,7 +93,7 @@ export function nextCode(old: string, raw: string): string {
 }
 
 /** Six boxes for the code: one real field under them (paste, autofill and backspace just work). */
-function CodeBoxes({ value, onChange, disabled, invalid }: { value: string; onChange: (v: string) => void; disabled?: boolean; invalid?: boolean }) {
+export function CodeBoxes({ value, onChange, disabled, invalid }: { value: string; onChange: (v: string) => void; disabled?: boolean; invalid?: boolean }) {
   const ref = useRef<HTMLInputElement>(null)
   useEffect(() => { ref.current?.focus() }, [])
   return (
@@ -105,16 +118,18 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
   const info = guestInfo()
   const g = group(info?.channel ?? '')
   const label = `${g ? channelIcon(g) : '#'} ${g?.name ?? info?.channel ?? ''}`
-  const [step, setStep] = useState<Step>('who')
+  const [step, setStep] = useState<Step>(() => (handOff.email ? 'code' : 'who'))
   const [name, setName] = useState('')
-  const [email, setEmail] = useState('')
+  const [email, setEmail] = useState(handOff.email)
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
   const [moved, setMoved] = useState(false)
-  const sentTo = useRef('') // what the person typed, as it was when the code went out
-  const askName = !saveOnly
+  const sentTo = useRef(handOff.email) // what the person typed, as it was when the code went out
+  useEffect(() => { handOff.email = '' }, [])
+  // a member link: no name (the belfry takes it from the address); a guest link asks for one
+  const askName = !saveOnly && !info?.member
   const fail = (e: unknown) => {
     const f = e instanceof JoinFailed ? e : new JoinFailed('failed')
     if (f.code === 'taken') { setMoved(f.moved); setStep('taken'); setError(''); return }

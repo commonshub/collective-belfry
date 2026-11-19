@@ -9,7 +9,8 @@ import { SearchView } from './Search'
 import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
-import { takeSignedInAs } from '../core/signedin'
+import { SIGNED_IN_AS, takeSignedInAs } from '../core/signedin'
+import type { SignedIn } from '../core/guestjoin'
 import { CheckIcon } from './icons'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
 import { wipe } from '../core/db'
@@ -93,6 +94,16 @@ export function App() {
     setPhase({ p: 'in', s })
   }
 
+  // signed in from the start screen (Log in, or this browser's application accepted): in the
+  // chat at once, no reload; "Signed in as <address>" for 3 s
+  const directIn = async (r: SignedIn) => {
+    await wipe() // a new account: nothing of another one's cache
+    try { sessionStorage.setItem(SIGNED_IN_AS, r.address) } catch { /* private mode */ }
+    if (location.pathname === '/apply') history.replaceState(history.state, '', '/' + location.search + location.hash)
+    if (!pendingInvite()) replaceHash(r.open ? `#/c/${encodeURIComponent(r.open)}` : '#/c/general')
+    await enter(r.session)
+  }
+
   const signOut = async () => {
     if (outboxItems().length && !confirm(`${outboxItems().length} messages are not sent yet and will be lost. Sign out anyway?`)) return
     const s = phase.p === 'in' ? phase.s : undefined
@@ -145,7 +156,7 @@ export function App() {
     return <EventJoinScreen link={eventLinkFromUrl()} backend={backend} onSignIn={() => { setPendingEvent(eventLinkFromUrl()); setSignInFirst(true) }}
       onJoined={async (s) => { await wipe(); await enter(s) }}
       onDemo={(name) => void enter(demoSession(`${name.toLowerCase().replace(/[^a-z0-9]+/g, '.') || 'guest'}@example.org`))} />
-  if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} />
+  if (phase.p === 'out') return <WelcomeScreen invited={!!pendingInvite()} backend={backend} error={phase.error} onDemo={(email) => enter(demoSession(email))} onIn={directIn} />
   return <>{veil}<Village key={phase.s.bunkerUrl ?? phase.s.email} session={phase.s} onSignOut={signOut} onSignIn={signInInstead} /></>
 }
 
