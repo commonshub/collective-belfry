@@ -10,7 +10,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { useGroupState } from '../core/groupstate'
 import { ArchivedBar } from './GroupPage'
 import { addTask, addressFor, mayPickAddress, slug, createChannel, createPod, DEFAULT_PROMPT, deleteMessage, editMessage, joinGroup, pinMessage, taskAction, postMessage, postThreadReply, react, topEmojis } from '../core/actions'
-import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName } from '../core/model'
+import { ANNOUNCE, NADDR, webPage, isPublicChannel, calendar, eventLink, eventLinksIn, eventCoordsOf, eventByCoord, eventByLinkLocal, channelIcon, channelRef, plainRefs, group, allGroups, archivedGroups, deletedGroup, guestJoins, type GuestJoin, isAnnouncement, displayName, eventCoordOf, groups, hashtags, messages, podOf, proposalOf, profiles, reactions, threadReplies, threadsOf, isInbox, mailLocal, pinned, tasklist, isWorking, workingSince, type Task, type TaskStep, type ChannelVisibility, type Group, type Message, type Reaction, type ThreadInfo, eventOfGroup, nameOf as groupName, fallbackName, deletedMessage } from '../core/model'
 import { all, outboxItems, status, useVersion } from '../core/store'
 import { joinWithAccount, me, retry, signedFetch } from '../core/sync'
 import { isBelfryAdmin } from '../core/people'
@@ -56,7 +56,7 @@ import { MEMBERS, SECTION_TITLE } from '../core/places'
 import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
 import { applyStatus } from '../core/apply'
-import { HomeIcon } from './icons'
+import { HomeIcon, LockIcon } from './icons'
 
 /** A guest's line under their name: how long they stay. */
 function guestLine() {
@@ -793,13 +793,29 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         focused.current = focus
         stick.current = false
         m.scrollIntoView({ block: 'center' })
-        m.classList.add('flash')
-        setTimeout(() => m.classList.remove('flash'), 2200)
+        flashIt(m)
+        setGone(false)
         return
       }
     }
     if (el && stick.current) el.scrollTop = el.scrollHeight
   })
+  // a link to a message that isn't here (deleted, unknown, not readable for me): the channel, with
+  // a fixed grey line at the top until I scroll (board channels/message-link). Given a few seconds
+  // to arrive first.
+  const [gone, setGone] = useState(false)
+  useEffect(() => {
+    if (!focus) return
+    const t = setTimeout(() => { if (focused.current !== focus) setGone(true) }, deletedMessage(id, focus) ? 0 : 5000)
+    return () => clearTimeout(t)
+  }, [focus, id])
+  useEffect(() => {
+    if (!gone) return
+    const off = () => setGone(false)
+    const el = scroller.current
+    el?.addEventListener('wheel', off, { passive: true }); el?.addEventListener('touchmove', off, { passive: true })
+    return () => { el?.removeEventListener('wheel', off); el?.removeEventListener('touchmove', off) }
+  }, [gone])
   // on screen at the newest message: read up to it (readstate.ts, shared with my other devices)
   const visible = useVisible()
   const newest = channelNewest(id)
@@ -810,6 +826,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
     <>
       <div className="scroll" ref={scroller}
         onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80; if (stick.current !== atEnd) setAtEnd(stick.current) }}>
+        {gone && <div className="msg-gone" role="status"><LockIcon /> This message isn’t available</div>}
         <div className="messages">
           {list.length === 0 && (topic
             ? <div className="empty">{topic === ANNOUNCE ? 'No announcements yet. Only the admins post them.' : `Nothing in #${topic} yet. What you send here carries it.`}</div>
@@ -888,7 +905,13 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
 }
 
 /** A thread: the message it hangs off, then the replies (#/c/<id>/thread/<message id>). */
-export function ThreadView({ groupId, rootId: asked, pane = false, replying = false }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean; /** opened from Reply: the reply box gets the focus */ replying?: boolean }) {
+/** The message a link pointed at: a yellow flash that fades after about 2 s (board channels/message-link). */
+function flashIt(m: HTMLElement) {
+  m.classList.remove('flash'); void m.offsetWidth; m.classList.add('flash')
+  setTimeout(() => m.classList.remove('flash'), 2400)
+}
+
+export function ThreadView({ groupId, rootId: asked, pane = false, replying = false, focus }: { groupId: string; rootId: string; /** shown as the third column beside its channel */ pane?: boolean; /** opened from Reply: the reply box gets the focus */ replying?: boolean; /** a link to one reply: centred and flashed */ focus?: string }) {
   useVersion()
   const g = group(groupId)
   const ps = profiles()
@@ -913,7 +936,14 @@ export function ThreadView({ groupId, rootId: asked, pane = false, replying = fa
   const [editing, setEditing] = useState<Message | null>(null)
   const [picking, setPicking] = useState(false)
   const scroller = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [flow.length])
+  const focused = useRef('')
+  useLayoutEffect(() => {
+    const el = scroller.current
+    if (!el) return
+    const m = focus && focused.current !== focus ? el.querySelector<HTMLElement>(`[id="m-${CSS.escape(focus)}"]`) : null
+    if (m) { focused.current = focus!; m.scrollIntoView({ block: 'center' }); flashIt(m); return }
+    if (!focused.current) el.scrollTop = el.scrollHeight
+  }, [flow.length, focus])
   // on screen: its replies are read (readstate.ts), up to the newest (the message itself when none)
   const visible = useVisible()
   const newestReply = threadNewest(rootId) || root?.ev.created_at || 0

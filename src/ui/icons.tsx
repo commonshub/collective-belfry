@@ -113,3 +113,4 @@ export const CheckCircleIcon = ({ on = false }: { on?: boolean }) => <Svg fill={
 export const ClockIcon = () => <Svg><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></Svg>
 export const GripIcon = () => <Svg><path d="M5 9h14M5 15h14" /></Svg>
 export const GateIcon = () => <Svg><path d="M4 21V9a8 8 0 0 1 16 0v12M8 21v-9M12 21v-9M16 21v-9M3 21h18" /></Svg>
+export const LockIcon = () => <Svg><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></Svg>

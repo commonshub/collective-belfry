@@ -1128,3 +1128,12 @@ export const todoPartsText = (p: TodoParts) => [
   [p.unclaimed, 'unclaimed'], [p.upNext, 'up next'], [p.inProgress, 'in progress'], [p.closedToday, 'closed today'],
 ].filter(([n]) => (n as number) > 0).map(([n, w]) => `${n} ${w}`).join(', ')
 export const todoTotalText = (p: TodoParts) => `${p.total} ${p.total === 1 ? 'to-do' : 'to-dos'}`
+
+/** A link to a thread reply (…/#/c/<id>/m/<reply>, board channels/message-link): the thread's root. */
+export function replyRoot(groupId: string, id: string): string | undefined {
+  const e = all(me()).find((x) => x.id === id)
+  if (!e || e.kind !== 1111 || tag(e, 'h') !== groupId) return undefined
+  return e.tags.find((t) => t[0] === 'E')?.[1]
+}
+/** Was message ID of GROUP deleted (by its author, or removed by a moderator)? */
+export const deletedMessage = (_groupId: string, id: string) => deleted(all(me())).has(id)

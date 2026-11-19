@@ -13,7 +13,7 @@ import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../
 import { wipe } from '../core/db'
 import { accounts, activeId, allAccounts, discardActiveFor, dropActive, forgetAll, noteAccount, readOf } from '../core/accounts'
 import { roleBadge } from '../core/roles'
-import { archivedGroups, deletedGroup, group, groups, profiles, nameOf } from '../core/model'
+import { replyRoot, archivedGroups, deletedGroup, group, groups, profiles, nameOf } from '../core/model'
 import { addEvents, loadAll, outboxItems, status, useVersion } from '../core/store'
 import { isLocalOnly, joinWithAccount, me, setAvatar, start, stop } from '../core/sync'
 import { BELFRY, NAME, PLACE, TEST_RELAYS, THEME, getBackend } from '../config'
@@ -318,7 +318,10 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
       : b === 'info' ? <ChannelPage key="members" id={id} page="members" />
       : b && OLD_PAGES[b] ? <ChannelPage key={OLD_PAGES[b]} id={id} page={OLD_PAGES[b]} />
       : b && CHANNEL_PAGES.has(b) ? <ChannelPage key={b} id={id} page={b} />
-      : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} /> : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
+      : b === 'events' ? <EventsScreen channel={id} /> : b === 'thread' && c ? <ThreadView groupId={id} rootId={c} replying={d === 'reply'} />
+      // a link to a thread reply: the thread, that reply centred and flashed (board channels/message-link)
+      : b === 'm' && c && replyRoot(id, c) ? <ThreadView key={c} groupId={id} rootId={replyRoot(id, c)!} focus={c} />
+      : <ChannelView id={id} topic={b === 't' ? c : undefined} focus={b === 'm' ? c : undefined} />
   }
   // phone: no tab bar: channels in a drawer behind ☰ (☰ again closes it), Me behind your avatar (top right), events under each
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).

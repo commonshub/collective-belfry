@@ -554,7 +554,10 @@ a.chip { text-decoration: none; color: inherit; }
 .search-hit .snip { font-size: 15px; line-height: 1.4; overflow-wrap: anywhere; }
 .search-hit mark { background: color-mix(in srgb, var(--orange) 28%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
 .msg.flash { animation: flash 2.2s ease-out; }
-@keyframes flash { 0%, 30% { background: color-mix(in srgb, var(--orange) 18%, transparent); } 100% { background: transparent; } }
+/* board channels/message-link: the linked message flashes yellow, fading after about 2 s */
+@keyframes flash { 0%, 40% { background: color-mix(in srgb, #F5C400 26%, transparent); box-shadow: inset 3px 0 0 #E0A800; } 100% { background: transparent; box-shadow: inset 3px 0 0 transparent; } }
+.msg-gone { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 10px; margin: 8px 12px; padding: 10px 14px; border-radius: 14px; background: var(--surface); color: var(--muted); font-size: 15px; }
+.msg-gone .ico { width: 18px; height: 18px; flex: none; }
 
 /* ---- invite, settings switches, the guest join line ---- */
 .switch-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); margin-bottom: 12px; cursor: pointer; }
