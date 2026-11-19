@@ -391,7 +391,7 @@ chat.{$BELFRY_DOMAIN} {
 	handle /.well-known/apple-app-site-association {
 		header Content-Type application/json
 		header Cache-Control "public, max-age=3600"
-		respond `{"applinks":{"details":[{"appIDs":["4MS4Y34UMJ.sh.belfry.app"],"components":[{"/":"/join/*","comment":"guest links"},{"/":"/events/*","comment":"event addresses"}]}]}}` 200
+		respond `{"applinks":{"details":[{"appIDs":["4MS4Y34UMJ.sh.belfry.app"],"components":[{"/":"/join/*","comment":"guest links"},{"/":"/events/*","comment":"event addresses"},{"/":"/login/*","comment":"link your phone"}]}]}}` 200
 	}
 	handle /.well-known/assetlinks.json {
 		header Content-Type application/json
@@ -408,6 +408,11 @@ chat.{$BELFRY_DOMAIN} {
 		# routes on the fragment, and the token never reaches a log that way
 		@join path_regexp join ^/join/([A-Za-z0-9_-]{20,})$
 		redir @join /#/join/{re.join.1} 302
+		# "Link your phone" (the chat's Accounts screen shows it as a QR code): chat.<domain>/
+		# login/<username> opens the phone app, or the chat's own log-in, with that address
+		# filled in. It carries no secret: the 6-digit code mailed to the member is the proof.
+		@login path_regexp login ^/login/([a-z0-9][a-z0-9._-]{0,29})$
+		redir @login /#/login/{re.login.1} 302
 		# an event (chat.<domain>/events/<link>, also the phone apps' link): the chat's event page
 		@event path_regexp event ^/events/([A-Za-z0-9_-]{1,80})/?$
 		redir @event /#/events/{re.event.1} 302
