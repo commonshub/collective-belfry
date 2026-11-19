@@ -8,6 +8,9 @@ export const me = () => g.__ME
 export const setWriteGuard = () => {}
 export const belfryAdminKeys = (): string[] => []
 export const isAdmin = () => false
+export const agentOwner = (_: string): string | undefined => undefined
+export const queryOnce = async () => []
+export const isLocalOnly = () => true
 export const BELFRY = { groupsRelay: 'wss://groups-relay.example.org', mainRelay: 'wss://relay.example.org', domain: 'example.org' }
 export const LABEL_NS = 'osv/member-label'
 export const THEME = 'osv'

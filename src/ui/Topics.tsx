@@ -3,7 +3,7 @@ import { openProfile } from './Profile'
 import { setTopics } from '../core/actions'
 import { nip19 } from 'nostr-tools'
 import { ANNOUNCE, channelIcon, channelOfNaddr, displayName, group, isAnnouncement, messages, normTopic, realName, topics, nameOf, refName } from '../core/model'
-import { go } from './common'
+import { go, PersonName } from './common'
 import { me } from '../core/sync'
 import { Markdown } from './markdown'
 import { RefName } from './Refs'
@@ -132,7 +132,7 @@ function Mention({ npub }: { npub: string }) {
   let pk = ''
   try { const d = nip19.decode(npub); if (d.type === 'npub') pk = d.data } catch { /* shown as is */ }
   if (!pk) return <>{'nostr:' + npub}</>
-  return <button type="button" className={'mention' + (pk === me() ? ' me' : '')} onClick={() => openProfile(pk)}>@{realName(pk) || displayName(pk)}</button>
+  return <button type="button" className={'mention' + (pk === me() ? ' me' : '')} onClick={() => openProfile(pk)}>@{realName(pk) || <PersonName pubkey={pk} />}</button>
 }
 
 /** The pinned topics, a scrolling line; the open one highlighted (shown even if not pinned). */

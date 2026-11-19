@@ -1,3 +1,4 @@
+import { startNames } from '../core/names'
 import { replaceHash } from '../core/nav'
 import { demoButtons } from '../core/buttons'
 import { generateSecretKey, getPublicKey } from 'nostr-tools'
@@ -163,6 +164,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
+        startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
         if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)

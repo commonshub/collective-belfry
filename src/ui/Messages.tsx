@@ -13,7 +13,7 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
-import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form } from './common'
+import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -148,7 +148,7 @@ function PersonHead({ pubkey }: { pubkey: string }) {
   return (
     <button className="dm-person" aria-label={`Open ${name}’s profile`} onClick={() => openProfile(pubkey)}>
       <Avatar pubkey={pubkey} size={34} />
-      <span className="n">{name} <span className="chev" aria-hidden="true">›</span></span>
+      <span className="n"><PersonName pubkey={pubkey} /> <span className="chev" aria-hidden="true">›</span></span>
     </button>
   )
 }

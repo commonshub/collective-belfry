@@ -4,7 +4,7 @@ import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard } from './sync'
-import { belfryAdminKeys, isAdmin as isAdminNow } from './access'
+import { agentOwner, belfryAdminKeys, isAdmin as isAdminNow } from './access'
 import { CHARTER_ID, placeName } from './places'
 
 // Derived views over the event log. Pure functions of all(); cheap enough to
@@ -71,10 +71,26 @@ export function realName(pubkey: string, ps = profiles()) {
   return p?.name || p?.nip05?.split('@')[0] || ''
 }
 
+/** Keys a 9000 marks as an agent (`agent` 1): an agent with no name reads "An agent". */
+const agentKeys: () => Set<string> = perLog((list) => new Set(list.filter((e) => e.kind === 9000 && tag(e, 'agent') === '1').map((e) => tag(e, 'p')).filter((p): p is string => !!p)))
+export const looksLikeAgent = (pubkey: string) => !!agentOwner(pubkey) || agentKeys().has(pubkey)
+
+// Never a shortened npub (to-do bbd452d5, 2026-11-19): a name not known is asked for (names.ts:
+// kind 0 on both relays) and reads "Somebody" for a person, "An agent" for an agent meanwhile;
+// screens that show a name on its own show a grey bar while it is being asked (PersonName).
+let missing: (pubkey: string) => void = () => {}
+export const onMissingName = (f: (pubkey: string) => void) => { missing = f }
+export const FALLBACK_PERSON = 'Somebody'
+export const FALLBACK_AGENT = 'An agent'
+export const fallbackName = (pubkey: string) => (looksLikeAgent(pubkey) ? FALLBACK_AGENT : FALLBACK_PERSON)
+
 export function displayName(pubkey: string, ps = profiles()) {
   if (pubkey === me()) return 'You'
   const p = ps.get(pubkey)
-  return p?.name || p?.nip05?.split('@')[0] || nip19.npubEncode(pubkey).slice(0, 12) + '…'
+  const n = p?.name || p?.nip05?.split('@')[0]
+  if (n) return n
+  missing(pubkey)
+  return fallbackName(pubkey)
 }
 
 // ---- groups (NIP-29) --------------------------------------------------------

@@ -12,7 +12,7 @@ type Tab = 'requests' | 'members' | 'invites'
 
 const date = (s?: number) => (s ? new Date(s * 1000).toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric' }) : '')
 const name = (p: string) =>
-  p === accessInfo()?.service ? 'Belfry' : displayName(p).endsWith('…') ? nip19.npubEncode(p).slice(0, 16) + '…' : displayName(p)
+  p === accessInfo()?.service ? 'Belfry' : displayName(p)
 
 /** #/admin, #/admin/requests/<wrap id> (the link in Belfry's DM), #/admin/members, #/admin/invites */
 export function Admin({ sub, id }: { sub?: string; id?: string }) {

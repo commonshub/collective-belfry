@@ -1,3 +1,4 @@
+import { nameLoading } from '../core/names'
 import { replaceHash } from '../core/nav'
 import { Drawer } from 'vaul'
 import { Component, useEffect, useId, useRef, useState, type ButtonHTMLAttributes, type FormEvent, type FormHTMLAttributes, type MouseEvent, type ReactNode } from 'react'
@@ -80,6 +81,14 @@ export function up(parent: string) {
   const prev = trail[cur - 1]
   const same = prev !== undefined && cur > 0 && prev !== location.hash && (parent.includes('/') ? prev === '#/' + parent : first(prev) === parent && (parent !== 'dm' || prev === '#/dm'))
   if (same) history.back(); else replaceWith(parent)
+}
+
+/** A person's name standing alone (a message's author, a header, a row): a grey bar while it is
+ *  being asked for, then "Somebody" / "An agent" if none came (to-do bbd452d5). */
+export function PersonName({ pubkey, name }: { pubkey: string; name?: string }) {
+  useVersion()
+  if (!name && nameLoading(pubkey) && !profiles().get(pubkey)?.name) return <span className="name-skel" role="img" aria-label="Loading" />
+  return <>{name || displayName(pubkey)}</>
 }
 
 // ---- avatars -----------------------------------------------------------------

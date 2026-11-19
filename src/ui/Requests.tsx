@@ -9,7 +9,6 @@
 import { Linkify } from './markdown'
 import { DECIDE_ERRORS, DecideFailed, decideRequest, relayAdmin } from '../core/checkin'
 import { useState } from 'react'
-import { nip19 } from 'nostr-tools'
 import { NAME } from '../config'
 import { canAdmin } from '../core/access'
 import { decline as declineInGroup, admit } from '../core/actions'
@@ -72,7 +71,7 @@ function AgentRow({ a }: { a: AgentRequest }) {
   const act = (approve: boolean) => decideAgent(a.id, approve).catch((e) => setError(fixed(e)))
   return (
     <div className="appl req-row">
-      <div className="who"><span className="req-ic"><BotIcon /></span><span className="t">{a.name || 'An agent'}<small>{nip19.npubEncode(a.pubkey).slice(0, 16)}… · {when(a.created)}{a.forMe ? ' · asked for you' : ''}</small></span></div>
+      <div className="who"><span className="req-ic"><BotIcon /></span><span className="t">{a.name || 'An agent'}<small>{when(a.created)}{a.forMe ? ' · asked for you' : ''}</small></span></div>
       {a.about && <blockquote><Linkify text={a.about} /></blockquote>}
       <Fail error={error} />
       <div className="row">
