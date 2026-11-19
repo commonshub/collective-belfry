@@ -77,6 +77,29 @@ def can_sell(svc: Services, env: str = "live") -> bool:
     )
 
 
+def missing(svc: Services, env: str = "live") -> str:
+    """What an admin still has to set before tickets can be sold in ENV, as one sentence naming
+    the console's places ("" when nothing is missing). Shown with `test_not_set_up` and
+    `cannot_sell`, so the person testing knows which piece it is."""
+    st = sales.settings(svc, env)
+    where = "Test" if env == "test" else "Production"
+    parts = []
+    if not sales.odoo_ready(svc, env):
+        parts.append(f"connect Odoo (Plugins → Odoo → {where})")
+    else:
+        if not odoo_product(st):
+            parts.append(
+                f"pick the Odoo product event tickets are invoiced as (Plugins → Odoo → {where})"
+            )
+        if not (st["tax_included"] and st["tax_excluded"]):
+            parts.append(f"pick both VAT taxes (Plugins → Odoo → {where})")
+    if not (sales.stripe_ready(svc, env) or sales.bank_ready(svc)):
+        parts.append(f"connect Stripe (Plugins → Stripe → {where}) or set the bank account (Sales)")
+    if not parts:
+        return ""
+    return "Still to do in the console: " + "; ".join(parts) + "."
+
+
 def clean_checkout_url(svc: Services, raw: Any) -> str:
     """The console's "Where people buy tickets": a template on the belfry's own domain with
     only the placeholders ``{link}`` and ``{id}``; "" = none. ValueError when it is not one."""

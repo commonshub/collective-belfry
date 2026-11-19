@@ -1774,6 +1774,13 @@ def _checkout(
         if total["gross"] > 0 and env == "test" and not sells(svc, "test"):
             # never a fall back to production
             _give_back(svc, {"id": oid, "code": code})
+            if wanted is not None:
+                raise ApiError(
+                    409,
+                    "test_not_set_up",
+                    "This address is a tester's, and tickets can't be sold in the test "
+                    "environment yet. " + ticketsales.missing(svc, "test"),
+                )
             raise ApiError(
                 409,
                 "test_not_set_up",
@@ -1782,6 +1789,12 @@ def _checkout(
             )
         if total["gross"] > 0 and not sells(svc, env):
             _give_back(svc, {"id": oid, "code": code})
+            if wanted is not None:
+                raise ApiError(
+                    409,
+                    "cannot_sell",
+                    ("Tickets can't be bought here yet. " + ticketsales.missing(svc, env)).strip(),
+                )
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
         created = now()
         # a free product with no code makes no account from nothing: the address first

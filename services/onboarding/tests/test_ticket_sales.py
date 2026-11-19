@@ -327,6 +327,7 @@ def test_a_tester_buys_while_the_switch_is_off(fair, keycast):
     with TestClient(create_app(rsvc)) as c:
         r = order(c, PrivateKey(), email="tom@example.org")
         assert r.status_code == 409 and r.json()["error"] == "test_not_set_up"
+        assert "Plugins → " in r.json()["message"] and "Test" in r.json()["message"]
 
 
 def test_places_sold_out_and_freed_when_an_order_expires(fair):
