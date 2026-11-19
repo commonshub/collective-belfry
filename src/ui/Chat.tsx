@@ -50,7 +50,7 @@ import { mayPin } from './ChannelLine'
 import { inChannel, inviteMember, isGuest } from '../core/invite'
 import { openProfile } from './Profile'
 import { requestCount } from '../core/requests'
-import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate } from './Places'
+import { amGuest, CreateSheet, isTownChannel, myGuestChannels, placesOn, takeCreate, CREATE_EVENT } from './Places'
 import { MEMBERS, SECTION_TITLE } from '../core/places'
 import { CategoryHead, placeNewChannel, townCategories, useCategoryDrag } from './Categories'
 import { charter, charterExists, remoteAgreements, toAgree } from '../core/charter'
@@ -702,14 +702,19 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   // Create (＋, Places.tsx) chose this channel: open its form here, or put the cursor in the composer
   useEffect(() => {
-    const k = takeCreate(id)
-    if (!k) return
-    if (k === 'event') setNewEvent(true)
-    else if (k === 'meeting') setNewMeeting(true)
-    else if (k === 'todo') setNewTodo(true)
-    else if (k === 'group') setNewPod(true)
-    else if (k === 'proposal') setNewProp(true)
-    else setTimeout(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(), 50)
+    const take = () => {
+      const k = takeCreate(id)
+      if (!k) return
+      if (k === 'event') setNewEvent(true)
+      else if (k === 'meeting') setNewMeeting(true)
+      else if (k === 'todo') setNewTodo(true)
+      else if (k === 'group') setNewPod(true)
+      else if (k === 'proposal') setNewProp(true)
+      else setTimeout(() => document.querySelector<HTMLTextAreaElement>('.composer textarea')?.focus(), 50)
+    }
+    take()
+    addEventListener(CREATE_EVENT, take) // Create from inside this channel: same address, no remount
+    return () => removeEventListener(CREATE_EVENT, take)
   }, [id])
   useVersion()
   // guest mode: reading only; the composer's place says so, with Join (GuestJoin.tsx)

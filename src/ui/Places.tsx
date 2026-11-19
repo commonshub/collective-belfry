@@ -86,6 +86,13 @@ addEventListener('hashchange', () => {
 
 export type CreateKind = 'message' | 'event' | 'meeting' | 'todo' | 'group' | 'proposal'
 let pending: { channel: string; kind: CreateKind } | null = null
+/** Open CHANNEL for the pending form. Already on it (Create from inside the channel, to-do
+ *  4d298b13): the address doesn't change, so tell the open channel to take the form now. */
+function openCreate(channel: string) {
+  if (location.hash === '#/c/' + encodeURIComponent(channel) || location.hash === '#/c/' + channel) dispatchEvent(new Event(CREATE_EVENT))
+  else go('c/' + encodeURIComponent(channel))
+}
+export const CREATE_EVENT = 'belfry-create'
 /** The form Create asked for, taken once by the channel it opened (Chat.tsx Conversation). */
 export function takeCreate(channel: string): CreateKind | undefined {
   if (!pending || pending.channel !== channel) return undefined
@@ -124,7 +131,7 @@ export function CreateSheet({ onClose, where, first }: { onClose: () => void; wh
       </label>
       <div className="act-group create-rows">
         {rows.map((r) => (
-          <button key={r.k} className={'act-row ' + r.cls} onClick={() => { pending = { channel: ch, kind: r.k }; onClose(); setTimeout(() => go('c/' + encodeURIComponent(ch)), 0) }}>
+          <button key={r.k} className={'act-row ' + r.cls} onClick={() => { pending = { channel: ch, kind: r.k }; onClose(); setTimeout(() => openCreate(ch), 0) }}>
             <span className="create-ico"><r.icon /></span>
             <span className="t"><b>{r.title}</b><small>{r.line(label)}</small></span>
           </button>
