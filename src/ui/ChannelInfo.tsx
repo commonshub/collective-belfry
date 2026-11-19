@@ -1,3 +1,4 @@
+import { TodoField, todoOver } from './TodoField'
 import { roleBadge } from '../core/roles'
 import { roleWord } from '../core/checkin'
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
@@ -403,9 +404,9 @@ export function Tasks({ groupId }: { groupId: string }) {
   const done = tasks.filter((t) => t.done)
   return (
     <div>
-      <Form className="row pad" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-        <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <button className="btn small" disabled={!title.trim()}>Add</button>
+      <Form className="row pad todo-add" onSubmit={async (e) => { e.preventDefault(); if (title.trim() && !todoOver(title)) { await addTask(groupId, title.trim()); setTitle('') } }}>
+        <TodoField label="Add a to-do" placeholder="Add a to-do…" value={title} onChange={setTitle} />
+        <button className="btn small" disabled={!title.trim() || todoOver(title) > 0}>Add</button>
       </Form>
       {tasks.length === 0 && <div className="empty">No to-dos yet.</div>}
       {[...todo, ...done].map((t) => (

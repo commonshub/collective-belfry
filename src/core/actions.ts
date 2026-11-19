@@ -225,7 +225,7 @@ const taskTags = (groupId: string) => [['t', listIdFor(groupId)], ['h', groupId]
 
 /** A to-do in the channel's list; FROM = the message it was made from (shown under it). */
 export const addTask = (groupId: string, title: string, from?: string) =>
-  enqueue('groups', { kind: 2100, content: title.slice(0, 300), tags: [...taskTags(groupId), ...(from ? [['q', from]] : [])] })
+  enqueue('groups', { kind: 2100, content: title, tags: [...taskTags(groupId), ...(from ? [['q', from]] : [])] })
 
 /** Pin a message as the channel's notice, or unpin it (channel admins; model.pinned). */
 export const pinMessage = (groupId: string, id: string, on: boolean) =>

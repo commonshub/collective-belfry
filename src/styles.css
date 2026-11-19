@@ -1904,3 +1904,18 @@ button.ref-pv { cursor: pointer; }
 .dm.mine .ref-off { color: inherit; opacity: 0.75; }
 .name-skel.ref-skel { display: inline-block; width: 5em; vertical-align: -2px; }
 .ref-pv-ev { margin-top: 6px; }
+
+/* board todos/new-todo-limit: a to-do's title field (TodoField.tsx): grows with the text; past 300
+   the extra is tinted red (a layer over the field, transparent text: glyphs stay the field's) */
+.todo-field { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.todo-input { position: relative; display: flex; }
+.todo-input textarea.input { resize: none; overflow: hidden; line-height: 1.35; font: inherit; font-size: 16px; min-height: 0; }
+.todo-marks { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; color: transparent;
+  padding: 12px 14px; border: 1px solid transparent; font: inherit; font-size: 16px; line-height: 1.35; letter-spacing: normal;
+  white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; text-align: start; }
+.todo-marks mark { color: transparent; background: color-mix(in srgb, var(--danger) 22%, transparent); border-radius: 3px; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.todo-field.over textarea.input { border-color: var(--danger); }
+.todo-limit { margin: 4px 2px 0; font-size: 13px; line-height: 18px; }
+.todo-limit.count { text-align: right; color: var(--muted); }
+.todo-limit.error { color: var(--danger); }
+.todo-add { align-items: flex-start; }

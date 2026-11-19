@@ -1,5 +1,6 @@
 // What the channel header knows (channelFacts), and the one line under it, which shows only when
 // something must catch the eye (SummaryLine). The pulled-down menu is in ChannelMenu.tsx.
+import { TodoField, todoOver } from './TodoField'
 import { useState, type ReactNode } from 'react'
 import { addTask, taskAction } from '../core/actions'
 import { canAdmin, belfryAdminKeys, accessInfo } from '../core/access'
@@ -139,9 +140,9 @@ function threadOfMessage(groupId: string, id: string): string | undefined {
 function NewTodo({ groupId }: { groupId: string }) {
   const [title, setTitle] = useState('')
   return (
-    <Form className="row pull-newtodo" onSubmit={async (e) => { e.preventDefault(); if (title.trim()) { await addTask(groupId, title.trim()); setTitle('') } }}>
-      <input className="input" placeholder="Add a to-do…" value={title} onChange={(e) => setTitle(e.target.value)} />
-      <Btn className="btn small" disabled={!title.trim()}>Add</Btn>
+    <Form className="row pull-newtodo todo-add" onSubmit={async (e) => { e.preventDefault(); if (title.trim() && !todoOver(title)) { await addTask(groupId, title.trim()); setTitle('') } }}>
+      <TodoField label="Add a to-do" placeholder="Add a to-do…" value={title} onChange={setTitle} />
+      <Btn className="btn small" disabled={!title.trim() || todoOver(title) > 0}>Add</Btn>
     </Form>
   )
 }

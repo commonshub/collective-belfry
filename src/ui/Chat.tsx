@@ -17,6 +17,7 @@ import { isBelfryAdmin } from '../core/people'
 import { Avatar, back, fmtDay, fmtTime, go, MediaGrid, Sheet, SyncDot, Btn, Form, up, useFormDraft, useNow, WorkRing, PersonName } from './common'
 import { EventCard, NewEventSheet } from './Calendar'
 import { RefPreview } from './Refs'
+import { NEW_TODO_EVENT, openNewTodo, TodoField, todoOver } from './TodoField'
 import { endRef, parts, refCoords, type Ref } from '../core/refs'
 import { MeetingSheet } from './Meeting'
 import { RecorderSheet, RecordingBar } from './Recorder'
@@ -699,6 +700,13 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
   const [proposeFrom, setProposeFrom] = useState<Message | null>(null)
   const [proposeSite, setProposeSite] = useState<Message | null>(null)
   const [newTodo, setNewTodo] = useState(false)
+  // Turn into a to-do with a message too long for one: New to-do opens with its text (never cut)
+  const [todoFrom, setTodoFrom] = useState<{ text: string; from?: string } | null>(null)
+  useEffect(() => {
+    const on = (e: Event) => { const d = (e as CustomEvent<{ text: string; from?: string }>).detail; setTodoFrom(d); setNewTodo(true) }
+    addEventListener(NEW_TODO_EVENT, on)
+    return () => removeEventListener(NEW_TODO_EVENT, on)
+  }, [])
   const [prefill, setPrefill] = useState('') // a new event's URL, put in the composer to send
   // Create (＋, Places.tsx) chose this channel: open its form here, or put the cursor in the composer
   useEffect(() => {
@@ -861,7 +869,7 @@ export function Conversation({ id, events = false, readOnly = false, topic, onTo
         onEvent={events ? () => setNewEvent(true) : undefined} onMeeting={events && !guestInfo() ? () => setNewMeeting(true) : undefined} onPod={events ? () => setNewPod(true) : undefined} onProposal={events ? () => setNewProp(true) : undefined} onTodo={events ? () => setNewTodo(true) : undefined} />}
       {recording && <RecorderSheet groupId={id} onClose={() => setRecording(false)} />}
       {newMeeting && <MeetingSheet channel={id} onClose={() => setNewMeeting(false)} onCreated={(d) => setPrefill(`https://${BELFRY.domain}/events/${d} `)} />}
-      {newTodo && <NewTodoSheet groupId={id} onClose={() => setNewTodo(false)} />}
+      {newTodo && <NewTodoSheet groupId={id} onClose={() => { setNewTodo(false); setTodoFrom(null) }} initial={todoFrom?.text} from={todoFrom?.from} />}
       {newThread && <NewThreadSheet groupId={id} onClose={() => setNewThread(false)} onSent={() => { stick.current = true }} />}
       {newProp && <NewProposalSheet parent={id} onClose={() => setNewProp(false)} />}
       {newPod && <NewPod parent={id} onClose={() => setNewPod(false)} />}
@@ -1132,7 +1140,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   const g = group(groupId)
   const isPinned = canAdmin(g) && pinned(groupId, mayPin(g)).some((x) => x.ev.id === m.ev.id)
   const isTodo = tasklist(groupId).tasks.some((t) => t.source === m.ev.id)
-  const todoTitle = plainRefs(m.text, '').replace(/\s+/g, ' ').trim().slice(0, 300)
+  const todoTitle = plainRefs(m.text, '').replace(/\s+/g, ' ').trim()
   const [copied, setCopied] = useState('')
   const mail = mailOf(m.ev)
   const [fullMail, setFullMail] = useState(false)
@@ -1188,7 +1196,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
             {m.text && <Item icon={<CopyIcon />} label={copied === 'text' ? 'Copied' : 'Copy text'} onClick={() => void copy('text', m.text)} />}
             <Item icon={<LinkIcon />} label={copied === 'link' ? 'Copied' : 'Copy link'} onClick={() => void copy('link', link)} />
             {onPropose && !m.ev.pending && <Item icon={<DocIcon />} label="Turn into a proposal" onClick={() => { onClose(); onPropose() }} />}
-            {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the to-dos' : 'Turn into a to-do'} onClick={() => { if (copied === 'todo') return; setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
+            {todoTitle && !isTodo && !m.ev.pending && <Item icon={<TodoIcon />} label={copied === 'todo' ? 'Added to the to-dos' : 'Turn into a to-do'} onClick={() => { if (copied === 'todo') return; if (todoOver(todoTitle)) { onClose(); openNewTodo(todoTitle, m.ev.id); return } setCopied('todo'); void addTask(groupId, todoTitle, m.ev.id); setTimeout(onClose, 700) }} />}
             {canAdmin(g) && !m.ev.pending && m.ev.kind === 9 && <Item icon={<PushPinIcon />} label={isPinned ? 'Unpin from the channel' : 'Pin to the channel'} onClick={() => { onClose(); void pinMessage(groupId, m.ev.id, !isPinned) }} />}
             {onProposeSite && nsiteRef(m.text) && !m.ev.pending && <Item icon={<GlobeIcon />} label="Propose as the website" onClick={() => { onClose(); onProposeSite() }} />}
           </div>
@@ -1435,16 +1443,18 @@ export function Composer({ onSend, onEvent, onMeeting, onRecord, onPod, onPropos
 }
 
 /** A new to-do for the channel (the ＋ menu). */
-function NewTodoSheet({ groupId, onClose }: { groupId: string; onClose: () => void }) {
+function NewTodoSheet({ groupId, onClose, initial, from }: { groupId: string; onClose: () => void; /** a message's text (Turn into a to-do, too long) */ initial?: string; from?: string }) {
   const [d, setD, clearDraft] = useFormDraft('todo:' + groupId, () => ({ title: '' }))
-  const title = d.title
-  const setTitle = (t: string) => setD(() => ({ title: t }))
+  const [given, setGiven] = useState(initial)
+  const title = given ?? d.title
+  const setTitle = (t: string) => { setGiven(undefined); setD(() => ({ title: t })) }
+  const over = todoOver(title)
   return (
     <Sheet title="New to-do" onClose={onClose}>
-      <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim()) return; await addTask(groupId, title.trim()); clearDraft(); onClose() }}>
+      <Form onSubmit={async (e) => { e.preventDefault(); if (!title.trim() || over) return; await addTask(groupId, title.trim(), from); clearDraft(); onClose() }}>
         <label className="field"><span>What needs doing?</span>
-          <input className="input" autoFocus maxLength={300} placeholder="e.g. Book the room for Friday" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
-        <button className="btn" disabled={!title.trim()}>Add to the list</button>
+          <TodoField autoFocus placeholder="e.g. Book the room for Friday" value={title} onChange={setTitle} /></label>
+        <button className="btn" disabled={!title.trim() || over > 0}>Add to the list</button>
         <p className="hint" style={{ marginTop: 10 }}>Everyone in the channel sees it under the channel's name. Anyone can take it or tick it off.</p>
       </Form>
     </Sheet>
