@@ -239,6 +239,7 @@ export async function checkUsername(body: { username?: string; name?: string }, 
       const u = body.username.trim().toLowerCase()
       const sug = demoSuggest(body.name ?? u).filter((x) => x !== u)
       if (!USERNAME.test(u)) return { check: { state: 'invalid', username: u, reason: u.length < 3 ? 'short' : u.length > 30 ? 'long' : 'chars', suggestions: [] }, suggestions: [] }
+      if (u === 'stewards') return { check: { state: 'invalid', username: u, reason: 'reserved', suggestions: sug }, suggestions: sug }
       return { check: { state: demoTaken.has(u) ? 'taken' : 'available', username: u, suggestions: demoTaken.has(u) ? sug : [] }, suggestions: sug }
     }
     const sug = demoSuggest(body.name ?? '')

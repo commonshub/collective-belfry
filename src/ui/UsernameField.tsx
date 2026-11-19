@@ -65,6 +65,7 @@ export function NameFields({ value, onChange, via, autoFocus }: { value: NameSta
         {state === 'checking' ? <span className="hint">Checking…</span>
           : state === 'available' ? <span className="ok"><CheckIcon /> {check!.username}@{BELFRY.domain} is available</span>
           : state === 'taken' ? <span className="error">Taken.{check!.suggestions.length > 0 && <> Try {check!.suggestions.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setEdited(true); onChange({ ...value, username: x, ok: false }) }}>{x}</button></span>)}</>}</span>
+          : state === 'invalid' && check!.reason === 'reserved' ? <span className="error">That name is kept for the belfry.{check!.suggestions.length > 0 && <> Try {check!.suggestions.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setEdited(true); onChange({ ...value, username: x, ok: false }) }}>{x}</button></span>)}</>}</span>
           : state === 'invalid' ? <span className="error">Use lowercase letters, digits and dashes, 3 to 30 characters.</span>
           : null}
       </div>
