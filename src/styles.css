@@ -1942,3 +1942,8 @@ button.chan-line.todo-line { width: 100%; text-align: left; color: inherit; font
 .screen.drop-on, .thread-pane.drop-on { position: relative; }
 .screen.drop-on::after, .thread-pane.drop-on::after { content: "Drop to add to your message"; position: absolute; inset: 8px; z-index: 80; display: grid; place-items: center;
   border: 2px dashed var(--accent); border-radius: 18px; background: color-mix(in srgb, var(--bg) 82%, transparent); font-size: 18px; font-weight: 650; color: var(--text); pointer-events: none; }
+
+/* "Buy" (sales.md §10): a link styled as the row's button, with an open-outside mark */
+a.buy { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+a.buy .ico { width: 14px; height: 14px; }
+.rsvp a.buy.on { justify-content: center; }

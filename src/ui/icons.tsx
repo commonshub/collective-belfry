@@ -114,3 +114,5 @@ export const ClockIcon = () => <Svg><circle cx="12" cy="12" r="9" /><path d="M12
 export const GripIcon = () => <Svg><path d="M5 9h14M5 15h14" /></Svg>
 export const GateIcon = () => <Svg><path d="M4 21V9a8 8 0 0 1 16 0v12M8 21v-9M12 21v-9M16 21v-9M3 21h18" /></Svg>
 export const LockIcon = () => <Svg><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" /></Svg>
+/** Opens outside the app (a page in the browser). */
+export const ExternalIcon = () => <Svg><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" /></Svg>

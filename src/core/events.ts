@@ -11,7 +11,7 @@
 import { nip19 } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
-import { BELFRY, TZ } from '../config'
+import { BELFRY, getBackend, TZ } from '../config'
 import { calendar, eventByLinkLocal, EVENT_D, EVENT_STATUS_NS, eventUrl, group, groups, type CalEvent, type Rsvp, type Visibility } from './model'
 import { all, addEvents, touch, type Ev } from './store'
 import { currentSigner, enqueue, isLocalOnly, me, newId, signedFetch, uploadBlob } from './sync'
@@ -42,7 +42,8 @@ export const slugOf = (title: string) => title.toLowerCase().normalize('NFKD').r
 // ---- what the belfry's API answers (GET /api/v1/events/<link>) ---------------------------
 
 export interface ApiTicket { d: string; id: string; title: string; summary: string; quantity: number | null; left: number | null; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean
-  price?: { amount: string; currency: string; vat?: string | null; vat_included?: boolean; until?: number | null } | null; prices?: { amount: string; currency: string; from?: number | null; until?: number | null }[]; on_sale?: boolean }
+  price?: { amount: string; currency: string; vat?: string | null; vat_included?: boolean; until?: number | null } | null; prices?: { amount: string; currency: string; from?: number | null; until?: number | null }[]; on_sale?: boolean
+  /** docs/sales.md §10: this viewer can buy it through the community's checkout now, and where */ can_pay?: boolean; checkout_url?: string | null }
 export interface ApiViewer {
   host: boolean; ticket: string | null; applied: boolean; waitlist: boolean; declined: boolean; rsvp: Rsvp | null; member: boolean
   /** check-in (docs/checkin.md): my ticket's code and the URL its QR holds, when I hold one */
@@ -74,6 +75,17 @@ export function remoteEvent(link: string, signed = true): ApiEvent | undefined {
   return got?.ev
 }
 export const remoteError = (link: string) => remote.get(link)?.error
+// demo mode only (tests): what the belfry would answer for an event, and how old the answer is
+if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoRemote: object }).__demoRemote = {
+  set: (link: string, ev: ApiEvent) => { remote.set(link, { at: Date.now(), ev }); touch() },
+  age: (link: string) => remote.get(link)?.at,
+}
+/** Ask the belfry again (back from the checkout in another tab: "Show my ticket" without a reload). */
+export function refreshEvent(link: string) {
+  const got = remote.get(link)
+  if (got) got.at = 0
+  touch()
+}
 
 export async function fetchEvent(link: string, signed = true): Promise<ApiEvent> {
   const url = `${BELFRY.api}/events/${encodeURIComponent(link)}`
@@ -131,7 +143,8 @@ export function eventByLink(link: string): { e?: CalEvent; api?: ApiEvent; error
 export * from './prices'
 import { isMoney, PRICE_AMOUNT, PRICE_LABEL, pricesOf, VAT_RATE, type Price, type PriceRow } from './prices'
 export interface Ticket { d: string; id: string; title: string; summary: string; quantity?: number; closed: boolean; prompt: string; members: boolean; position: number; implicit: boolean; ev?: Ev
-  /** the price now (none: free, or not on sale when `priced`) */ price?: Price; /** it has a price at all */ priced?: boolean; prices?: PriceRow[]; /** false: priced, but no price is on now */ onSale?: boolean }
+  /** the price now (none: free, or not on sale when `priced`) */ price?: Price;
+  /** sales.md §10: bought through the community's checkout, at this address (safeCheckout) */ checkout?: string; /** places left as the belfry counts them (orders holding one too) */ left?: number | null; /** it has a price at all */ priced?: boolean; prices?: PriceRow[]; /** false: priced, but no price is on now */ onSale?: boolean }
 
 /** People ask for this ticket (an application, a price) instead of taking it in one tap. */
 export const asks = (t: { closed: boolean; price?: unknown; priced?: boolean }) => t.closed || !!t.price || !!t.priced
@@ -139,8 +152,29 @@ export const asks = (t: { closed: boolean; price?: unknown; priced?: boolean }) 
 export const freeTicket = (e: Pick<CalEvent, 'd'>): Ticket => ({ d: `${e.d}:free`, id: 'free', title: 'RSVP', summary: '', closed: false, prompt: '', members: false, position: 0, implicit: true })
 
 /** A ticket as the belfry describes it (GET /events/<link>), in the app's shape. */
+/** A checkout address the app may open (sales.md §10, the server's own rule when the template is
+ *  saved): https, on this belfry's domain or a subdomain, no port, no user info, no fragment. */
+export function safeCheckout(u?: string | null): string | undefined {
+  if (!u || u.length > 600) return undefined
+  try {
+    const x = new URL(u)
+    const d = BELFRY.domain.toLowerCase(), h = x.hostname.toLowerCase()
+    if (x.protocol !== 'https:' || x.port || x.username || x.password || x.hash) return undefined
+    return h === d || h.endsWith('.' + d) ? x.href : undefined
+  } catch { return undefined }
+}
+/** The sales side of the belfry's answer on tickets (by d): left, and the checkout when the viewer can buy. */
+export function withSales(tks: Ticket[], api?: ApiEvent): Ticket[] {
+  if (!api) return tks
+  const by = new Map(api.tickets.map((t) => [t.d, t]))
+  return tks.map((t) => {
+    const a = by.get(t.d)
+    if (!a) return t
+    return { ...t, left: a.left, checkout: a.can_pay ? safeCheckout(a.checkout_url) : undefined }
+  })
+}
 export const apiTicket = (t: ApiTicket): Ticket & { left: number | null } => ({
-  ...t, quantity: t.quantity ?? undefined,
+  ...t, quantity: t.quantity ?? undefined, checkout: t.can_pay ? safeCheckout(t.checkout_url) : undefined,
   price: t.price ? { amount: t.price.amount, currency: t.price.currency, vat: t.price.vat ?? undefined, vatIncluded: !!t.price.vat_included, until: t.price.until ?? undefined } : undefined,
   prices: (t.prices ?? []).map((r) => ({ amount: r.amount, currency: r.currency, from: r.from ?? undefined, until: r.until ?? undefined })),
   priced: !!t.price || (t.prices?.length ?? 0) > 0, onSale: t.on_sale ?? true,
@@ -207,7 +241,7 @@ export function people(e: CalEvent): People {
 }
 
 export const taken = (p: People, ticketD: string) => [...p.holders.values()].filter((t) => t === ticketD).length
-export const placesLeft = (t: Ticket, p: People) => (t.quantity === undefined ? undefined : Math.max(0, t.quantity - taken(p, t.d)))
+export const placesLeft = (t: Ticket, p: People) => (typeof t.left === 'number' ? t.left : t.left === null ? undefined : t.quantity === undefined ? undefined : Math.max(0, t.quantity - taken(p, t.d)))
 
 /** Going: ticket holders who did not say otherwise, and members' RSVPs on the free ticket. */
 export function goingList(e: CalEvent, p = people(e)): string[] {

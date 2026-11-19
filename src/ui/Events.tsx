@@ -12,7 +12,7 @@ import { reading } from '../core/guestmode'
 import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
-import { addCoHost, apiTicket, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { addCoHost, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -25,7 +25,7 @@ import { Conversation, useCommunityName } from './Chat'
 import { FollowButton } from './Follow'
 import { Markdown } from './markdown'
 import { openProfile } from './Profile'
-import { CalendarIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
+import { CalendarIcon, ExternalIcon, CloseIcon, CopyIcon, DocIcon, GlobeIcon, LinkIcon, MoreIcon, PencilIcon, PeopleIcon, TrashIcon, ChevronDownIcon, ChevronUpIcon, ChevronRightIcon, ImageIcon, MessageIcon, PersonPlusIcon, PinIcon, ScanIcon, ShareIcon, TicketIcon } from './icons'
 import { EventFormSheet, DateChip, when, LABEL } from './Calendar'
 import { addByName, attendance, checkIn, handOver } from '../core/meetings'
 import { guestJoins } from '../core/model'
@@ -85,11 +85,17 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
   useEffect(() => { if (ticketCode) setCard(ticketCode) }, [ticketCode])
   const link = eventLinkOf(e)
   // what the belfry says about me (ticket code, roles): asked for local events too (cached a minute)
-  const api = given ?? (isLocalOnly() ? undefined : remoteEvent(link))
+  const api = given ?? remoteEvent(link) // demo mode: never asked (remoteEvent), only what a test feeds it
   const v = api?.me ?? api?.viewer ?? undefined
   const p = people(e)
-  const tks = tickets(e, given)
+  const tks = withSales(tickets(e, given), api) // left and Buy as the belfry says (sales.md §10)
   const st = myState(e, p, given)
+  // back from the checkout (another tab): ask the belfry again, so "Show my ticket" comes without a reload
+  useEffect(() => {
+    const again = () => { if (document.visibilityState === 'visible') refreshEvent(link) }
+    addEventListener('focus', again); document.addEventListener('visibilitychange', again)
+    return () => { removeEventListener('focus', again); document.removeEventListener('visibilitychange', again) }
+  }, [link])
   const host = isHost(e)
   const g = group(e.groupId)
   const plain = tks.length === 1 && tks[0].implicit
@@ -420,7 +426,7 @@ function RsvpRow({ e, p, tks, st, onPick, onWithdraw }: { e: CalEvent; p: People
     return <div className="row" style={{ gap: 8, justifyContent: 'space-between' }}><span>{st === 'applied' && tks.find((t) => t.d === p.applications.find((a) => a.pubkey === me())?.ticket)?.priced ? 'Waiting for the host to confirm your payment' : STATE_LINE[st]}</span><Btn className="btn small ghost" onClick={onWithdraw}>Withdraw</Btn></div>
   if (st === 'declined') return <p className="hint">{STATE_LINE.declined}.</p>
   if (!plain && !held && st === 'none')
-    return <div className="rsvp">{tks.length === 1 ? <button className="on" onClick={() => onPick(tks[0])}>{pickWord(tks[0])}</button> : <button className="on" onClick={() => onPick(tks[0])}>Pick a ticket</button>}</div>
+    return <div className="rsvp">{tks.length === 1 && tks[0].checkout ? <BuyLink href={tks[0].checkout} className="on" /> : tks.length === 1 ? <button className="on" onClick={() => onPick(tks[0])}>{pickWord(tks[0])}</button> : <button className="on" onClick={() => onPick(tks[0])}>Pick a ticket</button>}</div>
   const mine = e.rsvps.get(me()) ?? (held ? 'accepted' : undefined)
   return (
     <div className="rsvp">
@@ -429,6 +435,11 @@ function RsvpRow({ e, p, tks, st, onPick, onWithdraw }: { e: CalEvent; p: People
       ))}
     </div>
   )
+}
+
+/** "Buy" (sales.md §10, board events/get-tickets): the community's checkout page, in the browser. */
+function BuyLink({ href, className = 'btn small' }: { href: string; className?: string }) {
+  return <a className={className + ' buy'} href={href} target="_blank" rel="noopener noreferrer" aria-label="Buy, opens the ticket page in the browser" onClick={(x) => x.stopPropagation()}>Buy <ExternalIcon /></a>
 }
 
 function TicketRow({ t, p, onPick }: { t: Ticket; p: People; onPick?: () => void }) {
@@ -440,7 +451,8 @@ function TicketRow({ t, p, onPick }: { t: Ticket; p: People; onPick?: () => void
         <small>{ticketSub(t)}{t.members ? ' · Members only' : ''}{left !== undefined ? ` · ${left} left` : ''}</small>
         {t.summary && <small>{t.summary}</small>}
       </div>
-      {onPick && <button className="btn small" disabled={t.priced && t.onSale === false} onClick={onPick}>{full ? 'Waitlist' : t.priced && t.onSale === false ? 'Not on sale' : t.price ? 'Ask' : pickWord(t)}</button>}
+      {onPick && (t.checkout && !full ? <BuyLink href={t.checkout} />
+        : <button className="btn small" disabled={t.priced && t.onSale === false} onClick={onPick}>{full ? 'Waitlist' : t.priced && t.onSale === false ? 'Not on sale' : t.price ? 'Ask' : pickWord(t)}</button>)}
     </div>
   )
 }
@@ -724,6 +736,8 @@ const DEMO: ApiEvent = {
   tickets: [
     { d: '2026-demo01:std', id: 'std', title: 'Standard', summary: 'A place for the day', quantity: 30, left: 18, closed: false, prompt: '', members: false, position: 1, implicit: false },
     { d: '2026-demo01:sp', id: 'sp', title: 'Workshop host', summary: '', quantity: null, left: null, closed: true, prompt: 'What would you show?', members: false, position: 2, implicit: false },
+    { d: '2026-demo01:sup', id: 'sup', title: 'Supporter', summary: '', quantity: 20, left: 12, closed: false, prompt: '', members: false, position: 3, implicit: false,
+      price: { amount: '50', currency: 'EUR', vat: '21', vat_included: false }, can_pay: true, checkout_url: `https://${BELFRY.domain}/tickets?event=garden-day&ticket=2026-demo01%3Asup` },
   ],
 }
 
@@ -798,7 +812,12 @@ export function EventJoinScreen({ link, backend, onJoined, onSignIn, onDemo }: {
       {ev.status === 'cancelled' && <p className="error">This event is cancelled.</p>}
       {open && !t && (
         <div className="ev-tickets">
-          {ev.tickets.map(apiTicket).map((x) => (
+          {ev.tickets.map(apiTicket).map((x) => x.checkout && x.left !== 0 && !x.members ? (
+            <div key={x.d} className="ticket-row">
+              <div className="t"><b>{x.title}</b><small>{ticketSub(x)}{x.left !== null ? ` · ${x.left} left` : ''}</small></div>
+              <BuyLink href={x.checkout} />
+            </div>
+          ) : (
             <button key={x.d} className="ticket-row" onClick={() => x.members ? onSignIn() : setT(x)}>
               <div className="t"><b>{x.implicit ? 'RSVP' : x.title}</b><small>{ticketSub(x)}{x.members ? ' · Members only: sign in' : ''}{x.left !== null ? ` · ${x.left} left` : ''}</small></div>
               <span className="btn small">{x.left === 0 ? 'Waitlist' : x.priced && x.onSale === false ? 'Not on sale' : x.price ? 'Ask' : pickWord(x)}</span>
