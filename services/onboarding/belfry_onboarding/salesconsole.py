@@ -66,6 +66,11 @@ FLAGS = {
     "pass_closed": "its pass was closed",
     "paid_twice": "Paid twice: refund one in Stripe",
     "paid_old_amount": "paid through an older card session, for its own amount",
+    "tester_gone": "its tester is no tester any more: nothing opened",
+    "refunded_admitted": "refunded after they were admitted to the event: "
+    "remove them from the event yourself if they shouldn't come",
+    "already_admitted": "they had a ticket of this event already: refund one",
+    "event_over": "paid after the event ended or was cancelled",
 }
 
 MSG = {
@@ -86,6 +91,9 @@ MSG = {
     "not_open": "This order is not open any more.",
     "expired": "The form expired; try again.",
     "erase_cleared": "The request to erase their data after the event is cleared.",
+    "tickets": "Saved.",
+    "checkout_url_bad": "That address can't be used: https, on this belfry's own domain, with "
+    "only {link} and {id} as placeholders.",
 }
 
 
@@ -267,6 +275,26 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 <input type="hidden" name="id" value="{E(p["id"])}"><p><button class="btn ghost" type="submit">Delete</button></p></form></details>"""
     products = f"""<h2>Products</h2>{prods or '<p class="hint">No products yet.</p>'}
 <details><summary>Add a product</summary>{product_form(csrf, None)}</details>"""
+    # ── event tickets (ticketsales.py)
+    from . import ticketsales
+
+    if not st["tickets"]:
+        can = ""
+    elif ticketsales.can_sell(svc):
+        can = '<p class="ok">Tickets with a price in ' + E(st["currency"]) + " can be bought.</p>"
+    else:
+        can = (
+            '<p class="bad">Not yet: tickets need the Odoo connection with a product for event '
+            'tickets and both VAT taxes (<a href="/plugins">Plugins</a>), and Stripe or the bank '
+            "details.</p>"
+        )
+    tickets = f"""<h2 id="tickets">Event tickets</h2><div class="card">
+<form method="post" action="{PATH}/tickets" class="f"><input type="hidden" name="csrf" value="{csrf}">
+<label><input type="checkbox" name="tickets" value="1"{" checked" if st["tickets"] else ""}> Sell event tickets through the checkout</label>
+<p class="hint">An event's ticket with a price in {E(st["currency"])} is then paid by card or by transfer, like a pass; once paid, the buyer is admitted to the event. Off: the hosts settle the price themselves. Testers can try it while it is off.</p>{can}
+<label>Where people buy tickets <input type="text" name="checkout_url" value="{E(st["checkout_url"])}" placeholder="https://{E(svc.settings.nip05_domain)}/tickets?event={{link}}&amp;ticket={{id}}"></label>
+<p class="hint">The page of your website that runs the checkout. The public event page links each ticket that can be bought to it, with {{link}} = the event's address and {{id}} = the ticket's id. Empty: no links.</p>
+<div class="actions"><button class="btn" type="submit">Save</button></div></form></div>"""
     # ── codes
     popts = _opt("", "any product", "") + "".join(
         _opt(p["id"], p["name"], "") for p in sales.products(svc)
@@ -371,7 +399,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         row = (
             f"<tr><td>{E(o['created'][:10])}{'<br><span class=test-mark>TEST</span>' if test else ''}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span>"
             f"{f'<br><span class=hint>{bl}</span>' if (bl := billing_line(o.get('billing'))) else ''}</td>"
-            f"<td>{E(o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
+            f"<td>{E(o['product_name'] if o.get('ticket') else o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
             f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}{erase}</td><td>{act}</td></tr>"
         )
         if test:
@@ -386,7 +414,7 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 <table class="list test">{head}{trow}</table>"""
     body = f"""{STYLE}<div class="sales"><h1>Sales</h1>
 <p class="muted">Passes people buy: free with a code, or paid by card or bank transfer against an invoice in your Odoo.</p>
-{note}{state}{products}{codes}{offers}{orders}{bank}</div>"""
+{note}{state}{products}{tickets}{codes}{offers}{orders}{bank}</div>"""
     return console.frame("Sales", PATH, who, body)
 
 
@@ -457,6 +485,23 @@ def register(app: FastAPI) -> None:
             {"bank_holder": holder, "bank_iban": iban, "bank_bic": bic},
         )
         return back(request, msg="bank")
+
+    @app.post("/console/sales/tickets")
+    @admin_only
+    async def tickets(request: Request, me: dict[str, Any], form: Any):
+        from . import ticketsales
+
+        s = svc(request)
+        try:
+            url = ticketsales.clean_checkout_url(s, form.get("checkout_url"))
+        except ValueError:
+            return back(request, err="checkout_url_bad", at="tickets")
+        on = form.get("tickets") == "1"
+        await run_in_threadpool(sales.save_settings, s, {"tickets": on, "checkout_url": url})
+        log.info(
+            "sales: %s turned ticket sales %s", me["name"] or "an admin", "on" if on else "off"
+        )
+        return back(request, msg="tickets", at="tickets")
 
     @app.post("/console/sales/product")
     @admin_only

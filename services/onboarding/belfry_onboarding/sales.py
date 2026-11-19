@@ -78,6 +78,7 @@ ODOO_KEYS = (
     "tax_excluded",
     "card_journal",
     "manual_journal",
+    "ticket_product",
 )
 HOLD_DAYS = 7
 REMIND_DAYS = 2  # one reminder this long before the hold ends
@@ -598,12 +599,18 @@ def settings(svc: Services, env: str = "live") -> dict[str, Any]:
         "requests_channel": st.get("requests_channel") or "",
         "bank_iban": st.get("bank_iban") or "",
         "bank_bic": st.get("bank_bic") or "",
+        # event tickets through the checkout (ticketsales.py, docs/sales.md §10): the switch,
+        # where the public event page sends buyers, and the Odoo product a ticket is invoiced as
+        "tickets": bool(st.get("tickets")),
+        "checkout_url": st.get("checkout_url") or "",
+        "ticket_product": _int(st.get("ticket_product")),
     }
     if _env(env) == "test":
         t = _param(svc, TEST_SETTINGS_PARAM)
         t = t if isinstance(t, dict) else {}
         for k in ODOO_KEYS:
             out[k] = t.get(k) or ({} if k == "odoo_products" else None)
+        out["ticket_product"] = _int(out["ticket_product"])
         out["company_name"] = t.get("company_name") or out.get("company_name") or ""
         out["fallback_products"] = {}  # the server's ACCOUNTING_PRODUCTS are production's
     return out
@@ -1226,6 +1233,15 @@ def _partner_by_email(svc: Services, email: str, but: int) -> int | None:
 _confirm_lock = threading.Lock()
 
 
+def _has_pass(svc: Services, partner_id: int) -> bool:
+    """Whether the contact holds a membership pass (not only a guest's: the buyer of an event
+    ticket is the event's guest, and guests keep their guest name; ticketsales.py)."""
+    rows = svc.odoo.search_read(
+        "belfry.pass", [["partner_id", "=", partner_id], ["state", "=", "active"]], ["tier"]
+    )
+    return any(r.get("tier") != "guest" for r in rows)
+
+
 def confirm(svc: Services, partner_id: int, address: str) -> dict[str, Any]:
     """ADDRESS was proven for the contact (the link mailed to it, or a code mailed to it). It
     becomes the contact's ``email`` only if it is the contact's pending address, nothing else
@@ -1260,7 +1276,9 @@ def confirm(svc: Services, partner_id: int, address: str) -> dict[str, Any]:
             try:
                 from . import community
 
-                found = community.member_token(svc, partner_id)
+                found = None
+                if _has_pass(svc, partner_id):
+                    found = community.member_token(svc, partner_id)
                 if found:
                     number = (
                         svc.odoo.read_one("res.partner", partner_id, ["belfry_member_number"]) or {}
@@ -1331,6 +1349,15 @@ def _move_passes(svc: Services, temp: int, other: int) -> int:
     st = store(svc)
     n = 0
     for r in rows:
+        sold = st.order(r["sale_order"]) if r.get("sale_order") else None
+        if sold and sold.get("ticket"):
+            # an event ticket's guest pass: the ticket goes to OTHER's own key, no new pass
+            from . import ticketsales
+
+            ticketsales.moved(svc, sold, temp, other)
+            core.revoke_pass(svc, r["id"], "moved to the account of the same address")
+            n += 1
+            continue
         vals: dict[str, Any] = {
             "partner_id": other,
             "tier": r.get("tier") or "member",
@@ -1472,7 +1499,7 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
     out: dict[str, Any] = {
         "order": o["id"],
         "state": o["state"],
-        "product": o["product"],
+        "product": None if o.get("ticket") else o["product"],
         "total": {
             "net": euros(tot["net"]),
             "vat": euros(tot["vat"]),
@@ -1488,6 +1515,8 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
         # money; the buying page shows a banner
         "test": env_of(o) == "test",
     }
+    if o.get("ticket"):  # an event ticket's order (docs/sales.md §10)
+        out["ticket"] = o["ticket"]
     inv = o.get("invoice") or {}
     if inv.get("number"):
         out["invoice"] = {
@@ -1598,12 +1627,24 @@ def _checkout(
 
     if not own(svc):
         raise ApiError(409, "unsupported", "Selling needs the belfry's own register.")
-    pid = str(data.get("product") or "")
-    p = product(svc, pid)
-    if p is None:
-        raise ApiError(404, "unknown_product", "No such product.")
-    if not p.get("on_sale"):
-        raise ApiError(409, "not_on_sale", "This product is not on sale.")
+    wanted = None  # an event ticket instead of a product (ticketsales.py)
+    if data.get("ticket") is not None:
+        from . import ticketsales
+
+        if data.get("product") is not None or not isinstance(data["ticket"], str):
+            raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
+        if data.get("code"):
+            raise ApiError(422, "code_not_for_tickets", "Codes are for passes, not for tickets.")
+        wanted = ticketsales.find(svc, data["ticket"])
+        p = ticketsales.as_product(wanted)
+        pid = p["id"]
+    else:
+        pid = str(data.get("product") or "")
+        p = product(svc, pid)
+        if p is None:
+            raise ApiError(404, "unknown_product", "No such product.")
+        if not p.get("on_sale"):
+            raise ApiError(409, "not_on_sale", "This product is not on sale.")
     name = " ".join(str(data.get("name") or "").split())[:100]
     email = str(data.get("email") or "").strip()
     if not EMAIL.match(email) or len(email) > 254:
@@ -1656,11 +1697,16 @@ def _checkout(
         owner = None
     flags: list[str] = []
     vat_valid = False
+    sells = can_sell
+    if wanted is not None:
+        # the switch, who may have it, and whether tickets can be invoiced at all
+        ticketsales.check(svc, wanted, key, env, tester, owner)
+        sells = ticketsales.can_sell
     if (
         billing["kind"] == "organisation"
         and billing.get("vat")
         and vies_country(billing["kind"], billing["country"], billing["vat"])
-        and can_sell(svc, env)
+        and sells(svc, env)
     ):
         # checked before the invoice is made (outside the lock: VIES can be slow)
         from . import salesodoo
@@ -1689,10 +1735,16 @@ def _checkout(
             raise ApiError(429, "too_many", "Pay the orders you have before holding more places.")
         if code and not CODE_CHECKS.allow("key:" + key):
             raise ApiError(429, "too_many", "Too many codes tried. Try again in an hour.")
-        pr, _ = price_now(p)
-        if pr is None:
-            raise ApiError(409, "not_on_sale", "This product is not on sale.")
-        lft = left(svc, p)
+        if wanted is not None:
+            # the ticket's price now, as this buyer is invoiced (a person: the amount with its
+            # VAT; an organisation: before VAT), and the places left, counted under the lock
+            pr = {"until": None, "amount": ticketsales.unit(wanted, billing["kind"])}
+            lft = ticketsales.left_now(svc, wanted)
+        else:
+            pr, _ = price_now(p)
+            if pr is None:
+                raise ApiError(409, "not_on_sale", "This product is not on sale.")
+            lft = left(svc, p)
         if lft is not None and lft <= 0:
             raise ApiError(409, "sold_out", "Sold out.")
         oid = "o_" + "".join(
@@ -1719,7 +1771,7 @@ def _checkout(
                 c.setdefault(uses_key({"env": env}), []).append(oid)
                 st.put_code(c, db)
         total = split(pr["amount"], p["vat_rate"], percent, billing["kind"])
-        if total["gross"] > 0 and env == "test" and not can_sell(svc, "test"):
+        if total["gross"] > 0 and env == "test" and not sells(svc, "test"):
             # never a fall back to production
             _give_back(svc, {"id": oid, "code": code})
             raise ApiError(
@@ -1728,7 +1780,7 @@ def _checkout(
                 "This address is a tester's, and the test environment (Stripe test mode, test "
                 "Odoo) is not set up yet.",
             )
-        if total["gross"] > 0 and not can_sell(svc, env):
+        if total["gross"] > 0 and not sells(svc, env):
             _give_back(svc, {"id": oid, "code": code})
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
         created = now()
@@ -1784,6 +1836,8 @@ def _checkout(
             "tries": {},
             "error": None,
         }
+        if wanted is not None:
+            o.update(ticketsales.order_fields(wanted))
         st.put_order(o)
     log.info(
         "sales: %sorder %s for %s (%s), %s",
@@ -2029,6 +2083,11 @@ def _reopen(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
     p = product(svc, o["product"])
     if p is not None and (lft := left(svc, p)) is not None and lft <= 0:
         flags.append("oversold")
+    if o.get("ticket"):
+        from . import ticketsales
+
+        if ticketsales.full(svc, o):
+            flags.append("oversold")
     inv = o.get("invoice") or {}
     vals: dict[str, Any] = {"flags": _flag(o, *flags), "reopened": iso(now())}
     credited = bool(inv.get("credited"))
@@ -2073,6 +2132,12 @@ def activate(svc: Services, o: dict[str, Any]) -> None:
     tier and dates, the browser key as the account's first session, the receipt."""
     from . import core
 
+    if o.get("ticket"):
+        # an event ticket: the buyer is admitted to the event; no membership pass
+        from . import ticketsales
+
+        ticketsales.activate(svc, o)
+        return
     st = store(svc)
     oid = o["id"]
     pid = o.get("partner_id")

@@ -53,6 +53,10 @@ set.
   enter at Stripe (`https://belfry.<domain>/hooks/stripe`, and `…/hooks/stripe/test` for the
   Test section) and the events to select. Production refuses a test key (`sk_test_` /
   `rk_test_`), Test refuses a live one (`sk_live_` / `rk_live_`), with a fixed message.
+- **Event tickets** (on `/sales`): the switch "Sell event tickets through the checkout"
+  (setting `tickets`, off by default) and "Where people buy tickets" (setting `checkout_url`);
+  on Plugins → Odoo, "Event tickets are invoiced as" (setting `ticket_product`, one per
+  environment). See §10.
 - **Products**: id (slug), name, description, pass tier, role, valid from / until (the pass's
   dates), prices `[{until?: date, amount}]` in order (the first whose `until` hasn't passed
   applies; amount = price excluding VAT for organisations, including VAT for people — the same
@@ -254,6 +258,8 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
   maps the tax through an automatic fiscal position (e.g. "EU private / intra-community /
   non-EU" on the contact's country) is Odoo's setting: if it did, Odoo's total would differ and
   the order is flagged `odoo_total` (§8).
+- Instead of `product`, the body may name an event's ticket: `"ticket": "<the ticket's d tag>"`
+  (§10, with its own errors).
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
   `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
@@ -485,3 +491,129 @@ Testers: 409 `tester` on `POST /admins` and `POST /member-roles`; `POST /whois` 
 many testers there are.
 
 Not tested against the real Stripe test mode or a real test Odoo database (fakes only, as §8).
+
+## 10. Event tickets (2026-11-19)
+
+An event's ticket type with a price (a kind 30402 with a `price` tag, docs/checkin.md "Ticket
+prices") can be paid through this checkout: by card or against an invoice, exactly like a
+product. When the order is paid, the buyer is admitted to the event. Code: `ticketsales.py`;
+tests `tests/test_ticket_sales.py` (fakes only: §8 applies).
+
+**The switch.** `/sales` → "Event tickets" → "Sell event tickets through the checkout"
+(setting `tickets` in `belfry.sales.settings`; **off** by default). While off, a ticket
+checkout answers 409 `tickets_off`, and a priced ticket stays what it was: settled between the
+person and the hosts. A **tester's** order (§9: the checkout's e-mail is a tester's proven
+address) goes through while the switch is off, provided the test environment can sell tickets
+(else 409 `test_not_set_up`).
+
+**What must be set** (per environment): the Odoo connection, both VAT taxes, Stripe or the bank
+details, and the Odoo product a ticket is invoiced as: "Event tickets are invoiced as" on
+Plugins → Odoo (`ticket_product`), else the server's `ACCOUNTING_PRODUCTS` fallback (`ticket`
+or `*`), else the one Odoo product every Belfry product is invoiced as when they all share
+one. Missing → 409 `cannot_sell`.
+
+**`POST /checkout`** takes `"ticket": "<the 30402's d tag>"` instead of `product`, e.g.
+`"h9ptvr:day0128"` (the part before the first `:` is the event's d). Everything else is as in
+§4: `name`, `email`, `pay`, `billing`, `erase_after_event`, `return_url`; the same answers
+(`order`, `state`, `total`, `invoice`, `card_url`, `pay_url`, `hold_until`, `test`), the same
+7-day hold, limits, mails, `GET /checkout/<order>` and `POST /checkout/<order>/pay`. The answer
+carries `"ticket": "<d>"` and `"product": null`. Asking again with the same key, ticket and
+address returns the open order (200), as for a product.
+
+Errors, in the order they are checked:
+
+| | |
+|---|---|
+| 422 `invalid` | both `product` and `ticket`, or `ticket` not a string |
+| 422 `code_not_for_tickets` | a `code` with a `ticket` (codes are for products in this version) |
+| 404 `unknown_ticket` | no such event, or no such ticket of it by one of its hosts (the rule `GET /events/<link>` shows tickets by) |
+| 409 `event_over` | the event is cancelled or over |
+| 409 `free` | the ticket has no price (it is taken with `/join`) |
+| 409 `not_on_sale` | dated prices and none of them now, or a price tag that can't be read |
+| 409 `currency` | the price is not in the sales currency (`EUR`): hours and own labels are never sold here |
+| 409 `needs_application` | the ticket is `closed`: the hosts admit by application |
+| 409 `tickets_off` | the switch is off and this is not a tester's order |
+| 403 `members_only` | a members' ticket (or a members' event) and the key is no member or host |
+| 409 `already` | this account holds a ticket of the event, or this key paid for another ticket of it |
+| 409 `sold_out` | no place left |
+| 409 `test_not_set_up`, `cannot_sell` | as in §4, for tickets |
+
+**Price.** The ticket's current price when the order is made (`price_at` rows, else `price`),
+fixed on the order. VAT follows the ticket's `vat` tag:
+
+- `["vat", "21"]`: the price is before VAT. 50 → net 50.00, VAT 10.50, total 60.50, for a
+  person and for an organisation alike.
+- `["vat", "21", "included"]`: the price includes it. 50 → net 41.32, VAT 8.68, total 50.00.
+- On the invoice, a person's line is the total with the console's "VAT for people (price
+  includes it)" tax, an organisation's line is the net with "VAT for organisations (on top)"
+  (§4). The sums are made the way Odoo makes them, so an organisation paying a price that
+  includes VAT can differ by one cent from the ticket's price (net rounded, then VAT on it).
+- No `vat` tag: Belfry's total is the price, with no VAT in its own sum, as for a product
+  whose VAT rate is 0. The invoice still uses the console's two taxes (they are never chosen
+  per sale): for a person Odoo finds the VAT inside the same total; for an organisation Odoo
+  adds it on top, so Odoo's total is higher, the order follows Odoo's for a `pay: invoice`
+  order and is flagged `odoo_total` (a card order is paid at Belfry's total and flagged).
+  **Hosts selling to organisations should state the VAT on the ticket.**
+- The rate on the ticket is not checked against the rate of the Odoo taxes: when they differ,
+  Odoo's total differs and the order is flagged `odoo_total`.
+
+**Places.** A ticket with a `quantity` has that many places. Taken: the people who hold the
+ticket in the event's group, plus the orders `pending`, `invoiced` or `paid` (not yet admitted)
+for it. An order that expires or is cancelled frees its place. A tester's test order holds no
+place, and the tester's admission (its 9000 carries `["test", "1"]`) counts for none.
+
+**Paid → admitted.** At the point where a product's pass opens, the groups key publishes in
+the event's group the same event a host approving an application publishes: kind 9000 with
+`["h", "ev-<d>"]`, `["p", <the buyer's key>, "member"]`, `["ticket", "<ticket d>"]`,
+`["paid", "paid"]`, `["a", <the event>]`, `["by", "checkout"]` (and `["e", <their open
+application>]` when they had one). "Show my ticket" and the check-in QR work from that
+(docs/checkin.md). Then the invoice and the payment on it, and the receipt, as in §5.
+
+**A ticket gives the event only: no membership pass is made.** Who gets the ticket:
+
+- a signed-in member or guest (the request is signed by their account's key): that account. A
+  guest of other channels gets a guest pass of the event's group, as `/join` gives.
+- a browser key nobody knows: what an event's guest gets (a contact, a guest pass of the
+  event's group until 30 days after the event, an account in the signer named `guest-<n>`),
+  made only now, with the browser key bound as its first session (`bunker_url` in the order's
+  answer) and the address **unverified** (§3: `belfry_pending_email`; the receipt carries the
+  confirm link; the sign-in by e-mail code proves it too). The address is also the guest pass's
+  `event_email`: the event's own mails (reminder, cancellation) go there. A browser key that
+  applied to this event before gets its ticket on that same guest.
+- when the address is confirmed and belongs to another account already: the ticket moves to
+  that account's key (a new 9000 for it), the temporary guest is closed and leaves the group.
+- a tester's test order: the tester's own account only; nothing is created, no key is bound.
+
+**Ended unpaid**: nobody is admitted, the place is free again (credit note as in §5 when it had
+an invoice). **Paid after it ended**: reopened and admitted (flags `paid_late`, `oversold`;
+`event_over` when the event is over or cancelled by then: refund by hand).
+
+**A refund after admission** (the invoice credited in full in Odoo): the person is **not**
+taken out of the event. The order is flagged `refunded_admitted` in the console; a host removes
+them from the event if they shouldn't come. Other flags: `already_admitted` (the person held a
+ticket of this event before this order was paid: refund one).
+
+**`GET /events/<link>`** (docs/checkin.md): each ticket has `left` (places, counting the
+orders that hold one; null when unlimited), `can_pay` (this viewer could buy it through the
+checkout now: priced, on sale, in the sales currency, not `closed`, places left, the event not
+over, allowed for them when it is members-only, tickets can be invoiced, and the switch is on
+**or** the viewer is a tester with the test environment set up; without a viewer: the switch)
+and `checkout_url` (below; null when `can_pay` is false or no template is set).
+`needs_payment` is unchanged. `POST /events/<d>/join` on a priced ticket stays 409 `payment`,
+with `"checkout": true` in the body when `can_pay` is true for the caller.
+
+**Where people buy tickets** (`checkout_url`, `/sales` → "Event tickets"): a template for the
+page of the community's website that runs the checkout, e.g.
+`https://opensourcevillage.org/tickets?event={link}&ticket={id}`. Checked when saved: `https`,
+the host is the belfry's own domain or a subdomain of it (no port, no user info, no fragment),
+at most 500 characters of URL characters, and no placeholder other than `{link}` (the event's
+address: its slug, else its d) and `{id}` (the ticket's d tag), neither of them in the host.
+Both are URL-encoded when filled. When set, the public page `https://<domain>/events/<link>`
+makes each ticket whose `can_pay` (without a viewer) is true a link to the filled address, and
+when every ticket of the event has a price its main button ("Get tickets") goes to the first
+of them; otherwise the page is as before. The page never shows anything from the request URL.
+
+Not in this version: several tickets in one order, codes for tickets, a ticket that also gives
+a membership pass (a two-week ticket giving a village pass for its dates is an open question),
+removing someone automatically on a refund, tickets in the phone apps (they show the server's
+message), tickets on a belfry that keeps its register in Odoo.

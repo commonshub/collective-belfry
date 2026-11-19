@@ -200,6 +200,9 @@ def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
                 (url, "Confirm your e-mail"),
                 files,
             )
+    if o.get("ticket"):  # an event ticket: no pass, the event itself
+        lines.append("Sign in with your address to see the event and your ticket.")
+        return f"Your {o['product_name']}", lines, None, files
     lines.append("Sign in with your address to see your pass in the apps.")
     return f"Your {o['product_name']}", lines, None, files
 

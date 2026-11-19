@@ -296,6 +296,10 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
             or st["fallback_products"].get(o["tier"])
             or st["fallback_products"].get("*")
         )
+        if o.get("ticket"):  # an event ticket: the product picked for tickets (or the fallback)
+            from . import ticketsales
+
+            product = ticketsales.odoo_product(st)
         tax = st["tax_excluded"] if org else st["tax_included"]
         if not product or not tax:
             raise sales.Refused("no Odoo product or tax picked for this product")
@@ -574,6 +578,14 @@ def read_open_invoices(svc: Services, env: str = "live") -> dict[str, int]:
             if o["state"] != "active" and r.get("payment_state") in PAID:
                 sales.mark_paid(svc, o["id"], "transfer")
                 paid += 1
+            elif (
+                o["state"] == "active" and r.get("payment_state") == "reversed" and o.get("ticket")
+            ):
+                # an event ticket: nobody is taken out of the event by itself (docs/sales.md §10)
+                from . import ticketsales
+
+                ticketsales.refunded(svc, o)
+                closed += 1
             elif (
                 o["state"] == "active" and r.get("payment_state") == "reversed" and o.get("pass_id")
             ):

@@ -209,9 +209,27 @@ No tag, or an amount of zero, means free. A tag that can't be read still counts 
 A priced ticket is never self-served. `POST /events/<d>/join` answers 409 `payment`; the person
 asks through the application path (`/apply`, or a member's own 9021 with the `ticket` tag), and a
 host admitting them (their own 9000, or `/decide`) is the host saying the price is settled: that
-9000 carries `["paid", "paid"]`. Belfry takes no money for event tickets; the person and the host
-settle it between them. `GET /events/<link>` gives each ticket `price` (`{amount, currency}` or
-null) and `needs_payment`. The public page shows the price instead of "Free".
+9000 carries `["paid", "paid"]`. `GET /events/<link>` gives each ticket `price` (`{amount,
+currency}` or null) and `needs_payment`. The public page shows the price instead of "Free".
+
+Belfry takes the money for a ticket only when the belfry's admins turned on "Sell event tickets
+through the checkout" (docs/sales.md §10; off by default) and the price is in the sales currency
+(`EUR`): the ticket is then bought with `POST /api/v1/checkout {"ticket": "<the ticket's d
+tag>", …}`, by card or against an invoice, and the paid order admits the buyer with the same
+9000 (`["paid", "paid"]`, `["by", "checkout"]`, by the groups key). Otherwise (the switch off,
+a price in hours or in an own label, a `closed` ticket) the person and the host settle it
+between them as above. Each ticket in `GET /events/<link>` says which it is:
+
+- `left`: places left (null when unlimited), counting the checkout's unpaid orders that hold one;
+- `can_pay`: this viewer could buy it through the checkout now (without a viewer: anyone could);
+- `checkout_url`: the page where it is bought, when the admins set one and `can_pay` is true
+  (else null);
+- `needs_payment`: unchanged (the ticket has a price).
+
+`/join` on a priced ticket still answers 409 `payment`, with `"checkout": true` in the body
+when `can_pay` is true for the caller. On the public page a ticket that can be bought links to
+its `checkout_url`. A tester's ticket (a test order; its 9000 carries `["test", "1"]`) takes no
+place.
 
 ### VAT and prices for a while
 

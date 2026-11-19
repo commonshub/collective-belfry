@@ -688,9 +688,11 @@ class People:
     declined: set[str]
     members: set[str]  # in the group (39002)
     rsvps: dict[str, str]  # pubkey → accepted / tentative / declined (both relays)
+    # holders whose 9000 says ["test", "1"]: a tester's test order (ticketsales.py); no place
+    tests: set[str] = field(default_factory=set)
 
     def taken(self, ticket_d: str) -> int:
-        return sum(1 for t in self.holders.values() if t == ticket_d)
+        return sum(1 for p, t in self.holders.items() if t == ticket_d and p not in self.tests)
 
     def going(self) -> int:
         keys = set(self.holders) | {k for k, s in self.rsvps.items() if s == "accepted"}
@@ -753,6 +755,7 @@ def people(svc: Services, ev: Event) -> People:
         declined=declined,
         members=members,
         rsvps={k: v[1] for k, v in rsvps.items()},
+        tests={p for p in holders if has(put[p], "test")},
     )
 
 
@@ -866,6 +869,8 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         from .checkin import viewer_fields
 
         me.update(viewer_fields(svc, ev, viewer, ppl))
+    # what the checkout sells of it: places left, can_pay, checkout_url (docs/sales.md §10)
+    sold = sale_fields(svc, ev, tks, ppl, viewer)
     return {
         "d": ev.d,
         "coord": ev.coord,
@@ -890,12 +895,29 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         "hosts": [{"pubkey": h, "name": _known(host_names, h)} for h in sorted(ev.hosts)],
         # who to SHOW as hosting it: the creator and co-hosts, no service keys
         "hosted_by": [{"pubkey": h, "name": _known(host_names, h)} for h in shown_hosts(svc, ev)],
-        "tickets": [t.public(ppl.taken(t.d)) for t in tks],
+        "tickets": [{**t.public(ppl.taken(t.d)), **sold.get(t.d, NOT_SOLD)} for t in tks],
         "going": ppl.going(),
         "community": _community_name(),
         "me": me,
         "viewer": me,  # the same block, under the name docs/checkin.md uses
     }
+
+
+NOT_SOLD = {"can_pay": False, "checkout_url": None}
+
+
+def sale_fields(
+    svc: Services, ev: Event, tks: list[Ticket], ppl: People, viewer: str | None
+) -> dict[str, dict[str, Any]]:
+    """Per ticket d: ``left`` counting the checkout's unpaid orders, ``can_pay`` and
+    ``checkout_url`` (ticketsales.py). Nothing when the sales side can't be read."""
+    from . import ticketsales
+
+    try:
+        return ticketsales.fields(svc, ev, tks, ppl, viewer)
+    except Exception as exc:  # noqa: BLE001 — the event still shows
+        log.warning("events %s: ticket sales not read: %s", ev.d, type(exc).__name__)
+        return {}
 
 
 def _community_name() -> str:
@@ -1045,7 +1067,13 @@ def join(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[st
     if t.priced and not t.on_sale:
         raise ApiError(409, "not_on_sale", "This ticket is not on sale now.")
     if t.priced:
-        raise ApiError(409, "payment", "This ticket has a price: ask the hosts for it.")
+        from . import ticketsales
+
+        err = ApiError(409, "payment", "This ticket has a price: ask the hosts for it.")
+        if ticketsales.can_pay(svc, ev, t, caller):
+            # it can be bought through the checkout (POST /checkout {"ticket"})
+            err.extra["checkout"] = True
+        raise err
     member = is_member(svc, caller)
     if (t.members or ev.visibility == "members") and not member and caller not in ev.hosts:
         raise ApiError(403, "members_only", "This ticket is for members.")
@@ -1547,16 +1575,27 @@ def event_page(svc: Services, ev: Event) -> str:
     status = '<span class="tag cancel">Cancelled</span>' if ev.status == "cancelled" else ""
     where = ", ".join(x for x in (ev.location, "online" if ev.links else "") if x)
     ticket_rows = ""
+    # tickets the checkout sells (to anyone: no viewer here) link to where they are bought, the
+    # console's own template filled with this event's address and the ticket's id; never
+    # anything from the request
+    sold = sale_fields(svc, ev, tks, ppl, None)
+    buy = {d: f["checkout_url"] for d, f in sold.items() if f["can_pay"] and f["checkout_url"]}
     if not (len(tks) == 1 and tks[0].implicit):
         rows = []
         for t in tks:
-            left = "" if t.quantity is None else f" · {max(0, t.quantity - ppl.taken(t.d))} left"
+            n = sold[t.d]["left"] if t.d in sold else None
+            if n is None and t.quantity is not None:
+                n = max(0, t.quantity - ppl.taken(t.d))
+            left = "" if n is None else f" · {n} left"
             kind = t.price_text() or ("Apply" if t.closed else "Free")
             if t.priced and t.closed:
                 kind += " · Apply"
             mem = " · Members only" if t.members else ""
+            title = f"<b>{E(t.title)}</b>"
+            if t.d in buy:
+                title = f'<a class="buy" href="{E(buy[t.d])}">{title}</a>'
             rows.append(
-                f"<li><b>{E(t.title)}</b><small>{E(kind)}{mem}{left}</small>"
+                f"<li>{title}<small>{E(kind)}{mem}{left}</small>"
                 + (f"<small>{E(t.summary)}</small>" if t.summary else "")
                 + "</li>"
             )
@@ -1566,6 +1605,10 @@ def event_page(svc: Services, ev: Event) -> str:
         if ev.status == "cancelled" or ev.ended()
         else f'<a class="go" href="{E(chat_url(svc, ev))}">RSVP</a>'
     )
+    if action and buy and all(t.priced for t in tks):
+        # every ticket has a price: the main button goes to the first one that can be bought
+        first = next(buy[t.d] for t in tks if t.d in buy)
+        action = f'<a class="go" href="{E(first)}">Get tickets</a>'
     body = f"""<article class="ev">{cover}{status}
 <h1>{E(ev.title)}</h1>
 <p class="when">{E(when_text(ev))}</p>

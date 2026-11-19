@@ -289,6 +289,7 @@ def _picks_form(svc: Services, csrf: str, env: str) -> str:
 <input type="hidden" name="csrf" value="{csrf}">
 <label>Company {sel("company", lists["companies"], lambda r: r["name"], st["company"], "— the key's default —")}</label>
 {prod_rows}
+<label>Event tickets are invoiced as {sel("ticket_product", lists["products"], lambda r: r["display_name"], st["ticket_product"], "— pick a product —")}</label>
 <label>VAT for people (price includes it) {sel("tax_included", lists["taxes"], tax, st["tax_included"], "— pick a tax —")}</label>
 <label>VAT for organisations (on top) {sel("tax_excluded", lists["taxes"], tax, st["tax_excluded"], "— pick a tax —")}</label>
 <label>Journal for card payments {sel("card_journal", lists["journals"], lambda r: r["name"], st["card_journal"], "— not booked —")}</label>
@@ -476,6 +477,7 @@ def register(app: FastAPI) -> None:
             {
                 "company": num("company"),
                 "odoo_products": products,
+                "ticket_product": num("ticket_product"),
                 "tax_included": num("tax_included"),
                 "tax_excluded": num("tax_excluded"),
                 "card_journal": num("card_journal"),
