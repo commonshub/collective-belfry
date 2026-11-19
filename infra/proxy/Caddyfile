@@ -119,14 +119,26 @@
 	header ?Content-Security-Policy "{args[0]}; base-uri 'self'; object-src 'none'; frame-ancestors 'none'"
 }
 
-# import vanity <path> <host prefix>: <domain>/<path>[/rest] redirects to <host prefix>.<domain>[/rest]
-# (query kept). 302, so the short names can be pointed elsewhere later without browsers keeping
-# the old target. The apps stay on their own hosts (own origins: their keys in localStorage, their
-# service workers and policies stay apart); only the short name lives on the apex.
+# import vanity <path> <host prefix> <app>: <domain>/<path>[/rest] redirects to
+# <host prefix>.<domain>[/rest] (query kept), but only while that app runs here: all of them with
+# OSV_APPS=1, or the ones an admin added (EXTRA_APPS; <app> is the app's name there, `-` for a
+# host that always exists). Without the app the path is the website's: a community's own
+# /programme or /photos page is served, not sent to the apps list. 302, so the short names can
+# be pointed elsewhere later without browsers keeping the old target. The apps stay on their own
+# hosts (own origins: their keys in localStorage, their service workers and policies stay
+# apart); only the short name lives on the apex.
 (vanity) {
-	redir /{args[0]} https://{args[1]}.{$BELFRY_DOMAIN}/ 302
-	handle_path /{args[0]}/* {
-		redir https://{args[1]}.{$BELFRY_DOMAIN}{uri} 302
+	@vanity_{args[0]} {
+		path /{args[0]} /{args[0]}/*
+		expression `'{args[2]}' == '-' || {$OSV_APPS:1} == 1 || '{$EXTRA_APPS} '.contains('{args[2]} ')`
+	}
+	handle @vanity_{args[0]} {
+		handle_path /{args[0]}/* {
+			redir https://{args[1]}.{$BELFRY_DOMAIN}{uri} 302
+		}
+		handle {
+			redir https://{args[1]}.{$BELFRY_DOMAIN}/ 302
+		}
 	}
 }
 
@@ -281,16 +293,16 @@ apps.{$BELFRY_DOMAIN} {
 	# The belfry's own static apps at <domain>/<name>/ (`belfry app install` writes one route file
 	# per app into infra/data/apps/_routes/; the chat ships with every belfry). None: no match.
 	import /srv/apps/_routes/*.caddy
-	import vanity groups groups
-	import vanity calendar calendar
-	import vanity programme programme
-	import vanity vote vote
-	import vanity people people
-	import vanity market market
-	import vanity photos photos
-	import vanity wallet wallet
-	import vanity apps apps
-	import vanity shop {$ODOO_HOST_PREFIX:shop}
+	import vanity groups groups groups
+	import vanity calendar calendar calendar
+	import vanity programme programme village
+	import vanity vote vote vote
+	import vanity people people village
+	import vanity market market village
+	import vanity photos photos village
+	import vanity wallet wallet wallet
+	import vanity apps apps -
+	import vanity shop {$ODOO_HOST_PREFIX:shop} -
 	# Everything else: the start page (the onboarding service's landing page, SITE_URL) and the
 	# onboarding site it links to.
 	handle {
