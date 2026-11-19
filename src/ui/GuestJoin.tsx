@@ -4,8 +4,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { BELFRY, NAME } from '../config'
 import { coHostToken, guestInfo, setCoHostToken } from '../core/auth'
-import { JoinFailed, joinErrorText, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
-import { switchToSignedIn } from '../core/signedin'
+import { JoinFailed, joinErrorText, nameDone, sendJoinCode, verifyJoinCode } from '../core/guestjoin'
+import { DirectFailed, directErrorText, welcomeName } from '../core/direct'
+import { NameFields, type NameState } from './UsernameField'
+import { switchToLogin, switchToSignedIn } from '../core/signedin'
 import { askToJoin, closeJoin, joinAsked, reading, useGuestMode } from '../core/guestmode'
 import { channelIcon, group, nameOf } from '../core/model'
 import { touch } from '../core/store'
@@ -51,6 +53,7 @@ export function MemberInviteScreen() {
             placeholder="you@example.org" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
         {error && <div className="error" role="alert">{error}</div>}
         <button className="btn" disabled={!/^\S+@\S+\.\S+$/.test(email.trim())}>Send me a code</button>
+        <Btn className="link" onClick={() => switchToLogin()}>I’m already a member · Log in</Btn>
       </Form>
     </div>
   )
@@ -217,5 +220,39 @@ export function JoinSheet({ onClose, onSignIn, saveOnly = false, onSaved }: { on
         </div>
       )}
     </Sheet>
+  )
+}
+
+/** After a member link's code (board onboarding/member-link-name, canvas v54): how people will
+ *  know them here. Name + username (POST /welcome through the new member's session), then the
+ *  chat. Shown again on the next open while due (core/guestjoin nameNext: < 24 h, not set yet);
+ *  the belfry's already_set (or a guest's 403) ends it. */
+export function MemberNameScreen({ email, onDone }: { email: string; onDone: () => void }) {
+  const community = useCommunityName(NAME)
+  const [who, setWho] = useState<NameState>({ name: '', username: '', ok: false })
+  const [error, setError] = useState('')
+  const [sug, setSug] = useState<string[]>([])
+  return (
+    <div className="screen login start member-name">
+      <Form className="start-form" onSubmit={async () => {
+        setError('')
+        if (!who.name.trim() || !who.ok) return
+        try {
+          await welcomeName(who.name, who.username.trim())
+          nameDone(); touch(); onDone()
+        } catch (e) {
+          const f = e instanceof DirectFailed ? e : new DirectFailed('failed')
+          if (f.code === 'username_taken' || f.code === 'username_invalid') { setSug(f.suggestions); setWho((w) => ({ ...w, ok: false })) }
+          setError(directErrorText(f))
+        }
+      }}>
+        <h2>Welcome to {community}</h2>
+        <p className="hint">{email ? <><b className="addr">{email}</b> is confirmed. </> : null}One last thing: how people will know you here.</p>
+        <NameFields value={who} onChange={(v) => { setWho(v); if (v.username !== who.username) setSug([]) }} via="session" autoFocus />
+        {sug.length > 0 && <p className="username-state"><span className="error">Try {sug.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setWho({ ...who, username: x, ok: false }); setSug([]) }}>{x}</button></span>)}</span></p>}
+        {error && <div className="error" role="alert">{error}</div>}
+        <button className="btn" disabled={!who.name.trim() || !who.ok}>Go to the chat</button>
+      </Form>
+    </div>
   )
 }

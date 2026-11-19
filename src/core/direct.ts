@@ -42,11 +42,11 @@ export function releaseApplicantKey(secret: string) {
 export const appliedEmail = () => { try { return localStorage.getItem(EMAIL) ?? '' } catch { return '' } }
 const setAppliedEmail = (e: string) => { try { localStorage.setItem(EMAIL, e) } catch { /* private mode */ } }
 
-export type DirectError = 'missing' | 'unticked' | 'invalid' | 'unsupported' | 'wrong_code' | 'expired' | 'taken' | 'key_taken' | 'signer' | 'too_many' | 'proof' | 'offline' | 'failed'
+export type DirectError = 'missing' | 'unticked' | 'invalid' | 'unsupported' | 'username_invalid' | 'username_taken' | 'wrong_code' | 'expired' | 'taken' | 'key_taken' | 'signer' | 'too_many' | 'proof' | 'offline' | 'failed'
 export class DirectFailed extends Error {
-  constructor(public code: DirectError, public triesLeft?: number) { super(code) }
+  constructor(public code: DirectError, public triesLeft?: number, /** username_taken: the belfry's suggestions */ public suggestions: string[] = []) { super(code) }
 }
-const KNOWN = new Set<DirectError>(['missing', 'unticked', 'invalid', 'unsupported', 'wrong_code', 'expired', 'taken', 'key_taken', 'signer', 'too_many', 'proof'])
+const KNOWN = new Set<DirectError>(['missing', 'unticked', 'invalid', 'unsupported', 'username_invalid', 'username_taken', 'wrong_code', 'expired', 'taken', 'key_taken', 'signer', 'too_many', 'proof'])
 export function directErrorText(f: DirectFailed): string {
   if (f.code === 'wrong_code' && f.triesLeft !== undefined)
     return f.triesLeft <= 0 ? 'That code is not right, and no tries are left. Send a new one.' : `That code is not right. ${f.triesLeft} ${f.triesLeft === 1 ? 'try' : 'tries'} left.`
@@ -55,6 +55,8 @@ export function directErrorText(f: DirectFailed): string {
     unticked: 'Tick each agreement of the charter.',
     invalid: 'That doesn’t look like an e-mail address.',
     unsupported: 'This belfry takes applications another way.',
+    username_invalid: 'Use lowercase letters, digits and dashes, 3 to 30 characters.',
+    username_taken: 'That username was just taken. Pick another.',
     wrong_code: 'That code is not right. Check the e-mail and try again.',
     expired: 'That code has expired. Send a new one.',
     taken: 'This address has an account that signs in with its own key.',
@@ -68,6 +70,9 @@ export function directErrorText(f: DirectFailed): string {
 }
 
 const demo = () => getBackend() === 'demo'
+/** The belfry's suggested usernames (at most 3, each a plain username). */
+export const suggestionsOf = (d: Record<string, unknown>): string[] =>
+  (Array.isArray(d.suggestions) ? d.suggestions : []).filter((x): x is string => typeof x === 'string' && /^[a-z0-9][a-z0-9._-]{0,29}$/.test(x)).slice(0, 3)
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function post(path: string, body: Record<string, unknown>): Promise<{ status: number; d: Record<string, unknown> }> {
@@ -82,7 +87,7 @@ async function post(path: string, body: Record<string, unknown>): Promise<{ stat
     const e = String(d.error ?? '') as DirectError
     const left = typeof d.tries_left === 'number' && Number.isInteger(d.tries_left) && d.tries_left >= 0 && d.tries_left < 100 ? d.tries_left : undefined
     if (e === 'key_taken') dropApplicantKey() // one key, one identity: the next code goes with a new key
-    throw new DirectFailed(KNOWN.has(e) ? e : 'failed', left)
+    throw new DirectFailed(KNOWN.has(e) ? e : 'failed', left, suggestionsOf(d))
   }
   return { status: r.status, d }
 }
@@ -136,12 +141,13 @@ export async function loginVerify(email: string, code: string): Promise<Verified
 }
 
 /** Apply: with PROOF (a login code just proved the address) → pending at once; without → a code goes out. */
-export async function applyStart(email: string, motivation: string, agreed: string[], proof?: string): Promise<'sent' | 'pending'> {
+export async function applyStart(email: string, motivation: string, agreed: string[], proof?: string, who?: { name: string; username: string }): Promise<'sent' | 'pending'> {
   const e = email.trim()
   setAppliedEmail(e)
   applicantKey()
-  if (demo()) { await wait(300); if (proof) { setDemoState('pending'); return 'pending' } return 'sent' }
-  const { d } = await post('/apply/start', { email: e, motivation: motivation.trim(), agreed, ...(proof ? { proof } : {}) })
+  if (who) setDemoWho(who, motivation, e)
+  if (demo()) { await wait(300); if (who && demoTaken.has(who.username)) throw new DirectFailed('username_taken', undefined, demoSuggest(who.name).filter((x) => x !== who.username)); if (proof) { setDemoState('pending'); return 'pending' } return 'sent' }
+  const { d } = await post('/apply/start', { email: e, motivation: motivation.trim(), agreed, ...(proof ? { proof } : {}), ...(who ? { name: who.name.trim().replace(/\s+/g, ' ').slice(0, 100), username: who.username } : {}) })
   return d.state === 'pending' ? 'pending' : 'sent'
 }
 
@@ -157,7 +163,10 @@ export async function applyVerify(email: string, code: string): Promise<Verified
   return v
 }
 
-export type Status = { state: 'none' | 'pending' | 'declined' } | { state: 'approved'; signed?: SignedIn; nip05?: string }
+/** What a pending request says (for its screen): the name, the username asked for, the e-mail, the message. */
+export interface Pending { name: string; username: string; email: string; motivation: string }
+export type Status = { state: 'none' } | { state: 'pending'; pending?: Pending } | { state: 'declined'; note?: string } | { state: 'approved'; signed?: SignedIn; nip05?: string }
+const text = (x: unknown, max: number) => (typeof x === 'string' ? x.slice(0, max) : '')
 
 /** Where this browser's application is (asked on opening the chat signed out, and every 5 s while pending). */
 export async function applyStatus(): Promise<Status> {
@@ -166,14 +175,21 @@ export async function applyStatus(): Promise<Status> {
     await wait(150)
     const s = demoState()
     if (s === 'approved') { setDemoState('none'); return { state: 'approved', signed: demoSigned(appliedEmail() || 'new@example.org') } }
-    return { state: s === 'pending' || s === 'declined' ? s : 'none' }
+    if (s === 'pending') { const w = demoWho(); return { state: 'pending', ...(w ? { pending: w } : {}) } }
+    if (s === 'declined') return { state: 'declined' }
+    return { state: 'none' }
   }
   const { d } = await post('/apply/status', {})
   if (d.state === 'approved') {
     if (typeof d.bunker_url === 'string') return { state: 'approved', signed: signed(d, appliedEmail()) }
     return { state: 'approved', nip05: typeof d.nip05 === 'string' ? d.nip05 : undefined }
   }
-  return { state: d.state === 'pending' || d.state === 'declined' ? d.state : 'none' }
+  if (d.state === 'pending') {
+    const p: Pending = { name: text(d.name, 100), username: text(d.username, 30), email: text(d.email, 200), motivation: text(d.motivation, 4000) }
+    return { state: 'pending', ...(p.name || p.email || p.motivation ? { pending: p } : {}) }
+  }
+  if (d.state === 'declined') return { state: 'declined', ...(text(d.note, 2000) ? { note: text(d.note, 2000) } : {}) }
+  return { state: 'none' }
 }
 
 /** A belfry without its own register (409 unsupported): the old application, unsigned
@@ -196,4 +212,75 @@ export function takePollTurn(): boolean {
     localStorage.setItem(LOCK, JSON.stringify({ tab: TAB, at: Date.now() }))
     return true
   } catch { return true }
+}
+
+// ---- the name and the username (canvas v54, Xavier 19 Nov; POST /username/check, /welcome) -------
+export type Check = { state: 'available' | 'taken' | 'invalid'; username: string; reason?: string; suggestions: string[] }
+const USERNAME = /^[a-z0-9](?:[a-z0-9._-]{1,28}[a-z0-9])$/
+const demoTaken = new Set(['admin', 'ana', 'stewards'])
+const slug = (w: string) => w.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+/** Demo only: the suggestions the belfry would make (first name, first-last, first-2). */
+function demoSuggest(name: string): string[] {
+  const w = name.trim().split(/\s+/).map(slug).filter(Boolean)
+  if (!w.length) return []
+  const out = [w[0], w.length > 1 ? `${w[0]}-${w[w.length - 1]}` : '', `${w[0]}-2`, `${w[0]}-3`].filter((x) => x && USERNAME.test(x) && !demoTaken.has(x))
+  return [...new Set(out)].slice(0, 3)
+}
+type DemoWho = Pending
+const setDemoWho = (who: { name: string; username: string }, motivation: string, email: string) => { if (demo()) try { localStorage.setItem('demo-apply-who', JSON.stringify({ ...who, motivation, email })) } catch { /* private mode */ } }
+const demoWho = (): DemoWho | null => { try { return JSON.parse(localStorage.getItem('demo-apply-who') ?? 'null') } catch { return null } }
+
+/** Ask the belfry about a username (or, with only a name, for the one to suggest). VIA: the
+ *  applicant key (apply) or the session (after a member link). 429 too_many: null (keep the last state). */
+export async function checkUsername(body: { username?: string; name?: string }, via: 'applicant' | 'session'): Promise<{ check?: Check; suggested?: string; suggestions: string[] } | null> {
+  if (demo()) {
+    await wait(150)
+    if (body.username !== undefined) {
+      const u = body.username.trim().toLowerCase()
+      const sug = demoSuggest(body.name ?? u).filter((x) => x !== u)
+      if (!USERNAME.test(u)) return { check: { state: 'invalid', username: u, reason: u.length < 3 ? 'short' : u.length > 30 ? 'long' : 'chars', suggestions: [] }, suggestions: [] }
+      return { check: { state: demoTaken.has(u) ? 'taken' : 'available', username: u, suggestions: demoTaken.has(u) ? sug : [] }, suggestions: sug }
+    }
+    const sug = demoSuggest(body.name ?? '')
+    return { suggested: sug[0], suggestions: sug }
+  }
+  let d: Record<string, unknown>
+  try {
+    if (via === 'applicant') d = (await post('/username/check', body)).d
+    else {
+      const { signedFetch } = await import('./sync')
+      const r = await signedFetch(`${BELFRY.api}/username/check`, 'POST', body)
+      if (r.status === 429) return null
+      if (!r.ok) throw new DirectFailed('failed')
+      d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+    }
+  } catch (e) {
+    if (e instanceof DirectFailed && e.code === 'too_many') return null
+    throw e
+  }
+  const sug = suggestionsOf(d)
+  if (body.username !== undefined) {
+    const st = d.state === 'available' || d.state === 'taken' || d.state === 'invalid' ? d.state : 'invalid'
+    return { check: { state: st, username: typeof d.username === 'string' ? d.username.slice(0, 30) : body.username, reason: typeof d.reason === 'string' ? d.reason : undefined, suggestions: sug }, suggestions: sug }
+  }
+  const suggested = typeof d.suggested === 'string' && /^[a-z0-9][a-z0-9._-]{0,29}$/.test(d.suggested) ? d.suggested : undefined
+  return { suggested, suggestions: sug }
+}
+
+/** After a member link: the member's name and username (POST /welcome through the session). */
+export async function welcomeName(name: string, username: string): Promise<{ name: string; username: string; nip05?: string } | 'already_set'> {
+  if (demo()) {
+    await wait(250)
+    if (demoTaken.has(username)) throw new DirectFailed('username_taken', undefined, demoSuggest(name).filter((x) => x !== username))
+    return { name, username, nip05: `${username}@${BELFRY.domain}` }
+  }
+  const { signedFetch } = await import('./sync')
+  let r: Response
+  try { r = await signedFetch(`${BELFRY.api}/welcome`, 'POST', { name: name.trim().replace(/\s+/g, ' ').slice(0, 100), username }) } catch { throw new DirectFailed('offline') }
+  const d = (await r.json().catch(() => ({}))) as Record<string, unknown>
+  // already set, an account holding its own key, a guest or an unverified address: no screen
+  if (r.status === 409 && (d.error === 'already_set' || d.error === 'own_key')) return 'already_set'
+  if (r.status === 403) return 'already_set'
+  if (!r.ok) { const e = String(d.error ?? '') as DirectError; throw new DirectFailed(e === 'username_invalid' || e === 'username_taken' ? e : 'failed', undefined, suggestionsOf(d)) }
+  return { name: text(d.name, 100) || name, username: text(d.username, 30) || username, nip05: typeof d.nip05 === 'string' ? d.nip05 : undefined }
 }

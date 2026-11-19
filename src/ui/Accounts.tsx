@@ -2,7 +2,10 @@
 // person row at the bottom of the Town drawer. "On this browser": this belfry's accounts (a tap
 // switches: a full reload into that account) and other belfries (a tap opens their chat, where
 // their own sign-in lives). Then Add an account, Scan an invite, and Me.
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import qrcode from 'qrcode-generator'
+import { profiles } from '../core/model'
+import { isGuest } from '../core/invite'
 import { BELFRY, NAME } from '../config'
 import { accounts, activeId, addAccount, addOtherBelfry, otherBelfries, removeOtherBelfry, switchTo, type Account } from '../core/accounts'
 import { useVersion } from '../core/store'
@@ -27,6 +30,7 @@ export function AccountsScreen() {
   const community = useCommunityName(NAME)
   const [adding, setAdding] = useState(false)
   const [scanning, setScanning] = useState(false)
+  const [linking, setLinking] = useState(false)
   const [switching, setSwitching] = useState('')
   const [, setTick] = useState(0)
   const cur = activeId()
@@ -40,10 +44,16 @@ export function AccountsScreen() {
         <div className="place-section"><h3>On this browser</h3></div>
         <div className="home-card">
           {list.map((a) => a.id === cur ? (
-            <div key={a.id} className="home-row acct-row on" aria-current="true">
-              <Avatar pubkey={me()} size={36} />
-              <span className="t"><b>{a.name || 'You'}</b><small>{community} · {a.label || 'Member'}</small></span>
-              <CheckIcon />
+            <div key={a.id}>
+              <div className="home-row acct-row on" aria-current="true">
+                <Avatar pubkey={me()} size={36} />
+                <span className="t"><b>{a.name || 'You'}</b><small>{community} · {a.label || 'Member'}</small></span>
+                <CheckIcon />
+              </div>
+              {/* board home/accounts-web (canvas v55): open this account in the Belfry app */}
+              {myUsername() && <button className="home-row link-phone-row" onClick={() => setLinking(true)}>
+                <span className="row-ico"><PhoneIcon /></span><span className="t"><b>Link your phone</b><small>Open this account in the Belfry app</small></span><ChevronRightIcon />
+              </button>}
             </div>
           ) : (
             <Btn key={a.id} className="home-row acct-row" disabled={!!switching} aria-label={`Switch to ${a.name || a.email || 'this account'}`}
@@ -75,7 +85,42 @@ export function AccountsScreen() {
       </div>
       {adding && <AddAccountSheet onClose={() => setAdding(false)} onAdded={() => { setAdding(false); setTick((t) => t + 1) }} />}
       {scanning && <ScanInviteSheet onClose={() => setScanning(false)} />}
+      {linking && <LinkPhoneSheet onClose={() => setLinking(false)} />}
     </div>
+  )
+}
+
+const PhoneIcon = () => <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.5" /><path d="M11 18h2" /></svg>
+
+/** My username on this belfry: the name part of my nip05 when it is name@<this domain> (none for
+ *  a guest, or an address elsewhere: then no "Link your phone"). */
+export function myUsername(): string {
+  if (isGuest(me())) return ''
+  const n = (profiles().get(me())?.nip05 ?? '').toLowerCase()
+  const [u, d] = n.split('@')
+  return d === BELFRY.domain.toLowerCase() && /^[a-z0-9][a-z0-9._-]{0,29}$/.test(u ?? '') ? u : ''
+}
+
+/** Link your phone (boards home/link-phone, -laptop): a QR of https://chat.<domain>/login/<username>,
+ *  nothing else in it (no secret, no token); the app (or a browser) logs in with a code by e-mail. */
+function LinkPhoneSheet({ onClose }: { onClose: () => void }) {
+  const community = useCommunityName(NAME)
+  const u = myUsername()
+  const url = `https://chat.${BELFRY.domain}/login/${u}`
+  const name = profiles().get(me())?.name || u
+  const qr = useMemo(() => {
+    const q = qrcode(0, 'M'); q.addData(url); q.make()
+    return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }))
+  }, [url])
+  return (
+    <Sheet title="Link your phone" onClose={onClose}>
+      <div className="link-phone">
+        <p>Scan this with the Belfry app to open {community} on your phone as {name} (@{u}).</p>
+        <div className="qr-box"><img className="drop-qr" src={qr} alt={`QR code of ${url}`} /></div>
+        <p className="hint">Don’t have the app yet? <a href="https://belfry.sh/android" target="_blank" rel="noopener noreferrer">Android</a> · <a href="https://belfry.sh/iphone" target="_blank" rel="noopener noreferrer">iPhone</a></p>
+        <p className="hint small">For your security, we’ll e-mail you a 6-digit code to confirm on your phone.</p>
+      </div>
+    </Sheet>
   )
 }
 

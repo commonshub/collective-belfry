@@ -8,11 +8,14 @@
 //              declined = said so. Opening the chat later in this browser asks first.
 // One address and one code per device: never asked twice.
 import { useEffect, useRef, useState } from 'react'
-import { NAME } from '../config'
+import { BELFRY, NAME } from '../config'
 import { startSignIn } from '../core/auth'
 import { loadRemoteCharter, type RemoteAgreement } from '../core/charter'
 import { applyOld, applyStart, applyStatus, applyVerify, appliedEmail, DirectFailed, directErrorText, hasApplicantKey, loginStart, loginVerify, takePollTurn, type Verified } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
+import type { Pending } from '../core/direct'
+import { NameFields, type NameState } from './UsernameField'
+import { takeStartAt } from '../core/signedin'
 import { AgreementAbout } from './Charter'
 import { Btn, Form } from './common'
 import { useCommunityName } from './community'
@@ -26,6 +29,21 @@ type Step =
   | { s: 'apply'; proof?: string } | { s: 'apply-email' } | { s: 'apply-code' }
   | { s: 'pending' } | { s: 'declined' } | { s: 'sent' } | { s: 'approved'; address: string } | { s: 'taken' }
 
+// chat.<domain>/login/<username>: read as the page loads (before the router touches the hash);
+// only a username by the rule is kept, never the raw text
+const loginUser = (hash: string) => {
+  const m = /^#\/login\/([a-z0-9](?:[a-z0-9._-]{0,28}[a-z0-9])?)\/?$/.exec(hash.toLowerCase())
+  return m ? m[1] : ''
+}
+const LOGIN_LINK = loginUser(location.hash)
+let loginLinkTaken = false
+function takeLoginLink(): string {
+  if (loginLinkTaken) return ''
+  loginLinkTaken = true
+  if (/^#\/login\//.test(location.hash)) history.replaceState(history.state, '', location.pathname + location.search)
+  return LOGIN_LINK
+}
+
 const POLL = 5000 // every 5 s for the first 30 minutes of an open tab, then every minute
 const SLOW = 60_000
 const FAST_FOR = 30 * 60_000
@@ -33,10 +51,18 @@ const FAST_FOR = 30 * 60_000
 export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedIn) => Promise<void> | void; invited?: boolean; error?: string }) {
   const community = useCommunityName(NAME)
   const atApply = location.pathname === '/apply'
-  const [step, setStep] = useState<Step>(hasApplicantKey() ? { s: 'checking' } : atApply ? { s: 'apply' } : { s: 'start' })
-  const [email, setEmail] = useState(appliedEmail())
+  // chat.<domain>/login/<username> (the proxy makes it #/login/<username>; "Link your phone"): Log
+  // in with <username>@<domain> filled in. Only a username by the rule is used, never the raw text.
+  const [linked] = useState(() => { const u = takeLoginLink(); return u ? `${u}@${BELFRY.domain}` : '' })
+  const [step, setStep] = useState<Step>(() => linked ? { s: 'login-email' } : hasApplicantKey() ? { s: 'checking' } : takeStartAt() === 'login' ? { s: 'login-email' } : atApply ? { s: 'apply' } : { s: 'start' })
+  const [email, setEmail] = useState(linked || appliedEmail())
   const [code, setCode] = useState('')
   const [why, setWhy] = useState('')
+  const [who, setWho] = useState<NameState>({ name: '', username: '', ok: false })
+  const [takenSug, setTakenSug] = useState<string[]>([]) // the belfry said the username went meanwhile
+  const [pend, setPend] = useState<Pending | null>(null) // what /apply/status says of the request
+  const [note2, setNote2] = useState('') // a declined request's note
+  const named = { name: who.name.trim(), username: who.username.trim() }
   const [ticked, setTicked] = useState<Set<string>>(new Set())
   const [rules, setRules] = useState<RemoteAgreement[] | null>(null)
   const [busy, setBusy] = useState(false)
@@ -52,6 +78,12 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   const fail = (e: unknown) => {
     const f = e instanceof DirectFailed ? e : new DirectFailed('failed')
     if (f.code === 'taken') return go({ s: 'taken' })
+    // the username went meanwhile: back to it, with the belfry's suggestions
+    if (f.code === 'username_taken' || f.code === 'username_invalid') {
+      setTakenSug(f.suggestions); setWho((w) => ({ ...w, ok: false }))
+      setStep((st) => ({ s: 'apply', proof: st.s === 'apply' ? st.proof : undefined }))
+      setError(directErrorText(f)); return
+    }
     // a belfry without its own register: the old ways (its sign-in page; the unsigned application)
     if (f.code === 'unsupported') {
       if (step.s === 'login-email') { void startSignIn(); return }
@@ -75,8 +107,8 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
         if (st.signed) { await onIn(st.signed); return }
         return go({ s: 'approved', address: st.nip05 || appliedEmail() })
       }
-      if (st.state === 'pending') return step.s === 'pending' ? undefined : go({ s: 'pending' })
-      if (st.state === 'declined') return go({ s: 'declined' })
+      if (st.state === 'pending') { if (st.pending) setPend(st.pending); return step.s === 'pending' ? undefined : go({ s: 'pending' }) }
+      if (st.state === 'declined') { setNote2(st.note ?? ''); return go({ s: 'declined' }) }
       if (!quiet) go(atApply ? { s: 'apply' } : { s: 'start' })
     } catch { if (!quiet) go(atApply ? { s: 'apply' } : { s: 'start' }) }
   }
@@ -102,6 +134,17 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
     if (location.pathname !== want && (want === '/apply' || location.pathname === '/apply')) history.replaceState(history.state, '', want + location.search + location.hash)
   }, [step.s])
 
+  // the same link opened in this tab later (only the hash changes)
+  useEffect(() => {
+    const on = () => {
+      if (!/^#\/login\//.test(location.hash)) return
+      const u = loginUser(location.hash)
+      history.replaceState(history.state, '', location.pathname + location.search)
+      if (u) { setEmail(`${u}@${BELFRY.domain}`); setCode(''); go({ s: 'login-email' }) }
+    }
+    addEventListener('hashchange', on)
+    return () => removeEventListener('hashchange', on)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const emailOk = /^\S+@\S+\.\S+$/.test(email.trim())
   const codeStep = async (c: string, from: 'login' | 'apply') => {
     if (busy) return
@@ -112,7 +155,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
     setError(''); setNote('')
     try {
       if (from === 'login') await loginStart(sentTo.current)
-      else await applyStart(sentTo.current, why, [...ticked])
+      else await applyStart(sentTo.current, why, [...ticked], undefined, named)
       setCode(''); setSentAt(Date.now()); setNote('A new code is on its way to your e-mail.')
     } catch (e) { fail(e) }
   }
@@ -145,7 +188,7 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
           setError('')
           try {
             sentTo.current = email.trim()
-            if (apply) await applyStart(sentTo.current, why, [...ticked])
+            if (apply) await applyStart(sentTo.current, why, [...ticked], undefined, named)
             else await loginStart(sentTo.current)
             setCode(''); setSentAt(Date.now()); go({ s: apply ? 'apply-code' : 'login-code' })
           } catch (e) { fail(e) }
@@ -204,24 +247,28 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
         {head}
         <Form className="apply-form" onSubmit={async () => {
           setError('')
+          // Enter can submit past the disabled button: the same conditions here
+          if (!named.name || !who.ok || !why.trim() || rules === null || !(rules ?? []).every((r) => ticked.has(r.id))) return
           if (!proof) return go({ s: 'apply-email' })
           // the address was just proven by Log in: no second code
           try {
             sentTo.current = email.trim()
-            if ((await applyStart(sentTo.current, why, [...ticked], proof)) === 'pending') return go({ s: 'pending' })
+            if ((await applyStart(sentTo.current, why, [...ticked], proof, named)) === 'pending') return go({ s: 'pending' })
             setCode(''); go({ s: 'apply-code' })
           } catch (e) {
             if (e instanceof DirectFailed && e.code === 'proof') { // stale: a code after all
-              try { await applyStart(sentTo.current, why, [...ticked]); setCode(''); go({ s: 'apply-code' }); setNote(directErrorText(e)) } catch (x) { fail(x) }
+              try { await applyStart(sentTo.current, why, [...ticked], undefined, named); setCode(''); go({ s: 'apply-code' }); setNote(directErrorText(e)) } catch (x) { fail(x) }
               return
             }
             fail(e)
           }
         }}>
           <h3>Apply to join {community}</h3>
+          <NameFields value={who} onChange={(v) => { setWho(v); if (v.username !== who.username) setTakenSug([]) }} via="applicant" autoFocus />
+          {takenSug.length > 0 && <p className="username-state"><span className="error">Try {takenSug.map((x, i) => <span key={x}>{i > 0 && ' or '}<button type="button" className="chip-btn" onClick={() => { setWho({ ...who, username: x, ok: false }); setTakenSug([]) }}>{x}</button></span>)}</span></p>}
           {proof && <p className="hint start-unknown">With <b className="addr">{email.trim()}</b>: the stewards answer there by e-mail.</p>}
           <label className="field"><span>Why would you like to join?</span>
-            <textarea className="input" rows={4} required maxLength={4000} autoFocus value={why} onChange={(e) => setWhy(e.target.value)} /></label>
+            <textarea className="input" rows={4} required maxLength={4000} value={why} onChange={(e) => setWhy(e.target.value)} /></label>
           {rules === null && <div className="spinner" aria-label="Loading the charter" />}
           {list.length > 0 && <>
             <div className="field"><span>Our charter: tick each agreement</span></div>
@@ -236,23 +283,29 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
             </div>
           </>}
           {err}
-          <button className="btn" disabled={!why.trim() || rules === null || !all}>{all ? (proof ? 'Apply' : 'Continue') : `Tick each agreement (${ticked.size} of ${list.length})`}</button>
-          {!proof && <button type="button" className="link" onClick={() => go({ s: 'login-email' })}>I’m a member: Log in</button>}
+          <button className="btn" disabled={!named.name || !who.ok || !why.trim() || rules === null || !all}>{all ? (proof ? 'Apply' : 'Continue') : `Tick each agreement (${ticked.size} of ${list.length})`}</button>
+          {!proof && <button type="button" className="link" onClick={() => go({ s: 'login-email' })}>I’m already a member · Log in</button>}
         </Form>
       </div>
     )
   }
 
-  if (step.s === 'pending')
+  if (step.s === 'pending') {
+    // what the belfry says of the request, else what was typed here
+    const p: Pending = pend ?? { name: named.name, username: named.username, email: email.trim(), motivation: why.trim() }
     return (
       <div className="screen login start" role="status" aria-live="polite">
         {head}
-        <h3>Your request is with the stewards</h3>
-        <p className="hint">Keep this tab open: the chat opens here by itself once you’re in.</p>
-        {why.trim() && <blockquote className="start-why">{why.trim()}</blockquote>}
-        <p className="hint small">You can close this tab: we’ll e-mail {email.trim() ? <b className="addr">{email.trim()}</b> : 'you'}.</p>
+        <h3>Your request is pending</h3>
+        {(p.name || p.email) && <div className="pending-card">
+          <span><span className="nm">{p.name}</span>{p.username && <> <span className="hint">@{p.username}</span></>}</span>
+          {p.email && <small className="addr">{p.email}</small>}
+        </div>}
+        {p.motivation && <><div className="field" style={{ width: '100%', maxWidth: 420 }}><span>Your message</span></div><blockquote className="start-why">{p.motivation}</blockquote></>}
+        <p className="hint small">Once approved, you will be logged in to {location.host} with this browser. To log in in another browser or device, just enter your email{p.email ? <> <b className="addr">{p.email}</b></> : null} to receive a new 6-digit code.</p>
       </div>
     )
+  }
 
   if (step.s === 'sent')
     return (
@@ -268,7 +321,8 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
       <div className="screen login start" role="status">
         {head}
         <h3>Not this time</h3>
-        <p className="hint">The stewards of {community} did not accept your request this time. Their e-mail may say more.</p>
+        <p className="hint">The stewards of {community} did not accept your request this time.{note2 ? '' : ' Their e-mail may say more.'}</p>
+        {note2 && <blockquote className="start-why declined-note">{note2}</blockquote>}
         <button className="link start-apply" onClick={() => go({ s: 'start' })}>I have an account: log in</button>
       </div>
     )

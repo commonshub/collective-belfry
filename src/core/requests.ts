@@ -23,7 +23,7 @@ import { isLocalOnly, me, signedFetch } from './sync'
 import { vouch } from './actions'
 
 export interface Membership { invite: 'admins' | 'members'; accept: 'admins' | 'vouches'; vouches: number; mayInviteMembers: boolean }
-export interface BelfryRequest { id: number; name: string; motivation: string; created: string; vouches: number; vouched: boolean; email?: string; /** a guest asking from the app (docs/membership.md): their key, channels, who invited them, since when */ guest?: { pubkey?: string; channels: string[]; inviter: string; since: string } }
+export interface BelfryRequest { id: number; name: string; /** the username they asked for (canvas v54) */ username?: string; motivation: string; created: string; vouches: number; vouched: boolean; email?: string; /** a guest asking from the app (docs/membership.md): their key, channels, who invited them, since when */ guest?: { pubkey?: string; channels: string[]; inviter: string; since: string } }
 export interface AgentRequest { id: number; pubkey: string; name: string; about: string; created: string; forMe: boolean }
 
 export type RequestError = 'not_admin' | 'not_here' | 'not_vouching' | 'not_found' | 'decided' | 'invalid' | 'unsupported' | 'limit' | 'offline' | 'failed'
@@ -74,7 +74,7 @@ const takeSettings = (d: Record<string, unknown>) => {
   touch()
 }
 const cleanPeople = (x: unknown): BelfryRequest[] => (Array.isArray(x) ? x : []).filter((r) => r && typeof r.id === 'number').map((r) => ({
-  id: r.id, name: str(r.name), motivation: str(r.motivation), created: str(r.created), vouches: Number(r.vouches) || 0, vouched: !!r.vouched, ...(typeof r.email === 'string' ? { email: r.email } : {}),
+  id: r.id, name: str(r.name), ...(typeof r.username === 'string' && /^[a-z0-9][a-z0-9._-]{0,29}$/.test(r.username) ? { username: r.username } : {}), motivation: str(r.motivation), created: str(r.created), vouches: Number(r.vouches) || 0, vouched: !!r.vouched, ...(typeof r.email === 'string' ? { email: r.email } : {}),
   ...(r.kind === 'guest' ? { guest: { pubkey: /^[0-9a-f]{64}$/.test(r.pubkey) ? r.pubkey : undefined, channels: (Array.isArray(r.channels) ? r.channels : []).filter((c: unknown): c is string => typeof c === 'string'), inviter: str(r.inviter), since: str(r.since) } } : {}),
 }))
 const cleanAgents = (x: unknown): AgentRequest[] => (Array.isArray(x) ? x : []).filter((r) => r && typeof r.id === 'number' && /^[0-9a-f]{64}$/.test(r.pubkey)).map((r) => ({
@@ -197,7 +197,7 @@ export function demoRequests(opts: { vouching?: boolean; needed?: number; invite
   settingsLoaded = true
   const ago = (h: number) => new Date(Date.now() - h * 3600_000).toISOString().slice(0, 19).replace('T', ' ')
   people = [
-    { id: 1, name: 'Nora Lindqvist', motivation: 'I run the repair café on Thursdays and would like to bring it here. <b>not bold</b>', created: ago(5), vouches: 1, vouched: false, ...(isBelfryAdmin(me()) ? { email: 'nora@example.org' } : {}) },
+    { id: 1, name: 'Nora Lindqvist', username: 'nora', motivation: 'I run the repair café on Thursdays and would like to bring it here. <b>not bold</b>', created: ago(5), vouches: 1, vouched: false, ...(isBelfryAdmin(me()) ? { email: 'nora@example.org' } : {}) },
     { id: 2, name: 'Omar B.', motivation: 'A friend of Ana’s.', created: ago(30), vouches: 0, vouched: false, ...(isBelfryAdmin(me()) ? { email: 'omar@example.org' } : {}) },
   ]
   agents = isBelfryAdmin(me()) ? [{ id: 7, pubkey: 'b'.repeat(64), name: 'Scout', about: 'Sorts the bug reports in #issues.', created: ago(2), forMe: true }] : []

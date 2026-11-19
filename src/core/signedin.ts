@@ -33,3 +33,23 @@ export async function switchToSignedIn(r: SignedIn) {
 export function takeSignedInAs(): string {
   try { const a = sessionStorage.getItem(SIGNED_IN_AS) ?? ''; sessionStorage.removeItem(SIGNED_IN_AS); return a } catch { return '' }
 }
+
+/** "I'm already a member · Log in" from a member link's guest session: that session goes (ended in
+ *  the signer), and the start screen opens on Log in. */
+export async function switchToLogin() {
+  const s = await loadSession()
+  if (s?.backend === 'belfry') await endSession(s)
+  stop()
+  setGuestInfo(null)
+  closeJoin()
+  await clearSession()
+  await wipe()
+  forgetDevice()
+  try { sessionStorage.setItem(START_AT, 'login') } catch { /* private mode */ }
+  location.hash = ''
+  location.reload()
+  await new Promise(() => { /* the page is leaving */ })
+}
+/** sessionStorage: the start screen opens on this step once */
+export const START_AT = 'start-at'
+export function takeStartAt(): string { try { const v = sessionStorage.getItem(START_AT) ?? ''; sessionStorage.removeItem(START_AT); return v } catch { return '' } }

@@ -90,7 +90,7 @@ export function PersonRow({ p, admin }: { p: BelfryRequest; admin: boolean }) {
   return (
     <div className="appl req-row">
       <div className="who"><span className="req-ic initial" aria-hidden="true">{(p.name.trim()[0] ?? '?').toUpperCase()}</span>
-        <span className="t">{p.name || 'Someone'}<small>{admin && p.email ? `${p.email} · ` : ''}{when(p.created)}</small>
+        <span className="t">{p.name || 'Someone'}{(p.username || (admin && p.email)) && <small className="req-handle">{[p.username ? '@' + p.username : '', admin && p.email ? p.email : ''].filter(Boolean).join(' · ')}</small>}<small>asks to join · {when(p.created)}</small>
           {p.guest && <small className="guest-line">Guest in {p.guest.channels.map((c) => group(c)?.name ?? c).join(', ') || 'a channel'}{p.guest.since ? ` since ${when(p.guest.since)}` : ''}{p.guest.inviter ? `, invited by ${p.guest.inviter}` : ''}</small>}</span></div>
       {p.motivation && <blockquote>{p.motivation}</blockquote>}
       {/* anyone vouches (#issues 2026-11-15); while the admins decide, vouches tell them who stands for whom */}

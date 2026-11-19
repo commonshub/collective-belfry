@@ -8,7 +8,8 @@ import { Phone } from './Phone'
 import { SearchView } from './Search'
 import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demoSession, finishSignIn, openAfterSignIn, pendingInvite, setOpenAfterSignIn, setPendingInvite, startSignIn, takeInviteFromUrl, loadSession, makeSigner, saveSession, setGuestInfo, guestInfo, type Session } from '../core/auth'
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
-import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
+import { GuestJoinHost, MemberInviteScreen, MemberNameScreen, OpeningScreen } from './GuestJoin'
+import { nameNext } from '../core/guestjoin'
 import { SIGNED_IN_AS, takeSignedInAs } from '../core/signedin'
 import { releaseApplicantKey } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
@@ -252,6 +253,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   useEffect(() => { if (!joined) return; const t = setTimeout(() => setJoined(''), 6000); return () => clearTimeout(t) }, [joined])
   // just signed in by a guest's code: "Signed in as <address>" for 3 s (said once)
   const [signedAs, setSignedAs] = useState(takeSignedInAs)
+  // read on each render: a member link sets it while the app runs (the demo doesn't reload)
+  const [, nameTick] = useState(0)
+  const askName = session.backend === 'demo' || session.bunkerUrl ? nameNext() : null
   useEffect(() => { if (!signedAs) return; const t = setTimeout(() => setSignedAs(''), 3000); return () => clearTimeout(t) }, [signedAs])
   // signed in from an event's page: back to it; an application that got a place: done waiting
   useEffect(() => {
@@ -288,6 +292,10 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // the places (Places.tsx): the app starts on Home; #/town opens the town channel I was in
   const places = placesOn()
   if (places && route[0] === 'town') { replaceHash('#/' + townPath()); return null }
+  // chat.<domain>/login/<username> opened while signed in: nothing to do, stay where I was
+  if (route[0] === 'login') { replaceHash('#/home'); return null }
+  // a member link just used: their name and username first (board onboarding/member-link-name)
+  if (places && askName && !reading()) return <MemberNameScreen email={askName.email} onDone={() => nameTick((x) => x + 1)} />
   if (places && welcomeDue() && route[0] !== 'welcome') { replaceHash('#/welcome'); return null }
   const [section = places ? 'home' : 'c', a, b, c, d] = route
   let view

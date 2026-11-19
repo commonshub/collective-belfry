@@ -1965,3 +1965,22 @@ a.buy .ico { width: 14px; height: 14px; }
 .invite-as { margin-bottom: 4px; }
 .invite-edit { margin-top: 8px; }
 .invite-agent { margin-top: 4px; }
+/* the name and the username (boards onboarding/apply-name, username-states, member-link-name) */
+.name-fields { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.username-input { display: flex; align-items: center; gap: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); padding-right: 12px; }
+.username-input .input { border: 0; background: none; flex: 1; min-width: 0; font-size: 16px; }
+.username-input .at { color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+.username-input.good { border-color: #34c759; }
+.username-input.bad { border-color: var(--danger, #e5372b); }
+.username-state { min-height: 20px; font-size: 14px; }
+.username-state .ok { color: #1f8a3e; display: inline-flex; align-items: center; gap: 4px; }
+.username-state .ok svg { width: 16px; height: 16px; }
+.username-state .chip-btn { border: 1px solid var(--line); background: var(--surface); border-radius: 99px; padding: 2px 10px; font: inherit; font-size: 14px; color: var(--text); cursor: pointer; }
+.username-about { margin: 0; }
+.start .pending-card { width: 100%; max-width: 420px; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; }
+.start .pending-card .nm { font-weight: 600; }
+.start .pending-card small { color: var(--muted); }
+/* Link your phone (boards home/accounts-web, home/link-phone) */
+.link-phone { display: flex; flex-direction: column; gap: 10px; text-align: center; }
+.link-phone .qr-box { margin: 6px auto; }
+.link-phone .drop-qr { width: 220px; height: 220px; }

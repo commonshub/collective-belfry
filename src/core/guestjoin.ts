@@ -111,9 +111,9 @@ export async function verifyJoinCode(email: string, code: string, name?: string,
       if (!(e instanceof JoinFailed && (e.retried || again) && ['expired', 'wrong_code', 'not_guest'].includes(e.code) && g && await savedOnRelay(g.channel, started))) throw e
     }
     if (d.signed_in === true) return signedInFrom(d, sk, email)
-    if (d.member === true) return becameMember(g?.channel)
+    if (d.member === true) return becameMember(g?.channel, undefined, email)
   }
-  if (g?.member && isLocalOnly()) return becameMember(g.channel, g.member.role)
+  if (g?.member && isLocalOnly()) return becameMember(g.channel, g.member.role, email)
   if (g) setGuestInfo({ channel: g.channel, saved: true })
   guestChanged()
 }
@@ -132,7 +132,8 @@ async function savedOnRelay(channel: string, since: number): Promise<boolean> {
 
 /** A member link was used (roles.py): no guest any more. The session is the same key, now a
  *  member's; the app opens again so the relays and the belfry see it as one. */
-function becameMember(channel?: string, demoRole?: string) {
+function becameMember(channel?: string, demoRole?: string, email = '') {
+  askNameNext(email) // board onboarding/member-link-name: how people will know them here
   setGuestInfo(null)
   guestChanged()
   if (isLocalOnly()) { demoRoles(demoRole === 'admin', []); if (demoRole) setDemoRole(demoRole); return }
@@ -183,3 +184,17 @@ export function verifyNext(status: number, body: Record<string, unknown> | null)
 }
 
 const demoSigned = (email: string): Session => demoSession(email.trim())
+
+// ---- after a member link: the name and the username, once (board onboarding/member-link-name) ----
+const NAME_NEXT = 'belfry-name-next'
+/** The member link made a member of this address: ask their name and username next (for 24 h). */
+export function askNameNext(email: string) { try { localStorage.setItem(NAME_NEXT, JSON.stringify({ email: email.trim().slice(0, 200), at: Date.now() })) } catch { /* private mode */ } }
+/** The address to say on the name screen, while it is due (joined < 24 h ago, not set yet). */
+export function nameNext(): { email: string } | null {
+  try {
+    const v = JSON.parse(localStorage.getItem(NAME_NEXT) ?? 'null') as { email?: unknown; at?: unknown } | null
+    if (!v || typeof v.at !== 'number' || Date.now() - v.at > 24 * 3600_000) { localStorage.removeItem(NAME_NEXT); return null }
+    return { email: typeof v.email === 'string' ? v.email : '' }
+  } catch { return null }
+}
+export const nameDone = () => { try { localStorage.removeItem(NAME_NEXT) } catch { /* private mode */ } }
