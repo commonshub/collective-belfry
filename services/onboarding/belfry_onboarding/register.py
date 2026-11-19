@@ -1746,6 +1746,42 @@ class Register(OdooApi):
             )
         return app_id
 
+    def application_pass(self, app_id: int) -> dict[str, Any]:
+        """The person and the membership of an application whose address is proven
+        (applyverified.py): their contact (the one that has the address, else a new one with the
+        application's name) and a pending member pass for the service to open
+        (core.activate_free_pass). ``{"partner_id", "pass_id", "state"}``; a membership they
+        hold or that waits already is answered as it is."""
+        with self._lock:
+            row = self._get("belfry.application", int(app_id))
+            if row is None or not row.get("verified") or not EMAIL.match(row.get("email") or ""):
+                raise _user_error("No such application.")
+            person = self._partner_by_email(row["email"])
+            pid = (
+                person["id"]
+                if person
+                else self._create(
+                    "res.partner",
+                    {
+                        "name": (row.get("name") or "").strip()[:100] or row["email"],
+                        "email": row["email"],
+                    },
+                )
+            )
+            for p in self._all("belfry.pass"):
+                if (
+                    p.get("partner_id") == pid
+                    and p.get("state") in ("pending", "active")
+                    and p.get("tier") not in ("guest", "agent")
+                    and not p.get("invite_id")
+                ):
+                    return {"partner_id": pid, "pass_id": p["id"], "state": p["state"]}
+            pass_id = self._create(
+                "belfry.pass",
+                {"partner_id": pid, "tier": "member", "manual_paid_by": "application"},
+            )
+            return {"partner_id": pid, "pass_id": pass_id, "state": "pending"}
+
     def _application(self, ids: list[int]) -> dict[str, Any]:
         row = self._get("belfry.application", ids[0])
         if row is None:
@@ -1819,7 +1855,12 @@ class Register(OdooApi):
     def _hash(code_id: int, code: str) -> str:
         return hashlib.sha256(f"{code_id}:{code}".encode()).hexdigest()
 
-    def _m_belfry_key_code_send(self, model, email, pubkey, app_name=False, *_a, **_k):
+    def _m_belfry_key_code_send(
+        self, model, email, pubkey, app_name=False, purpose=False, data=False, *_a, **_k
+    ):
+        """PURPOSE ``apply`` / ``login`` (applyverified.py): the mail's own words, and a code
+        that only ``check_key_code`` with the same purpose takes; DATA rides on the code and
+        comes back with the right one (what the person filled in before proving the address)."""
         email, pubkey = self._clean(email, pubkey)
         since = stamp(now() - dt.timedelta(minutes=CODE_WINDOW))
         codes = [c for c in self._all("belfry.key.code") if c.get("create_date", "") >= since]
@@ -1848,10 +1889,28 @@ class Register(OdooApi):
                 "expires_at": expires,
                 "tries": 0,
                 "used_at": False,
+                "purpose": purpose or False,
+                "data": data or False,
             },
         )
         self._write("belfry.key.code", [cid], {"code_hash": self._hash(cid, code)})
         app = (app_name or "").strip()[:60]
+        if purpose in ("apply", "login"):
+            what = (
+                f"to apply to {self.mailer.name}"
+                if purpose == "apply"
+                else f"for {self.mailer.name}"
+            )
+            self.mailer.send(
+                email,
+                f"{code} is your code {what}",
+                [
+                    f"Your code {what}: {code}",
+                    f"It works for {CODE_MINUTES} minutes. If you did not ask for it, "
+                    "ignore this mail.",
+                ],
+            )
+            return {"state": "sent", "expires_at": expires}
         self.mailer.send(
             email,
             f"{code} is your {self.mailer.name} code",
@@ -1865,28 +1924,37 @@ class Register(OdooApi):
         )
         return {"state": "sent", "expires_at": expires}
 
-    def check_key_code(self, email: str, pubkey: str, code: str) -> dict[str, Any]:
+    def check_key_code(
+        self, email: str, pubkey: str, code: str, purpose: str | None = None
+    ) -> dict[str, Any]:
         """The code mailed to EMAIL for PUBKEY, checked and used, binding nothing:
         ``{"state": "ok" | "wrong_code" (with tries_left) | "expired"}``. The sign-in of a buyer
-        whose address is not proven yet (sales.confirm does the rest)."""
+        whose address is not proven yet (sales.confirm does the rest). With PURPOSE only a code
+        sent for it counts, and the right one answers its ``data`` too (applyverified.py)."""
         email, pubkey = self._clean(email, pubkey)
         with self._lock:
             self._db.execute("BEGIN IMMEDIATE")
             try:
-                out = self._check_code(email, pubkey, code)
+                out = self._check_code(email, pubkey, code, purpose)
             except BaseException:
                 self._db.execute("ROLLBACK")
                 raise
             self._db.execute("COMMIT")
-        return {k: v for k, v in out.items() if k != "rec"}
+        rec = out.pop("rec", None)
+        if purpose and rec is not None:
+            out["data"] = rec.get("data") or {}
+        return out
 
-    def _check_code(self, email: str, pubkey: str, code: str) -> dict[str, Any]:
+    def _check_code(
+        self, email: str, pubkey: str, code: str, purpose: str | None = None
+    ) -> dict[str, Any]:
         live = [
             c
             for c in self._all("belfry.key.code")
             if c["email"].lower() == email.lower()
             and c["pubkey"] == pubkey
             and not c.get("used_at")
+            and (purpose is None or c.get("purpose") == purpose)
         ]
         rec = live[-1] if live else None
         if rec is None or rec["expires_at"] <= stamp() or rec.get("tries", 0) >= CODE_TRIES:

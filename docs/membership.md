@@ -60,6 +60,42 @@ is accepted as an admin's would be, with `handled_by` = `vouches`. The service's
 (`followers.tick`, every 5 minutes) also settles them. Errors: 403 `not_admin`, 403 `not_here`,
 403 `not_vouching`, 404 `not_found`, 409 `decided`, 422 `invalid`, 409 `unsupported`.
 
+## Applying from the chat (verified)
+
+Since 2026-11-19 (`applyverified.py`; needs the belfry's own register, else 409 `unsupported`).
+The whole flow stays on `chat.<domain>`: the chat makes a key in the browser, the **applicant
+key**, and signs every request below with it (NIP-98, `belfry.<domain>/api/v1/…`). A 6-digit
+code mailed to an address is the only proof of that address (10 minutes, 5 tries, as every
+e-mail code here); a session is only ever bound to the key that signed the request.
+
+| Request | Answer |
+|---|---|
+| `POST /apply/start` `{"email", "motivation", "name"?, "agreed": [<agreement id>…]}` | 202 `{"sent": true}`: a code is mailed ("Your code to apply to <community>: 123456"), the same answer whether the address is known or not. Checked as `/api/apply`: 400 `missing` (e-mail or motivation), 400 `unticked` (every agreement of the charter must be ticked), 422 `invalid` (not an address); the hidden field `website` filled in → 202 and nothing happens. 429 `too_many` (5 codes per address and 10 per key in 30 minutes, 20 per network address an hour). |
+| `POST /apply/start` with `"proof"` (from `/login/verify`, same `email`, same key) | no code is mailed: 200 with the answer of `/apply/verify`. Invalid or expired proof: 422 `proof` (the chat falls back to the code). |
+| `POST /apply/verify` `{"email", "code"}` | 422 `wrong_code` with `tries_left`; 410 `expired`. Right code, and the address has an account here (a member, or a guest who saved it): 200 `{"state": "signed_in", "bunker_url", "pubkey", "npub", "nip05"}`, a session on that account bound to the applicant key (as `guests.md`, "An address that has an account"); an account that holds its own key: 409 `taken` with `nip05`; 409 `key_taken`; 503 `signer`. Otherwise the application is stored (`verified`, the applicant key, the name or the part before the @, the motivation, the ticked agreements) and the admins get the mail and push of a request to join, once: 200 `{"state": "pending"}`. A request that waits already for this address or this key: the same answer, no second request, no second mail (the key that proved the address last is its applicant key). |
+| `POST /apply/status` `{}` | `{"state": "none" \| "pending" \| "declined" \| "approved"}` for the latest request of this key. `approved` comes with `"signed_in": true, "bunker_url", "pubkey", "npub", "nip05"`: a session on the new member's key, bound to the applicant key, made on this call. Once it was handed out (or the signer knows the key already) the answer is `{"state": "approved", "signed_in": false, "nip05"}`: the chat shows Log in with the address filled in. One register lookup while the request waits: made to be asked every 5 seconds. |
+| `POST /login/start` `{"email"}` | 202 `{"sent": true}` for any address that looks like one, known or not ("Your code for <community>: 123456"); 422 `invalid`; 429 `too_many` (the same limits). |
+| `POST /login/verify` `{"email", "code"}` | 422 `wrong_code` (`tries_left`), 410 `expired`. Right code: the address has an account (also a request that was approved meanwhile) → `{"state": "signed_in", …}` as above (409 `taken` + `nip05`, 409 `key_taken`, 503 `signer`); a request for it waits → `{"state": "pending"}` and this key is its applicant key from now on (`/apply/status` answers for this browser; the earlier key gets `none`); nobody knows it → `{"state": "unknown", "proof"}`. |
+
+`proof` is `<expiry>.<HMAC-SHA256>` over the lower-cased address, the applicant key and the
+expiry (15 minutes ahead), keyed from `PASS_PAGE_SECRET`: checked without anything stored, good
+for that key and that address only. A code sent for applying is not taken by `/login/verify`, and
+the other way round.
+
+**Accepted** (an admin's `decide`, or enough vouches): the person is a member at once. Their
+contact and a free membership (the activation an accepted invite ends in: default role, a
+username from their name), the agreements they ticked signed for them (`charter.md`), and one
+mail: the welcome mail (`register.md`). No invite, no confirmation mail, no sign-in link. State
+`accepted`. A browser that still waits gets its session from `/apply/status`; anyone else opens
+the mail's button and logs in with the address. **Declined**: the usual mail; `/apply/status`
+says `declined`, and they may ask again.
+
+List rows of `POST /applications` carry `"verified": true` for these requests (false for the
+others). The older ways keep their invite: the form on `pass.<domain>/apply` and `POST
+/api/apply` (older chat builds) store an unproven request, and accepting it mails an invite. If
+the person later proves that address (`/apply/verify` or `/login/verify`), the request that waits
+becomes a verified one.
+
 ## Groups that accept by vouches
 
 A closed group's metadata edit (kind 9002 by one of its admins) carries next to `closed` and

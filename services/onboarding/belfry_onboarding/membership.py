@@ -39,6 +39,9 @@ API (belfry.<domain>/api/v1/…, NIP-98):
   - ``{"decide": <id>, "approve": true|false}`` (admins) → ``{"application"}``.
   - ``{"vouch": <id>, "on"?: true|false}`` (any member, #issues 2026-11-15; the vouches accept
     the request only while vouching is on) → ``{"application", "accepted": bool}``.
+    A request from the chat's own form with a proven address (applyverified.py, 2026-11-19)
+    carries ``"verified": true``: accepting it makes the person a member at once (state
+    ``accepted``, the welcome mail, no invite).
   - ``{"apply": {...}}`` / ``{"apply": "status"}`` (a guest, 2026-11-16): a guest asks to become
     a member from the app, on their own key (guestapply.py has the contract). List rows carry
     ``channels``, ``inviter`` (name) and, for a guest's request, ``pubkey`` and ``since``;
@@ -178,6 +181,10 @@ FIELDS = [
     "inviter",
     "since",
     "agreed",
+    # a request from the chat with a proven address and a browser key (applyverified.py)
+    "verified",
+    "client",
+    "member_partner",
 ]
 
 
@@ -207,6 +214,8 @@ def _row(svc: Services, r: dict[str, Any], caller: str, admin: bool) -> dict[str
         # the stewards' card: "Guest in #garden since …, invited by Ana" (guestapply.py)
         "channels": [c for c in r.get("channels") or [] if isinstance(c, str)],
         "inviter": _inviter_name(svc, r.get("inviter")),
+        # the address is proven: accepting makes them a member at once (applyverified.py)
+        "verified": bool(r.get("verified")),
     }
     if r.get("kind") == "guest":
         out["pubkey"] = r.get("pubkey") or ""
@@ -247,8 +256,10 @@ def _admin_email(svc: Services, caller: str) -> tuple[str, str]:
 
 def accept(svc: Services, aid: int, by_email: str, by_name: str = "") -> None:
     """Accept an application as an admin would: an invite mailed to the applicant; a guest's
-    request (guestapply.py) makes them a member on their own key instead, no mail."""
-    from . import guestapply
+    request (guestapply.py) makes them a member on their own key instead, no mail; a request
+    from the chat with a proven address (applyverified.py) makes them a member at once, with
+    the welcome mail."""
+    from . import applyverified, guestapply
     from .holder_invites import ApiError
 
     with _lock:
@@ -257,6 +268,12 @@ def accept(svc: Services, aid: int, by_email: str, by_name: str = "") -> None:
             if row.get("state") != "new":
                 raise ApiError(409, "decided", "This request was answered already.")
             guestapply.accept(svc, row, by_email)
+            return
+        if applyverified.direct(row) and own(svc):
+            # a proven address and a browser key: a member at once, no invite
+            if row.get("state") != "new":
+                raise ApiError(409, "decided", "This request was answered already.")
+            applyverified.accept(svc, row, by_email)
             return
     try:
         svc.odoo.call(
