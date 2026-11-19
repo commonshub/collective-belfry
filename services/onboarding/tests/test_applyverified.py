@@ -398,7 +398,7 @@ def test_login_with_a_request_that_waits_moves_it_to_this_browser(belfry, monkey
         assert bound == [("Chat", pk(third)), ("Chat", pk(second))]
 
 
-def test_login_signs_a_member_in_and_an_old_unproven_request_becomes_proven(belfry, monkeypatch):
+def test_login_signs_a_member_in_and_never_adopts_a_request_nobody_proved(belfry, monkeypatch):
     rsvc, _k, _ada, rule, _g = belfry
     bound = bound_keys(rsvc, monkeypatch)
     me, olga = PrivateKey(), PrivateKey()
@@ -408,9 +408,11 @@ def test_login_signs_a_member_in_and_an_old_unproven_request_becomes_proven(belf
         assert bound == [("Chat", pk(me))] and "proof" not in r.json()
         body = {"email": "olga@example.org", "motivation": WHY, "agreed": [rule]}
         assert c.post("/api/apply", json=body).json() == {"ok": True}
-        assert login(c, olga, "olga@example.org").json() == {"state": "pending"}
+        # anyone may have typed that address and those words: logging in does not adopt it
+        got = login(c, olga, "olga@example.org").json()
+        assert got["state"] == "unknown" and got["proof"]
         [row] = apps_of(rsvc)
-        assert row["verified"] is True and row["client"] == pk(olga)
+        assert not row.get("verified") and row.get("client") != pk(olga)
 
 
 def test_without_the_own_register_the_endpoints_say_so(services, monkeypatch):

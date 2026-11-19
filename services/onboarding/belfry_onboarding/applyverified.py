@@ -146,12 +146,16 @@ def _waiting(svc: Services) -> list[dict[str, Any]]:
     return [r for r in rows if r.get("kind") != guestapply.KIND]
 
 
-def take_over(svc: Services, email: str, key: str) -> bool:
+def take_over(svc: Services, email: str, key: str, verified_only: bool = False) -> bool:
     """An application for the proven EMAIL waits: KEY is its applicant key from now on (the key
-    that proved the address last), and it counts as verified. False: none waits."""
+    that proved the address last), and it counts as verified. False: none waits. With
+    VERIFIED_ONLY a request nobody proved (an old form: anyone may have typed that address and
+    those words) is left alone: the owner of the address applies in their own words."""
     with _lock:
         for r in _waiting(svc):
             if (r.get("email") or "").strip().lower() != email.lower():
+                continue
+            if verified_only and not r.get("verified"):
                 continue
             if r.get("client") != key or not r.get("verified"):
                 svc.odoo.write("belfry.application", [r["id"]], {"client": key, "verified": True})
@@ -332,7 +336,7 @@ def login_verify(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any
     opened = sign_in(svc, email, key, str(body.get("client") or ""))
     if opened is not None:
         return opened
-    if take_over(svc, email, key):
+    if take_over(svc, email, key, verified_only=True):
         return {"state": "pending"}
     return {"state": "unknown", "proof": make_proof(svc, email, key)}
 
