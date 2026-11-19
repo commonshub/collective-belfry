@@ -11,7 +11,7 @@ import { useEffect, useRef, useState } from 'react'
 import { NAME } from '../config'
 import { startSignIn } from '../core/auth'
 import { loadRemoteCharter, type RemoteAgreement } from '../core/charter'
-import { applyStart, applyStatus, applyVerify, appliedEmail, DirectFailed, directErrorText, hasApplicantKey, loginStart, loginVerify, type Verified } from '../core/direct'
+import { applyOld, applyStart, applyStatus, applyVerify, appliedEmail, DirectFailed, directErrorText, hasApplicantKey, loginStart, loginVerify, takePollTurn, type Verified } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
 import { AgreementAbout } from './Charter'
 import { Btn, Form } from './common'
@@ -24,9 +24,11 @@ type Step =
   | { s: 'checking' } | { s: 'start' }
   | { s: 'login-email' } | { s: 'login-code' } | { s: 'unknown'; proof: string }
   | { s: 'apply'; proof?: string } | { s: 'apply-email' } | { s: 'apply-code' }
-  | { s: 'pending' } | { s: 'declined' } | { s: 'approved'; address: string } | { s: 'taken' }
+  | { s: 'pending' } | { s: 'declined' } | { s: 'sent' } | { s: 'approved'; address: string } | { s: 'taken' }
 
-const POLL = 5000
+const POLL = 5000 // every 5 s for the first 30 minutes of an open tab, then every minute
+const SLOW = 60_000
+const FAST_FOR = 30 * 60_000
 
 export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedIn) => Promise<void> | void; invited?: boolean; error?: string }) {
   const community = useCommunityName(NAME)
@@ -50,6 +52,12 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   const fail = (e: unknown) => {
     const f = e instanceof DirectFailed ? e : new DirectFailed('failed')
     if (f.code === 'taken') return go({ s: 'taken' })
+    // a belfry without its own register: the old ways (its sign-in page; the unsigned application)
+    if (f.code === 'unsupported') {
+      if (step.s === 'login-email') { void startSignIn(); return }
+      void applyOld(email, why, [...ticked]).then(() => go({ s: 'sent' }), (x) => setError(directErrorText(x instanceof DirectFailed ? x : new DirectFailed('failed'))))
+      return
+    }
     if (f.code === 'wrong_code' || f.code === 'expired' || f.code === 'key_taken' || f.code === 'signer') setCode('')
     setError(directErrorText(f))
   }
@@ -76,11 +84,15 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
   // pending, tab open: every 5 s and when the tab comes back
   useEffect(() => {
     if (step.s !== 'pending') return
-    const t = setInterval(() => { if (document.visibilityState === 'visible') void check(true) }, POLL)
+    // one tab of this browser asks at a time (takePollTurn); the others still ask when shown
+    const since = Date.now()
+    let t: ReturnType<typeof setTimeout>
+    const next = () => { t = setTimeout(() => { if (document.visibilityState === 'visible' && takePollTurn()) void check(true); next() }, Date.now() - since < FAST_FOR ? POLL : SLOW) }
+    next()
     const back = () => { if (document.visibilityState === 'visible') void check(true) }
     document.addEventListener('visibilitychange', back)
     addEventListener('focus', back)
-    return () => { clearInterval(t); document.removeEventListener('visibilitychange', back); removeEventListener('focus', back) }
+    return () => { clearTimeout(t); document.removeEventListener('visibilitychange', back); removeEventListener('focus', back) }
   }, [step.s]) // eslint-disable-line react-hooks/exhaustive-deps
   // the charter, for the apply screen
   useEffect(() => { if (step.s === 'apply' && !rules) void loadRemoteCharter(true).then((r) => setRules([...r].sort((a, b) => a.order - b.order))).catch(() => setRules([])) }, [step.s]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -239,6 +251,15 @@ export function StartScreen({ onIn, invited, error: given }: { onIn: (r: SignedI
         <p className="hint">Keep this tab open: the chat opens here by itself once you’re in.</p>
         {why.trim() && <blockquote className="start-why">{why.trim()}</blockquote>}
         <p className="hint small">You can close this tab: we’ll e-mail {email.trim() ? <b className="addr">{email.trim()}</b> : 'you'}.</p>
+      </div>
+    )
+
+  if (step.s === 'sent')
+    return (
+      <div className="screen login start" role="status">
+        {head}
+        <h3>Thank you</h3>
+        <p className="hint">Your request is in. The stewards’ answer comes by e-mail.</p>
       </div>
     )
 

@@ -10,6 +10,7 @@ import { belfrySignOut, endSession, revokeWith, forgetDevice, clearSession, demo
 import { closeJoin, openingNow, reading, setOpening, useGuestMode } from '../core/guestmode'
 import { GuestJoinHost, MemberInviteScreen, OpeningScreen } from './GuestJoin'
 import { SIGNED_IN_AS, takeSignedInAs } from '../core/signedin'
+import { releaseApplicantKey } from '../core/direct'
 import type { SignedIn } from '../core/guestjoin'
 import { CheckIcon } from './icons'
 import { accessState, isAdmin, loadAccessInfo, myGrant, onAccessInfo } from '../core/access'
@@ -173,6 +174,9 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         const signer = await makeSigner(session)
         if (cancelled) return
         await start(signer, { localOnly: session.backend === 'demo' && !TEST_RELAYS })
+        // signed in from the start screen: the applicant key leaves its slot once the saved
+        // session has signed (a dead tab before this is still let in by /apply/status)
+        void signer.sign({ kind: 27235, content: '', created_at: Math.floor(Date.now() / 1000), tags: [['u', 'belfry:session-check']] }).then(() => releaseApplicantKey(session.clientSecret), () => {})
         // direct messages and e-mail (dm.ts); my address is my name@domain
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)

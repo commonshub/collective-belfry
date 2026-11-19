@@ -34,19 +34,27 @@ export function applicantKey(): Uint8Array {
 export const hasApplicantKey = () => { try { return /^[0-9a-f]{64}$/.test(localStorage.getItem(KEY) ?? '') } catch { return false } }
 /** The key became a session's (or was refused): the next request makes a new one. */
 export const dropApplicantKey = () => { try { localStorage.removeItem(KEY) } catch { /* private mode */ } }
+/** The session SECRET (hex) is this browser's applicant key, and it has just signed: the key is
+ *  the session's now, and leaves the applicant slot. */
+export function releaseApplicantKey(secret: string) {
+  try { if (localStorage.getItem(KEY) === secret) localStorage.removeItem(KEY) } catch { /* private mode */ }
+}
 export const appliedEmail = () => { try { return localStorage.getItem(EMAIL) ?? '' } catch { return '' } }
 const setAppliedEmail = (e: string) => { try { localStorage.setItem(EMAIL, e) } catch { /* private mode */ } }
 
-export type DirectError = 'missing' | 'wrong_code' | 'expired' | 'taken' | 'key_taken' | 'signer' | 'too_many' | 'proof' | 'offline' | 'failed'
+export type DirectError = 'missing' | 'unticked' | 'invalid' | 'unsupported' | 'wrong_code' | 'expired' | 'taken' | 'key_taken' | 'signer' | 'too_many' | 'proof' | 'offline' | 'failed'
 export class DirectFailed extends Error {
   constructor(public code: DirectError, public triesLeft?: number) { super(code) }
 }
-const KNOWN = new Set<DirectError>(['missing', 'wrong_code', 'expired', 'taken', 'key_taken', 'signer', 'too_many', 'proof'])
+const KNOWN = new Set<DirectError>(['missing', 'unticked', 'invalid', 'unsupported', 'wrong_code', 'expired', 'taken', 'key_taken', 'signer', 'too_many', 'proof'])
 export function directErrorText(f: DirectFailed): string {
   if (f.code === 'wrong_code' && f.triesLeft !== undefined)
     return f.triesLeft <= 0 ? 'That code is not right, and no tries are left. Send a new one.' : `That code is not right. ${f.triesLeft} ${f.triesLeft === 1 ? 'try' : 'tries'} left.`
   return ({
-    missing: 'Write why you would like to join, and tick each agreement.',
+    missing: 'Write why you would like to join.',
+    unticked: 'Tick each agreement of the charter.',
+    invalid: 'That doesn’t look like an e-mail address.',
+    unsupported: 'This belfry takes applications another way.',
     wrong_code: 'That code is not right. Check the e-mail and try again.',
     expired: 'That code has expired. Send a new one.',
     taken: 'This address has an account that signs in with its own key.',
@@ -84,9 +92,9 @@ export type Verified = { state: 'pending' } | { state: 'signed_in'; signed: Sign
 /** A signed_in (or approved) answer: the session on the applicant key (never stored unless the
  *  bunker address and the key check out: guestjoin.signedInFrom). */
 function signed(d: Record<string, unknown>, email: string): SignedIn {
-  const r = signedInFrom(d, applicantKey(), email)
-  dropApplicantKey() // it is the session's client key now
-  return r
+  // the applicant key stays stored until the session is saved and has signed once (App.tsx:
+  // releaseApplicantKey): a tab that dies in between can still be let in by /apply/status
+  return signedInFrom(d, applicantKey(), email)
 }
 
 function verified(d: Record<string, unknown>, email: string): Verified {
@@ -101,7 +109,7 @@ function verified(d: Record<string, unknown>, email: string): Verified {
 const DEMO = 'demo-apply-state'
 const demoState = (): string => { try { return localStorage.getItem(DEMO) ?? 'none' } catch { return 'none' } }
 const setDemoState = (s: string) => { try { localStorage.setItem(DEMO, s) } catch { /* private mode */ } }
-const demoSigned = (email: string): SignedIn => { dropApplicantKey(); return { session: demoSession(email), address: email, open: null, moved: false } }
+const demoSigned = (email: string): SignedIn => ({ session: { ...demoSession(email), clientSecret: bytesToHex(applicantKey()) }, address: email, open: null, moved: false })
 let demoTries = 5
 function demoCode(code: string) {
   if (code !== '123456') { demoTries = Math.max(0, demoTries - 1); throw new DirectFailed('wrong_code', demoTries) }
@@ -166,4 +174,26 @@ export async function applyStatus(): Promise<Status> {
     return { state: 'approved', nip05: typeof d.nip05 === 'string' ? d.nip05 : undefined }
   }
   return { state: d.state === 'pending' || d.state === 'declined' ? d.state : 'none' }
+}
+
+/** A belfry without its own register (409 unsupported): the old application, unsigned
+ *  (POST /apply; the stewards answer by e-mail, no code here). */
+export async function applyOld(email: string, motivation: string, agreed: string[]) {
+  if (demo()) { await wait(300); return }
+  let r: Response
+  try { r = await fetch(`${BELFRY.api}/apply`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email.trim(), motivation: motivation.trim(), agreed, website: '' }) }) } catch { throw new DirectFailed('offline') }
+  if (!r.ok) { const d = (await r.json().catch(() => ({}))) as Record<string, unknown>; const e = String(d.error ?? '') as DirectError; throw new DirectFailed(KNOWN.has(e) && e !== 'unsupported' ? e : 'failed') }
+}
+
+// ---- one poll per browser (the proxy allows 60 API calls a minute per client) -------------------
+const LOCK = 'belfry-apply-poll'
+const TAB = Math.random().toString(36).slice(2)
+/** May this tab ask now? Only the tab holding the lock (renewed on each ask; free after 20 s). */
+export function takePollTurn(): boolean {
+  try {
+    const l = JSON.parse(localStorage.getItem(LOCK) ?? 'null') as { tab: string; at: number } | null
+    if (l && l.tab !== TAB && Date.now() - l.at < 20_000) return false
+    localStorage.setItem(LOCK, JSON.stringify({ tab: TAB, at: Date.now() }))
+    return true
+  } catch { return true }
 }
