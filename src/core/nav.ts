@@ -5,7 +5,9 @@
 // (Xavier, 2026-11-18: "the back button … goes sometimes in loop").
 /** Replace the address with HASH ("#/…") or URL, keeping this entry's place in the history. */
 export function replaceHash(hashOrUrl: string) {
-  const url = hashOrUrl.startsWith('#') ? location.pathname + location.search + hashOrUrl : hashOrUrl
+  // a bare "#/…" resolves against this page whatever its path ("//" on a test server made
+  // pathname + search read as another host, and the replace threw: nav.cjs, 2026-11-19)
+  const url = hashOrUrl
   const before = location.hash
   try { history.replaceState(history.state, '', url) } catch { location.replace(url); return }
   if (location.hash !== before) dispatchEvent(new HashChangeEvent('hashchange'))
