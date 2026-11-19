@@ -798,9 +798,12 @@ async def preview(request: Request, svc: Services) -> Response:
     """preview.<domain>: /p/<npub>[@<name>] picks the site (cookie), every other path is that
     site's own (absolute links work)."""
     path = request.url.path
-    m = re.fullmatch(rf"/p/({NPUB})(?:@({NAME}))?/?", path)
+    m = re.fullmatch(rf"/p/({NPUB})(?:@({NAME}))?((?:/[A-Za-z0-9._-]+)*/?)", path)
     if m:
-        resp = RedirectResponse("/", status_code=302)
+        # the link may name where to land (…/p/<npub>@<name>/ios/screenshots/): a proposal for
+        # one part of the site has no home page of its own
+        land = m.group(3) if m.group(3) and ".." not in m.group(3) else "/"
+        resp = RedirectResponse(land, status_code=302)
         resp.set_cookie(
             PREVIEW_COOKIE,
             m.group(1) + (f"@{m.group(2)}" if m.group(2) else ""),
@@ -831,6 +834,30 @@ async def preview(request: Request, svc: Services) -> Response:
         if client is not None:
             await client.aclose()
     resp = await hp.nsite(request, path)
+    if resp.status_code == 404:
+        # a site for one part of the website (a proposal with a path): it has no page here.
+        # At the root, go to its first page; elsewhere show the live site's page, so the
+        # preview reads as the website would after approval.
+        try:
+            own = {"/" + k.lstrip("/") for k in (await hp.site()).paths}
+        except Exception:  # noqa: BLE001 — the 404 stands
+            own = set()
+        if own and "/index.html" not in own:
+            if path in ("", "/"):
+                pages = sorted(
+                    (k[: -len("index.html")] for k in own if k.endswith("/index.html")),
+                    key=lambda k: (k.count("/"), k),
+                )
+                if pages:
+                    return RedirectResponse(pages[0], status_code=302)
+            live = getattr(request.app.state, "homepage", None)
+            if live is not None and live.enabled and live is not hp:
+                try:
+                    shown = await live.nsite(request, path)
+                except Exception:  # noqa: BLE001
+                    shown = None
+                if shown is not None and shown.status_code == 200:
+                    resp = shown
     resp.headers["X-Robots-Tag"] = "noindex"
     return resp
 

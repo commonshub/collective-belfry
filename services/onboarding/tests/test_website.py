@@ -152,3 +152,44 @@ def test_a_preview_keeps_its_site_and_closes_the_ones_it_drops(rsvc, monkeypatch
         c.cookies.set(website.PREVIEW_COOKIE, NPUB)  # another site: the first is dropped
         assert c.get("/", headers=host).text == "ok"
         assert len(made) == 2 and closed == [1]
+
+
+def test_a_preview_of_one_part_lands_on_its_first_page_and_shows_the_live_site_elsewhere(
+    rsvc, monkeypatch  # noqa: F811
+):
+    """A proposal for /ios/screenshots/ has no home page: the link used to end on a 404."""
+    from types import SimpleNamespace
+
+    class Part:
+        async def site(self):
+            return SimpleNamespace(
+                paths={"/ios/screenshots/index.html": "a", "/ios/screenshots/home/index.html": "b"}
+            )
+
+        async def nsite(self, request, path):
+            if path.startswith("/ios/screenshots/"):
+                return Response(f"new {path}", media_type="text/html")
+            return Response("Not found", status_code=404)
+
+    class Live:
+        enabled = True
+
+        async def nsite(self, request, path=None):
+            return Response(f"live {path}", media_type="text/html")
+
+    monkeypatch.setattr(website, "site_of", lambda svc, pk, name: Part())
+    website._previews.clear()
+    rsvc.settings.nip05_domain = "belfry.test"
+    app = create_app(rsvc)
+    with TestClient(app) as c:
+        app.state.homepage = Live()
+        host = {"Host": "preview.belfry.test"}
+        # the link may say where to land; a made-up path with dots is not followed
+        r = c.get(f"/p/{NPUB}@shots/ios/screenshots/", headers=host, follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == "/ios/screenshots/"
+        c.cookies.set(website.PREVIEW_COOKIE, f"{NPUB}@shots")
+        r = c.get("/", headers=host, follow_redirects=False)
+        assert r.status_code == 302 and r.headers["location"] == "/ios/screenshots/"
+        assert c.get("/ios/screenshots/", headers=host).text == "new /ios/screenshots/"
+        assert c.get("/android/", headers=host).text == "live /android/"  # the rest of the site
+    website._previews.clear()
