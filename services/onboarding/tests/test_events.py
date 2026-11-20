@@ -153,6 +153,40 @@ def call(c, key, method, path, data=None):
     )
 
 
+def test_the_website_shows_an_event_itself_when_it_has_the_page(rsvc, world, router, monkeypatch):
+    from belfry_onboarding import homepage
+
+    ada = member(rsvc, "ada@belfry.test", "Ada")
+    make_event(world, ada)
+    hp = homepage.Homepage(rsvc.settings, homepage.Config("nsite", pubkey="11" * 32))
+    files = {"/index.html": b"<h1>Home</h1>"}
+
+    def publish():
+        hp._site = homepage.Site(
+            {p: f"{i:064x}" for i, p in enumerate(files)}, ["http://b"], 1e18, event_id="e"
+        )
+
+    async def blob(sha, servers):
+        return list(files.values())[int(sha, 16)], "text/html"
+
+    monkeypatch.setattr(hp, "blob", blob)
+    publish()
+    with TestClient(create_app(rsvc)) as c:
+        c.app.state.homepage = hp
+        assert "RSVP" in c.get(f"/events/{D}").text or "Garden day" in c.get(f"/events/{D}").text
+        files["/events/_.html"] = b"<html><head><title>x</title></head><body>SITE</body></html>"
+        publish()
+        page = c.get(f"/events/{D}")
+        assert page.status_code == 200 and "<body>SITE</body>" in page.text
+        assert '<meta property="og:title" content="Garden day">' in page.text
+        assert page.text.index("og:title") < page.text.index("</head>")
+        assert "etag" not in page.headers
+        # what stays the belfry's: the calendar file, an unknown event
+        assert c.get(f"/events/{D}.ics").headers["content-type"].startswith("text/calendar")
+        assert c.get("/events/nothere").status_code == 404
+        assert "SITE" not in c.get("/events/nothere").text
+
+
 def test_the_public_page_json_ics_and_cover(rsvc, world, router):
     ada = member(rsvc, "ada@belfry.test", "Ada")
     make_event(world, ada)
@@ -810,7 +844,9 @@ def test_parallel_readers_share_one_relay_answer_and_a_slow_relay_is_tried_again
         return [{"id": "a"}]
 
     got = []
-    ts = [threading.Thread(target=lambda: got.append(events._shared("k", fetch))) for _ in range(12)]
+    ts = [
+        threading.Thread(target=lambda: got.append(events._shared("k", fetch))) for _ in range(12)
+    ]
     [t.start() for t in ts]
     [t.join() for t in ts]
     assert got == [[{"id": "a"}]] * 12 and len(calls) == 2  # one failure, one read for all twelve

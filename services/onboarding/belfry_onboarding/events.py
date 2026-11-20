@@ -1715,13 +1715,10 @@ def _message(key: str, svc: Services, status: int) -> HTMLResponse:
     return HTMLResponse(_page("Event", body), status_code=status)
 
 
-def event_page(svc: Services, ev: Event) -> str:
+def page_head(svc: Services, ev: Event) -> str:
+    """What a link preview and a search engine read of an event's page: fixed tags, the
+    event's own words escaped."""
     url = url_of(svc, ev)
-    ppl = people(svc, ev)
-    tks = tickets(svc, ev)
-    from . import community
-
-    hosts = community.people_html(svc, shown_hosts(svc, ev))
     desc = re.sub(r"\s+", " ", ev.about)[:200]
     head = (
         '<meta property="og:type" content="event">'
@@ -1738,6 +1735,51 @@ def event_page(svc: Services, ev: Event) -> str:
         )
     if ev.visibility != "public":
         head += '<meta name="robots" content="noindex">'
+    return head
+
+
+WEBSITE_PAGE = "/events/_.html"  # the community's website shows an event itself when it has this
+
+
+async def website_page(request: Request, ev: Event) -> Response | None:
+    """The website's own page for an event (docs/checkin.md "The website's event page"): when
+    the published site has ``/events/_.html``, that file answers ``/events/<link>`` with the
+    event's link-preview tags put in its head. None: the belfry's page, as before."""
+    hp = getattr(request.app.state, "homepage", None)
+    if hp is None or getattr(hp.config, "mode", "") != "nsite" or request.method != "GET":
+        return None
+    try:
+        site = await hp.site()
+        if WEBSITE_PAGE not in site.paths:
+            return None
+        body, _ = await hp.blob(site.paths[WEBSITE_PAGE], site.servers)
+    except Exception as exc:  # noqa: BLE001 — the belfry's own page then
+        log.info("events: the website's page was not read: %s", type(exc).__name__)
+        return None
+    from .homepage import NSITE_CSP
+
+    html = body.decode("utf-8", "replace")
+    head = page_head(request.app.state.services, ev)
+    at = html.lower().find("</head>")
+    html = html[:at] + head + html[at:] if at >= 0 else head + html
+    headers = {
+        "Cache-Control": "public, max-age=60" if ev.visibility == "public" else "no-store",
+        "Content-Security-Policy": NSITE_CSP,
+        "X-Content-Type-Options": "nosniff",
+    }
+    if ev.visibility == "link":
+        headers["X-Robots-Tag"] = "noindex"
+    return HTMLResponse(html, headers=headers)
+
+
+def event_page(svc: Services, ev: Event) -> str:
+    url = url_of(svc, ev)
+    ppl = people(svc, ev)
+    tks = tickets(svc, ev)
+    from . import community
+
+    hosts = community.people_html(svc, shown_hosts(svc, ev))
+    head = page_head(svc, ev)
     cover = f'<img class="ev-cover" src="{E(url)}/cover" alt="">' if ev.cover else ""
     status = '<span class="tag cancel">Cancelled</span>' if ev.status == "cancelled" else ""
     where = ", ".join(x for x in (ev.location, "online" if ev.links else "") if x)
@@ -2013,6 +2055,9 @@ def register(app: FastAPI) -> None:
         got = await _found(request, link)
         if not isinstance(got, Event):
             return got
+        theirs = await website_page(request, got)
+        if theirs is not None:
+            return theirs
         page = await run_in_threadpool(event_page, request.app.state.services, got)
         cache = "public, max-age=60" if got.visibility == "public" else "no-store"
         headers = {"Cache-Control": cache}

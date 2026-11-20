@@ -571,7 +571,10 @@ def viewer_fields(
     tks = events.tickets(svc, ev)
     mine = holders(ev, ppl, tks)
     code = ticket_code(svc, ev.d, viewer) if viewer in mine else None
+    held = ppl.holders.get(viewer)
+    title = next((t.title for t in tks if t.d == held), "Ticket") if held else None
     return {
+        "ticket_title": title,
         "ticket_code": code,
         "ticket_url": ticket_url(svc, ev, code) if code else None,
         "checked_in": st.checked.get(viewer) if viewer in mine else None,

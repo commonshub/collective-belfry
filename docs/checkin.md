@@ -293,3 +293,20 @@ slug or its id; `ticket`: the required ticket's d; `{"event_link": null, "event_
 for an unreadable tag). When the request is signed (NIP-98, also by a website session, which
 reads as its account) each ticket also gains `eligible`: `true` when it needs nothing or the
 viewer holds what it needs. `can_pay` is false for a viewer who is not eligible.
+
+## The website's event page
+
+When the community's published website has the file `/events/_.html`, `https://<domain>/events/<link>`
+answers with that file (status 200) instead of the belfry's own page, for an event that exists
+and is public or by link. The belfry puts the event's link-preview tags (`og:title`,
+`og:description`, `og:image`, canonical, the calendar link, `noindex` for a by-link event) in
+the file's `<head>`; the page reads the link from the address and asks
+`GET /api/v1/events/<link>` (signed by a website session when there is one,
+docs/website-accounts.md). Still the belfry's: `/events` (the list), `/events/<link>.ics`,
+`/events/<link>/cover`, the redirect from an event's id or old name to its address, an unknown
+event (404), a members-only event (the note that sends to the chat). Removing the file from the
+website gives the belfry's page back. On `preview.<domain>` a proposed site shows its own
+`/events/_.html` through the website's general rule (docs/website-accounts.md), without the tags.
+
+`me` / `viewer` of `GET /events/<link>` also carries `ticket_title`: the title of the ticket
+the viewer holds (`"Ticket"` when that ticket is gone, `null` without one).
