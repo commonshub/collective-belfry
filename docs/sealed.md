@@ -19,6 +19,8 @@ person's devices. The signer is never asked: sealing, opening and signing happen
   and which cannot read earlier messages.
 - E-mail: sealed on arrival and in the thread; in clear at the moment it enters or leaves the
   belfry's mail server, and at the other side's provider.
+- A removed or stolen device can no longer read, but it can still write messages dated before
+  its removal, which are accepted as old messages of the person (§4). Accepted in this version.
 - No forward secrecy between key changes (a letterbox key changes when a device is removed).
 
 Channels and NIP-29 groups are not covered by this version.
@@ -74,7 +76,8 @@ always without `since`.
 - Roster n: `prev` is the id of a valid roster n−1; its signer is a device of roster n−1;
   at least one device; `p` = A; when any device of n−1 is missing, `lb` differs from the
   `lb` of every earlier roster of the chain; when none is missing, `lb` equals the previous one.
-- Two valid rosters with the same `prev`: the lower id wins; the other and its descendants are ignored.
+- Also invalid: `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
+- Two valid rosters with the same `prev` (ids compared as lower-case hex strings): the lower id wins; the other and its descendants are ignored.
 - Head: the last roster of the valid chain. Its `lb` is where to seal for A. Its devices are A's devices.
 - Anything else is ignored silently (wrong signature, unknown prev, signer not in the previous roster).
 
@@ -93,7 +96,8 @@ for someone else. Date = the roster's `created_at`. Don't show notices for chang
 the newest message already shown at first sync of a conversation; the Encryption screen's grey
 line covers the last 30 days.
 
-"Added from ‹device›" on my own list: the signer of the first roster that contains the device.
+"Added from ‹device›" on my own list: the signer of the first roster that contains the device
+(nothing for a device that added itself, i.e. a root).
 
 ### 3.5 My device names, kind 30078 `d = belfry:devices`
 
@@ -166,7 +170,7 @@ while waiting. The device shows the banner "Earlier messages are locked on this 
 Until it is allowed it reads no sealed message at all, old or new (it has no letterbox secret).
 
 An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}`:
-1. `GET /api/me/sessions`: the request's pubkey must be the `client_pubkey` of a live session;
+1. `GET /api/me/sessions`: the request's pubkey must be the `client_pubkey` of a live session with `"chat": true`;
    otherwise ignore it. The prompt's device name comes from that session.
 2. With a valid `link` for a code this device showed in the last 15 minutes: allow at once.
    Otherwise ask: Allow / Not me.
@@ -223,8 +227,11 @@ and reads its wraps again from 0.
 
 ## 6. When a conversation is sealed
 
-A device adds `["ready"]` to the roster it publishes when every live session of the account
-(`/api/me/sessions`) is a device of that roster; a device that sees this become true publishes
+A device adds `["ready"]` to the roster it publishes when every counted session of the account
+is a device of that roster. Counted = a session of `/api/me/sessions` with `"chat": true` (the
+belfry's own chat clients: the web chat and the phone apps; other apps and remote apps never
+count) and `last_activity` within the last 30 days. The device key is the key that list gives
+as `client_pubkey`, for every way of signing in. Then: a device that sees this become true publishes
 roster n+1 with `ready` (same devices, same `lb`). Once a chain has had `ready`, it stays ready
 for everybody (later rosters without the tag don't unset it).
 
@@ -266,7 +273,8 @@ Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its con
 
 At most 200 rumors or 200 kB per wrap; several wraps for more. The receiver, when the sharer is
 a participant of each rumor's conversation, adds the rumors it doesn't have, marked as shared
-by that person (they are not proven to be authentic).
+by that person (they are not proven to be authentic). The mark is kept on the receiving
+device only.
 
 ## 9. Errors and edge rules
 
