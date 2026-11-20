@@ -7,6 +7,8 @@ import json
 import logging
 import mimetypes
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -233,6 +235,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
         await run_in_threadpool(core.sync_participants, app.state.services)
         app.state.sessions = sessions.Sessions(app.state.services)
+        if services is None:
+            # the first read of the events after a start is slow (relay connections, names,
+            # the store): do it now, aside, so the first visitor doesn't wait for it
+            def warm(svc: Services = app.state.services) -> None:
+                try:
+                    n = len(events.listing(svc, int(time.time()) - 86400))
+                    logging.getLogger(__name__).info("events: %d upcoming read at start", n)
+                except Exception as exc:  # noqa: BLE001 — the first visitor reads them then
+                    logging.getLogger(__name__).info("events: not read at start: %s", exc)
+
+            threading.Thread(target=warm, name="warm-events", daemon=True).start()
         async with (
             sessions.running(app),  # name@domain sign-in by DM (sessions.py)
             followers.running(app),  # the announcements channel and its digests (followers.py)
