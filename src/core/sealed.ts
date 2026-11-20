@@ -47,13 +47,15 @@ interface State {
   lines: Map<Conv, DeviceLine[]>
   /** this device is new: the conversations whose earlier messages it can't read yet */
   lockedHere: Set<Conv>
+  /** when each conversation was sealed (ms): messages from before read as usual */
+  sealedAt: Map<Conv, number>
   /** on this (older) device: a new device of mine waits for Allow */
   asking?: { id: string; name: string; kind: DeviceKind; at: number }
   /** Link a phone or tablet: the device that just came in by scanning my code */
   linked?: { name: string; kind: DeviceKind }
 }
 
-const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set() })
+const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map() })
 let state: State = empty()
 
 export const isSealed = (conv: Conv) => state.sealed.has(conv)
@@ -63,6 +65,11 @@ export const theirDevices = (pk: string): TheirDevices | undefined => state.peop
 export const deviceLines = (conv: Conv) => state.lines.get(conv) ?? []
 export const lockedHere = (conv: Conv) => state.lockedHere.has(conv)
 export const anyLockedHere = () => state.lockedHere.size > 0
+/** When the conversation was sealed (ms; 0 when unknown). */
+export const sealedAt = (conv: Conv) => state.sealedAt.get(conv) ?? 0
+/** A device not yet allowed reads NO sealed message, old or new (canvas v84): only what came
+ *  before the conversation was sealed reads as usual. */
+export const lockedMsg = (conv: Conv, at: number) => state.lockedHere.has(conv) && at * 1000 >= sealedAt(conv)
 export const asking = () => state.asking
 export const linkedByScan = () => state.linked
 export const clearLinked = () => { state.linked = undefined; touch() }
@@ -152,6 +159,7 @@ export interface DemoSealed {
   sealed: Conv[]
   lines?: Record<Conv, Omit<DeviceLine, 'id'>[]>
   lockedHere?: Conv[]
+  sealedAt?: Record<Conv, number>
   asking?: { name: string; kind: DeviceKind; at: number }
   linked?: { name: string; kind: DeviceKind }
 }
@@ -160,7 +168,7 @@ export interface DemoSealed {
 export function setDemoSealed(d: DemoSealed) {
   demo = true
   state = {
-    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []),
+    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})),
     lines: new Map(Object.entries(d.lines ?? {}).map(([c, ls]) => [c, ls.map((l) => ({ id: crypto.randomUUID(), ...l }))])),
     asking: d.asking && { id: crypto.randomUUID(), ...d.asking }, linked: d.linked,
   }

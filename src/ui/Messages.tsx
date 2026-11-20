@@ -13,8 +13,8 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
-import { deviceLines, isSealed, type DeviceLine } from '../core/sealed'
-import { DeviceLineRow, LockButton, encConv } from './Sealed'
+import { anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, type DeviceLine } from '../core/sealed'
+import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, ShareHistorySheet } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
@@ -39,6 +39,7 @@ export function MessagesList() {
         <button className="icon-btn" aria-label="New message" onClick={() => setCreating(true)}>＋</button>
       </div>
       <div className="scroll">
+        {anyLockedHere() && <LockedBanner />}
         {list.length === 0 && (
           <div className="empty">
             No messages yet.<br />
@@ -50,7 +51,8 @@ export function MessagesList() {
             <Who conv={t.conv} size={36} />
             <span className="t">
               <b>{isMail(t.conv) ? threadName(t.conv) : convName(t.conv)}</b>
-              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(t.last.text).split('\n')[0]}</small>
+              {lockedHere(t.conv) ? <small><LockedHereText /></small>
+                : <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(t.last.text).split('\n')[0]}</small>}
             </span>
             <span className="dm-meta">
               <time>{fmtTime(t.last.at)}</time>
@@ -103,7 +105,10 @@ function NewMessage({ onClose }: { onClose: () => void }) {
 
 export function MessageThread({ conv }: { conv: Conv }) {
   useVersion()
-  const list = thread(conv)
+  // boards messages/encryption-locked-thread (v84): a device not yet allowed reads no sealed
+  // message; what came before the conversation was sealed reads as usual, then the amber block
+  const locked = lockedHere(conv)
+  const list = thread(conv).filter((d) => !lockedMsg(conv, d.at))
   const mail = isMail(conv)
   const scroller = useRef<HTMLDivElement>(null)
   const visible = useVisible()
@@ -116,9 +121,10 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const title = mail ? (isNewMail(conv) ? `New e-mail to ${who}` : threadName(conv)) : convName(conv)
   const sealed = isSealed(conv)
   // the device lines between the messages, by time (core/sealed.ts; none unless sealed)
-  const lines = sealed ? deviceLines(conv) : []
+  const lines = sealed && !locked ? deviceLines(conv) : []
   const rows: ({ d: Dm } | { l: DeviceLine })[] = [...list.map((d) => ({ d, t: d.at * 1000 })), ...lines.map((l) => ({ l, t: l.at }))].sort((a, b) => a.t - b.t)
-  const onShare = (l: DeviceLine) => go('dm/' + encConv(conv) + '/lock') // step 8: the Share history sheet
+  const [sharing, setSharing] = useState<DeviceLine | null>(null)
+  const onShare = (l: DeviceLine) => setSharing(l)
   let day = ''
   return (
     <div className="screen">
@@ -131,7 +137,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
       </div>
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
-          {list.length === 0 && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
+          {list.length === 0 && !locked && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
           {rows.map((r) => {
             const t = 'd' in r ? r.d.at * 1000 : r.l.at
             const dd = fmtDay(new Date(t))
@@ -140,9 +146,11 @@ export function MessageThread({ conv }: { conv: Conv }) {
             const d = r.d
             return <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
           })}
+          {locked && <LockedBlock since={sealedAt(conv) || Date.now()} />}
         </div>
       </div>
-      <DmComposer conv={conv} needsSubject={isNewMail(conv)} />
+      {locked ? <div className="seal-nocompose">You can write here once this device is allowed.</div> : <DmComposer conv={conv} needsSubject={isNewMail(conv)} />}
+      {sharing && <ShareHistorySheet conv={conv} l={sharing} onClose={() => setSharing(null)} />}
     </div>
   )
 }

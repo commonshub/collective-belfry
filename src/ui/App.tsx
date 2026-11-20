@@ -34,7 +34,8 @@ import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
-import { EncryptionScreen } from './Sealed'
+import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
+import { hasDevices } from '../core/sealed'
 import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
@@ -313,6 +314,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'charter') view = <CharterScreen sub={a} id={b} />
   else if (section === 'welcome') view = <WelcomeFlow />
   else if (section === 'channels' && !wide) view = <ChannelList />
+  else if (section === 'dm' && a === 'unlock') view = <ShowHowScreen />
   else if (section === 'dm' && a && b === 'lock') view = <EncryptionScreen conv={a} />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
@@ -321,6 +323,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'events' || section === 'cal' && !a) view = <EventsScreen />
   else if (section === 'cal' && a) view = <EventScreen key={a} coord={a} />
   else if (section === 'me' && a === 'connections') view = <Connections session={session} />
+  else if (section === 'me' && a === 'devices') view = <DevicesScreen />
   else if (section === 'me' && a === 'signin') view = <SignInMethods />
   else if (section === 'me' && a === 'branding' && THEME === 'belfry') view = <BrandingScreen />
   else if (section === 'me') view = <Me session={session} onSignOut={onSignOut} />
@@ -361,13 +364,14 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   // channel's name. Laptop: the channel list stays on the left, you at its bottom (like WhatsApp).
   const current = section === 'c' ? chanId : section === 'events' ? a : undefined
   const place = places ? placeOf(route) : undefined
-  if (!wide) return <><Phone current={current} section={section} open={drawer} bar={place ? <TabBar place={place} /> : undefined}>{view}</Phone>{toast}</>
+  if (!wide) return <><Phone current={current} section={section} open={drawer} bar={place ? <TabBar place={place} /> : undefined}>{view}</Phone>{toast}<AllowPrompt /></>
   return (
     <div className="layout wide">
       <aside className="side" aria-label="Channels"><ChannelList side current={current} section={section} top={places ? <SidePlaces place={place} /> : undefined} /></aside>
       <main className="main screen">{view}</main>
       {pane && <aside className="thread-pane" aria-label="Thread">{pane}</aside>}
       {toast}
+      <AllowPrompt />
     </div>
   )
 }
@@ -473,6 +477,13 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           <div>
             <div style={{ fontWeight: 600 }}>Sign-in methods</div>
             <div className="hint" style={{ fontSize: 14 }}>E-mail code and passkeys</div>
+          </div>
+          <span className="hint" aria-hidden="true">›</span>
+        </button>}
+        {hasDevices() && <button className="card row me-devices" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/devices')}>
+          <div>
+            <div style={{ fontWeight: 600 }}>Devices</div>
+            <div className="hint" style={{ fontSize: 14 }}>Where you’re signed in</div>
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>}

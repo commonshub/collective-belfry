@@ -1,3 +1,5 @@
+import { clearLinked, linkedByScan } from '../core/sealed'
+import { LinkedByScan } from './Sealed'
 // #/accounts (board home/accounts; the web's limits from the lead, 2026-11-18): opened from the
 // person row at the bottom of the Town drawer. "On this browser": this belfry's accounts (a tap
 // switches: a full reload into that account) and other belfries (a tap opens their chat, where
@@ -104,6 +106,7 @@ export function myUsername(): string {
 /** Link your phone (boards home/link-phone, -laptop): a QR of https://chat.<domain>/login/<username>,
  *  nothing else in it (no secret, no token); the app (or a browser) logs in with a code by e-mail. */
 function LinkPhoneSheet({ onClose }: { onClose: () => void }) {
+  useVersion()
   const community = useCommunityName(NAME)
   const u = myUsername()
   const url = `https://chat.${BELFRY.domain}/login/${u}`
@@ -112,6 +115,9 @@ function LinkPhoneSheet({ onClose }: { onClose: () => void }) {
     const q = qrcode(0, 'M'); q.addData(url); q.make()
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }))
   }, [url])
+  const linked = linkedByScan()
+  // board messages/encryption-link-qr: the new device scanned this code, so no Allow follows
+  if (linked) return <Sheet title="Link your phone" onClose={() => { clearLinked(); onClose() }}><LinkedByScan name={linked.name} onDone={() => { clearLinked(); onClose() }} /></Sheet>
   return (
     <Sheet title="Link your phone" onClose={onClose}>
       <div className="link-phone">
