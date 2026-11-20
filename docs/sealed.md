@@ -264,8 +264,11 @@ set of conversation ids, not published; a conversation also enters the set the m
 accepts a sealed rumor in it), and re-checks at each send until the conversation is
 sealed. If a participant of a sealed conversation later has no ready chain (a fresh start not
 finished, an anchor that disappeared), seal to the last valid head this device knew for them;
-never fall back. If there is no head to seal to at all, the message waits in the outbox; it is
-never sent the old way. An old-style message (no `lb`) that arrives in a sealed conversation dated
+never fall back. If there is no head to seal to at all, the message waits in the outbox or the send is refused
+with the text kept in the composer; it is never sent the old way. And a message goes the old way
+only on knowledge, never on silence: the device must hold, for some participant, a complete
+answer from the relay (after authentication, to EOSE, since this start or within the last
+10 minutes) showing no ready chain. When it cannot tell, the send is refused with the text kept. An old-style message (no `lb`) that arrives in a sealed conversation dated
 after this device first saw it sealed is shown with a "not sealed" mark. Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
 app) keeps the conversation unsealed.
 
