@@ -85,8 +85,9 @@ always without `since`.
   cannot fork it.
 - After the end of the anchored path (rosters published but not anchored yet): each step must be
   valid as above; when two valid rosters have the same `prev` there, the lower id wins for now
-  (ids compared as lower-case hex strings) and the next anchor settles it. A device whose roster
-  lost re-reads the chain and does its change again.
+  (ids compared as lower-case hex strings) and the next anchor settles it. A device always
+  anchors its own roster at once, whatever the ids; when the anchor then names another branch
+  (another of my devices was a moment later), it re-reads the chain and does its change again.
 - Head: the last roster reached. Its `lb` is where to seal for A. Its devices are A's devices.
 - No going back: a client that has pinned head H for a person ignores an anchor whose `head`
   is an ancestor of H (it keeps H). An anchor naming another branch of the same root is followed.
