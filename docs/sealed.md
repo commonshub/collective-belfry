@@ -134,7 +134,7 @@ A wrap with an `lb` tag is sealed; one without is the old kind and goes to the s
 One wrap per participant's head letterbox, and one to my own head letterbox (the self-copy),
 through the outbox to the community relay as today. No signer call.
 
-Opening: find the letterbox secret by the `lb` tag (no secret: the message is locked on this
+Opening (the rumor's id is always computed by the opener; an `id` or `sig` field inside is ignored): find the letterbox secret by the `lb` tag (no secret: the message is locked on this
 device, §5.3; keep the wrap). Open wrap, verify the seal's signature, open the seal with
 conv(letterbox secret, seal.pubkey). Accept the rumor only when `seal.pubkey` is a device of
 `rumor.pubkey`'s valid chain — in the head, or in an earlier roster when the rumor's `created_at`
@@ -271,7 +271,10 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-At most 200 rumors or 200 kB per wrap; several wraps for more. The receiver, when the sharer is
+At most 200 rumors or 40 000 bytes of rumor JSON per wrap, whichever comes first (NIP-44 carries
+65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
+A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
+a sender never seals a rumor whose JSON is over 40 000 bytes. The receiver, when the sharer is
 a participant of each rumor's conversation, adds the rumors it doesn't have, marked as shared
 by that person (they are not proven to be authentic). The mark is kept on the receiving
 device only.
