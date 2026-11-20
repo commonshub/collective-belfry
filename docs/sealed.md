@@ -67,7 +67,9 @@ kind 30078, pubkey = account, content ""
 It stops another member from publishing a roster "for" someone, and a removed device from
 taking the chain back: only a live session of the account (or the server) can make it, and a
 removed device's session is revoked. Every device that publishes a roster publishes the anchor
-again together with it (both sent in the same moment, the roster first), with `head` = that roster (and the same `root`). `head` absent = the root.
+again together with it: the roster is signed locally, the anchor naming it is signed by the signer,
+and only then are both sent, in the same moment, the roster first. When the anchor cannot be signed,
+neither is sent and the change is tried again later, with `head` = that roster (and the same `root`). `head` absent = the root.
 
 ### 3.3 Valid chain
 
@@ -78,7 +80,7 @@ always without `since`.
 - Roster n: `prev` is the id of a valid roster n−1; its signer is a device of roster n−1;
   at least one device; `p` = A; when any device of n−1 is missing, `lb` differs from the
   `lb` of every earlier roster of the chain; when none is missing, `lb` equals the previous one.
-- Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev`; `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
+- Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev` (a tag given twice makes the event invalid; the same for the anchor's `d`, `root`, `head`, a wrap's `lb`, and the `p` of an 8561 or 8564); `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
 - The anchored path: the rosters from the root to the anchor's `head`, when `head` is a valid
   roster descending from the root; otherwise the root alone. A roster that is not on that path
   and does not descend from its end is ignored, whatever its id: a device dropped by the path
@@ -161,7 +163,9 @@ is not after the `created_at` of the roster that dropped it. The chain may not b
 keep the wrap and retry when it is (on each new roster of that author and at each start);
 never mark it seen on that failure, and give up only after 30 days. A wrap that does not
 decrypt with the right letterbox secret, or whose seal signature is bad, is dropped at once. A mail from the belfry
-(§7) is the exception: its seal is signed by the belfry's key.
+(§7) is the only exception: a rumor of kind 1301 whose `pubkey` and whose seal's signer are both the
+belfry's key (the key in belfry.json, not a name looked up at the time). Any other kind sealed by
+that key is refused.
 
 Reading filter: unchanged `{kinds:[1059], "#p":[me]}`; a device that just received keys (§5)
 asks once from 0.
@@ -211,13 +215,17 @@ A wrap that can't be opened says only that it is for me, not which conversation:
 marks "Locked on this device" the conversations this device already knows whose participants
 all have a ready chain, while this device is not in my head; a conversation that exists only as
 unopened wraps is not listed. The banner shows when this device is not in my head or holds a
-wrap whose `lb` it has no secret for.
+wrap whose `lb` is a letterbox of MY OWN chain (any roster of it) that it has no secret for. A
+wrap naming any other `lb` is dropped: anyone can write one. Only "this device is not in my head"
+hides messages or the composer.
 
 ### 5.4 Starting fresh
 
 When this device is not in the head and the user says they have no other device ("Show how" →
 "I don't have another device"), or when no device of the head has a live session in
-`/api/me/sessions`: make a new letterbox, publish a new root (n = 1, this device) and replace the
+`/api/me/sessions` — the head being known from an answer the relay gave after authentication,
+complete to EOSE, on this connection, for my anchor and my rosters, never from what the device had
+stored: make a new letterbox, publish a new root (n = 1, this device) and replace the
 anchor. Everyone sees the amber notice (§3.4). Devices of the old chain that come back see
 they are out: they publish a request like any new device, and once allowed they send their
 old key chain (5.5), which unlocks the earlier messages again.
@@ -245,7 +253,9 @@ and reads its wraps again from 0.
   start and every 6 h by each device; wait a random 0–60 s, re-read the head, skip if done):
   make a new letterbox, send keys (5.5) with the new secret to each remaining device, publish
   roster n+1 with the new `lb` and without the device; each device rewrites its name (§3.5) when it sees the new head.
-  A user's removal also revokes the session.
+  A user's removal revokes the session FIRST and changes nothing when that fails (a removed device
+  with a live session could still have an anchor signed); keys go only to devices that stay AND have
+  a live session.
 - Signing out: the device revokes its session as today and wipes its keys. The others do the above.
 
 ## 6. When a conversation is sealed
@@ -269,7 +279,9 @@ with the text kept in the composer; it is never sent the old way. And a message 
 only on knowledge, never on silence: the device must hold, for some participant, a complete
 answer from the relay (after authentication, to EOSE, since this start or within the last
 10 minutes) showing no ready chain. When it cannot tell, the send is refused with the text kept. An old-style message (no `lb`) that arrives in a sealed conversation dated
-after this device first saw it sealed is shown with a "not sealed" mark. Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
+after this device first saw it sealed is shown with a "not sealed" mark when it is a message (kind 14); an old-style reaction or
+take-back (7, 5) there is ignored. An old-style rumor never replaces a message the device holds
+(its id is computed by the opener on the old path too). Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
 app) keeps the conversation unsealed.
 
 The lock shows on a sealed conversation, always.
