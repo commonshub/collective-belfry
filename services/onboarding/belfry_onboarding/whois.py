@@ -13,10 +13,16 @@ event saying so unless a label was published). The register knows, so it answers
 - And ``"testers": ["<hex>", …]``: the keys among those asked that belong to a tester
   (testers.py: an account for trying payments; its purchases go through the test environment).
   Members still, so "people" says "member"; apps label them "Tester".
+- And ``"tags": {"<hex>": ["tag", …]}``: the profile tags of the **guests** among the keys
+  asked who have some. A guest's tags are kept on their contact (set on the website,
+  sitesessions.py) because guests are not on the members' relay; a member's are in their own
+  kind 30078 ``d`` = ``belfry:profile`` event, which the apps read themselves, so members are
+  never in ``tags``. A guest without tags is left out.
 - ``{"directory": true}`` (members only, #issues 2026-11-15: the chat's Members directory) →
   ``{"members": [{"pubkey", "name", "role"?}], "agents": {"<agent>": "<its member>"},
   "names": {"<agent>": "<name>"}}``: everyone holding a member's pass, and members' own agents;
-  a tester's entry has ``"tester": true``.
+  a tester's entry has ``"tester": true``. Guests are not in the directory, so it has no
+  ``tags``.
 """
 
 from __future__ import annotations
@@ -78,7 +84,36 @@ def answer(svc: Services, caller: str, keys: list[str]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         found = set()
     out["testers"] = sorted(found)
+    try:
+        out["tags"] = guest_tags(svc, [k for k in keys if known.get(k) == "guest"])
+    except Exception:  # noqa: BLE001
+        out["tags"] = {}
     return out
+
+
+def guest_tags(svc: Services, keys: list[str]) -> dict[str, list[str]]:
+    """The profile tags of the guests among KEYS, from their contacts (``belfry_tags``); a
+    guest without tags is left out."""
+    from . import sitesessions
+    from .core import m2o_id
+
+    if not keys:
+        return {}
+    want = set(keys)
+    partner: dict[str, int] = {}
+    for r in svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["tier", "=", "guest"], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey", "partner_id"],
+    ):
+        pid = m2o_id(r.get("partner_id"))
+        if r.get("keycast_pubkey") in want and pid:
+            partner.setdefault(str(r["keycast_pubkey"]), int(pid))
+    if not partner:
+        return {}
+    rows = svc.odoo.read("res.partner", sorted(set(partner.values())), ["belfry_tags"])
+    held = {r["id"]: sitesessions.clean_tags(r.get("belfry_tags")) for r in rows}
+    return {k: held[p] for k, p in partner.items() if held.get(p)}
 
 
 def directory(svc: Services, caller: str) -> dict[str, Any]:

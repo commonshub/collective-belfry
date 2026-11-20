@@ -120,9 +120,32 @@ endpoints below such a key is a browser key like any other, as before.
   it is the list the chat shows and edits: the `tags` of their kind 30078 `d` =
   `belfry:profile` event on the community relay, read as the chat reads it (lowercased, at
   most 30, each at most 32 characters; the chat allows letters of any alphabet and `_`). For
-  a **guest** it is kept on their contact in the register: guests are not on the members'
-  relay, so **a guest's tags are not visible in the chat** (nor carried over when the guest
-  becomes a member: from then on the list is the chat's, empty until they set it).
+  a **guest** it is kept on their contact in the register (`belfry_tags`): guests are not on
+  the members' relay, so they have no `belfry:profile` event. **The chat reads a guest's tags
+  from `POST /api/v1/whois`** (below), and they follow the guest into membership.
+
+**A guest's tags in the chat (2026-11-20).** `POST https://belfry.<domain>/api/v1/whois`
+(NIP-98, anyone holding an active pass, guests too; `{"pubkeys": ["<hex>", …]}`, at most 500)
+answers, next to `people`, `roles` and `testers`:
+
+```json
+{"people": {"<kim>": "guest", "<bob>": "member"},
+ "tags": {"<kim>": ["solar", "bread-making"]}}
+```
+
+`tags` has one entry per asked key that is a **guest with tags** on their contact (cleaned as
+the chat reads tags, 30 at most). A guest without tags, a member, an agent and an unknown key
+are not in it: a member's tags are read from their own `belfry:profile` event, as before.
+`{"directory": true}` lists members and their agents only, so it carries no `tags`.
+
+**When a guest becomes a member** (an admin accepts their request, a member link, an admin
+role: `guests.became_member`), the contact's tags are carried into a `belfry:profile` event of
+theirs on the community relay, written through the signer the way `POST /site/profile` writes
+a member's: added after the tags an event of theirs already has (30 at most), the rest of that
+event kept; the contact's list is then emptied. Best effort, never in the way of the
+membership: someone who holds their own key gets no event (the belfry can't sign for them),
+and when the relay or the signer doesn't answer the tags stay on the contact, where nothing
+shows them for a member (they set them again in the chat or on the website).
 - `email`: their own proven address, in full. This is the only answer that carries one.
 - `tickets`: the events whose group has the account admitted with a ticket now (at most 30,
   by start). `ticket`: the ticket's d. `ticket_url`: the ticket's own link (its QR,
@@ -360,7 +383,9 @@ endpoint not named in this document as the account.
   are separate mails, as before.
 - `replies` covers the threads opened from the web and the comments made from the website.
   Threads and replies written in the chat are not mailed to their writers.
-- A guest's tags are not shown anywhere but `GET /site/me`.
+- A guest's tags reach the chat only through `POST /whois` (`tags`): an app that doesn't
+  read it shows none. Tags that could not be carried over when a guest became a member (relay
+  or signer down, own key) are not retried.
 - Not run: a member's `belfry:profile` event written by the server and read back by the
   chat on a live relay (the test uses an event as the chat writes it); any of these mails
   through a real mail provider.

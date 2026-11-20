@@ -368,6 +368,11 @@ def tags_of(svc: Services, acct: dict[str, Any]) -> list[str]:
         raw = row.get("belfry_tags")
     else:
         raw = _extras_content(_extras(svc, acct)).get("tags")
+    return clean_tags(raw)
+
+
+def clean_tags(raw: Any) -> list[str]:
+    """A stored list of tags as the chat reads one: each cleaned, none twice, 30 at most."""
     out: list[str] = []
     for t in raw if isinstance(raw, list) else []:
         t = _chat_tag(t)

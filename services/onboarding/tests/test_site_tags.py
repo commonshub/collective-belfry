@@ -11,7 +11,9 @@ from fastapi.testclient import TestClient
 
 from belfry_onboarding import (
     community,
+    guests,
     mail,
+    roles,
     sitesessions,
 )
 from belfry_onboarding.app import create_app
@@ -155,3 +157,72 @@ def test_a_member_with_no_tags_yet_and_someone_with_their_own_key(site, monkeypa
         monkeypatch.setattr(community, "member_signer", lambda svc, pid: None)
         r = call(c, bk, "/site/profile", {"tags": ["wind"]})
         assert r.status_code == 409 and r.json()["error"] == "own_key"
+
+
+# ── a guest's tags in the chat (whois), and into their own event when they become a member ──
+def test_a_guests_tags_show_in_whois_and_follow_them_into_membership(site, monkeypatch):
+    rsvc, w, _ada = site
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    monkeypatch.setattr(community, "query", lambda svc, f: w.comm.query(f, None))
+    with TestClient(create_app(rsvc)) as c:
+        kim = guest(c)
+        leo = guest(c, LEO, "Leo Long")  # a guest with no tags
+        kp = sitesessions.site_account(rsvc, pk(kim))["pubkey"]
+        lp = sitesessions.site_account(rsvc, pk(leo))["pubkey"]
+        pid = sitesessions.site_account(rsvc, pk(kim))["partner"]
+        assert call(c, kim, "/site/profile", {"tags": ["solar", "bread-making"]}).status_code == 200
+        ask = {"pubkeys": [kp, lp, pk(bob), "f" * 64]}
+        got = call(c, bob, "/whois", ask).json()
+        assert got["people"] == {kp: "guest", lp: "guest", pk(bob): "member"}
+        # guests with tags only: a member's are in their own event, which the apps read
+        assert got["tags"] == {kp: ["solar", "bread-making"]}
+        assert call(c, bob, "/whois", {"pubkeys": [pk(bob)]}).json()["tags"] == {}
+        assert "tags" not in call(c, bob, "/whois", {"directory": True}).json()
+        # Kim becomes a member: the tags go into her belfry:profile event, signed as her
+        n = len(w.comm.events)
+        assert roles.make_member(rsvc, kp, "member") is True
+        [new] = [e for e in w.comm.events[n:] if e["kind"] == 30078]
+        assert new["pubkey"] == kp and new["tags"] == [["d", "belfry:profile"]]
+        assert json.loads(new["content"]) == {"tags": ["solar", "bread-making"]}
+        assert rsvc.odoo.read_one("res.partner", pid, ["belfry_tags"])["belfry_tags"] == []
+        got = call(c, bob, "/whois", ask).json()
+        assert got["people"][kp] == "member" and got["tags"] == {}
+        assert call(c, kim, "/site/me", method="GET").json()["tags"] == ["solar", "bread-making"]
+        # once: nothing left to carry
+        assert guests.carry_tags(rsvc, kp) is False
+
+
+def test_carrying_tags_never_blocks_a_membership(site, monkeypatch):
+    rsvc, w, _ada = site
+    with TestClient(create_app(rsvc)) as c:
+        kim = guest(c)
+        leo = guest(c, LEO, "Leo Long")
+        ka = sitesessions.site_account(rsvc, pk(kim))
+        la = sitesessions.site_account(rsvc, pk(leo))
+        for k in (kim, leo):
+            assert call(c, k, "/site/profile", {"tags": ["solar"]}).status_code == 200
+
+    def down(svc, f):
+        raise RuntimeError("relay down")
+
+    # the relay can't be read: a member all the same, the tags stay on the contact
+    monkeypatch.setattr(community, "query", down)
+    assert roles.make_member(rsvc, ka["pubkey"], "member") is True
+    assert not [e for e in w.comm.events if e["kind"] == 30078]
+    row = rsvc.odoo.read_one("res.partner", ka["partner"], ["belfry_tags"])
+    assert row["belfry_tags"] == ["solar"]
+    # merged after the tags the event has, when the relay answers again
+    monkeypatch.setattr(community, "query", lambda svc, f: w.comm.query(f, None))
+    old = {"kind": 30078, "created_at": 1_700_000_000, "tags": [["d", "belfry:profile"]]}
+    w.comm.events.append(
+        sign_as(ka["pubkey"])({**old, "content": '{"tags": ["wind"], "share": "city"}'})
+    )
+    assert guests.carry_tags(rsvc, ka["pubkey"]) is True
+    assert json.loads(w.comm.events[-1]["content"]) == {"tags": ["wind", "solar"], "share": "city"}
+    # someone who holds their own key: the belfry signs nothing for them
+    monkeypatch.setattr(community, "member_signer", lambda svc, pid: None)
+    n = len(w.comm.events)
+    assert roles.make_member(rsvc, la["pubkey"], "member") is True
+    assert len([e for e in w.comm.events[n:] if e["kind"] == 30078]) == 0
+    row = rsvc.odoo.read_one("res.partner", la["partner"], ["belfry_tags"])
+    assert row["belfry_tags"] == ["solar"]

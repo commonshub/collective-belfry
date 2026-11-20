@@ -60,7 +60,9 @@ Stored in the register param `belfry.roles` (`{"roles": [{"id", "label", "descri
 Order: `member`, the custom roles as they were added, `admin`. `members` has every member's key
 (not guests', not agents'); a guest gets `{}`. `others` only for admins. `POST /whois` also
 answers `"roles": {"<hex>": "<id>"}` for the members among the keys asked, next to `people`
-(whose values stay `member` / `agent` / `guest`).
+(whose values stay `member` / `agent` / `guest`), and `"tags": {"<hex>": ["tag", …]}` for the
+guests among them who have profile tags on their contact (website-accounts.md; members' tags
+are in their own `belfry:profile` event and are never in this answer).
 
 ### Change (belfry admins only)
 

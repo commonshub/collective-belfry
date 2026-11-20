@@ -32,7 +32,7 @@ def test_whois_tells_members_guests_and_agents_apart(world):
         # Ada makes it her own agent: an agent now, not a guest
         assert post(c, ada, "/api/agents", {"pubkey": pk(bot), "mine": True}).status_code == 200
         r = post(c, ada, "/api/whois", {"pubkeys": [pk(bot)]})
-        assert r.json() == {"people": {pk(bot): "agent"}, "roles": {}, "testers": []}
+        assert r.json() == {"people": {pk(bot): "agent"}, "roles": {}, "testers": [], "tags": {}}
 
 
 def test_belfry_json_revalidates(world):
