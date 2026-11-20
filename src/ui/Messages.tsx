@@ -13,6 +13,7 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
+import { refreshChains } from '../core/sealedrt'
 import { anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
@@ -114,6 +115,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const visible = useVisible()
   useEffect(() => { if (visible) markRead(conv) }, [conv, list.length, visible])
   useEffect(() => { if (mail) void checkReports() }, [conv])
+  useEffect(() => { void refreshChains(conv) }, [conv]) // §4: a sealed conversation opens with fresh heads
   useLayoutEffect(() => { const el = scroller.current; if (el) el.scrollTop = el.scrollHeight }, [list.length])
   const addr = mail ? mailAddress(conv) : ''
   const who = mail ? convName(conv) : ''

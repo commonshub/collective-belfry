@@ -222,7 +222,7 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     try {
       const { seal, rumor } = S.openSealed(unhex(c.letterbox_secret), c.wrap)
       const ok = S.accept(S.validChain(c.sharer_chain_events.anchor, c.sharer_chain_events.rosters), seal, rumor)
-      got = { sharer: rumor.pubkey, seal_pubkey: seal.pubkey, added_ids: ok ? S.historyRumors(rumor).map((r) => r.id) : [] }
+      got = { sharer: rumor.pubkey, seal_pubkey: seal.pubkey, added_ids: ok ? S.historyRumors(rumor, c.receiver).map((r) => r.id) : [] }
     } catch (e) { got = { error: String(e.message) } }
     check(`sealed history: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
   }

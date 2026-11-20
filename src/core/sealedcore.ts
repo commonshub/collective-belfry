@@ -11,7 +11,7 @@ import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 import { getEventHash, getPublicKey, nip44, verifyEvent, type NostrEvent } from 'nostr-tools'
 
 export const ROSTER = 8560, KEYS = 8561, REQUEST = 8562, HISTORY = 8564, SEAL = 13, WRAP = 1059, MAIL = 1301, ANCHOR = 30078
-export const ANCHOR_D = 'belfry:sealed', DEVICES_D = 'belfry:devices'
+export const ANCHOR_D = 'belfry:sealed'
 export const MAX_DEVICES = 20
 export const MAX_RUMOR = 40_000 // bytes of a sealed rumor's JSON (§4, §8)
 export const MAX_HISTORY_RUMORS = 200
@@ -147,8 +147,10 @@ export function withId(r: unknown): Rumor {
   return { ...kept, id: getEventHash(kept as unknown as NostrEvent) } as Rumor
 }
 
-/** The rumor as it goes into a seal: compact JSON, UTF-8 as it is (keys in the rumor's own order). */
-export const rumorJson = (r: Rumor) => JSON.stringify(r)
+/** A rumor's fields in the order sealed.md §4 serialises them: id, pubkey, created_at, kind, tags, content. */
+const ordered = (r: Rumor) => ({ id: r.id, pubkey: r.pubkey, created_at: r.created_at, kind: r.kind, tags: r.tags, content: r.content })
+/** The rumor as it goes into a seal: compact JSON, keys in that order, UTF-8 and '/' not escaped. */
+export const rumorJson = (r: Rumor) => JSON.stringify(ordered(r))
 const utf8 = (s: string) => new TextEncoder().encode(s).length
 export const rumorBytes = (r: Rumor) => utf8(rumorJson(r))
 /** §4: a sealed rumor's JSON is at most 40 000 bytes. */
@@ -298,7 +300,7 @@ export function makeRoster(device: Uint8Array, a: { account: string; n: number; 
 // ---- shared history (§8) -------------------------------------------------------------------
 
 export function historyRumor(sharer: string, person: string, rumors: Rumor[], at: number): Rumor {
-  return withId({ kind: HISTORY, pubkey: sharer, created_at: at, tags: [['p', person]], content: JSON.stringify({ v: 1, rumors }) })
+  return withId({ kind: HISTORY, pubkey: sharer, created_at: at, tags: [['p', person]], content: JSON.stringify({ v: 1, rumors: rumors.map(ordered) }) })
 }
 
 /** RUMORS (oldest first) as kind 8564 rumors, each filled until one more would pass 200 rumors or
@@ -316,9 +318,9 @@ export function packHistory(sharer: string, person: string, rumors: Rumor[], at:
   return { packs, leftOut }
 }
 
-/** The rumors of an opened 8564 the receiver adds: those whose conversation the sharer is in
- *  (author or a p tag), with computed ids; HAVE: ids already here. */
-export function historyRumors(h: Rumor, have: Set<string> = new Set()): Rumor[] {
+/** The rumors of an opened 8564 the receiver adds, one by one: those whose conversation both the
+ *  sharer and the RECEIVER are in (author or a p tag), with computed ids; HAVE: ids already here. */
+export function historyRumors(h: Rumor, receiver: string, have: Set<string> = new Set()): Rumor[] {
   if (h.kind !== HISTORY) return []
   let body: { v?: unknown; rumors?: unknown }
   try { body = JSON.parse(h.content) } catch { return [] }
@@ -327,7 +329,8 @@ export function historyRumors(h: Rumor, have: Set<string> = new Set()): Rumor[] 
   for (const x of body.rumors) {
     let r: Rumor
     try { r = withId(x) } catch { continue }
-    if (r.pubkey !== h.pubkey && !values(r, 'p').includes(h.pubkey)) continue
+    const inIt = (pk: string) => r.pubkey === pk || values(r, 'p').includes(pk)
+    if (!inIt(h.pubkey) || !inIt(receiver)) continue
     if (!have.has(r.id) && !out.some((o) => o.id === r.id)) out.push(r)
   }
   return out

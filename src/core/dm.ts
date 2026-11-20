@@ -8,7 +8,7 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
-import { decryptForLb, ensureChains, isSealedConv, onHistory, openDm, sealMailOut, sealWraps, setPartners, setRumorSource } from './sealedrt'
+import { decryptForLb, isSealedConv, refreshChains, onHistory, openDm, sealMailOut, sealWraps, setPartners, setRumorSource } from './sealedrt'
 import type { Rumor } from './sealedcore'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -32,6 +32,8 @@ export interface Dm {
   text: string
   /** the rumor's tags (kind 14): a shared history (§8) sends the rumor again as it was */
   tags?: string[][]
+  /** it came, or went, sealed (docs/sealed.md): only these are shared with a new device (§8) */
+  sealed?: boolean
   /** my e-mail's rumor tags, while it may still be sealed again (§9) */
   mailTags?: string[][]
   subject?: string
@@ -288,7 +290,7 @@ async function process() {
           if (!o.ok) { if (!o.retry) seen.add(e.id); continue }
           const rumor = o.rumor as unknown as NostrEvent
           if (rumor.kind === 7 || rumor.kind === 5) reactionRumor(rumor)
-          else d = await fromRumor(rumor)
+          else { d = await fromRumor(rumor); if (d) d.sealed = true }
         } else if (e.kind === 1059) {
           const rumor = await unwrap(e)
           if (rumor && (rumor.kind === 7 || rumor.kind === 5)) reactionRumor(rumor)
@@ -299,7 +301,7 @@ async function process() {
           const text = s?.decrypt04 ? await s.decrypt04(peer, e.content) : '(an old-style message this app cannot read)'
           d = { rid: e.id, conv: 'n:' + peer, from: e.pubkey, mine: e.pubkey === self, at: e.created_at, kind: 4, text }
         }
-        if (d) { const old = items.get(d.rid); items.set(d.rid, { ...d, mine: d.mine || !!old?.mine }) }
+        if (d) { const old = items.get(d.rid); items.set(d.rid, { ...d, mine: d.mine || !!old?.mine, sealed: d.sealed || old?.sealed }) }
         seen.add(e.id)
       } catch (x) {
         if (String(x).includes('timeout')) break // the signer is away: next time
@@ -334,7 +336,7 @@ export function startDms() {
     for (const r of rumors) {
       if (items.has(r.id)) continue
       const d = await fromRumor(r as unknown as NostrEvent)
-      if (d) items.set(d.rid, d)
+      if (d) items.set(d.rid, { ...d, sealed: true })
     }
     save(); touch()
   })())
@@ -407,8 +409,10 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
 async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv) {
-  if (conv) await ensureChains(conv) // §6: sealed or not is decided with every chain asked for
-  const wraps = conv && isSealedConv(conv) ? sealedWraps(rumor, to, conv) : await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
+  if (conv) await refreshChains(conv) // §4: fresh heads before each send (at most 3 s, then what is known)
+  const sealed = !!conv && isSealedConv(conv)
+  if (sealed) { const it = items.get(rumor.id); if (it) it.sealed = true }
+  const wraps = sealed ? sealedWraps(rumor, to, conv!) : await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
   for (const w of wraps) await enqueueSigned('main', w, rumor.id)
 }

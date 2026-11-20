@@ -71,8 +71,12 @@ const participantsOf = (conv: Conv) => (conv.startsWith('n:') ? conv.slice(2).sp
 
 function realMine(): MyDevice[] {
   const c = R.chainOf(me())
-  if (!c) return []
   const rows = R.sessionsNow() ?? []
+  // no chain yet: where I'm signed in is still my list (the chat sessions, canvas v88)
+  if (!c) return rows.filter((r) => r.chat === true && r.client_pubkey).map((r) => {
+    const name = r.device || r.application_name || 'A device'
+    return { id: r.client_pubkey!, name, kind: kindOf(name), added: r.created_at ? Date.parse(r.created_at) : 0, active: r.last_activity ? Date.parse(r.last_activity) : undefined, here: r.client_pubkey === R.devicePub() }
+  })
   return SC.headOf(c).devices.map((d) => {
     const at = c.added.get(d)
     const by = at && at.signer !== d ? sessionName(at.signer) || undefined : undefined
@@ -93,9 +97,8 @@ function realTheirs(pk: string): TheirDevices | undefined {
 /** §3.4: one line per device that appeared or left, one roster step at a time, from the newest
  *  message of the conversation at its first sync on; mine name the device. A fresh start: amber. */
 function realLines(conv: Conv): DeviceLine[] {
-  const msgs = thread(conv)
-  R.noteFirstSeen(conv, (msgs.at(-1)?.at ?? Math.floor(Date.now() / 1000)) * 1000)
-  const from = R.firstSeenOf(conv) ?? 0
+  // roster steps dated at or after the moment this device first saw the conversation sealed
+  const from = R.firstSeenOf(conv) ?? Date.now()
   const out: DeviceLine[] = []
   for (const pk of [...new Set([...participantsOf(conv), me()])]) {
     const c = R.chainOf(pk)
@@ -107,7 +110,7 @@ function realLines(conv: Conv): DeviceLine[] {
       for (const d of st.removed) out.push({ id: `${pk}:${d}:-${st.at}`, at, who: pk, what: 'removed', ...(pk === me() ? { device: sessionName(d) || undefined, kind: kindOf(sessionName(d)) } : {}) })
     }
     const f = pk === me() ? undefined : R.freshStart(pk)
-    if (f) out.push({ id: `${pk}:fresh:${f.root}`, at: f.at, who: pk, what: 'new-locked', kind: 'phone', shared: f.shared.includes(conv) })
+    if (f) out.push({ id: `${pk}:fresh:${f.root}`, at: f.at, who: pk, what: 'new-locked', shared: f.shared.includes(conv) }) // their device's kind isn't known (v88)
   }
   return out.sort((a, b) => a.at - b.at)
 }
@@ -170,7 +173,8 @@ export const devicesWord = (n: number) => `${n} device${n === 1 ? '' : 's'}`
 
 const later = (ms = 700) => new Promise<void>((r) => setTimeout(r, ms))
 const ready = () => { if (!demo) throw new Error('Not available yet.') }
-const rumorsOf = (conv: Conv) => thread(conv).filter((d) => d.kind === 14 && !d.pending && !d.failed)
+// Share history sends only the conversation's sealed messages
+const rumorsOf = (conv: Conv) => thread(conv).filter((d) => d.kind === 14 && d.sealed && !d.pending && !d.failed)
   .map((d) => {
     const author = d.mine ? me() : d.from
     // kept since this version; older ones: the p tags rebuilt (everyone in it but the author)

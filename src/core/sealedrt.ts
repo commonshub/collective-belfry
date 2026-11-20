@@ -26,7 +26,7 @@ let pins: Record<string, Pin> = {}
 let sealedConvs = new Set<Conv>()
 let shared: Record<string, string> = {} // rumor id → sharer
 let freshOf: Record<string, Fresh> = {} // person → their latest fresh start I noticed
-let firstSeen: Record<Conv, number> = {} // conv → newest message at first sync (no older notices)
+let firstSeen: Record<Conv, number> = {} // conv → when this device first saw it sealed (device lines from then on)
 let askedAt = 0
 let started = false
 let partners: string[] = []
@@ -69,7 +69,7 @@ export async function startSealed(clientSecret: string) {
   save(K.device, device.pub)
   started = true
   currentFilters = () => device ? [
-    { kinds: [C.ANCHOR], authors: [me()], '#d': [C.ANCHOR_D, C.DEVICES_D] },
+    { kinds: [C.ANCHOR], authors: [me()] }, // my anchor and my devices' name records (d prefix: not filterable)
     { kinds: [C.ROSTER], '#p': [me()] },
     // the people I write to: their rosters and anchors live, so a removed device of theirs gets
     // nothing new from me (a message goes to the head I know)
@@ -151,11 +151,12 @@ const participants = (conv: Conv): string[] => (conv.startsWith('n:') ? conv.sli
  *  way (remembered here, not published). An e-mail thread: when my own chain is ready (§7). */
 export function isSealedConv(conv: Conv): boolean {
   if (!active()) return false
-  if (sealedConvs.has(conv)) return true
+  if (sealedConvs.has(conv)) { if (firstSeen[conv] === undefined) { firstSeen[conv] = Date.now(); save(K.first, firstSeen) } return true }
   const people = conv.startsWith('m:') ? [me()] : [...new Set([...participants(conv), me()])]
   if (!people.every(readyChain)) { void ensureChains(conv); return false }
   sealedConvs.add(conv)
   save(K.convs, [...sealedConvs])
+  if (firstSeen[conv] === undefined) { firstSeen[conv] = Date.now(); save(K.first, firstSeen) } // device lines from here on
   return true
 }
 
@@ -167,6 +168,15 @@ export async function ensureChains(conv: Conv) {
   const before = people.filter(readyChain).length
   await Promise.all(people.filter((p) => !readyChain(p)).map((p) => loadChain(p)))
   if (people.filter(readyChain).length !== before) touch()
+}
+
+/** §4: before each send and when a sealed conversation opens, every participant's anchor and
+ *  rosters asked for again (they stay live too); at most 3 s, then what is known is used. */
+export async function refreshChains(conv: Conv, waitMs = 3000) {
+  if (!active()) return
+  const people = conv.startsWith('m:') ? [me()] : [...new Set([...participants(conv), me()])]
+  const got = await queryComplete('main', [{ kinds: [C.ANCHOR], authors: people, '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': people }] as Filter[], waitMs)
+  if (got?.length) { addEvents(got); for (const p of people) loaded.set(p, Date.now()) }
 }
 
 /** This device is in my head and holds its letterbox secret. */
@@ -284,7 +294,7 @@ async function myDevice() {
     if (!c) return firstDevice(sessions)
     const head = C.headOf(c)
     if (!head.devices.includes(device!.pub) || !keys.has(head.lb)) return ask()
-    await writeDevicesDoc()
+    await writeMyName()
     // §6: ready once every counted chat session is a device of the head
     if (sessions && !C.isReady(c) && C.mayCarryReady(sessions, head.devices)) await publishRoster({ n: head.n + 1, prev: head.id, lb: head.lb, devices: head.devices, ready: true })
     // §5.6: a device whose session is gone leaves (wait 0–60 s, re-read the head, skip if done)
@@ -364,7 +374,7 @@ async function onStore() {
   if (!active()) return
   // a head changed (mine or someone's): what waits in the outbox goes to the new letterboxes
   const heads = Object.entries(pins).map(([pk, p]) => pk + p.head).join()
-  if (heads !== headsSeen) { headsSeen = heads; await resealQueued(outboxItems() as unknown as OutboxItemLike[], (o) => putOutbox(o as never)) }
+  if (heads !== headsSeen) { headsSeen = heads; await resealQueued(outboxItems() as unknown as OutboxItemLike[], (o) => putOutbox(o as never)); void writeMyName() }
   // a hand-over to this device (§5.5)
   for (const w of all().filter((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === device!.pub))) {
     if (answered.has(w.id)) continue
@@ -443,7 +453,6 @@ export async function rotate(gone: string[]) {
   keys.set(lb, bytesToHex(lbSecret)); persistKeys()
   for (const d of left) if (d !== device!.pub) await enqueueSigned('main', C.handKeys(device!.secret, me(), [{ lb, secret: bytesToHex(lbSecret) }], d))
   await publishRoster({ n: head.n + 1, prev: head.id, lb, devices: left, ready: C.isReady(c) })
-  await writeDevicesDoc(true) // §3.5: rewritten under the new letterbox
 }
 
 /** Remove one of my devices (Me → Devices): its session ends, then the letterbox changes. */
@@ -466,7 +475,7 @@ export const onHistory = (f: (rumors: C.Rumor[]) => void) => { historyListener =
 
 function takeHistory(h: C.Rumor, seal: NostrEvent) {
   void seal
-  const rumors = C.historyRumors(h)
+  const rumors = C.historyRumors(h, me())
   for (const r of rumors) shared[r.id] ??= h.pubkey
   save(K.shared, shared)
   historyListener?.(rumors)
@@ -490,31 +499,38 @@ export async function shareHistory(person: string, rumors: C.Rumor[], conv: Conv
 
 export const freshStart = (pk: string) => freshOf[pk]
 export const firstSeenOf = (conv: Conv) => firstSeen[conv]
-export function noteFirstSeen(conv: Conv, newest: number) { if (firstSeen[conv] === undefined) { firstSeen[conv] = newest; save(K.first, firstSeen) } }
 
-// ---- my device names, kind 30078 d = belfry:devices (§3.5) -------------------------------------
+// ---- my device names, one kind 30078 per device, d = belfry:device:<device pubkey> (§3.5) ----------
 
-interface DevicesDoc { v: 1; devices: Record<string, { name?: string; kind?: string; added?: number; [k: string]: unknown }>; [k: string]: unknown }
-const NINETY = 90 * 86400
-
-/** The names my devices gave themselves, read with the head letterbox's secret ({} when none). */
-export function deviceNames(): DevicesDoc['devices'] {
-  const d = readDevicesDoc()
-  return d?.devices ?? {}
+const NAME_D = 'belfry:device:'
+interface DeviceName { v: 1; name?: string; kind?: string; added?: number; [k: string]: unknown }
+const nameEvents = () => all().filter((e) => e.kind === C.ANCHOR && e.pubkey === me() && e.tags.some((t) => t[0] === 'd' && t[1].startsWith(NAME_D)))
+/** The newest name event of each device: device → event. */
+function newestNames(): Map<string, NostrEvent> {
+  const out = new Map<string, NostrEvent>()
+  for (const e of nameEvents()) {
+    const d = e.tags.find((t) => t[0] === 'd')![1].slice(NAME_D.length)
+    if (!C.isKey(d)) continue
+    const o = out.get(d)
+    if (!o || e.created_at > o.created_at || (e.created_at === o.created_at && e.id < o.id)) out.set(d, e)
+  }
+  return out
 }
-/** Every version of the event this device can decrypt, merged oldest to newest (two devices
- *  writing at once each keep the other's entry this way; the newest wins per device). */
-function readDevicesDoc(): DevicesDoc | undefined {
-  const evs = all().filter((e) => e.kind === C.ANCHOR && e.pubkey === me() && e.tags.some((t) => t[0] === 'd' && t[1] === C.DEVICES_D)).sort((a, b) => a.created_at - b.created_at)
-  let out: DevicesDoc | undefined
-  for (const ev of evs) {
-    const lb = ev.tags.find((t) => t[0] === 'lb')?.[1]
+
+/** The names my devices gave themselves (each opened with the key chain), only devices of a roster of my chain. */
+export function deviceNames(): Record<string, DeviceName> {
+  const c = chainOf(me())
+  if (!c) return {}
+  const inAny = C.allDevices(c)
+  const out: Record<string, DeviceName> = {}
+  for (const [d, e] of newestNames()) {
+    if (!inAny.has(d)) continue
+    const lb = e.tags.find((t) => t[0] === 'lb')?.[1]
     const secret = lb && keys.get(lb)
     if (!lb || !secret) continue
     try {
-      const doc = JSON.parse(nip44.v2.decrypt(ev.content, nip44.v2.utils.getConversationKey(hexToBytes(secret), lb))) as DevicesDoc
-      if (!doc || doc.v !== 1 || !doc.devices || typeof doc.devices !== 'object') continue
-      out = { ...(out ?? {}), ...doc, devices: { ...(out?.devices ?? {}), ...doc.devices } }
+      const v = JSON.parse(nip44.v2.decrypt(e.content, nip44.v2.utils.getConversationKey(hexToBytes(secret), lb))) as DeviceName
+      if (v && v.v === 1) out[d] = v
     } catch { /* not readable here */ }
   }
   return out
@@ -531,29 +547,24 @@ function ownName(sessions: SessionRow[] | null): { name: string; kind: string } 
   return { name, kind }
 }
 
-/** Write my own entry (and keep the others and unknown fields), under the head letterbox. FORCE:
- *  rewrite even when mine is there (after a key change). */
-export async function writeDevicesDoc(force = false) {
+let nameWriting = false
+/** §3.5: my own name record, written when this device is in the head and its record isn't under
+ *  the head letterbox (it joined, or the letterbox changed). Only this device writes it. */
+export async function writeMyName() {
   const c = chainOf(me())
-  if (!c || !deviceIn()) return
+  if (!c || !deviceIn() || nameWriting) return
   const head = C.headOf(c)
-  const old = readDevicesDoc()
-  const evLb = all().filter((e) => e.kind === C.ANCHOR && e.pubkey === me() && e.tags.some((t) => t[0] === 'd' && t[1] === C.DEVICES_D)).sort((a, b) => b.created_at - a.created_at)[0]?.tags.find((t) => t[0] === 'lb')?.[1]
-  if (!force && old?.devices[device!.pub] && evLb === head.lb) return
-  const sessions = await mySessions()
-  const doc: DevicesDoc = { ...(old ?? {}), v: 1, devices: { ...(old?.devices ?? {}) } }
-  doc.devices[device!.pub] = { ...(doc.devices[device!.pub] ?? {}), ...ownName(sessions), added: doc.devices[device!.pub]?.added ?? (c.added.get(device!.pub)?.created_at ?? nowS()) }
-  // entries of devices no longer in any roster go after 90 days
-  const anyRoster = C.allDevices(c)
-  for (const d of Object.keys(doc.devices)) {
-    if (anyRoster.has(d) && !c.dropped.has(d)) continue
-    const gone = c.dropped.get(d)?.created_at ?? 0
-    if (!anyRoster.has(d) || nowS() - gone > NINETY) delete doc.devices[d]
-  }
-  const sk = hexToBytes(keys.get(head.lb)!)
-  const content = nip44.v2.encrypt(JSON.stringify(doc), nip44.v2.utils.getConversationKey(sk, head.lb))
-  await enqueue('main', { kind: C.ANCHOR, tags: [['d', C.DEVICES_D], ['lb', head.lb]], content })
-  void flush()
+  const mine = newestNames().get(device!.pub)
+  if (mine && mine.tags.some((t) => t[0] === 'lb' && t[1] === head.lb)) return
+  nameWriting = true
+  try {
+    const sessions = await mySessions()
+    const doc: DeviceName = { v: 1, ...ownName(sessions), added: c.added.get(device!.pub)?.created_at ?? nowS() }
+    const sk = hexToBytes(keys.get(head.lb)!)
+    const content = nip44.v2.encrypt(JSON.stringify(doc), nip44.v2.utils.getConversationKey(sk, head.lb))
+    await enqueue('main', { kind: C.ANCHOR, tags: [['d', NAME_D + device!.pub], ['lb', head.lb]], content })
+    void flush()
+  } finally { nameWriting = false }
 }
 
 // ---- re-sealing what waits in the outbox (§9) ---------------------------------------------------

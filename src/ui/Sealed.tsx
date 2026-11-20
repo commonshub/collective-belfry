@@ -4,7 +4,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
 import { displayName, realName } from '../core/model'
-import { useVersion } from '../core/store'
+import { touch, useVersion } from '../core/store'
+import { active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
 import { sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
@@ -229,7 +230,7 @@ export function ShareHistorySheet({ conv, l, onClose }: { conv: Conv; l: DeviceL
   const { busy, error, run } = usePair()
   const first = displayName(l.who).split(' ')[0]
   const group = peers(conv).filter((p) => p !== me()).length > 1
-  const kind = l.kind === 'computer' ? 'computer' : l.kind ?? 'device'
+  const kind = l.kind ?? 'device' // outside the demo: "A new device" (canvas v88)
   const t = new Date(l.at)
   return (
     <Sheet title={`Share ${group ? 'this group’s' : 'this conversation’s'} history with ${first}’s new device?`} onClose={() => { if (!busy) onClose() }}>
@@ -248,6 +249,7 @@ export function ShareHistorySheet({ conv, l, onClose }: { conv: Conv; l: DeviceL
  *  the row shows progress and no other row can be removed. This device: Sign out instead. */
 export function DevicesScreen() {
   useVersion()
+  useEffect(() => { if (sealedOn()) void mySessions(0).then(() => touch()) }, [])
   const [asked, setAsked] = useState<MyDevice | null>(null)
   const [removing, setRemoving] = useState('')
   const [error, setError] = useState('')

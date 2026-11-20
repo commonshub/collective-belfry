@@ -35,7 +35,6 @@ import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
 import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
-import { hasDevices } from '../core/sealed'
 import { deviceIn, devicePub, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
 import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
@@ -489,7 +488,8 @@ function Me({ session, onSignOut }: { session: Session; onSignOut: () => void })
           </div>
           <span className="hint" aria-hidden="true">›</span>
         </button>}
-        {hasDevices() && <button className="card row me-devices" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/devices')}>
+        {/* canvas v88: always (every member has a list of where they're signed in) */}
+        {<button className="card row me-devices" style={{ width: '100%', textAlign: 'left', justifyContent: 'space-between' }} onClick={() => go('me/devices')}>
           <div>
             <div style={{ fontWeight: 600 }}>Devices</div>
             <div className="hint" style={{ fontSize: 14 }}>Where you’re signed in</div>
