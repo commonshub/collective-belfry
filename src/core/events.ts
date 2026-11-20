@@ -323,6 +323,26 @@ export function utcToZoned(date: Date, tz: string): string {
     return `${date.getFullYear()}-${z(date.getMonth() + 1)}-${z(date.getDate())}T${z(date.getHours())}:${z(date.getMinutes())}`
   }
 }
+// ---- when an event is over (lead 2026-11-20, a member in #website: "Upcoming events show events of
+// the current day that have already passed"): an event is upcoming until its END, then past. No end:
+// start + 1 h. All day: until the end of its last day (its end date, as the chat writes it: the last
+// day) in its time zone, the viewer's when it has none. Going on now = still upcoming.
+export const DEFAULT_LENGTH = 3600e3
+const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+/** When E is over (ms). */
+export function eventEnd(e: Pick<CalEvent, 'allDay' | 'start' | 'end' | 'tz'>): number {
+  if (e.allDay) {
+    const last = e.end && +e.end > +e.start ? e.end : e.start // a date at the viewer's midnight (model.ts parse)
+    const next = new Date(last.getFullYear(), last.getMonth(), last.getDate() + 1)
+    return e.tz ? zonedToUtc(ymd(next) + 'T00:00', e.tz) * 1000 : +next
+  }
+  return e.end && +e.end > +e.start ? +e.end : +e.start + DEFAULT_LENGTH
+}
+/** When E starts (ms): an all-day event at the start of its first day in its time zone. */
+export const eventStart = (e: Pick<CalEvent, 'allDay' | 'start' | 'tz'>): number => (e.allDay && e.tz ? zonedToUtc(ymd(e.start) + 'T00:00', e.tz) * 1000 : +e.start)
+export const isPastEvent = (e: Pick<CalEvent, 'allDay' | 'start' | 'end' | 'tz'>, now = Date.now()) => eventEnd(e) <= now
+export const isOnNow = (e: Pick<CalEvent, 'allDay' | 'start' | 'end' | 'tz'>, now = Date.now()) => eventStart(e) <= now && now < eventEnd(e)
+
 export const localTz = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || TZ } catch { return TZ } }
 
 function versionTags(d: string, n: EventForm, extra: string[][] = []): { kind: number; tags: string[][] } {

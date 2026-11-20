@@ -24,7 +24,7 @@ import { MeetingSheet } from './Meeting'
 import { RecorderSheet, RecordingBar } from './Recorder'
 import { canRecord } from '../core/recorder'
 import { yourEvents } from './Events'
-import { eventByLink as eventByLinkAny } from '../core/events'
+import { eventByLink as eventByLinkAny, isPastEvent } from '../core/events'
 import { RichText } from './Topics'
 import { newMentions, preview } from './Mentions'
 import { NewProposalSheet, ProposalCard, ProposalView, SiteBar } from './Proposals'
@@ -235,7 +235,7 @@ function OldChannelList({ current, side = false, section, drawer = false }: List
   const pub = inOrder(chans.filter((g) => isPublicChannel(g)))
   const members = inOrder(chans.filter((g) => !isPublicChannel(g)))
   const dnd = useChannelDrag(pub, members)
-  const next = calendar().filter((e) => e.status !== 'cancelled' && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
+  const next = calendar().filter((e) => e.status !== 'cancelled' && !isPastEvent(e)).sort((a, b) => +a.start - +b.start)[0]
   const fresh = newMentions()
   const waitingN = requestCount()
   const Row = ({ g, depth = 0 }: { g: Group; depth?: number }) => {

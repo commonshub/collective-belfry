@@ -12,7 +12,7 @@ import { reading } from '../core/guestmode'
 import { checkedLive, demoCode, eventRoles, mayCheckIn, onTheDay, roleWord } from '../core/checkin'
 import { postMessage } from '../core/actions'
 import { CheckInScreen, TicketCard, TicketScreen } from './CheckIn'
-import { addCoHost, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
+import { addCoHost, isPastEvent, apiTicket, refreshEvent, withSales, applyFor, asks, dayInput, formPriceTags, pricesOf, isMoney, priceLabel, priceLine, type FormPrice, type Price, coHostLink, decide, eventByLink, eventLinkOf, goingList, isHost, localTz, myState, people, placesLeft, remoteEvent, rsvp, saveTicket, deleteTicket, setStatus, stillGoing, takeTicket, tickets, withdraw, fetchEvent, setPendingApplication, type ApiEvent, type People, type Ticket, type TicketForm } from '../core/events'
 import { deleteEvent } from '../core/actions'
 import { isGuest } from '../core/invite'
 import { finalizeEvent, generateSecretKey } from 'nostr-tools'
@@ -33,7 +33,7 @@ import { Logo } from './Login'
 
 const day = (d: Date) => (d.toDateString() === new Date().toDateString() ? 'Today' : fmtDay(d))
 const at = (e: CalEvent) => (e.allDay ? '' : ' ' + when(e).split(' – ')[0])
-const ended = (e: CalEvent) => +(e.end ?? e.start) < Date.now()
+const ended = (e: CalEvent) => isPastEvent(e)
 /** The button that takes a ticket: "Ask for a ticket · €15", "Apply" or "RSVP". */
 const pickWord = (t: { closed: boolean; price?: Price | null; priced?: boolean; onSale?: boolean }) => t.priced && t.onSale === false ? 'Not on sale now' : t.price ? `Ask for a ticket · ${priceLabel(t.price)}` : t.closed ? 'Apply' : 'RSVP'
 /** A ticket's prices back in the sheet: its rows, currency and VAT (from its tags). */

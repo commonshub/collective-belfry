@@ -7,7 +7,7 @@ import { calendar, eventByCoord, eventLink, group, type CalEvent, type Rsvp, typ
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import PlaceInput from './PlaceInput'
-import { claimSlug, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
+import { claimSlug, isPastEvent, createEvent, editEvent, eventByLink, formOf, goingList, localTz, myState, people, rsvp, slugFree, slugOf, slugProblem, tickets, uploadCover, type EventForm } from '../core/events'
 import { back, fmtDay, go, Sheet, Btn, Form, up, useFormDraft } from './common'
 import { Tabs } from './ChannelInfo'
 import { CalendarIcon, ImageIcon } from './icons'
@@ -39,11 +39,10 @@ export const when = (e: CalEvent) => {
 
 export const going = (e: CalEvent) => (e.isNew ? goingList(e).length : [...e.rsvps.values()].filter((s) => s === 'accepted').length)
 
-const endOf = (e: CalEvent) => +(e.end ?? e.start)
-const startOfToday = () => +new Date(new Date().toDateString())
-const isPast = (e: CalEvent) => endOf(e) < startOfToday()
+// over once it has ended (events.ts eventEnd), not at the end of its day
+const isPast = (e: CalEvent) => isPastEvent(e)
 
-/** Upcoming events (today onwards), of one channel (its cards) or of all. */
+/** Upcoming events (not over yet: going on now included), of one channel (its cards) or of all. */
 export const upcoming = (channel?: string) =>
   calendar().filter((e) => !isPast(e) && (!channel || e.channels.includes(channel)))
 

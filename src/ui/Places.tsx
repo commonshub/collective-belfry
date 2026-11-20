@@ -19,7 +19,7 @@ import { guestInfo } from '../core/auth'
 import { useBranding } from '../core/branding'
 import { charter, charterExists, loadRemoteCharter, remoteAgreements, toAgree, isStale } from '../core/charter'
 import { threads, unreadTotal, convName } from '../core/dm'
-import { myState, publicEvents } from '../core/events'
+import { isPastEvent, myState, publicEvents } from '../core/events'
 import { askToJoin, reading } from '../core/guestmode'
 import { isGuest } from '../core/invite'
 import { allGroups, archivedGroups, calendar, channelIcon, displayName, realName, group, groups, guestJoins, messages, tasklist, isWorking, workingSince, type CalEvent, type Group, type Task } from '../core/model'
@@ -259,7 +259,7 @@ function stateWords(e: CalEvent): string | undefined {
 }
 const isMine = (e: CalEvent) => { const s = myState(e); return s === 'host' || s === 'ticket' || s === 'maybe' || s === 'applied' || s === 'waitlist' || e.hosts.has(me()) }
 const isInvited = (e: CalEvent) => e.meeting && e.invited.includes(me()) && myState(e) === 'none' && !e.hosts.has(me())
-const upcomingEvents = () => calendar().filter((e) => e.status !== 'cancelled' && +(e.end ?? e.start) >= +startOfDay())
+const upcomingEvents = () => calendar().filter((e) => e.status !== 'cancelled' && !isPastEvent(e))
 
 /** The events of the next 7 days I'm part of or invited to. */
 function comingUp(): CalEvent[] {
@@ -364,7 +364,7 @@ export function HomeScreen() {
   const dmCount = unreadTotal()
   const dmNames = dms.slice(0, 2).map((t) => convName(t.conv).split(/[ @]/)[0])
   const soon = comingUp()
-  const next = soon.length ? undefined : upcomingEvents().filter((e) => isMine(e) && +e.start > Date.now()).sort((a, b) => +a.start - +b.start)[0]
+  const next = soon.length ? undefined : upcomingEvents().filter((e) => isMine(e)).sort((a, b) => +a.start - +b.start)[0]
   const act = recentActivity()
   const search = <button className="icon-btn round" aria-label="Search" onClick={() => go('search')}><SearchIcon /></button>
   return (
@@ -593,7 +593,7 @@ export function CalendarPlace() {
   const all = useMemo(() => {
     const local = upcomingEvents()
     const byCoord = new Map(local.map((e) => [e.coord, e]))
-    for (const e of pub) if (!byCoord.has(e.coord) && e.status !== 'cancelled' && +(e.end ?? e.start) >= +startOfDay()) byCoord.set(e.coord, e)
+    for (const e of pub) if (!byCoord.has(e.coord) && e.status !== 'cancelled' && !isPastEvent(e)) byCoord.set(e.coord, e)
     return [...byCoord.values()].sort((a, b) => +a.start - +b.start)
   }, [calendar(), pub]) // eslint-disable-line react-hooks/exhaustive-deps
   const invited = all.filter(isInvited)
