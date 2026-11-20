@@ -1223,10 +1223,13 @@ print(json.dumps(build_services(Settings()).signer.account(sys.argv[1])))' "odoo
 
 if [[ -n "${ACCOUNTING_ODOO_URL:-}" ]]; then
   step "12. a full refund becomes a credit note at the ticket seller"
+  # The refund revokes the pass and suspends the signer account: not with SMOKE_KEEP_PASS.
+  if [[ -n "${SMOKE_KEEP_PASS:-}" ]]; then echo "  note SMOKE_KEEP_PASS set: pass $PASS_ID stays active (browser checks of the apps); the refund at the seller not tested"; else
   REF_TX=$(ox payment.transaction create "[{\"provider_id\":$PROVIDER_ID,${PM_ID:+\"payment_method_id\":$PM_ID,}\"reference\":\"SMOKE-$STAMP-R\",\"amount\":-$(jq -r .amount_total <<<"$INV"),\"currency_id\":$(jq -r '.currency_id[0]' <<<"$INV"),\"partner_id\":$(jq -r '.partner_id[0]' <<<"$INV"),\"operation\":\"refund\",\"source_transaction_id\":$TX_ID,\"provider_reference\":\"re_smoke_$STAMP\",\"state\":\"done\"}]")
   R=$(onb_post "/hooks/odoo/refund?token=$HOOK_TOKEN" "{\"_model\":\"payment.transaction\",\"_id\":$REF_TX,\"_action\":\"smoke\"}" | jq -r .result)
   ACC=$(ox belfry.pass read "[[$PASS_ID]]" '{"fields":["state","accounting_state","accounting_refund_ref","accounting_error"]}' | jq -c '.[0]')
   [[ "$(jq -r .accounting_state <<<"$ACC")" == refunded ]] && ok "refund ($R): credit note $(jq -r .accounting_refund_ref <<<"$ACC") at ${ACCOUNTING_ISSUER:-the ticket seller}" || bad "refund at the seller: $ACC"
+  fi
 fi
 
 printf '\n%d ok, %d failed\n' "$pass" "$fail"
