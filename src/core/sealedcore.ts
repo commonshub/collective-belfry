@@ -94,7 +94,12 @@ function follows(prev: Roster, earlierLbs: Set<string>, r: Roster): boolean {
 export function validChain(anchor: unknown, rosterEvents: unknown[]): Chain | null {
   const rootId = anchorRoot(anchor)
   if (!rootId) return null
-  const account = (anchor as NostrEvent).pubkey
+  return chainFromRoot((anchor as NostrEvent).pubkey, rootId, rosterEvents)
+}
+
+/** The valid chain from a root this device pinned earlier (§3.4, §5.5: after a fresh start the
+ *  previous chain's devices may still hand their old keys over). */
+export function chainFromRoot(account: string, rootId: string, rosterEvents: unknown[]): Chain | null {
   const parsed = new Map<string, Roster>()
   for (const e of rosterEvents ?? []) { const r = parseRoster(e, account); if (r) parsed.set(r.id, r) }
   const root = parsed.get(rootId)

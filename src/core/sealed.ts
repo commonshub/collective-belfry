@@ -66,7 +66,7 @@ let state: State = empty()
 const real = () => !demo && R.active()
 const DAY_MS = 864e5
 const kindOf = (name: string): DeviceKind => (/iphone|android|pixel|galaxy|phone|mobile/i.test(name) ? (/ipad|tablet/i.test(name) ? 'tablet' : 'phone') : /ipad|tablet/i.test(name) ? 'tablet' : 'computer')
-const sessionName = (pk: string) => { const r = R.sessionsNow()?.find((x) => x.client_pubkey === pk); return r ? (r.device || r.application_name || '') : '' }
+const sessionName = (pk: string) => { const n = R.deviceNames()[pk]?.name; if (typeof n === 'string' && n) return n; const r = R.sessionsNow()?.find((x) => x.client_pubkey === pk); return r ? (r.device || r.application_name || '') : '' }
 const participantsOf = (conv: Conv) => (conv.startsWith('n:') ? conv.slice(2).split(',') : [])
 
 function realMine(): MyDevice[] {
@@ -77,7 +77,8 @@ function realMine(): MyDevice[] {
     const at = c.added.get(d)
     const by = at && at.signer !== d ? sessionName(at.signer) || undefined : undefined
     const row = rows.find((x) => x.client_pubkey === d)
-    const name = sessionName(d) || 'A device'
+    const named = R.deviceNames()[d]
+    const name = (typeof named?.name === 'string' && named.name) || sessionName(d) || 'A device'
     return { id: d, name, kind: kindOf(name), added: (at?.created_at ?? 0) * 1000, from: by, active: row?.last_activity ? Date.parse(row.last_activity) : undefined, here: d === R.devicePub() }
   })
 }

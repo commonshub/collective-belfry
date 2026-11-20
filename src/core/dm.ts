@@ -8,7 +8,7 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
-import { decryptForLb, isSealedConv, onHistory, openDm, sealMailOut, sealWraps } from './sealedrt'
+import { decryptForLb, ensureChains, isSealedConv, onHistory, openDm, sealMailOut, sealWraps, setPartners, setRumorSource } from './sealedrt'
 import type { Rumor } from './sealedcore'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -32,6 +32,8 @@ export interface Dm {
   text: string
   /** the rumor's tags (kind 14): a shared history (§8) sends the rumor again as it was */
   tags?: string[][]
+  /** my e-mail's rumor tags, while it may still be sealed again (§9) */
+  mailTags?: string[][]
   subject?: string
   fromName?: string
   emailId?: string
@@ -315,6 +317,18 @@ export function startDms() {
   if (started) return
   started = true
   watchOutbox()
+  // §9: a queued sealed wrap is sealed again to a new head: its rumor, rebuilt from the message
+  // (the outbox holds only finished wraps); the same id or nothing
+  setRumorSource((rid) => {
+    const d = items.get(rid)
+    if (!d || !d.mine) return undefined
+    const content = d.kind === 14 ? d.text : d.raw
+    if (content === undefined || d.kind === 4) return undefined
+    const tags = d.kind === 14 ? d.tags : d.mailTags
+    if (!tags) return undefined
+    const r = { pubkey: me(), created_at: d.at, kind: d.kind, tags, content } as NostrEvent
+    return getEventHash(r) === rid ? ({ ...r, id: rid } as unknown as Rumor) : undefined
+  })
   // §8: a history shared with this device: its rumors, marked (sealedrt keeps who shared them)
   onHistory((rumors) => void (async () => {
     for (const r of rumors) {
@@ -333,14 +347,23 @@ export function startDms() {
 
 export interface Thread { conv: Conv; last: Dm; unread: number; count: number }
 
+let partnersSent = ''
+function notePartners(list: Thread[]) {
+  const ps = list.flatMap((t) => peers(t.conv))
+  const key = ps.join()
+  if (key !== partnersSent) { partnersSent = key; setPartners(ps) }
+}
+
 export function threads(): Thread[] {
   const by = new Map<Conv, Dm[]>()
   for (const d of items.values()) (by.get(d.conv) ?? by.set(d.conv, []).get(d.conv)!).push(d)
-  return [...by.entries()].map(([conv, list]) => {
+  const out = [...by.entries()].map(([conv, list]) => {
     list.sort((a, b) => a.at - b.at)
     const last = list[list.length - 1]
     return { conv, last, count: list.length, unread: list.filter((d) => !d.mine && d.at > readUpTo('d', conv)).length }
   }).sort((a, b) => b.last.at - a.last.at)
+  notePartners(out)
+  return out
 }
 
 export const unreadTotal = () => threads().reduce((n, t) => n + (t.unread ? 1 : 0), 0)
@@ -384,6 +407,7 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
 async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv) {
+  if (conv) await ensureChains(conv) // §6: sealed or not is decided with every chain asked for
   const wraps = conv && isSealedConv(conv) ? sealedWraps(rumor, to, conv) : await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
   for (const w of wraps) await enqueueSigned('main', w, rumor.id)
@@ -504,7 +528,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   if (!isMail(conv)) {
     const to = peers(conv)
     const rumor = rumorOf(14, to.filter((p) => p !== me()).map((p) => ['p', p]), text)
-    items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text, pending: true })
+    items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text, tags: rumor.tags, pending: true })
     save()
     try {
       await deliver(rumor, to, true, conv) // saved; the outbox sends it when it can
@@ -534,7 +558,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   const target = fresh ? mailThreadOf(to, subj) : conv
   const emailId = crypto.randomUUID()
   const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', myAddress], ['rcpt-to', to], ['subject', subj]], raw)
-  items.set(rumor.id, { rid: rumor.id, conv: target, from: me(), mine: true, at: rumor.created_at, kind: 1301, text, subject: subj, emailId, raw, messageId, references: before ? [before.references, before.messageId].filter(Boolean).join(' ') : undefined, pending: true })
+  items.set(rumor.id, { rid: rumor.id, conv: target, from: me(), mine: true, at: rumor.created_at, kind: 1301, text, subject: subj, emailId, raw, mailTags: rumor.tags, messageId, references: before ? [before.references, before.messageId].filter(Boolean).join(' ') : undefined, pending: true })
   reports.set(emailId, { status: 'queued', details: 'Waiting for the connection…' })
   save()
   try {
