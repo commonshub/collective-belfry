@@ -131,12 +131,20 @@ def test_mails_carry_the_logo_and_the_primary_colour(world):
 
 
 def test_the_accent_reads_in_both_modes():
+    # a dark green: itself on white, a lighter green of the same hue on black (never the secondary)
+    import colorsys
+
     from belfry_onboarding import branding
 
-    # a dark green and a lime: the green on white, the lime on black
     got = branding.colors("#2b3a31", "#d6ff52")
     assert got["light"] == {"accent": "#2b3a31", "on_accent": "#ffffff"}
-    assert got["dark"] == {"accent": "#d6ff52", "on_accent": "#111111"}
+    dark = got["dark"]["accent"]
+    assert dark not in ("#2b3a31", "#d6ff52") and branding.contrast(dark, "#000000") >= 4.5
+
+    def hue(c):
+        return colorsys.rgb_to_hls(*(v / 255 for v in branding._rgb(c)))[0]
+
+    assert abs(hue(dark) - hue("#2b3a31")) < 0.02
     # no secondary: the primary is lightened until it reads on black, and stays itself on white
     got = branding.colors("#2b3a31", "")
     assert got["light"]["accent"] == "#2b3a31"

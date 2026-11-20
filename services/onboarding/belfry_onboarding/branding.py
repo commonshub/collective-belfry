@@ -116,28 +116,35 @@ def _reads(color: str, mode: str) -> bool:
     return contrast(color, page) >= TEXT_CONTRAST and contrast(color, surface) >= SURFACE_CONTRAST
 
 
-def _toward(color: str, target: str, share: float) -> str:
-    return "#" + "".join(
-        f"{round(c + (t - c) * share):02x}"
-        for c, t in zip(_rgb(color), _rgb(target), strict=True)
-    )
+def _lightness(color: str, lightness: float) -> str:
+    """COLOR with its hue and saturation kept and this HSL lightness (0–1)."""
+    import colorsys
+
+    h, _, sat = colorsys.rgb_to_hls(*(v / 255 for v in _rgb(color)))
+    return "#" + "".join(f"{round(v * 255):02x}" for v in colorsys.hls_to_rgb(h, lightness, sat))
 
 
 def accent(primary: str, secondary: str, mode: str) -> str:
     """The colour for words, icons and filled buttons in MODE (light | dark): the primary when it
-    reads on that mode's page; else the secondary when that one does; else the primary moved
-    toward white (dark) or black (light), 4 % at a time, until it does. A dark green that
-    vanishes on a black page gives way to the community's lime, not to an invisible button."""
-    for color in (primary, secondary):
-        if COLOR.match(color or "") and _reads(color.lower(), mode):
-            return color.lower()
+    reads on that mode's page; else the primary with its hue and saturation kept and its
+    lightness raised (dark) or lowered (light), 2 % at a time, until it does: a dark green
+    becomes a lighter green on a black page, not an invisible button. The secondary is never
+    used for this: it is another colour, not another shade."""
+    import colorsys
+
     base = (primary if COLOR.match(primary or "") else DEFAULT_PRIMARY).lower()
-    target = "#ffffff" if mode == "dark" else "#000000"
-    for step in range(1, 26):
-        moved = _toward(base, target, step * 0.04)
+    if _reads(base, mode):
+        return base
+    light = colorsys.rgb_to_hls(*(v / 255 for v in _rgb(base)))[1]
+    step = 0.02 if mode == "dark" else -0.02
+    for n in range(1, 51):
+        at = light + n * step
+        if not 0 <= at <= 1:
+            break
+        moved = _lightness(base, at)
         if _reads(moved, mode):
             return moved
-    return target
+    return "#ffffff" if mode == "dark" else "#000000"
 
 
 def colors(primary: str, secondary: str) -> dict[str, dict[str, str]]:
