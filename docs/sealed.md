@@ -271,10 +271,10 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-At most 200 rumors or 40 000 bytes of rumor JSON per wrap, whichever comes first (NIP-44 carries
+At most 200 rumors per wrap, and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
 65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
 A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
-a sender never seals a rumor whose JSON is over 40 000 bytes. The receiver, when the sharer is
+a sender never seals a rumor whose JSON (the exact string that is encrypted, as UTF-8 bytes) is over 40 000 bytes. The receiver, when the sharer is
 a participant of each rumor's conversation, adds the rumors it doesn't have, marked as shared
 by that person (they are not proven to be authentic). The mark is kept on the receiving
 device only.
