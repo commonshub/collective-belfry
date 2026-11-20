@@ -4,6 +4,14 @@ blossom-server verifies the BUD-11 auth event itself, but it cannot know who hol
 gate in front of it (infra/blossom/Caddyfile) asks ``GET /blossom/auth`` with the original
 ``Authorization: Nostr <base64 event>`` header; this module checks the event (kind 24242,
 Schnorr signature, verb, expiry, server tag) and that its pubkey has an active pass in Odoo.
+
+Who may write (``authorize``): the belfry's own key; a key with an active pass; a live site
+session of an account (sitesessions.py: the website's browser key, for its account). Members
+(any pass that is not a guest's) write as before. Someone who is only a guest has an allowance
+(``allowance``): ``GUEST_FILE`` a file and ``GUEST_TOTAL`` in all; a guest who holds a ticket
+of an event, the server's own limit a file and ``TICKET_TOTAL`` in all. The count is per
+account (its own key and its site sessions together), of everything it ever sent: a delete
+gives nothing back; the same file again is not counted twice.
 """
 
 from __future__ import annotations
@@ -12,12 +20,13 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import time
 from typing import Any
 
 from coincurve import PublicKeyXOnly
 
-from .core import Services
+from .core import Services, m2o_id
 
 log = logging.getLogger(__name__)
 
@@ -25,13 +34,22 @@ BLOSSOM_AUTH_KIND = 24242
 VERBS_BY_METHOD = {"PUT": {"upload"}, "DELETE": {"delete"}, "HEAD": {"upload"}}
 MAX_FUTURE_SKEW = 60  # created_at may not lie this far in the future
 MAX_TOKEN_LIFETIME = 24 * 3600  # an auth event valid longer than this is refused
+MB = 1024 * 1024
+GUEST_FILE = 5 * MB  # one file of someone who is only a guest
+GUEST_TOTAL = 50 * MB  # everything such a guest ever sends
+TICKET_TOTAL = 1024 * MB  # everything a guest who holds a ticket ever sends
+TICKET_SECONDS = 120  # how long "holds a ticket" is believed
+SEEN_MAX = 300  # files remembered per account, so that a retry is not counted twice
+_quota_lock = threading.Lock()
+_ticket: dict[str, tuple[float, bool]] = {}
 
 
 class BlossomAuthError(Exception):
-    def __init__(self, status: int, reason: str):
+    def __init__(self, status: int, reason: str, code: str = ""):
         super().__init__(reason)
         self.status = status
         self.reason = reason
+        self.code = code
 
 
 def event_id(event: dict[str, Any]) -> str:
@@ -127,8 +145,89 @@ def pubkey_has_active_pass(svc: Services, pubkey: str) -> bool:
     return bool(rows)
 
 
-def authorize(svc: Services, authorization: str | None, method: str) -> str:
-    """The pubkey allowed to write, or raises BlossomAuthError (401 bad token, 403 no pass)."""
+def has_ticket(svc: Services, pubkey: str) -> bool:
+    """Whether the account of this key is admitted with a ticket to an event that is not
+    cancelled (a tester's test ticket too); believed for TICKET_SECONDS."""
+    from . import sitesessions
+
+    now = time.time()
+    hit = _ticket.get(pubkey)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        held = any(not t["cancelled"] for t in sitesessions.tickets(svc, {"pubkey": pubkey}))
+    except Exception as exc:  # noqa: BLE001 — the smaller allowance then
+        log.info("blossom: tickets not read: %s", type(exc).__name__)
+        return False
+    if len(_ticket) > 5000:
+        _ticket.clear()
+    _ticket[pubkey] = (now + TICKET_SECONDS, held)
+    return held
+
+
+def allowance(svc: Services, pubkey: str) -> tuple[int, str] | None:
+    """(the account's contact, "member" | "ticket" | "guest") for a key that may write: one
+    with an active pass, or a live site session (as its account). None for any other key."""
+    from . import sitesessions
+
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["state", "=", "active"], ["keycast_pubkey", "=", pubkey]],
+        ["tier", "partner_id"],
+    )
+    if rows:
+        partner, account_key = m2o_id(rows[0].get("partner_id")), pubkey
+        member = any(r.get("tier") != "guest" for r in rows)
+    else:
+        acct = sitesessions.site_account(svc, pubkey, touch=False)
+        if acct is None:
+            return None
+        partner, account_key = acct["partner"], acct["pubkey"]
+        member = acct["role"] != "guest"
+    if member:
+        return int(partner or 0), "member"
+    return int(partner or 0), ("ticket" if has_ticket(svc, account_key) else "guest")
+
+
+def _mb(n: int) -> str:
+    return f"{n // MB} MB"
+
+
+def charge(svc: Services, partner: int, kind: str, length: int | None, shas: list[str]) -> None:
+    """Count an upload of LENGTH bytes against a guest's allowance, or refuse it: 411 without
+    a length, 413 ``too_large`` (one file), 413 ``quota`` (in all)."""
+    if length is None:
+        raise BlossomAuthError(411, "send a Content-Length", "length")
+    who = "a guest" if kind == "guest" else "a ticket holder"
+    total = GUEST_TOTAL if kind == "guest" else TICKET_TOTAL
+    if kind == "guest" and length > GUEST_FILE:
+        raise BlossomAuthError(
+            413, f"file too big: {_mb(GUEST_FILE)} at most for {who}", "too_large"
+        )
+    key = f"belfry.blossom.used.{partner}"
+    with _quota_lock:
+        try:
+            used = json.loads(svc.odoo.param(key, "") or "{}")
+        except ValueError:
+            used = {}
+        n = int(used.get("n") or 0)
+        seen = [x for x in used.get("x") or [] if isinstance(x, str)]
+        if shas and all(x in seen for x in shas):
+            return  # this file again (a retry): counted already
+        if n + length > total:
+            log.info("blossom: contact %s is over their allowance (%s)", partner, kind)
+            raise BlossomAuthError(
+                413, f"over quota: {_mb(total)} in all for {who}, {_mb(n)} used", "quota"
+            )
+        seen = (seen + [x for x in shas if x not in seen])[-SEEN_MAX:]
+        svc.odoo.set_param(key, json.dumps({"n": n + length, "x": seen}))
+
+
+def authorize(
+    svc: Services, authorization: str | None, method: str, length: int | None = None
+) -> str:
+    """The pubkey allowed to write, or raises BlossomAuthError (401 bad token, 403 no pass,
+    411 / 413 for a guest's allowance). ``length``: the upload's Content-Length."""
     hosts = [h.strip().lower() for h in svc.settings.blossom_hosts.split(",") if h.strip()]
     event = parse_authorization(authorization)
     pubkey = check_event(event, method, hosts)
@@ -137,7 +236,16 @@ def authorize(svc: Services, authorization: str | None, method: str) -> str:
 
     if pubkey == belfry_pubkey(svc.settings):
         return pubkey
-    if not pubkey_has_active_pass(svc, pubkey):
+    who = allowance(svc, pubkey)
+    if who is None:
         log.info("blossom: %s refused for %s, no active pass", method, pubkey)
-        raise BlossomAuthError(403, "no active pass for this key")
+        raise BlossomAuthError(403, "no active pass for this key", "no_pass")
+    partner, kind = who
+    if kind != "member" and method == "PUT" and hasattr(svc.odoo, "params_under"):
+        shas = [
+            t[1]
+            for t in event.get("tags") or []
+            if isinstance(t, list) and len(t) > 1 and t[0] == "x" and isinstance(t[1], str)
+        ]
+        charge(svc, partner, kind, length, shas)
     return pubkey

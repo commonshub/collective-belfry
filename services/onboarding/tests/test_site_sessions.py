@@ -334,6 +334,67 @@ def test_someone_with_their_own_key_cannot_be_signed_for(site, monkeypatch):
         assert r.status_code == 409 and r.json()["error"] == "own_key"
 
 
+# ── uploads (the Blossom gate) ──────────────────────────────────────────────────────────────
+def test_a_site_session_uploads_within_its_accounts_allowance(site, monkeypatch):
+    import base64
+
+    from belfry_onboarding import blossom
+
+    rsvc, _w, _ada = site
+    bob, _ = person(rsvc, "bob@belfry.test", "Bob")
+    monkeypatch.setattr(blossom, "has_ticket", lambda svc, key: False)
+    n = itertools.count(1)
+
+    def put(c, key, length, sha=None, method="PUT"):
+        tags = [["t", "upload" if method == "PUT" else "delete"]]
+        tags += [["expiration", str(int(time.time()) + 300)]]
+        tags += [["x", sha or f"{next(n):064x}"]]
+        e = signed(
+            key, {"kind": 24242, "created_at": int(time.time()), "tags": tags, "content": "up"}
+        )
+        auth = "Nostr " + base64.b64encode(json.dumps(e).encode()).decode()
+        headers = {"Authorization": auth, "X-Forwarded-Method": method}
+        if length is not None:
+            headers["X-Upload-Length"] = str(length)
+        return c.get("/blossom/auth", headers=headers)
+
+    mb = blossom.MB
+    with TestClient(create_app(rsvc)) as c:
+        r = put(c, PrivateKey(), 1000)
+        assert r.status_code == 403 and r.headers["x-belfry-code"] == "no_pass"
+        assert r.headers["access-control-allow-origin"] == "*"
+        k = guest(c)
+        acct = sitesessions.site_account(rsvc, pk(k))
+        r = put(c, k, 300_000)
+        assert r.status_code == 200 and r.headers["x-belfry-pubkey"] == pk(k), r.text
+        assert put(c, k, None).status_code == 411
+        r = put(c, k, 5 * mb + 1)
+        assert r.status_code == 413 and r.headers["x-belfry-code"] == "too_large"
+        assert "5 MB" in r.headers["x-reason"]
+        # the same file again is not counted; the account's own key counts with its sessions
+        for _ in range(3):
+            assert put(c, k, 5 * mb, sha="ab" * 32).status_code == 200
+        used = json.loads(rsvc.odoo.param(f"belfry.blossom.used.{acct['partner']}"))
+        assert used["n"] == 300_000 + 5 * mb
+        for _ in range(8):
+            assert put(c, k, 5 * mb).status_code == 200
+        r = put(c, k, 5 * mb)
+        assert r.status_code == 413 and r.headers["x-belfry-code"] == "quota"
+        assert "50 MB" in r.headers["x-reason"]
+        assert put(c, k, 1000, method="DELETE").status_code == 200
+        # with a ticket: the bigger allowance
+        monkeypatch.setattr(blossom, "has_ticket", lambda svc, key: key == acct["pubkey"])
+        assert put(c, k, 20 * mb).status_code == 200
+        # a member and their site session: no allowance to count
+        kb = PrivateKey()
+        assert login(c, kb, "bob@belfry.test").json()["role"] == "member"
+        for key in (bob, kb):
+            assert put(c, key, None).status_code == 200
+        # logged out: the key is nobody's
+        assert call(c, k, "/site/logout").status_code == 200
+        assert put(c, k, 1000).status_code == 403
+
+
 # ── requests and comments ───────────────────────────────────────────────────────────────────
 ASK = {"product": "village-2027", "offer": "I cook for 40 people on two evenings."}
 

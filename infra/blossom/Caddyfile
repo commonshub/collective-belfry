@@ -25,6 +25,8 @@
 	handle @write {
 		forward_auth onboarding:8100 {
 			uri /blossom/auth
+			# the upload's size, for a guest's allowance (the auth request itself has no body)
+			header_up X-Upload-Length {http.request.header.Content-Length}
 			copy_headers X-Belfry-Pubkey
 		}
 		reverse_proxy blossom:3000

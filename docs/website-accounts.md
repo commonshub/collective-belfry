@@ -167,7 +167,7 @@ least one, nothing else. `name`: 1–80 characters, one line, not a key or an e-
 `about`: at most 1000 characters. `picture`: an `https://` address, at most 500 characters.
 `null` or `""` takes `about` / `picture` out.
 
-`tags`: the whole list (`[]` empties it), at most 20, each 1–30 characters of `a-z`, `0-9`
+`tags`: the whole list (`[]` empties it), at most 30 (the chat's own limit), each 1–30 characters of `a-z`, `0-9`
 and `-`. The server trims and lowercases them and drops doubles; a `#`, a space inside, or
 any other character is 422 `invalid` (nothing is saved). One exception: a tag the account
 **already has** (written in the chat, whose rule is wider: `café`, `solar_power`) may be sent
@@ -194,6 +194,42 @@ them; also for `tags` alone, guest or member); 429 `too_many` (10 changes an hou
 The site treats the name "Guest" as "ask for a name": after `{"name"}` what they wrote before
 reads under the new name (docs/requests.md: names come from the profile; a guest with no
 profile shows under the account's name).
+
+
+### A picture: straight to Blossom
+
+There is no upload endpoint in this API. The website sends the file to the community's
+Blossom server itself (`PUT https://blossom.<domain>/upload`, BUD-02, with a kind 24242
+authorization **signed by the site session's key**, `x` = the file's SHA-256), then saves the
+address it got with `POST /site/profile {"picture": "https://blossom.<domain>/<sha256>.jpg"}`.
+
+The gate in front of Blossom (blossom.py) lets write: a key with an active pass, and a live
+site session, as its account. How much:
+
+| who (the account) | one file | in all |
+|---|---|---|
+| a member, an admin, an agent | 25 MB (the server's limit) | not counted |
+| a guest who holds a ticket of an event (not cancelled; a tester's test ticket too) | 25 MB | 1 GB |
+| any other guest | 5 MB | 50 MB |
+
+The count is per account (its own key in the chat and all its site sessions together) and of
+everything it ever sent: deleting a file gives nothing back. The same file sent again (same
+`x`) is not counted twice. A guest's upload must carry a `Content-Length` (a browser's `fetch`
+with a Blob does). "Holds a ticket" is read again every two minutes.
+
+Refusals of the gate come with `X-Reason` (words), `X-Belfry-Code` and a JSON body
+`{"error", "code"}`, readable from any origin:
+
+- 401: the authorization is not right (no code).
+- 403 `no_pass`: the key is no account's and no live session's (logged out, ended).
+- 411 `length`: no `Content-Length`.
+- 413 `too_large`: `file too big: 5 MB at most for a guest`.
+- 413 `quota`: `over quota: 50 MB in all for a guest, 48 MB used` (or `1024 MB in all for a
+  ticket holder, …`).
+
+Blossom itself still answers 413 over 25 MB and 415 for a type it doesn't keep. The website
+should send a picture it has redrawn on a canvas (small, and without the camera's EXIF data,
+which can hold the place a photo was taken): nothing on the way re-encodes it.
 
 ## 3. Which e-mails they get
 

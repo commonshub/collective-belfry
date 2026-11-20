@@ -887,12 +887,28 @@ def create_app(services: Services | None = None) -> FastAPI:
         """Forward-auth target of the Blossom gate: 200 when the Authorization: Nostr event is a
         valid BUD-11 token for the original method and its pubkey holds an active pass."""
         method = request.headers.get("x-forwarded-method", request.method)
+        length = request.headers.get("x-upload-length", "").strip()
         try:
             pubkey = await run_in_threadpool(
-                blossom.authorize, svc(request), request.headers.get("authorization"), method
+                blossom.authorize,
+                svc(request),
+                request.headers.get("authorization"),
+                method,
+                int(length) if length.isdigit() else None,
             )
         except blossom.BlossomAuthError as exc:
-            return JSONResponse({"error": exc.reason}, status_code=exc.status)
+            # the gate hands this answer to the browser as it is: readable from any origin,
+            # like blossom-server's own (BUD-01: the reason in X-Reason)
+            return JSONResponse(
+                {"error": exc.reason, "code": exc.code},
+                status_code=exc.status,
+                headers={
+                    "X-Reason": exc.reason,
+                    "X-Belfry-Code": exc.code,
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Expose-Headers": "X-Reason, X-Belfry-Code",
+                },
+            )
         return Response(status_code=200, headers={"X-Belfry-Pubkey": pubkey})
 
     @app.post("/hooks/stripe")

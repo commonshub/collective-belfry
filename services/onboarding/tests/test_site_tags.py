@@ -55,7 +55,7 @@ def test_a_guests_tags_are_kept_on_the_contact(site):
             ["x" * 31],
             ["café"],
             [1],
-            [f"t{i}" for i in range(21)],
+            [f"t{i}" for i in range(31)],
         ):
             r = call(c, kim, "/site/profile", {"tags": bad})
             assert r.status_code == 422 and r.json()["error"] == "invalid", bad
