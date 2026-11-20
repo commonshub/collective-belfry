@@ -8,7 +8,10 @@ import { signedFetch } from './sync'
 
 // description: the line under the community's name on its homepage (the belfry profile's about,
 // plain text, at most 500; "" = the default line)
-export interface Branding { logo: string; cover: string; primary: string; secondary: string; description: string }
+// colors: the accent per mode, made by Belfry from the primary so it reads on that mode's page
+// (lead, 2026-11-20: a dark primary used raw vanished on a dark page). Absent: the primary as is.
+export interface ModeColors { accent: string; on_accent: string }
+export interface Branding { logo: string; cover: string; primary: string; secondary: string; description: string; colors?: { light: ModeColors; dark: ModeColors } }
 const EMPTY: Branding = { logo: '', cover: '', primary: '', secondary: '', description: '' }
 const KEY = 'osv-branding'
 const HEX = /^#[0-9a-f]{6}$/i
@@ -29,7 +32,19 @@ function clean(b: Partial<Record<keyof Branding, unknown>> | undefined): Brandin
     primary: typeof b?.primary === 'string' && HEX.test(b.primary) ? b.primary.toLowerCase() : '',
     secondary: typeof b?.secondary === 'string' && HEX.test(b.secondary) ? b.secondary.toLowerCase() : '',
     description: typeof b?.description === 'string' ? b.description.slice(0, 500) : '',
+    ...(colorsOf(b?.colors) ? { colors: colorsOf(b?.colors) } : {}),
   }
+}
+
+/** {light: {accent, on_accent}, dark: {…}}, every colour #rrggbb, else none. */
+function colorsOf(c: unknown): Branding['colors'] {
+  const mode = (m: unknown): ModeColors | undefined => {
+    const x = m as Partial<ModeColors> | undefined
+    return x && typeof x.accent === 'string' && HEX.test(x.accent) && typeof x.on_accent === 'string' && HEX.test(x.on_accent) ? { accent: x.accent.toLowerCase(), on_accent: x.on_accent.toLowerCase() } : undefined
+  }
+  const o = c as { light?: unknown; dark?: unknown } | undefined
+  const light = mode(o?.light), dark = mode(o?.dark)
+  return light && dark ? { light, dark } : undefined
 }
 
 export const branding = () => brand
@@ -68,6 +83,15 @@ export function applyBranding(b: Branding = brand) {
   } else {
     delete root.dataset.brand
     root.style.removeProperty('--brand'); root.style.removeProperty('--on-brand')
+  }
+  // the accent of each mode (styles.css [data-brand-colors] picks one per prefers-color-scheme, live)
+  if (b.colors) {
+    root.dataset.brandColors = ''
+    root.style.setProperty('--accent-light', b.colors.light.accent); root.style.setProperty('--on-accent-light', b.colors.light.on_accent)
+    root.style.setProperty('--accent-dark', b.colors.dark.accent); root.style.setProperty('--on-accent-dark', b.colors.dark.on_accent)
+  } else {
+    delete root.dataset.brandColors
+    for (const v of ['--accent-light', '--on-accent-light', '--accent-dark', '--on-accent-dark']) root.style.removeProperty(v)
   }
   if (b.secondary) {
     root.style.setProperty('--brand-2', b.secondary)
