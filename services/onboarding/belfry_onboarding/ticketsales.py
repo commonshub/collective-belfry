@@ -23,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import logging
 import re
+import time
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal
@@ -66,19 +67,30 @@ def odoo_product(st: dict[str, Any]) -> int | None:
     return int(got) if got else None
 
 
-def can_sell(svc: Services, env: str = "live") -> bool:
-    """Tickets can be invoiced and paid in ENV (the switch is asked apart)."""
+def tax_ok(st: dict[str, Any], vat: bool = True, kind: str | None = None) -> bool:
+    """Whether the VAT tax this sale's invoice line needs is picked. A ticket that states no
+    VAT (no ``vat`` tag) needs none: its line then carries no tax unless one is picked. KIND:
+    the buyer's billing kind when known (an organisation: the tax on top; else the one in the
+    price)."""
+    if not vat:
+        return True
+    return bool(st["tax_excluded"] if kind == "organisation" else st["tax_included"])
+
+
+def can_sell(svc: Services, env: str = "live", vat: bool = True, kind: str | None = None) -> bool:
+    """Tickets can be invoiced and paid in ENV (the switch is asked apart). The Odoo product is
+    never what is missing: with none picked Belfry finds or makes one ("Event ticket") at the
+    first sale (``prepare``), unless Odoo refused that. VAT, KIND: see ``tax_ok``."""
     st = sales.settings(svc, env)
     return bool(
         sales.odoo_ready(svc, env)
-        and odoo_product(st)
-        and st["tax_included"]
-        and st["tax_excluded"]
+        and (odoo_product(st) or not st["ticket_product_refused"])
+        and tax_ok(st, vat, kind)
         and (sales.stripe_ready(svc, env) or sales.bank_ready(svc))
     )
 
 
-def missing(svc: Services, env: str = "live") -> str:
+def missing(svc: Services, env: str = "live", vat: bool = True, kind: str | None = None) -> str:
     """What an admin still has to set before tickets can be sold in ENV, as one sentence naming
     the console's places ("" when nothing is missing). Shown with `test_not_set_up` and
     `cannot_sell`, so the person testing knows which piece it is."""
@@ -88,17 +100,51 @@ def missing(svc: Services, env: str = "live") -> str:
     if not sales.odoo_ready(svc, env):
         parts.append(f"connect Odoo (Plugins → Odoo → {where})")
     else:
-        if not odoo_product(st):
+        if not odoo_product(st) and st["ticket_product_refused"]:
             parts.append(
-                f"pick the Odoo product event tickets are invoiced as (Plugins → Odoo → {where})"
+                "Odoo did not let Belfry create the product “Event ticket” (its API key's user "
+                "may not create products): create a service product in Odoo and pick it as the "
+                f"product event tickets are invoiced as (Plugins → Odoo → {where})"
             )
-        if not (st["tax_included"] and st["tax_excluded"]):
-            parts.append(f"pick both VAT taxes (Plugins → Odoo → {where})")
+        if not tax_ok(st, vat, kind):
+            which = (
+                "VAT for organisations (on top)"
+                if kind == "organisation"
+                else "VAT for people (price includes it)"
+            )
+            parts.append(f"pick the tax “{which}” (Plugins → Odoo → {where})")
     if not (sales.stripe_ready(svc, env) or sales.bank_ready(svc)):
         parts.append(f"connect Stripe (Plugins → Stripe → {where}) or set the bank account (Sales)")
     if not parts:
         return ""
     return "Still to do in the console: " + "; ".join(parts) + "."
+
+
+_prepared: dict[str, float] = {}
+PREPARE_AGAIN = 300  # after Odoo refused to create the product: asked again at most this often
+
+
+def prepare(svc: Services, env: str = "live", force: bool = False) -> None:
+    """With Odoo connected and no product for event tickets picked, make sure one exists
+    (salesodoo.ensure_ticket_product): at the first ticket sale, and when an admin saves the
+    Odoo connection or its picks (FORCE). Never raises: a refusal is remembered in the settings
+    (``can_sell`` and ``missing`` say so), Odoo not answering is left for the invoice step."""
+    from . import salesodoo
+
+    st = sales.settings(svc, env)
+    if not sales.odoo_ready(svc, env) or odoo_product(st):
+        return
+    key = f"{svc.settings.register_path}:{env}"
+    if st["ticket_product_refused"] and not force:
+        if time.monotonic() - _prepared.get(key, -1e9) < PREPARE_AGAIN:
+            return
+    _prepared[key] = time.monotonic()
+    try:
+        salesodoo.ensure_ticket_product(svc, env)
+    except sales.Refused:
+        pass  # remembered in the settings
+    except Exception as exc:  # noqa: BLE001 — Odoo is down: the invoice step asks again
+        log.info("ticket sales: no product made sure of in Odoo yet: %s", type(exc).__name__)
 
 
 def clean_checkout_url(svc: Services, raw: Any) -> str:
@@ -233,22 +279,29 @@ def fields(
     if not sales.own(svc):
         return {}
     st = sales.settings(svc)
-    live = st["tickets"] and can_sell(svc, "live")
-    test = False
-    if viewer and not live:
-        from . import testers
+    tester: bool | None = None
 
-        test = testers.is_tester_key(svc, viewer) and can_sell(svc, "test")
+    def sold(t: events.Ticket) -> bool:
+        """The checkout can take this ticket's money: live (the switch), or for a tester in
+        the test environment. The tax asked for is the one a person's invoice needs."""
+        nonlocal tester
+        vat = bool(Decimal(t.vat or "0"))
+        if st["tickets"] and can_sell(svc, "live", vat):
+            return True
+        if not viewer:
+            return False
+        if tester is None:
+            from . import testers
+
+            tester = testers.is_tester_key(svc, viewer)
+        return tester and can_sell(svc, "test", vat)
+
     inside: bool | None = None
     holds = held(svc)
     out: dict[str, dict[str, Any]] = {}
     for t in tks:
         lft = left(t, ppl, holds)
-        ok = (
-            (live or test)
-            and _why_not(svc, ev, t, st["currency"]) is None
-            and (lft is None or lft > 0)
-        )
+        ok = _why_not(svc, ev, t, st["currency"]) is None and (lft is None or lft > 0) and sold(t)
         if ok and t.requires is not None:
             got = events.required(svc, t, viewer)  # only who holds the ticket it needs
             ok = bool(got and got[1])

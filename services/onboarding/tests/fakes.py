@@ -1210,6 +1210,7 @@ class FakeSellerOdoo:
         self.unreadable: set[int] = set()  # invoices that can't be read
         self.no_pdf = False
         self.refuse_partner_fields: set[str] = set()  # res.partner fields Odoo refuses (422)
+        self.refuse_create: set[str] = set()  # models Odoo refuses to create a record of (403)
         self.add("res.company", name="XL Collective")
         self.add("res.country", code="BE", name="Belgium")
         self.add("res.currency", name="EUR")
@@ -1257,13 +1258,18 @@ class FakeSellerOdoo:
     def create(self, model, vals, context=None):
         self._fail(model, "create")
         vals = dict(vals)
+        if model in self.refuse_create:
+            raise OdooError(f"{model}.create: not allowed", {"status": 403})
+        if model == "product.product":
+            vals.setdefault("display_name", vals.get("name"))
         if model == "res.partner" and self.refuse_partner_fields & set(vals):
             raise OdooError("res.partner.create: the VAT number is not valid", {"status": 422})
         if model == "account.move":
             total = untaxed = 0.0
             for _, _, line in vals.get("invoice_line_ids", []):
                 price = line["price_unit"] * line["quantity"] * (1 - line["discount"] / 100)
-                rate, included = self.TAXES[line["tax_ids"][0][2][0]]
+                taxes = line["tax_ids"][0][2]
+                rate, included = self.TAXES[taxes[0]] if taxes else (0.0, True)
                 if included:
                     net = round(price / (1 + rate / 100), 2)
                     untaxed, total = untaxed + net, total + round(price, 2)

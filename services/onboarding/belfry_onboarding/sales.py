@@ -80,6 +80,8 @@ ODOO_KEYS = (
     "card_journal",
     "manual_journal",
     "ticket_product",
+    "ticket_product_auto",
+    "ticket_product_refused",
 )
 HOLD_DAYS = 7
 REMIND_DAYS = 2  # one reminder this long before the hold ends
@@ -631,6 +633,10 @@ def settings(svc: Services, env: str = "live") -> dict[str, Any]:
         "tickets": bool(st.get("tickets")),
         "checkout_url": st.get("checkout_url") or "",
         "ticket_product": _int(st.get("ticket_product")),
+        # the product "Event ticket" Belfry found or made in this Odoo when none was picked
+        # (salesodoo.ensure_ticket_product), and whether Odoo refused to let it make one
+        "ticket_product_auto": _int(st.get("ticket_product_auto")),
+        "ticket_product_refused": bool(st.get("ticket_product_refused")),
     }
     if _env(env) == "test":
         t = _param(svc, TEST_SETTINGS_PARAM)
@@ -638,6 +644,8 @@ def settings(svc: Services, env: str = "live") -> dict[str, Any]:
         for k in ODOO_KEYS:
             out[k] = t.get(k) or ({} if k == "odoo_products" else None)
         out["ticket_product"] = _int(out["ticket_product"])
+        out["ticket_product_auto"] = _int(out["ticket_product_auto"])
+        out["ticket_product_refused"] = bool(out["ticket_product_refused"])
         out["company_name"] = t.get("company_name") or out.get("company_name") or ""
         out["fallback_products"] = {}  # the server's ACCOUNTING_PRODUCTS are production's
     return out
@@ -1844,7 +1852,17 @@ def _checkout(
             and _usable(c, pid, key, proven, by_offer) in (None, "code_used")
         )
         ticketsales.check(svc, wanted, key, env, tester, owner, switch=not given)
-        sells = ticketsales.can_sell
+        # with Odoo connected and no product picked for tickets, Belfry finds or makes one now
+        # (outside the lock: Odoo can be slow)
+        ticketsales.prepare(svc, env)
+        stated = bool(p["vat_rate"])  # a ticket that states no VAT needs no tax picked
+
+        def sells(svc: Services, env: str = "live") -> bool:
+            return ticketsales.can_sell(svc, env, stated, billing["kind"])
+
+        def lacks(env: str) -> str:
+            return ticketsales.missing(svc, env, stated, billing["kind"])
+
     if (
         billing["kind"] == "organisation"
         and billing.get("vat")
@@ -1924,7 +1942,7 @@ def _checkout(
                     409,
                     "test_not_set_up",
                     "This address is a tester's, and tickets can't be sold in the test "
-                    "environment yet. " + ticketsales.missing(svc, "test"),
+                    "environment yet. " + lacks("test"),
                 )
             raise ApiError(
                 409,
@@ -1938,7 +1956,7 @@ def _checkout(
                 raise ApiError(
                     409,
                     "cannot_sell",
-                    ("Tickets can't be bought here yet. " + ticketsales.missing(svc, env)).strip(),
+                    ("Tickets can't be bought here yet. " + lacks(env)).strip(),
                 )
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
         created = now()

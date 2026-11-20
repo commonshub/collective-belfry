@@ -284,9 +284,8 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         can = '<p class="ok">Tickets with a price in ' + E(st["currency"]) + " can be bought.</p>"
     else:
         can = (
-            '<p class="bad">Not yet: tickets need the Odoo connection with a product for event '
-            'tickets and both VAT taxes (<a href="/plugins">Plugins</a>), and Stripe or the bank '
-            "details.</p>"
+            f'<p class="bad">Not yet. {E(ticketsales.missing(svc))} '
+            '(<a href="/plugins">Plugins</a>)</p>'
         )
     tickets = f"""<h2 id="tickets">Event tickets</h2><div class="card">
 <form method="post" action="{PATH}/tickets" class="f"><input type="hidden" name="csrf" value="{csrf}">

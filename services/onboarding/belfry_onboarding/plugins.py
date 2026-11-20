@@ -44,6 +44,11 @@ WEBHOOK = re.compile(r"^whsec_[A-Za-z0-9]{8,200}$")
 
 MSG = {
     "odoo_ok": "Odoo answers. Now pick the company, products, taxes and journals below.",
+    "odoo_ok_no_ticket": "Odoo answers, but it did not let Belfry create the product “Event "
+    "ticket” (the API key's user may not create products). Create a service product in Odoo and "
+    "pick it below as the product event tickets are invoiced as.",
+    "picks_no_ticket": "Saved. Odoo did not let Belfry create the product “Event ticket”: "
+    "create a service product in Odoo and pick it as the product event tickets are invoiced as.",
     "odoo_bad": "Odoo did not accept the connection. Check the URL, the database and the key.",
     "odoo_need": "Give the URL, the database and the API key.",
     "odoo_same": "The test Odoo must be another database than production's.",
@@ -285,11 +290,44 @@ def _picks_form(svc: Services, csrf: str, env: str) -> str:
         )
         or '<p class="hint">Add a product on the <a href="/sales">Sales</a> page first.</p>'
     )
+    # the product for event tickets: an admin's pick, else the one Belfry found or made in this
+    # Odoo ("Event ticket", ticketsales.prepare: when the connection or these picks are saved,
+    # and at the first ticket sale); shown selected even when Odoo's list leaves it out
+    tickets = list(lists["products"])
+    mine = st["ticket_product"]
+    if mine and all(r["id"] != mine for r in tickets):
+        tickets.append(
+            {
+                "id": mine,
+                "display_name": salesodoo.TICKET_PRODUCT
+                if mine == st["ticket_product_auto"]
+                else "(the product picked earlier)",
+            }
+        )
+    if mine and mine == st["ticket_product_auto"]:
+        ticket_hint = (
+            '<p class="hint">Belfry found or made the service product “Event ticket” in this '
+            "Odoo for event tickets (the invoice line carries the ticket's own name and price). "
+            "Pick another one if you prefer.</p>"
+        )
+    elif not mine and st["ticket_product_refused"]:
+        ticket_hint = (
+            '<p class="bad">Odoo did not let Belfry create the product “Event ticket” (the API '
+            "key's user may not create products). Create a service product in Odoo and pick it "
+            "here.</p>"
+        )
+    elif not mine:
+        ticket_hint = (
+            '<p class="hint">Nothing picked: Belfry makes a service product “Event ticket” in '
+            "this Odoo when you save, or at the first ticket sale.</p>"
+        )
+    else:
+        ticket_hint = ""
     return f"""<form method="post" action="{PATH}/odoo/{env}/picks" class="f">
 <input type="hidden" name="csrf" value="{csrf}">
 <label>Company {sel("company", lists["companies"], lambda r: r["name"], st["company"], "— the key's default —")}</label>
 {prod_rows}
-<label>Event tickets are invoiced as {sel("ticket_product", lists["products"], lambda r: r["display_name"], st["ticket_product"], "— pick a product —")}</label>
+<label>Event tickets are invoiced as {sel("ticket_product", tickets, lambda r: r["display_name"], st["ticket_product"], "— Belfry's own “Event ticket” —")}</label>{ticket_hint}
 <label>VAT for people (price includes it) {sel("tax_included", lists["taxes"], tax, st["tax_included"], "— pick a tax —")}</label>
 <label>VAT for organisations (on top) {sel("tax_excluded", lists["taxes"], tax, st["tax_excluded"], "— pick a tax —")}</label>
 <label>Journal for card payments {sel("card_journal", lists["journals"], lambda r: r["name"], st["card_journal"], "— not booked —")}</label>
@@ -429,6 +467,16 @@ def register(app: FastAPI) -> None:
         log.info("plugins: %s saved Stripe (%s)", me["name"] or "an admin", env)
         return back(request, to, msg="stripe")
 
+    async def ticket_product(s: Services, env: str, ok: str) -> str:
+        """With no product picked for event tickets, Belfry finds or makes one in ENV's Odoo
+        now (ticketsales.prepare). The message to show: OK, or that Odoo refused."""
+        from . import ticketsales
+
+        await run_in_threadpool(ticketsales.prepare, s, env, True)
+        st = sales.settings(s, env)
+        refused = st["ticket_product_refused"] and not ticketsales.odoo_product(st)
+        return f"{ok}_no_ticket" if refused else ok
+
     @app.post("/console/plugins/odoo/{env}")
     async def odoo_save(request: Request, env: str):
         to = f"{PATH}/odoo"
@@ -450,11 +498,18 @@ def register(app: FastAPI) -> None:
         except (OdooError, httpx.HTTPError, OSError, ValueError):
             log.info("plugins: an admin's Odoo check failed (%s)", env)
             return back(request, to, err="odoo_bad")
-        await run_in_threadpool(sales.save_settings, s, {"odoo_url": url, "odoo_db": db}, env)
+        was = sales.settings(s, env)
+        vals: dict[str, Any] = {"odoo_url": url, "odoo_db": db}
+        if ((was["odoo_url"] or "").rstrip("/"), was["odoo_db"]) != (url, db):
+            # another database has other ids: the product Belfry made in the old one is not here
+            vals.update(ticket_product_auto=None, ticket_product_refused=False)
+            if was["ticket_product"] and was["ticket_product"] == was["ticket_product_auto"]:
+                vals["ticket_product"] = None
+        await run_in_threadpool(sales.save_settings, s, vals, env)
         if typed:
             await run_in_threadpool(sales.set_secret, s, "odoo_api_key", key, env)
         log.info("plugins: %s set the Odoo connection (%s)", me["name"] or "an admin", env)
-        return back(request, to, msg="odoo_ok")
+        return back(request, to, msg=await ticket_product(s, env, "odoo_ok"))
 
     @app.post("/console/plugins/odoo/{env}/picks")
     async def odoo_picks(request: Request, env: str):
@@ -478,6 +533,7 @@ def register(app: FastAPI) -> None:
                 "company": num("company"),
                 "odoo_products": products,
                 "ticket_product": num("ticket_product"),
+                "ticket_product_refused": False,
                 "tax_included": num("tax_included"),
                 "tax_excluded": num("tax_excluded"),
                 "card_journal": num("card_journal"),
@@ -485,7 +541,7 @@ def register(app: FastAPI) -> None:
             },
             env,
         )
-        return back(request, to, msg="picks")
+        return back(request, to, msg=await ticket_product(s, env, "picks"))
 
     @app.post("/console/plugins/clear")
     async def clear(request: Request):

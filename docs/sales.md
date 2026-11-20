@@ -56,7 +56,8 @@ set.
 - **Event tickets** (on `/sales`): the switch "Sell event tickets through the checkout"
   (setting `tickets`, off by default) and "Where people buy tickets" (setting `checkout_url`);
   on Plugins → Odoo, "Event tickets are invoiced as" (setting `ticket_product`, one per
-  environment). See §10.
+  environment; with nothing picked Belfry finds or makes a service product "Event ticket" in
+  that Odoo and shows it selected). See §10.
 - **Products**: id (slug), name, description, pass tier, role, valid from / until (the pass's
   dates), prices `[{until?: date, amount}]` in order (the first whose `until` hasn't passed
   applies; amount = price excluding VAT for organisations, including VAT for people — the same
@@ -476,6 +477,12 @@ Everything above runs against fakes in the tests. Unproven until tried live:
   `res.partner` in that Odoo version, the note printing on the invoice PDF, `=ilike` on
   `res.country.state`, and whether an automatic fiscal position remaps the explicit
   `tax_ids` Belfry sends for a foreign contact.
+- The product for event tickets (§10): `product.product` created over JSON-2 with `name`,
+  `type: "service"`, `sale_ok`, `purchase_ok`, `list_price`, `taxes_id: [[6, 0, []]]` (Odoo 19:
+  `type` is the field; older versions used `detailed_type`); that a user without the right
+  gets a 4xx (403); that a search on `product.product` by `name` / `type` / `sale_ok` /
+  `company_id` works and leaves archived products out; an invoice line with an empty
+  `tax_ids` staying untaxed (no default tax put back by Odoo).
 - The browser key binding (Keycast patch 0022) and an EPC QR read by real banking apps.
 
 ## 9. Testing with testers: the test environment (2026-11-18)
@@ -560,11 +567,52 @@ person and the hosts. A **tester's** order (§9: the checkout's e-mail is a test
 address) goes through while the switch is off, provided the test environment can sell tickets
 (else 409 `test_not_set_up`).
 
-**What must be set** (per environment): the Odoo connection, both VAT taxes, Stripe or the bank
-details, and the Odoo product a ticket is invoiced as: "Event tickets are invoiced as" on
-Plugins → Odoo (`ticket_product`), else the server's `ACCOUNTING_PRODUCTS` fallback (`ticket`
-or `*`), else the one Odoo product every Belfry product is invoiced as when they all share
-one. Missing → 409 `cannot_sell`.
+**What must be set** (per environment): the Odoo connection, Stripe or the bank details, and
+the VAT tax the sale uses (below). Missing → 409 `cannot_sell` (a tester's order: 409
+`test_not_set_up`), whose `message` names what is missing and where in the console.
+
+**The Odoo product a ticket is invoiced as is never what blocks a sale** (Xavier, 2026-11-20).
+It is, in this order: the admin's pick, "Event tickets are invoiced as" on Plugins → Odoo
+(`ticket_product`); the server's `ACCOUNTING_PRODUCTS` fallback (`ticket` or `*`); the one Odoo
+product every Belfry product is invoiced as when they all share one. When none of these gives
+a product, or the one they give no longer exists in Odoo (deleted or archived), Belfry makes
+sure one exists (`salesodoo.ensure_ticket_product`), per environment:
+
+1. the product it found or made earlier in this Odoo (setting `ticket_product_auto`), while it
+   still exists;
+2. else a product for sale of type service named exactly `Event ticket` (in the picked
+   company or shared);
+3. else it **creates** one: `product.product` with `name: "Event ticket"`, `type: "service"`,
+   `sale_ok: true`, `purchase_ok: false`, `list_price: 0`, `taxes_id: []` (no default tax). The
+   invoice line carries the ticket's own name ("<ticket> · <event>"), price and tax, so
+   invoices look the same as with a picked product.
+
+What it finds or makes is saved as `ticket_product` (and `ticket_product_auto`), so Plugins →
+Odoo shows it selected under "Event tickets are invoiced as", with a line saying Belfry made
+it. An admin's explicit pick always wins; picking "— Belfry's own “Event ticket” —" (nothing)
+gives Belfry's own back. **When**: at the first ticket checkout that finds no product
+(`ticketsales.prepare`, before the order is made), again with every ticket invoice (which
+also checks that the product still exists: one read), and when an admin saves the Odoo
+connection ("Check") or its picks. Opening a page or reading an event creates nothing. Saving
+the connection with another URL or database forgets `ticket_product_auto` (another database
+has other ids).
+
+**If Odoo refuses to create the product** (its API key's user may not create products; Odoo
+answers 4xx): the setting `ticket_product_refused` is kept, the checkout answers 409
+`cannot_sell` with "Odoo did not let Belfry create the product “Event ticket” …: create a
+service product in Odoo and pick it …", `can_pay` is false, and Plugins → Odoo says the same.
+Odoo is asked again at most every 5 minutes at a checkout, and at once when an admin saves the
+connection or the picks; a pick clears it. Odoo not answering (down) is no refusal: a card
+order is taken, and the product is made with its invoice.
+
+**The VAT taxes are never created by Belfry**, and only the one a sale uses is required:
+
+- a ticket with a `vat` tag bought by a person needs "VAT for people (price includes it)"
+  (`tax_included`); bought by an organisation it needs "VAT for organisations (on top)"
+  (`tax_excluded`). The missing one is named in the refusal. `can_pay` asks for the people's.
+- a ticket **without** a `vat` tag needs none: when the tax its buyer's kind would use is not
+  picked, the invoice line carries no tax (`tax_ids: []`) and Odoo's total is Belfry's. When
+  that tax is picked, it is used as before (next section).
 
 **`POST /checkout`** takes `"ticket": "<the 30402's d tag>"` instead of `product`, e.g.
 `"h9ptvr:day0128"` (the part before the first `:` is the event's d). Everything else is as in
@@ -605,10 +653,11 @@ fixed on the order. VAT follows the ticket's `vat` tag:
   (§4). The sums are made the way Odoo makes them, so an organisation paying a price that
   includes VAT can differ by one cent from the ticket's price (net rounded, then VAT on it).
 - No `vat` tag: Belfry's total is the price, with no VAT in its own sum, as for a product
-  whose VAT rate is 0. The invoice still uses the console's two taxes (they are never chosen
-  per sale): for a person Odoo finds the VAT inside the same total; for an organisation Odoo
-  adds it on top, so Odoo's total is higher, the order follows Odoo's for a `pay: invoice`
-  order and is flagged `odoo_total` (a card order is paid at Belfry's total and flagged).
+  whose VAT rate is 0. The invoice uses the console's tax for that kind of buyer **when it is
+  picked** (they are never chosen per sale): for a person Odoo finds the VAT inside the same
+  total; for an organisation Odoo adds it on top, so Odoo's total is higher, the order follows
+  Odoo's for a `pay: invoice` order and is flagged `odoo_total` (a card order is paid at
+  Belfry's total and flagged). When that tax is not picked, the line has no tax at all.
   **Hosts selling to organisations should state the VAT on the ticket.**
 - The rate on the ticket is not checked against the rate of the Odoo taxes: when they differ,
   Odoo's total differs and the order is flagged `odoo_total`.
@@ -652,7 +701,9 @@ ticket of this event before this order was paid: refund one).
 **`GET /events/<link>`** (docs/checkin.md): each ticket has `left` (places, counting the
 orders that hold one; null when unlimited), `can_pay` (this viewer could buy it through the
 checkout now: priced, on sale, in the sales currency, not `closed`, places left, the event not
-over, allowed for them when it is members-only, tickets can be invoiced, and the switch is on
+over, allowed for them when it is members-only, tickets can be invoiced (Odoo connected, the
+tax a person's invoice needs picked when the ticket states VAT, Odoo did not refuse to let
+Belfry make the product, a way to pay), and the switch is on
 **or** the viewer is a tester with the test environment set up; without a viewer: the switch)
 and `checkout_url` (below; null when `can_pay` is false or no template is set).
 `needs_payment` is unchanged. `POST /events/<d>/join` on a priced ticket stays 409 `payment`,

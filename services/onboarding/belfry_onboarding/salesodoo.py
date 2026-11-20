@@ -272,6 +272,85 @@ def _create_partner(
     raise AssertionError("unreachable")
 
 
+# ── the product event tickets are invoiced as ───────────────────────────────────────────────
+TICKET_PRODUCT = "Event ticket"
+
+
+def _product_alive(remote: Json2Client, product: int) -> bool:
+    """Whether the product still exists in Odoo and is not archived (Odoo's searches leave
+    archived records out by themselves)."""
+    return bool(remote.search_read("product.product", [["id", "=", int(product)]], ["id"], limit=1))
+
+
+def ensure_ticket_product(
+    svc: Services, env: str = "live", remote: Json2Client | None = None
+) -> int:
+    """The Odoo product of ENV an event ticket's invoice line uses, made sure to exist
+    (docs/sales.md §10). An admin's pick (or the server's fallback) wins while it exists in
+    Odoo. Otherwise, in this order: the product Belfry found or made earlier (remembered as
+    ``ticket_product_auto``), a service product for sale named exactly "Event ticket", a new
+    one made now. What is found or made is saved as the setting ``ticket_product``, so the
+    console's pick-list shows it selected.
+
+    Odoo refusing to create the product (its API key's user has no right to) raises
+    ``sales.Refused`` and is remembered (``ticket_product_refused``) until a product is found,
+    made or picked; Odoo not answering raises as it is (the caller tries again later)."""
+    from . import sales, ticketsales
+
+    st = sales.settings(svc, env)
+    remote = remote or client_for(svc, env)
+    tried: set[int] = set()
+    for cand in (ticketsales.odoo_product(st), st["ticket_product_auto"]):
+        if not cand or int(cand) in tried:
+            continue
+        tried.add(int(cand))
+        if _product_alive(remote, int(cand)):
+            if int(cand) != st["ticket_product"] and cand == st["ticket_product_auto"]:
+                sales.save_settings(
+                    svc, {"ticket_product": int(cand), "ticket_product_refused": False}, env
+                )
+            return int(cand)
+    company = st["company"]
+    scope = [["company_id", "in", [int(company), False]]] if company else []
+    rows = remote.search_read(
+        "product.product",
+        [["name", "=", TICKET_PRODUCT], ["type", "=", "service"], ["sale_ok", "=", True], *scope],
+        ["id"],
+        limit=1,
+    )
+    if rows:
+        found = int(rows[0]["id"])
+    else:
+        try:
+            found = int(
+                remote.create(
+                    "product.product",
+                    {
+                        "name": TICKET_PRODUCT,
+                        "type": "service",
+                        "sale_ok": True,
+                        "purchase_ok": False,
+                        # the invoice line carries the ticket's own name, price and tax
+                        "list_price": 0.0,
+                        "taxes_id": [[6, 0, []]],
+                    },
+                )
+            )
+        except OdooError as exc:
+            if not _refused(exc):
+                raise
+            sales.save_settings(svc, {"ticket_product_refused": True}, env)
+            log.warning("sales: Odoo (%s) refused to create the product for event tickets", env)
+            raise sales.Refused("Odoo refused to create the product for event tickets") from exc
+        log.info("sales: made the product for event tickets in Odoo (%s)", env)
+    sales.save_settings(
+        svc,
+        {"ticket_product": found, "ticket_product_auto": found, "ticket_product_refused": False},
+        env,
+    )
+    return found
+
+
 @_guard
 def make_invoice(svc: Services, o: dict[str, Any]) -> None:
     """The order's posted invoice: its number, communication and totals read back."""
@@ -296,12 +375,14 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
             or st["fallback_products"].get(o["tier"])
             or st["fallback_products"].get("*")
         )
-        if o.get("ticket"):  # an event ticket: the product picked for tickets (or the fallback)
-            from . import ticketsales
-
-            product = ticketsales.odoo_product(st)
         tax = st["tax_excluded"] if org else st["tax_included"]
-        if not product or not tax:
+        untaxed = False
+        if o.get("ticket"):
+            # an event ticket: the product picked for tickets (or the fallback), else the one
+            # Belfry finds or makes ("Event ticket"); a ticket that states no VAT needs no tax
+            product = ensure_ticket_product(svc, env, remote)
+            untaxed = not tax and not float(o.get("vat_rate") or 0)
+        if not product or not (tax or untaxed):
             raise sales.Refused("no Odoo product or tax picked for this product")
         vals: dict[str, Any] = {
             "move_type": "out_invoice",
@@ -317,7 +398,7 @@ def make_invoice(svc: Services, o: dict[str, Any]) -> None:
                         "quantity": 1,
                         "price_unit": o["unit"] / 100,
                         "discount": float(o["total"]["percent_off"]),
-                        "tax_ids": [[6, 0, [int(tax)]]],
+                        "tax_ids": [[6, 0, [int(tax)] if tax else []]],
                     },
                 ]
             ],

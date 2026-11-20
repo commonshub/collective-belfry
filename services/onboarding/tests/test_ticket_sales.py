@@ -13,7 +13,7 @@ import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import events, guests, mailer, sales, testers, ticketsales
+from belfry_onboarding import events, guests, mailer, sales, salesodoo, testers, ticketsales
 from belfry_onboarding.app import create_app
 
 from .test_events import GROUP, D, World, make_event
@@ -270,10 +270,14 @@ def test_what_the_checkout_refuses(fair):
         assert r.json()["total"] == {"net": 33.06, "vat": 6.94, "gross": 40.0, "percent_off": 0}
         # a member buys a members' ticket
         assert order(c, bob, ticket=f"{D}:mem", email="bob@example.org").status_code == 201
-        # no Odoo product for tickets: nothing can be sold
+        # no Odoo product for tickets and Odoo won't let Belfry make one: nothing can be sold
         sales.save_settings(rsvc, {"ticket_product": None, "odoo_products": {"a": 1, "b": 2}})
-        assert err(c, f"{D}:now", key=PrivateKey()) == (409, "cannot_sell")
-        sales.save_settings(rsvc, {"ticket_product": 1})
+        _l.refuse_create = {"product.product"}
+        r = order(c, PrivateKey(), ticket=f"{D}:now")
+        assert (r.status_code, r.json()["error"]) == (409, "cannot_sell")
+        assert "did not let Belfry create the product" in r.json()["message"]
+        _l.refuse_create = set()
+        sales.save_settings(rsvc, {"ticket_product": 1, "ticket_product_refused": False})
         # a cancelled event sells nothing
         w.put(ada, 1985, [["h", GROUP], ["L", events.STATUS_NS], ["l", "cancelled"]])
         assert err(c, f"{D}:now", key=PrivateKey()) == (409, "event_over")
@@ -324,10 +328,14 @@ def test_a_tester_buys_while_the_switch_is_off(fair, keycast):
     # the test environment not set up: never production instead
     testers.add_tester(rsvc, "tom@example.org", "Tom")
     sales.save_settings(rsvc, {"ticket_product": None, "odoo_products": {}}, "test")
+    test_odoo.refuse_create = {"product.product"}
     with TestClient(create_app(rsvc)) as c:
         r = order(c, PrivateKey(), email="tom@example.org")
         assert r.status_code == 409 and r.json()["error"] == "test_not_set_up"
         assert "Plugins → " in r.json()["message"] and "Test" in r.json()["message"]
+    # production was never asked to make a product for a tester's order
+    assert sales.settings(rsvc)["ticket_product"] == 1
+    assert len(live_odoo.records["product.product"]) == 1
 
 
 def test_places_sold_out_and_freed_when_an_order_expires(fair):
@@ -428,8 +436,11 @@ def test_can_pay_left_and_checkout_url_in_the_events_api(fair):
         # an unpaid order holds a place
         assert order(c, PrivateKey()).status_code == 201
         assert seen(c)["day"]["left"] == 2
-        # Odoo can't invoice tickets: not payable
+        # no product picked for tickets: still payable (Belfry makes one at the first sale)…
         sales.save_settings(rsvc, {"ticket_product": None, "odoo_products": {"a": 1, "b": 2}})
+        assert seen(c)["day"]["can_pay"] is True
+        # …unless Odoo refused to let Belfry make it
+        sales.save_settings(rsvc, {"ticket_product_refused": True})
         assert seen(c)["day"]["can_pay"] is False
 
 
@@ -549,3 +560,175 @@ def test_a_buyer_whose_address_is_an_accounts_gets_the_ticket_there(fair, keycas
     assert [p["state"] for p in old] == ["revoked"]
     mine = rsvc.odoo.search_read("belfry.pass", [["partner_id", "=", bob_id]], ["tier"])
     assert len(mine) == 1  # a member needs no guest pass, and got no second pass
+
+
+# ── no product picked for tickets: Belfry finds or makes "Event ticket" in Odoo ─────────────
+def unpick(rsvc, env="live"):
+    sales.save_settings(rsvc, {"ticket_product": None, "odoo_products": {"a": 1, "b": 2}}, env)
+    ticketsales._prepared.clear()
+
+
+def test_no_ticket_product_picked_one_is_made_at_the_first_sale(fair, keycast):
+    rsvc, w, ada, live_odoo, test_odoo, _made = fair
+    tk(w, ada, "day", "Day ticket", ["price", "50", "EUR"], ["vat", "21"])
+    sales.save_settings(rsvc, {"tickets": True})
+    unpick(rsvc)
+    products = live_odoo.records["product.product"]
+    with TestClient(create_app(rsvc)) as c:
+        # reading the event creates nothing
+        got = call(c, PrivateKey(), f"/events/{D}", method="GET").json()
+        assert got["tickets"][0]["can_pay"] is True and len(products) == 1
+        r = order(c, PrivateKey(), pay="invoice")
+        assert r.status_code == 201 and r.json()["state"] == "invoiced", r.text
+    made = products[2]
+    assert made["name"] == "Event ticket" and made["type"] == "service"
+    assert made["sale_ok"] is True and made["purchase_ok"] is False
+    assert made["list_price"] == 0.0 and made["taxes_id"] == [[6, 0, []]]
+    st = sales.settings(rsvc)
+    assert st["ticket_product"] == 2 and st["ticket_product_auto"] == 2
+    line = live_odoo.records["account.move"][1]["invoice_line_ids"][0][2]
+    assert line["product_id"] == 2 and line["name"] == "Day ticket · Garden day"
+    # the test environment was not touched, and a second sale makes no second product
+    assert len(test_odoo.records["product.product"]) == 1
+    with TestClient(create_app(rsvc)) as c:
+        assert order(c, PrivateKey(), pay="invoice", email="b@example.org").status_code == 201
+    assert len(products) == 2
+
+
+def test_an_existing_event_ticket_product_is_found_and_a_pick_wins(fair, keycast):
+    rsvc, w, ada, live_odoo, _t, _made = fair
+    tk(w, ada, "day", "Day ticket", ["price", "50", "EUR"], ["vat", "21"])
+    sales.save_settings(rsvc, {"tickets": True})
+    unpick(rsvc)
+    products = live_odoo.records["product.product"]
+    live_odoo.add("product.product", name="Event ticket", type="consu", sale_ok=True)  # goods
+    mine = live_odoo.add("product.product", name="Event ticket", type="service", sale_ok=True)
+    assert salesodoo.ensure_ticket_product(rsvc) == mine and len(products) == 3
+    # an admin's pick wins while it exists
+    sales.save_settings(rsvc, {"ticket_product": 1})
+    assert salesodoo.ensure_ticket_product(rsvc) == 1
+    assert sales.settings(rsvc)["ticket_product"] == 1
+    # archived or deleted in Odoo: back to Belfry's own, remembered
+    del products[1]
+    assert salesodoo.ensure_ticket_product(rsvc) == mine
+    assert sales.settings(rsvc)["ticket_product"] == mine
+    # and when that one is gone too, a new one is made, at the invoice
+    del products[mine]
+    with TestClient(create_app(rsvc)) as c:
+        r = order(c, PrivateKey(), pay="invoice")
+        assert r.status_code == 201 and r.json()["state"] == "invoiced", r.text
+    new = sales.settings(rsvc)["ticket_product"]
+    assert products[new]["name"] == "Event ticket" and products[new]["purchase_ok"] is False
+    assert live_odoo.records["account.move"][1]["invoice_line_ids"][0][2]["product_id"] == new
+
+
+def test_odoo_refusing_the_product_is_said_and_asked_again_later(fair, keycast):
+    rsvc, w, ada, live_odoo, _t, _made = fair
+    tk(w, ada, "day", "Day ticket", ["price", "50", "EUR"], ["vat", "21"])
+    sales.save_settings(rsvc, {"tickets": True})
+    unpick(rsvc)
+    live_odoo.refuse_create = {"product.product"}
+    with TestClient(create_app(rsvc)) as c:
+        r = order(c, PrivateKey())
+        assert r.status_code == 409 and r.json()["error"] == "cannot_sell"
+        assert "did not let Belfry create the product “Event ticket”" in r.json()["message"]
+        assert sales.settings(rsvc)["ticket_product_refused"] is True
+        assert sales.store(rsvc).orders() == []
+        got = call(c, PrivateKey(), f"/events/{D}", method="GET").json()
+        assert got["tickets"][0]["can_pay"] is False
+        # Odoo is not asked at every checkout
+        live_odoo.refuse_create = set()
+        n = len(live_odoo.calls)
+        assert order(c, PrivateKey()).status_code == 409 and len(live_odoo.calls) == n
+        # later (or once an admin saved the connection or the picks): made
+        ticketsales._prepared.clear()
+        assert order(c, PrivateKey()).status_code == 201
+    st = sales.settings(rsvc)
+    assert st["ticket_product"] == 2 and st["ticket_product_refused"] is False
+
+
+def test_odoo_down_at_the_first_sale_the_product_is_made_with_the_invoice(fair, keycast):
+    rsvc, w, ada, live_odoo, _t, _made = fair
+    tk(w, ada, "day", "Day ticket", ["price", "50", "EUR"], ["vat", "21"])
+    sales.save_settings(rsvc, {"tickets": True})
+    unpick(rsvc)
+    live_odoo.down = True
+    with TestClient(create_app(rsvc)) as c:
+        got = order(c, PrivateKey()).json()  # by card: Odoo is not needed yet
+        assert got["state"] == "pending" and got["card_url"]
+        live_odoo.down = False
+        assert pay_card(c, got, 6050, "evt_d1").json()["result"] == "paid"
+    o = sales.store(rsvc).order(got["order"])
+    assert o["state"] == "active" and o["invoice"]["number"]
+    assert sales.settings(rsvc)["ticket_product"] == 2
+
+
+def test_a_ticket_without_vat_needs_no_tax_picked(fair, keycast):
+    rsvc, w, ada, live_odoo, _t, _made = fair
+    tk(w, ada, "day", "Day ticket", ["price", "50", "EUR"])
+    tk(w, ada, "vat", "With VAT", ["price", "50", "EUR"], ["vat", "21"])
+    sales.save_settings(rsvc, {"tickets": True, "tax_included": None, "tax_excluded": None})
+    with TestClient(create_app(rsvc)) as c:
+        got = call(c, PrivateKey(), f"/events/{D}", method="GET").json()
+        can = {t["id"]: t["can_pay"] for t in got["tickets"]}
+        assert can == {"day": True, "vat": False}
+        r = order(c, PrivateKey(), pay="invoice")
+        assert r.status_code == 201 and r.json()["state"] == "invoiced", r.text
+        assert r.json()["total"] == {"net": 50.0, "vat": 0.0, "gross": 50.0, "percent_off": 0}
+        line = live_odoo.records["account.move"][1]["invoice_line_ids"][0][2]
+        assert line["tax_ids"] == [[6, 0, []]] and line["price_unit"] == 50.0
+        assert "odoo_total" not in sales.store(rsvc).order(r.json()["order"])["flags"]
+        # a ticket that states VAT needs the tax of its buyer's kind, and says which
+        r = order(c, PrivateKey(), ticket=f"{D}:vat", email="v@example.org")
+        assert r.status_code == 409 and r.json()["error"] == "cannot_sell"
+        assert "VAT for people (price includes it)" in r.json()["message"]
+        sales.save_settings(rsvc, {"tax_included": 10})
+        assert order(c, PrivateKey(), ticket=f"{D}:vat", email="v@example.org").status_code == 201
+        r = order(c, PrivateKey(), ticket=f"{D}:vat", email="o@example.org", billing=ORG)
+        assert r.status_code == 409 and "VAT for organisations (on top)" in r.json()["message"]
+    # both picked: a ticket without VAT is invoiced with them, as before
+    sales.save_settings(rsvc, {"tax_excluded": 11})
+    with TestClient(create_app(rsvc)) as c:
+        r = order(c, PrivateKey(), pay="invoice", email="w@example.org")
+        assert r.status_code == 201
+    moves = live_odoo.records["account.move"]
+    assert moves[max(moves)]["invoice_line_ids"][0][2]["tax_ids"] == [[6, 0, [10]]]
+
+
+def test_saving_the_odoo_connection_or_the_picks_makes_the_product(fair, world, monkeypatch):
+    rsvc, _w, _ada, live_odoo, test_odoo, _made = fair
+    rsvc.settings.pass_page_oidc_client_secret = "pass-secret"
+    rsvc.settings.pass_page_secret = "p" * 32
+    monkeypatch.setattr(salesodoo, "check_connection", lambda url, db, key: [{"id": 1}])
+    unpick(rsvc)
+    unpick(rsvc, "test")
+    with TestClient(create_app(rsvc), base_url="https://belfry.belfry.test") as c:
+        signed_in(c, rsvc, world[4])
+        # the page itself makes nothing
+        page = c.get("/plugins/odoo", headers=H).text
+        assert "Belfry makes a service product “Event ticket”" in page
+        assert len(live_odoo.records["product.product"]) == 1
+        post(c, "/plugins/odoo/live", url="https://xl.odoo.test", db="xl", key="")
+        st = sales.settings(rsvc)
+        assert st["ticket_product"] == 2 == st["ticket_product_auto"]
+        assert len(test_odoo.records["product.product"]) == 1  # the other environment: not
+        page = c.get("/plugins/odoo", headers=H).text
+        assert '<option value="2" selected>Event ticket</option>' in page
+        assert "Belfry found or made the service product “Event ticket”" in page
+        # an explicit pick wins; picking nothing gives Belfry's own back
+        post(c, "/plugins/odoo/live/picks", ticket_product="1", tax_included="10")
+        assert sales.settings(rsvc)["ticket_product"] == 1
+        post(c, "/plugins/odoo/live/picks", ticket_product="", tax_included="10")
+        assert sales.settings(rsvc)["ticket_product"] == 2
+        assert len(live_odoo.records["product.product"]) == 2
+        # the test environment: Odoo refuses, and the page says so
+        test_odoo.refuse_create = {"product.product"}
+        r = post(c, "/plugins/odoo/test/picks", tax_included="10", tax_excluded="11")
+        assert r.status_code == 303
+        page = c.get("/plugins/odoo", headers=H).text
+        assert "Odoo did not let Belfry create the product “Event ticket”" in page
+        assert sales.settings(rsvc, "test")["ticket_product"] is None
+        # another database: what Belfry made in the old one is forgotten
+        test_odoo.refuse_create = set()
+        post(c, "/plugins/odoo/live", url="https://xl.odoo.test", db="xl-new", key="")
+        assert sales.settings(rsvc)["ticket_product"] == 2  # found again by its name
