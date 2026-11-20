@@ -215,7 +215,8 @@ currency}` or null) and `needs_payment`. The public page shows the price instead
 Belfry takes the money for a ticket only when the belfry's admins turned on "Sell event tickets
 through the checkout" (docs/sales.md §10; off by default) and the price is in the sales currency
 (`EUR`): the ticket is then bought with `POST /api/v1/checkout {"ticket": "<the ticket's d
-tag>", …}`, by card or against an invoice, and the paid order admits the buyer with the same
+tag>", …}`, by card or by bank transfer (against an invoice when the belfry has an Odoo
+connected, else with Belfry's own receipt: docs/sales.md §11), and the paid order admits the buyer with the same
 9000 (`["paid", "paid"]`, `["by", "checkout"]`, by the groups key; `["paid", "offer"]` when an
 approved request covered all of the price, docs/sales.md §10). Otherwise (the switch off,
 a price in hours or in an own label, a `closed` ticket) the person and the host settle it
