@@ -90,7 +90,7 @@ def _latest(svc: Services) -> tuple[dict[str, Any], int]:
 # What the apps draw on, per mode: the page and the raised surface (sheets, cards, bars).
 GROUNDS = {"light": ("#ffffff", "#f2f2f7"), "dark": ("#000000", "#1c1c1e")}
 TEXT_CONTRAST = 4.5  # words and icons in the accent, on the page (WCAG AA)
-SURFACE_CONTRAST = 3.0  # the same on a raised surface
+SURFACE_CONTRAST = 4.5  # the same on a raised surface: text buttons, sheets and bars sit there
 
 
 def _rgb(color: str) -> tuple[int, int, int]:

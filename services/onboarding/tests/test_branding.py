@@ -149,7 +149,7 @@ def test_the_accent_reads_in_both_modes():
     got = branding.colors("#2b3a31", "")
     assert got["light"]["accent"] == "#2b3a31"
     assert branding.contrast(got["dark"]["accent"], "#000000") >= 4.5
-    assert branding.contrast(got["dark"]["accent"], "#1c1c1e") >= 3.0
+    assert branding.contrast(got["dark"]["accent"], "#1c1c1e") >= 4.5
     # a pale primary: darkened for the light mode, itself in the dark one
     got = branding.colors("#ffe98a", "")
     assert got["dark"]["accent"] == "#ffe98a" and got["dark"]["on_accent"] == "#111111"
@@ -161,4 +161,4 @@ def test_the_accent_reads_in_both_modes():
     for primary in ("#000000", "#ffffff", "#808080", "#ff0000", "#0000ff", "#00ff00"):
         for mode, (page, surface) in branding.GROUNDS.items():
             a = branding.colors(primary, "")[mode]["accent"]
-            assert branding.contrast(a, page) >= 4.5 and branding.contrast(a, surface) >= 3.0
+            assert branding.contrast(a, page) >= 4.5 and branding.contrast(a, surface) >= 4.5
