@@ -186,7 +186,7 @@ def test_every_history_case(v):
         assert rumor["kind"] == sealed.HISTORY and rumor["pubkey"] == case["expected"]["sharer"]
         assert seal["pubkey"] == case["expected"]["seal_pubkey"]
         assert sealed.accept(chain, seal, rumor)
-        got = [r["id"] for r in sealed.shared_rumors(rumor)]
+        got = [r["id"] for r in sealed.shared_rumors(rumor, case["receiver"])]
         assert got == case["expected"]["added_ids"], case["name"]
 
 
@@ -356,18 +356,24 @@ def test_mail_to_a_member_without_a_chain_goes_as_before(m):
     assert mail.unwrap(ANA.secret, wrap)[0] == BELFRY_PUB
 
 
-def test_a_relay_that_does_not_answer_the_chain_question_does_not_stop_the_mail(m, monkeypatch):
+def test_a_relay_that_does_not_answer_the_chain_question_puts_the_mail_off(m, monkeypatch):
+    """Never delivered unsealed because of a failure: 451, the sending server tries again."""
     publish_chain(m, ready=True)
+    real = m.relay.query
 
     def down(filters, sign):
         raise RuntimeError("relay down")
 
     monkeypatch.setattr(m.relay, "query", down)
-    assert sealed.chain_for(m, ANA_PUB) is None  # never raises
+    assert sealed.chain_for(m, ANA_PUB) is None  # the lenient reader never raises
     with pytest.raises(RuntimeError):
         sealed.chain_for(m, ANA_PUB, strict=True)
+    code, text = deliver(m)
+    assert code == 451 and "try again" in text
+    assert not [e for e in m.relay.events if e["kind"] == 1059]  # nothing went out unsealed
+    monkeypatch.setattr(m.relay, "query", real)  # the next try of the sending server
     assert deliver(m)[0] == 250
-    assert the_wrap(m)["tags"] == [["p", ANA_PUB]]  # as before sealing
+    assert ["lb", pub(LB)] in the_wrap(m)["tags"]
 
 
 def test_the_chain_is_read_as_the_belfry_and_kept_a_minute(m, monkeypatch):
@@ -389,9 +395,27 @@ def test_the_chain_is_read_as_the_belfry_and_kept_a_minute(m, monkeypatch):
     assert sealed.chain_for(m, "nonsense") is None
 
 
-def test_a_sealed_mail_too_big_for_a_seal_goes_to_blossom(m, monkeypatch):
-    """A sealed rumor is at most 40 000 bytes of JSON: over it, the Blossom route, although the
-    unsealed limit (60 kB of mail) is not reached."""
+def sized(m, monkeypatch, total: int) -> bytes:
+    """A mail whose kind 1301 rumor is exactly TOTAL bytes of JSON (ids and times have a fixed
+    width, so a mail one letter longer gives a rumor one byte longer)."""
+    made = []
+    real = mail.mail_rumor
+    monkeypatch.setattr(mail, "mail_rumor", lambda *a: made.append(real(*a)) or made[-1])
+    assert deliver(m, message(body="x" * 100))[0] == 250
+    monkeypatch.setattr(mail, "mail_rumor", real)
+    m.relay.events[:] = [e for e in m.relay.events if e["kind"] != 1059]
+    mail._counts.clear()
+    return message(body="x" * (100 + total - len(sealed.rumor_json(made[0]).encode())))
+
+
+@pytest.mark.parametrize("ready", [True, False, None])
+def test_a_rumor_of_40_000_bytes_stays_inline_and_one_byte_more_goes_to_blossom(
+    m, monkeypatch, ready
+):
+    """The ceiling of a gift wrap, sealed or not (the unsealed path used to fail between about
+    40 and 60 kB: the seal no longer fitted NIP-44)."""
+    import base64
+
     from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     stored = {}
@@ -401,22 +425,40 @@ def test_a_sealed_mail_too_big_for_a_seal_goes_to_blossom(m, monkeypatch):
         return [["imeta", "url https://blossom.belfry.test/abc", "m application/octet-stream"]]
 
     monkeypatch.setattr(drops, "upload", upload)
-    publish_chain(m, ready=True)
-    raw = message(body="line of text\r\n" * 3200)  # 45 kB, and more once the line ends are escaped
-    assert 40_000 < len(raw) < mail.INLINE
-    assert deliver(m, raw)[0] == 250
-    seal, rumor = sealed.open_sealed(LB.secret, the_wrap(m))
-    assert rumor["content"] == "" and mail.tag(rumor, "encryption-algorithm") == "aes-gcm"
-    import base64
+    if ready is not None:
+        publish_chain(m, ready=ready)
 
+    def opened():
+        wrap = the_wrap(m)
+        if ready:
+            return sealed.open_sealed(LB.secret, wrap)[1]
+        return mail.unwrap(ANA.secret, wrap)[1]
+
+    raw = sized(m, monkeypatch, 40_000)
+    assert len(raw) < mail.INLINE
+    assert deliver(m, raw)[0] == 250
+    rumor = opened()
+    assert len(sealed.rumor_json(sealed.with_id(rumor)).encode()) == 40_000
+    assert rumor["content"] == raw.decode() and not stored
+
+    m.relay.events[:] = [e for e in m.relay.events if e["kind"] != 1059]
+    raw += b"x"  # one byte over
+    assert deliver(m, raw)[0] == 250
+    rumor = opened()
+    assert rumor["content"] == "" and mail.tag(rumor, "encryption-algorithm") == "aes-gcm"
     key = base64.b64decode(mail.tag(rumor, "decryption-key"))
     nonce = base64.b64decode(mail.tag(rumor, "decryption-nonce"))
     assert AESGCM(key).decrypt(nonce, stored["blob"], None) == raw
-    # a small one stays inline
-    m.relay.events[:] = [e for e in m.relay.events if e["kind"] != 1059]
-    stored.clear()
-    assert deliver(m, message(body="x" * 20_000))[0] == 250
-    assert sealed.open_sealed(LB.secret, the_wrap(m))[1]["content"] and not stored
+
+
+def test_a_mail_between_40_and_60_kb_is_delivered(m, monkeypatch):
+    monkeypatch.setattr(
+        drops, "upload", lambda svc, files: [["imeta", "url https://blossom.belfry.test/abc"]]
+    )
+    for size in (41_000, 50_000, 59_000):
+        m.relay.events[:] = []
+        assert deliver(m, message(body="line of text\r\n" * (size // 14)))[0] == 250
+        assert mail.unwrap(ANA.secret, the_wrap(m))[1]["content"] == ""
 
 
 # ── mail out, sealed by a device ────────────────────────────────────────────────────────────
@@ -575,13 +617,85 @@ def test_a_device_speaks_only_for_its_own_account(m, sent):
     assert not sent
 
 
-def test_a_signer_or_relay_that_does_not_answer_leaves_the_mail_for_later(m, sent, monkeypatch):
+@pytest.fixture
+def later(monkeypatch):
+    """What take_wrap put off: (seconds, call), instead of a timer."""
+    put_off = []
+    monkeypatch.setattr(mail, "_later", lambda seconds, call: put_off.append((seconds, call)))
+    return put_off
+
+
+def test_a_signer_that_does_not_answer_puts_a_device_sealed_mail_off(m, sent, later, monkeypatch):
+    publish_chain(m, ready=True)
+    session(m, PHONE)
+    real = m.keycast.list_sessions
+    monkeypatch.setattr(m.keycast, "list_sessions", lambda token: 1 / 0)
+    with pytest.raises(mail.Later):  # no refusal
+        mail.handle_wrap(m, out_wrap(PHONE))
+    wrap = out_wrap(PHONE)
+    mail.take_wrap(m, wrap)
+    assert not sent and not [e for e in m.relay.events if e["kind"] == 7679]
+    # 30 s, 2 min, 10 min, then every 30 min
+    waits = []
+    for _ in range(6):
+        [(seconds, again)] = later
+        later.clear()
+        waits.append(seconds)
+        again()
+    assert waits == [30, 120, 600, 1800, 1800, 1800] and not sent
+    monkeypatch.setattr(m.keycast, "list_sessions", real)  # the signer is back
+    [(_, again)] = later
+    later.clear()
+    again()
+    assert sent == [("ana@belfry.test", ["bob@example.org"])] and not later
+    assert read_dsn(dsn(m, "d1"), LB.secret)["status"] == "delivered"
+
+
+def test_a_wrap_is_given_up_after_a_day(m, sent, later, monkeypatch):
     publish_chain(m, ready=True)
     session(m, PHONE)
     monkeypatch.setattr(m.keycast, "list_sessions", lambda token: 1 / 0)
-    with pytest.raises(ZeroDivisionError):  # not a ValueError: logged, tried again later
-        mail.handle_wrap(m, out_wrap(PHONE))
+    mail.take_wrap(m, out_wrap(PHONE))
+    total = 0.0
+    while later:
+        seconds, again = later.pop()
+        total += seconds
+        again()
+    assert 86400 - 1800 < total <= 86400 and not sent
+
+
+def test_a_refusal_is_not_tried_again(m, sent, later):
+    publish_chain(m, ready=True)
+    session(m, STRANGER)
+    with pytest.raises(ValueError):
+        mail.take_wrap(m, out_wrap(STRANGER))
+    assert not later and not sent
+
+
+def test_a_relay_that_does_not_answer_puts_outgoing_mail_off_before_it_is_sent(
+    m, sent, later, monkeypatch
+):
+    """The report is for the letterbox or for the account key: not known, nothing is sent (a
+    report is never encrypted to the account key because of a failure, a mail never sent twice)."""
+    publish_chain(m, ready=True)
+    real = m.relay.query
+
+    def chains_down(filters, sign):
+        if any(sealed.ROSTER in f.get("kinds", []) for f in filters):
+            raise RuntimeError("relay down")
+        return real(filters, sign)
+
+    monkeypatch.setattr(m.relay, "query", chains_down)
+    mail.take_wrap(m, mail.gift_wrap(ANA.secret, json_rumor("a2"), BELFRY_PUB))  # the old seal
     assert not sent and not [e for e in m.relay.events if e["kind"] == 7679]
+    [(seconds, again)] = later
+    later.clear()
+    assert seconds == 30
+    monkeypatch.setattr(m.relay, "query", real)
+    again()
+    assert len(sent) == 1 and not later
+    e = dsn(m, "a2")
+    assert ["lb", pub(LB)] in e["tags"] and read_dsn(e, LB.secret)["status"] == "delivered"
 
 
 def test_a_device_answers_as_the_shared_inbox(m, sent, monkeypatch):

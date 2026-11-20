@@ -70,7 +70,7 @@ from .relay import AUTH_KIND
 log = logging.getLogger(__name__)
 
 MAIL, SEAL, WRAP, DSN = 1301, 13, 1059, 7679
-INLINE = 60_000  # bytes of MIME that still fit in a gift wrap (NIP-44 caps at 65535, twice)
+INLINE = 60_000  # bytes of MIME never tried inline; under it the rumor decides (sealed.fits)
 MAX_RCPT = 20
 RESERVED = {"postmaster", "abuse"}
 LOCAL = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
@@ -82,6 +82,11 @@ _lock = threading.Lock()
 _cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
 _counts: dict[str, list[float]] = {}
 DNSFUNC = None  # tests: a DKIM key lookup instead of DNS
+
+
+class Later(Exception):
+    """Something this needs did not answer (the relay, the signer): not a refusal. The wrap is
+    tried again (``take_wrap``)."""
 
 
 class MailError(Exception):
@@ -446,8 +451,9 @@ def gift_wrap(secret: bytes, rumor: dict[str, Any], to: str) -> dict[str, Any]:
             "kind": SEAL,
             "created_at": now - secrets.randbelow(2 * 86400),
             "tags": [],
+            # compact, as sealed rumors are (docs/sealed.md §8): what mail_rumor measured
             "content": nip44_encrypt(
-                conversation_key(secret, bytes.fromhex(to)), json.dumps(rumor)
+                conversation_key(secret, bytes.fromhex(to)), sealed.rumor_json(rumor)
             ),
         },
     )
@@ -485,14 +491,17 @@ def unwrap(secret: bytes, wrap: dict[str, Any]) -> tuple[str, dict[str, Any]]:
 def device_may_send(svc: Services, member: str, device: str) -> bool:
     """docs/sealed.md §7 Out: DEVICE may seal MEMBER's outgoing mail: it is a device of the head
     of their valid chain and the client key of one of their live chat sessions in the signer.
-    Raises when the relay or the signer does not answer (the wrap is tried again later)."""
-    chain = sealed.chain_for(svc, member, strict=True)
-    if chain is None or device not in chain.devices:
-        # a device added a moment ago: don't refuse it on a minute-old answer
-        chain = sealed.chain_for(svc, member, fresh=True, strict=True)
-    if chain is None or device not in chain.devices:
-        return False
-    return device in sealed.live_devices(svc, member)
+    ``Later`` when the relay or the signer does not answer: that is no refusal."""
+    try:
+        chain = sealed.chain_for(svc, member, strict=True)
+        if chain is None or device not in chain.devices:
+            # a device added a moment ago: don't refuse it on a minute-old answer
+            chain = sealed.chain_for(svc, member, fresh=True, strict=True)
+        if chain is None or device not in chain.devices:
+            return False
+        return device in sealed.live_devices(svc, member)
+    except Exception as exc:  # noqa: BLE001
+        raise Later(f"the device of {member[:8]}… could not be checked: {exc!r}") from exc
 
 
 def unwrap_out(svc: Services, wrap: dict[str, Any]) -> tuple[str, dict[str, Any]]:
@@ -555,17 +564,11 @@ def store_large(svc: Services, raw: bytes) -> list[list[str]]:
 
 
 def mail_rumor(
-    svc: Services,
-    raw: bytes,
-    msg: EmailMessage,
-    sender: str,
-    auth: dict,
-    to: str,
-    ceiling: int | None = None,
+    svc: Services, raw: bytes, msg: EmailMessage, sender: str, auth: dict, to: str
 ) -> dict[str, Any]:
-    """The kind 1301 rumor of a mail for TO. CEILING: the most bytes the rumor's JSON may be
-    (a sealed rumor, docs/sealed.md §8): a mail that would go over it takes the Blossom route
-    whatever its size."""
+    """The kind 1301 rumor of a mail for TO. A rumor whose JSON would pass 40 000 bytes takes
+    the Blossom route (docs/sealed.md §8): more does not fit a gift wrap, sealed or not (the
+    wrap holds the seal's base64 of the padded rumor, under NIP-44's 65 535 bytes)."""
     key = _belfry(svc)
     when = email.utils.parsedate_to_datetime(str(msg["Date"])) if msg["Date"] else None
     rumor_tags = [
@@ -587,12 +590,11 @@ def mail_rumor(
         "tags": rumor_tags,
         "content": raw.decode("utf-8", "replace") if len(raw) <= INLINE else "",
     }
-    if not rumor["content"] or (
-        ceiling is not None and len(sealed.rumor_json(rumor).encode()) + 80 > ceiling
-    ):  # 80: the id that is added below
+    rumor["id"] = event_id(rumor)
+    if not rumor["content"] or not sealed.fits(rumor):
         rumor["content"] = ""
         rumor["tags"] = rumor_tags + store_large(svc, raw)
-    rumor["id"] = event_id(rumor)
+        rumor["id"] = event_id(rumor)
     return rumor
 
 
@@ -600,12 +602,18 @@ def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender:
     secret = _belfry(svc).secret
     # sealed conversations (docs/sealed.md §7): a member whose chain is ready gets the mail
     # under their head letterbox, which only their devices open; anyone else as before
-    chain = sealed.chain_for(svc, pubkey)
+    try:
+        chain = sealed.chain_for(svc, pubkey, strict=True)
+    except Exception as exc:  # noqa: BLE001
+        # not known whether this member's mail is sealed: never delivered unsealed because of
+        # a failure. The sending server tries again.
+        log.warning("mail: the chain of %s… could not be read: %r", pubkey[:8], exc)
+        raise MailError(451, "4.3.0 Delivery failed here; try again later.") from exc
+    rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey)
     if chain is not None and chain.ready:
-        rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey, ceiling=sealed.MAX_RUMOR)
         wrap = sealed.seal_to_letterbox(secret, rumor, pubkey, chain.lb)
     else:
-        wrap = gift_wrap(secret, mail_rumor(svc, raw, msg, sender, auth, pubkey), pubkey)
+        wrap = gift_wrap(secret, rumor, pubkey)
     _publish(svc, wrap)
 
 
@@ -926,10 +934,19 @@ def sent_card(
     )
 
 
-def report(svc: Services, sender: str, email_id: str, rcpts: list[str], code: int, answer: str):
+def report(
+    svc: Services,
+    sender: str,
+    email_id: str,
+    rcpts: list[str],
+    code: int,
+    answer: str,
+    chain: sealed.Chain | None = None,
+):
     """A kind 7679 delivery report to SENDER (Nostr Mail DSN): an ephemeral key, no p tag.
-    Encrypted to the sender's head letterbox, named in an ``lb`` tag, when their chain is
-    ready (docs/sealed.md §7); else to their account key."""
+    Encrypted to the head letterbox of CHAIN (the sender's), named in an ``lb`` tag, when it is
+    ready (docs/sealed.md §7); else to their account key. The caller reads the chain, before
+    anything is sent (handle_wrap)."""
     status = "delivered" if 200 <= code < 300 else "failed" if code >= 500 else "delayed"
     now = int(time.time())
     body = {
@@ -941,7 +958,6 @@ def report(svc: Services, sender: str, email_id: str, rcpts: list[str], code: in
         ("delivered_at" if status == "delivered" else "failed_at"): now,
         "details": answer[:500],
     }
-    chain = sealed.chain_for(svc, sender)
     sealed_to = chain.lb if chain is not None and chain.ready else ""
     to, lb_tag = (sealed_to, [["lb", sealed_to]]) if sealed_to else (sender, [])
     temp = PrivateKey()
@@ -978,18 +994,62 @@ def handle_wrap(svc: Services, wrap: dict[str, Any]) -> None:
     email_id = tag(rumor, "email-id") or rumor.get("id") or wrap["id"]
     if reported(svc, email_id):
         return  # sent before a restart
+    try:
+        # whom the report is for (their letterbox, or their account key), known before the mail
+        # leaves: a report is never encrypted to the account key because the read failed, and a
+        # mail is never sent twice because its report could not be made
+        chain = sealed.chain_for(svc, sender, strict=True)
+    except Exception as exc:  # noqa: BLE001
+        raise Later(f"the chain of {sender[:8]}… could not be read: {exc!r}") from exc
     sent = None
     try:
         rcpts, code, answer, sent = outgoing(svc, sender, rumor)
     except MailError as exc:
         rcpts, code, answer = tags(rumor, "rcpt-to")[:MAX_RCPT], exc.code, exc.message
     log.info("mail: out from %s… to %d recipients: %s", sender[:8], len(rcpts), code)
-    report(svc, sender, email_id, rcpts, code, answer)
+    report(svc, sender, email_id, rcpts, code, answer, chain)
     if sent and 200 <= code < 300:
         try:
             sent_card(svc, sent[0], sender, sent[1], rcpts, tag(rumor, "e"))
         except Exception as exc:  # noqa: BLE001 — the mail is gone; the card is a courtesy
             log.warning("mail: sent card in %s failed: %r", sent[0], exc)
+
+
+# How long after each failed try a wrap that hit a ``Later`` is tried again: 30 s, 2 min, 10 min,
+# then every 30 min, for a day. In memory: after a restart the listener reads the last three
+# days again and what has no report yet is taken up.
+RETRY_AFTER = (30.0, 120.0, 600.0)
+RETRY_EVERY = 1800.0
+RETRY_FOR = 86400.0
+
+
+def _later(seconds: float, call) -> None:
+    timer = threading.Timer(seconds, call)
+    timer.daemon = True
+    timer.start()
+
+
+def take_wrap(svc: Services, wrap: dict[str, Any], tries: int = 0, waited: float = 0.0) -> None:
+    """``handle_wrap``, and again later when the relay or the signer did not answer. Anything
+    else it raises is the caller's (a wrap that is not ours, a refusal: dropped)."""
+    try:
+        handle_wrap(svc, wrap)
+    except Later as exc:
+        delay = RETRY_AFTER[tries] if tries < len(RETRY_AFTER) else RETRY_EVERY
+        if waited + delay > RETRY_FOR:
+            log.warning("mail: a wrap given up after a day: %s", exc)
+            return
+        log.info("mail: a wrap again in %.0f s: %s", delay, exc)
+        _later(delay, lambda: _retry(svc, wrap, tries + 1, waited + delay))
+
+
+def _retry(svc: Services, wrap: dict[str, Any], tries: int, waited: float) -> None:
+    try:
+        take_wrap(svc, wrap, tries, waited)
+    except (ValueError, KeyError, TypeError) as exc:
+        log.debug("mail: skipped a wrap: %s", exc)
+    except Exception as exc:  # noqa: BLE001 — a timer's thread: nothing above to tell
+        log.warning("mail: a wrap failed: %s", exc)
 
 
 async def listen(app: FastAPI) -> None:
@@ -1038,7 +1098,7 @@ async def listen(app: FastAPI) -> None:
                         for k in [k for k, t in seen.items() if t < now - 4 * 86400]:
                             del seen[k]
                         try:
-                            await run_in_threadpool(handle_wrap, svc, msg[2])
+                            await run_in_threadpool(take_wrap, svc, msg[2])
                         except (ValueError, KeyError, TypeError) as exc:
                             log.debug("mail: skipped a wrap: %s", exc)
                         except Exception as exc:  # noqa: BLE001 — the next wrap still counts

@@ -278,12 +278,23 @@ def with_id(rumor: dict[str, Any]) -> dict[str, Any]:
     if not all(isinstance(t, list) and all(isinstance(v, str) for v in t) for t in rumor["tags"]):
         raise ValueError("the rumor is not an event")
     kept = {k: v for k, v in rumor.items() if k not in ("id", "sig")}
-    return {**kept, "id": event_id(kept)}
+    return _ordered({**kept, "id": event_id(kept)})
+
+
+_ORDER = ("id", "pubkey", "created_at", "kind", "tags", "content")
+
+
+def _ordered(rumor: dict[str, Any]) -> dict[str, Any]:
+    """RUMOR with its keys in the order sealed rumors are serialised in (§8): id, pubkey,
+    created_at, kind, tags, content; anything else after."""
+    first = {k: rumor[k] for k in _ORDER if k in rumor}
+    return {**first, **{k: v for k, v in rumor.items() if k not in first}}
 
 
 def rumor_json(rumor: dict[str, Any]) -> str:
-    """The rumor as it goes into a seal: compact JSON, UTF-8 as it is."""
-    return json.dumps(rumor, separators=(",", ":"), ensure_ascii=False)
+    """The rumor as it goes into a seal (§8): compact JSON, the keys in the order id, pubkey,
+    created_at, kind, tags, content, non-ASCII characters and ``/`` not escaped."""
+    return json.dumps(_ordered(rumor), separators=(",", ":"), ensure_ascii=False)
 
 
 def fits(rumor: dict[str, Any]) -> bool:
@@ -507,7 +518,9 @@ def history_rumor(sharer: str, person: str, rumors: list[dict[str, Any]], at: in
             "created_at": at,
             "tags": [["p", person]],
             "content": json.dumps(
-                {"v": 1, "rumors": rumors}, separators=(",", ":"), ensure_ascii=False
+                {"v": 1, "rumors": [_ordered(r) for r in rumors]},
+                separators=(",", ":"),
+                ensure_ascii=False,
             ),
         }
     )
@@ -539,9 +552,10 @@ def participants(rumor: dict[str, Any]) -> set[str]:
     return {rumor.get("pubkey", ""), *_values(rumor, "p")} - {""}
 
 
-def shared_rumors(history: dict[str, Any]) -> list[dict[str, Any]]:
-    """§8: the rumors of a (already accepted, §4) kind 8564 the receiver may add: those whose
-    conversation the sharer is part of and whose id is their own. The others are dropped."""
+def shared_rumors(history: dict[str, Any], receiver: str) -> list[dict[str, Any]]:
+    """§8: the rumors of a (already accepted, §4) kind 8564 that RECEIVER (their account) may
+    add, taken one by one: those of a conversation both the sharer and the receiver are part of
+    (author or ``p``). The others are dropped."""
     if history.get("kind") != HISTORY:
         return []
     try:
@@ -557,7 +571,7 @@ def shared_rumors(history: dict[str, Any]) -> list[dict[str, Any]]:
             r = with_id(r)
         except (ValueError, TypeError):
             continue
-        if sharer in participants(r):
+        if {sharer, receiver} <= participants(r):
             out.append(r)
     return out
 

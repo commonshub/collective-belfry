@@ -652,10 +652,9 @@ def ceiling() -> dict[str, Any]:
         "from bob with 39 700 'x' as content: it fits a sealed rumor of its own but no kind "
         "8564, whose JSON would pass the ceiling with it alone, so it is left out. Each 8564 is "
         "kind 8564, pubkey bob, created_at T0+800, tags [['p', alice]], content "
-        '{"v":1,"rumors":[…]} in compact JSON with each rumor\'s keys in the order pubkey, '
-        "created_at, kind, tags, content, id; the 8564's own keys in the order kind, pubkey, "
-        "created_at, tags, content, id. 200 rumors are never reached here: with two 64-character "
-        "fields each, 200 rumors are already more than 40 000 bytes.",
+        '{"v":1,"rumors":[…]} with every rumor, and the 8564 itself, serialised as the '
+        "'serialisation' note at the top says. 200 rumors are never reached here: with two "
+        "64-character fields each, 200 rumors are already more than 40 000 bytes.",
         "expected": {
             "rumors_per_8564": counts,
             "json_bytes_per_8564": sizes,
@@ -667,9 +666,8 @@ def ceiling() -> dict[str, Any]:
         "max_rumor_json_bytes": sealed.MAX_RUMOR,
         "history_packing": packing,
         "note": "The bytes are those of the exact JSON string that is encrypted in the seal, as "
-        "UTF-8. Here: compact "
-        "JSON (no spaces), UTF-8 not escaped, the keys in the order pubkey, created_at, kind, "
-        "tags, content, id. The content is described (a string repeated), not written out. "
+        "UTF-8, serialised as the 'serialisation' note at the top says. "
+        "The content is described (a string repeated), not written out. "
         "For a rumor that fits, seal and wrap were made with the keys alice_phone → bob_lb1 and "
         "the fixed values of the case (see 'fixed'), so wrap_id can be reproduced; the lengths "
         "are those of the two NIP-44 payloads (base64 characters).",
@@ -748,7 +746,8 @@ def link() -> list[dict[str, Any]]:
     for name, note, device, used, ok in (
         (
             "a request with the link's proof",
-            "link = hex HMAC-SHA256(key: the 32 bytes of the link secret, message: the 32 bytes "
+            "link = hex HMAC-SHA256(key: the 32 bytes the link secret's 64 hex characters stand "
+            "for, decoded, not the hex text; message: the 32 bytes "
             "of the device's public key).",
             "alice_tablet",
             secret,
@@ -804,6 +803,7 @@ def history() -> list[dict[str, Any]]:
     m1 = sealed.with_id(rumor("alice", "bob", 14, "Are you coming on Friday?", T0 + 10))
     m2 = sealed.with_id(rumor("bob", "alice", 14, "Yes, with the cake.", T0 + 20))
     foreign = sealed.with_id(rumor("mallory", "alice", 14, "Bob never saw this.", T0 + 30))
+    elsewhere = sealed.with_id(rumor("bob", "mallory", 14, "Alice was not in this.", T0 + 40))
     out = []
     for name, note, rumors, kept in (
         (
@@ -819,6 +819,13 @@ def history() -> list[dict[str, Any]]:
             [m1, m2, foreign],
             [m1, m2],
         ),
+        (
+            "a rumor of a conversation the receiver is not in",
+            "The third rumor is between Bob and Mallory: Alice, who receives, is neither its "
+            "author nor in its p tags. It is dropped; the two others are added.",
+            [m1, m2, elsewhere],
+            [m1, m2],
+        ),
     ):
         inner = sealed.history_rumor(PUB["bob"], PUB["alice"], rumors, T0 + 800)
         w = sealed.seal_to_letterbox(
@@ -830,7 +837,11 @@ def history() -> list[dict[str, Any]]:
         )
         seal, opened = sealed.open_sealed(SECRET["alice_lb3"], w)
         agree(name + " (accepted)", sealed.accept(bob, seal, opened), True)
-        agree(name, [r["id"] for r in sealed.shared_rumors(opened)], [r["id"] for r in kept])
+        agree(
+            name,
+            [r["id"] for r in sealed.shared_rumors(opened, PUB["alice"])],
+            [r["id"] for r in kept],
+        )
         out.append(
             {
                 "name": name,
@@ -838,6 +849,7 @@ def history() -> list[dict[str, Any]]:
                 "wrap": w,
                 "letterbox": "alice_lb3",
                 "letterbox_secret": SECRET["alice_lb3"].hex(),
+                "receiver": PUB["alice"],
                 "sharer_chain_events": {"anchor": bob_anchor, "rosters": [bob_root]},
                 "expected": {
                     "sharer": PUB["bob"],
@@ -937,6 +949,21 @@ def ready() -> dict[str, Any]:
             False,
         ),
         (
+            "no counted session at all",
+            "One session of another app and one chat session idle for 40 days: nothing counts, "
+            "so nothing holds ready back.",
+            [session(T, False, DAY, "Notes"), session(L, True, 40 * DAY, "Chat", made=90 * DAY)],
+            [P],
+            True,
+        ),
+        (
+            "no session at all",
+            "An empty list: ready is allowed.",
+            [],
+            [P],
+            True,
+        ),
+        (
             "a session that was never active counts from its creation",
             "last_activity is null and created_at is 2 days ago: it counts, and the tablet is "
             "not in the roster.",
@@ -989,6 +1016,12 @@ def build() -> dict[str, Any]:
         "in the order of the head roster's device tags. An opened rumor is compared on pubkey, "
         "created_at, kind, tags, content and the id the opener computes. Signatures were made "
         "with fixed auxiliary randomness and only need to verify.",
+        "serialisation": "A sealed rumor is serialised (docs/sealed.md §4, §8) as compact JSON, no "
+        "spaces, its keys in the order id, pubkey, created_at, kind, tags, content, non-ASCII "
+        "characters and '/' not escaped. The 40 000-byte ceiling counts that exact string as "
+        "UTF-8 bytes. Every rumor inside a seal here was written that way, and so were the "
+        'rumors inside a kind 8564\'s content ({"v":1,"rumors":[…]}, compact as well). An '
+        "opener never refuses a rumor for its size or its key order.",
         "fixed": {
             "T0": T0,
             "secret key of <name>": "SHA-256('belfry sealed vectors/key/' + name)",
