@@ -9,7 +9,9 @@
 //
 // Rules from the boards: never a key, npub or id as text; only MY devices are named, other
 // people's are a count (and a "changed in the last 30 days" line); channels never have a lock.
-import type { Conv } from './dm'
+import { thread, type Conv } from './dm'
+import * as R from './sealedrt'
+import * as SC from './sealedcore'
 import { touch } from './store'
 import { me } from './sync'
 
@@ -60,22 +62,81 @@ interface State {
 const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map() })
 let state: State = empty()
 
-export const isSealed = (conv: Conv) => state.sealed.has(conv)
-export const myDevices = () => state.mine
-export const hasDevices = () => state.mine.length > 0
-export const theirDevices = (pk: string): TheirDevices | undefined => state.people.get(pk)
-export const deviceLines = (conv: Conv) => state.lines.get(conv) ?? []
-export const lockedHere = (conv: Conv) => state.lockedHere.has(conv)
-export const anyLockedHere = () => state.lockedHere.size > 0
-/** When the conversation was sealed (ms; 0 when unknown). */
-export const sharedBy = (rid: string) => state.shared.get(rid)
-export const sealedAt = (conv: Conv) => state.sealedAt.get(conv) ?? 0
+// Demo mode: the boards' people (setDemoSealed). On a belfry: the real chains (sealedrt.ts).
+const real = () => !demo && R.active()
+const DAY_MS = 864e5
+const kindOf = (name: string): DeviceKind => (/iphone|android|pixel|galaxy|phone|mobile/i.test(name) ? (/ipad|tablet/i.test(name) ? 'tablet' : 'phone') : /ipad|tablet/i.test(name) ? 'tablet' : 'computer')
+const sessionName = (pk: string) => { const r = R.sessionsNow()?.find((x) => x.client_pubkey === pk); return r ? (r.device || r.application_name || '') : '' }
+const participantsOf = (conv: Conv) => (conv.startsWith('n:') ? conv.slice(2).split(',') : [])
+
+function realMine(): MyDevice[] {
+  const c = R.chainOf(me())
+  if (!c) return []
+  const rows = R.sessionsNow() ?? []
+  return SC.headOf(c).devices.map((d) => {
+    const at = c.added.get(d)
+    const by = at && at.signer !== d ? sessionName(at.signer) || undefined : undefined
+    const row = rows.find((x) => x.client_pubkey === d)
+    const name = sessionName(d) || 'A device'
+    return { id: d, name, kind: kindOf(name), added: (at?.created_at ?? 0) * 1000, from: by, active: row?.last_activity ? Date.parse(row.last_activity) : undefined, here: d === R.devicePub() }
+  })
+}
+function realTheirs(pk: string): TheirDevices | undefined {
+  const c = R.chainOf(pk)
+  if (!c) return undefined
+  const steps = SC.rosterSteps(c).filter((x) => x.added.length || x.removed.length)
+  const last = steps[steps.length - 1]
+  const change = last && Date.now() - last.at * 1000 < 30 * DAY_MS ? { what: (last.removed.length ? 'removed' : 'added') as 'added' | 'removed', at: last.at * 1000 } : undefined
+  return { count: SC.headOf(c).devices.length, change }
+}
+/** §3.4: one line per device that appeared or left, one roster step at a time, from the newest
+ *  message of the conversation at its first sync on; mine name the device. A fresh start: amber. */
+function realLines(conv: Conv): DeviceLine[] {
+  const msgs = thread(conv)
+  R.noteFirstSeen(conv, (msgs.at(-1)?.at ?? Math.floor(Date.now() / 1000)) * 1000)
+  const from = R.firstSeenOf(conv) ?? 0
+  const out: DeviceLine[] = []
+  for (const pk of [...new Set([...participantsOf(conv), me()])]) {
+    const c = R.chainOf(pk)
+    if (!c) continue
+    for (const st of SC.rosterSteps(c)) {
+      const at = st.at * 1000
+      if (at < from) continue
+      for (const d of st.added) out.push({ id: `${pk}:${d}:+${st.at}`, at, who: pk, what: 'added', ...(pk === me() ? { device: sessionName(d) || undefined, kind: kindOf(sessionName(d)) } : {}) })
+      for (const d of st.removed) out.push({ id: `${pk}:${d}:-${st.at}`, at, who: pk, what: 'removed', ...(pk === me() ? { device: sessionName(d) || undefined, kind: kindOf(sessionName(d)) } : {}) })
+    }
+    const f = pk === me() ? undefined : R.freshStart(pk)
+    if (f) out.push({ id: `${pk}:fresh:${f.root}`, at: f.at, who: pk, what: 'new-locked', kind: 'phone', shared: f.shared.includes(conv) })
+  }
+  return out.sort((a, b) => a.at - b.at)
+}
+
+export const isSealed = (conv: Conv) => (real() ? R.isSealedConv(conv) : state.sealed.has(conv))
+export const myDevices = () => (real() ? realMine() : state.mine)
+export const hasDevices = () => myDevices().length > 0
+export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? realTheirs(pk) : state.people.get(pk))
+export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
+export const lockedHere = (conv: Conv) => (real() ? R.lockedConv(conv) : state.lockedHere.has(conv))
+export const anyLockedHere = () => (real() ? R.showBanner() : state.lockedHere.size > 0)
+export const sharedBy = (rid: string) => (real() ? R.sharedByOf(rid) : state.shared.get(rid))
+/** When the conversation was sealed (ms; 0 when unknown). On a belfry: the latest of its people's
+ *  first ready roster. */
+export function sealedAt(conv: Conv): number {
+  if (!real()) return state.sealedAt.get(conv) ?? 0
+  let at = 0
+  for (const pk of [...new Set([...participantsOf(conv), me()])]) { const r = R.chainOf(pk)?.rosters.find((x) => x.ready); if (r) at = Math.max(at, r.created_at * 1000) }
+  return at
+}
 /** A device not yet allowed reads NO sealed message, old or new (canvas v84): only what came
- *  before the conversation was sealed reads as usual. */
-export const lockedMsg = (conv: Conv, at: number) => state.lockedHere.has(conv) && at * 1000 >= sealedAt(conv)
-export const asking = () => state.asking
-export const linkedByScan = () => state.linked
-export const clearLinked = () => { state.linked = undefined; touch() }
+ *  before the conversation was sealed reads as usual. On a belfry the locked ones never opened. */
+export const lockedMsg = (conv: Conv, at: number) => (real() ? false : state.lockedHere.has(conv) && at * 1000 >= sealedAt(conv))
+export function asking() {
+  if (!real()) return state.asking
+  const a = R.pendingAsk()
+  return a && { id: a.id, name: a.name, kind: kindOf(a.name), at: a.at }
+}
+export const linkedByScan = () => (real() ? (R.linkedName() ? { name: R.linkedName()!, kind: kindOf(R.linkedName()!) } : undefined) : state.linked)
+export const clearLinked = () => { if (real()) R.clearLinkedName(); state.linked = undefined; touch() }
 
 const DAY = 864e5
 /** A change counts for 30 days. */
@@ -108,9 +169,17 @@ export const devicesWord = (n: number) => `${n} device${n === 1 ? '' : 's'}`
 
 const later = (ms = 700) => new Promise<void>((r) => setTimeout(r, ms))
 const ready = () => { if (!demo) throw new Error('Not available yet.') }
+const rumorsOf = (conv: Conv) => thread(conv).filter((d) => d.kind === 14 && !d.pending && !d.failed)
+  .map((d) => {
+    const author = d.mine ? me() : d.from
+    // kept since this version; older ones: the p tags rebuilt (everyone in it but the author)
+    const tags = d.tags ?? [...new Set([...participantsOf(conv), me()])].filter((p) => p !== author).map((p) => ['p', p])
+    return { pubkey: author, created_at: d.at, kind: 14, tags, content: d.text, id: '' }
+  })
 
 /** Allow on an older device: the new one reads everything (its banner goes). */
 export async function allowAsking() {
+  if (real()) { const a = R.pendingAsk(); if (a) await R.allow(a.device); return }
   ready(); const a = state.asking; if (!a) return
   await later()
   if (state.asking?.id !== a.id) return // another device answered first
@@ -121,6 +190,7 @@ export async function allowAsking() {
 
 /** Not me: that device is removed and signed out. */
 export async function refuseAsking() {
+  if (real()) { const a = R.pendingAsk(); if (a) await R.refuse(a.device); return }
   ready(); if (!state.asking) return
   await later()
   state.asking = undefined
@@ -129,6 +199,7 @@ export async function refuseAsking() {
 
 /** Remove one of my devices (never this one: that is Sign out). */
 export async function removeDevice(id: string) {
+  if (real()) return R.removeMyDevice(id)
   ready()
   const d = state.mine.find((x) => x.id === id)
   if (!d || d.here) return
@@ -140,6 +211,7 @@ export async function removeDevice(id: string) {
 
 /** Share a conversation's history with someone's new device (any member, by this deliberate tap). */
 export async function shareHistory(conv: Conv, lineId: string) {
+  if (real()) { const who = lineId.split(':')[0]; return R.shareHistory(who, rumorsOf(conv) as unknown as SC.Rumor[], conv) }
   ready()
   await later()
   const l = deviceLines(conv).find((x) => x.id === lineId)

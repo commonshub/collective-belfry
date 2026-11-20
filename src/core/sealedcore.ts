@@ -172,6 +172,10 @@ function wrapTo(signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], 
   return signWith(once, { kind: WRAP, created_at: f.wrapAt ?? backdated(now), tags, content: nip44.v2.encrypt(JSON.stringify(seal), conv(once, to), f.wrapNonce) }, f.aux)
 }
 
+/** RUMOR sealed by SIGNER and gift-wrapped to the key TO with TAGS (§7: a mail out to the
+ *  belfry's key, ["p", belfry], no lb). */
+export const sealToKey = (signer: Uint8Array, rumor: Rumor, to: string, tags: string[][], f?: Fixed) => wrapTo(signer, rumor, to, tags, f)
+
 /** §4: RUMOR sealed by a device key (the belfry's for its mail) to the letterbox LB of ACCOUNT. */
 export function sealToLetterbox(signer: Uint8Array, rumor: Rumor, account: string, lb: string, f?: Fixed): NostrEvent {
   if (!isKey(account) || !isKey(lb)) throw new Error('account and letterbox are 64 hex characters')
@@ -326,10 +330,14 @@ export function historyRumors(h: Rumor, have: Set<string> = new Set()): Rumor[] 
 
 // ---- ready (§6) ------------------------------------------------------------------------------
 
-export interface SessionRow { client_pubkey?: string | null; chat?: boolean; last_activity?: string | null; device?: string; application_name?: string }
+export interface SessionRow { client_pubkey?: string | null; chat?: boolean; last_activity?: string | null; created_at?: string | null; device?: string; application_name?: string }
 const DAY = 86400
-/** Counted: a chat session active within the last 30 days. */
-export const counted = (s: SessionRow, now: number) => s.chat === true && !!s.last_activity && now - Date.parse(s.last_activity) / 1000 < 30 * DAY
+/** Counted: a chat session whose last activity (its creation when never active) is within the
+ *  last 30 days, strictly (the lead, 20 Nov). */
+export function counted(s: SessionRow, now: number): boolean {
+  const t = s.last_activity || s.created_at
+  return s.chat === true && !!t && now - Date.parse(t) / 1000 < 30 * DAY
+}
 /** A roster may carry ready when every counted session's client key is one of its devices. */
 export const mayCarryReady = (sessions: SessionRow[], devices: string[], now = Math.floor(Date.now() / 1000)) =>
   sessions.filter((s) => counted(s, now)).every((s) => !!s.client_pubkey && devices.includes(s.client_pubkey))

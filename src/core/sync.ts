@@ -518,6 +518,14 @@ function moveMark(t: Target) {
   if (at > syncMark(t)) try { localStorage.setItem(MARK(t), String(at)) } catch { /* private mode */ }
 }
 
+// sealed conversations (sealedrt.ts): its own filters on the community relay (rosters, anchors,
+// device requests, wraps to this device's key), set once it knows the device
+let extraMain: () => Filter[] = () => []
+export function setExtraMainFilters(f: () => Filter[]) { extraMain = f; resubscribe('main') }
+/** Read the gift wraps again from the start once (a device that just received keys, §4). */
+export function replayWraps() { wrapsFromZero = true; resubscribe('main') }
+let wrapsFromZero = false
+
 function filters(target: Target): Filter[] {
   const kinds = target === 'groups' ? KINDS_GROUPS : KINDS_MAIN
   // from the catch-up mark (moved only at an EOSE after the relay signed us in), overlapping by
@@ -535,7 +543,8 @@ function filters(target: Target): Filter[] {
   // direct messages and e-mail (dm.ts) on the community relay, my DM relay (10050): gift wraps
   // are back-dated up to two days (NIP-59), so they overlap by three
   const p = signer.pubkey
-  const wrapsSince = Math.max(0, latestCreatedAt((e) => e.kind === 1059) - 3 * 86400)
+  const wrapsSince = wrapsFromZero ? 0 : Math.max(0, latestCreatedAt((e) => e.kind === 1059 && e.tags.some((t) => t[0] === 'p' && t[1] === p)) - 3 * 86400)
+  wrapsFromZero = false
   const oldSince = Math.max(0, latestCreatedAt((e) => e.kind === 4) - 3600)
   // members' tags and places (people.ts): one replaceable event each, members-only relay
   const extrasSince = Math.max(0, latestCreatedAt((e) => e.kind === 30078 && e.tags.some((t) => t[0] === 'd' && t[1] === 'belfry:profile')) - 3600)
@@ -547,6 +556,7 @@ function filters(target: Target): Filter[] {
     { kinds: [1059], '#p': [p], since: wrapsSince, limit: 1000 },
     { kinds: [4], '#p': [p], since: oldSince, limit: 500 },
     { kinds: [4], authors: [p], since: oldSince, limit: 500 },
+    ...extraMain(),
   ]
 }
 

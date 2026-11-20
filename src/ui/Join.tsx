@@ -35,12 +35,13 @@ const loginUser = (hash: string) => {
   const m = /^#\/login\/([a-z0-9](?:[a-z0-9._-]{0,28}[a-z0-9])?)\/?$/.exec(hash.toLowerCase())
   return m ? m[1] : ''
 }
-const LOGIN_LINK = loginUser(location.hash)
+// also chat.<domain>/login/<username> served as the page itself (the #l= of sealed.md §5.2 survives that, not a redirect)
+const LOGIN_LINK = loginUser(location.hash) || loginUser('#' + location.pathname)
 let loginLinkTaken = false
 function takeLoginLink(): string {
   if (loginLinkTaken) return ''
   loginLinkTaken = true
-  if (/^#\/login\//.test(location.hash)) history.replaceState(history.state, '', location.pathname + location.search)
+  if (/^#\/login\//.test(location.hash) || /^\/login\//.test(location.pathname)) history.replaceState(history.state, '', (/^\/login\//.test(location.pathname) ? '/' : location.pathname) + location.search)
   return LOGIN_LINK
 }
 

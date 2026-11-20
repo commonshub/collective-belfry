@@ -8,6 +8,8 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
+import { decryptForLb, isSealedConv, onHistory, openDm, sealMailOut, sealWraps } from './sealedrt'
+import type { Rumor } from './sealedcore'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
 // e-mail as Nostr Mail (kind 1301 in gift wraps, nogringo/nostr-mail). The belfry is the e-mail
@@ -28,6 +30,8 @@ export interface Dm {
   at: number
   kind: 14 | 4 | 1301
   text: string
+  /** the rumor's tags (kind 14): a shared history (§8) sends the rumor again as it was */
+  tags?: string[][]
   subject?: string
   fromName?: string
   emailId?: string
@@ -212,7 +216,7 @@ function convOf(rumor: NostrEvent, bridgePk?: string): Conv {
 async function fromRumor(rumor: NostrEvent): Promise<Dm | null> {
   const b = await bridge()
   const base = { rid: rumor.id || getEventHash(rumor), conv: convOf(rumor, b), mine: rumor.pubkey === me(), at: rumor.created_at }
-  if (rumor.kind === 14) return { ...base, from: rumor.pubkey, kind: 14, text: rumor.content }
+  if (rumor.kind === 14) return { ...base, from: rumor.pubkey, kind: 14, text: rumor.content, tags: rumor.tags }
   if (rumor.kind !== 1301) return null
   const bridged = rumor.pubkey === b && !!tag(rumor, 'mail-from')
   const d: Dm = {
@@ -275,7 +279,15 @@ async function process() {
     for (const e of todo) {
       try {
         let d: Dm | null = null
-        if (e.kind === 1059) {
+        if (e.kind === 1059 && e.tags.some((t) => t[0] === 'lb')) {
+          // sealed (docs/sealed.md §4): opened with my letterbox key, never by the signer; no key
+          // or chain yet: keep the wrap and try again later (not marked seen)
+          const o = await openDm(e, await bridge())
+          if (!o.ok) { if (!o.retry) seen.add(e.id); continue }
+          const rumor = o.rumor as unknown as NostrEvent
+          if (rumor.kind === 7 || rumor.kind === 5) reactionRumor(rumor)
+          else d = await fromRumor(rumor)
+        } else if (e.kind === 1059) {
           const rumor = await unwrap(e)
           if (rumor && (rumor.kind === 7 || rumor.kind === 5)) reactionRumor(rumor)
           else if (rumor) d = await fromRumor(rumor)
@@ -303,6 +315,15 @@ export function startDms() {
   if (started) return
   started = true
   watchOutbox()
+  // §8: a history shared with this device: its rumors, marked (sealedrt keeps who shared them)
+  onHistory((rumors) => void (async () => {
+    for (const r of rumors) {
+      if (items.has(r.id)) continue
+      const d = await fromRumor(r as unknown as NostrEvent)
+      if (d) items.set(d.rid, d)
+    }
+    save(); touch()
+  })())
   let t: ReturnType<typeof setTimeout> | null = null
   subscribe(() => { t ??= setTimeout(() => { t = null; void process() }, 200) })
   void load().then(process)
@@ -362,10 +383,20 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
-async function deliver(rumor: NostrEvent, to: string[], self = true) {
-  const wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
+async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv) {
+  const wraps = conv && isSealedConv(conv) ? sealedWraps(rumor, to, conv) : await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
   for (const w of wraps) await enqueueSigned('main', w, rumor.id)
+}
+
+/** A sealed conversation (§6): every wrap sealed by this device, no signer call. An e-mail goes
+ *  to the belfry sealed by the device (§7), its self-copy to my own letterbox. */
+function sealedWraps(rumor: NostrEvent, to: string[], conv: Conv): NostrEvent[] {
+  const r = rumor as unknown as Rumor
+  if (!isMail(conv)) return sealWraps(r, to)
+  const out = sealMailOut(r, to[0])
+  if (!out) throw new Error('This device can’t send sealed e-mail yet.')
+  return [out, ...sealWraps(r, [])]
 }
 
 /** Where a message stands in the outbox: waiting (and why, after a failed try). */
@@ -450,13 +481,13 @@ export async function reactDm(d: Dm, emoji: string, mine?: DmReaction) {
   if (mine) {
     const rumor = rumorOf(5, [['e', mine.rid], ['k', '7'], ...to.filter((p) => p !== me()).map((p) => ['p', p])], '')
     dmReacts.delete(mine.rid); save()
-    await deliver(rumor, to)
+    await deliver(rumor, to, true, d.conv)
     return
   }
   const rumor = rumorOf(7, [['e', d.rid, '', d.from], ['p', d.from], ['k', String(d.kind)], ...to.filter((p) => p !== me() && p !== d.from).map((p) => ['p', p])], emoji)
   dmReacts.set(rumor.id, { rid: rumor.id, target: d.rid, from: me(), emoji, at: rumor.created_at, pending: !isLocalOnly() })
   save()
-  await deliver(rumor, to)
+  await deliver(rumor, to, true, d.conv)
   const r = dmReacts.get(rumor.id); if (r) r.pending = false
   save()
 }
@@ -476,7 +507,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
     items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text, pending: true })
     save()
     try {
-      await deliver(rumor, to) // saved; the outbox sends it when it can
+      await deliver(rumor, to, true, conv) // saved; the outbox sends it when it can
     } catch (e) {
       items.delete(rumor.id) // the composer gets the text back
       save()
@@ -507,7 +538,7 @@ export async function sendDm(conv: Conv, text: string, subject?: string) {
   reports.set(emailId, { status: 'queued', details: 'Waiting for the connection…' })
   save()
   try {
-    await deliver(rumor, [b]) // saved; the outbox sends it when it can, the report follows
+    await deliver(rumor, [b], true, target) // saved; the outbox sends it when it can, the report follows
   } catch (e) {
     reports.set(emailId, { status: 'failed', details: e instanceof Error ? e.message : String(e) })
     const d = items.get(rumor.id)
@@ -530,7 +561,10 @@ export async function checkReports() {
   if (!b || !s || !open.length || isLocalOnly()) return
   for (const e of await queryOnce('main', { kinds: [7679], authors: [b], '#r': open.slice(-50) })) {
     try {
-      const body = JSON.parse(await s.decrypt(tag(e, 'ephemeral-pubkey')!, e.content)) as { status: Report['status']; details?: string; smtp_response?: string }
+      const lb = tag(e, 'lb') // §7: encrypted to my head letterbox when my chain is ready
+      const plain = lb ? decryptForLb(lb, tag(e, 'ephemeral-pubkey')!, e.content) : await s.decrypt(tag(e, 'ephemeral-pubkey')!, e.content)
+      if (plain === undefined) continue // no key for it on this device (yet)
+      const body = JSON.parse(plain) as { status: Report['status']; details?: string; smtp_response?: string }
       reports.set(tag(e, 'r')!, { status: body.status, details: body.details || body.smtp_response || '' })
       if (body.status !== 'queued') channelSends.delete(tag(e, 'r')!)
     } catch { /* not mine */ }

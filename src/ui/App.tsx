@@ -36,6 +36,7 @@ import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
 import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
 import { hasDevices } from '../core/sealed'
+import { setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
 import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
@@ -69,6 +70,7 @@ export function App() {
   useEffect(() => {
     void (async () => {
       takeInviteFromUrl() // a guest link (#/join/<token>): kept until it is used
+      takeLinkSecret() // Link a phone (sealed.md §5.2): #l=<secret>, kept until this device has asked
       // back from the village sign-in page?
       try {
         const fresh = await finishSignIn()
@@ -186,6 +188,11 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
         startDms()
+        // sealed conversations (docs/sealed.md): this sign-in's device key is the session's client key
+        if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret) {
+          setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
+          void startSealed(session.clientSecret)
+        }
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
         if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSealed, demoAsk, demoLinked, demoUnlockHere, __demoMe: () => me(), __demoOrder: () => orderContent() })

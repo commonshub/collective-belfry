@@ -1,3 +1,4 @@
+import { active as sealedActive, newLinkCode } from '../core/sealedrt'
 import { clearLinked, linkedByScan } from '../core/sealed'
 import { LinkedByScan } from './Sealed'
 // #/accounts (board home/accounts; the web's limits from the lead, 2026-11-18): opened from the
@@ -109,7 +110,10 @@ function LinkPhoneSheet({ onClose }: { onClose: () => void }) {
   useVersion()
   const community = useCommunityName(NAME)
   const u = myUsername()
-  const url = `https://chat.${BELFRY.domain}/login/${u}`
+  // sealed.md §5.2: a fresh one-time secret each time this opens (memory only, 15 min): the new
+  // device proves it scanned this code, so no Allow prompt follows
+  const code = useMemo(() => (sealedActive() ? newLinkCode() : ''), [])
+  const url = `https://chat.${BELFRY.domain}/login/${u}` + (code ? `#l=${code}` : '')
   const name = profiles().get(me())?.name || u
   const qr = useMemo(() => {
     const q = qrcode(0, 'M'); q.addData(url); q.make()
@@ -122,7 +126,7 @@ function LinkPhoneSheet({ onClose }: { onClose: () => void }) {
     <Sheet title="Link your phone" onClose={onClose}>
       <div className="link-phone">
         <p>Scan this with the Belfry app to open {community} on your phone as {name} (@{u}).</p>
-        <div className="qr-box"><img className="drop-qr" src={qr} alt={`QR code of ${url}`} /></div>
+        <div className="qr-box"><img className="drop-qr" src={qr} alt={`QR code of https://chat.${BELFRY.domain}/login/${u}`} /></div>
         <p className="hint">Don’t have the app yet? <a href="https://belfry.sh/android" target="_blank" rel="noopener noreferrer">Android</a> · <a href="https://belfry.sh/iphone" target="_blank" rel="noopener noreferrer">iPhone</a></p>
         <p className="hint small">For your security, we’ll e-mail you a 6-digit code to confirm on your phone.</p>
       </div>
