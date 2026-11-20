@@ -931,6 +931,68 @@ def start_thread(
     return token
 
 
+def post_thread(
+    svc: Services,
+    slug: str,
+    site: dict[str, Any],
+    title: str,
+    text: str,
+    name: str,
+    email: str,
+    ip: str,
+    partner: int,
+    extra: list[list[str]] | None = None,
+) -> dict[str, str]:
+    """A thread by someone logged in on the website (sitesessions.py): their address is proven
+    already, so nothing waits for a link; it is posted now, by their own key, as ``confirm``
+    posts it. PARTNER: their account. ``{"id", "url", "my_url"}``; ApiError 429 ``too_many``
+    (the limits of ``start_thread``), 409 ``own_key`` (they hold their own key: the belfry can't
+    sign for them), 503 ``unavailable``."""
+    from . import drops, mail, sitesessions
+    from .holder_invites import ApiError
+
+    email = email.strip().lower()
+    if mail._limited("web-ip:" + ip, 10, 3600) or mail._limited("web-mail:" + email, 5, 3600):
+        raise ApiError(429, "too_many", "Too many requests in a short time: try in an hour.")
+    # a guest of something else becomes a guest of this channel too; a member posts as is
+    me = web_identity(svc, site["channel"], name, email)
+    if me is None or int(me["partner"]) != int(partner):
+        log.warning("webthreads: no account to post a thread from the website as")
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+    acct = sitesessions.account(svc, int(partner))
+    if acct is None:
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+    sitesessions.signer(svc, acct)  # 409 own_key, 503 signer: before anything is posted
+    tags = [["subject", title[:300]], *[t for t in extra or [] if isinstance(t, list) and t]]
+    try:
+        event = drops.post(
+            svc, site["channel"], f"**{title[:200]}**\n\n{text[:8000]}", tags, int(partner), TAG
+        )
+    except Exception as exc:  # noqa: BLE001 — the signer or the relay
+        log.warning("webthreads: a thread from the website was not posted: %s", type(exc).__name__)
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
+    k = thread_key(svc, event["id"], event["pubkey"])
+    url = thread_url(svc, slug, site, event["id"])
+    my_url = thread_url(svc, slug, site, event["id"], k)
+    try:
+        _mailer(svc).send(
+            email,
+            f"Your thread: {title[:120]}",
+            [
+                f"Hello {name},",
+                "Your thread is open. This link is yours: read the answers and comment there.",
+            ],
+            (my_url, "Open your thread"),
+            "Keep this mail: the link is how you come back.",
+        )
+    except Exception as exc:  # noqa: BLE001 — the thread is posted; they are logged in
+        log.warning("webthreads: a thread's own link was not mailed: %s", type(exc).__name__)
+    from . import webrequests
+
+    webrequests.forget()
+    return {"id": event["id"], "url": url, "my_url": my_url}
+
+
 def confirm(svc: Services, slug: str, token: str, site: dict[str, Any] | None = None) -> Response:
     """SITE: the channel's setting when its page lives on the community's website (``page``):
     the thread's links then point there."""
@@ -1066,6 +1128,41 @@ def add_comment(
     return "ok"
 
 
+def add_reply(
+    svc: Services, site: dict[str, Any], root_id: str, text: str, pubkey: str, sign: Any
+) -> str:
+    """A comment under a thread by someone who has the channel, signed with their own key (SIGN:
+    the signer, for PUBKEY): a member, a steward or a guest of the channel logged in on the
+    website (sitesessions.py; the caller checked that they may). "ok", "unknown" (no such
+    thread) or "empty"."""
+    roots, _ = _events(svc, site["channel"])
+    root = next((e for e in roots if e["id"] == root_id), None)
+    if root is None:
+        return "unknown"
+    if not text:
+        return "empty"
+    author = root["pubkey"]
+    tags = [
+        ["h", site["channel"]],
+        ["E", root_id, "", author],
+        ["K", "9"],
+        ["P", author],
+        ["e", root_id, "", author],
+        ["k", "9"],
+        ["p", author],
+        ["client", TAG],
+    ]
+    event = sign({"kind": 1111, "created_at": int(time.time()), "content": text, "tags": tags})
+    if event.get("pubkey") != pubkey:
+        raise RuntimeError("the signer signed for another key")
+    relay, _api_sign = _relay(svc)
+    relay.publish(event, sign)
+    from . import webrequests
+
+    webrequests.forget()
+    return "ok"
+
+
 def _author_sign(svc: Services, root: dict[str, Any], owner: str) -> Any:
     """What signs for the thread's author: the signer for their own account (the thread is by
     their key), the groups key for an older card (it wrote the card for their address). None
@@ -1105,6 +1202,7 @@ def edit(
     body: str | None = None,
     comment_id: str = "",
     text: str | None = None,
+    actor: tuple[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """The author's edit of their thread (TITLE and / or BODY) or of one of their own comments
     (COMMENT_ID, TEXT), proven as for a comment. Published as the chat reads edits: a kind 1010
@@ -1113,11 +1211,19 @@ def edit(
     ``subject`` and as the bold first line (where the page and the chat read it). The first
     version and every edit stay on the relay. → ("ok", {"title", "body"} as they are now),
     ("same", …) when nothing changes (no event), or "not_author", "unknown", "not_yours",
-    "too_many", "unavailable"."""
+    "too_many", "unavailable".
+
+    ACTOR ``(pubkey, sign)``: someone logged in on the website (sitesessions.py) who is not
+    the thread's author edits a comment **they** signed (COMMENT_ID, TEXT); nothing else."""
     roots, replies, edits = _read(svc, site["channel"])
     root = next((e for e in roots if e["id"] == root_id), None)
     owner = _owner(svc, root)
-    if root is None or not owner or not (proven or is_author(svc, root, k)):
+    if actor is not None:
+        if root is None:
+            return "unknown", {}
+        if not comment_id:
+            return "not_author", {}
+    elif root is None or not owner or not (proven or is_author(svc, root, k)):
         return "not_author", {}
     now_root = edited(root, edits)
     if comment_id:
@@ -1126,7 +1232,10 @@ def edit(
         )
         if target is None:
             return "unknown", {}
-        if not own_comment(svc, root, target):
+        if actor is not None:
+            if target["kind"] != 1111 or target["pubkey"] != actor[0]:
+                return "not_yours", {}
+        elif not own_comment(svc, root, target):
             return "not_yours", {}
         content = text or ""
         same = edited(target, edits).get("content") == content
@@ -1142,9 +1251,12 @@ def edit(
         return "same", now
     from . import mail
 
-    if mail._limited("web-edit:" + root_id, EDITS_PER_HOUR, 3600):
+    # a commenter's edits count apart: they never use up the author's
+    if mail._limited(
+        "web-edit:" + root_id + (":" + actor[0] if actor is not None else ""), EDITS_PER_HOUR, 3600
+    ):
         return "too_many", {}
-    sign = _author_sign(svc, root, owner)
+    sign = actor[1] if actor is not None else _author_sign(svc, root, owner)
     if sign is None:
         return "unavailable", {}
     tags = [

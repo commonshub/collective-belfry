@@ -115,6 +115,7 @@ def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
     offers = {f["card"]: f for f in st.offers() if f.get("card") and f.get("channel") == channel}
     labellers = [{"pubkey": who} for labs in labels.values() for (_at, _lab, who) in labs]
     names, roles = webthreads._who(svc, [*roots, *replies, *labellers])
+    names = {**_account_names(svc, {e["pubkey"] for e in [*roots, *replies]} - set(names)), **names}
     by_root: dict[str, list[dict]] = {}
     for r in sorted(replies, key=lambda e: (e["created_at"], e["id"])):
         by_root.setdefault(webthreads._root_of(r), []).append(r)
@@ -140,6 +141,33 @@ def _read(svc: Services, slug: str, site: dict[str, Any]) -> dict[str, Any]:
         "roles": roles,
         "gk": gk,
     }
+
+
+def _account_names(svc: Services, keys: set[str]) -> dict[str, str]:
+    """The name on the account of each **guest** among KEYS, who has no profile to read a name
+    from (someone who wrote from the website and never set a profile: the name they gave for
+    it). A member with no profile stays "Somebody": the name on a member's contact is not
+    theirs to see in public unless they put it in their profile."""
+    from .core import m2o_id
+
+    out: dict[str, str] = {}
+    try:
+        for k in sorted(keys)[:200]:
+            rows = svc.odoo.search_read(
+                "belfry.pass",
+                [["keycast_pubkey", "=", k], ["state", "=", "active"]],
+                ["partner_id", "tier"],
+            )
+            if not rows or any(r.get("tier") != "guest" for r in rows):
+                continue
+            pid = m2o_id(rows[0].get("partner_id"))
+            row = svc.odoo.read_one("res.partner", pid, ["name"]) if pid else None
+            name = " ".join(str((row or {}).get("name") or "").split())[:80]
+            if name:
+                out[k] = name
+    except Exception as exc:  # noqa: BLE001 — "Somebody" then
+        log.info("webrequests: account names not read: %s", type(exc).__name__)
+    return out
 
 
 def snapshot(svc: Services) -> dict[str, Any]:
@@ -247,7 +275,13 @@ def item(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool = Fa
     }
 
 
-def _timeline(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool) -> list[dict]:
+def _timeline(
+    svc: Services,
+    snap: dict[str, Any],
+    t: dict[str, Any],
+    mine: bool,
+    viewer: dict[str, Any] | None = None,
+) -> list[dict]:
     root, f = t["root"], t["offer"]
     site = snap["site"]
     out: list[dict[str, Any]] = []
@@ -288,8 +322,10 @@ def _timeline(svc: Services, snap: dict[str, Any], t: dict[str, Any], mine: bool
             "edited_at": c.get("edited_at"),
             "text": webthreads._body(c),
         }
-        if mine and webthreads.own_comment(svc, root, c):
-            entry["mine"] = True  # the author may edit it (POST …/edit)
+        if (mine and webthreads.own_comment(svc, root, c)) or (
+            viewer and c["kind"] == 1111 and c["pubkey"] == viewer["pubkey"]
+        ):
+            entry["mine"] = True  # they may edit it (POST …/edit)
         out.append(entry)
         for x, was, now in versions(first[c["id"]]):
             if was.get("content") != now.get("content"):
@@ -340,7 +376,16 @@ def _page(rows: list[dict], at: Any, before: int | None, limit: int) -> tuple[li
     return page, (at(page[-1]) if len(page) < len(rows) else None)
 
 
-def listing(svc: Services, state: str, q: str, before: int | None, limit: int) -> dict[str, Any]:
+def listing(
+    svc: Services,
+    state: str,
+    q: str,
+    before: int | None,
+    limit: int,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """VIEWER: the account of a website session that signed the request: its own requests
+    carry ``"mine": true`` (the list itself is the public one, for everyone)."""
     snap = snapshot(svc)
     needle = fold(q)
     rows = []
@@ -350,7 +395,10 @@ def listing(svc: Services, state: str, q: str, before: int | None, limit: int) -
         root = _root(snap, t)
         if needle and needle not in fold(webthreads._title(root) + "\n" + webthreads._body(root)):
             continue
-        rows.append(item(svc, snap, t))
+        row = item(svc, snap, t)
+        if is_mine(svc, t, viewer):
+            row["mine"] = True
+        rows.append(row)
     counts = {"open": 0, "approved": 0, "closed": 0}
     for r in rows:
         counts["closed" if r["state"] == "declined" else r["state"]] += 1
@@ -385,6 +433,33 @@ def _proven(svc: Services, t: dict[str, Any], signer: str | None, thread_key: st
     return bool(KEY_RE.match(thread_key or "")) and webthreads.is_author(svc, t["root"], thread_key)
 
 
+def is_mine(svc: Services, t: dict[str, Any], acct: dict[str, Any] | None) -> bool:
+    """Whether the thread is the account's own (ACCT: someone logged in on the website,
+    sitesessions.py): they made its offer, they signed it, or it is an older card written for
+    their proven address."""
+    if not acct:
+        return False
+    f, root = t["offer"], t["root"]
+    if f and f.get("key") == acct["pubkey"]:
+        return True
+    owner = webthreads._owner(svc, root)
+    if not owner:
+        return False
+    return owner == acct["pubkey"] or bool(acct["email"]) and owner.lower() == acct["email"]
+
+
+def may_comment(svc: Services, snap: dict[str, Any], acct: dict[str, Any] | None) -> bool:
+    """Whether the account has the requests channel (sitesessions.has_channel)."""
+    from . import sitesessions
+
+    if not acct:
+        return False
+    try:
+        return sitesessions.has_channel(svc, acct, snap["site"]["channel"])
+    except Exception:  # noqa: BLE001 — the relay can't say: no
+        return False
+
+
 def ticket_url(svc: Services, f: dict[str, Any] | None) -> str | None:
     """Where an approved author goes on for their pass. GET /offers/<id> never gives the code
     (it is only in the private mail), so neither does this: only the address of the checkout
@@ -409,17 +484,32 @@ def _redeemed(svc: Services, f: dict[str, Any]) -> bool:
     return bool(c and len(c["used"]) >= int(c["uses"]))
 
 
-def detail(svc: Services, ref: str, signer: str | None, thread_key: str) -> dict[str, Any]:
+def detail(
+    svc: Services,
+    ref: str,
+    signer: str | None,
+    thread_key: str,
+    viewer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """VIEWER: the account of a website session that signed the request (SIGNER is then that
+    account's key): the author of its own threads, and ``viewer`` in the answer says whether
+    it may comment."""
     from .holder_invites import ApiError
 
     snap = snapshot(svc)
     t = _find(snap, ref)
-    mine = t is not None and _proven(svc, t, signer, thread_key)
+    mine = t is not None and (_proven(svc, t, signer, thread_key) or is_mine(svc, t, viewer))
     if t is None or not (t["public"] or mine):
         raise ApiError(404, "unknown", "No such request.")
     out = item(svc, snap, t, mine)
     out["body"] = webthreads._body(_root(snap, t, mine))
-    out["timeline"] = _timeline(svc, snap, t, mine)
+    out["timeline"] = _timeline(svc, snap, t, mine, viewer)
+    if viewer:
+        out["viewer"] = {
+            "role": viewer["role"],
+            "author": mine,
+            "can_comment": mine or may_comment(svc, snap, viewer),
+        }
     if mine:
         out["me"] = {"author": True}
         f = t["offer"]
@@ -439,13 +529,66 @@ def detail(svc: Services, ref: str, signer: str | None, thread_key: str) -> dict
     return out
 
 
-def comment(svc: Services, ref: str, signer: str | None, thread_key: str, text: Any) -> None:
+COMMENTS_PER_HOUR = 20  # per account, for a website session
+
+
+def _site_comment(
+    svc: Services, snap: dict[str, Any], t: dict[str, Any], viewer: dict[str, Any], text: str
+) -> None:
+    """A comment by someone logged in on the website, signed with their own key through the
+    signer: the author of the thread, or anyone who has the requests channel."""
+    from . import checkin, mail, sitesessions
+    from .holder_invites import ApiError
+
+    mine = is_mine(svc, t, viewer)
+    if not (t["public"] or mine):
+        raise ApiError(404, "unknown", "No such request.")
+    if not (mine or may_comment(svc, snap, viewer)):
+        raise ApiError(403, "not_allowed", "Only people who have this channel comment here.")
+    checkin.refuse_archived(svc, snap["site"]["channel"])
+    if mine and t["root"]["pubkey"] == snap["gk"]:
+        # their older card, written by the belfry's posting key for their address: the comment
+        # goes the way the card's own link posts it, so it reads as the author's
+        if mail._limited(f"site-comment:{viewer['partner']}", COMMENTS_PER_HOUR, 3600):
+            raise ApiError(429, "too_many", "Too many comments in a short time.")
+        got = webthreads.add_comment(svc, snap["site"], t["root"]["id"], text, "", True)
+        if got == "too_many":
+            raise ApiError(429, "too_many", "Too many comments in a short time.")
+        if got != "ok":
+            raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+        return
+    sign = sitesessions.signer(svc, viewer)  # 409 own_key, 503 signer
+    if mail._limited(f"site-comment:{viewer['partner']}", COMMENTS_PER_HOUR, 3600):
+        raise ApiError(429, "too_many", "Too many comments in a short time.")
+    try:
+        got = webthreads.add_reply(svc, snap["site"], t["root"]["id"], text, viewer["pubkey"], sign)
+    except Exception as exc:  # noqa: BLE001 — the signer or the relay
+        log.warning("webrequests: a comment was not posted: %s", type(exc).__name__)
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
+    if got != "ok":
+        raise ApiError(404, "unknown", "No such request.")
+
+
+def comment(
+    svc: Services,
+    ref: str,
+    signer: str | None,
+    thread_key: str,
+    text: Any,
+    viewer: dict[str, Any] | None = None,
+) -> None:
     from .holder_invites import ApiError
 
     snap = snapshot(svc)
     t = _find(snap, ref)
     if t is None:
         raise ApiError(404, "unknown", "No such request.")
+    if viewer is not None:
+        text = text.strip() if isinstance(text, str) else ""
+        if not text or len(text) > webthreads.COMMENT_MAX:
+            raise ApiError(422, "invalid", f"text: 1 to {webthreads.COMMENT_MAX} characters.")
+        _site_comment(svc, snap, t, viewer, text)
+        return
     by_offer = bool(signer and t["offer"] and t["offer"].get("key") == signer)
     if not by_offer and not _proven(svc, t, None, thread_key):
         raise ApiError(403, "not_author", "Only the request's author comments here.")
@@ -464,10 +607,16 @@ def comment(svc: Services, ref: str, signer: str | None, thread_key: str, text: 
 
 
 def edit(
-    svc: Services, ref: str, signer: str | None, thread_key: str, data: dict[str, Any]
+    svc: Services,
+    ref: str,
+    signer: str | None,
+    thread_key: str,
+    data: dict[str, Any],
+    viewer: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """POST /requests/<id or number>/edit: the author changes the title and / or the text of
-    their request, or one of their own comments."""
+    their request, or one of their own comments. VIEWER (a website session's account): the
+    author of their own threads; under anyone else's, only a comment they signed."""
     from . import checkin
     from .holder_invites import ApiError
 
@@ -476,8 +625,18 @@ def edit(
     if t is None:
         raise ApiError(404, "unknown", "No such request.")
     by_offer = bool(signer and t["offer"] and t["offer"].get("key") == signer)
-    if not by_offer and not _proven(svc, t, None, thread_key):
+    by_site = is_mine(svc, t, viewer)  # proven by the session: no thread key needed
+    actor = None
+    if viewer is not None and not by_site:
+        # not their thread: one of their own comments, when the thread is one they can see
+        if not t["public"] or "comment" not in data:
+            raise ApiError(403, "not_author", "Only the request's author edits it.")
+        from . import sitesessions
+
+        actor = (viewer["pubkey"], sitesessions.signer(svc, viewer))
+    elif not by_offer and not by_site and not _proven(svc, t, None, thread_key):
         raise ApiError(403, "not_author", "Only the request's author edits it.")
+    by_offer = by_offer or by_site
     title = body = text = None
     comment_id = ""
     if "comment" in data or "text" in data:
@@ -509,6 +668,7 @@ def edit(
         body,
         comment_id or "",
         text,
+        actor,
     )
     if got == "not_author":
         raise ApiError(403, "not_author", "Only the request's author edits it.")
@@ -744,8 +904,10 @@ def register(app: FastAPI) -> None:
             raise ApiError(422, "invalid", f"q: at most {Q_MAX} characters.")
         before, limit = _paging(request)
         s = request.app.state.services
-        out = await _run(listing, s, state, text, before, limit)
-        return answer(out, SHORT)
+        # signed by a website session: the same list, the account's own requests marked
+        _key, viewer = await _acting(request, events._viewer(request, _signed_path(request)))
+        out = await _run(listing, s, state, text, before, limit, viewer)
+        return answer(out, NO_STORE if viewer else SHORT)
 
     @app.get(API + "/requests/{ref}")
     async def requests_one(request: Request, ref: str) -> JSONResponse:
@@ -753,10 +915,22 @@ def register(app: FastAPI) -> None:
         s = request.app.state.services
         # who asks, when they say: the offer's key (NIP-98) or the thread's own key, in a
         # header. Never from the query string (query strings end up in logs)
-        signer = events._viewer(request, request.url.path)
+        signer, viewer = await _acting(request, events._viewer(request, request.url.path))
         key = request.headers.get("x-thread-key") or ""
-        out = await _run(detail, s, ref, signer, key)
+        out = await _run(detail, s, ref, signer, key, viewer)
         return answer(out, NO_STORE)  # the same address answers its author with more
+
+    def _signed_path(request: Request) -> str:
+        """The path a GET with a query was signed for (NIP-98 signs the whole address)."""
+        return request.url.path + ("?" + request.url.query if request.url.query else "")
+
+    async def _acting(request: Request, signer: str | None) -> tuple[str | None, Any]:
+        """(the key to act as, the account when SIGNER is a website session, else None)."""
+        from . import sitesessions
+
+        if not signer:
+            return signer, None
+        return await run_in_threadpool(sitesessions.acting, request.app.state.services, signer)
 
     async def _posted(request: Request) -> tuple[Any, str | None, str, dict[str, Any]]:
         """(services, the NIP-98 signer if any, the thread key if any, the JSON body)."""
@@ -784,14 +958,16 @@ def register(app: FastAPI) -> None:
     async def requests_comment(request: Request, ref: str) -> JSONResponse:
         _allow(request)
         s, signer, key, data = await _posted(request)
-        await _run(comment, s, ref, signer, key, data.get("text"))
+        signer, viewer = await _acting(request, signer)
+        await _run(comment, s, ref, signer, key, data.get("text"), viewer)
         return answer({"ok": True}, NO_STORE, 201)
 
     @app.post(API + "/requests/{ref}/edit")
     async def requests_edit(request: Request, ref: str) -> JSONResponse:
         _allow(request)
         s, signer, key, data = await _posted(request)
-        out = await _run(edit, s, ref, signer, key, data)
+        signer, viewer = await _acting(request, signer)
+        out = await _run(edit, s, ref, signer, key, data, viewer)
         return answer(out, NO_STORE)
 
     @app.get(API + "/events/{link}/activity")
