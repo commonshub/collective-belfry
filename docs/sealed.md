@@ -230,7 +230,7 @@ and reads its wraps again from 0.
 A device adds `["ready"]` to the roster it publishes when every counted session of the account
 is a device of that roster. Counted = a session of `/api/me/sessions` with `"chat": true` (the
 belfry's own chat clients: the web chat and the phone apps; other apps and remote apps never
-count) and `last_activity` within the last 30 days. The device key is the key that list gives
+count) and last active less than 30 × 86 400 s ago (`last_activity`, or `created_at` when the session was never active). The device key is the key that list gives
 as `client_pubkey`, for every way of signing in. Then: a device that sees this become true publishes
 roster n+1 with `ready` (same devices, same `lb`). Once a chain has had `ready`, it stays ready
 for everybody (later rosters without the tag don't unset it).
