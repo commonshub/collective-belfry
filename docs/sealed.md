@@ -99,19 +99,22 @@ line covers the last 30 days.
 "Added from ‹device›" on my own list: the signer of the first roster that contains the device
 (nothing for a device that added itself, i.e. a root).
 
-### 3.5 My device names, kind 30078 `d = belfry:devices`
+### 3.5 My device names, kind 30078 `d = belfry:device:<device pubkey>`
 
-Signed by the account, replaceable, content = NIP-44 with conv(letterbox secret, letterbox pub)
-of the head letterbox, tag `["lb", <that letterbox pub>]`:
+One event per device, signed by the account, replaceable, written only by that device (so two
+devices never overwrite each other). Content = NIP-44 with conv(letterbox secret, letterbox pub)
+of the head letterbox at the time of writing, tag `["lb", <that letterbox pub>]`:
 
 ```json
-{"v":1,"devices":{"<device pubkey>":{"name":"Safari on Mac","kind":"computer","added":1790000000}}}
+{"v":1,"name":"Safari on Mac","kind":"computer","added":1790000000}
 ```
 
-`kind` is phone | tablet | computer. Each device writes its own entry (its name = the `device` of its own row in `/api/me/sessions`, found by `client_pubkey`, so it matches what the Allow prompt showed; the platform's own name for itself when that is empty)
-when it joins, keeps unknown fields and other devices' entries, drops entries of devices no longer
-in any roster after 90 days. Rewritten under the new letterbox after a key change. Other people
-never receive it.
+`kind` is phone | tablet | computer. The name is the `device` of the device's own row in
+`/api/me/sessions` (found by `client_pubkey`), so it matches what the Allow prompt showed; the
+platform's own name for itself when that is empty. Written when the device joins the head and
+again after each letterbox change. Read with `{kinds:[30078], authors:[me]}` and the `d` prefix;
+an entry under an older letterbox is opened with the key chain. Entries of devices that are in no
+roster are ignored. Other people never receive the names.
 
 ## 4. Messages
 
@@ -130,6 +133,10 @@ Gift wrap, kind 1059:
   `["lb", <recipient's letterbox pub>]`.
 
 A wrap with an `lb` tag is sealed; one without is the old kind and goes to the signer as before.
+
+Before each send, and when a sealed conversation is opened, ask the relay again for every
+participant's anchor and rosters (keep them on the live subscription too; wait at most 3 s, then
+use what is known): sealing to a letterbox its owner has left lets the removed device read.
 
 One wrap per participant's head letterbox, and one to my own head letterbox (the self-copy),
 through the outbox to the community relay as today. No signer call.
@@ -155,7 +162,7 @@ Reactions, taking a reaction back, e-mail threads, conversation ids, read state:
 ### 5.1 The first device
 
 No anchor for my account and I am capable: make a letterbox, publish roster n = 1 with this
-device, then the anchor, then `belfry:devices`. If an anchor appeared meanwhile (two devices at
+device, then the anchor, then its device name (§3.5). If an anchor appeared meanwhile (two devices at
 once), drop mine and go to 5.2.
 
 ### 5.2 A new device asks
@@ -223,7 +230,7 @@ and reads its wraps again from 0.
 - Removed from the list by the user, or its session is gone from `/api/me/sessions` (checked at
   start and every 6 h by each device; wait a random 0–60 s, re-read the head, skip if done):
   make a new letterbox, send keys (5.5) with the new secret to each remaining device, publish
-  roster n+1 with the new `lb` and without the device, rewrite `belfry:devices`.
+  roster n+1 with the new `lb` and without the device; each device rewrites its name (§3.5) when it sees the new head.
   A user's removal also revokes the session.
 - Signing out: the device revokes its session as today and wipes its keys. The others do the above.
 
