@@ -51,10 +51,12 @@ PROFILE_D = "belfry:profile"  # the chat's own event for tags and place (kind 30
 TAGS_MAX = 30  # the chat's own limit
 TAG = re.compile(r"^[a-z0-9-]{1,30}$")
 TICKETS_MAX = 30
+TICKET_SECONDS = 120  # how long "holds a ticket" is believed
 NO_STORE = {"Cache-Control": "no-store"}
 HEX = re.compile(r"^[0-9a-f]{64}$")
 PICTURE = re.compile(r"^https://[A-Za-z0-9.-]+(:\d{1,5})?(/[\x21-\x7e]*)?$")
 _lock = threading.RLock()
+_ticket: dict[str, tuple[float, bool]] = {}
 
 
 def own(svc: Services) -> bool:
@@ -425,6 +427,26 @@ def tickets(svc: Services, acct: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def has_ticket(svc: Services, pubkey: str) -> bool:
+    """Whether the account of this key is admitted with a ticket to an event that is not
+    cancelled (a tester's test ticket too); believed for TICKET_SECONDS. What makes a guest a
+    "villager": a larger allowance on Blossom (blossom.py) and the villagers-only profiles
+    (villagers.py)."""
+    now = time.time()
+    hit = _ticket.get(pubkey)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        held = any(not t["cancelled"] for t in tickets(svc, {"pubkey": pubkey}))
+    except Exception as exc:  # noqa: BLE001 — not a ticket holder, for now
+        log.info("site: tickets not read: %s", type(exc).__name__)
+        return False
+    if len(_ticket) > 5000:
+        _ticket.clear()
+    _ticket[pubkey] = (now + TICKET_SECONDS, held)
+    return held
+
+
 def _request_url(svc: Services, snap: dict[str, Any], t: dict[str, Any]) -> str:
     """The request's address as webthreads.thread_url gives it (by its number on the website's
     own page), without reading the channel again."""
@@ -480,7 +502,7 @@ def _requests(svc: Services, acct: dict[str, Any]) -> tuple[list[dict], list[dic
 
 
 def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
-    from . import guests, nostr
+    from . import guests, nostr, villagers
 
     profile, _at = _profile(svc, acct)
 
@@ -504,6 +526,11 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("site: tags not read: %s", type(exc).__name__)
         tags = []
+    try:
+        slug = villagers.slug_of(svc, acct, nip05.split("@")[0] if nip05 else "")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("site: slug not read: %s", type(exc).__name__)
+        slug = None
     current = acct["session"]["key"]
     return {
         "name": text("display_name", NAME_MAX) or text("name", NAME_MAX) or acct["name"] or "Guest",
@@ -512,6 +539,8 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
         "picture": text("picture", PICTURE_MAX),
         "about": text("about", ABOUT_MAX),
         "tags": tags,
+        "slug": slug,
+        "visibility": villagers.visibility_of(villagers._contact(svc, acct["partner"])),
         "email": acct["email"] or None,
         "role": acct["role"],
         "pubkey": acct["pubkey"],
@@ -533,13 +562,25 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
 
 # ── POST /site/profile ──────────────────────────────────────────────────────────────────────
 def _clean_profile(body: dict[str, Any]) -> dict[str, Any]:
-    """{"name"?, "about"?, "picture"?, "tags"?} checked: what to set (a value) or take out
-    (None). ``tags``: lowercased, without doubles; each is checked against the ones the account
-    has in ``set_tags``."""
-    unknown = set(body) - {"name", "about", "picture", "tags"}
+    """{"name"?, "about"?, "picture"?, "tags"?, "slug"?, "visibility"?} checked: what to set
+    (a value) or take out (None). ``tags``: lowercased, without doubles; each is checked
+    against the ones the account has in ``set_tags``. ``slug``: checked in villagers.plan."""
+    from . import villagers
+
+    unknown = set(body) - {"name", "about", "picture", "tags", "slug", "visibility"}
     if unknown or not body:
-        raise ApiError(422, "invalid", "Send name, about, picture and / or tags.")
+        raise ApiError(422, "invalid", "Send name, about, picture, tags, slug and / or visibility.")
     out: dict[str, Any] = {}
+    if "visibility" in body:
+        if body["visibility"] not in villagers.VISIBILITIES:
+            raise ApiError(422, "invalid", "visibility: public or villagers.")
+        out["visibility"] = body["visibility"]
+    if "slug" in body:
+        if not isinstance(body["slug"], str):
+            exc = ApiError(422, "slug_invalid", "slug: a word.")
+            exc.extra["reason"] = "short"
+            raise exc
+        out["slug"] = body["slug"]
     if "tags" in body:
         raw = body["tags"]
         if not isinstance(raw, list) or len(raw) > 60 or not all(isinstance(t, str) for t in raw):
@@ -636,13 +677,32 @@ def mail_limited(acct: dict[str, Any]) -> bool:
 
 
 def set_profile(svc: Services, acct: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """``POST /site/profile``. The page's name and who sees it (``slug``, ``visibility``:
+    villagers.py) are kept on the contact; a slug that is refused refuses the whole call,
+    before anything is saved. The rest: ``_set_profile``."""
+    from . import villagers
+
+    want = _clean_profile(body)
+    slug, visibility = want.pop("slug", None), want.pop("visibility", None)
+    vals = villagers.plan(svc, acct, slug, visibility)
+    if vals and mail_limited(acct):
+        raise ApiError(429, "too_many", "Too many changes in a short time.")
+    out = _set_profile(svc, acct, want) if want else {"ok": True, "changed": False}
+    changed = villagers.apply(svc, acct, vals)
+    if out["changed"]:
+        villagers.forget()
+        if "name" in want and slug is None:
+            villagers.renamed(svc, account(svc, acct["partner"]) or acct)
+    return {"ok": True, "changed": bool(out["changed"] or changed)}
+
+
+def _set_profile(svc: Services, acct: dict[str, Any], want: dict[str, Any]) -> dict[str, Any]:
     """The account's kind 0 with these fields changed and everything else kept (nip05, fields
     this API doesn't know), signed through the signer; on the groups relay (where the website's
     names are read, and the only one a guest is on) and, for a member, the community relay.
     ``tags``: set_tags."""
     from . import events, followers, webrequests
 
-    want = _clean_profile(body)
     sign = signer(svc, acct)
     tags = want.pop("tags", None)
     changed = set_tags(svc, acct, tags, sign) if tags is not None else False

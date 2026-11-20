@@ -38,10 +38,8 @@ MB = 1024 * 1024
 GUEST_FILE = 5 * MB  # one file of someone who is only a guest
 GUEST_TOTAL = 50 * MB  # everything such a guest ever sends
 TICKET_TOTAL = 1024 * MB  # everything a guest who holds a ticket ever sends
-TICKET_SECONDS = 120  # how long "holds a ticket" is believed
 SEEN_MAX = 300  # files remembered per account, so that a retry is not counted twice
 _quota_lock = threading.Lock()
-_ticket: dict[str, tuple[float, bool]] = {}
 
 
 class BlossomAuthError(Exception):
@@ -146,23 +144,11 @@ def pubkey_has_active_pass(svc: Services, pubkey: str) -> bool:
 
 
 def has_ticket(svc: Services, pubkey: str) -> bool:
-    """Whether the account of this key is admitted with a ticket to an event that is not
-    cancelled (a tester's test ticket too); believed for TICKET_SECONDS."""
+    """Whether the account of this key holds a ticket of an event (sitesessions.has_ticket:
+    the rule is also who sees a villagers-only profile, villagers.py)."""
     from . import sitesessions
 
-    now = time.time()
-    hit = _ticket.get(pubkey)
-    if hit and hit[0] > now:
-        return hit[1]
-    try:
-        held = any(not t["cancelled"] for t in sitesessions.tickets(svc, {"pubkey": pubkey}))
-    except Exception as exc:  # noqa: BLE001 — the smaller allowance then
-        log.info("blossom: tickets not read: %s", type(exc).__name__)
-        return False
-    if len(_ticket) > 5000:
-        _ticket.clear()
-    _ticket[pubkey] = (now + TICKET_SECONDS, held)
-    return held
+    return sitesessions.has_ticket(svc, pubkey)
 
 
 def allowance(svc: Services, pubkey: str) -> tuple[int, str] | None:

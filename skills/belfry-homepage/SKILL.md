@@ -171,6 +171,14 @@ The belfry uploads every file to its Blossom server, `https://blossom.<domain>`,
 NIP-5A root site manifest (kind 15128) with its own key on its community relay. The site needs
 an `index.html` at its root, and optionally a `404.html`. Dotfiles are skipped.
 
+**One page for every address under a folder.** A file named `_.html` in a folder answers the
+addresses one step under that folder that have no file of their own: with `/villagers/_.html`,
+`/villagers/kim-cook` (and `/villagers/kim-cook/`) shows that page with status 200, and the
+page's script reads the name from `location.pathname` (people's profiles:
+`GET /api/v1/villagers/<slug>`, docs/website-accounts.md). A file that exists wins; deeper
+addresses (`/villagers/kim/photos`), names ending in a file extension the site uses (`.png`)
+and the root (`/_.html`) are not covered. It works on the apex and in previews.
+
 1. Build the site to a folder (`dist/`, `public/`, `_site/`).
 2. Publish from the server:
    ```bash

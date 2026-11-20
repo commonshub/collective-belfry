@@ -980,6 +980,7 @@ def _finish_activation(
                 member_number,
                 # the username they asked for when they applied (applyverified.accept)
                 str(partner.get("belfry_wanted_username") or ""),
+                pubkey,
             )
         publish_profile(svc, user_token, pubkey, partner, username)
         if tier != "guest" and not unproven and username != member_number.lower():

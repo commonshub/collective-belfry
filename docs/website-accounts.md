@@ -99,6 +99,7 @@ endpoints below such a key is a browser key like any other, as before.
 ```json
 {"name": "Kim Cook", "username": "guest-12", "nip05": "guest-12@<domain>",
  "picture": "https://…" , "about": "…", "tags": ["solar", "bread-making"],
+ "slug": "kim-cook", "visibility": "villagers",
  "email": "kim@example.org", "role": "guest",
  "pubkey": "<64 hex>", "npub": "npub1…",
  "tickets": [{"event_link": "village-2027", "event_title": "The village",
@@ -146,6 +147,8 @@ event kept; the contact's list is then emptied. Best effort, never in the way of
 membership: someone who holds their own key gets no event (the belfry can't sign for them),
 and when the relay or the signer doesn't answer the tags stay on the contact, where nothing
 shows them for a member (they set them again in the chat or on the website).
+- `slug`: the name of their profile page (`null` for a member the signer has no username
+  for); `visibility`: `public` or `villagers`. Both: "Villagers: profile pages" below.
 - `email`: their own proven address, in full. This is the only answer that carries one.
 - `tickets`: the events whose group has the account admitted with a ticket now (at most 30,
   by start). `ticket`: the ticket's d. `ticket_url`: the ticket's own link (its QR,
@@ -162,8 +165,9 @@ shows them for a member (they set them again in the chat or on the website).
 
 ### `POST /site/profile`
 
-`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "tags"?: ["…"]}`, at
-least one, nothing else. `name`: 1–80 characters, one line, not a key or an e-mail address.
+`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "tags"?: ["…"],
+"slug"?: "…", "visibility"?: "public" | "villagers"}`, at least one, nothing else. `slug` and
+`visibility`: "Villagers: profile pages" below. `name`: 1–80 characters, one line, not a key or an e-mail address.
 `about`: at most 1000 characters. `picture`: an `https://` address, at most 500 characters.
 `null` or `""` takes `about` / `picture` out.
 
@@ -230,6 +234,133 @@ Refusals of the gate come with `X-Reason` (words), `X-Belfry-Code` and a JSON bo
 Blossom itself still answers 413 over 25 MB and 415 for a type it doesn't keep. The website
 should send a picture it has redrawn on a canvas (small, and without the camera's EXIF data,
 which can hold the place a photo was taken): nothing on the way re-encodes it.
+
+## 2b. Villagers: profile pages
+
+Built 2026-11-20; code: `villagers.py`. Every account (never an agent) can have a page on the
+website, `https://<domain>/villagers/<slug>`: the website draws it (its own
+`/villagers/_.html`, see "One page for every address under a folder" below) from
+`GET /villagers/<slug>`.
+
+**The slug.**
+
+- **A member, an admin:** their username in the signer (what `/site/me` gives as `username`).
+  It is changed in the chat, never here: `POST /site/profile {"slug": …}` → 409 `use_chat`
+  (also when it is the one they have, and nothing else in that call is saved). A member the
+  signer has no username for (they hold their own key) has `"slug": null` and no page.
+- **A guest:** kept on their contact (`belfry_slug`). Made the first time it is asked for
+  (`GET /site/me`, the list), from the name on the account with the rules of a username:
+  `ada-lovelace`, then `ada-lovelace-2`, `-3`… A guest called "Guest", or whose name leaves
+  nothing (or only a number), gets `guest-<contact id>` (then `-2`…); when such a guest gives
+  a name with `POST /site/profile {"name"}`, the slug becomes that name, unless they chose
+  one themselves.
+- **One set of names with the usernames.** A guest's slug is never: a username in the signer
+  (of someone else), another contact's slug, a reserved name (`admin`, `hello`, …), the name of
+  a channel. And nobody gets a **username** that is another contact's slug: `POST /username`
+  (409 `taken`), `POST /username/check` (`taken`), the username asked for when applying or
+  after a member link (409 `username_taken`), and the default a new member gets from their
+  name (the next free one). A contact's own slug is no obstacle for that contact: a guest who
+  becomes a member gets their name as a username even when it is their slug. From then on the
+  username is the slug; what is left on the contact counts for nothing and is taken off the
+  next time that name is looked up.
+- A guest whose passes all ended **keeps the name** (nobody else can take it) but has no page.
+
+**A guest changes it:** `POST /site/profile {"slug": "kim"}`, alone or with the other fields.
+Trimmed, lowercased, a leading `@` dropped.
+
+- 422 `slug_invalid`, with `reason`: `short` (nothing, or not a string), `long` (over 30),
+  `chars` (not a–z, 0–9, `.`, `-`, `_`, starting and ending with a letter or a digit),
+  `reserved` (a reserved name, or what accounts are called before they have a name: a number,
+  `guest-12`, `member-12`, two to six letters and a number of two or more digits like
+  `osv-0007`).
+- 409 `slug_taken`, with `"suggestions"`: up to 3 free ones (`kim-2`, `kim-3`, `kim-4`).
+- A slug that is refused refuses the whole call: nothing else in it is saved.
+- The slug they have already: `"changed": false`.
+
+**Visibility.** `POST /site/profile {"visibility": "public" | "villagers"}` (422 `invalid`
+for anything else), members and guests alike; kept on the contact
+(`belfry_profile_visibility`). The default is `villagers` (`villagers.DEFAULT_VISIBILITY`).
+
+A change of slug or visibility counts in the account's 10 profile changes an hour (429
+`too_many`, answered before anything is saved).
+
+### `GET /villagers/<slug>`
+
+NIP-98 **optional**. Signed by a site session it reads as that account; signed by an
+account's own key (the chat's), as that account. A signature that is sent must be right: 401
+`unauthorized` otherwise.
+
+```json
+{"slug": "kim-cook", "name": "Kim Cook", "picture": "https://…", "about": "…",
+ "tags": ["solar", "bread-making"], "role": "guest", "visibility": "villagers", "self": false}
+```
+
+- `name`: the profile's (kind 0), else the name on the account, else "Somebody". `picture`,
+  `about`: `null` when not set. `tags`: as in `GET /site/me`. `role`: `admin` | `member` |
+  `guest`. `self`: the caller's own profile.
+- Never an e-mail address, a key, an npub or a nip05.
+- `slug` is matched in lowercase. Only accounts with an active pass have a page.
+
+**A villager** is a caller whose account is a member or an admin, or a guest who holds a
+ticket of an event (not cancelled; the rule of the Blossom allowance, read again every two
+minutes). An agent is not an account here, so not a villager.
+
+| the profile | unsigned, a key nobody knows, a guest without a ticket | a villager | its owner |
+|---|---|---|---|
+| `public` | 200 | 200 | 200 |
+| `villagers` | 403 `villagers_only` | 200 | 200 |
+| no such slug | 403 `villagers_only` | 404 `unknown` | (none) |
+
+Someone who is not a villager gets the **same** 403 (`{"error": "villagers_only", "message":
+"…"}`, nothing else) for a villagers-only profile and for a name nobody has, so the two cannot
+be told apart. Admins are members, so they see every profile.
+
+`Cache-Control`: `no-store` on every signed answer and every error; `public, max-age=60` on
+the unsigned answer of a public profile (so a profile made villagers-only may still be shown
+to the public for up to a minute by a cache). 429 `too_many`: 120 reads a minute per address
+of the network (this endpoint and the list together). 409 `unsupported` without the belfry's
+own register.
+
+### `GET /villagers`
+
+No signature needed. The **public** profiles only, also for a signed caller:
+
+```json
+{"villagers": [{"slug": "kim-cook", "name": "Kim Cook", "picture": null,
+  "tags": ["bread"], "role": "guest"}]}
+```
+
+Sorted by name (then slug), at most 500. Kept in memory for 60 seconds, and read again at once
+after a change made through `POST /site/profile` (name, picture, tags, slug, visibility). A
+change made elsewhere (a name or a username changed in the chat, a pass that ended) shows
+within the minute. `Cache-Control: public, max-age=60` (`no-store` when an `Authorization`
+header was sent). Accounts without a slug are left out.
+
+### One page for every address under a folder (`_.html`)
+
+A rule of the website itself (the nsite on the apex and in previews; `homepage.fallback_path`),
+for any folder, not only `/villagers`:
+
+> When the site has no file for the address `/<folder>/<segment>` (with or without a trailing
+> slash) and it has `/<folder>/_.html`, that file is served, with status 200.
+
+- `<folder>` is one or more segments (`/villagers`, `/a/b`), never the root: `/_.html` does
+  nothing.
+- Exactly one segment more than the folder: `/villagers/kim/photos` is not answered by
+  `/villagers/_.html`.
+- `<segment>`: 1–80 of `A-Z a-z 0-9 . _ -`, and not ending in a file extension that some
+  file of the site has (`/villagers/kim.png` on a site with `.png` files stays a 404;
+  `/villagers/kim.cook` is a name).
+- A file that exists wins, as before: `/villagers/ada`, `/villagers/ada.html`,
+  `/villagers/ada/index.html`.
+- Served as any `.html` file of the site: `Content-Type: text/html`, `Cache-Control: public,
+  max-age=60`, an ETag. The page reads the name from `location.pathname` and asks the API.
+- Everything else is answered as before (the site's `/404.html` with 404, or "Not found").
+- Only the website's own paths come here: `/events`, `/.well-known/*`, `/theme/*`, `/follow`,
+  `/git`, the installed apps and Belfry's own pages are routed before the website.
+- In a preview of **one part** of the site (a proposal with a `path`), an address the draft
+  has nothing for shows the live site's answer, as before: so the live site's `_.html` too.
+- Not with `HOMEPAGE=https://…` (a proxied website answers its own addresses).
 
 ## 3. Which e-mails they get
 
@@ -378,7 +509,8 @@ No cookies anywhere; nothing is ever answered with `Access-Control-Allow-Credent
 - The apex `https://<domain>`: every `/api/v1/*` path, as before.
 - `https://preview.<domain>` (anyone's draft site): what it could call before (the sales
   endpoints, reading events and requests), plus `login/start`, `login/verify`, `site/me`,
-  `site/profile`, `site/logout`, `site/notifications`. Still **not**: a comment or an edit on a request,
+  `site/profile`, `site/logout`, `site/notifications`, and reading `villagers` and
+  `villagers/<slug>`. Still **not**: a comment or an edit on a request,
   `events/<d>/join`.
 
 A preview is another origin: its browser key is its own, and a session made there is not the
@@ -386,7 +518,8 @@ real site's.
 
 ## 8. What a site session can and cannot do
 
-Can, for its own account only: read `/site/me`; change name, about, picture, tags; choose
+Can, for its own account only: read `/site/me`; change name, about, picture, tags, who sees
+its profile and (a guest) its page's name; read the profiles its account may see; choose
 which e-mails it gets; comment on public
 requests and edit its own comments, title and text; open a request (an offer); order through
 the checkout and read its own orders; check a code; take a free open ticket; read events as
@@ -425,4 +558,12 @@ endpoint not named in this document as the account.
 - Not run: a member's `belfry:profile` event written by the server and read back by the
   chat on a live relay (the test uses an event as the chat writes it); any of these mails
   through a real mail provider.
+- Profile pages: the list reads each public member's username from the signer (two calls
+  each) when it is rebuilt, at most once a minute: slow with hundreds of public members.
+  Someone applying for membership with the username that is their own guest slug is told it is
+  taken (the form signs with a browser key, not the account's); at approval they get it
+  anyway when it is still theirs. A slug is not re-checked against usernames set outside
+  these checks (the first-run setup's admin name): the username wins the page then. Whether
+  the website's Content-Security-Policy lets a page on the apex call `belfry.<domain>` was
+  not looked at here (the site already calls the API).
 - Nothing here ran against a live signer, relay, Stripe or Odoo.

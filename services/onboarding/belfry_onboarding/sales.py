@@ -1352,7 +1352,9 @@ def confirm(svc: Services, partner_id: int, address: str) -> dict[str, Any]:
                     number = (
                         svc.odoo.read_one("res.partner", partner_id, ["belfry_member_number"]) or {}
                     ).get("belfry_member_number") or ""
-                    usernames.give_default(svc, found[1], row.get("name") or "", str(number))
+                    usernames.give_default(
+                        svc, found[1], row.get("name") or "", str(number), mine=found[0]
+                    )
             except Exception:  # noqa: BLE001 — the address is proven; the name can come later
                 log.exception("sales: no username for partner %s", partner_id)
             return {"state": "confirmed", "partner": partner_id}

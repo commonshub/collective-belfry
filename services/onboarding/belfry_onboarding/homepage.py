@@ -32,6 +32,7 @@ import io
 import logging
 import mimetypes
 import posixpath
+import re
 import tarfile
 import time
 from collections import OrderedDict
@@ -189,6 +190,34 @@ def candidate_paths(path: str) -> list[str]:
     if "." in base:
         return [path]
     return [path, path + "/index.html", path + ".html"]
+
+
+PAGE_FOR_ANY = "_.html"  # a folder's page for the addresses under it that have no file
+SEGMENT = re.compile(r"[A-Za-z0-9._-]{1,80}")
+
+
+def fallback_path(wanted: str, paths: dict[str, str]) -> str | None:
+    """The site's page for an address it has no file for: ``/<folder>/_.html`` answers
+    ``/<folder>/<segment>`` (one segment more than the folder, with or without a trailing
+    slash; the folder may be several deep, never the root). Not for a segment that ends in a
+    file extension some file of the site has (a missing picture stays missing). None: no such
+    page. A profile page per person is made this way: ``/villagers/_.html`` reads the name
+    from the address and asks the API."""
+    parts = wanted.split("/")
+    if parts and parts[-1] == "" and len(parts) > 2:
+        parts.pop()  # one trailing slash
+    if len(parts) < 3 or parts[0] != "" or not all(parts[1:]):
+        return None
+    segment = parts[-1]
+    if segment in (".", "..") or not SEGMENT.fullmatch(segment) or ".." in parts:
+        return None
+    page = "/".join(parts[:-1]) + "/" + PAGE_FOR_ANY
+    if page not in paths:
+        return None
+    ext = posixpath.splitext(segment)[1].lower()
+    if ext and any(posixpath.splitext(p)[1].lower() == ext for p in paths):
+        return None
+    return page
 
 
 @dataclass
@@ -351,6 +380,8 @@ class Homepage:
         status = 200
         wanted = request.url.path if path is None else path
         path = next((p for p in candidate_paths(wanted) if p in site.paths), None)
+        if path is None:
+            path = fallback_path(wanted, site.paths)  # /<folder>/_.html for /<folder>/<name>
         if path is None:
             status, path = 404, "/404.html"
             if path not in site.paths:

@@ -113,7 +113,9 @@ def holder(svc: Services, name: str) -> str:
         who = str(svc.keycast.pubkey_for_name(name) or "").lower()
     except Exception as exc:  # noqa: BLE001
         log.info("usernames: signer not asked about a name: %s", exc)
-    if not who and not _free(svc, name):
+    if not who:
+        who = _guest_slug(svc, name)  # a guest's page on the website has that name
+    if not who and not _free_name(svc, name):
         who = "#"
     if who:
         if len(_taken) > 2000:
@@ -198,7 +200,25 @@ def check(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _free(svc: Services, name: str) -> bool:
+def _guest_slug(svc: Services, name: str) -> str:
+    """The key of the guest whose page on the website is called NAME (villagers.py: slugs and
+    usernames are one set of names), "" for nobody. Best effort."""
+    try:
+        from . import villagers
+
+        return villagers.guest_holder(svc, name)
+    except Exception as exc:  # noqa: BLE001
+        log.info("usernames: guests' slugs not checked: %s", type(exc).__name__)
+        return ""
+
+
+def _free(svc: Services, name: str, mine: str = "") -> bool:
+    """``_free_name``, and not the slug of another contact's page (MINE: the key of the
+    account asking; a guest who becomes a member may take their own)."""
+    return _free_name(svc, name) and _guest_slug(svc, name) in ("", mine)
+
+
+def _free_name(svc: Services, name: str) -> bool:
     """Not reserved and not the name of a channel (channels receive mail at <channel>@)."""
     if name in RESERVED or not VALID.fullmatch(name):
         return False
@@ -219,12 +239,15 @@ def current(svc: Services, token: str) -> str:
         return ""
 
 
-def give_default(svc: Services, token: str, name: str, fallback: str, wanted: str = "") -> str:
+def give_default(
+    svc: Services, token: str, name: str, fallback: str, wanted: str = "", mine: str = ""
+) -> str:
     """The account's username after making sure it is not a bare number: a member who never chose
     one gets their name as a slug (with -2, -3… when taken); with WANTED (the username they
     asked for when they applied) that one when it is free, else the first free of
     ``candidates``. Returns the username the account has now; FALLBACK when nothing could be
-    read or set (best effort: the account works)."""
+    read or set (best effort: the account works). MINE: the account's key (the slug of its own
+    page as a guest does not stand in the way)."""
     fallback = fallback.lower()
     if not token:
         return fallback
@@ -241,7 +264,7 @@ def give_default(svc: Services, token: str, name: str, fallback: str, wanted: st
             tail = "" if n == 1 else f"-{n}"
             tries.append(base[: MAX - len(tail)].strip("-") + tail)
     for name_ in dict.fromkeys(tries):
-        if DEFAULT.fullmatch(name_) or not _free(svc, name_):
+        if DEFAULT.fullmatch(name_) or not _free(svc, name_, mine):
             continue
         try:
             svc.keycast.set_username(token, name_)
@@ -348,7 +371,7 @@ def change(svc: Services, pubkey: str, wanted: str) -> dict[str, str]:
     domain = svc.settings.nip05_domain
     if current(svc, token) == wanted:
         return {"username": wanted, "nip05": f"{wanted}@{domain}"}
-    if not _free(svc, wanted):
+    if not _free(svc, wanted, pubkey):
         raise ApiError(409, "taken", "That name is taken.")
     try:
         svc.keycast.set_username(token, wanted)

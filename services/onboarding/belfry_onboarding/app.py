@@ -84,6 +84,7 @@ from . import (
     steward,
     theme,
     usernames,
+    villagers,
     volunteer,
     vouches,
     wallet_tokens,
@@ -298,6 +299,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     signin.register(app)  # /signin, /welcome: one-time sign-in links, the page after paying
     apply.register(app)  # /apply: applications to join (apply.py)
     applyverified.register(app)  # /api/apply/*, /api/login/*: the chat's own form and log-in
+    villagers.register(app)  # /api/villagers: a profile page per person (villagers.py)
     sitesessions.register(app)  # /api/site/*: the website's own accounts (sitesessions.py)
     sitenotify.register(app)  # /api/site/notifications, /notifications/<token> (sitenotify.py)
     volunteer.register(app)  # /shifts, /admin/shifts: volunteers' shifts (volunteer.py)
