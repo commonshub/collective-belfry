@@ -69,7 +69,10 @@ taking the chain back: only a live session of the account (or the server) can ma
 removed device's session is revoked. Every device that publishes a roster publishes the anchor
 again together with it: the roster is signed locally, the anchor naming it is signed by the signer,
 and only then are both sent, in the same moment, the roster first. When the anchor cannot be signed,
-neither is sent and the change is tried again later, with `head` = that roster (and the same `root`). `head` absent = the root.
+neither is sent and the change is tried again later. A change counts as done only when the relay
+accepted both events; the device then reads its chain again from the relay and checks its roster is
+on the anchored path. When it is not (another branch was anchored, an event was refused), it does
+the change again on the new head, and until then shows the action as not done, with `head` = that roster (and the same `root`). `head` absent = the root.
 
 ### 3.3 Valid chain
 
@@ -277,8 +280,11 @@ finished, an anchor that disappeared), seal to the last valid head this device k
 never fall back. If there is no head to seal to at all, the message waits in the outbox or the send is refused
 with the text kept in the composer; it is never sent the old way. And a message goes the old way
 only on knowledge, never on silence: the device must hold, for some participant, a complete
-answer from the relay (after authentication, to EOSE, since this start or within the last
-10 minutes) showing no ready chain. When it cannot tell, the send is refused with the text kept. An old-style message (no `lb`) that arrives in a sealed conversation dated
+answer from the relay (after authentication, to EOSE, on a live connection, within the last
+10 minutes) showing no ready chain. When it cannot tell (offline, before authentication, no answer),
+the message is neither sealed nor sent the old way: either the send is refused with the text kept,
+or the message is held on the device undecided (shown as waiting) and decided at the first
+complete answer. An old-style message (no `lb`) that arrives in a sealed conversation dated
 after this device first saw it sealed is shown with a "not sealed" mark when it is a message (kind 14); an old-style reaction or
 take-back (7, 5) there is ignored. An old-style rumor never replaces a message the device holds
 (its id is computed by the opener on the old path too). Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
