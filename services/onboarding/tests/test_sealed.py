@@ -40,7 +40,7 @@ def chain_named(v, name: str | None):
     if name is None:
         return None
     case = next(c for c in v["chains"] if c["name"] == name)
-    return sealed.chain(case["anchor"], case["rosters"])
+    return sealed.chain(case["anchor"], case["rosters"], case.get("pinned_head"))
 
 
 def summary(c):
@@ -72,10 +72,11 @@ def test_every_chain_case(v):
     assert len(v["chains"]) >= 14
     assert len({c["name"] for c in v["chains"]}) == len(v["chains"])
     for case in v["chains"]:
-        got = sealed.chain(case["anchor"], case["rosters"])
+        pin = case.get("pinned_head")
+        got = sealed.chain(case["anchor"], case["rosters"], pin)
         assert summary(got) == case["expected"], case["name"]
         # the order the relay gives them in does not matter
-        back = sealed.chain(case["anchor"], list(reversed(case["rosters"])))
+        back = sealed.chain(case["anchor"], list(reversed(case["rosters"])), pin)
         assert summary(back) == case["expected"], case["name"]
 
 
@@ -149,6 +150,18 @@ def test_the_ceiling(v):
     assert [len(sealed.rumor_json(p).encode()) for p in packed] == want["json_bytes_per_8564"]
     assert [len(json.loads(p["content"])["rumors"]) for p in packed] == want["rumors_per_8564"]
     assert want["left_out"] == [big["id"]] and all(sealed.fits(p) for p in packed)
+    # and a long key chain goes in several kind 8561 rumors
+    want = c["keys_packing"]["expected"]
+    many = [
+        {"lb": sealed.pubkey_of(t.h(f"key/many-lb-{i}")), "secret": t.h(f"key/many-lb-{i}").hex()}
+        for i in range(600)
+    ]
+    handed = sealed.pack_keys(k["alice_phone"], k["alice"], many, t.T0 + 600)
+    assert [x["id"] for x in handed] == want["ids_of_8561"] and len(handed) > 1
+    assert [len(sealed.rumor_json(x).encode()) for x in handed] == want["json_bytes_per_8561"]
+    got = [key for x in handed for key in json.loads(x["content"])["keys"]]
+    assert got == many and all(sealed.fits(x) for x in handed)
+    assert [len(json.loads(x["content"])["keys"]) for x in handed] == want["keys_per_8561"]
 
 
 def test_every_hand_over_case(v):
@@ -306,7 +319,7 @@ def publish_chain(m, ready: bool, devices=(PHONE,)) -> None:
         {
             "kind": sealed.ANCHOR,
             "created_at": now - 99,
-            "tags": [["d", sealed.ANCHOR_D], ["root", root["id"]]],
+            "tags": [["d", sealed.ANCHOR_D], ["root", root["id"]], ["head", events[-1]["id"]]],
             "content": "",
         },
     )

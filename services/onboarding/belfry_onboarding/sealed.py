@@ -44,6 +44,7 @@ SEAL, WRAP, MAIL = 13, 1059, 1301
 MAX_DEVICES = 20
 MAX_RUMOR = 40_000  # bytes of a sealed rumor's JSON (§8)
 MAX_SHARED = 200  # rumors in one kind 8564
+SHARED_KINDS = (14, 7, 5)  # what a kind 8564 holds: messages, reactions, taking back (§8)
 BACKDATE = 2 * 86400  # seals and wraps are back-dated up to two days (NIP-59), as mail.py does
 
 _HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -224,9 +225,26 @@ def _follows(prev: Roster, earlier_lbs: set[str], r: Roster) -> bool:
     return r.lb == prev.lb
 
 
-def chain(anchor_event: Any, roster_events: list[Any]) -> Chain | None:
+def anchor_head(anchor: dict[str, Any]) -> str | None:
+    """The head a (valid) anchor names: its one ``head`` tag; None when absent (= the root) or
+    not an id."""
+    head = _one(anchor, "head")
+    return head if is_key(head) else None
+
+
+def chain(
+    anchor_event: Any, roster_events: list[Any], pinned_head: str | None = None
+) -> Chain | None:
     """The valid chain of the anchor's account (§3.3), or None when there is none (no valid
-    anchor, or no valid root for it). Anything invalid is ignored silently."""
+    anchor, or no valid root for it). Anything invalid is ignored silently.
+
+    The anchored path runs from the root to the anchor's ``head`` when that is a valid roster
+    descending from the root, else it is the root alone; a roster that is neither on it nor
+    descending from its end is ignored whatever its id (a device the path dropped cannot fork
+    it). After its end come the rosters not anchored yet: valid steps, the lower id among
+    siblings for now. PINNED_HEAD: the head a client last accepted for this person: an anchor
+    whose head is an ancestor of it is ignored (no going back); one naming another branch of the
+    same root is followed. The server keeps no pin."""
     root_id = anchor_root(anchor_event)
     if root_id is None:
         return None
@@ -239,28 +257,52 @@ def chain(anchor_event: Any, roster_events: list[Any]) -> Chain | None:
     root = parsed.get(root_id)
     if root is None or root.n != 1 or root.prev is not None or root.signer not in root.devices:
         return None
+
+    def path_to(roster_id: str | None) -> list[Roster] | None:
+        """Root … the roster, when each step of the way is valid; else None."""
+        back: list[Roster] = []
+        at = parsed.get(roster_id or "")
+        while at is not None and at.id != root.id:
+            back.append(at)
+            at = parsed.get(at.prev or "")  # n falls by one each step: this ends
+            if len(back) > len(parsed):
+                return None
+        if at is None:
+            return None
+        path, lbs = [root], {root.lb}
+        for r in reversed(back):
+            if not _follows(path[-1], lbs, r):
+                return None
+            path.append(r)
+            lbs.add(r.lb)
+        return path
+
+    rosters = path_to(anchor_head(anchor_event)) or [root]
+    held = path_to(pinned_head) if pinned_head else None
+    if held and len(held) > len(rosters) and held[len(rosters) - 1].id == rosters[-1].id:
+        rosters = held  # the anchor went back to an ancestor of the pinned head: not followed
+
     children: dict[str, list[Roster]] = {}
     for r in parsed.values():
         if r.prev is not None:
             children.setdefault(r.prev, []).append(r)
-    rosters = [root]
-    lbs = {root.lb}
-    added = {d: root for d in root.devices}
-    dropped: dict[str, Roster] = {}
-    while True:
-        head = rosters[-1]
-        valid = [r for r in children.get(head.id, []) if _follows(head, lbs, r)]
+    lbs = {r.lb for r in rosters}
+    while True:  # what is published and not anchored yet
+        valid = [r for r in children.get(rosters[-1].id, []) if _follows(rosters[-1], lbs, r)]
         if not valid:
             break
-        nxt = min(valid, key=lambda r: r.id)  # a fork: the lower id wins
-        for d in head.devices:
-            if d not in nxt.devices:
-                dropped[d] = nxt
-        for d in nxt.devices:
-            added.setdefault(d, nxt)
+        rosters.append(min(valid, key=lambda r: r.id))  # a fork: the lower id, for now
+        lbs.add(rosters[-1].lb)
+
+    added = {d: root for d in root.devices}
+    dropped: dict[str, Roster] = {}
+    for before, r in zip(rosters, rosters[1:], strict=False):
+        for d in before.devices:
+            if d not in r.devices:
+                dropped[d] = r
+        for d in r.devices:
+            added.setdefault(d, r)
             dropped.pop(d, None)
-        rosters.append(nxt)
-        lbs.add(nxt.lb)
     return Chain(account=account, rosters=tuple(rosters), added=added, dropped=dropped)
 
 
@@ -438,6 +480,21 @@ def keys_rumor(giver: str, account: str, keys: list[dict[str, str]], at: int) ->
     )
 
 
+def pack_keys(giver: str, account: str, keys: list[dict[str, str]], at: int) -> list[dict]:
+    """§5.5: the giver's key chain as kind 8561 rumors: one, or several when one would pass the
+    40 000-byte ceiling (each filled until one more key would take it past)."""
+    out: list[dict[str, Any]] = []
+    held: list[dict[str, str]] = []
+    for k in keys:
+        if held and not fits(keys_rumor(giver, account, [*held, k], at)):
+            out.append(keys_rumor(giver, account, held, at))
+            held = []
+        held.append(k)
+    if held or not out:
+        out.append(keys_rumor(giver, account, held, at))
+    return out
+
+
 def hand_keys(
     giver_secret: bytes, account: str, keys: list[dict[str, str]], to_device: str, **fixed: Any
 ) -> dict[str, Any]:
@@ -531,10 +588,12 @@ def pack_history(
 ) -> list[dict[str, Any]]:
     """§8: RUMORS (oldest first) as kind 8564 rumors, each filled until one more would take it
     past 200 rumors or its own JSON (the shared rumors escaped inside its content) past 40 000
-    bytes. A rumor that does not fit alone is left out."""
+    bytes. Only kinds 14, 7 and 5; a rumor that does not fit alone is left out."""
     out: list[dict[str, Any]] = []
     held: list[dict[str, Any]] = []
     for r in rumors:
+        if r.get("kind") not in SHARED_KINDS:
+            continue  # never an e-mail, nor anything else
         if len(held) < MAX_SHARED and fits(history_rumor(sharer, person, [*held, r], at)):
             held.append(r)
             continue
@@ -554,9 +613,10 @@ def participants(rumor: dict[str, Any]) -> set[str]:
 
 def shared_rumors(history: dict[str, Any], receiver: str) -> list[dict[str, Any]]:
     """§8: the rumors of a (already accepted, §4) kind 8564 that RECEIVER (their account) may
-    add, taken one by one: those of a conversation both the sharer and the receiver are part of
+    add. The 8564's one ``p`` must be the receiver, else none. Then one by one: only kinds 14, 7
+    and 5 (never an e-mail), of a conversation both the sharer and the receiver are part of
     (author or ``p``). The others are dropped."""
-    if history.get("kind") != HISTORY:
+    if history.get("kind") != HISTORY or _values(history, "p") != [receiver]:
         return []
     try:
         body = json.loads(history.get("content") or "")
@@ -571,7 +631,7 @@ def shared_rumors(history: dict[str, Any], receiver: str) -> list[dict[str, Any]
             r = with_id(r)
         except (ValueError, TypeError):
             continue
-        if {sharer, receiver} <= participants(r):
+        if r["kind"] in SHARED_KINDS and {sharer, receiver} <= participants(r):
             out.append(r)
     return out
 

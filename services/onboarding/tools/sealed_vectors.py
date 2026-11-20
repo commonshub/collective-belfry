@@ -88,19 +88,15 @@ def roster(
     return sealed.sign(SECRET[signer], event, AUX)
 
 
-def anchor(account: str, root: dict | str, at: int) -> dict[str, Any]:
+def anchor(
+    account: str, root: dict | str, at: int, head: dict | str | None = None
+) -> dict[str, Any]:
+    """The account's anchor. HEAD absent: no head tag (= the root, §3.2)."""
+    tags = [["d", sealed.ANCHOR_D], ["root", root if isinstance(root, str) else root["id"]]]
+    if head is not None:
+        tags.append(["head", head if isinstance(head, str) else head["id"]])
     return sealed.sign(
-        SECRET[account],
-        {
-            "kind": sealed.ANCHOR,
-            "created_at": at,
-            "tags": [
-                ["d", sealed.ANCHOR_D],
-                ["root", root if isinstance(root, str) else root["id"]],
-            ],
-            "content": "",
-        },
-        AUX,
+        SECRET[account], {"kind": sealed.ANCHOR, "created_at": at, "tags": tags, "content": ""}, AUX
     )
 
 
@@ -141,12 +137,22 @@ def chains() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     LB1, LB2, LB3 = "alice_lb1", "alice_lb2", "alice_lb3"
     out: list[dict[str, Any]] = []
 
-    def case(name, note, anch, rosters, valid, ready=False):
+    def case(name, note, anch, rosters, valid, ready=False, anchored=True, pinned=None):
+        """ANCH a1 (alice's anchor with no head) stands for "the anchor a device publishes
+        right after its roster": it gets the expected head, unless ANCHORED is False."""
+        if anch is a1 and anchored and len(valid) > 1:
+            anch = ah(valid[-1])
         want = expect(valid, ready)
-        agree(name, summary(sealed.chain(anch, rosters)), want)
-        out.append(
-            {"name": name, "note": note, "anchor": anch, "rosters": rosters, "expected": want}
-        )
+        got = sealed.chain(anch, rosters, pinned["id"] if pinned else None)
+        agree(name, summary(got), want)
+        one = {"name": name, "note": note, "anchor": anch, "rosters": rosters}
+        if pinned:
+            one["pinned_head"] = pinned["id"]
+        out.append({**one, "expected": want})
+
+    def ah(head):
+        """Alice's anchor naming HEAD, made a second after it."""
+        return anchor(A, r1, head["created_at"] + 1, head)
 
     r1 = roster(P, A, 1, None, LB1, [P], T0)
     a1 = anchor(A, r1, T0 + 1)
@@ -215,12 +221,23 @@ def chains() -> tuple[list[dict[str, Any]], dict[str, Any]]:
     win, lose = (fa, fb) if fa["id"] < fb["id"] else (fb, fa)
     lost_child = roster(P, A, 3, lose, LB1, [P, L, T], T0 + 150)
     case(
-        "a fork: the lower id wins",
-        "Two valid rosters name roster 1 as prev. The one with the lower id (as lower-case hex) "
-        "wins; the other and the roster built on it are ignored.",
+        "a fork after the anchored path: the lower id wins for now",
+        "The anchor has no head (= the root). Two valid rosters name roster 1 as prev and "
+        "neither is anchored yet: the one with the lower id (as lower-case hex) wins "
+        "provisionally; the other and the roster built on it are ignored. The next anchor "
+        "settles it.",
         a1,
         [r1, fa, fb, lost_child],
         [r1, win],
+        anchored=False,
+    )
+    case(
+        "the anchor names the other side of the fork",
+        "The same rosters; the anchor's head is the roster with the HIGHER id: that branch is "
+        "the chain, and the roster built on it follows as its tail.",
+        ah(lose),
+        [r1, fa, fb, lost_child],
+        [r1, lose, lost_child],
     )
     at = T0 + 100
     while True:  # a loser that says ready, whatever the ids turn out to be
@@ -230,10 +247,11 @@ def chains() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         at += 1
     case(
         "ready on the losing side of a fork does not count",
-        "The roster with ready has the higher id.",
+        "The anchor has no head; the roster with ready has the higher id.",
         a1,
         [r1, fr, fb],
         [r1, fb],
+        anchored=False,
     )
     case(
         "an unknown prev",
@@ -335,7 +353,111 @@ def chains() -> tuple[list[dict[str, Any]], dict[str, Any]]:
         [r1, r2, leave],
         [r1, r2, leave],
     )
-    return out, {"a1": a1, "r1": r1, "r2": r2, "r3": r3}
+    # the anchor names the head: a dropped device cannot take the chain back
+    at = T0 + 200
+    while True:  # the laptop, dropped by roster 3, forks from roster 2 with a LOWER id
+        evil = roster(L, A, 3, r2, LB3, [L], at)
+        if evil["id"] < r3["id"]:
+            break
+        at += 1
+    case(
+        "a dropped device forks before its removal: ignored, the anchor names the real head",
+        "Roster 3 (by the phone) drops the laptop. The laptop signs another roster 3 on roster "
+        "2 that drops the phone instead; it is a valid step and has the LOWER id. The anchor's "
+        "head is the phone's roster 3: the laptop's is not on the anchored path and does not "
+        "descend from its end, so it is ignored whatever its id.",
+        ah(r3),
+        [r1, r2, r3, evil],
+        [r1, r2, r3],
+    )
+    case(
+        "the same fork with no head in the anchor yet: the lower id wins for now",
+        "The same rosters under an anchor with no head (= the root): nothing after the root is "
+        "anchored, so between the two rosters 3 the lower id wins provisionally, here the "
+        "laptop's. This lasts until the phone's anchor (it anchors its own roster at once, "
+        "§3.3), which gives the case above.",
+        a1,
+        [r1, r2, r3, evil],
+        [r1, r2, evil],
+        anchored=False,
+    )
+    case(
+        "an unanchored tail after the anchored head",
+        "The anchor's head is roster 2; roster 3 is published and not anchored yet: accepted.",
+        ah(r2),
+        [r1, r2, r3],
+        [r1, r2, r3],
+    )
+    case(
+        "the anchor's head does not descend from the root",
+        "The head is a roster of another root: the anchored path is the root alone. What "
+        "follows the root is then taken as an unanchored tail (roster 2).",
+        anchor(A, r1, T0 + 600, other_root),
+        [r1, r2, other_root],
+        [r1, r2],
+    )
+    case(
+        "the anchor's head is not there",
+        "The head names an id no roster has: the root alone, then the unanchored tail.",
+        anchor(A, r1, T0 + 600, "ab" * 32),
+        [r1, r2],
+        [r1, r2],
+    )
+    invalid3 = roster(P, A, 3, r2, LB1, [P], T0 + 200)
+    case(
+        "the anchor's head is an invalid roster",
+        "The head is a roster 3 that drops the laptop and keeps the letterbox (invalid): the "
+        "anchored path is the root alone; roster 2 follows as an unanchored tail and the "
+        "invalid roster is ignored.",
+        anchor(A, r1, T0 + 600, invalid3),
+        [r1, r2, invalid3],
+        [r1, r2],
+    )
+    case(
+        "pinned head: an anchor that goes back to an ancestor is ignored",
+        "This client accepted roster 3 (the phone's) as head. The anchor now names roster 2, an "
+        "ancestor of it, and the laptop's lower-id roster 3 is there: without the pin the "
+        "laptop's would win for now; with it the client keeps its head.",
+        ah(r2),
+        [r1, r2, r3, evil],
+        [r1, r2, r3],
+        pinned=r3,
+    )
+    case(
+        "pinned head: an anchor with no head is going back too",
+        "The same with an anchor that has no head (= the root, an ancestor of the pinned head).",
+        a1,
+        [r1, r2, r3, evil],
+        [r1, r2, r3],
+        anchored=False,
+        pinned=r3,
+    )
+    case(
+        "pinned head: an anchor on another branch of the same root is followed",
+        "This client had accepted the laptop's roster 3 (the lower id, before any anchor). The "
+        "anchor now names the phone's roster 3, another branch: followed.",
+        ah(r3),
+        [r1, r2, r3, evil],
+        [r1, r2, r3],
+        pinned=evil,
+    )
+    case(
+        "pinned head: the anchor moved forward",
+        "Pinned roster 2; the anchor names roster 3, which descends from it: followed.",
+        ah(r3),
+        [r1, r2, r3],
+        [r1, r2, r3],
+        pinned=r2,
+    )
+    case(
+        "pinned head: a pin this client cannot find is no pin",
+        "The pinned id is not among the rosters (or is of another root): the anchor decides.",
+        ah(r2),
+        [r1, r2],
+        [r1, r2],
+        pinned={"id": "cd" * 32},
+    )
+    return out, {"a1": ah(r3), "r1": r1, "r2": r2, "r3": r3}
 
 
 # ── wraps ───────────────────────────────────────────────────────────────────────────────────
@@ -643,6 +765,37 @@ def ceiling() -> dict[str, Any]:
     agree("packing: all but the big one", sum(counts), 300)
     agree("packing: under the ceiling", all(n <= sealed.MAX_RUMOR for n in sizes), True)
     agree("packing: the big one fits alone as a rumor", sealed.fits(big), True)
+    # a hand-over too: a long key chain goes in several kind 8561 rumors
+    many = [
+        {"lb": sealed.pubkey_of(h(f"key/many-lb-{i}")), "secret": h(f"key/many-lb-{i}").hex()}
+        for i in range(600)
+    ]
+    handed = sealed.pack_keys(PUB["alice_phone"], PUB["alice"], many, T0 + 600)
+    key_counts = [len(json.loads(k["content"])["keys"]) for k in handed]
+    key_sizes = [len(sealed.rumor_json(k).encode()) for k in handed]
+    agree("keys packing: all of them, in order", sum(key_counts), 600)
+    agree("keys packing: under the ceiling", all(n <= sealed.MAX_RUMOR for n in key_sizes), True)
+    agree("keys packing: more than one", len(handed) > 1, True)
+    agree(
+        "keys packing: one short chain, one rumor",
+        len(sealed.pack_keys(PUB["alice_phone"], PUB["alice"], many[:3], T0 + 600)),
+        1,
+    )
+    keys_packing = {
+        "name": "a key chain of 600 letterboxes",
+        "note": "§5.5: the giver's whole chain in several kind 8561 rumors when one would pass "
+        "the ceiling. Key i (0 to 599) has secret SHA-256('belfry sealed vectors/key/many-lb-' "
+        "+ i) and lb = its public key, in that order. Each rumor is kind 8561, pubkey "
+        "alice_phone, created_at T0+600, tags [['p', alice]], content "
+        '{"v":1,"account":"<alice>","keys":[{"lb":"…","secret":"…"},…]} in compact JSON, '
+        "filled until one more key would take the rumor's JSON past 40 000 bytes. Each is "
+        "wrapped on its own to the receiving device.",
+        "expected": {
+            "keys_per_8561": key_counts,
+            "json_bytes_per_8561": key_sizes,
+            "ids_of_8561": [k["id"] for k in handed],
+        },
+    }
     packing = {
         "name": "300 short rumors and one that cannot be shared",
         "note": "Bob shares 301 rumors with Alice, oldest first: rumor i (0 to 299) is kind 14, "
@@ -665,6 +818,7 @@ def ceiling() -> dict[str, Any]:
     return {
         "max_rumor_json_bytes": sealed.MAX_RUMOR,
         "history_packing": packing,
+        "keys_packing": keys_packing,
         "note": "The bytes are those of the exact JSON string that is encrypted in the seal, as "
         "UTF-8, serialised as the 'serialisation' note at the top says. "
         "The content is described (a string repeated), not written out. "
@@ -804,13 +958,48 @@ def history() -> list[dict[str, Any]]:
     m2 = sealed.with_id(rumor("bob", "alice", 14, "Yes, with the cake.", T0 + 20))
     foreign = sealed.with_id(rumor("mallory", "alice", 14, "Bob never saw this.", T0 + 30))
     elsewhere = sealed.with_id(rumor("bob", "mallory", 14, "Alice was not in this.", T0 + 40))
+    letter = sealed.with_id(
+        {
+            "pubkey": PUB["bob"],
+            "created_at": T0 + 50,
+            "kind": 1301,
+            "tags": [["p", PUB["alice"]], ["mail-from", "bob@belfry.test"]],
+            "content": "From: Bob <bob@belfry.test>\r\nSubject: Cake\r\n\r\nRecipe attached.\r\n",
+        }
+    )
+    like = sealed.with_id(rumor("alice", "bob", 7, "👍", T0 + 25, [["e", m2["id"]], ["k", "14"]]))
+    unlike = sealed.with_id(rumor("alice", "bob", 5, "", T0 + 26, [["e", like["id"]]]))
     out = []
-    for name, note, rumors, kept in (
+    for name, note, rumors, kept, to in (
         (
             "a conversation shared by one of its two people",
             "Bob shares his conversation with Alice to her new letterbox.",
             [m1, m2],
             [m1, m2],
+            "alice",
+        ),
+        (
+            "a reaction and its taking back are shared too",
+            "Kinds 14, 7 and 5.",
+            [m1, m2, like, unlike],
+            [m1, m2, like, unlike],
+            "alice",
+        ),
+        (
+            "an e-mail inside is dropped",
+            "The third rumor is a kind 1301 between the same two people: never taken from a "
+            "share. The two messages are added.",
+            [m1, m2, letter],
+            [m1, m2],
+            "alice",
+        ),
+        (
+            "the share's p is not the receiver",
+            "The kind 8564 says p = Mallory although it is sealed to Alice's letterbox: Alice "
+            "takes nothing from it.",
+            [m1, m2],
+            [],
+            "mallory",
         ),
         (
             "a rumor of a conversation the sharer is not in",
@@ -818,6 +1007,7 @@ def history() -> list[dict[str, Any]]:
             "p tags. It is dropped; the two others are added.",
             [m1, m2, foreign],
             [m1, m2],
+            "alice",
         ),
         (
             "a rumor of a conversation the receiver is not in",
@@ -825,9 +1015,10 @@ def history() -> list[dict[str, Any]]:
             "author nor in its p tags. It is dropped; the two others are added.",
             [m1, m2, elsewhere],
             [m1, m2],
+            "alice",
         ),
     ):
-        inner = sealed.history_rumor(PUB["bob"], PUB["alice"], rumors, T0 + 800)
+        inner = sealed.history_rumor(PUB["bob"], PUB[to], rumors, T0 + 800)
         w = sealed.seal_to_letterbox(
             SECRET["bob_phone"],
             inner,
