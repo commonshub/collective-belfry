@@ -108,7 +108,7 @@ of the head letterbox, tag `["lb", <that letterbox pub>]`:
 {"v":1,"devices":{"<device pubkey>":{"name":"Safari on Mac","kind":"computer","added":1790000000}}}
 ```
 
-`kind` is phone | tablet | computer. Each device writes its own entry (its own name for itself)
+`kind` is phone | tablet | computer. Each device writes its own entry (its name = the `device` of its own row in `/api/me/sessions`, found by `client_pubkey`, so it matches what the Allow prompt showed; the platform's own name for itself when that is empty)
 when it joins, keeps unknown fields and other devices' entries, drops entries of devices no longer
 in any roster after 90 days. Rewritten under the new letterbox after a key change. Other people
 never receive it.
@@ -166,7 +166,7 @@ kind 8562, pubkey = new device, content ""
 ```
 
 Published at sign-in when a chain exists and this device is not in its head; again every 24 h
-while waiting. The device shows the banner "Earlier messages are locked on this device".
+while waiting. The device shows the banner "Messages are locked on this device".
 Until it is allowed it reads no sealed message at all, old or new (it has no letterbox secret).
 
 An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}`:
