@@ -17,19 +17,14 @@ PHOTO = "cc" * 32
 
 
 @pytest.fixture
-def web(services, odoo, authentik):
+def web(services, odoo):
     services.settings.pass_info_token = "info-token"
     alice = odoo.add("res.partner", name="Alice", email="alice@example.org")
     bob = odoo.add("res.partner", name="Bob", email="bob@example.org")
-    odoo.add("belfry.pass", partner_id=alice, state="active", tier="week", keycast_pubkey=REPORTER)
-    odoo.add("belfry.pass", partner_id=bob, state="active", tier="day", keycast_pubkey=AUTHOR)
-    authentik.users.append(
-        {"pk": 7, "username": "sam", "email": "sam@belfry.test", "attributes": {}}
-    )
-    authentik.users.append(
-        {"pk": 8, "username": "kim", "email": "kim@belfry.test", "attributes": {}}
-    )
-    authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": {7, 8}}
+    odoo.add("belfry.pass", partner_id=alice, state="active", tier="week", nostr_pubkey=REPORTER)
+    odoo.add("belfry.pass", partner_id=bob, state="active", tier="day", nostr_pubkey=AUTHOR)
+    odoo.add("res.partner", name="Sam", email="sam@belfry.test", belfry_steward=True)
+    odoo.add("res.partner", name="Kim", email="kim@belfry.test", belfry_steward=True)
     with TestClient(create_app(services), base_url="https://testserver") as c:
         yield c
 

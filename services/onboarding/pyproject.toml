@@ -49,9 +49,12 @@ target-version = "py312"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-# inline HTML, CSS and JS of the claim, door and bridge pages
+# inline HTML, CSS and JS of the claim, door, login and account pages
 "belfry_onboarding/claim.py" = ["E501"]
-"belfry_onboarding/bridge.py" = ["E501"]
+"belfry_onboarding/passlogin.py" = ["E501"]
+"belfry_onboarding/login.py" = ["E501"]
+"belfry_onboarding/account.py" = ["E501"]
+"belfry_onboarding/connect.py" = ["E501"]
 "belfry_onboarding/mypass.py" = ["E501"]
 "belfry_onboarding/feedback.py" = ["E501"]
 "belfry_onboarding/apply.py" = ["E501"]

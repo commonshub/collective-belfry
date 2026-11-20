@@ -11,12 +11,9 @@ WELCOME_SIGNIN_HOURS = 24
 
 
 class BelfryPass(models.Model):
-    """Sign-in without a stored authentik link (user test 2026-10-26).
-
-    authentik keeps one recovery token per user, so a second link (the welcome page after paying)
-    would kill the mail's. The mail and the welcome page therefore carry Belfry's own one-time
-    secrets; the onboarding service (signin.py) mints the authentik link only when one of them is
-    used, and redirects there."""
+    """One-time sign-in secrets: the activation mail's link and the page after paying (user test
+    2026-10-26). Spending one signs the browser in to Open Source Village (onboarding service,
+    signin.py: Belfry's session cookie, since 2026-11-19 without Authentik)."""
 
     _inherit = 'belfry.pass'
 
@@ -91,8 +88,8 @@ class BelfryPass(models.Model):
     @api.model
     def belfry_use_signin(self, kind, token):
         """Spend a sign-in secret (``signin``: the mail's link; ``welcome``: the page after
-        paying). Returns ``{'result': 'ok', 'authentik_user_id': …}`` or a result of
-        ``not_found``, ``not_active``, ``used``, ``expired``, ``no_user``. The welcome page's
+        paying). Returns ``{'result': 'ok', 'partner_id': …, 'pass_id': …}`` or a result of
+        ``not_found``, ``not_active``, ``used``, ``expired``. The welcome page's
         answers carry the order's ``return_url``: the payer goes on there either way."""
         _check_service_caller(self.env)
         record = self._belfry_by_token(kind, token)
@@ -118,7 +115,5 @@ class BelfryPass(models.Model):
             expired = not record._belfry_welcome_fresh()
         if expired:
             return {'result': 'expired'}
-        if not record.authentik_user_id:
-            return {'result': 'no_user'}
         record.write({used_field: fields.Datetime.now()})
-        return {'result': 'ok', 'authentik_user_id': record.authentik_user_id, 'pass_id': record.id}
+        return {'result': 'ok', 'partner_id': record.partner_id.id, 'pass_id': record.id}

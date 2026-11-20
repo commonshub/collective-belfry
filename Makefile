@@ -1,16 +1,17 @@
 # Belfry local stack. See infra/README.md.
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: up up-app build-keycast bootstrap smoke down logs test-odoo test-onboarding secrets
+.PHONY: up up-app build-signer bootstrap smoke down logs test-odoo test-onboarding test-signer secrets
 
 infra/.env:
 	infra/scripts/gen-secrets.sh
 
-secrets: ## (re)generate infra/.env, infra/secrets/ and the Keycast master key (keeps existing files)
+secrets: ## (re)generate infra/.env and infra/secrets/ (keeps existing files)
 	infra/scripts/gen-secrets.sh
 
-up: infra/.env ## start postgres, odoo, authentik, keycast, relay (not the onboarding service)
+up: infra/.env ## start postgres, odoo, the signer, the relays, issuer and verifier (not the onboarding service)
 	mkdir -p odoo/addons
+	$(COMPOSE) up -d --build signer
 	$(COMPOSE) up -d
 
 up-app: infra/.env ## start everything including the onboarding service (needs services/onboarding)
@@ -18,10 +19,10 @@ up-app: infra/.env ## start everything including the onboarding service (needs s
 	$(COMPOSE) --profile app build onboarding
 	$(COMPOSE) --profile app up -d
 
-build-keycast: ## build belfry-keycast:local from infra/keycast/build/Dockerfile (about 15 minutes cold)
-	$(COMPOSE) build keycast
+build-signer: ## build belfry-signer:local from services/signer (a few minutes cold)
+	$(COMPOSE) build signer
 
-bootstrap: ## create the Odoo database, users, tokens, Keycast admin and policy; writes tokens into infra/secrets/
+bootstrap: ## create the Odoo database, users and tokens, check the signer; writes tokens into infra/secrets/
 	infra/scripts/bootstrap.sh
 
 smoke: ## invite -> pay -> accounts created once (needs up-app and bootstrap)
@@ -39,3 +40,6 @@ test-odoo: ## run the belfry_pass tests in a throwaway Odoo container against th
 
 test-onboarding:
 	cd services/onboarding && pytest
+
+test-signer: ## the signer's unit tests (cargo; set CARGO_TARGET_DIR outside /tmp if it is small)
+	cd services/signer && cargo test

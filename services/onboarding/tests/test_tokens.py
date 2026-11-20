@@ -285,7 +285,7 @@ def test_wallet_gets_the_pass_tokens_once(mint_services, odoo, mint, client):
     core.activate_pass(mint_services, ids["invoice"])
     p = next(p for p in odoo.tables["belfry.pass"].values() if p["invoice_id"] == ids["invoice"])
     key = PrivateKey()
-    p["keycast_pubkey"] = key.public_key_xonly.format().hex()
+    p["nostr_pubkey"] = key.public_key_xonly.format().hex()
     url = "https://pass.belfry.test/wallet/pass-tokens"
 
     r = client.get("/wallet/pass-tokens", headers={"Authorization": nip98(key, url)})

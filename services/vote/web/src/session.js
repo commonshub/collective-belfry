@@ -1,6 +1,6 @@
-// The participant's signer (Keycast over NIP-46) and the voting identity on this device.
+// The participant's signer (Belfry's signer over NIP-46) and the voting identity on this device.
 //
-// The Semaphore identity never leaves the device: Keycast holds the participant's managed Nostr
+// The Semaphore identity never leaves the device: Belfry's signer holds the participant's managed Nostr
 // key, so an identity backed up encrypted to that key could be decrypted by Belfry and would link
 // votes to people. Moving to another device is an explicit export code.
 import { Identity } from "@semaphore-protocol/core"

@@ -1,4 +1,4 @@
-// The participant's signer: Keycast over NIP-46 (from the sign-in), or a browser extension (NIP-07)
+// The participant's signer: Belfry's signer over NIP-46 (from the sign-in), or a browser extension (NIP-07)
 // for participants who hold their own key. Copied from services/vote without the voting key.
 import { BunkerSigner, parseBunkerInput } from "nostr-tools/nip46"
 import { bytesToHex, hexToBytes } from "nostr-tools/utils"

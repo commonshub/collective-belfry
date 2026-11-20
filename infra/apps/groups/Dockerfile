@@ -2,8 +2,9 @@
 # Groups: Flotilla (coracle/flotilla, MIT) at a pinned commit in platform mode on Belfry's groups
 # relay, with the Open Source Village look, served by nginx. Build args: FLOTILLA_COMMIT,
 # GROUPS_PUBLIC_URL, GROUPS_RELAY_URL, COMMUNITY_RELAY_URL, BUNKER_PUBLIC_RELAYS,
-# BLOSSOM_PUBLIC_URL, KEYCAST_APP_URL (see make-env.sh), COMMUNITY_APPS (the app bar); build
-# context "brand" = the repo's brand/ folder.
+# BLOSSOM_PUBLIC_URL, KEYCAST_APP_URL (Belfry's sign-in, the onboarding service; the name is
+# Keycast's, see make-env.sh), COMMUNITY_APPS (the app bar); build context "brand" = the repo's
+# brand/ folder.
 
 FROM node:24-slim AS builder
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates perl \
@@ -36,8 +37,8 @@ ARG BUNKER_PUBLIC_RELAYS
 ARG BLOSSOM_PUBLIC_URL
 ARG KEYCAST_APP_URL
 ARG SITE_URL
-# The Open Source Village app bar (brand/osv-bar.js): back to the apps page (KEYCAST_APP_URL) and
-# to the other apps (COMMUNITY_APPS, Name|URL|Description;...).
+# The Open Source Village app bar (brand/osv-bar.js): home to the onboarding service
+# (KEYCAST_APP_URL) and to the other apps (COMMUNITY_APPS, Name|URL|Description;...).
 ARG COMMUNITY_APPS=""
 COPY --from=brand osv-bar.js static/osv-bar.js
 RUN node -e ' \

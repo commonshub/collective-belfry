@@ -32,7 +32,7 @@ def active_pass(odoo, invoice_id):
 
 # (7) dispute event delivered twice -> one revoke, second call returns duplicate;
 #     bad signature -> 400
-def test_dispute_created_twice_revokes_once(client, services, odoo, keycast):
+def test_dispute_created_twice_revokes_once(client, services, odoo, signer):
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     payload = stripe_event(
@@ -50,13 +50,14 @@ def test_dispute_created_twice_revokes_once(client, services, odoo, keycast):
         and p["revoke_reason"] == "chargeback"
         and p["stripe_dispute_id"] == "dp_1"
     )
-    assert keycast.status[p["keycast_pubkey"]] == "suspended"
-    suspend_calls = len(keycast.status_calls)
+    vid = f"odoo-partner-{p['partner_id']}"
+    assert signer.accounts[vid]["status"] == "suspended"
+    suspend_calls = len(signer.status_calls)
 
     r2 = post_event(client, payload)
     assert r2.status_code == 200
     assert r2.json()["result"] == "duplicate"
-    assert len(keycast.status_calls) == suspend_calls
+    assert len(signer.status_calls) == suspend_calls
     events = list(odoo.tables["belfry.stripe.event"].values())
     assert len(events) == 1
     assert (
@@ -88,7 +89,7 @@ def test_verify_signature_accepts_multiple_v1_values():
 
 
 def test_dispute_won_reactivates_and_other_events_are_recorded(
-    client, services, odoo, keycast, monkeypatch
+    client, services, odoo, signer, monkeypatch
 ):
     monkeypatch.setattr(core, "today", lambda: __import__("datetime").date(2027, 1, 26))
     ids = seed_paid_invoice(odoo)
@@ -121,7 +122,7 @@ def test_dispute_won_reactivates_and_other_events_are_recorded(
     assert won.json()["result"] == "reactivated"
     p = active_pass(odoo, ids["invoice"])
     assert p["state"] == "active" and p["revoke_reason"] is False
-    assert keycast.status[p["keycast_pubkey"]] == "active"
+    assert signer.accounts[f"odoo-partner-{p['partner_id']}"]["status"] == "active"
 
     other = post_event(client, stripe_event("evt_o", "payment_intent.succeeded", {"id": "pi_123"}))
     assert other.json()["result"] == "ignored"

@@ -7,6 +7,7 @@ import httpx
 import pytest
 
 from belfry_onboarding import core
+from belfry_onboarding.clients.signer import SignerError
 from belfry_onboarding.nostr import hex_to_npub
 
 from .conftest import HOOK_TOKEN, seed_paid_invoice
@@ -17,8 +18,8 @@ def active_pass(odoo: FakeOdoo, invoice_id: int) -> dict:
     return next(p for p in odoo.tables["belfry.pass"].values() if p["invoice_id"] == invoice_id)
 
 
-# (1) paid invoice -> one Authentik user, one source link, one Keycast preload, pass active
-def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
+# (1) paid invoice -> one signer account, pass active
+def test_paid_invoice_activates_everything(services, odoo, signer):
     ids = seed_paid_invoice(odoo, tier="week")
 
     assert core.activate_pass(services, ids["invoice"]) == "activated"
@@ -35,34 +36,16 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     assert p["stripe_payment_intent"] == "pi_123"
     assert p["activated_at"]
 
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
-    user = authentik.users[0]
-    assert user["username"] == "osv-0001"
-    assert user["path"] == "belfry/participants"
-    assert user["attributes"] == {
-        "belfry_member_number": "OSV-0001",
-        "odoo_partner_id": ids["partner"],
-    }
-    assert authentik.connections[0] == {
-        "pk": 1,
-        "user": 1,
-        "source": "pass-bridge",
-        "identifier": "OSV-0001",
-    }
-    assert partner["belfry_authentik_user_id"] == 1
-    assert p["authentik_user_id"] == 1
-
-    assert keycast.preloads == 1
-    kc_user = keycast.users[f"odoo-partner-{ids['partner']}"]
-    assert kc_user["username"] == "osv-0001"
-    assert p["keycast_pubkey"] == kc_user["pubkey"]
-    assert p["npub"] == partner["belfry_npub"] == hex_to_npub(kc_user["pubkey"])
+    assert signer.creates == 1
+    account = signer.accounts[f"odoo-partner-{ids['partner']}"]
+    assert account["custody"] == "derived" and account["key_version"] == 0
+    assert p["nostr_pubkey"] == account["pubkey"]
+    assert p["npub"] == partner["belfry_npub"] == hex_to_npub(account["pubkey"])
     assert p["npub"].startswith("npub1")
-    assert keycast.status[kc_user["pubkey"]] == "active"
+    assert account["status"] == "active"
 
 
-def test_profile_published_with_name_and_member_number_only(services, odoo, keycast, relay):
+def test_profile_published_with_name_and_member_number_only(services, odoo, signer, relay):
     ids = seed_paid_invoice(odoo, tier="day")
     assert core.activate_pass(services, ids["invoice"]) == "activated"
 
@@ -70,7 +53,7 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     assert sorted(by_kind) == [0, 3, 10002, 10050]
     ev = by_kind[0]
     partner = odoo.get("res.partner", ids["partner"])
-    assert ev["pubkey"] == active_pass(odoo, ids["invoice"])["keycast_pubkey"]
+    assert ev["pubkey"] == active_pass(odoo, ids["invoice"])["nostr_pubkey"]
     assert json.loads(ev["content"]) == {
         "name": partner["name"],
         "display_name": partner["name"],
@@ -81,14 +64,13 @@ def test_profile_published_with_name_and_member_number_only(services, odoo, keyc
     assert by_kind[3]["tags"] == []
     assert by_kind[10002]["tags"] == [["r", relay.url]]
     assert by_kind[10050]["tags"] == [["relay", relay.url]]
-    # NIP-42: the challenge was signed with the same key, and every signature went through Keycast
+    # NIP-42: the challenge was signed with the same key, and every signature went through the
+    # signer
     assert len(relay.auth_events) == 4
-    assert [e["kind"] for e in keycast.signed if e["kind"] != 22242] == [0, 3, 10002, 10050]
-    # the Keycast user token was used for this only and not written anywhere
-    assert "ucan-token" not in json.dumps(odoo.tables["belfry.pass"])
+    assert [e["kind"] for e in signer.signed if e["kind"] != 22242] == [0, 3, 10002, 10050]
 
 
-def test_starter_events_use_the_public_relay_and_never_overwrite(services, odoo, keycast, relay):
+def test_starter_events_use_the_public_relay_and_never_overwrite(services, odoo, signer, relay):
     services.settings.community_relay_public_url = "wss://relay.belfry.test"
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
@@ -138,24 +120,23 @@ def test_relay_failure_does_not_block_activation(services, odoo, relay):
     assert relay.events == []
 
 
-def test_no_relay_configured_skips_profile(services, odoo, keycast):
+def test_no_relay_configured_skips_profile(services, odoo, signer):
     services.relay = None
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-    assert keycast.signed == []
+    assert signer.signed == []
 
 
-def test_activation_survives_authentik_refusing_the_source_link(services, odoo, authentik, keycast):
-    """authentik 2026.8.5 rejects API-created source connections; activation must still complete."""
-    authentik.reject_connections = True
+def test_a_locked_seed_holds_the_activation_until_unlocked(services, odoo, signer):
+    """No key is made that could not be recovered: the pass stays pending, the retry works."""
+    signer.seed_locked = True
     ids = seed_paid_invoice(odoo, tier="day")
-
+    with pytest.raises(SignerError) as exc:
+        core.activate_pass(services, ids["invoice"])
+    assert exc.value.code == "seed_locked"
+    assert active_pass(odoo, ids["invoice"])["state"] == "pending"
+    signer.seed_locked = False
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 0
-    assert keycast.preloads == 1
-    assert active_pass(odoo, ids["invoice"])["state"] == "active"
 
 
 def test_full_access_ends_at_event_end_and_late_payment_starts_on_payment_day(services, odoo):
@@ -167,7 +148,7 @@ def test_full_access_ends_at_event_end_and_late_payment_starts_on_payment_day(se
 
 
 # (2) the same webhook replayed three times -> no additional creates, same npub
-def test_webhook_replayed_three_times_creates_nothing_new(client, odoo, authentik, keycast):
+def test_webhook_replayed_three_times_creates_nothing_new(client, odoo, signer):
     ids = seed_paid_invoice(odoo)
     results = []
     for _ in range(3):
@@ -183,30 +164,25 @@ def test_webhook_replayed_three_times_creates_nothing_new(client, odoo, authenti
         results.append(r.json()["result"])
     assert results == ["activated", "already_active", "already_active"]
     assert len(odoo.tables["belfry.pass"]) == 1
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
-    assert keycast.preloads == 1
-    assert len(keycast.users) == 1
+    assert signer.creates == 1
+    assert len(signer.accounts) == 1
     npub = active_pass(odoo, ids["invoice"])["npub"]
     assert odoo.get("res.partner", ids["partner"])["belfry_npub"] == npub
 
 
-def test_activation_resumes_after_partial_failure(services, odoo, authentik, keycast):
-    """Authentik user created, then Keycast fails: the retry creates no second user or link."""
+def test_activation_resumes_after_partial_failure(services, odoo, signer):
+    """The member number is assigned, then the signer fails: the retry makes one account."""
     ids = seed_paid_invoice(odoo)
-    preload = keycast.preload_route
-    original = preload.side_effect
-    preload.side_effect = lambda request: httpx.Response(500, json={"error": "boom"})
-    with pytest.raises(httpx.HTTPStatusError):
+    signer.fail = True
+    with pytest.raises(SignerError):
         core.activate_pass(services, ids["invoice"])
-    assert authentik.user_creates == 1
     assert active_pass(odoo, ids["invoice"])["state"] == "pending"
+    assert odoo.get("res.partner", ids["partner"])["belfry_member_number"] == "OSV-0001"
 
-    preload.side_effect = original
+    signer.fail = False
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
-    assert keycast.preloads == 1
+    assert signer.creates == 1
+    assert odoo.get("res.partner", ids["partner"])["belfry_member_number"] == "OSV-0001"
     assert active_pass(odoo, ids["invoice"])["state"] == "active"
 
 
@@ -220,7 +196,7 @@ def test_hook_rejects_bad_token_and_tolerates_errors(client, odoo):
 
 
 # (3) unpaid or pending transaction -> nothing created
-def test_unpaid_invoice_creates_nothing(services, odoo, authentik, keycast):
+def test_unpaid_invoice_creates_nothing(services, odoo, signer):
     ids = seed_paid_invoice(odoo, payment_state="not_paid", tx_state="pending")
     assert core.activate_pass(services, ids["invoice"]) == "not_paid"
     ids2 = seed_paid_invoice(odoo, payment_state="paid", tx_state="pending")
@@ -230,8 +206,7 @@ def test_unpaid_invoice_creates_nothing(services, odoo, authentik, keycast):
     ids4 = seed_paid_invoice(odoo, payment_state="in_payment", with_transaction=False)
     assert core.activate_pass(services, ids4["invoice"]) == "not_paid"
     assert odoo.tables["belfry.pass"] == {}
-    assert authentik.user_creates == 0
-    assert keycast.preloads == 0
+    assert signer.creates == 0
 
 
 def test_manual_payment_accepted_only_when_enabled(services, odoo):
@@ -244,8 +219,8 @@ def test_manual_payment_accepted_only_when_enabled(services, odoo):
     assert p["date_start"] == "2027-01-25"  # invoice_date 2027-01-19 < event start
 
 
-# (4) refund -> pass revoked, Keycast suspended
-def test_refund_revokes_pass_and_suspends_keycast(client, services, odoo, keycast):
+# (4) refund -> pass revoked, the signer account suspended
+def test_refund_revokes_pass_and_suspends_the_signer(client, services, odoo, signer):
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     refund_id = odoo.add(
@@ -265,7 +240,7 @@ def test_refund_revokes_pass_and_suspends_keycast(client, services, odoo, keycas
     assert p["state"] == "revoked"
     assert p["revoke_reason"] == "refund"
     assert p["revoked_at"]
-    assert keycast.status[p["keycast_pubkey"]] == "suspended"
+    assert signer.accounts[f"odoo-partner-{p['partner_id']}"]["status"] == "suspended"
     # replay
     r = client.post(f"/hooks/odoo/refund?token={HOOK_TOKEN}", json={"_id": refund_id})
     assert r.json()["result"] == "already_revoked"
@@ -280,14 +255,14 @@ def test_refund_revokes_pass_and_suspends_keycast(client, services, odoo, keycas
     assert core.revoke_for_refund(services, pending) == "not_refund"
 
 
-# (5) a second active pass for the same partner keeps Keycast active on refund of the first
-def test_refund_keeps_keycast_active_with_second_active_pass(services, odoo, keycast):
+# (5) a second active pass for the same partner keeps the signer active on refund of the first
+def test_refund_keeps_the_signer_active_with_second_active_pass(services, odoo, signer):
     first = seed_paid_invoice(odoo, tier="day")
     assert core.activate_pass(services, first["invoice"]) == "activated"
     second = seed_paid_invoice(odoo, tier="full", partner_id=first["partner"])
     odoo.get("payment.transaction", second["transaction"])["provider_reference"] = "pi_456"
     assert core.activate_pass(services, second["invoice"]) == "activated"
-    assert keycast.preloads == 2 and len(keycast.users) == 1  # same partner, same key
+    assert signer.creates == 1 and len(signer.accounts) == 1  # same partner, same key
 
     refund_id = odoo.add(
         "payment.transaction",
@@ -298,13 +273,13 @@ def test_refund_keeps_keycast_active_with_second_active_pass(services, odoo, key
     assert core.revoke_for_refund(services, refund_id) == "revoked"
     assert active_pass(odoo, first["invoice"])["state"] == "revoked"
     assert active_pass(odoo, second["invoice"])["state"] == "active"
-    pubkey = active_pass(odoo, first["invoice"])["keycast_pubkey"]
-    assert keycast.status[pubkey] == "active"
-    assert (pubkey, "suspended") not in keycast.status_calls
+    vid = f"odoo-partner-{first['partner']}"
+    assert signer.accounts[vid]["status"] == "active"
+    assert (vid, "suspended") not in signer.status_calls
 
 
 # (6) expiry job expires only passes with date_end < today
-def test_expire_only_passes_past_date_end(services, odoo, keycast, monkeypatch):
+def test_expire_only_passes_past_date_end(services, odoo, signer, monkeypatch):
     fake_today = dt.date(2027, 1, 28)
     monkeypatch.setattr(core, "today", lambda: fake_today)
     a = seed_paid_invoice(odoo, tier="day")  # ends 2027-01-26
@@ -320,8 +295,8 @@ def test_expire_only_passes_past_date_end(services, odoo, keycast, monkeypatch):
     pa, pb = active_pass(odoo, a["invoice"]), active_pass(odoo, b["invoice"])
     assert pa["state"] == "expired" and pa["revoke_reason"] == "expiry" and pa["revoked_at"]
     assert pb["state"] == "active"
-    assert keycast.status[pa["keycast_pubkey"]] == "suspended"
-    assert keycast.status[pb["keycast_pubkey"]] == "active"
+    assert signer.accounts[f"odoo-partner-{a['partner']}"]["status"] == "suspended"
+    assert signer.accounts[f"odoo-partner-{b['partner']}"]["status"] == "active"
     assert all(
         p["invoice_id"] != c["invoice"] or p["state"] == "pending"
         for p in odoo.tables["belfry.pass"].values()
@@ -331,7 +306,7 @@ def test_expire_only_passes_past_date_end(services, odoo, keycast, monkeypatch):
 
 
 def test_reconcile_activates_missed_invoices_and_revokes_refunds(
-    services, odoo, authentik, keycast, monkeypatch
+    services, odoo, signer, monkeypatch
 ):
     monkeypatch.setattr(core, "today", lambda: dt.date(2027, 1, 21))
     missed = seed_paid_invoice(odoo)
@@ -354,16 +329,10 @@ def test_reconcile_activates_missed_invoices_and_revokes_refunds(
     assert not any(
         p["invoice_id"] == unpaid["invoice"] for p in odoo.tables["belfry.pass"].values()
     )
-    # the participants group follows the active passes: the refunded holder was dropped
-    assert result["participants"] == {"members": 1, "added": [], "removed": []}
-    assert authentik.members() == {active_pass(odoo, missed["invoice"])["authentik_user_id"]}
+    # the refunded holder's signer account is suspended
+    assert signer.accounts[f"odoo-partner-{done['partner']}"]["status"] == "suspended"
     # second run is a no-op
-    assert core.reconcile(services) == {
-        "activated": {},
-        "revoked": {},
-        "participants": {"members": 1, "added": [], "removed": []},
-        "tokens": {},
-    }
+    assert core.reconcile(services) == {"activated": {}, "revoked": {}, "tokens": {}}
 
 
 def test_reconcile_endpoint_requires_token(client):
@@ -372,21 +341,18 @@ def test_reconcile_endpoint_requires_token(client):
     assert r.status_code == 200 and r.json() == {
         "activated": {},
         "revoked": {},
-        "participants": {"members": 0, "added": [], "removed": []},
         "tokens": {},
     }
 
 
-def test_legacy_module_fallbacks(settings, authentik, keycast):
+def test_legacy_module_fallbacks(settings, signer):
     """Without the module's RPC methods the service numbers members and creates passes itself."""
-    from belfry_onboarding.clients.authentik import AuthentikClient
-    from belfry_onboarding.clients.keycast import KeycastClient
+    from belfry_onboarding.clients.signer import SignerClient
 
     odoo = FakeOdoo(legacy_module=True)
     services = core.Services(
         odoo=odoo,
-        authentik=AuthentikClient("http://authentik.test", "t"),
-        keycast=KeycastClient("http://keycast.test", "a", "s"),
+        signer=SignerClient("http://signer.test", "t"),
         settings=settings,
     )
     ids = seed_paid_invoice(odoo, tier="day")
@@ -400,29 +366,17 @@ def test_legacy_module_fallbacks(settings, authentik, keycast):
     assert p["date_end"] == "2027-01-26"
 
 
-def test_existing_authentik_user_found_by_email_is_reused(services, odoo, authentik):
-    authentik.users.append(
-        {"pk": 7, "username": "alice", "email": "alice@example.com", "attributes": {}}
-    )
-    ids = seed_paid_invoice(odoo)
-    assert core.activate_pass(services, ids["invoice"]) == "activated"
-    assert authentik.user_creates == 0
-    assert authentik.connection_creates == 1
-    assert authentik.connections[0]["user"] == 7
-    assert active_pass(odoo, ids["invoice"])["authentik_user_id"] == 7
+def test_signer_client_sends_the_token_and_reads_errors(router):
+    from belfry_onboarding.clients.signer import SignerClient
 
-
-def test_keycast_client_sends_tenant_host_header(router):
-    from belfry_onboarding.clients.keycast import KeycastClient
-
-    route = router.post("http://keycast.test/api/admin/preload-user").mock(
-        return_value=httpx.Response(200, json={"pubkey": "ab" * 32, "token": "t"})
+    route = router.put("http://signer.example/accounts/odoo-partner-1").mock(
+        return_value=httpx.Response(503, json={"error": "seed_locked", "message": "locked"})
     )
-    KeycastClient("http://keycast.test", "a", "s", tenant_domain="belfry.example").preload_user(
-        "odoo-partner-1", "osv-0001", "Alice"
-    )
-    assert route.calls.last.request.headers["host"] == "belfry.example"
-    assert route.calls.last.request.headers["authorization"] == "Bearer a"
+    with pytest.raises(SignerError) as exc:
+        SignerClient("http://signer.example", "tok").ensure_account("odoo-partner-1", 3)
+    assert (exc.value.status, exc.value.code) == (503, "seed_locked")
+    assert route.calls.last.request.headers["authorization"] == "Bearer tok"
+    assert json.loads(route.calls.last.request.content) == {"key_version": 3}
 
 
 def test_health(client):
@@ -435,52 +389,39 @@ def test_npub_encoding_known_vector():
     assert hex_to_npub(hex_pk) == "npub10elfcs4fr0l0r8af98jlmgdh9c8tcxjvz9qkw038js35mp4dma8qzvjptg"
 
 
-# -- self-custody (Keycast patch 0012) -------------------------------------------------------------
+# -- self-custody (the account page moves the key, account.py) ----------------------------------
 
 
-def test_key_changed_moves_the_pass_and_the_whitelist(services, odoo, keycast, whitelist, client):
+def test_key_changed_moves_the_pass_and_the_whitelist(services, odoo, signer, whitelist):
     ids = seed_paid_invoice(odoo, tier="week")
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     p = active_pass(odoo, ids["invoice"])
-    old, new = p["keycast_pubkey"], "ab" * 32
+    old, new = p["nostr_pubkey"], "ab" * 32
     vine = f"odoo-partner-{ids['partner']}"
 
-    assert client.post("/hooks/keycast/key-changed", json={}).status_code == 401
-    r = client.post(
-        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
-        json={"vine_id": vine, "old_pubkey": old, "new_pubkey": old},
-    )
-    assert r.json() == {"result": "took_custody"} and p["keycast_pubkey"] == old
-
-    r = client.post(
-        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
-        json={"vine_id": vine, "old_pubkey": old, "new_pubkey": new},
-    )
-    assert r.json() == {"result": "moved"}
-    assert p["keycast_pubkey"] == new and p["npub"] == hex_to_npub(new)
+    assert core.key_changed(services, vine, old, old) == "took_custody"
+    assert p["nostr_pubkey"] == old
+    assert core.key_changed(services, vine, old, new) == "moved"
+    assert p["nostr_pubkey"] == new and p["npub"] == hex_to_npub(new)
     assert odoo.get("res.partner", ids["partner"])["belfry_npub"] == hex_to_npub(new)
     rendered = whitelist.config_path.read_text()
     assert new in rendered and old not in rendered
-
-    bad = client.post(
-        f"/hooks/keycast/key-changed?token={HOOK_TOKEN}",
-        json={"vine_id": "vine-1", "old_pubkey": old, "new_pubkey": new},
-    )
-    assert bad.status_code == 400
+    with pytest.raises(ValueError):
+        core.key_changed(services, "vine-1", old, new)
 
 
-# -- derived keys and recovery (Keycast patch 0014) ------------------------------------------------
+# -- derived keys and recovery (the custody seed) -------------------------------------------------
 
 
-def test_activation_passes_the_key_version(services, odoo, keycast):
+def test_activation_passes_the_key_version(services, odoo, signer):
     ids = seed_paid_invoice(odoo, tier="day")
     odoo.get("res.partner", ids["partner"])["belfry_key_version"] = 2
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-    assert keycast.preload_bodies[-1]["key_version"] == 2
+    assert signer.accounts[f"odoo-partner-{ids['partner']}"]["key_version"] == 2
 
 
-def test_restore_keys_recreates_accounts_with_the_same_npubs(services, odoo, keycast, client):
-    keycast.derived = True
+def test_restore_keys_recreates_accounts_with_the_same_npubs(services, odoo, signer):
+    signer.derived = True
     a = seed_paid_invoice(odoo, tier="week")
     assert core.activate_pass(services, a["invoice"]) == "activated"
     pa = active_pass(odoo, a["invoice"])
@@ -492,36 +433,36 @@ def test_restore_keys_recreates_accounts_with_the_same_npubs(services, odoo, key
     assert core.activate_pass(services, b["invoice"]) == "activated"
     pb = active_pass(odoo, b["invoice"])
     own = "cd" * 32
-    core.key_changed(services, f"odoo-partner-{b['partner']}", pb["keycast_pubkey"], own)
+    core.key_changed(services, f"odoo-partner-{b['partner']}", pb["nostr_pubkey"], own)
     assert odoo.get("res.partner", b["partner"])["belfry_key_custody"] == "self"
 
-    # Keycast's database is lost
-    keycast.users.clear()
-    keycast.status.clear()
+    # the signer's data is lost
+    signer.accounts.clear()
     report = core.restore_keys(services)
     assert report["partners"] == {
         odoo.get("res.partner", a["partner"])["belfry_member_number"]: "ok",
         odoo.get("res.partner", b["partner"])["belfry_member_number"]: "own_key",
     }
-    assert keycast.users[f"odoo-partner-{a['partner']}"]["pubkey"] == pa["keycast_pubkey"]
-    assert keycast.users[f"odoo-partner-{b['partner']}"]["pubkey"] == own
-    assert keycast.preload_bodies[-1].get("pubkey") in (own, None)
+    assert signer.accounts[f"odoo-partner-{a['partner']}"]["pubkey"] == pa["nostr_pubkey"]
+    assert signer.accounts[f"odoo-partner-{b['partner']}"]["pubkey"] == own
+    assert signer.accounts[f"odoo-partner-{b['partner']}"]["custody"] == "own"
     # running it again changes nothing
     assert core.restore_keys(services) == report
 
 
-def test_restore_keys_reports_a_random_key_that_cannot_come_back(services, odoo, keycast):
+def test_restore_keys_reports_a_random_key_that_cannot_come_back(services, odoo, signer):
     ids = seed_paid_invoice(odoo, tier="day")
     assert core.activate_pass(services, ids["invoice"]) == "activated"  # sequential = "random"
-    keycast.users.clear()
-    keycast.derived = True
+    signer.accounts.clear()
+    signer.derived = True
     report = core.restore_keys(services)
     assert list(report["partners"].values()) == ["mismatch"]
+    assert signer.accounts == {}, "nothing is written for a key the seed does not give"
+    signer.seed_locked = True
+    assert list(core.restore_keys(services)["partners"].values()) == ["locked"]
 
 
-def test_mollie_chargeback_revokes_and_reversal_gives_the_pass_back(
-    client, services, odoo, keycast
-):
+def test_mollie_chargeback_revokes_and_reversal_gives_the_pass_back(client, services, odoo, signer):
     ids = seed_paid_invoice(odoo)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
     tx = odoo.get("payment.transaction", ids["transaction"])
@@ -539,11 +480,12 @@ def test_mollie_chargeback_revokes_and_reversal_gives_the_pass_back(
     assert hook() == "revoked"
     p = active_pass(odoo, ids["invoice"])
     assert (p["state"], p["revoke_reason"]) == ("revoked", "chargeback")
-    assert keycast.status[p["keycast_pubkey"]] == "suspended"
+    vid = f"odoo-partner-{ids['partner']}"
+    assert signer.accounts[vid]["status"] == "suspended"
     assert hook() == "already_revoked"
     tx["belfry_chargeback_state"] = "reversed"
     assert hook() == "reactivated"
-    assert p["state"] == "active" and keycast.status[p["keycast_pubkey"]] == "active"
+    assert p["state"] == "active" and signer.accounts[vid]["status"] == "active"
     assert hook() == "unchanged"
     # a pass a steward revoked stays revoked when a chargeback is reversed
     core.revoke_pass(services, p["id"], "steward")
@@ -596,7 +538,7 @@ def seed_own_key_pass(odoo: FakeOdoo, ids: dict, pubkey: str, proof: str) -> int
     )
 
 
-def test_own_key_gets_a_keyless_account_and_no_profile(services, odoo, keycast, relay, whitelist):
+def test_own_key_gets_a_keyless_account_and_no_profile(services, odoo, signer, relay, whitelist):
     ids = seed_paid_invoice(odoo, tier="week")
     pubkey, proof = own_key_proof()
     seed_own_key_pass(odoo, ids, pubkey, proof)
@@ -605,18 +547,19 @@ def test_own_key_gets_a_keyless_account_and_no_profile(services, odoo, keycast, 
 
     p = active_pass(odoo, ids["invoice"])
     partner = odoo.get("res.partner", ids["partner"])
-    assert keycast.preload_bodies[-1]["pubkey"] == pubkey
-    assert p["keycast_pubkey"] == pubkey
+    account = signer.accounts[f"odoo-partner-{ids['partner']}"]
+    assert (account["pubkey"], account["custody"]) == (pubkey, "own")
+    assert p["nostr_pubkey"] == pubkey
     assert p["npub"] == partner["belfry_npub"] == hex_to_npub(pubkey)
     assert partner["belfry_key_custody"] == "self"
-    assert keycast.status[pubkey] == "active"
+    assert account["status"] == "active"
     # Belfry cannot sign for the key: no profile, no relay or follow lists
     assert relay.events == []
-    assert keycast.signed == []
+    assert signer.signed == []
     assert pubkey in whitelist.config_path.read_text()
 
 
-def test_own_key_with_a_tampered_proof_stops_the_activation(services, odoo, keycast):
+def test_own_key_with_a_tampered_proof_stops_the_activation(services, odoo, signer):
     ids = seed_paid_invoice(odoo, tier="week")
     pubkey, proof = own_key_proof()
     other, _ = own_key_proof()
@@ -624,11 +567,11 @@ def test_own_key_with_a_tampered_proof_stops_the_activation(services, odoo, keyc
 
     with pytest.raises(RuntimeError, match="does not hold"):
         core.activate_pass(services, ids["invoice"])
-    assert keycast.preloads == 0
+    assert signer.accounts == {}
     assert active_pass(odoo, ids["invoice"])["state"] == "pending"
 
 
-def test_starter_events_skip_participants_with_their_own_key(services, odoo, keycast, relay):
+def test_starter_events_skip_participants_with_their_own_key(services, odoo, signer, relay):
     ids = seed_paid_invoice(odoo, tier="week")
     pubkey, proof = own_key_proof()
     seed_own_key_pass(odoo, ids, pubkey, proof)

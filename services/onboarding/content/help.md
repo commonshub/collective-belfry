@@ -9,9 +9,10 @@ Everything you need for Open Source Village on one page.
 2. That signs you in. You land on [your account]({{account}}): your pass, your village name and
    the apps.
 3. Next time, open any app and choose **Sign in with Open Source Village**. Enter your e-mail
-   address. We send you a link and a 6-digit code, both valid for 10 minutes: open the link in
-   the same browser, or type the code on the sign-in page (handy on a device where your e-mail
-   is not). Once you are signed in, the apps sign you in by themselves.
+   address. We send you a link and a 6-digit code, both valid for 10 minutes and once: open the
+   link, or type the code on the sign-in page (handy on a device where your e-mail is not). With
+   the pass in a wallet app you can also choose **Sign in with your pass**. Once you are signed
+   in, the apps sign you in by themselves; signing out of one app signs you out of all.
 
 No e-mail? Check your spam folder, then ask a steward to send a new link.
 
@@ -39,9 +40,11 @@ wallet. Once you have signed in to the wallet, it keeps your tokens on every dev
 
 ## Your identity
 
-Your account page shows your village name (for example `osv-0042@<domain>`) and your Nostr key.
-Belfry keeps the key safe for you. If you have your own Nostr signer, you can move your identity
-to your own key on the security page; after that, the apps sign in with your own signer.
+[Your account]({{account}}) shows your village name (for example `osv-0042@<domain>`), your Nostr
+key and the apps you are signed in to; remove one there to sign it out. Belfry keeps the key safe
+for you. Another Nostr app (a phone app, an agent) can use it too: **Connect a Nostr app** gives
+you a bunker link for it. If you have your own Nostr signer, you can move your identity to your
+own key under **Your key**; after that, the apps sign in with your own signer.
 
 If you already use Nostr, you can also join with your key from the start: on the invite page, tick
 **Join with my own Nostr key**. Your browser's signer extension shares your public key and signs

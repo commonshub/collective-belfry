@@ -3,11 +3,8 @@
 says whether the pass is valid. Like the wallet door check it tells only the tier and the
 validity, never a name.
 
-Sign-in: Authentik application belfry-pass (blueprint belfry-pass-app, group
-belfry-participants, implicit consent), authorization code + PKCE, code and userinfo server to
-server as on the steward pages. The partner comes from the "keycast" scope's claim
-keycast_vine_id (odoo-partner-<id>). A participant already signed in to Authentik passes without
-a click. The session is a signed cookie on /me (PASS_PAGE_SECRET).
+Sign-in: Belfry's session (session.py, login.py; until 2026-11-19 an Authentik application).
+A participant already signed in passes without a click; /me/login goes to the login page.
 
 The QR is a URL with a short-lived token, <pass id>.<expiry>.<HMAC>, renewed every
 QR_REFRESH_SECONDS by the page and valid for QR_TTL_SECONDS, so a screenshot is useless soon
@@ -24,26 +21,24 @@ import hashlib
 import hmac
 import html
 import logging
-import secrets
 import threading
 import time
 import urllib.parse
 from typing import Any
 
-import httpx
 import jwt
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import session
 from .claim import TIER_NAMES, page, qr_svg
 from .clients.odoo import OdooError
 from .core import Services, odoo_date
 
 log = logging.getLogger(__name__)
 
-SESSION_COOKIE = "belfry_pass"
-FLOW_COOKIE = "belfry_pass_flow"
+SESSION_COOKIE = "belfry_pass"  # the cookie before 2026-11-19; cleared at logout
 FLOW_SECONDS = 600
 QR_TTL_SECONDS = 90
 QR_REFRESH_SECONDS = 30
@@ -60,11 +55,7 @@ class PassPageError(Exception):
 
 def enabled(svc: Services) -> bool:
     s = svc.settings
-    return bool(s.pass_page_oidc_client_secret and s.pass_page_secret)
-
-
-def redirect_uri(svc: Services) -> str:
-    return svc.settings.public_url.rstrip("/") + "/me/callback"
+    return bool(s.pass_page_secret and s.session_secret)
 
 
 def _secure(svc: Services) -> bool:
@@ -174,67 +165,6 @@ def check_pass(svc: Services, pass_id: int, today: dt.date | None = None) -> dic
 
 
 # -- sign-in ---------------------------------------------------------------------------------------
-
-
-def start_login(svc: Services) -> tuple[str, str]:
-    state = secrets.token_urlsafe(24)
-    verifier = secrets.token_urlsafe(48)
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    )
-    params = {
-        "response_type": "code",
-        "client_id": svc.settings.pass_page_oidc_client_id,
-        "redirect_uri": redirect_uri(svc),
-        "scope": "openid keycast",
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    url = (
-        svc.settings.authentik_public_url.rstrip("/")
-        + "/application/o/authorize/?"
-        + urllib.parse.urlencode(params)
-    )
-    return url, _sign(svc, {"kind": "flow", "state": state, "verifier": verifier}, FLOW_SECONDS)
-
-
-def finish_login(svc: Services, code: str, state: str, flow_cookie: str | None) -> str:
-    """Exchange the code, read the partner id; returns the session cookie."""
-    flow = _verify(svc, flow_cookie, "flow")
-    if not flow or not state or state != flow.get("state"):
-        raise PassPageError(400, "The sign-in took too long or was started elsewhere. Try again.")
-    if not code:
-        raise PassPageError(400, "The sign-in returned no code. Try again.")
-    s = svc.settings
-    base = s.authentik_url.rstrip("/")
-    token = httpx.post(
-        f"{base}/application/o/token/",
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri(svc),
-            "code_verifier": flow["verifier"],
-        },
-        auth=(s.pass_page_oidc_client_id, s.pass_page_oidc_client_secret),
-        timeout=15,
-    )
-    if token.status_code != 200:
-        log.warning("pass page login: token exchange %s %s", token.status_code, token.text[:200])
-        raise PassPageError(502, "The sign-in failed. Try again.")
-    info = httpx.get(
-        f"{base}/application/o/userinfo/",
-        headers={"Authorization": f"Bearer {token.json().get('access_token')}"},
-        timeout=15,
-    )
-    if info.status_code != 200:
-        log.warning("pass page login: userinfo %s %s", info.status_code, info.text[:200])
-        raise PassPageError(502, "The sign-in failed. Try again.")
-    vine = info.json().get("keycast_vine_id") or ""
-    if not vine.startswith("odoo-partner-") or not vine.removeprefix("odoo-partner-").isdigit():
-        raise PassPageError(403, "This account has no pass.")
-    partner_id = int(vine.removeprefix("odoo-partner-"))
-    return _sign(svc, {"kind": "session", "partner": partner_id}, s.pass_page_session_days * 86400)
 
 
 # -- pages -----------------------------------------------------------------------------------------
@@ -426,7 +356,8 @@ def register(app: FastAPI) -> None:
         services = svc(request)
         if not enabled(services):
             raise PassPageError(503, "The pass page is not configured on this server.")
-        return services, _verify(services, request.cookies.get(SESSION_COOKIE), "session")
+        current = session.current(request)
+        return services, ({"partner": current.partner_id} if current else None)
 
     def qr_for(services: Services, pass_id: int) -> dict[str, Any]:
         token, exp = qr_token(services, pass_id)
@@ -469,42 +400,10 @@ def register(app: FastAPI) -> None:
 
     @app.get("/me/login")
     async def me_login(request: Request):
-        services, _sess = guard(request)
-        url, flow = start_login(services)
-        response = RedirectResponse(url, status_code=303)
-        response.set_cookie(
-            FLOW_COOKIE,
-            flow,
-            max_age=FLOW_SECONDS,
-            httponly=True,
-            secure=_secure(services),
-            samesite="lax",
-            path="/me",
+        guard(request)
+        return RedirectResponse(
+            "/login?" + urllib.parse.urlencode({"next": "/me"}), status_code=303
         )
-        return response
-
-    @app.get("/me/callback")
-    async def me_callback(request: Request, code: str = "", state: str = "", error: str = ""):
-        services, _sess = guard(request)
-        if error:
-            raise PassPageError(
-                403, "You were not signed in. Only participants with a pass can open this page."
-            )
-        cookie = await run_in_threadpool(
-            finish_login, services, code, state, request.cookies.get(FLOW_COOKIE)
-        )
-        response = RedirectResponse("/me", status_code=303)
-        response.delete_cookie(FLOW_COOKIE, path="/me")
-        response.set_cookie(
-            SESSION_COOKIE,
-            cookie,
-            max_age=services.settings.pass_page_session_days * 86400,
-            httponly=True,
-            secure=_secure(services),
-            samesite="lax",
-            path="/",  # the feedback page knows who sends it
-        )
-        return response
 
     def same_origin(request: Request, services: Services) -> None:
         """Forms post only from this site (the session cookie is SameSite=Lax as well)."""
@@ -541,11 +440,11 @@ def register(app: FastAPI) -> None:
     @app.post("/me/logout")
     async def me_logout(request: Request):
         guard(request)
-        body = """<div class="card"><h1>Signed out</h1><p>This page is signed out.</p>
+        body = """<div class="card"><h1>Signed out</h1><p>You are signed out.</p>
 <p><a class="btn" href="/me">Show my pass</a></p></div>"""
         response = HTMLResponse(page("Signed out", body))
+        session.clear_cookie(response, svc(request).settings)
         response.delete_cookie(SESSION_COOKIE, path="/")
-        response.delete_cookie(SESSION_COOKIE, path="/me")  # sessions from before 2026-10-25
         return response
 
     @app.get("/check/{token}", response_class=HTMLResponse)

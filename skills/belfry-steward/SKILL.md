@@ -6,7 +6,7 @@ description: Help a steward of a Belfry community (such as Open Source Village) 
 # Running a Belfry community: the steward's skill
 
 A **Belfry** runs access and identity for one community: who holds a pass (Odoo), their Nostr
-keys (Keycast, or the participant's own), sign-in (Authentik), the pass in EUDI wallets, the
+keys (Belfry's signer, or the participant's own), sign-in (Belfry's own), the pass in EUDI wallets, the
 community relays, files and village tokens. Stewards run the community. This skill covers what a
 steward, or an agent or app acting for one, can do and where.
 
@@ -25,7 +25,7 @@ The participant-side skill (passes, ordering, posting, groups) is at `https://pa
 - **Access follows the pass.** The community relay, the groups relay and the file server let in
   only keys with an active pass. They follow Odoo within seconds of a payment, a revocation or
   an expiry. There is nothing to add or remove by hand.
-- **Stewards** are the members of the Authentik group `belfry-stewards`. Each gets a free pass.
+- **Stewards** are the contacts Odoo marks as stewards (`belfry_steward`). Each gets a free pass.
   A steward's invites are unlimited; a participant has a few (3 by default).
 
 ## Rules
@@ -42,11 +42,11 @@ The participant-side skill (passes, ordering, posting, groups) is at `https://pa
 
 ## Acting for a steward: the signer
 
-As for any pass holder (participant skill, section 6): the steward signs in at
-`https://apps.<domain>`, chooses **Connect to Nostr App** with the permissions **Belfry event
-apps**, and gives you the `bunker://` URL. Every request below is a Nostr event signed through it.
-You then have the steward's rights, nothing more. The steward can end your access at any time
-(**Revoke Access**).
+As for any pass holder (participant skill, section 6): the steward signs in to their account
+page `https://pass.<domain>/account`, chooses **Connect a Nostr app**, and gives you the
+`bunker://` URL. Every request below is a Nostr event signed through it. You then have the
+steward's rights, nothing more. The steward can end your access at any time (**Remove** next to
+the app on the account page).
 
 ## What you can do through the API
 
@@ -107,7 +107,7 @@ which are minted when the pass activates. Participants pass them on as nutzaps f
 
 ## What needs the steward pages
 
-`https://pass.<domain>/steward`: the steward signs in with Authentik. It opens only from the
+`https://pass.<domain>/steward`: the steward signs in as everyone does (e-mail link or code). It opens only from the
 community's admin network (ZeroTier). These are pages for the steward, not an API, so don't
 script them. Tell the steward what to do there:
 
@@ -124,9 +124,9 @@ script them. Tell the steward what to do there:
 
 Commands on the Belfry server (`docker compose exec onboarding python -m belfry_onboarding …`):
 `add-steward <e-mail> [name]` (makes someone a steward and gives them their free pass),
-`steward-passes`, `login-link <pass id>`, `reconcile`, `sync-relay`, `restore-keys`. Making
-someone a steward or taking it away, and the list of stewards, are in Authentik (Directory →
-Groups → `belfry-stewards`).
+`steward-passes`, `login-link <pass id>`, `reconcile`, `sync-relay`, `restore-keys`. Taking the
+steward role away, and the list of stewards, are in Odoo's back office (the contact's Belfry tab,
+**Belfry steward**).
 
 ## Not there yet
 

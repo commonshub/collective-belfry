@@ -48,9 +48,8 @@ def test_invites_need_a_session_and_this_site(web, passing, odoo):  # noqa: F811
     assert odoo.tables["belfry.invite"][theirs]["state"] == "open"
 
 
-def test_feedback_without_signing_in(web, odoo, authentik):  # noqa: F811
-    authentik.users.append({"pk": 7, "username": "sam", "email": "sam@belfry.test"})
-    authentik.groups["belfry-stewards"] = {"pk": "g", "members": {7}}
+def test_feedback_without_signing_in(web, odoo):  # noqa: F811
+    odoo.add("res.partner", name="Sam", email="sam@belfry.test", belfry_steward=True)
     page = web.get("/feedback?from=https://photos.belfry.test/%23/new").text
     assert "What happened?" in page and "https://photos.belfry.test/#/new" in page
     assert 'name="email"' in page

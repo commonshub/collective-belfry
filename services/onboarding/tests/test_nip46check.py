@@ -78,8 +78,8 @@ def test_parse_bunker_url_and_host_map():
     url = f"bunker://{pk}?relay=ws%3A%2F%2Flocalhost%3A3080&secret=s3cret"
     assert n.parse_bunker_url(url) == (pk, ["ws://localhost:3080"], "s3cret")
     assert (
-        n.HostMap("localhost:3080=keycast-relay:8080")("ws://localhost:3080")
-        == "ws://keycast-relay:8080"
+        n.HostMap("localhost:3080=bunker-relay:8080")("ws://localhost:3080")
+        == "ws://bunker-relay:8080"
     )
     assert n.HostMap("")("wss://bunker.example.org") == "wss://bunker.example.org"
     assert (

@@ -1,7 +1,7 @@
 // Drives the programme app's Shifts tab (services/village, programme.<domain>) in headless Chromium
 // at phone width:
 //
-//   1. As a steward with an active pass (JAR, an Authentik session; the participant's e-mail added
+//   1. As a steward with an active pass (JAR, a Belfry session; the participant's e-mail added
 //      with `python -m belfry_onboarding add-steward`): signed in silently, the tab bar gains
 //      "Shifts" once the server names the role, and the tab lists the shifts (SHIFT, a title that
 //      must be among them) with who signed up, without sign-up buttons.

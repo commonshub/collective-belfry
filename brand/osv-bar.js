@@ -1,17 +1,17 @@
 /* Open Source Village app bar: a thin strip on top of every community app with the way back to
- * the apps page and links to the other apps. One file for all apps; each app's build copies it
+ * the account page and links to the other apps. One file for all apps; each app's build copies it
  * next to its index.html (same origin, so a strict script-src 'self' allows it) and loads it in
  * <head>, without defer, so the offset is known before the app lays out:
  *
- *   <script src="/osv-bar.js" data-home="https://apps.<domain>"
+ *   <script src="/osv-bar.js" data-home="https://pass.<domain>/account"
  *           data-apps="Chat|https://chat.<domain>|…;Calendar|https://calendar.<domain>|…"></script>
  *
- * data-apps has the format of Keycast's BELFRY_COMMUNITY_APPS (Name|URL|Description;…). The bar
- * is fixed at the top and sets --osv-bar-h on <html> (with the class osv-bar); each app moves its
- * own fixed and sticky parts down by that much (the chat through Coracle's
- * --safe-area-inset-top, the calendar through its --safe-area-top) and may set --osv-bar-z to put
- * the bar above its navigation and below its dialogs (default 1250: above MUI's app bar and
- * drawers, below its modals). Colours from tokens.css. */
+ * data-apps has the format of the onboarding service's BELFRY_COMMUNITY_APPS
+ * (Name|URL|Description;…). The bar is fixed at the top and sets --osv-bar-h on <html> (with the
+ * class osv-bar); each app moves its own fixed and sticky parts down by that much (the chat
+ * through Coracle's --safe-area-inset-top, the calendar through its --safe-area-top) and may set
+ * --osv-bar-z to put the bar above its navigation and below its dialogs (default 1250: above
+ * MUI's app bar and drawers, below its modals). Colours from tokens.css. */
 (function () {
   var script = document.currentScript;
   if (!script || window.__osvBar) return;

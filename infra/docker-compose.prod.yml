@@ -31,9 +31,8 @@ services:
       BELFRY_DOMAIN: ${BELFRY_DOMAIN:?set BELFRY_DOMAIN (scripts/prod-env.sh)}
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL}
       CADDY_TLS_ARG: ${CADDY_TLS_ARG:-${ACME_EMAIL}}
-      KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
       ODOO_HOST_PREFIX: ${ODOO_HOST_PREFIX:-shop}
-      # Admin pages (Odoo back office, Authentik admin, /steward) only from these networks: the
+      # Admin pages (Odoo back office, /steward) only from these networks: the
       # ZeroTier subnet and the VM itself (bootstrap and smoke run there). infra/DEPLOY.md.
       ADMIN_NETS: ${ADMIN_NETS:-127.0.0.1/8 172.16.0.0/12}
       # The venue WiFi's public addresses (space-separated CIDRs), exempt from the rate limits; the
@@ -50,9 +49,7 @@ services:
         condition: service_completed_successfully
       odoo:
         condition: service_started
-      authentik-server:
-        condition: service_started
-      keycast:
+      bunker-relay:
         condition: service_started
       relay:
         condition: service_started
@@ -76,20 +73,9 @@ services:
     # "dev" profile; remove a running one with `docker compose rm -sf mailpit`.
     profiles: ["dev"]
     ports: !reset []
-  authentik-server:
-    ports: !reset []
+  signer:
     restart: unless-stopped
-  authentik-worker:
-    restart: unless-stopped
-  keycast:
-    ports: !reset []
-    restart: unless-stopped
-    environment:
-      # Behind the proxy Keycast talks to Authentik over the public HTTPS hostname: through the
-      # Compose network Authentik only sees plain HTTP and publishes an http:// issuer, which
-      # Keycast rejects against OIDC_ISSUER (seen on the first deployment, 2026-10-23).
-      OIDC_BACKCHANNEL_URL: ""
-  keycast-relay:
+  bunker-relay:
     ports: !reset []
     restart: unless-stopped
   relay:
@@ -137,8 +123,6 @@ services:
     ports: !reset []
     restart: unless-stopped
   postgres:
-    restart: unless-stopped
-  redis:
     restart: unless-stopped
 
 networks:

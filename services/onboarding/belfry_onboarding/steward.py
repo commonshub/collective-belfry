@@ -1,20 +1,19 @@
 """Steward pages (/steward): Belfry's own UI for stewards, Odoo stays the backend (decided
-2026-10-23). Stewards sign in through Authentik (application belfry-steward, group
-belfry-stewards; blueprint belfry-steward-app) and can create, copy and revoke invites, mark a
-pending pass paid, re-send a participant's sign-in link and revoke a pass. Every Odoo call runs
-as the service user; the steward's e-mail is written on what they create or mark.
+2026-10-23). Stewards sign in with Belfry's own sign-in (login.py; until 2026-11-19 through
+Authentik) and are the contacts Odoo marks as stewards (res.partner.belfry_steward,
+``add-steward``). They can create, copy and revoke invites, mark a pending pass paid, re-send a
+participant's sign-in link and revoke a pass. Every Odoo call runs as the service user; the
+steward's e-mail is written on what they create or mark.
 
-Login: authorization code + PKCE. The code is exchanged and the user read from userinfo over the
-Compose network (AUTHENTIK_URL), server to server with the client secret, so no ID token is
-parsed. The session is a signed cookie (HS256, STEWARD_SESSION_SECRET) for STEWARD_SESSION_HOURS;
-every form carries the session's CSRF token.
+Login: /steward/login needs Belfry's session (else the login page first) and a steward; it
+then sets the steward cookie (HS256, STEWARD_SESSION_SECRET) for STEWARD_SESSION_HOURS; every
+form carries that cookie's CSRF token.
 """
 
 from __future__ import annotations
 
 import base64
 import datetime as dt
-import hashlib
 import html
 import logging
 import secrets
@@ -31,13 +30,12 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from . import core
+from . import session as belfry_session
 from .core import Services
 
 log = logging.getLogger(__name__)
 
 SESSION_COOKIE = "belfry_steward"
-FLOW_COOKIE = "belfry_steward_flow"
-FLOW_SECONDS = 600
 
 
 class StewardError(Exception):
@@ -52,11 +50,7 @@ class StewardError(Exception):
 
 def enabled(svc: Services) -> bool:
     s = svc.settings
-    return bool(s.steward_oidc_client_secret and s.steward_session_secret)
-
-
-def redirect_uri(svc: Services) -> str:
-    return svc.settings.public_url.rstrip("/") + "/steward/callback"
+    return bool(s.steward_session_secret and s.session_secret)
 
 
 def secure_cookies(svc: Services) -> bool:
@@ -92,76 +86,22 @@ def check_csrf(sess: dict[str, Any], token: str | None) -> None:
 # -- login ---------------------------------------------------------------------------------------
 
 
-def start_login(svc: Services) -> tuple[str, str]:
-    """Authorize URL at Authentik's public origin, and the signed flow cookie (state, PKCE)."""
-    state = secrets.token_urlsafe(24)
-    verifier = secrets.token_urlsafe(48)
-    challenge = (
-        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    )
-    params = {
-        "response_type": "code",
-        "client_id": svc.settings.steward_oidc_client_id,
-        "redirect_uri": redirect_uri(svc),
-        "scope": "openid email profile",
-        "state": state,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    url = (
-        svc.settings.authentik_public_url.rstrip("/")
-        + "/application/o/authorize/?"
-        + urllib.parse.urlencode(params)
-    )
-    flow = _sign(svc, {"kind": "flow", "state": state, "verifier": verifier}, FLOW_SECONDS)
-    return url, flow
-
-
-def finish_login(svc: Services, code: str | None, state: str | None, flow_cookie: str | None):
-    """Exchange the code, read the user, require the steward group. Returns the session cookie."""
-    flow = _verify(svc, flow_cookie)
-    if not flow or flow.get("kind") != "flow" or not state or state != flow.get("state"):
-        raise StewardError(400, "The sign-in took too long or was started elsewhere. Try again.")
-    if not code:
-        raise StewardError(400, "Authentik returned no code.")
-    base = svc.settings.authentik_url.rstrip("/")
-    s = svc.settings
-    token = httpx.post(
-        f"{base}/application/o/token/",
-        data={
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": redirect_uri(svc),
-            "code_verifier": flow["verifier"],
-        },
-        auth=(s.steward_oidc_client_id, s.steward_oidc_client_secret),
-        timeout=15,
-    )
-    if token.status_code != 200:
-        log.warning("steward login: token exchange %s %s", token.status_code, token.text[:200])
-        raise StewardError(502, "Authentik refused the sign-in. Try again.")
-    access = token.json().get("access_token")
-    info = httpx.get(
-        f"{base}/application/o/userinfo/",
-        headers={"Authorization": f"Bearer {access}"},
-        timeout=15,
-    )
-    if info.status_code != 200:
-        log.warning("steward login: userinfo %s %s", info.status_code, info.text[:200])
-        raise StewardError(502, "Authentik did not return the user. Try again.")
-    user = info.json()
-    email = (user.get("email") or "").strip()
-    if s.steward_group not in (user.get("groups") or []) or not email:
-        log.warning("steward login refused for %s: not in %s", email or "?", s.steward_group)
+def steward_session(svc: Services, partner_id: int) -> str:
+    """The steward cookie for a signed-in partner who is a steward; StewardError otherwise."""
+    partner = svc.odoo.read_one("res.partner", partner_id, ["name", "email", "belfry_steward"])
+    email = ((partner or {}).get("email") or "").strip()
+    if not partner or not partner.get("belfry_steward") or not email:
+        log.warning("steward login refused for partner %s: not a steward", partner_id)
         raise StewardError(403, "This account is not a steward.")
     log.info("steward login: %s", email)
     claims = {
         "kind": "session",
         "email": email,
-        "name": user.get("name") or email,
+        "name": partner.get("name") or email,
+        "partner": partner_id,
         "csrf": secrets.token_urlsafe(24),
     }
-    return _sign(svc, claims, s.steward_session_hours * 3600)
+    return _sign(svc, claims, svc.settings.steward_session_hours * 3600)
 
 
 # -- actions -------------------------------------------------------------------------------------
@@ -405,38 +345,19 @@ def revoke_pass(svc: Services, sess: dict[str, Any], pass_id: int) -> str:
 def add_steward(
     svc: Services, email: str, name: str = "", activate: Activate | None = None
 ) -> dict[str, Any]:
-    """Make the Authentik user with this e-mail a steward (CLI ``add-steward``) and give them
-    their free pass (``steward_pass``). A participant keeps their account; anyone else gets a new
-    passwordless user (path belfry/stewards), who signs in by magic link."""
+    """Make the contact with this e-mail a steward (CLI ``add-steward``; Odoo creates the contact
+    when there is none) and give them their free pass (``steward_pass``). They sign in like
+    everyone, by e-mail link and code."""
     email = email.strip()
     if "@" not in email:
         raise ValueError(f"not an e-mail address: {email!r}")
-    ak = svc.authentik
-    group = ak.find_group(svc.settings.steward_group)
-    if group is None:
-        raise RuntimeError(
-            f"group {svc.settings.steward_group} missing (blueprint belfry-steward-app)"
-        )
-    users = ak.find_users_by_email(email)
-    if users:
-        user, created = users[0], False
-    else:
-        local = "".join(c if c.isalnum() else "-" for c in email.lower())
-        user = ak.create_user(
-            username=f"steward-{local}"[:150],
-            name=name or email,
-            email=email,
-            attributes={"belfry_steward": True},
-            path="belfry/stewards",
-        )
-        created = True
-    ak.add_user_to_group(group["pk"], int(user["pk"]))
-    log.info("add_steward: %s (Authentik user %s, created=%s)", email, user["pk"], created)
+    made = svc.odoo.call("res.partner", "belfry_make_steward", [email, name or False])
+    log.info("add_steward: %s (partner %s, created=%s)", email, made["partner_id"], made["created"])
     return {
         "email": email,
-        "authentik_user": int(user["pk"]),
-        "created": created,
-        "pass": steward_pass(svc, email, name or user.get("name") or "", activate),
+        "partner_id": int(made["partner_id"]),
+        "created": bool(made["created"]),
+        "pass": steward_pass(svc, email, name, activate),
     }
 
 
@@ -480,10 +401,10 @@ def steward_pass(
 
 
 def steward_passes(svc: Services, activate: Activate | None = None) -> dict[str, Any]:
-    """A free pass for every member of the stewards group (CLI ``steward-passes``, run by
-    deploys; ``add-steward`` gives new stewards theirs)."""
+    """A free pass for every steward (CLI ``steward-passes``, run by deploys; ``add-steward``
+    gives new stewards theirs)."""
     done: dict[str, Any] = {}
-    for email in svc.authentik.group_member_emails(svc.settings.steward_group):
+    for email in core.steward_emails(svc):
         try:
             done[email] = steward_pass(svc, email, activate=activate)
         except Exception as exc:  # one steward's failure must not stop the others
@@ -985,29 +906,12 @@ def register(app: FastAPI) -> None:
     @app.get("/steward/login")
     async def steward_login(request: Request):
         services, _sess = guard(request)
-        url, flow = start_login(services)
-        response = RedirectResponse(url, status_code=303)
-        response.set_cookie(
-            FLOW_COOKIE,
-            flow,
-            max_age=FLOW_SECONDS,
-            httponly=True,
-            secure=secure_cookies(services),
-            samesite="lax",
-            path="/steward",
-        )
-        return response
-
-    @app.get("/steward/callback")
-    async def steward_callback(request: Request, code: str = "", state: str = "", error: str = ""):
-        services, _sess = guard(request)
-        if error:
-            raise StewardError(403, "Authentik did not sign you in as a steward.")
-        cookie = await run_in_threadpool(
-            finish_login, services, code, state, request.cookies.get(FLOW_COOKIE)
-        )
+        current = belfry_session.current(request)
+        if current is None:
+            login = "/login?" + urllib.parse.urlencode({"next": "/steward/login"})
+            return RedirectResponse(login, status_code=303)
+        cookie = await run_in_threadpool(steward_session, services, current.partner_id)
         response = RedirectResponse("/steward", status_code=303)
-        response.delete_cookie(FLOW_COOKIE, path="/steward")
         response.set_cookie(
             SESSION_COOKIE,
             cookie,

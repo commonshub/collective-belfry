@@ -6,8 +6,7 @@
 # with Caddy's own CA.
 #
 # Hardening (2026-10-24):
-# - Admin pages (Odoo's back office, Authentik's admin and password login, the steward pages,
-#   Keycast's admin pages) answer only connections from ADMIN_NETS: the ZeroTier network's subnet
+# - Admin pages (Odoo's back office, the steward pages) answer only connections from ADMIN_NETS: the ZeroTier network's subnet
 #   plus the VM itself (Docker's address ranges, for bootstrap and the smoke test). Admins map the
 #   public hostnames to the VM's ZeroTier address in their hosts file (infra/DEPLOY.md). The
 #   check uses the connection's address (remote_ip), never X-Forwarded-For.
@@ -15,14 +14,14 @@
 #   can hit without an account. They are generous on purpose: at the event most participants
 #   share the venue's address, which RATE_LIMIT_EXEMPT (the venue WiFi's public addresses, CIDR,
 #   space-separated) takes out of every limit. Pages that poll every 1.5 s (the door's session,
-#   pass sign-in) count about 40 requests a minute per open page. Mail flooding is limited per
-#   account in Authentik (belfry-magic-link-flow.yaml), not here.
+#   pass sign-in) count about 40 requests a minute per open page. Sign-in mails are limited per
+#   address in Odoo (belfry.login.code: five in half an hour), and the login page here.
 # - Errors the proxy answers itself (admin pages from outside ADMIN_NETS, closed paths, rate
 #   limits, a service that is down) are a branded page for browsers (errors/error.html, rendered
 #   by Caddy's templates) and the plain message for other clients. Errors a service answers
 #   itself pass through.
 # - A Content-Security-Policy per browser app (scripts and connections only to Belfry's own
-#   hosts). Odoo and Authentik bring their own inline code and get none.
+#   hosts). Odoo brings its own inline code and gets none.
 {
 	email {$ACME_EMAIL}
 	order rate_limit before basic_auth
@@ -108,20 +107,26 @@
 # import onboarding_site <zone prefix>: the onboarding service as one site, on pass.<domain> and
 # (for the start page) on the apex; the same rules on both hosts.
 (onboarding_site) {
-	@internal path /admin/* /hooks/odoo/* /hooks/keycast/* /issuer-shim/* /docs /openapi.json /redoc
+	@internal path /admin/* /hooks/odoo/* /issuer-shim/* /docs /openapi.json /redoc
 	error @internal 404
 	import admin_only /steward /steward/*
 	import limit {args[0]}-claim 120 1m /claim/* /tokens/* /wallet/*
-	import limit {args[0]}-me 120 1m /me/login /me/callback /me/invites /me/invites/*
+	import limit {args[0]}-me 120 1m /me/login /me/invites /me/invites/*
 	import limit {args[0]}-check 600 1m /check/*
-	import limit {args[0]}-bridge 1200 1m /bridge/*
+	# the login page: e-mail, code (six digits: five tries per code in Odoo, and this), the
+	# mail's link, the pass (its page polls every 1.5 s), the issuer's sign-in
+	import limit {args[0]}-login 60 1m /login /login/email /login/code /login/link/* /oidc/authorize
+	import limit {args[0]}-passlogin 1200 1m /login/pass /login/pass/*
 	import limit {args[0]}-door 600 1m /door /door/*
 	import limit {args[0]}-feedback 30 1m /feedback
 	import limit {args[0]}-apply 30 1m /apply
 	import limit {args[0]}-signin 120 1m /signin/* /welcome/*
+	# the apps' sign-in and the wallet's HTTP RPC: a few calls per sign-in and per signature
+	import limit {args[0]}-connect 600 1m /api/oauth/* /api/nostr
 	import limit {args[0]}-api 60 1m /api/*
 	# the pages carry their own small inline scripts and the QR codes as data: images
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https://login.{$BELFRY_DOMAIN}"
+	# form-action: the sign-in ends at an app (its redirect) after a form post (code, consent)
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self' https:"
 	reverse_proxy onboarding:8100
 }
 
@@ -136,39 +141,22 @@
 	reverse_proxy odoo:8069
 }
 
-# Login (Authentik). Keycast's OIDC issuer is https://login.<domain>/application/o/keycast/.
+# The addresses before 2026-11-19: login.<domain> (Authentik) and apps.<domain> (Keycast's account
+# page) lead to Belfry's sign-in and account page, so old links and bookmarks keep working.
 login.{$BELFRY_DOMAIN} {
 	import security
-	# Authentik's admin interface and akadmin's password login only over the admin network.
-	import admin_only /if/admin /if/admin/* /if/flow/default-authentication-flow /if/flow/default-authentication-flow/* /api/v3/flows/executor/default-authentication-flow /api/v3/flows/executor/default-authentication-flow/* /api/v3/admin/*
-	# Flow steps (e-mail entry, magic links, pass sign-in): bursts from the venue are fine.
-	import limit login-flows 300 1m /api/v3/flows/executor/*
-	reverse_proxy authentik-server:9000
+	redir https://pass.{$BELFRY_DOMAIN}/login 302
 }
 
-# Community apps / signer (Keycast web app and API, NIP-05 for its usernames).
 apps.{$BELFRY_DOMAIN} {
 	import security
-	# Admin API only for the onboarding service (Compose network); the dev mail inbox
-	# (ENABLE_DEV_EMAIL_INBOX, read by bootstrap to confirm the admin) must never be public.
-	@admin path /api/admin/* /api/dev/*
-	error @admin 404
-	import admin_only /admin /admin/*
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' https: data:; connect-src 'self' https://login.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; form-action 'self' https://login.{$BELFRY_DOMAIN}"
-	reverse_proxy keycast:3000
+	redir https://pass.{$BELFRY_DOMAIN}/account 302
 }
 
-# NIP-05 on Belfry's own domain: <member>@<domain> resolves through Keycast's nostr.json.
+# NIP-05 on Belfry's own domain: <member>@<domain> resolves through the onboarding service's
+# nostr.json (from Odoo), which also answers the apex's other pages (below).
 {$BELFRY_DOMAIN} {
 	import security
-	@nip05 path /.well-known/nostr.json
-	handle @nip05 {
-		# Keycast already answers with Access-Control-Allow-Origin: *.
-		# Keycast takes its tenant from the Host header and only knows KEYCAST_TENANT_DOMAIN.
-		reverse_proxy keycast:3000 {
-			header_up Host {$KEYCAST_TENANT_DOMAIN}
-		}
-	}
 	# Short names for the participant apps (<domain>/chat, …). None may collide with a page of
 	# the onboarding service, which answers everything else on the apex.
 	import vanity chat chat
@@ -180,7 +168,7 @@ apps.{$BELFRY_DOMAIN} {
 	import vanity market market
 	import vanity photos photos
 	import vanity wallet wallet
-	import vanity apps apps
+	redir /apps https://pass.{$BELFRY_DOMAIN}/account 302
 	import vanity shop {$ODOO_HOST_PREFIX:shop}
 	# Everything else: the start page (the onboarding service's landing page, SITE_URL) and the
 	# onboarding site it links to.
@@ -225,18 +213,18 @@ mint.{$BELFRY_DOMAIN} {
 	reverse_proxy mint:8085
 }
 
-# Village token wallet (cashu.me, static); it talks to mint., apps. (Keycast) and relay. itself.
+# Village token wallet (cashu.me, static); it talks to mint., pass. (sign-in, signing) and relay. itself.
 wallet.{$BELFRY_DOMAIN} {
 	import security
 	# one inline script (brand.mjs: the dark background before the app loads)
-	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://apps.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://mint.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy wallet:80
 }
 
-# Keycast's NIP-46 relay for remote signing; wss://bunker.<domain>
+# The signer's NIP-46 relay for remote signing; wss://bunker.<domain>
 bunker.{$BELFRY_DOMAIN} {
 	import security
-	reverse_proxy keycast-relay:8080
+	reverse_proxy bunker-relay:8080
 }
 
 # Credential issuer: wallet-facing OpenID4VCI only; the management API stays internal.
@@ -282,7 +270,7 @@ issuer.{$BELFRY_DOMAIN} {
 }
 
 # Verifier: wallets fetch request objects and post presentations; session management is
-# internal (door page and bridge create and read sessions over the Compose network).
+# internal (door page and pass sign-in create and read sessions over the Compose network).
 verifier.{$BELFRY_DOMAIN} {
 	import security
 	@wallet path_regexp ^/verification-session/[^/]+/(request|response)$
@@ -297,7 +285,7 @@ verifier.{$BELFRY_DOMAIN} {
 # Community app: the Open Source Village calendar (infra/apps/calendar, a static build).
 calendar.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN} https://programme.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN} https://programme.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy calendar:80
 }
 
@@ -305,7 +293,7 @@ calendar.{$BELFRY_DOMAIN} {
 vote.{$BELFRY_DOMAIN} {
 	import security
 	# the Semaphore prover runs WebAssembly
-	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN}; worker-src 'self' blob:; manifest-src 'self'; form-action 'self'"
 	reverse_proxy vote:8080
 }
 
@@ -313,25 +301,25 @@ vote.{$BELFRY_DOMAIN} {
 # one process, four ports).
 people.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8080
 }
 
 market.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8081
 }
 
 photos.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://blossom.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8082
 }
 
 programme.{$BELFRY_DOMAIN} {
 	import security
-	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://apps.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://vote.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+	import csp "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://pass.{$BELFRY_DOMAIN}; font-src 'self' data: https://pass.{$BELFRY_DOMAIN}; img-src 'self' https: data: blob:; connect-src 'self' https://pass.{$BELFRY_DOMAIN} wss://relay.{$BELFRY_DOMAIN} wss://bunker.{$BELFRY_DOMAIN} https://vote.{$BELFRY_DOMAIN} https://pass.{$BELFRY_DOMAIN}; worker-src 'self'; manifest-src 'self'; form-action 'self'"
 	reverse_proxy village:8083
 }
 
@@ -354,14 +342,36 @@ groups-relay.{$BELFRY_DOMAIN} {
 
 # The git server (ngit-grasp, GRASP-08): its relay (WebSocket) and Git Smart HTTP on one host.
 # Private: the relay asks for NIP-42 AUTH and git requests need a member's NIP-98 credential, so
-# the proxy adds nothing; NIP-11, the landing page and NIP-05 stay public by design.
+# the proxy adds nothing; NIP-11 and NIP-05 stay public by design. A browser asking for a page
+# (not a WebSocket, not git: git sends Accept */*) gets Belfry's page from the onboarding service
+# (content/git.md) instead of ngit-grasp's landing and repository pages; the footer's links go to
+# pass.<domain>.
 git.{$BELFRY_DOMAIN} {
 	import security
-	reverse_proxy git:7334
+	@footer path /help /feedback /rules /privacy /terms /refunds
+	redir @footer https://pass.{$BELFRY_DOMAIN}{uri}
+	@brand path /brand/*
+	@gitpage {
+		method GET HEAD
+		header Accept *text/html*
+		not header Upgrade *
+		not path /.well-known/* /icon.png
+	}
+	handle @brand {
+		reverse_proxy onboarding:8100
+	}
+	handle @gitpage {
+		import csp "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'"
+		rewrite * /git
+		reverse_proxy onboarding:8100
+	}
+	handle {
+		reverse_proxy git:7334
+	}
 }
 
-# Participant-facing pages of the onboarding service: claim page, door, pass bridge, status
-# list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
+# Participant-facing pages of the onboarding service: sign-in, account page, the apps' sign-in
+# and signing, claim page, door, status list, type metadata, Stripe webhook. Odoo's hooks and the admin endpoints are internal.
 pass.{$BELFRY_DOMAIN} {
 	import security
 	import onboarding_site pass

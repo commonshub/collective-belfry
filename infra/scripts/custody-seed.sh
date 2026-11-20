@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The custody seed participant keys derive from (Keycast patch 0014), kept under the stewards'
+# The custody seed participant keys derive from (Belfry's signer, services/signer), kept under the stewards'
 # YubiKeys and on the VM only in memory. Run on a steward's laptop.
 #
 #   custody-seed.sh recipients                 list this laptop's YubiKey recipients (age1yubikey1…)
@@ -53,7 +53,7 @@ case "$cmd" in
     seed=$("$AGE" -d "${ids[@]}" "$file") || die "could not decrypt $file"
     [[ "$seed" =~ ^[0-9a-f]{64}$ ]] || die "$file does not hold a custody seed"
     # /run is a tmpfs: the seed is gone after a reboot (signing keeps working, new accounts wait).
-    # Keycast runs as the deploying user (HOST_UID, the SSH user here), so the directory and the
+    # The signer runs as the deploying user (HOST_UID, the SSH user here), so the directory and the
     # file belong to that user, readable by nobody else.
     printf '%s\n' "$seed" | ssh "$host" 'u=$(id -u); g=$(id -g); sudo install -d -m 700 -o "$u" -g "$g" /run/belfry && sudo install -m 400 -o "$u" -g "$g" /dev/stdin /run/belfry/custody-seed && echo "unlocked on $(hostname)"'
     unset seed

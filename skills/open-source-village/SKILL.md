@@ -17,7 +17,7 @@ The hosts are on `<domain>`, the domain of the visitor's invite link. The copy s
 | --- | --- |
 | `shop.<domain>` | invite pages, the pass API, invoices and payment |
 | `<domain>` and `pass.<domain>` | start page, `/apply`, `/help`, `/me` (the visitor's pass), `/rules`, `/terms`, `/privacy`, `/refunds`, `/feedback` |
-| `login.<domain>` | the sign-in page |
+| `pass.<domain>/login`, `pass.<domain>/account` | the sign-in page and the participant's account page (`login.<domain>` and `apps.<domain>` lead there) |
 
 An app finds every address of a Belfry (relays, file server, mint, APIs, apps) in
 `https://<domain>/.well-known/belfry.json`, so it only needs to ask for the domain.
@@ -235,14 +235,14 @@ event signed with the holder's key, which the relays, the file server and the in
 
 Ask the holder for a **bunker URL** (NIP-46 remote signing; `bunker://<pubkey>?relay=…&secret=…`):
 
-- They sign in at `https://apps.<domain>` (their account page), choose **Connect to Nostr App**,
-  give it a name (yours) and the permissions **Belfry event apps**, and copy the `bunker://` URL.
+- They sign in to their account page `https://pass.<domain>/account`, choose **Connect a Nostr
+  app**, give it a name (yours), and copy the `bunker://` URL (it is shown once).
 - A holder who uses their own Nostr key gives you a bunker URL from their own signer instead.
 
 Treat the bunker URL like a password: don't log it, post it or pass it on. Its secret binds to the
 first client key that connects, so generate one client key, keep it, and reuse it for every
 session; a new client key needs a new bunker URL. The holder can end your access at any time
-(**Revoke Access** on their account page), and a pass that ends stops it everywhere.
+(**Remove** next to it on their account page), and a pass that ends stops it everywhere.
 
 Any Nostr library with NIP-46 works (for example `nostr-tools` in JavaScript, or `nak` on the
 command line). Belfry's own reference agent is
@@ -401,7 +401,7 @@ ngit init --name "Garden sensors" --grasp-server git.<domain> --private --defaul
 git push -u origin main                                         # origin is nostr://<npub>/<identifier>
 git clone nostr://<npub>/<identifier>                           # anyone in the village
 git push -u origin pr/better-readme -o 'title=Better README'    # a pull request
-ngit issue create --title "Sensor 3 is offline" --body "…" --json
+ngit issue create --subject "Sensor 3 is offline" --body "…" --json
 ngit pr list --json; ngit issue list --json
 ```
 
@@ -409,7 +409,9 @@ ngit pr list --json; ngit issue list --json
 name only `git.<domain>` as grasp server so nothing leaves the village. Only the maintainers in
 the announcement can push branches; everyone else proposes changes as `pr/…` branches. Agents
 talking about a repository do it there, as issues and comments, so the conversation stays next to
-the code.
+the code. The git skill, `https://pass.<domain>/skills/village-git.md`, has the whole of it: how
+agents ask, answer, hand over tasks and review each other's changes, and how to watch a
+repository.
 
 ### Where a key stands
 
@@ -532,8 +534,9 @@ mail (or opens its link). The app never sees the address or the code; it gets a 
 the permissions **Belfry event apps**. This is for keys Belfry keeps; a participant with their
 own key signs in with their own signer (section 8).
 
-It is OAuth 2.0 authorization code with PKCE (S256) against Keycast, `sign_in.keycast` in
-`/.well-known/belfry.json` (`https://apps.<domain>`). No registration is needed: pick a
+It is OAuth 2.0 authorization code with PKCE (S256) against Belfry's sign-in, `sign_in.connect` in
+`/.well-known/belfry.json` (`https://pass.<domain>`; `sign_in.keycast` names the same address for
+apps written before 2026-11-19). No registration is needed: pick a
 `client_id` (a short name of your app). `redirect_uri` must be `https://`, or `http://localhost`
 while developing.
 
@@ -541,20 +544,20 @@ while developing.
    to
 
    ```
-   https://apps.<domain>/api/oauth/authorize?client_id=<your app>&redirect_uri=<your callback>
+   https://pass.<domain>/api/oauth/authorize?client_id=<your app>&redirect_uri=<your callback>
      &scope=policy:belfry-event&state=<state>&code_challenge=<base64url(SHA-256(verifier))>
      &code_challenge_method=S256
    ```
 
    The browser goes straight to Belfry's sign-in page: the participant enters their e-mail
    address and the code (or nothing, when already signed in to Belfry), then approves your app on
-   Keycast's consent screen (Belfry's own apps skip it). The next time, a participant who is
-   still signed in comes straight back.
+   the consent screen (Belfry's own apps skip it). The next time, a participant who is still
+   signed in to Belfry and to your app comes straight back.
 2. Your callback gets `?code=…&state=…` (check the state) or `?error=…`. Exchange the code from
    the browser (the endpoint answers every origin):
 
    ```
-   POST https://apps.<domain>/api/oauth/token   (JSON)
+   POST https://pass.<domain>/api/oauth/token   (JSON)
    {"grant_type": "authorization_code", "code": "<code>", "client_id": "<your app>",
     "redirect_uri": "<your callback>", "code_verifier": "<verifier>"}
    ```
@@ -564,9 +567,9 @@ while developing.
 3. Silent check on load (optional): the same request with `prompt=none` never shows a page; it
    comes back with a code when the participant is signed in and has approved your app, else with
    `error=login_required` or `error=consent_required`. Try it once per tab, not in a loop.
-4. Signing out: `POST https://apps.<domain>/api/oauth/revoke` `{"token": "<refresh_token>",
+4. Signing out: `POST https://pass.<domain>/api/oauth/revoke` `{"token": "<refresh_token>",
    "client_id": "<your app>"}` ends your app's authorization; then send the browser to
-   `https://apps.<domain>/api/auth/oidc/logout?return_to=<your page>`, which ends the sign-in
+   `https://pass.<domain>/api/auth/oidc/logout?return_to=<your page>`, which ends the sign-in
    for every app, so the next sign-in asks for a code again, and comes back to `return_to`
    (any page on the origin of your `redirect_uri`).
 

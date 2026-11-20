@@ -7,10 +7,10 @@
 | `../README.md` | what Belfry is, what a participant does, the parts |
 | `../infra/README.md` | the Compose stack: services, ports, scripts, bootstrap, the smoke test |
 | `../infra/DEPLOY.md` | running it on a server: hostnames, proxy, admin network, custody seed, backups |
-| `pass-sign-in.md` | signing in with the village pass from an EUDI wallet (the OpenID4VP to OIDC bridge) |
+| `pass-sign-in.md` | signing in with the village pass from an EUDI wallet (`/login/pass`), and Issuer2's sign-in at the onboarding service (`/oidc`) |
 | `../infra/issuer/README.md` | the pass as an SD-JWT VC: issuer, verifier, keys, status list, door check |
-| `../infra/keycast/README.md` | the signer and Belfry's patches to it |
-| `../services/onboarding/README.md` | the onboarding service: activation, revocation, its endpoints |
+| `../services/signer/README.md` | the signer: the members' keys, its internal API, the NIP-46 bunker |
+| `../services/onboarding/README.md` | the onboarding service: activation, revocation, the sign-in and account page, its endpoints |
 | `../odoo/addons/belfry_pass/README.md` | the Odoo module: products, pricing, invites, webhooks |
 | `../infra/relay/README.md`, `../infra/blossom/README.md`, `../infra/mint/README.md` | community relay, file server, token mint |
 | `../infra/apps/*/README.md`, `../services/vote/README.md`, `../services/village/README.md` | the community apps |

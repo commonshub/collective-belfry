@@ -24,12 +24,13 @@ from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from . import (
+    account,
     accounting,
     apply,
     avatar,
     blossom,
-    bridge,
     claim,
+    connect,
     core,
     discovery,
     email_code,
@@ -37,20 +38,22 @@ from . import (
     feedback,
     groups_members,
     holder_invites,
+    login,
     mypass,
+    nip05,
     pages,
     programme,
     reports,
+    session,
     signin,
     steward,
     volunteer,
     wallet_tokens,
 )
-from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
-from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
+from .clients.signer import SignerClient
 from .clients.verifier import VerifierClient
 from .core import Services
 from .git_members import GitMembers
@@ -103,13 +106,7 @@ def build_services(settings: Settings) -> Services:
         odoo=OdooClient(
             settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
         ),
-        authentik=AuthentikClient(settings.authentik_url, settings.authentik_token),
-        keycast=KeycastClient(
-            settings.keycast_url,
-            settings.keycast_admin_token,
-            settings.keycast_service_token,
-            tenant_domain=settings.keycast_tenant_domain,
-        ),
+        signer=SignerClient(settings.signer_url, settings.signer_token),
         settings=settings,
         relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
         whitelist=(
@@ -157,14 +154,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         else:
             app.state.services = services
         claim.TEST_NOTICE = app.state.services.settings.test_run_notice
-        # Bring the relay whitelist and the Authentik participants group up to date with Odoo
-        # on every start (best effort).
+        # Bring the relay whitelist up to date with Odoo on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
-        await run_in_threadpool(core.sync_participants, app.state.services)
         yield
 
     app = FastAPI(title="Belfry onboarding", version="0.2.0", lifespan=lifespan)
-    app.state.bridge = bridge.BridgeStore()
+    login.register(
+        app
+    )  # /login, /logout, /oidc: Belfry's sign-in (login.py, passlogin.py, oidc.py)
+    connect.register(app)  # /api/oauth/*, /api/nostr: the apps' sign-in and signing (connect.py)
+    account.register(app)  # /account: the participant's account page (account.py)
+    nip05.register(app)  # /.well-known/nostr.json: NIP-05 names from Odoo (nip05.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
     pages.register(app)  # /privacy, /terms, /refunds, /rules, /help (pages.py, texts in content/)
@@ -179,7 +179,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     discovery.register(app)  # /.well-known/belfry.json, /api/me, CORS of /api/* (discovery.py)
     email_code.register(app)  # /api/email-code: an app's own key proves an e-mail address
     # The repo's brand/ folder (Open Source Village logos, Geist fonts, tokens.css) at /brand:
-    # read by the pages here, authentik's brand blueprint, the issuer metadata and wallets.
+    # read by the pages here, the apps' app bar, the issuer metadata and wallets.
     # BRAND_DIR in Compose (../brand mounted at /brand); a local checkout finds the folder itself.
     brand_dir = Path(os.environ.get("BRAND_DIR") or Path(__file__).resolve().parents[3] / "brand")
     if brand_dir.is_dir():
@@ -188,7 +188,7 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def brand_cors(request: Request, call_next):
-        """Authentik (login.<domain>) and Odoo (shop.<domain>) load the fonts from here; font
+        """The apps and Odoo (shop.<domain>) load the fonts from here; font
         files are CORS-checked, so /brand answers every origin and may be cached for a day."""
         response = await call_next(request)
         if request.url.path.startswith("/brand/"):
@@ -221,8 +221,12 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse, include_in_schema=False)
     async def home(request: Request) -> Response:
-        """The start page. With SITE_URL it lives there (the apex): other hosts forward."""
+        """The start page. With SITE_URL it lives there (the apex): other hosts forward. A
+        signed-in participant goes to the account page instead (the chat's and the groups app's
+        "Apps" link is this service's root, their sign-in URL)."""
         settings = svc(request).settings
+        if session.current(request) is not None:
+            return RedirectResponse("/account", status_code=303)
         site = httpx.URL(settings.site_url) if settings.site_url else None
         if site is not None and request.headers.get("host", "").lower() != site.netloc.decode():
             return RedirectResponse(str(site), status_code=302)
@@ -283,25 +287,6 @@ def create_app(services: Services | None = None) -> FastAPI:
             )
         return {"result": result, "invoice_id": invoice_id}
 
-    @app.post("/hooks/keycast/key-changed")
-    async def keycast_key_changed(
-        request: Request, token: str | None = Query(default=None)
-    ) -> dict[str, Any]:
-        """Keycast patch 0012: a participant took custody of their key or moved to their own."""
-        check_token(request, token)
-        body = await request.json()
-        try:
-            result = await run_in_threadpool(
-                core.key_changed,
-                svc(request),
-                str(body.get("vine_id") or ""),
-                str(body.get("old_pubkey") or ""),
-                str(body.get("new_pubkey") or ""),
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"result": result}
-
     @app.post("/hooks/odoo/refund")
     async def refund(request: Request, token: str | None = Query(default=None)) -> dict[str, Any]:
         check_token(request, token)
@@ -356,7 +341,7 @@ def create_app(services: Services | None = None) -> FastAPI:
         pass_id: int, request: Request, token: str | None = Query(default=None)
     ) -> dict[str, Any]:
         """A new one-time sign-in link for an active pass (Odoo's "Send new login link" button).
-        Odoo mails it when the pass is written. Errors from Authentik or Odoo are 500."""
+        Odoo mails it when the pass is written. Errors from Odoo are 500."""
         check_token(request, token)
         result = await run_in_threadpool(core.send_login_link, svc(request), pass_id)
         return {"result": result, "pass_id": pass_id}
@@ -365,8 +350,8 @@ def create_app(services: Services | None = None) -> FastAPI:
     async def admin_revoke(
         pass_id: int, request: Request, token: str | None = Query(default=None)
     ) -> dict[str, Any]:
-        """Steward decision (Odoo's "Revoke pass" button): relay, signer, Authentik group and
-        the status list bit (served live from Odoo's state) all follow."""
+        """Steward decision (Odoo's "Revoke pass" button): relay, signer and the status
+        list bit (served live from Odoo's state) all follow."""
         check_token(request, token)
         result = await run_in_threadpool(core.revoke_pass, svc(request), pass_id, "steward")
         return {"result": result, "pass_id": pass_id}
@@ -383,7 +368,7 @@ def create_app(services: Services | None = None) -> FastAPI:
 
     @app.get("/admin/partners/{partner_id}/pass")
     async def admin_partner_pass(partner_id: int, request: Request) -> dict[str, Any]:
-        """The partner's pass for the community apps (Keycast's "Your pass" card)."""
+        """The partner's pass, as the account page shows it (internal)."""
         require_pass_info_token(request)
         info = await run_in_threadpool(claim.pass_info, svc(request), partner_id)
         if info is None:
@@ -508,26 +493,6 @@ def create_app(services: Services | None = None) -> FastAPI:
         r = await run_in_threadpool(issuer.token, form)
         return Response(r.content, status_code=r.status_code, media_type="application/json")
 
-    @app.post("/issuer-shim/ak-token")
-    async def issuer_ak_token(request: Request) -> Response:
-        """Relay of Issuer2's token call to Authentik (its external login): Issuer2 sends
-        "Upgrade: h2c" over plain HTTP, which makes Authentik lose the form body. Internal only
-        (the proxy does not route /issuer-shim/* on pass.<domain>)."""
-        body = await request.body()
-        headers = {
-            k: v
-            for k, v in request.headers.items()
-            if k.lower() in ("content-type", "authorization", "accept")
-        }
-        url = svc(request).settings.authentik_url.rstrip("/") + "/application/o/token/"
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(url, content=body, headers=headers)
-        return Response(
-            r.content,
-            status_code=r.status_code,
-            media_type=r.headers.get("content-type", "application/json"),
-        )
-
     @app.post("/issuer-shim/par")
     async def issuer_par(request: Request) -> Response:
         """Issuer2's pushed authorization endpoint, only for requests with issuer_state: without
@@ -603,76 +568,6 @@ def create_app(services: Services | None = None) -> FastAPI:
             )
         except claim.ClaimError as exc:
             return JSONResponse({"error": exc.message}, status_code=exc.status)
-
-    # -- Phase 3: OpenID4VP-to-OIDC bridge for Authentik ------------------------------------------
-
-    def store(request: Request) -> bridge.BridgeStore:
-        return request.app.state.bridge
-
-    def bridge_json_error(exc: bridge.BridgeError) -> JSONResponse:
-        return JSONResponse(
-            {"error": exc.error, "error_description": exc.description}, status_code=exc.status
-        )
-
-    @app.get("/bridge/.well-known/openid-configuration")
-    async def bridge_discovery(request: Request) -> JSONResponse:
-        return JSONResponse(bridge.discovery(svc(request).settings.public_url))
-
-    @app.get("/bridge/jwks")
-    async def bridge_jwks(request: Request) -> JSONResponse:
-        key = svc(request).bridge_jwk
-        return JSONResponse({"keys": [bridge.public_jwk(key)] if key else []})
-
-    @app.get("/bridge/authorize", response_class=HTMLResponse)
-    async def bridge_authorize(request: Request):
-        params = dict(request.query_params)
-        try:
-            auth = await run_in_threadpool(
-                bridge.start_authorization, svc(request), store(request), params
-            )
-        except bridge.BridgeError as exc:
-            if exc.error in ("invalid_client", "invalid_request") or not params.get("redirect_uri"):
-                return HTMLResponse(bridge.error_page(exc), status_code=exc.status)
-            sep = "&" if "?" in params["redirect_uri"] else "?"
-            return RedirectResponse(
-                f"{params['redirect_uri']}{sep}error={exc.error}"
-                + (f"&state={params['state']}" if params.get("state") else ""),
-                status_code=302,
-            )
-        return HTMLResponse(bridge.authorize_page(auth))
-
-    @app.get("/bridge/poll/{sid}")
-    async def bridge_poll(sid: str, request: Request) -> JSONResponse:
-        try:
-            return JSONResponse(
-                await run_in_threadpool(bridge.poll, svc(request), store(request), sid)
-            )
-        except bridge.BridgeError as exc:
-            return bridge_json_error(exc)
-
-    @app.post("/bridge/token")
-    async def bridge_token(request: Request) -> JSONResponse:
-        form = {k: str(v) for k, v in (await request.form()).items()}
-        try:
-            tokens = await run_in_threadpool(
-                bridge.exchange_code,
-                svc(request),
-                store(request),
-                form,
-                request.headers.get("authorization"),
-            )
-        except bridge.BridgeError as exc:
-            return bridge_json_error(exc)
-        return JSONResponse(tokens, headers={"Cache-Control": "no-store"})
-
-    @app.get("/bridge/userinfo")
-    async def bridge_userinfo(request: Request) -> JSONResponse:
-        try:
-            return JSONResponse(
-                bridge.userinfo(store(request), request.headers.get("authorization"))
-            )
-        except bridge.BridgeError as exc:
-            return bridge_json_error(exc)
 
     @app.api_route("/blossom/auth", methods=["GET", "HEAD", "PUT", "DELETE"])
     async def blossom_auth(request: Request) -> Response:

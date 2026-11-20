@@ -92,7 +92,7 @@ def test_activation_whitelists_the_pubkey_before_the_profile_is_published(
 
     monkeypatch.setattr(relay, "publish", publish)
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-    pubkey = next(iter(odoo.tables["belfry.pass"].values()))["keycast_pubkey"]
+    pubkey = next(iter(odoo.tables["belfry.pass"].values()))["nostr_pubkey"]
     assert seen == [[pubkey]] * 4  # profile, follows, relays, DM relays
     assert rendered(services) == [pubkey]
 
@@ -110,9 +110,9 @@ def test_revoke_and_expiry_remove_the_pubkey_but_a_second_active_pass_keeps_it(
     odoo.get("payment.transaction", other["transaction"])["provider_reference"] = "pi_3"
     core.activate_pass(services, other["invoice"])
     passes = {p["invoice_id"]: p for p in odoo.tables["belfry.pass"].values()}
-    same_partner_key = passes[first["invoice"]]["keycast_pubkey"]
-    other_key = passes[other["invoice"]]["keycast_pubkey"]
-    assert passes[second["invoice"]]["keycast_pubkey"] == same_partner_key
+    same_partner_key = passes[first["invoice"]]["nostr_pubkey"]
+    other_key = passes[other["invoice"]]["nostr_pubkey"]
+    assert passes[second["invoice"]]["nostr_pubkey"] == same_partner_key
     assert rendered(services) == sorted([same_partner_key, other_key])
 
     # expiry of the day pass: the partner still holds the full pass, key stays

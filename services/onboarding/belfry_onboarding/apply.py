@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import mypass
+from . import core, mypass
 from .claim import page
 from .clients.odoo import OdooError
 from .core import Services
@@ -72,7 +72,7 @@ in a few days.</p></div>"""
 
 def submit(svc: Services, vals: dict[str, str]) -> int:
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = core.steward_emails(svc)
     except Exception:  # noqa: BLE001 - the application counts even when the mail cannot be addressed
         log.exception("apply: could not list the stewards' e-mail addresses")
         stewards = []

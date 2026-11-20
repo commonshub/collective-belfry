@@ -262,7 +262,7 @@ async function waitForPass() {
   const mnemonic = store.get("pending." + invite.token);
   const p = $("payment");
   if (!mnemonic) {
-    // Belfry keeps the key: sign in through Keycast with the e-mail address and a mailed code
+    // Belfry keeps the key: sign in through Belfry's sign-in with the e-mail address and a mailed code
     const email = store.get("ordered." + invite.token);
     const button = el("button", {}, "Sign in with Open Source Village");
     button.onclick = loginSso;
@@ -626,10 +626,16 @@ async function loginBunker() {
   $("bunker-login").disabled = false;
 }
 
-// "Sign in with Open Source Village": OAuth authorization code + PKCE against Keycast, as the
-// community chat does. Keycast sends the participant through the Belfry's sign-in page (e-mail,
+/** The Belfry's sign-in (sign_in.connect; sign_in.keycast in discovery documents before 2026-11-19). */
+function signinBase() {
+  return String(cfg.sign_in.connect || cfg.sign_in.keycast).replace(/\/+$/, "");
+}
+
+// "Sign in with Open Source Village": OAuth authorization code + PKCE against Belfry's sign-in
+// (sign_in.connect; sign_in.keycast before 2026-11-19), as the
+// community chat does. The participant signs in on the Belfry's login page (e-mail,
 // then the mailed 6-digit code or link) and, after consent, its token response carries a fresh
-// bunker:// URL with the permissions "Belfry event apps". Keycast takes any client_id; its token
+// bunker:// URL with the permissions "Belfry event apps". Belfry takes any client_id; its token
 // endpoint answers every origin, so this needs no proxy.
 
 const OAUTH_CLIENT = "village-notes";
@@ -645,7 +651,7 @@ async function loginSso() {
   store.set("oauth", flow);
   const challenge = b64url(new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(flow.verifier))));
-  const url = new URL(cfg.sign_in.keycast.replace(/\/+$/, "") + "/api/oauth/authorize");
+  const url = new URL(signinBase() + "/api/oauth/authorize");
   url.search = new URLSearchParams({
     client_id: OAUTH_CLIENT, redirect_uri: oauthRedirect(), scope: OAUTH_SCOPE,
     state: flow.state, code_challenge: challenge, code_challenge_method: "S256",
@@ -653,7 +659,7 @@ async function loginSso() {
   location.assign(url);
 }
 
-/** Back from Keycast at /oauth/callback: exchanges the code for a bunker URL. */
+/** Back from the sign-in at /oauth/callback: exchanges the code for a bunker URL. */
 async function finishSso() {
   const params = new URLSearchParams(location.search);
   const flow = store.get("oauth");
@@ -661,7 +667,7 @@ async function finishSso() {
   history.replaceState(null, "", "/");
   if (!flow || params.get("state") !== flow.state) throw new Error("The sign-in did not start here; try again.");
   if (params.get("error")) throw new Error("Not signed in: " + params.get("error"));
-  const res = await fetch(cfg.sign_in.keycast.replace(/\/+$/, "") + "/api/oauth/token", {
+  const res = await fetch(signinBase() + "/api/oauth/token", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -688,9 +694,9 @@ async function loginNip07() {
 }
 
 /** Signs out here; after "Sign in with Open Source Village" also everywhere (as the chat does):
- *  revokes this app's authorization and ends the Keycast and sign-in sessions, so the next sign-in
- *  asks for the e-mail code again. Keycast then returns to this page (the origin of an app the
- *  participant signed in to, Keycast patch 0019). */
+ *  revokes this app's authorization and ends the Belfry session, so the next sign-in asks for the
+ *  e-mail code again. Belfry then returns to this page (the origin of an app the participant
+ *  signed in to lately). */
 async function logout() {
   const session = store.get("session");
   store.del("session");
@@ -699,22 +705,22 @@ async function logout() {
   signer = relay = null;
   notes.clear();
   if (!session?.sso) return location.reload();
-  const keycast = cfg.sign_in.keycast.replace(/\/+$/, "");
+  const signin = signinBase();
   if (session.refresh) {
-    await fetch(keycast + "/api/oauth/revoke", {
+    await fetch(signin + "/api/oauth/revoke", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ token: session.refresh, client_id: OAUTH_CLIENT }),
     }).catch(() => {});
   }
-  location.assign(keycast + "/api/auth/oidc/logout?return_to=" + encodeURIComponent(location.origin + "/"));
+  location.assign(signin + "/api/auth/oidc/logout?return_to=" + encodeURIComponent(location.origin + "/"));
 }
 
 async function main() {
   cfg = await (await fetch("/belfry.json")).json();
   $("community").textContent = `${cfg.name} · ${cfg.domain}`;
-  $("apps-link").href = cfg.sign_in.keycast;
-  $("apps-link").textContent = new URL(cfg.sign_in.keycast).host;
+  $("apps-link").href = cfg.sign_in.account || signinBase();
+  $("apps-link").textContent = new URL(cfg.sign_in.account || signinBase()).host;
   $("invite-open").onclick = openInvite;
   $("invite-back").onclick = () => { clearTimeout(invite?.timer); show("signed-out"); };
   $("order").onclick = order;

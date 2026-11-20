@@ -8,7 +8,7 @@ if (!["people", "market", "photos", "programme"].includes(app)) throw new Error(
 export default defineConfig({
   root: `${import.meta.dirname}/${app}`,
   envDir: import.meta.dirname,
-  // Keycast clients belfry-people, belfry-market, belfry-photos and belfry-programme (registered and trusted by bootstrap/Compose)
+  // sign-in clients belfry-people, belfry-market, belfry-photos and belfry-programme (OAUTH_CLIENTS in docker-compose.yml)
   define: {
     "import.meta.env.VITE_APP_NAME": JSON.stringify(app),
     "import.meta.env.VITE_OAUTH_CLIENT_ID": JSON.stringify(`belfry-${app}`),

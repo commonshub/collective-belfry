@@ -1,7 +1,7 @@
 """Publish events to a Nostr relay, answering a NIP-42 AUTH challenge through a signer callback.
 
 The community relay requires AUTH for writing, so the publisher signs the kind-22242 challenge
-event with the same signer (Keycast, on behalf of the participant) that signed the event itself.
+event with the same signer (Belfry's, on behalf of the participant) that signed the event itself.
 """
 
 from __future__ import annotations

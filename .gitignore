@@ -3,6 +3,8 @@ infra/.env
 infra/.env.bak.*
 infra/.bootstrap-odoo.log
 infra/data/
+# Keycast's master key on deployments from before 2026-11-19 (gen-secrets.sh copies it into
+# infra/secrets/signer_master_key)
 infra/keycast/master.key
 infra/issuer/keys/
 infra/issuer/config/issuer2-profiles.conf
@@ -24,8 +26,6 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-# ...but not the Keycast image build context (Dockerfile + Belfry patch series)
-!infra/keycast/build/
 
 # odoo
 *.pot~

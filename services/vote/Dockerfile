@@ -15,9 +15,11 @@ COPY brand/apps/vote-512.png web/public/icon-512.png
 COPY brand/apps/vote-maskable-512.png web/public/icon-maskable-512.png
 COPY brand/apps/vote-180.png web/public/apple-touch-icon.png
 RUN npm test
-# Sign-in through Keycast (client belfry-vote), the app bar's links, the brand URL.
-ARG VITE_KEYCAST_URL=http://localhost:3000
-ARG VITE_APPS_URL=http://localhost:3000
+# Sign-in through Belfry's onboarding service (client belfry-vote; VITE_KEYCAST_URL keeps Keycast's
+# name, which served the same paths before 2026-11-19), the app bar's links (VITE_APPS_URL, the
+# account page), the brand URL.
+ARG VITE_KEYCAST_URL=http://localhost:8100
+ARG VITE_APPS_URL=http://localhost:8100/account
 ARG VITE_COMMUNITY_APPS=""
 ARG VITE_BRAND_URL=http://localhost:8100/brand
 # polls about a session link back to it

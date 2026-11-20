@@ -8,19 +8,18 @@ import respx
 from fastapi.testclient import TestClient
 
 from belfry_onboarding.app import create_app
-from belfry_onboarding.clients.authentik import AuthentikClient
-from belfry_onboarding.clients.keycast import KeycastClient
+from belfry_onboarding.clients.signer import SignerClient
 from belfry_onboarding.core import Services
 from belfry_onboarding.relay_whitelist import RelayWhitelist
 from belfry_onboarding.settings import Settings
 
-from .fakes import FakeAuthentik, FakeIssuer, FakeKeycast, FakeOdoo, FakeRelay, FakeVerifier
+from .fakes import FakeIssuer, FakeOdoo, FakeRelay, FakeSigner, FakeVerifier
 
-AUTHENTIK_URL = "http://authentik.test"
-KEYCAST_URL = "http://keycast.test"
+SIGNER_URL = "http://signer.test"
 ISSUER_URL = "http://issuer.test"
 VERIFIER_URL = "http://verifier.test"
-BRIDGE_SECRET = "bridge-secret"
+ISSUER_OIDC_SECRET = "issuer-oidc-secret"
+SESSION_SECRET = "session-secret-for-tests-" + "x" * 16
 HOOK_TOKEN = "hook-secret"
 STRIPE_SECRET = "whsec_test_secret"
 
@@ -30,12 +29,9 @@ def settings() -> Settings:
     return Settings(
         ODOO_URL="http://odoo.test",
         ODOO_API_KEY="odoo-key",
-        AUTHENTIK_URL=AUTHENTIK_URL,
-        AUTHENTIK_TOKEN="ak-token",
-        AUTHENTIK_PUBLIC_URL="https://login.belfry.test",
-        KEYCAST_URL=KEYCAST_URL,
-        KEYCAST_ADMIN_TOKEN="kc-admin",
-        KEYCAST_SERVICE_TOKEN="kc-service",
+        SIGNER_URL=SIGNER_URL,
+        SIGNER_TOKEN="signer-token",
+        SESSION_SECRET=SESSION_SECRET,
         HOOK_TOKEN=HOOK_TOKEN,
         STRIPE_WEBHOOK_SECRET=STRIPE_SECRET,
         EVENT_START=dt.date(2027, 1, 25),
@@ -45,7 +41,7 @@ def settings() -> Settings:
         VERIFIER_URL=VERIFIER_URL,
         PUBLIC_URL="https://belfry.test",
         STATUS_LIST_URL="http://onboarding:8100/status/1",
-        BRIDGE_CLIENT_SECRET=BRIDGE_SECRET,
+        ISSUER_OIDC_CLIENT_SECRET=ISSUER_OIDC_SECRET,
         _env_file=None,
     )
 
@@ -105,13 +101,8 @@ def odoo() -> FakeOdoo:
 
 
 @pytest.fixture
-def authentik(router) -> FakeAuthentik:
-    return FakeAuthentik(router, AUTHENTIK_URL)
-
-
-@pytest.fixture
-def keycast(router) -> FakeKeycast:
-    return FakeKeycast(router, KEYCAST_URL)
+def signer(router) -> FakeSigner:
+    return FakeSigner(router, SIGNER_URL)
 
 
 @pytest.fixture
@@ -130,15 +121,14 @@ def whitelist(tmp_path) -> RelayWhitelist:
 
 @pytest.fixture
 def services(
-    settings, odoo, authentik, keycast, relay, whitelist, issuer, verifier, issuer_jwk, bridge_jwk
+    settings, odoo, signer, relay, whitelist, issuer, verifier, issuer_jwk, bridge_jwk
 ) -> Services:
     from belfry_onboarding.clients.issuer import IssuerClient
     from belfry_onboarding.clients.verifier import VerifierClient
 
     return Services(
         odoo=odoo,
-        authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
-        keycast=KeycastClient(KEYCAST_URL, "kc-admin", "kc-service"),
+        signer=SignerClient(SIGNER_URL, "signer-token"),
         settings=settings,
         relay=relay,  # type: ignore[arg-type]
         whitelist=whitelist,
@@ -210,3 +200,11 @@ def seed_paid_invoice(
             invoice_ids=[invoice_id],
         )
     return {"partner": partner_id, "invoice": invoice_id, "transaction": tx_id, **products}
+
+
+def sign_in(client, partner_id: int, method: str = "email", auth_time: int | None = None) -> None:
+    """Put Belfry's session cookie for ``partner_id`` into the test client."""
+    from belfry_onboarding import session
+
+    settings = client.app.state.services.settings
+    client.cookies.set(session.COOKIE, session.encode(settings, partner_id, method, auth_time))

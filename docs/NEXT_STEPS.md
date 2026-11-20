@@ -874,10 +874,75 @@ Local smoke 239 ok / 0 failed (after re-applying `keycast/policy.sql`: the local
 the kind list from before PR #1). Deployed 2026-11-04 to belfry.tofauti.net (image built locally
 and loaded, gen-secrets, `GIT_DOMAIN`/`GIT_PUBLIC_URL`, onboarding rebuilt, perms-init, `caddy
 reload`; no bootstrap): smoke 232 ok / 0 failed over TLS, 26 members. Not on belfry2 yet.
+- [x] Belfry landing page for git.<domain> (user, 2026-11-04: ngit-grasp's page linked to
+  gitworkshop.dev, which looked public): onboarding `content/git.md` at `/git`, served by Caddy to
+  browsers on git.<domain> (root and repository addresses; `/brand/*` from the onboarding service,
+  the footer's links redirect to pass.<domain>); relay, NIP-11 and git untouched. Smoke 6x checks it
+  on public deployments.
+- [x] Git skill for agents (user, 2026-11-04): `skills/village-git/SKILL.md`, served at
+  `pass.<domain>/skills/village-git.md` and listed as `skills.git` in `/.well-known/belfry.json`;
+  linked from the git landing page and the visitor skill. How agents talk through a repository
+  (issues, comments, replies, pull requests, labels, resolved/closed), manners between agents
+  (one issue per task, claim before work), polling (no push notification), failures, and the raw
+  NIP-34/NIP-98 shapes without ngit. Commands checked against ngit v3.0.5's CLI.
 
 Open: no web view of the repositories (gitworkshop.dev cannot read a private server); ngit 2.x
 agents cannot authenticate (ngit 3 needed); a repository whose announcement also names public
 relays or servers is synced there by design (the skill says not to).
+
+## 3zw. Belfry's own signer and sign-in instead of Keycast and Authentik — built 2026-11-19
+
+User (on cocoa007's proposal): replace Keycast and Authentik with hand-written code and a signer
+library, in Rust or what suits Belfry; one sign-in, Belfry's own; every member keeps the same npub.
+Keycast had become 21 Belfry patches (login, silent sign-in, derived keys, wallet secret,
+self-custody, one key per app, account page, NIP-05, pass QR) with a 15-minute build, Redis and
+its own database; Authentik was there mostly because Keycast needed an OIDC login (about 1 GB of
+RAM, 8 blueprints, ~170 lines of bootstrap, workarounds).
+
+- [x] `services/signer` (Rust on rust-nostr 0.45, axum, SQLite, RustCrypto AES-GCM and HKDF; 12
+  tests): keys derived with Keycast patch 0014's formula (its test vector passes, npubs unchanged),
+  sealed at rest in Keycast's `FileKeyManager` format under `secrets/signer_master_key` (taken over
+  from `infra/keycast/master.key` by `gen-secrets.sh`); per-purpose secrets with patch 0011's
+  formula (the wallets' seeds unchanged, checked byte for byte in the smoke test); internal API for
+  the onboarding service; NIP-46 bunker on `bunker-relay` (was `keycast-relay`), one key per
+  connection, the secret bound to the first client, NIP-44 and NIP-04; suspension; keyless
+  accounts for own keys; `/import` of Keycast's sealed keys. Compose: its own internal network
+  `signer` (no internet), runs as `HOST_UID`, read-only, 128 MB.
+- [x] Sign-in in the onboarding service: `/login` (Odoo mails a one-time link and a 6-digit code,
+  new model `belfry.login.code`: ten minutes, five tries, five mails per address in 30 minutes;
+  the pass from a wallet at `/login/pass`, the bridge's verification without Authentik), the
+  activation link and welcome page set the session directly, `session.py` (signed cookie,
+  `SESSION_SECRET`), `/logout`. `/me` and `/steward` use the session.
+- [x] The apps' sign-in with Keycast's paths and token shape (`connect.py`: `/api/oauth/authorize`,
+  `token`, `revoke`, `/api/auth/oidc/logout`, `/api/nostr`), so the app patches did not change,
+  only the URL compiled into them (build args keep their Keycast names). Own apps
+  (`OAUTH_CLIENTS`) silently and without consent, five connections each; outside apps with
+  consent, remembered while their connection lives; `DERIVE_SECRETS`; `self_custody` as before.
+- [x] Account page `/account` (pass, apps, npub and NIP-05 name, signed-in apps with Remove,
+  "Connect a Nostr app" for a bunker URL, key export and the move to an own key after a fresh
+  sign-in); NIP-05 from Odoo (`nip05.py`); Issuer2's sign-in through Belfry's own OIDC endpoints
+  (`oidc.py`, `/oidc/*`, client `belfry-issuer`).
+- [x] Stewards in Odoo (`res.partner.belfry_steward`, `belfry_make_steward`,
+  `belfry_steward_emails`); `add-steward`, `steward-passes`, the stewards' mails and `/api/me`
+  read it. `belfry.pass.keycast_pubkey` renamed `nostr_pubkey` (migration 19.0.1.29.0); the
+  Authentik user ids are gone.
+- [x] Infra: Keycast, keycast-migrate, Authentik (server, worker), Redis, their databases,
+  `infra/keycast/`, `infra/authentik/` and about 16 secrets removed; `login.` and `apps.` redirect
+  to `pass.`; bootstrap is five steps; `scripts/migrate-from-keycast.sh` moves a deployment (keys
+  copied sealed, accounts from Odoo, stewards from Authentik's group, then `--remove`,
+  `--drop-databases`); backups carry `signer-data`.
+- [x] Checks: signer 12 tests; onboarding 284 (15 new in `test_signin.py`, the Authentik and
+  Keycast fakes replaced by a fake signer); Odoo 125 (8 new in `test_login.py`); smoke rewritten
+  for the new sign-in: 253 ok / 0 failed locally, on the local stack migrated from Keycast (125 keys
+  moved, 51 of them random keys from before the seed, kept; 3 test partners without any key in
+  Keycast reported as mismatch). Browser checks: the polls app (silent sign-in, NIP-46 through the
+  Rust signer, voting) and the wallet (silent sign-in, derived seed and nutzap key over the HTTP
+  RPC) against rebuilt images.
+
+Open: deploy to the two VMs (coordinate with the other session on belfry.tofauti.net; rebuild
+the apps there), a review of the signer before it holds real keys (the
+proposal's risk), passkeys (not built; e-mail and the pass only), the chat/calendar/groups images
+rebuilt and their browser checks.
 
 ## 4. Next
 

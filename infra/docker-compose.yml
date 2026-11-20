@@ -6,8 +6,8 @@ name: belfry
 # /run/secrets/<name> into the containers that need them; none is an environment variable of a
 # container (docker inspect shows none). The files are mode 640 with group 10001 (perms-init sets
 # it at every start), and each container that reads one carries that group (group_add). Images
-# that read secrets only from environment variables (Odoo, Keycast, the mint, authentik's first-
-# start bootstrap) start through /belfry/with-secrets (secrets-env/with-secrets.sh), which
+# that read secrets only from environment variables (Odoo, the mint) start through
+# /belfry/with-secrets (secrets-env/with-secrets.sh), which
 # exports the files named in SECRETS_ENV for that process alone. infra/README.md, "Secrets".
 x-secret-group: &secret-group ["10001"]
 
@@ -19,9 +19,8 @@ x-with-secrets: &with-secrets ./secrets-env/with-secrets.sh:/belfry/with-secrets
 # Hardening (2026-10-24): no container gains privileges after start; the ones that start as a
 # non-root user also drop every capability. Each has a process limit (pids_limit, against fork
 # bombs and runaway workers), and Belfry's own services run with a read-only root file system. Images that start as root get the user 10001
-# (APP_UID); perms-init hands the volumes they write to that user once. Keycast runs as the
-# deploying user (HOST_UID, written by gen-secrets.sh), the owner of master.key and the custody
-# seed. Web servers that listen on port 80 keep that one capability (caddy) or may bind it
+# (APP_UID); perms-init hands the volumes they write to that user once. The signer runs as the
+# deploying user (HOST_UID, written by gen-secrets.sh), the owner of the custody seed. Web servers that listen on port 80 keep that one capability (caddy) or may bind it
 # unprivileged (the sysctl below, nginx).
 x-hardened: &hardened
   security_opt: ["no-new-privileges:true"]
@@ -34,97 +33,13 @@ x-nonroot: &nonroot
 x-low-ports: &low-ports
   net.ipv4.ip_unprivileged_port_start: "0"
 
-x-authentik-env: &authentik-env
-  AUTHENTIK_POSTGRESQL__HOST: postgres
-  AUTHENTIK_POSTGRESQL__NAME: authentik
-  AUTHENTIK_POSTGRESQL__USER: authentik
-  # authentik reads file:// values itself
-  AUTHENTIK_POSTGRESQL__PASSWORD: file:///run/secrets/authentik_db_password
-  AUTHENTIK_SECRET_KEY: file:///run/secrets/authentik_secret_key
-  AUTHENTIK_ERROR_REPORTING__ENABLED: "false"
-  # The system blueprint /blueprints/system/bootstrap.yaml creates akadmin and a non-expiring API
-  # token (identifier authentik-bootstrap-token) on first start; the worker gets the two values
-  # AUTHENTIK_BOOTSTRAP_PASSWORD and AUTHENTIK_BOOTSTRAP_TOKEN through with-secrets.
-  AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL:-akadmin@belfry.local}
-  # The Belfry blueprints read their client secrets from /run/secrets (!File), the URLs here (!Env).
-  # The pass bridge lives in the onboarding service.
-  BELFRY_BRIDGE_PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/bridge
-  BELFRY_BRIDGE_INTERNAL_URL: http://onboarding:8100/bridge
-  # Read by the keycast-provider blueprint (!Env): redirect URI.
-  KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
-  # Read by the steward-app blueprint (!Env): the steward pages of the onboarding service.
-  BELFRY_STEWARD_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward
-  BELFRY_STEWARD_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/steward/callback
-  # Read by the pass-app blueprint (!Env): the pass on the phone (/me) of the onboarding service.
-  BELFRY_PASS_PAGE_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/me
-  BELFRY_PASS_PAGE_REDIRECT_URI: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/me/callback
-  # Read by the issuer-app blueprint (!Env): Issuer2's login for authorization-code offers.
-  BELFRY_ISSUER_REDIRECT_URI: ${ISSUER_PUBLIC_URL:-http://localhost:7005}/openid4vci/external/oauth/callback
-  # Read by the brand blueprint (!Env): logo, favicon, background and fonts come from the
-  # repo's brand/ folder as served by the onboarding service (pass.<domain>/brand).
-  BELFRY_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
-
-# The community apps (Name|URL|Description;...): the cards on Keycast's dashboard and the links of
-# the Open Source Village app bar (brand/osv-bar.js) in every app.
+# The community apps (Name|URL|Description;...): the cards on the account page (onboarding
+# service, /account) and the links of the Open Source Village app bar (brand/osv-bar.js).
 x-community-apps: &community-apps "Chat|${CHAT_PUBLIC_URL:-http://localhost:3300}|Private messages with other participants;Calendar|${CALENDAR_PUBLIC_URL:-http://localhost:3200}|The village's events and your own calendars;Vote|${VOTE_PUBLIC_URL:-http://localhost:3500}|Anonymous polls, one vote per pass;Wallet|${WALLET_PUBLIC_URL:-http://localhost:3400}|Your village tokens: receive and pass them on;Directory|${PEOPLE_PUBLIC_URL:-http://localhost:3600}|Who is here: the participants who chose to be listed;Market|${MARKET_PUBLIC_URL:-http://localhost:3700}|Offers between participants, paid in village tokens;Photos|${PHOTOS_PUBLIC_URL:-http://localhost:3800}|Pictures of the village, shared between participants;Programme|${PROGRAMME_PUBLIC_URL:-http://localhost:3900}|What is on now and next: the programme, the rooms, participants' sessions;Groups|${GROUPS_PUBLIC_URL:-http://localhost:3150}|Rooms for teams, topics and projects; anyone can open one;Help|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/help|Signing in, your pass, the apps, tokens, stewards;Feedback|${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/feedback|Tell us what works and what does not"
 
-x-keycast-env: &keycast-env
-  # the password comes as PGPASSWORD (with-secrets), which sqlx uses when the URL has none
-  DATABASE_URL: postgres://keycast@postgres:5432/keycast
-  SECRETS_ENV: PGPASSWORD=keycast_db_password SERVER_NSEC=keycast_server_nsec KEYCAST_SERVICE_TOKEN=keycast_service_token OIDC_CLIENT_SECRET=keycast_oidc_client_secret PASS_INFO_TOKEN=pass_info_token BELFRY_HOOK_TOKEN=hook_token
-  REDIS_URL: redis://redis:6379
-  KMS_PROVIDER: file
-  # Only checked for presence; the binary opens /app/master.key (see keycast/README.md).
-  MASTER_KEY_PATH: /app/master.key
-  ALLOWED_PUBKEYS: ${KEYCAST_ADMIN_PUBKEY:?}
-  ALLOWED_ORIGINS: ${KEYCAST_APP_URL:-http://localhost:3000}
-  # Tenant = Host header without port. Every caller (browser and onboarding service)
-  # must present this host, otherwise Keycast answers 400 "Invalid domain".
-  ALLOWED_TENANT_DOMAINS: ${KEYCAST_TENANT_DOMAIN:-localhost}
-  BUNKER_RELAYS: ws://keycast-relay:8080
-  # Belfry fork (patch 0007): the same relay as clients reach it, written into bunker:// URLs and
-  # NIP-05 discovery; the signer keeps BUNKER_RELAYS. Host port 3080 locally, wss://bunker.<domain> in production.
-  BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
-  APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
-  BASE_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
-  WEB_BUILD_DIR: /app/web
-  NODE_ENV: development
-  ENABLE_DEV_EMAIL_INBOX: "true"
-  FROM_EMAIL: noreply@belfry.local
-  FROM_NAME: Belfry
-  RUST_LOG: ${KEYCAST_RUST_LOG:-info}
-  PORT: "3000"
-  # Belfry fork: sign-in through Authentik (infra/keycast/README.md, "The Belfry fork").
-  # The issuer is the URL the browser sees; back-channel calls go to authentik-server with
-  # that Host header, so the ID token's iss matches.
-  OIDC_ISSUER: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/application/o/keycast/
-  OIDC_CLIENT_ID: keycast
-  OIDC_REDIRECT_URL: ${KEYCAST_APP_URL:-http://localhost:3000}/api/auth/oidc/callback
-  OIDC_BACKCHANNEL_URL: http://authentik-server:9000
-  OIDC_SCOPES: openid email profile keycast
-  OIDC_LINK_CLAIM: keycast_vine_id
-  OIDC_PROVIDER_NAME: Open Source Village
-  OIDC_HIDE_PASSWORD_LOGIN: ${KEYCAST_OIDC_ONLY:-true}
-  # Logout goes to the invalidation flow itself, not authentik's end-session view, which answers
-  # an empty page while the browser holds an unfinished sign-in (Keycast patch 0013).
-  OIDC_LOGOUT_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}/if/flow/belfry-signer-logout/
-  # Belfry's own apps skip the consent screen and may sign in silently (prompt=none, patch 0008);
-  # each must also be a registered client (bootstrap writes their redirect URIs).
-  KEYCAST_TRUSTED_CLIENTS: ${KEYCAST_TRUSTED_CLIENTS:-belfry-chat,belfry-calendar,belfry-vote,belfry-wallet,belfry-people,belfry-market,belfry-photos,belfry-programme,belfry-groups}
-  # Keycast patch 0011: the village wallet derives its backup seed and nutzap key from the
-  # participant's key (HKDF per purpose); no other app may derive anything.
-  KEYCAST_DERIVE_SECRETS: ${KEYCAST_DERIVE_SECRETS:-belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1}
-  # Belfry fork: the NIP-05 names shown on the dashboard live on the apex domain (the proxy
-  # forwards its nostr.json to this tenant); same value as the onboarding service's.
-  NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
-  # Belfry fork: the dashboard's "Your pass" card, from the onboarding service (internal network).
-  BELFRY_PASS_INFO_URL: http://onboarding:8100
-  # Keycast patch 0012: self-custody changes go to the onboarding service (pass npub, relay
-  # whitelist), with the hook token like Odoo's hooks.
-  KEYCAST_CUSTODY_SEED_FILE: /run/belfry/custody-seed
-  BELFRY_KEY_CHANGED_URL: http://onboarding:8100/hooks/keycast/key-changed
-  # Belfry fork (patch 0009): the dashboard's "Community apps" cards, Name|URL|Description;...
-  BELFRY_COMMUNITY_APPS: *community-apps
+# Belfry's own apps, client_id=redirect_uri: they sign in without a consent screen and silently
+# (onboarding service, connect.py). Any other app sees the consent screen.
+x-oauth-clients: &oauth-clients "belfry-chat=${CHAT_PUBLIC_URL:-http://localhost:3300}/oauth/callback,belfry-calendar=${CALENDAR_PUBLIC_URL:-http://localhost:3200}/oauth/callback,belfry-vote=${VOTE_PUBLIC_URL:-http://localhost:3500}/oauth/callback,belfry-wallet=${WALLET_PUBLIC_URL:-http://localhost:3400}/oauth/callback,belfry-people=${PEOPLE_PUBLIC_URL:-http://localhost:3600}/oauth/callback,belfry-market=${MARKET_PUBLIC_URL:-http://localhost:3700}/oauth/callback,belfry-photos=${PHOTOS_PUBLIC_URL:-http://localhost:3800}/oauth/callback,belfry-programme=${PROGRAMME_PUBLIC_URL:-http://localhost:3900}/oauth/callback,belfry-groups=${GROUPS_PUBLIC_URL:-http://localhost:3150}/oauth/callback"
 
 services:
   postgres:
@@ -141,8 +56,7 @@ services:
       perms-init:
         condition: service_completed_successfully
     # the role passwords are read by postgres/init.sh on the first start only
-    secrets: [postgres_password, odoo_db_password, authentik_db_password, keycast_db_password,
-              zooid_db_password]
+    secrets: [postgres_password, odoo_db_password, zooid_db_password]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
@@ -150,7 +64,7 @@ services:
       - postgres:/var/lib/postgresql/data
       - ./postgres/init.sh:/docker-entrypoint-initdb.d/10-belfry.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc \"select 1 from pg_database where datname='keycast'\" | grep -q 1"]
+      test: ["CMD-SHELL", "pg_isready -U postgres && psql -U postgres -tAc \"select 1 from pg_database where datname='zooid'\" | grep -q 1"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -216,79 +130,6 @@ services:
       timeout: 5s
       retries: 10
 
-  authentik-server:
-    image: ghcr.io/goauthentik/server:2026.8.5@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5
-    command: server
-    security_opt: ["no-new-privileges:true"]
-    pids_limit: 1024
-    cap_drop: [ALL]
-    group_add: *secret-group
-    secrets: [authentik_db_password, authentik_secret_key]
-    networks: [default, data]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment: *authentik-env
-    ports: ["9000:9000"]
-    shm_size: 512mb
-    volumes:
-      - authentik-media:/media
-      - ./authentik/blueprints:/blueprints/custom:ro
-      # Custom e-mail templates (belfry/magic_link.html for the magic-link stage).
-      - ./authentik/templates:/templates:ro
-      # The PNG authentik attaches to every mail as cid:logo (stages/email/utils.py).
-      - ../brand/osv-logo-horizontal-dark.png:/web/dist/assets/icons/icon_left_brand.png:ro
-    healthcheck:
-      test: ["CMD", "ak", "healthcheck"]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-      start_period: 60s
-
-  authentik-worker:
-    image: ghcr.io/goauthentik/server:2026.8.5@sha256:602227a86455d6772e3d16b7d852713c4f864f40df5df894abd1285bb53979a5
-    # the bootstrap values exist for authentik only as environment variables (core/setup)
-    entrypoint: ["/belfry/with-secrets", "dumb-init", "--", "ak"]
-    command: worker
-    security_opt: ["no-new-privileges:true"]
-    pids_limit: 1024
-    cap_drop: [ALL]
-    group_add: *secret-group
-    secrets: [authentik_db_password, authentik_secret_key, authentik_bootstrap_password,
-              authentik_bootstrap_token, bridge_client_secret, keycast_oidc_client_secret,
-              steward_oidc_client_secret, pass_page_oidc_client_secret, issuer_oidc_client_secret]
-    networks: [default, data]
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      <<: *authentik-env
-      SECRETS_ENV: AUTHENTIK_BOOTSTRAP_PASSWORD=authentik_bootstrap_password AUTHENTIK_BOOTSTRAP_TOKEN=authentik_bootstrap_token
-    shm_size: 512mb
-    volumes:
-      - *with-secrets
-      - authentik-media:/media
-      - authentik-certs:/certs
-      - ./authentik/blueprints:/blueprints/custom:ro
-      - ./authentik/templates:/templates:ro
-      - ../brand/osv-logo-horizontal-dark.png:/web/dist/assets/icons/icon_left_brand.png:ro
-    healthcheck:
-      test: ["CMD", "ak", "healthcheck"]
-      interval: 10s
-      timeout: 10s
-      retries: 30
-      start_period: 60s
-
-  redis:
-    image: redis:7@sha256:44960b3100c48159a66d28c18b0588c193492e25f7551d60e51dd464fc3eca5b
-    <<: *hardened
-    networks: [data]
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
   # One-shot: the volumes written by images that used to run as root belong to APP_UID 10001
   # (chown only where needed, so a restart costs nothing), and the secret files (infra/secrets/,
   # the rendered issuer and verifier configs with their keys) get group 10001 and mode 640, so
@@ -296,7 +137,7 @@ services:
   # and chmod need.
   perms-init:
     image: busybox:1.37@sha256:bdf57e528e45e4433820e045b29b4597825a1c9e38353532d90a01445013f82e
-    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
+    entrypoint: ["sh", "-c", "for d in /v/*; do [ \"$$(stat -c %u $$d)\" = 10001 ] || chown -R 10001:10001 $$d; done; chown 1000:1000 /w/git-members; chown ${HOST_UID:-1000}:${HOST_GID:-1000} /w/signer; for f in /s/secrets/* /s/issuer-config/issuer2-profiles.conf /s/issuer-config/issuer-service.conf /s/issuer-config/authentication-service.conf /s/verifier-config/verifier-service.conf /s/issuer-keys/issuer.jwk.json /s/issuer-keys/bridge.jwk.json /s/issuer-keys/eudi/wrpac.jwk.json; do [ -f $$f ] && chgrp 10001 $$f && chmod 640 $$f; done; true"]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 1024
     cap_drop: [ALL]
@@ -305,17 +146,21 @@ services:
     volumes:
       - mint-data:/v/mint
       - blossom-data:/v/blossom
-      - relay-data:/v/keycast-relay
+      - relay-data:/v/bunker-relay
       - git-data:/v/git
       # written by the onboarding service (uid 1000), read by the git server
       - git-members:/w/git-members
+      # the signer's data, owned by the deploying user (the signer runs as HOST_UID)
+      - signer-data:/w/signer
       - ./secrets:/s/secrets
       - ./issuer/config:/s/issuer-config
       - ./issuer/keys:/s/issuer-keys
       - ./verifier/config:/s/verifier-config
     restart: "no"
 
-  keycast-relay:
+  # The relay the signer answers NIP-46 requests on (wss://bunker.<domain>); apps and the signer
+  # meet here. Until 2026-11-19 "keycast-relay"; the volume keeps its name.
+  bunker-relay:
     image: ghcr.io/verse-pbc/relay_builder:latest@sha256:3af9ecda55c8bf06c3b18450c60257f13b881d593a4c37fd742c3efdb2027584
     <<: *nonroot
     depends_on:
@@ -328,6 +173,7 @@ services:
       # volunteered AUTH). Default was ws://localhost:8080, the container port.
       RELAY_URL: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
     ports: ["3080:8080"]
+    networks: [default, signer]
     volumes:
       - relay-data:/data
 
@@ -373,74 +219,48 @@ services:
           memory: 256m
           pids: 1024
 
-  # One-shot: the keycast binary does not run migrations at startup and the image
-  # entrypoint only knows unified/keycast/web, so the entrypoint is overridden.
-  # The image is built from keycast/build/Dockerfile (clones divinevideo/keycast @ fe9c6460;
-  # a plain git build context fails on upstream's broken submodule entry). ~15 min cold.
-  keycast-migrate:
-    image: belfry-keycast:local
+  # Belfry's signer (services/signer, Rust): the members' keys, derived from the custody seed and
+  # sealed at rest with the master key; signs for the onboarding service (internal API) and for
+  # apps over NIP-46 on the bunker relay. Its own network only: no internet, reachable by the
+  # onboarding service and the bunker relay alone. services/signer/README.md.
+  signer:
+    image: belfry-signer:local
     build:
-      context: ./keycast/build
-    entrypoint: ["/belfry/with-secrets", "/app/keycast", "--migrate"]
+      context: ../services/signer
+    # the owner of the custody seed (scripts/custody-seed.sh unlock)
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    read_only: true
     security_opt: ["no-new-privileges:true"]
-    pids_limit: 1024
+    pids_limit: 256
     cap_drop: [ALL]
     group_add: *secret-group
-    secrets: [keycast_db_password]
-    networks: [default, data]
-    volumes:
-      - *with-secrets
-    environment:
-      DATABASE_URL: postgres://keycast@postgres:5432/keycast
-      SECRETS_ENV: PGPASSWORD=keycast_db_password
+    secrets: [signer_token, signer_master_key]
+    networks: [signer]
     depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
-
-  keycast:
-    image: belfry-keycast:local
-    build:
-      context: ./keycast/build
-    entrypoint: ["/belfry/with-secrets", "/usr/local/bin/docker-entrypoint.sh"]
-    command: ["unified"]
-    # the owner of master.key and the custody seed (scripts/custody-seed.sh unlock)
-    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
-    security_opt: ["no-new-privileges:true"]
-    pids_limit: 1024
-    cap_drop: [ALL]
-    group_add: *secret-group
-    secrets: [keycast_db_password, keycast_server_nsec, keycast_service_token,
-              keycast_oidc_client_secret, pass_info_token, hook_token]
-    networks: [default, data]
-    # Keycast's graceful shutdown (pre-drain 15 s, HTTP drain, signer drain) ends with leaving the
-    # signer hashring in Redis. Docker's default 10 s would kill it during the pre-drain, the dead
-    # instance would stay in the ring for 30 s and NIP-46 requests hashed to it would be dropped
-    # silently until then (seen 2026-10-23). Clients retry, but give it time to leave cleanly.
-    stop_grace_period: 90s
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      keycast-migrate:
+      perms-init:
         condition: service_completed_successfully
-    environment: *keycast-env
-    ports: ["3000:3000"]
+      bunker-relay:
+        condition: service_started
+    environment:
+      SIGNER_LISTEN: 0.0.0.0:8200
+      SIGNER_DB: /data/signer.sqlite3
+      CUSTODY_SEED_FILE: /run/belfry/custody-seed
+      BUNKER_RELAYS: ws://bunker-relay:8080
+      # the same relay as clients reach it, written into bunker:// URLs; host port 3080 locally,
+      # wss://bunker.<domain> on a server
+      BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
+      RUST_LOG: ${SIGNER_LOG:-info}
     volumes:
-      - *with-secrets
-      - ./keycast/master.key:/app/master.key:ro
-      # Keycast patch 0014: the custody seed participant keys derive from. Locally a file written
-      # by gen-secrets.sh; on a deployment CUSTODY_SEED_DIR=/run/belfry (memory only), filled by a
-      # steward with infra/scripts/custody-seed.sh unlock. Missing seed: new accounts wait (503).
+      - signer-data:/data
+      # The custody seed participant keys derive from. Locally a file written by gen-secrets.sh;
+      # on a deployment CUSTODY_SEED_DIR=/run/belfry (memory only), filled by a steward with
+      # infra/scripts/custody-seed.sh unlock. Missing seed: new accounts wait (503).
       - ${CUSTODY_SEED_DIR:-./secrets/custody}:/run/belfry:ro
-    healthcheck:
-      test: ["CMD", "curl", "-fs", "http://localhost:3000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 20
-      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+          pids: 256
 
   # Phase 3: walt.id Issuer2 issues the village-pass SD-JWT VC (OpenID4VCI, pre-authorized code).
   # Config: issuer/config (the two *.conf files with key material are rendered there by gen-issuer-pki.sh).
@@ -471,7 +291,7 @@ services:
           memory: 1g
           pids: 1024
 
-  # Phase 3: walt.id Verifier2 checks presentations (door page and pass bridge create sessions
+  # Phase 3: walt.id Verifier2 checks presentations (door page and pass sign-in create sessions
   # through http://verifier:7004; wallets use VERIFIER_PUBLIC_URL).
   verifier:
     image: waltid/verifier-api2:1.2.0@sha256:2e8581019531c2efa17a2c086b9c76ee7fee4bb5ee68369e2ea1864733039e9a
@@ -569,8 +389,9 @@ services:
         condition: service_healthy
 
   # Community chat (NIP-17): Coracle at a pinned commit with Belfry's relays and the OSV look
-  # compiled in; participants sign in with "Sign in with Open Source Village" (Keycast OAuth, silent
-  # when already signed in) or a bunker URL from the apps dashboard. infra/apps/chat/README.md.
+  # compiled in; participants sign in with "Sign in with Open Source Village" (the onboarding
+  # service's sign-in, silent when already signed in) or a bunker URL from the account page.
+  # infra/apps/chat/README.md.
   chat:
     image: belfry-chat:local
     build:
@@ -582,7 +403,9 @@ services:
         COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
-        KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # The sign-in (the onboarding service; the build arg kept Keycast's name) and the app
+        # bar's home, the account page.
+        KEYCAST_APP_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
         COMMUNITY_APPS: *community-apps
     profiles: ["app"]
     # nginx as its own unprivileged user (it owns its pid and temp directories in the image).
@@ -607,16 +430,15 @@ services:
     cap_drop: [ALL]
     # settings.py reads every secret from /run/secrets (pydantic secrets_dir)
     group_add: *secret-group
-    secrets: [odoo_api_key, authentik_token, keycast_admin_token, keycast_service_token,
-              bridge_client_secret, hook_token, steward_oidc_client_secret, steward_session_secret,
-              pass_page_oidc_client_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
+    secrets: [odoo_api_key, signer_token, session_secret, issuer_oidc_client_secret, hook_token,
+              steward_session_secret, pass_page_secret, pass_info_token, stripe_webhook_secret,
               programme_nsec, groups_api_nsec, accounting_odoo_api_key]
+    # signer: the only way to the signer (an internal network of its own)
+    networks: [default, signer]
     depends_on:
       odoo:
         condition: service_healthy
-      authentik-server:
-        condition: service_healthy
-      keycast:
+      signer:
         condition: service_healthy
       relay:
         condition: service_healthy
@@ -635,7 +457,7 @@ services:
       - ./issuer/keys/bridge.jwk.json:/keys/bridge.jwk.json:ro
       # The EUDI registrar's access and registration certificates (eudi-registry-certs.sh); may be empty.
       - ./issuer/keys/eudi:/keys/eudi:ro
-      # Open Source Village brand assets, served at /brand (pages, authentik, issuer, wallets).
+      # Open Source Village brand assets, served at /brand (pages, apps, issuer, wallets).
       - ../brand:/brand:ro
       # The skill for agents helping a visitor, served at /skill.md.
       - ../skills:/skills:ro
@@ -645,13 +467,12 @@ services:
       ODOO_URL: http://odoo:8069
       ODOO_DB: odoo
       ODOO_USER: ${ODOO_ONBOARDING_LOGIN:-onboarding@belfry.local}
-      AUTHENTIK_URL: http://authentik-server:9000
-      # Authentik as the browser sees it: the account-setup links mailed at activation use it.
-      AUTHENTIK_PUBLIC_URL: ${AUTHENTIK_PUBLIC_URL:-http://localhost:9000}
-      AUTHENTIK_SOURCE_SLUG: pass-bridge
-      KEYCAST_URL: http://keycast:3000
-      # Send this as the Host header to Keycast (tenant = Host).
-      KEYCAST_TENANT_DOMAIN: ${KEYCAST_TENANT_DOMAIN:-localhost}
+      # Belfry's signer (the members' keys) and Belfry's sign-in: the apps' OAuth clients, the
+      # wallet's derived secrets, the apps on the account page (connect.py, account.py).
+      SIGNER_URL: http://signer:8200
+      OAUTH_CLIENTS: *oauth-clients
+      DERIVE_SECRETS: ${DERIVE_SECRETS:-belfry-wallet:cashu-wallet-v1|cashu-nutzap-v1}
+      BELFRY_COMMUNITY_APPS: *community-apps
       # Community relay: profiles, follow and relay lists are published here; the whitelist is rendered from
       # the template into the shared config volume (rnostr reloads it).
       RELAY_URL: ws://relay:8080
@@ -673,7 +494,7 @@ services:
       NIP05_DOMAIN: ${NIP05_DOMAIN:-localhost}
       # Blossom gate: hostnames a BUD-11 "server" tag may name (comma-separated), empty = any.
       BLOSSOM_HOSTS: ${BLOSSOM_PUBLIC_DOMAIN:-localhost:3100}
-      # Phase 3: credentials (issuer management API, verifier sessions, status list, bridge).
+      # Phase 3: credentials (issuer management API, verifier sessions, status list, sign-in key).
       ISSUER_URL: http://issuer:7005
       ISSUER_PUBLIC_URL: ${ISSUER_PUBLIC_URL:-http://localhost:7005}
       VERIFIER_URL: http://verifier:7004
@@ -682,7 +503,7 @@ services:
       MINT_PUBLIC_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
       WALLET_PUBLIC_URL: ${WALLET_PUBLIC_URL:-http://localhost:3400}
       # Links on the landing page at pass.<domain>/: the account page and the community apps.
-      APPS_PUBLIC_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+      APPS_PUBLIC_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account
       CHAT_PUBLIC_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
       CALENDAR_PUBLIC_URL: ${CALENDAR_PUBLIC_URL:-http://localhost:3200}
       STATUS_LIST_URL: ${STATUS_LIST_URL:-http://onboarding:8100/status/1}
@@ -691,7 +512,9 @@ services:
       ISSUER_X5C_PATH: /keys/issuer.x5c.json
       BRIDGE_JWK_PATH: /keys/bridge.jwk.json
       EUDI_DIR: /keys/eudi
-      BRIDGE_CLIENT_ID: belfry-authentik
+      # Issuer2's sign-in for authorization-code offers (oidc.py); the secret is
+      # issuer_oidc_client_secret, the redirect URI must be under ISSUER_PUBLIC_URL
+      ISSUER_OIDC_CLIENT_ID: belfry-issuer
       EVENT_START: ${EVENT_START:-2027-01-25}
       SITE_URL: ${SITE_URL:-}
       # /.well-known/belfry.json (discovery.py): the addresses an app needs to connect
@@ -737,8 +560,9 @@ services:
         VITE_TEST_RELAY: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         VITE_SIGNER_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
-        VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
-        VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_APPS_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account
+        # the sign-in (the onboarding service; the build arg kept Keycast's name)
+        VITE_KEYCAST_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
         VITE_COMMUNITY_APPS: *community-apps
         VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
         VITE_PROGRAMME_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
@@ -761,10 +585,11 @@ services:
       dockerfile: infra/apps/wallet/Dockerfile
       args:
         BELFRY_MINT_URL: ${MINT_PUBLIC_URL:-http://localhost:3338}
-        BELFRY_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # the sign-in and the HTTP RPC (the onboarding service; the build arg kept Keycast's name)
+        BELFRY_KEYCAST_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
         BELFRY_COMMUNITY_RELAY: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         BELFRY_PASS_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
-        APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        APPS_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account
         COMMUNITY_APPS: *community-apps
     # static files only: no backend access
     <<: *nonroot
@@ -786,8 +611,9 @@ services:
       context: ..
       dockerfile: services/vote/Dockerfile
       args:
-        VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
-        VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # the sign-in (the onboarding service; the build arg kept Keycast's name)
+        VITE_KEYCAST_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
+        VITE_APPS_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_COMMUNITY_APPS: *community-apps
         VITE_PROGRAMME_URL: ${PROGRAMME_PUBLIC_URL:-http://localhost:3900}
@@ -822,7 +648,8 @@ services:
       context: ..
       dockerfile: services/village/Dockerfile
       args:
-        VITE_KEYCAST_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # the sign-in (the onboarding service; the build arg kept Keycast's name)
+        VITE_KEYCAST_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
         VITE_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         VITE_BLOSSOM_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
         VITE_CHAT_URL: ${CHAT_PUBLIC_URL:-http://localhost:3300}
@@ -835,7 +662,7 @@ services:
         VITE_PROGRAMME_PUBKEY: ${PROGRAMME_PUBKEY:-}
         VITE_VOTE_URL: ${VOTE_PUBLIC_URL:-http://localhost:3500}
         VITE_POLLS_PUBKEY: ${POLLS_PUBKEY:-}
-        VITE_APPS_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        VITE_APPS_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/account
         VITE_BRAND_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}/brand
         VITE_COMMUNITY_APPS: *community-apps
     environment:
@@ -893,7 +720,9 @@ services:
         COMMUNITY_RELAY_URL: ${COMMUNITY_RELAY_URL:-ws://localhost:3090}
         BUNKER_PUBLIC_RELAYS: ${BUNKER_PUBLIC_RELAYS:-ws://localhost:3080}
         BLOSSOM_PUBLIC_URL: ${BLOSSOM_PUBLIC_URL:-http://localhost:3100}
-        KEYCAST_APP_URL: ${KEYCAST_APP_URL:-http://localhost:3000}
+        # the sign-in (the onboarding service; the build arg kept Keycast's name) and the app
+        # bar's home, the account page
+        KEYCAST_APP_URL: ${ONBOARDING_PUBLIC_URL:-http://localhost:8100}
         # "No pass yet? Ask for an invite" links here (the start page)
         SITE_URL: ${SITE_URL:-${ONBOARDING_PUBLIC_URL:-http://localhost:8100}}
         COMMUNITY_APPS: *community-apps
@@ -955,11 +784,14 @@ services:
     stop_grace_period: 1m
     ports: ["3170:7334"]
 
-# default: service to service. data (internal, no internet): Postgres and Redis with their
-# clients only. edge: what only the browser reaches (the static apps; the production proxy).
+# default: service to service. data (internal, no internet): Postgres with its clients only.
+# signer (internal, no internet): the signer with the onboarding service and the bunker relay
+# only. edge: what only the browser reaches (the static apps; the production proxy).
 networks:
   default:
   data:
+    internal: true
+  signer:
     internal: true
   edge:
 
@@ -967,18 +799,11 @@ networks:
 secrets:
   postgres_password: {file: ./secrets/postgres_password}
   odoo_db_password: {file: ./secrets/odoo_db_password}
-  authentik_db_password: {file: ./secrets/authentik_db_password}
-  keycast_db_password: {file: ./secrets/keycast_db_password}
   odoo_api_key: {file: ./secrets/odoo_api_key}
-  authentik_secret_key: {file: ./secrets/authentik_secret_key}
-  authentik_bootstrap_password: {file: ./secrets/authentik_bootstrap_password}
-  authentik_bootstrap_token: {file: ./secrets/authentik_bootstrap_token}
-  authentik_token: {file: ./secrets/authentik_token}
-  bridge_client_secret: {file: ./secrets/bridge_client_secret}
-  keycast_oidc_client_secret: {file: ./secrets/keycast_oidc_client_secret}
-  steward_oidc_client_secret: {file: ./secrets/steward_oidc_client_secret}
+  signer_token: {file: ./secrets/signer_token}
+  signer_master_key: {file: ./secrets/signer_master_key}
+  session_secret: {file: ./secrets/session_secret}
   steward_session_secret: {file: ./secrets/steward_session_secret}
-  pass_page_oidc_client_secret: {file: ./secrets/pass_page_oidc_client_secret}
   pass_page_secret: {file: ./secrets/pass_page_secret}
   programme_nsec: {file: ./secrets/programme_nsec}
   polls_nsec: {file: ./secrets/polls_nsec}
@@ -986,9 +811,6 @@ secrets:
   groups_api_nsec: {file: ./secrets/groups_api_nsec}
   zooid_db_password: {file: ./secrets/zooid_db_password}
   issuer_oidc_client_secret: {file: ./secrets/issuer_oidc_client_secret}
-  keycast_server_nsec: {file: ./secrets/keycast_server_nsec}
-  keycast_service_token: {file: ./secrets/keycast_service_token}
-  keycast_admin_token: {file: ./secrets/keycast_admin_token}
   hook_token: {file: ./secrets/hook_token}
   pass_info_token: {file: ./secrets/pass_info_token}
   mint_seed: {file: ./secrets/mint_seed}
@@ -1004,8 +826,8 @@ volumes:
   mint-data:
   postgres:
   odoo-data:
-  authentik-media:
-  authentik-certs:
+  # the signer's accounts and connections (SQLite); backups carry it
+  signer-data:
   relay-data:
   community-relay-config:
   community-relay-data:

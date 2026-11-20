@@ -28,8 +28,9 @@ policy applies to the payment: https://stripe.com/privacy.
 
 **Your account.** When your pass is paid we create:
 
-- a login account (Authentik) with your name, e-mail address and member number (for example
-  `OSV-0042`). There is no password: you sign in with a link we e-mail you, or with your pass;
+- a login with your name, e-mail address and member number (for example `OSV-0042`), kept in
+  our registry. There is no password: you sign in with a link and code we e-mail you, or with
+  your pass;
 - a Nostr identity: a key pair that lets you use the community apps, and a name like
   `osv-0042@<domain>`. We hold the secret key for you, encrypted. It is derived from a master
   secret kept under the organisers' hardware keys, so that we can recover your key if our servers
@@ -95,7 +96,7 @@ cookies, no analytics and no advertising.
 | Your account, pass record and Nostr identity | until [TO FILL: e.g. 12 months after the event], then deleted on request or by us |
 | Posts, offers, calendar entries, profiles on the relay | until you delete them or until [TO FILL: relay retention]; they stay stored after your pass ends, but people without a valid pass cannot read them |
 | Uploaded photos and files | up to one year after they were last opened (video and audio: three months) |
-| Sign-in and security logs | [TO FILL: e.g. up to one year (Authentik's event log)] |
+| Sign-in and security logs | [TO FILL: e.g. up to one year (the sign-in mails in the registry are deleted after two days)] |
 | Server and app logs | [TO FILL: e.g. 14 days] |
 | Backups | encrypted, [TO FILL: 30] days |
 

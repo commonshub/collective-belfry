@@ -1,5 +1,5 @@
 // NIP-98 HTTP auth: `Authorization: Nostr <base64 kind-27235 event>` signed by the participant's
-// key (through Keycast), bound to the absolute URL, the method and the SHA-256 of the raw body.
+// key (through Belfry's signer), bound to the absolute URL, the method and the SHA-256 of the raw body.
 import { createHash } from "node:crypto"
 import { verifyEvent } from "nostr-tools/pure"
 

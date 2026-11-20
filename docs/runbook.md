@@ -67,14 +67,15 @@ tail -n 20 ~/belfry-cron.log                                    # reconcile and 
 ```
 
 From outside, `https://pass.<domain>/health` answers `{"status":"ok"}`, and the landing page,
-`https://apps.<domain>/` and `https://chat.<domain>/` load.
+`https://pass.<domain>/login` and `https://chat.<domain>/` load.
 
 ## After a reboot of the VM
 
 Containers start by themselves. The custody seed is gone from memory, so new participants cannot
 be activated until it is unlocked (existing participants are not affected).
 
-1. Wait until everything is healthy: `$C ps`. The signer (`keycast`) takes over a minute.
+1. Wait until everything is healthy: `$C ps`. The onboarding service waits for the signer
+   (`signer`) and Odoo to be healthy.
 2. A steward unlocks the seed from their laptop:
    `infra/scripts/custody-seed.sh unlock belfry@<host> custody-seed.age yubikey-<name>.txt`.
 3. Activations that waited are retried by `reconcile` (or run `$ONB reconcile` now).
@@ -85,7 +86,7 @@ If services have to be started by hand, start the data layer first, then the res
 waits for the health checks in between:
 
 ```bash
-$C up -d postgres redis
+$C up -d postgres signer
 $C up -d          # everything else, in dependency order
 ```
 
@@ -94,10 +95,11 @@ $C up -d          # everything else, in dependency order
 ### A participant gets no sign-in mail
 
 1. Ask them to check spam, and that they use the address they bought the pass with.
-2. More than five links in 30 minutes for one account are refused; wait.
-3. A link must be opened in the same browser where the sign-in started, within 10 minutes.
-4. Mail delivery: Authentik's events (admin interface › Events) show the e-mail stage; Odoo's
-   outgoing queue (Settings › Technical › Emails) shows failed activation mails. A relay that
+2. More than five mails in 30 minutes for one address are refused; wait.
+3. The mail's link and code work for 10 minutes. The link signs in any browser that opens it,
+   once; the code must be typed in the browser that asked for it.
+4. Mail delivery: Odoo sends the sign-in mails and the activation mails; its outgoing queue
+   (Settings › Technical › Emails) shows failed ones. A relay that
    accepts but recipients never receive usually means the sender domain's SPF does not cover the
    relay (`MAIL_FROM`, `../infra/DEPLOY.md`).
 5. A steward can send a new one-time sign-in link from the steward pages (passes › "New sign-in
@@ -106,9 +108,8 @@ $C up -d          # everything else, in dependency order
 ### A participant cannot use the apps
 
 - Is the pass active? Steward pages, or Odoo › Belfry › Passes.
-- They must be in Authentik's group `belfry-participants`; `$ONB sync-participants` repairs it.
 - Their key must be on the relay whitelist; `$ONB sync-relay` repairs it.
-- Is the signer healthy (`$C ps keycast`)? After a restart, wait until it is.
+- Is the signer healthy (`$C ps signer`)? After a restart, wait until it is.
 - A participant who took their key into their own custody signs in with their own signer, not
   with "Sign in with Open Source Village".
 
@@ -128,8 +129,7 @@ from belfry_onboarding.app import build_services; from belfry_onboarding.setting
 print(core.reactivate_pass(build_services(Settings()), <pass id>))"
 ```
 
-It sets the pass active again and restores the signer account, the Authentik group and the relay
-access. A pass whose last day has passed stays closed (`expired`).
+It sets the pass active again and restores the signer account and the relay access. A pass whose last day has passed stays closed (`expired`).
 
 ### New participants are not activated
 

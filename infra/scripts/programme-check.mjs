@@ -24,7 +24,7 @@
 //   JAR_A=a.jar [JAR_B=b.jar] PROGRAMME_URL=http://localhost:3900 PHOTOS_URL=http://localhost:3800 \
 //   node infra/scripts/programme-check.mjs [shot-prefix]
 //
-// Jars as for infra/scripts/village-check.mjs (SAVE_AK_JAR=<file> make smoke). KEEP=1 leaves the
+// Jars as for infra/scripts/village-check.mjs (SAVE_SESSION_JAR=<file> make smoke). KEEP=1 leaves the
 // photo; the RSVP and the comment stay (they are harmless and replaceable).
 import {spawn} from "node:child_process"
 import {readFileSync, writeFileSync, mkdtempSync} from "node:fs"

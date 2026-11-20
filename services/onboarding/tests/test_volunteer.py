@@ -72,7 +72,7 @@ def test_full_shift_is_refused_on_the_page(web, odoo):  # noqa: F811
 def test_shifts_api_roles(web, odoo, services, monkeypatch):  # noqa: F811
     services.settings.pass_info_token = "info-token"
     stewards: list[str] = []
-    monkeypatch.setattr(services.authentik, "group_member_emails", lambda name: stewards)
+    monkeypatch.setattr(core, "steward_emails", lambda svc: stewards)
     _shifts(odoo, 2)
     partner, pass_id = _volunteer(odoo)
     visitor = odoo.add("res.partner", name="Val Visitor", email="val@example.org")

@@ -48,14 +48,13 @@ class BelfryPass(models.Model):
     )
     invite_id = fields.Many2one('belfry.invite', string="Invite", ondelete='set null')
     npub = fields.Char(string="npub at activation", copy=False)
-    keycast_pubkey = fields.Char(string="Keycast pubkey (hex)", copy=False)
+    nostr_pubkey = fields.Char(string="Nostr pubkey (hex)", copy=False, index=True)
     # Joining with a key of one's own (invite page): the public key and the signed NIP-98 event
     # that proves control of it (models/nostr_proof.py). Activation then creates a signer account
     # without a key of Belfry's, and the partner holds their own key from the start.
     own_pubkey = fields.Char(string="Own Nostr key (hex)", copy=False, readonly=True)
     own_pubkey_proof = fields.Text(string="Proof of the own key", copy=False, readonly=True,
                                    groups='belfry_pass.group_admin')
-    authentik_user_id = fields.Integer(string="Authentik user id at activation", copy=False)
     activated_at = fields.Datetime(copy=False)
     revoked_at = fields.Datetime(copy=False)
     revoke_reason = fields.Selection(
@@ -68,8 +67,8 @@ class BelfryPass(models.Model):
         copy=False,
     )
     stripe_dispute_id = fields.Char(copy=False)
-    # Phase 2 login: a one-time sign-in link into Authentik (participants have no password;
-    # later sign-ins use the login page's magic link). Minted by the onboarding service at
+    # Phase 2 login: a one-time sign-in link (participants have no password; later sign-ins use
+    # the login page's e-mail link and code, belfry.login.code). Minted by the onboarding service at
     # activation and on request ("Send new login link"); writing it on an active pass mails the
     # activation template.
     login_setup_url = fields.Char(string="Sign-in link", copy=False, readonly=True)
@@ -175,11 +174,11 @@ class BelfryPass(models.Model):
 
     @api.model
     def belfry_apps_url(self):
-        """Where participants use the community apps (Keycast's web app for now)."""
+        """The participant's account page with the community apps (pass.<domain>/account)."""
         return self.env['ir.config_parameter'].sudo().get_param('belfry.apps_url') or ''
 
     def belfry_login_url(self):
-        """Authentik's login page: e-mail magic link or the village pass."""
+        """Belfry's login page (pass.<domain>/login): e-mail link and code, or the village pass."""
         return self.env['ir.config_parameter'].sudo().get_param('belfry.login_url') or ''
 
     def _belfry_send_login_mail(self, with_invoice=False):
@@ -217,8 +216,8 @@ class BelfryPass(models.Model):
                 cron.sudo()._trigger()
 
     def action_revoke(self):
-        """Steward decision: the onboarding service revokes the pass (relay, signer, Authentik
-        group and the certificate's status list bit all follow)."""
+        """Steward decision: the onboarding service revokes the pass (relay, signer and the
+        certificate's status list bit all follow)."""
         self.ensure_one()
         if self.state != 'active':
             raise UserError(_("Only an active pass can be revoked."))
@@ -234,8 +233,8 @@ class BelfryPass(models.Model):
         return {'type': 'ir.actions.client', 'tag': 'soft_reload'}
 
     def action_send_login_link(self):
-        """Steward button: ask the onboarding service for a new link. The service mints it in
-        Authentik and writes it on this pass, which queues the mail (see ``write``)."""
+        """Steward button: ask the onboarding service for a new link. The service mints it
+        and writes it on this pass, which queues the mail (see ``write``)."""
         self.ensure_one()
         if self.state != 'active':
             raise UserError(_("Only an active pass can get a login link."))

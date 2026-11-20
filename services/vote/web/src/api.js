@@ -1,4 +1,4 @@
-// The vote API. Requests that need a participant carry a NIP-98 token signed through Keycast;
+// The vote API. Requests that need a participant carry a NIP-98 token signed through the participant's signer;
 // votes carry nothing but the proof.
 import { sign } from "./session.js"
 

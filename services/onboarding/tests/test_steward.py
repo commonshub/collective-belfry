@@ -1,38 +1,24 @@
-"""Steward pages (/steward): login through Authentik, CSRF, invites, mark paid, CLI."""
+"""Steward pages (/steward): login with Belfry's session, CSRF, invites, mark paid, CLI."""
 
 from __future__ import annotations
 
 import re
-import urllib.parse
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from belfry_onboarding import core, steward
 from belfry_onboarding.app import create_app
 
-from .conftest import AUTHENTIK_URL, seed_paid_invoice
+from .conftest import seed_paid_invoice, sign_in
 
 
 @pytest.fixture
-def stewarding(services, router):
-    """Steward pages configured; Authentik's token and userinfo endpoints mocked."""
-    services.settings.steward_oidc_client_secret = "steward-secret"
+def stewarding(services, odoo):
+    """Steward pages configured; Sam is a steward in Odoo."""
     services.settings.steward_session_secret = "s" * 32
-    user = {"email": "sam@belfry.test", "name": "Steward Sam", "groups": ["belfry-stewards"]}
-    seen: dict = {}
-
-    def token(request: httpx.Request) -> httpx.Response:
-        seen["token"] = urllib.parse.parse_qs(request.content.decode())
-        seen["auth"] = request.headers.get("authorization")
-        return httpx.Response(200, json={"access_token": "at-1", "token_type": "Bearer"})
-
-    router.post(f"{AUTHENTIK_URL}/application/o/token/").mock(side_effect=token)
-    router.get(f"{AUTHENTIK_URL}/application/o/userinfo/").mock(
-        side_effect=lambda request: httpx.Response(200, json=user)
-    )
-    return {"user": user, "seen": seen}
+    sam = odoo.add("res.partner", name="Steward Sam", email="sam@belfry.test", belfry_steward=True)
+    return {"partner": sam}
 
 
 @pytest.fixture
@@ -42,20 +28,16 @@ def web(services):
         yield c
 
 
-def login(web) -> str:
+def login(web, partner_id: int | None = None) -> str:
     start = web.get("/steward/login", follow_redirects=False)
     assert start.status_code == 303
-    location = start.headers["location"]
-    assert location.startswith("https://login.belfry.test/application/o/authorize/?")
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(location).query)
-    assert query["client_id"] == ["belfry-steward"]
-    assert query["redirect_uri"] == ["https://belfry.test/steward/callback"]
-    assert query["code_challenge_method"] == ["S256"]
-    back = web.get(
-        "/steward/callback",
-        params={"code": "c-1", "state": query["state"][0]},
-        follow_redirects=False,
+    assert start.headers["location"] == "/login?next=%2Fsteward%2Flogin"
+    odoo = web.app.state.services.odoo
+    sam = partner_id or next(
+        p["id"] for p in odoo.tables["res.partner"].values() if p.get("belfry_steward")
     )
+    sign_in(web, sam)
+    back = web.get("/steward/login", follow_redirects=False)
     assert back.status_code == 303, back.text
     assert back.headers["location"] == "/steward"
     page = web.get("/steward")
@@ -67,12 +49,9 @@ def test_disabled_without_secrets(web):
     assert web.get("/steward", follow_redirects=False).status_code == 503
 
 
-def test_login_exchanges_code_with_pkce_and_client_secret(web, stewarding):
-    login(web)
-    seen = stewarding["seen"]
-    assert seen["token"]["code"] == ["c-1"]
-    assert seen["token"]["code_verifier"][0]
-    assert seen["auth"].startswith("Basic ")
+def test_login_goes_through_belfrys_sign_in(web, stewarding):
+    csrf = login(web)
+    assert csrf
 
 
 def test_unauthenticated_is_sent_to_login(web, stewarding):
@@ -80,24 +59,13 @@ def test_unauthenticated_is_sent_to_login(web, stewarding):
     assert r.status_code == 303 and r.headers["location"] == "/steward/login"
 
 
-def test_non_steward_is_refused(web, stewarding):
-    stewarding["user"]["groups"] = ["belfry-participants"]
-    start = web.get("/steward/login", follow_redirects=False)
-    state = urllib.parse.parse_qs(urllib.parse.urlsplit(start.headers["location"]).query)["state"]
-    r = web.get(
-        "/steward/callback", params={"code": "c", "state": state[0]}, follow_redirects=False
-    )
+def test_non_steward_is_refused(web, stewarding, odoo):
+    alice = odoo.add("res.partner", name="Alice", email="alice@example.org")
+    sign_in(web, alice)
+    r = web.get("/steward/login", follow_redirects=False)
     assert r.status_code == 403
     assert "not a steward" in r.text
     assert "belfry_steward=" not in r.headers.get("set-cookie", "")
-
-
-def test_callback_with_wrong_state_is_refused(web, stewarding):
-    web.get("/steward/login", follow_redirects=False)
-    r = web.get(
-        "/steward/callback", params={"code": "c", "state": "forged"}, follow_redirects=False
-    )
-    assert r.status_code == 400
 
 
 def test_create_invite_needs_csrf(web, stewarding, odoo):
@@ -123,7 +91,7 @@ def test_revoke_invite(web, stewarding, odoo):
     assert odoo.get("belfry.invite", 1)["state"] == "revoked"
 
 
-def test_mark_paid_activates_the_pass(web, stewarding, services, odoo, authentik, keycast):
+def test_mark_paid_activates_the_pass(web, stewarding, services, odoo, signer):
     assert services.settings.allow_manual_payments is False
     ids = seed_paid_invoice(odoo, payment_state="not_paid", with_transaction=False)
     pass_id = odoo.add(
@@ -143,7 +111,7 @@ def test_mark_paid_activates_the_pass(web, stewarding, services, odoo, authentik
     p = odoo.get("belfry.pass", pass_id)
     assert p["state"] == "active"
     assert p["manual_paid_by"] == "sam@belfry.test"
-    assert keycast.preloads == 1
+    assert signer.creates == 1
 
 
 def test_manual_payment_without_steward_mark_stays_refused(services, odoo):
@@ -151,7 +119,7 @@ def test_manual_payment_without_steward_mark_stays_refused(services, odoo):
     assert core.activate_pass(services, ids["invoice"]) == "not_paid"
 
 
-def test_steward_mark_counts_even_with_a_failed_card_attempt(services, odoo, authentik, keycast):
+def test_steward_mark_counts_even_with_a_failed_card_attempt(services, odoo, signer):
     ids = seed_paid_invoice(odoo, payment_state="paid", tx_state="error")
     odoo.add(
         "belfry.pass",
@@ -164,8 +132,7 @@ def test_steward_mark_counts_even_with_a_failed_card_attempt(services, odoo, aut
     assert core.activate_pass(services, ids["invoice"]) == "activated"
 
 
-def test_add_steward_creates_or_reuses_the_user(services, authentik):
-    authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": set()}
+def test_add_steward_creates_or_reuses_the_contact(services, odoo):
     first = steward.add_steward(services, "sam@belfry.test", "Steward Sam")
     assert first["created"] is True
     again = steward.add_steward(services, "sam@belfry.test")
@@ -174,12 +141,13 @@ def test_add_steward_creates_or_reuses_the_user(services, authentik):
         "created": False,
         "pass": {**first["pass"], "result": "already_active"},
     }
-    assert authentik.members("belfry-stewards") == {first["authentik_user"]}
+    assert odoo.tables["res.partner"][first["partner_id"]]["belfry_steward"] is True
+    assert core.steward_emails(services) == ["sam@belfry.test"]
     with pytest.raises(ValueError):
         steward.add_steward(services, "not-an-address")
 
 
-def test_concurrent_activation_runs_once(services, odoo, authentik, keycast, monkeypatch):
+def test_concurrent_activation_runs_once(services, odoo, signer, monkeypatch):
     """Mark paid and Odoo's invoice-paid webhook arrive together: one activation, one link."""
     import threading
     import time

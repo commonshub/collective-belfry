@@ -1,7 +1,7 @@
 // Browser check of the polls app (services/vote) in headless Chromium over the DevTools protocol:
-// silent sign-in with the participant's Authentik session, set up voting on this device, open a
+// silent sign-in with the participant's Belfry session, set up voting on this device, open a
 // poll, vote anonymously, and see the vote counted.
-// Usage: COOKIE_JAR=<curl jar with the Authentik session> node vote-check.mjs <app url> <out prefix>
+// Usage: COOKIE_JAR=<curl jar with the Belfry session> node vote-check.mjs <app url> <out prefix>
 //   BUNKER_FILE=<file with a bunker:// URL> instead: sign in with "Use your own signer" (self-custody).
 //   CHROME: the Chromium binary (default: Playwright's); WIDTH (390), WAIT (ms per step, 12000).
 import { spawn } from "node:child_process"

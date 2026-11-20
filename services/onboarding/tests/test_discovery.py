@@ -40,6 +40,7 @@ def test_discovery_document(services, client, monkeypatch):
         {"name": "Chat", "url": "https://chat.belfry.test", "description": "Messages"}
     ]
     assert doc["skills"]["steward"] == BASE + "/skills/belfry-steward.md"
+    assert doc["skills"]["git"] == BASE + "/skills/village-git.md"
 
 
 def test_skills_are_served_by_name(services, client):
@@ -69,8 +70,8 @@ def test_me_for_a_member(services, odoo, client):
     assert me["passes"][0]["tokens"] == 350
 
 
-def test_me_for_a_steward(services, odoo, client, authentik):
-    key, _ = holder(services, odoo, authentik, steward_group=True)
+def test_me_for_a_steward(services, odoo, client):
+    key, _ = holder(services, odoo, steward_group=True)
     assert get(client, key, "/api/me").json()["steward"] is True
 
 
@@ -131,3 +132,12 @@ def test_cors_of_the_api_for_configured_origins(services, odoo, client):
     services.settings.api_cors_origins = "*"
     r = client.get("/api/me", headers={"Origin": "https://anywhere.test"})
     assert r.headers["access-control-allow-origin"] == "*"
+
+
+def test_git_skill_is_served_with_the_domain(services, client):
+    services.settings.public_url = "https://pass.belfry.test"
+    r = client.get("/skills/village-git.md")
+    assert r.status_code == 200
+    assert "name: village-git" in r.text
+    assert "--grasp-server git.belfry.test --private" in r.text
+    assert "<domain>" not in r.text

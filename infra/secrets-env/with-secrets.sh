@@ -1,6 +1,6 @@
 #!/bin/sh
 # Entrypoint wrapper for images that read their secrets only from environment variables (Odoo,
-# Keycast, the mint). SECRETS_ENV lists VAR=file pairs: each file under /run/secrets (a Compose
+# the mint). SECRETS_ENV lists VAR=file pairs: each file under /run/secrets (a Compose
 # secret) is exported as VAR, then the image's own entrypoint runs. The values are then in the
 # process environment of this container only, not in its configuration (docker inspect) or in
 # infra/.env. infra/README.md, "Secrets".

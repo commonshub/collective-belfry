@@ -2,7 +2,7 @@
 
 The village server (services/village) checks the reporter's NIP-98 signature and forwards the
 report to ``POST /admin/reports`` with the pass-info bearer token. The report is stored in Odoo
-(``belfry.report``) and mailed to every member of the stewards group in Authentik; stewards
+(``belfry.report``) and mailed to every steward (Odoo: res.partner.belfry_steward); stewards
 handle it on the steward pages (steward.py). ``GET /admin/moderation/hidden`` lists what the
 apps must not show: the references of reports whose content a steward hid.
 
@@ -77,7 +77,7 @@ def create_report(svc: Services, body: dict[str, Any]) -> int:
     if vals["reporter_pubkey"] not in set(core.active_pubkeys(svc)):
         raise PermissionError("the reporter has no active pass")
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = core.steward_emails(svc)
     except Exception:  # noqa: BLE001 - the report counts even when the mail cannot be addressed
         log.exception("reports: could not list the stewards' e-mail addresses")
         stewards = []

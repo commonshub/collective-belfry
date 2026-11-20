@@ -10,7 +10,8 @@
 #   issuer.key.pem, issuer.crt.pem    pass signer, SAN = ISSUER_SAN (default issuer.belfry.local)
 #   issuer.jwk.json                   private JWK of the signer (kid = RFC 7638 thumbprint)
 #   issuer.x5c.json                   ["<leaf b64 DER>", "<ca b64 DER>"], the x5c header
-#   bridge.jwk.json                   private JWK that signs the pass-bridge ID tokens
+#   bridge.jwk.json                   private JWK that signs the ID tokens of Belfry's sign-in
+#                                     for Issuer2 (oidc.py; the name is the pass bridge's)
 #   verifier.key.pem, verifier.crt.pem, verifier.jwk.json, verifier.x5c.json
 #                                     Verifier2's request-signing key, SAN = VERIFIER_SAN (the
 #                                     x509_san_dns client id; default verifier.belfry.local)
@@ -19,8 +20,8 @@
 #   infra/issuer/config/issuer2-profiles.conf   from issuer2-profiles.conf.tmpl (issuer key + x5c chain)
 #   infra/issuer/config/issuer-service.conf     from issuer-service.conf.tmpl (ciTokenKey)
 #   infra/issuer/config/authentication-service.conf from authentication-service.conf.tmpl
-#                                     (Authentik login of authorization-code offers: public
-#                                     Authentik URL, ISSUER_OIDC_CLIENT_SECRET)
+#                                     (Belfry's sign-in for authorization-code offers: public
+#                                     onboarding URL, ISSUER_OIDC_CLIENT_SECRET)
 #   infra/verifier/config/verifier-service.conf from verifier-service.conf.tmpl (signing key, x5c, client id;
 #                                     the EUDI registrar's access certificate from keys/eudi/ when
 #                                     eudi-registry-certs.sh imported one)
@@ -171,22 +172,22 @@ PY2
 chmod 600 "$KEYS"/*.jwk.json
 [[ -f "$KEYS/eudi/wrpac.jwk.json" ]] && chmod 600 "$KEYS/eudi/wrpac.jwk.json"
 
-# Issuer2's external login (authorization-code offers) at Authentik: the URL from .env, the client
-# secret from infra/secrets/.
-AK_PUBLIC=${AUTHENTIK_PUBLIC_URL:-$(env_value AUTHENTIK_PUBLIC_URL)}
+# Issuer2's external login (authorization-code offers) at Belfry's sign-in (the onboarding
+# service): the URL from .env, the client secret from infra/secrets/.
+SIGNIN_PUBLIC=${ONBOARDING_PUBLIC_URL:-$(env_value ONBOARDING_PUBLIC_URL)}
 ISSUER_OIDC_CLIENT_SECRET=${ISSUER_OIDC_CLIENT_SECRET:-$(cat "$INFRA_DIR/secrets/issuer_oidc_client_secret" 2>/dev/null || true)}
-AK_PUBLIC=${AK_PUBLIC:-http://localhost:9000} ISSUER_OIDC_CLIENT_SECRET=$ISSUER_OIDC_CLIENT_SECRET \
+SIGNIN_PUBLIC=${SIGNIN_PUBLIC:-http://localhost:8100} ISSUER_OIDC_CLIENT_SECRET=$ISSUER_OIDC_CLIENT_SECRET \
   python3 - "$INFRA_DIR/issuer/config" <<'PY3'
 import os, sys
 cfg = sys.argv[1]
 secret = os.environ["ISSUER_OIDC_CLIENT_SECRET"] or "unset-run-gen-secrets"
 out = (open(f"{cfg}/authentication-service.conf.tmpl").read()
-       .replace("@@AUTHENTIK_PUBLIC_URL@@", os.environ["AK_PUBLIC"].rstrip("/"))
+       .replace("@@ONBOARDING_PUBLIC_URL@@", os.environ["SIGNIN_PUBLIC"].rstrip("/"))
        .replace("@@ISSUER_OIDC_CLIENT_SECRET@@", secret))
 path = f"{cfg}/authentication-service.conf"
 with open(os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o640), "w") as f:
     f.write(out)
-print("wrote issuer/config/authentication-service.conf (Authentik", os.environ["AK_PUBLIC"] + ")")
+print("wrote issuer/config/authentication-service.conf (sign-in at", os.environ["SIGNIN_PUBLIC"] + ")")
 PY3
 
 # The rendered configs carry private keys and the client secret: no access for other users. The

@@ -124,7 +124,7 @@ class InviteCheckout:
             ['|', ('belfry_npub', '=', key_npub), ('belfry_verified_pubkey', '=', pubkey),
              ('id', '!=', person.id)], limit=1,
         ) or env['belfry.pass'].sudo().search_count(
-            ['|', ('keycast_pubkey', '=', pubkey), ('own_pubkey', '=', pubkey),
+            ['|', ('nostr_pubkey', '=', pubkey), ('own_pubkey', '=', pubkey),
              ('partner_id', '!=', person.id), ('state', 'in', ('pending', 'active'))], limit=1,
         )
         if taken:

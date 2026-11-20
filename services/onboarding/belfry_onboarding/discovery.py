@@ -36,7 +36,7 @@ WELL_KNOWN = "/.well-known/belfry.json"
 ME = "/api/me"
 VERSION = 1
 # skills/ in the repo, served at /skills/<name>.md (pages.py); the visitor's also at /skill.md
-SKILLS = {"visitor": "open-source-village", "steward": "belfry-steward"}
+SKILLS = {"visitor": "open-source-village", "steward": "belfry-steward", "git": "village-git"}
 
 
 def _url(value: str) -> str:
@@ -78,9 +78,14 @@ def document(settings: Any) -> dict[str, Any]:
         "mint": {"url": _url(settings.mint_public_url), "unit": settings.mint_unit}
         if settings.mint_url
         else None,
+        # "Sign in with Open Source Village" (connect.py): the OAuth paths are under this URL
+        # (/api/oauth/authorize, /api/oauth/token, /api/oauth/revoke, /api/auth/oidc/logout).
+        # "keycast" is the name apps read before 2026-11-19 and stays for them.
         "sign_in": {
-            "login": _url(settings.authentik_public_url),
-            "keycast": _url(settings.apps_public_url),
+            "login": f"{public}/login",
+            "connect": public,
+            "keycast": public,
+            "account": _url(settings.account_url),
         },
         "credential": {"vct": settings.vct, "issuer": settings.credential_issuer}
         if settings.issuer_url
@@ -95,7 +100,7 @@ def document(settings: Any) -> dict[str, Any]:
 
 
 def me(svc: Services, pubkey: str) -> dict[str, Any]:
-    """Where the key stands: its passes (Keycast's key or one of the holder's own) and holder."""
+    """Where the key stands: its passes (the signer's key or one of the holder's own) and holder."""
     fields = [
         "id",
         "state",
@@ -107,8 +112,8 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         "cashu_amount",
     ]
     found: dict[int, dict[str, Any]] = {}
-    # keycast_pubkey is set at activation; own_pubkey already when ordering with one's own key
-    for field in ("keycast_pubkey", "own_pubkey"):
+    # nostr_pubkey is set at activation; own_pubkey already when ordering with one's own key
+    for field in ("nostr_pubkey", "own_pubkey"):
         for row in svc.odoo.search_read("belfry.pass", [[field, "=", pubkey]], fields):
             found[row["id"]] = row
     rows = sorted(found.values(), key=lambda r: r["id"], reverse=True)
@@ -127,7 +132,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
     ]
     active = next((r for r in rows if r["state"] == "active"), None)
     partner_id = m2o_id((active or (rows[0] if rows else {})).get("partner_id"))
-    partner_fields = ["email", "belfry_member_number", "belfry_authentik_user_id"]
+    partner_fields = ["email", "belfry_member_number", "belfry_steward"]
     partner: dict[str, Any] = {}
     if partner_id:
         partner = svc.odoo.read_one("res.partner", partner_id, partner_fields) or {}
@@ -138,10 +143,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         )
         partner = found_partners[0] if found_partners else {}
     number = partner.get("belfry_member_number") or ""
-    user_pk = partner.get("belfry_authentik_user_id")
-    steward = bool(active and user_pk) and int(user_pk) in svc.authentik.group_member_pks(
-        svc.settings.steward_group
-    )
+    steward = bool(active and partner.get("belfry_steward"))
     return {
         "pubkey": pubkey,
         "npub": hex_to_npub(pubkey),
@@ -173,6 +175,10 @@ def cors_headers(origin: str) -> dict[str, str]:
     }
 
 
+# The apps' sign-in (connect.py): tokens, no cookies, so open to every origin.
+TOKEN_PATHS = ("/api/oauth/token", "/api/oauth/revoke", "/api/nostr")
+
+
 def register(app: FastAPI) -> None:
     """Mount /.well-known/belfry.json, /api/me and the CORS of /api/* (create_app calls this)."""
 
@@ -181,6 +187,9 @@ def register(app: FastAPI) -> None:
         path = request.url.path
         if path == WELL_KNOWN:
             origin: str | None = "*"
+        elif path in TOKEN_PATHS:
+            # bearer tokens in the body or header, never cookies: any app may call these
+            origin = "*"
         elif path.startswith("/api/"):
             settings = request.app.state.services.settings
             origin = allowed_origin(settings, request.headers.get("origin"))

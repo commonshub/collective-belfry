@@ -7,8 +7,8 @@
 # relay; the rendered copy is derived state. Durations: https://docs.rs/duration-str
 #
 # Access model (plan, "Collective Bunker"): both reading (REQ) and writing (EVENT) need a
-# NIP-42 AUTH as a whitelisted pubkey. Clients sign the AUTH event through Keycast, so the
-# belfry-event policy must allow kind 22242.
+# NIP-42 AUTH as a whitelisted pubkey. Clients sign the AUTH event through Belfry's signer
+# (NIP-46 or the onboarding service's HTTP RPC), which signs any kind, 22242 among them.
 
 [information]
 name = "Belfry"

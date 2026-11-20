@@ -14,18 +14,20 @@ A small app on a Belfry, built from the visitor skill
   Nostr keys themselves, the app creates the key instead (12 words, HKDF per the skill's section
   8) and sends `nostr_pubkey` + `nostr_proof` with the order; once `/api/me` says `member` for
   that key, you're signed in.
-- **Sign in**: "Sign in with Open Source Village" (OAuth code + PKCE against Keycast, client
-  `village-notes`, back at `/oauth/callback`): the Belfry's sign-in page asks for the pass's
-  e-mail address and mails a 6-digit code and a link; after Keycast's consent screen the token
-  response's `bunker://` URL ("Belfry event apps") signs the app in. Or a `bunker://` URL from the
-  account page (Connect to Nostr App, permissions "Belfry event apps"), or a NIP-07 browser
-  extension.
+- **Sign in**: "Sign in with Open Source Village" (OAuth code + PKCE against the Belfry's
+  sign-in, `sign_in.connect` in `/.well-known/belfry.json`, falling back to `sign_in.keycast` of
+  Belfries from before 2026-11-19; client `village-notes`, back at `/oauth/callback`): the
+  Belfry's login page asks for the pass's e-mail address and mails a 6-digit code and a link;
+  after the consent screen the token response's `bunker://` URL signs the app in. Or a
+  `bunker://` URL from the account page (`pass.<domain>/account`, "Connect a Nostr app"), or a
+  NIP-07 browser extension.
 - **Tokens**: the pass's tokens that no wallet has collected yet (`/wallet/pass-tokens`), plus
   nutzaps to the key that are still unspent at the mint, plus what the pass brought and the wallet
   already collected (`tokens` in `/api/me`). The wallet's own balance stays there, because its
-  seed is derived through Keycast for the wallet only.
-- **Sign out**: after "Sign in with Open Source Village" it revokes the app's authorization and
-  ends the sign-in everywhere (Keycast's logout), so the next sign-in asks for the code again.
+  seed is derived through Belfry's signer for the wallet only.
+- **Sign out**: after "Sign in with Open Source Village" it revokes the app's connection and
+  ends the sign-in everywhere (`/api/auth/oidc/logout`), so the next sign-in asks for the code
+  again.
 - **Invites**: a pass holder makes an invite code to pass on (or has Belfry mail an invite to an
   address). The same tap opens the phone's share sheet with a link into this app
   (`/?invite=<code>`; a copy where there is no share sheet); they follow their invites and revoke

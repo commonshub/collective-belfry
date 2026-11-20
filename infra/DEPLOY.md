@@ -9,13 +9,14 @@ in front of everything and publishes no other port.
 - A VM with Docker and Compose v2, 4 vCPU and 8 GB RAM, ports 80 and 443 open. amd64: the relay
   image has no ARM build.
 - A domain. Every service gets a subdomain: `shop.` (Odoo; `ODOO_HOST_PREFIX` changes the
-  name), `login.`, `apps.`, `pass.`, `relay.`, `bunker.`, `blossom.`, `mint.`, `issuer.`,
+  name), `pass.` (also the sign-in and the account page), `relay.`, `bunker.`, `blossom.`, `mint.`, `issuer.`,
   `verifier.`, `chat.`, `calendar.`, `wallet.`, `vote.`, `people.`, `market.`, `photos.`, `programme.`, `git.`, plus the
   domain itself (NIP-05 names are `<member>@<domain>`). A wildcard record covers them all: A and
   AAAA for `<domain>` and `*.<domain>`. The participant apps also have short names on the domain
   itself (`<domain>/chat`, `/groups`, `/calendar`, `/programme`, `/vote`, `/people`, `/market`,
   `/photos`, `/wallet`, `/apps`, `/shop`): 302 redirects to their hosts (`vanity` in
-  `proxy/Caddyfile`), so the apps keep their own origins.
+  `proxy/Caddyfile`), so the apps keep their own origins. `login.` and `apps.` (Authentik's and
+  Keycast's until 2026-11-19) redirect to the login and account pages on `pass.`.
 - An SMTP relay for the mails (sign-in links, activation mails) and a sender address whose domain
   allows that relay in its SPF record (better also DKIM). Otherwise the relay accepts the mails and
   recipients silently drop them.
@@ -57,10 +58,9 @@ from your machine:
 
 ```bash
 C="docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml"
-$C up -d                                  # builds the signer on the first run (about 15 minutes)
+$C up -d                                  # builds the signer on the first run (a few minutes)
 infra/scripts/custody-seed.sh unlock …    # from a steward's laptop, see "Custody seed"
-ODOO_URL=https://shop.belfry.example AK_URL=https://login.belfry.example KC_URL=https://apps.belfry.example \
-  infra/scripts/bootstrap.sh
+ODOO_URL=https://shop.belfry.example infra/scripts/bootstrap.sh
 $C --profile app up -d --build            # onboarding service and apps
 ```
 
@@ -97,8 +97,7 @@ up the admin network and the backups.
 ### The smoke test on the server
 
 ```bash
-export ODOO_URL=https://shop.belfry.example AK_URL=https://login.belfry.example \
-  KC_URL=https://apps.belfry.example ONB_URL=https://pass.belfry.example \
+export ODOO_URL=https://shop.belfry.example ONB_URL=https://pass.belfry.example \
   BLOSSOM_URL=https://blossom.belfry.example WALLET_MAP="" BUNKER_MAP="" ONB_ADMIN_EXEC=1
 infra/scripts/smoke.sh
 ```
@@ -111,7 +110,8 @@ relay; that step is reported as a note. Test real mail delivery with a real addr
 - `https://issuer.<domain>/.well-known/openid-credential-issuer/openid4vci` lists `village_pass`.
 - `https://pass.<domain>/status/1` answers `application/statuslist+jwt`;
   `https://pass.<domain>/vct/village-pass/v1` the type metadata.
-- `https://login.<domain>/application/o/keycast/.well-known/openid-configuration` exists.
+- `https://pass.<domain>/login` shows the login page; `https://pass.<domain>/oidc/.well-known/openid-configuration`
+  (Issuer2's sign-in) exists.
 - `https://<domain>/.well-known/nostr.json?name=<member>` after the first activation.
 - A test purchase in Stripe test mode: the activation mail arrives with its links, the claim page
   issues to a wallet, the door accepts the pass, the pass signs in.
@@ -126,10 +126,8 @@ Pull or copy the new commits, rebuild what changed and start it:
 $C --profile app build <services> && $C --profile app up -d <services>
 ```
 
-- Run bootstrap again when public URLs, SMTP settings, Authentik blueprints or the signer's
-  policy changed.
-- After restarting `keycast`, wait until it reports healthy before running the smoke test; it
-  takes over a minute to start.
+- Run bootstrap again when public URLs or SMTP settings changed.
+- After changing public URLs, rebuild the apps: the sign-in URL is compiled into them.
 - After a change to `proxy/Caddyfile` (the directory is mounted into the proxy), reload it:
   `$C exec -T proxy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`, or
   `$C restart proxy`. `$C up -d proxy` alone does nothing when only the Caddyfile changed.
@@ -157,22 +155,21 @@ signer is recreated, and it reads the seed from `/run/belfry`).
 
 ## Sign-in for participants and admins
 
-Participants sign in with an e-mail link or code, or their pass; they have no passwords. The
-login page mails a one-time link and a 6-digit code, valid for 10 minutes, at most five mails per
-account in 30 minutes; the page waits for the code (five wrong codes end it), so a device without
-the mailbox signs in by typing it. Using one of the two makes the other useless. The mails go
-out through the SMTP settings bootstrap writes into Authentik (`SMTP_*`,
-`infra/secrets/smtp_password`); run bootstrap again after changing them.
-
-The Authentik admin `akadmin` signs in with its password at
-`https://login.<domain>/if/flow/default-authentication-flow/?next=/if/admin/`, over the admin
-network only.
+Participants sign in on `https://pass.<domain>/login` with an e-mail link or code, or their pass;
+they have no passwords. The login page has Odoo mail a one-time link and a 6-digit code, valid for
+10 minutes, at most five mails per address in 30 minutes; the page waits for the code (five wrong
+codes end it), so a device without the mailbox signs in by typing it. Using one of the two makes
+the other useless. The mails go out through Odoo's outgoing mail server (`SMTP_*`,
+`infra/secrets/smtp_password`, written by bootstrap); run bootstrap again after changing them.
+Only addresses of an active pass or a steward get a mail; the page answers the same for any
+address. Admins use Odoo's back office (its own login, admin network only); there is no other
+admin interface for the sign-in.
 
 ## Admin network (ZeroTier)
 
 The admin pages answer only over a private ZeroTier network: Odoo's back office and login
-(`/odoo`, `/web`, `/web/login`, the database manager, XML/JSON-RPC), Authentik's admin interface
-and the password login, the steward pages (`pass.<domain>/steward`) and the signer's admin pages.
+(`/odoo`, `/web`, `/web/login`, the database manager, XML/JSON-RPC) and the steward pages
+(`pass.<domain>/steward`). The signer has no pages and no public address at all.
 From anywhere else they answer 403. Participants' pages are not affected.
 
 The proxy compares each connection's address with `ADMIN_NETS`: the ZeroTier subnet, the VM's
@@ -196,7 +193,7 @@ bootstrap and the smoke test on the VM reach the proxy through the public hostna
    ZeroTier app. The devices then reach every Belfry hostname over ZeroTier, with the same TLS
    certificates (same names). If the network's DNS setting is not available, set the VM's
    ZeroTier address as custom DNS in the device's ZeroTier app, or on a laptop map the names in
-   the hosts file (`10.147.17.10 shop.<domain> login.<domain> pass.<domain> apps.<domain>`).
+   the hosts file (`10.147.17.10 shop.<domain> pass.<domain>`).
    On Android, "Private DNS" with a fixed hostname and Chrome's "Use secure DNS" with another
    provider bypass ZeroTier's DNS: set them to Automatic/Off and "your current provider".
 7. Check from outside the network: `https://pass.<domain>/steward` answers 403; from inside it
@@ -262,8 +259,9 @@ addresses, since its proxy serves `/json/*` only to the admin network).
 
 Stewards work on `https://pass.<domain>/steward` (over the admin network): create and revoke
 invites, mark a pass paid by hand, re-send a sign-in link, revoke a pass. They sign in like
-participants. Odoo's back office is for admins and accounting. Make someone a steward (creates a
-passwordless Authentik user if needed and adds it to the group `belfry-stewards`):
+participants (e-mail link or code) and then open `/steward`. Odoo's back office is for admins and
+accounting. Make someone a steward (marks the Odoo contact with that address `belfry_steward`,
+creating it if needed, and gives them a free pass):
 
 ```bash
 $C --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-mail> "<name>"
@@ -274,10 +272,9 @@ $C --profile app exec -T onboarding python -m belfry_onboarding add-steward <e-m
 | Host | Serves | Restricted |
 | --- | --- | --- |
 | `shop.` | Odoo: invite pages, payment, invoices | back office, login, database manager, RPC: admin network only |
-| `login.` | Authentik | admin interface and password login: admin network only |
-| `apps.` | the signer: participants' account page and API | `/api/admin/*` denied; `/admin` admin network only |
-| `<domain>` | the start page (`SITE_URL`: what the village is, how to join with an invite) and the rest of the onboarding site with the same rules as `pass.`; `/.well-known/nostr.json` (NIP-05) from the signer | as `pass.` |
-| `pass.` | onboarding service (its `/` forwards to the start page): claim, tokens, the pass on the phone and invites for friends (`/me`, `/check`), feedback, door, pass sign-in bridge, status list, type metadata, Stripe webhook, brand files | `/admin/*`, `/hooks/odoo/*` and the API docs denied; `/steward` admin network only |
+| `login.`, `apps.` | redirects to `pass.<domain>/login` and `/account` (the addresses of Authentik and Keycast until 2026-11-19) | |
+| `<domain>` | the start page (`SITE_URL`: what the village is, how to join with an invite) and the rest of the onboarding site with the same rules as `pass.`; `/.well-known/nostr.json` (NIP-05, from Odoo) | as `pass.` |
+| `pass.` | onboarding service (its `/` forwards to the start page): the sign-in (`/login`, the pass from a wallet), the account page (`/account`), the apps' sign-in and signing (`/api/oauth/*`, `/api/nostr`), Issuer2's sign-in (`/oidc/*`), claim, tokens, the pass on the phone and invites for friends (`/me`, `/check`), feedback, door, status list, type metadata, Stripe webhook, brand files | `/admin/*`, `/hooks/odoo/*` and the API docs denied; `/steward` admin network only |
 | `relay.` | the community relay | |
 | `bunker.` | the signer's NIP-46 relay (`BUNKER_PUBLIC_RELAYS=wss://bunker.<domain>` goes into bunker URLs) | |
 | `blossom.` | file server, through its gate | uploads need a participant's signature |
@@ -291,17 +288,18 @@ Protections on top:
 
 - **TLS** from Let's Encrypt (`ACME_EMAIL`), HSTS and the usual security headers.
 - **Rate limits per client address**, set high because the venue's Wi-Fi puts hundreds of
-  participants behind one address: Authentik's flow steps 300/min, claim and token pages
-  120/min, `/me` sign-in 120/min, `/check` 600/min, pass sign-in bridge 1200/min and door 600/min
-  (both pages poll every 1.5 s), issuer 300/min, invite pages 120/min. Beyond that the answer is
-  429 with `Retry-After`. The venue Wi-Fi's own public addresses can be exempted altogether with
-  `RATE_LIMIT_EXEMPT` in `.env` (space-separated CIDRs; unset, nobody is exempt). Mail flooding is
-  limited per account in Authentik, not by address.
+  participants behind one address: the login page (e-mail, code, link) 60/min, the apps'
+  sign-in and HTTP RPC 600/min, claim and token pages 120/min, `/me` 120/min, `/check` 600/min,
+  pass sign-in 1200/min and door 600/min (both pages poll every 1.5 s), issuer 300/min, invite
+  pages 120/min. Beyond that the answer is 429 with `Retry-After`. The venue Wi-Fi's own public
+  addresses can be exempted altogether with `RATE_LIMIT_EXEMPT` in `.env` (space-separated CIDRs;
+  unset, nobody is exempt). Sign-in mails are also limited per address in Odoo (five in 30
+  minutes).
 - **Content-Security-Policy** on every browser app: scripts only from the app itself, connections
-  only to Belfry's hosts (the chat may reach any relay), no framing. Odoo and Authentik ship
-  inline code and get none. Blossom's files are served sandboxed.
+  only to Belfry's hosts (the chat may reach any relay), no framing. Odoo ships inline code and
+  gets none. Blossom's files are served sandboxed.
 - **Containers** run without root (most as user 10001; Postgres as its own user; the signer as
-  the deploying user, `HOST_UID`, who owns `master.key` and the custody seed), with
+  the deploying user, `HOST_UID`, who owns the custody seed), with
   `no-new-privileges`, a process limit, and without capabilities where they start unprivileged;
   Belfry's own services have a read-only root file system. `perms-init` hands the data volumes to
   those users.
@@ -309,23 +307,21 @@ Protections on top:
   that needs them and into no other; none is an environment variable of a container, so
   `docker inspect` shows none (`README.md`, "Secrets").
 - **Images** from registries are pinned by digest to the builds the smoke test ran against.
-- **Networks**: Postgres and Redis are on the internal network `data` with their clients only;
-  the static apps only on `edge` with the proxy. `edge` has IPv6, so the proxy sees IPv6 visitors'
+- **Networks**: Postgres is on the internal network `data` with its clients only; the signer on
+  the internal network `signer` with the onboarding service and the bunker relay only (no
+  internet, no public address); the static apps only on `edge` with the proxy. `edge` has IPv6, so the proxy sees IPv6 visitors'
   real addresses.
 - **No mail catcher**: Mailpit only runs locally (Compose profile `dev` in production).
 
-Odoo's webhooks to the onboarding service and Authentik's token and userinfo calls to the bridge
-stay inside the Compose network, so the proxy can deny those paths publicly.
-
-**Signer and Authentik behind the proxy.** The overlay unsets `OIDC_BACKCHANNEL_URL` for the
-signer: it reaches Authentik through `https://login.<domain>`, not the Compose network, because
-Authentik derives the issuer's scheme from the request and would announce `http://` to an internal
-caller, which the signer rejects.
+Odoo's webhooks to the onboarding service, the onboarding service's calls to the signer and
+Issuer2's token call to `/oidc/token` stay inside the Compose network, so the proxy can deny
+those paths publicly.
 
 ## Custody seed (recoverable participant keys)
 
 Participants' Nostr keys are derived from one secret, the custody seed, and the participant's
-Odoo id (`keycast/README.md`). With the seed and Odoo, every managed key can be recreated. The
+Odoo id (`../services/signer/README.md`). With the seed and Odoo, every managed key can be
+recreated (keys moved out of Keycast that predate the seed come back only from a backup). The
 seed is encrypted to the stewards' YubiKeys (either one decrypts it) and on the VM it only lives
 in memory (`/run/belfry`, `CUSTODY_SEED_DIR=/run/belfry`, set by `prod-env.sh`). Needs `age` and
 `age-plugin-yubikey` on the steward's laptop.
@@ -341,8 +337,8 @@ in memory (`/run/belfry`, `CUSTODY_SEED_DIR=/run/belfry`, set by `prod-env.sh`).
    participants wait and their activation is retried):
    `infra/scripts/custody-seed.sh unlock belfry@<host> custody-seed.age yubikey-<name>.txt` (touch
    the key), then `… status belfry@<host>`.
-4. Recovery after losing the signer's database or `master.key`: unlock the seed, start the
-   signer with an empty database and run
+4. Recovery after losing the signer's data (volume `signer-data`) or `secrets/signer_master_key`:
+   unlock the seed, start the signer with an empty `signer-data` and run
    `docker compose exec onboarding python -m belfry_onboarding restore-keys`. Derived keys come
    back with the same public keys; participants who moved to their own key get an account without
    a key for their public key.
@@ -360,9 +356,10 @@ seed (`init`) would instead leave everyone activated before with a key that cann
 
 `scripts/backup.sh` writes one encrypted file per night and sends it off the VM. It holds every
 Postgres database (`pg_dumpall`), the data volumes that cannot be rebuilt from Odoo (Odoo's file
-store, mint, polls, Blossom, the community relay, Authentik's media; the SQLite and LMDB ones are
-paused for the few seconds of the copy), the secret files (`.env`, `keycast/master.key`,
-`issuer/keys/`, the rendered configs, `secrets/` without the custody seed) and the deployed code.
+store, mint, polls, Blossom, the community relay, the signer's accounts and sealed keys; the
+SQLite and LMDB ones are paused for the few seconds of the copy), the secret files (`.env`,
+`issuer/keys/`, the rendered configs, `secrets/` with the signer's master key but without the
+custody seed, `keycast/master.key` where it still exists) and the deployed code.
 The VM only holds the public half of the backup key: it can write backups but not read them. The
 plain custody seed is never in a backup; `custody-seed.age` is, if you copy it to `secrets/`.
 
@@ -389,8 +386,8 @@ then `infra/scripts/backup.sh drill restored`. The drill unpacks the backup's ow
 temporary directory, restores files, volumes and databases into the Compose project
 `belfry-drill` (only Postgres runs, no ports, a running stack is not touched), compares file
 hashes, volume file counts and every table's row count with the backup's manifest, and removes
-everything again. Busy tables may differ by a few rows; passes, partners, signer accounts and keys
-and Authentik users may not.
+everything again. Busy tables may differ by a few rows; passes and partners may not, and the
+signer's data volume must come back with every file.
 
 **Restore on a new VM**: provision and clone as above (or `tar -xpzf restored/code.tar.gz` for
 the exact deployed code), copy `restored/` there, run `infra/scripts/backup.sh restore restored`
@@ -443,3 +440,23 @@ they need `<admin>@<host>` and `sudo -u belfry`, which these scripts do not do y
   metadata and a trusted issuer certificate, and Belfry's CA is not published for wallets.
 - Verifier responses are not encrypted (`direct_post`, not `direct_post.jwt`).
 - The issuer key is a file on the VM, not in a hardware module.
+
+## Moving from Keycast and Authentik (2026-11-19)
+
+A deployment from before Belfry's own signer and sign-in moves once; every npub stays the same
+and the steps are in `README.md`, "Moving from Keycast and Authentik". On a server:
+
+```bash
+git pull
+infra/scripts/gen-secrets.sh                          # signer_master_key = keycast/master.key
+$C up -d && ODOO_URL=https://shop.<domain> infra/scripts/bootstrap.sh
+$C --profile app build && $C --profile app up -d      # the apps with the new sign-in URL
+BELFRY_PROD=1 infra/scripts/migrate-from-keycast.sh   # keys, accounts, stewards
+# the smoke test on the server, then:
+BELFRY_PROD=1 infra/scripts/migrate-from-keycast.sh --remove
+```
+
+Keep the backups from before the move until the smoke test is green; drop the old databases
+(`--drop-databases`) after the next backup. Members' outside apps (phone signers, agents)
+connect again from the account page; Belfry's apps sign in again by themselves. Coordinate with
+the other session on the shared VM first.

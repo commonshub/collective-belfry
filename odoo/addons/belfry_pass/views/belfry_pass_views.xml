@@ -37,7 +37,7 @@
                     <button name="action_send_login_link" type="object" string="Send new login link"
                             class="btn-secondary" invisible="state != 'active'"
                             groups="belfry_pass.group_steward"
-                            help="Asks the onboarding service for a new one-time Authentik sign-in link and mails it to the pass holder. Earlier links stop working."/>
+                            help="Asks the onboarding service for a new one-time sign-in link and mails it to the pass holder. Earlier links stop working."/>
                     <field name="state" widget="statusbar" statusbar_visible="pending,active"/>
                 </header>
                 <sheet>
@@ -68,9 +68,8 @@
                         <group string="Accounts (set at activation)">
                             <field name="activated_at"/>
                             <field name="npub"/>
-                            <field name="keycast_pubkey"/>
+                            <field name="nostr_pubkey"/>
                             <field name="own_pubkey" invisible="not own_pubkey"/>
-                            <field name="authentik_user_id"/>
                         </group>
                         <group string="Pass certificate (Phase 3)">
                             <field name="claim_url" widget="url" groups="belfry_pass.group_admin"/>
@@ -80,7 +79,7 @@
                             <field name="cashu_amount"/>
                             <field name="tokens_url" widget="url" groups="belfry_pass.group_admin"/>
                         </group>
-                        <group string="Login (Authentik)">
+                        <group string="Sign-in link">
                             <field name="login_setup_url" widget="url"/>
                             <field name="login_setup_expires_at"/>
                             <field name="login_mail_sent_at"/>

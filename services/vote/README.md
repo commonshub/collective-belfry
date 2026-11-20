@@ -10,8 +10,8 @@ per poll, anonymously, with Semaphore zero-knowledge proofs over groups built fr
   on the pass id, so a participant who changes keys (self-custody) keeps their place.
 - **Voting key.** On first use the browser creates a [Semaphore](https://docs.semaphore.pse.dev)
   identity and registers its public commitment for the pass (`PUT /api/me/identity`, NIP-98 auth
-  signed through Keycast). The identity's secret stays on the device. It is deliberately **not**
-  backed up encrypted to the participant's Nostr key: Keycast holds managed keys, so Belfry could
+  signed through Belfry's signer). The identity's secret stays on the device. It is deliberately **not**
+  backed up encrypted to the participant's Nostr key: Belfry's signer holds managed keys, so Belfry could
   decrypt such a backup and link votes to people. "Voting key" in the app shows an export code to
   move it to another device.
 - **Groups per poll.** When a poll opens, every registered identity of an active pass joins its
@@ -78,12 +78,14 @@ Poseidon Merkle tree are JavaScript), no framework: `server/` (node:http, node:s
 `vote-data` volume), `web/` (vanilla JS, Vite), one container serving both. The Dockerfile fetches
 the depth-10 proving artifacts (`scripts/fetch-artifacts.sh`, SHA-256 pinned) into the app, so
 browsers never load them from a third party, runs the tests and builds the web app with the
-Keycast URL, the brand URL and the app bar's links. Sign-in is "Sign in with Open Source Village"
-(Keycast client `belfry-vote`, registered and trusted by bootstrap and Compose), silent once per
-tab; logout ends the Keycast and Authentik sessions like the other apps. Participants who took
-their key into their own custody (Keycast patch 0012) get `error_description=self_custody` from
-the sign-in and land on "Use your own signer": a NIP-07 browser extension or a `bunker://` URL from
-their signer app (also linked from the sign-in card).
+sign-in URL (`VITE_KEYCAST_URL`: the name is Keycast's, Compose sets it to `ONBOARDING_PUBLIC_URL`,
+which serves the same paths), the brand URL and the app bar's links (`VITE_APPS_URL`, the account
+page). Sign-in is "Sign in with Open Source Village" (client `belfry-vote`, one of Belfry's own apps
+in `OAUTH_CLIENTS`: no consent screen), silent once per tab; logout ends the Belfry session like the
+other apps. Participants who took their key into their own custody (the account page's move to an
+own key) get `error_description=self_custody` from the sign-in and land on "Use your own signer":
+a NIP-07 browser extension or a `bunker://` URL from their signer app (also linked from the
+sign-in card).
 
 ```bash
 cd services/vote && npm ci && scripts/fetch-artifacts.sh && npm test
@@ -94,4 +96,4 @@ Checks: `npm test` (NIP-98, validation, real proofs: double votes, replaced keys
 results and proofs after close); smoke step 6n (page, artifacts, 401 without auth, 403 for a key
 without a pass, 404 for an unknown poll); `infra/scripts/vote-check.mjs` drives Chromium through
 silent sign-in, voting set-up, a new poll and a vote with a real proof (`COOKIE_JAR` = the
-participant's Authentik session).
+participant's Belfry session, `SAVE_SESSION_JAR` from the smoke test).
