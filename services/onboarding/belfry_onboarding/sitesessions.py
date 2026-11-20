@@ -47,6 +47,9 @@ NAME_MAX = 80
 ABOUT_MAX = 1000
 PICTURE_MAX = 500
 PROFILE_EDITS_PER_HOUR = 10
+PROFILE_D = "belfry:profile"  # the chat's own event for tags and place (kind 30078)
+TAGS_MAX = 20
+TAG = re.compile(r"^[a-z0-9-]{1,30}$")
 TICKETS_MAX = 30
 NO_STORE = {"Cache-Control": "no-store"}
 HEX = re.compile(r"^[0-9a-f]{64}$")
@@ -321,6 +324,58 @@ def _profile(svc: Services, acct: dict[str, Any]) -> tuple[dict[str, Any], int]:
     return (content if isinstance(content, dict) else {}), int(latest.get("created_at") or 0)
 
 
+def _chat_tag(raw: Any) -> str:
+    """A tag as the chat reads one (people.ts ``clean``)."""
+    if not isinstance(raw, str):
+        return ""
+    t = re.sub(r"\s+", "-", raw.strip().lower().removeprefix("#"))
+    return re.sub(r"[^\w-]", "", t)[:32]
+
+
+def _extras(svc: Services, acct: dict[str, Any]) -> dict[str, Any] | None:
+    """A member's latest kind 30078 ``d`` = ``belfry:profile`` on the community relay (what the
+    chat keeps their tags and place in), None when they have none. Raises when the relay can't
+    be read: never written over blind."""
+    from . import community
+
+    found = community.query(
+        svc, [{"kinds": [30078], "authors": [acct["pubkey"]], "#d": [PROFILE_D]}]
+    )
+    found = [
+        e
+        for e in found
+        if e.get("kind") == 30078
+        and e.get("pubkey") == acct["pubkey"]
+        and any(t[:2] == ["d", PROFILE_D] for t in e.get("tags", []))
+    ]
+    return max(found, key=lambda e: (e.get("created_at", 0), e.get("id", "")), default=None)
+
+
+def _extras_content(event: dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        content = json.loads((event or {}).get("content") or "{}")
+    except ValueError:
+        content = {}
+    return content if isinstance(content, dict) else {}
+
+
+def tags_of(svc: Services, acct: dict[str, Any]) -> list[str]:
+    """The account's tags: a member's are the chat's own list (their ``belfry:profile`` event,
+    read as the chat reads it); a guest's are kept on the contact (guests are not on the
+    members' relay, so the chat doesn't show them)."""
+    if acct["role"] == "guest":
+        row = svc.odoo.read_one("res.partner", acct["partner"], ["belfry_tags"]) or {}
+        raw = row.get("belfry_tags")
+    else:
+        raw = _extras_content(_extras(svc, acct)).get("tags")
+    out: list[str] = []
+    for t in raw if isinstance(raw, list) else []:
+        t = _chat_tag(t)
+        if t and t not in out:
+            out.append(t)
+    return out[:30]
+
+
 def tickets(svc: Services, acct: dict[str, Any]) -> list[dict[str, Any]]:
     """The events the account is admitted to with a ticket (the groups relay's 9000s that name
     its key), soonest last; cancelled and unreadable events are left out."""
@@ -439,6 +494,11 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("site: requests not read: %s", type(exc).__name__)
         reqs, comments = [], []
+    try:
+        tags = tags_of(svc, acct)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("site: tags not read: %s", type(exc).__name__)
+        tags = []
     current = acct["session"]["key"]
     return {
         "name": text("display_name", NAME_MAX) or text("name", NAME_MAX) or acct["name"] or "Guest",
@@ -446,6 +506,7 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
         "nip05": nip05,
         "picture": text("picture", PICTURE_MAX),
         "about": text("about", ABOUT_MAX),
+        "tags": tags,
         "email": acct["email"] or None,
         "role": acct["role"],
         "pubkey": acct["pubkey"],
@@ -467,11 +528,21 @@ def me(svc: Services, acct: dict[str, Any]) -> dict[str, Any]:
 
 # ── POST /site/profile ──────────────────────────────────────────────────────────────────────
 def _clean_profile(body: dict[str, Any]) -> dict[str, Any]:
-    """{"name"?, "about"?, "picture"?} checked: what to set (a value) or take out (None)."""
-    unknown = set(body) - {"name", "about", "picture"}
+    """{"name"?, "about"?, "picture"?, "tags"?} checked: what to set (a value) or take out
+    (None). ``tags``: lowercased, without doubles; each is checked against the ones the account
+    has in ``set_tags``."""
+    unknown = set(body) - {"name", "about", "picture", "tags"}
     if unknown or not body:
-        raise ApiError(422, "invalid", "Send name, about and / or picture.")
+        raise ApiError(422, "invalid", "Send name, about, picture and / or tags.")
     out: dict[str, Any] = {}
+    if "tags" in body:
+        raw = body["tags"]
+        if not isinstance(raw, list) or len(raw) > 60 or not all(isinstance(t, str) for t in raw):
+            raise ApiError(422, "invalid", "tags: a list of words.")
+        tags = list(dict.fromkeys(t.strip().lower() for t in raw))
+        if len(tags) > TAGS_MAX or not all(tags):
+            raise ApiError(422, "invalid", f"tags: at most {TAGS_MAX}, none empty.")
+        out["tags"] = tags
     if "name" in body:
         name = clean_name(body["name"])
         if name is None:
@@ -498,14 +569,82 @@ def _clean_profile(body: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def set_tags(svc: Services, acct: dict[str, Any], tags: list[str], sign: Any) -> bool:
+    """The account's tags become TAGS; whether anything changed. A member: their
+    ``belfry:profile`` event (the list the chat shows and edits) with only ``tags`` changed,
+    the rest of its content and its tags kept, signed through the signer, on the community
+    relay. A guest: on the contact. A new tag is 1–30 of a–z, 0–9 and -; one they have already
+    (written in the chat, whose rule is wider) may stay as it is."""
+    from . import events
+
+    guest = acct["role"] == "guest"
+    try:
+        event = None if guest else _extras(svc, acct)
+        have = tags_of(svc, acct) if guest else None
+    except Exception as exc:  # noqa: BLE001 — never written over an event that wasn't read
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
+    content = _extras_content(event)
+    if have is None:
+        raw = content.get("tags")
+        have = list(
+            dict.fromkeys(filter(None, map(_chat_tag, raw if isinstance(raw, list) else [])))
+        )
+    if any(not TAG.match(t) and t not in have for t in tags):
+        raise ApiError(422, "invalid", "tags: 1 to 30 of a-z, 0-9 and - each.")
+    if tags == have[:30]:
+        return False
+    if mail_limited(acct):
+        raise ApiError(429, "too_many", "Too many changes in a short time.")
+    if guest:
+        svc.odoo.write("res.partner", [acct["partner"]], {"belfry_tags": tags})
+        return True
+    if svc.relay is None:
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.")
+    kept = [t for t in (event or {}).get("tags", []) if isinstance(t, list)]
+    try:
+        new = sign(
+            {
+                "kind": 30078,
+                "created_at": max(_now(), int((event or {}).get("created_at") or 0) + 1),
+                "tags": kept or [["d", PROFILE_D]],
+                "content": json.dumps({**content, "tags": tags}, ensure_ascii=False),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ApiError(503, "signer", "The signer isn't answering: try again in a moment.") from exc
+    if new.get("pubkey") != acct["pubkey"]:
+        raise ApiError(503, "signer", "The signer isn't answering: try again in a moment.")
+    try:
+        svc.relay.publish(new, sign)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("site: tags not on the community relay: %s", type(exc).__name__)
+        raise ApiError(503, "unavailable", "That did not work just now. Try again.") from exc
+    events.forget_reads()
+    return True
+
+
+def mail_limited(acct: dict[str, Any]) -> bool:
+    """Whether the account used its profile changes of this hour (this one counts)."""
+    from . import mail
+
+    return mail._limited(f"site-profile:{acct['partner']}", PROFILE_EDITS_PER_HOUR, 3600)
+
+
 def set_profile(svc: Services, acct: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
     """The account's kind 0 with these fields changed and everything else kept (nip05, fields
     this API doesn't know), signed through the signer; on the groups relay (where the website's
-    names are read, and the only one a guest is on) and, for a member, the community relay."""
-    from . import events, followers, mail, webrequests
+    names are read, and the only one a guest is on) and, for a member, the community relay.
+    ``tags``: set_tags."""
+    from . import events, followers, webrequests
 
     want = _clean_profile(body)
     sign = signer(svc, acct)
+    tags = want.pop("tags", None)
+    changed = set_tags(svc, acct, tags, sign) if tags is not None else False
+    if tags is not None:
+        log.info("site: partner %s set their tags from the website", acct["partner"])
+    if not want:
+        return {"ok": True, "changed": changed}
     content, at = _profile(svc, acct)
     new = dict(content)
     for k, v in want.items():
@@ -518,8 +657,8 @@ def set_profile(svc: Services, acct: dict[str, Any], body: dict[str, Any]) -> di
     if new == content and at:
         if "name" in want and want["name"] != acct["name"]:
             svc.odoo.write("res.partner", [acct["partner"]], {"name": want["name"]})
-        return {"ok": True, "changed": False}
-    if mail._limited(f"site-profile:{acct['partner']}", PROFILE_EDITS_PER_HOUR, 3600):
+        return {"ok": True, "changed": changed}
+    if mail_limited(acct):
         raise ApiError(429, "too_many", "Too many changes in a short time.")
     try:
         event = sign(
