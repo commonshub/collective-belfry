@@ -687,6 +687,10 @@ button.mention { border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
 .profile-place { display: flex; gap: 6px; align-items: center; color: var(--muted); margin-bottom: 8px; }
 .profile-about { margin: 8px 0; }
 .profile-tags { display: flex; flex-wrap: wrap; margin: 8px 0; }
+.profile-tags-sec { margin: 16px 0 12px; }
+.card-head .profile-guest { display: flex; flex-direction: column; align-items: center; }
+.profile-tags-sec .profile-tags { margin: 0; gap: 6px; }
+.profile-guest .invited-by { font: inherit; color: inherit; background: none; border: 0; padding: 2px 0; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
 .profile-chan { display: block; padding: 4px 0; text-align: left; }
 .tag-box { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); min-height: 44px; }
 .tag-box:focus-within { border-color: var(--text); }

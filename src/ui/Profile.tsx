@@ -53,6 +53,8 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const about = aboutOf(pk)
   const joins = allGroups().flatMap((g) => guestJoins(g.id).map((j) => ({ ...j, group: g }))).filter((j) => j.pubkey === pk && !j.member)
   const guest = joins[0]
+  // a guest's tags come from whois, a member's from their belfry:profile event
+  const tags = (guest ? guestTags(pk) : undefined) ?? x?.tags ?? []
   // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
   const noAdmin = joins.some((j) => j.agent) ? 'An agent has no role.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them a member.' : ''
   const shared = groups().filter((g) => g.members.has(pk) && !g.isProposal)
@@ -89,7 +91,10 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
           <Avatar pubkey={pk} size={96} />
           <div className="profile-name">{p?.name || displayName(pk)}</div>
           {guest && !guest.agent
-            ? <div className="hint profile-address profile-guest">Guest in #{guest.group.name || 'a channel'}{guest.unsaved ? ' (not saved)' : ''}{guest.by && <> · invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></>}</div>
+            ? <div className="hint profile-address profile-guest">
+                <div>Guest in #{guest.group.name || 'a channel'}{guest.unsaved ? ' (not saved)' : ''}</div>
+                {guest.by && <button type="button" className="invited-by" onClick={() => openProfile(guest.by!)}>invited by {displayName(guest.by)}</button>}
+              </div>
             : address && <div className="hint profile-address">{address}</div>}
           <div className="profile-badges">
             {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
@@ -102,6 +107,13 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
             <button className="profile-act" onClick={() => void share()}><span className="bx"><ShareIcon /></span>{shared_ ? 'Copied' : 'Share'}</button>
           </div>
         </div>
+        {/* Tags right under the actions, above Role (board home/profile v68, as iOS); none = no section */}
+        {tags.length > 0 && (
+          <section className="profile-tags-sec" aria-labelledby="profile-tags-h">
+            <div className="hint card-title" id="profile-tags-h">Tags</div>
+            <div className="profile-tags">{tags.map((t) => <span key={t} className="chip">#{t}</span>)}</div>
+          </section>
+        )}
         {/* the belfry-wide role (docs/roles.md): everyone sees it, the belfry's admins change it */}
         {(canRole || role) && !owner && (
           <div className="card profile-role">
@@ -122,7 +134,6 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
         {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
         {x?.place && <div className="profile-place"><PinIcon /> {placeLabel(x.place)}</div>}
         {about ? <Markdown text={about} className="profile-about" /> : mine && <p className="hint">Say a few words about yourself: tap Edit.</p>}
-        {(() => { const tags = (guest ? guestTags(pk) : undefined) ?? x?.tags ?? []; return tags.length > 0 && <div className="profile-tags" aria-label="Tags">{tags.map((t) => <span key={t} className="chip">#{t}</span>)}</div> })()}
         {(canOwn || canDrop) && (
           <div className="card">
             {canOwn && <>
