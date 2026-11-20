@@ -139,7 +139,9 @@ device, §5.3; keep the wrap). Open wrap, verify the seal's signature, open the 
 conv(letterbox secret, seal.pubkey). Accept the rumor only when `seal.pubkey` is a device of
 `rumor.pubkey`'s valid chain — in the head, or in an earlier roster when the rumor's `created_at`
 is not after the `created_at` of the roster that dropped it. The chain may not be loaded yet:
-keep the wrap and retry when it is; never mark it seen on that failure. A mail from the belfry
+keep the wrap and retry when it is (on each new roster of that author and at each start);
+never mark it seen on that failure, and give up only after 30 days. A wrap that does not
+decrypt with the right letterbox secret, or whose seal signature is bad, is dropped at once. A mail from the belfry
 (§7) is the exception: its seal is signed by the belfry's key.
 
 Reading filter: unchanged `{kinds:[1059], "#p":[me]}`; a device that just received keys (§5)
@@ -286,4 +288,7 @@ device only.
 - A wrap whose `lb` is not the recipient's head is still opened when the secret is in the chain.
 - Kinds 8560, 8562 and the anchor are public to members: they show how many devices someone
   has and when they changed, nothing else.
+- The relay ignores a `#lb` filter: read wraps by `#p` only and match `lb` on the device.
+- A queued wrap is sealed again when the head it was sealed to has changed before it is sent
+  (my own head for the self-copy, the recipient's for theirs).
 - Limits: 20 devices per roster; key chain of any length.
