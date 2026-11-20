@@ -4,7 +4,8 @@ People use the community's own website (the nsite on `https://<domain>`, and its
 `https://preview.<domain>`) signed in: someone the belfry doesn't know as a guest of the public
 requests channel, members and admins as themselves. Built 2026-11-20; code: `sitesessions.py`
 (sessions, `/site/*`), `applyverified.py` (the log-in), `webrequests.py` / `webthreads.py`
-(requests and comments), `sales.py` / `ticketsales.py` (offers, checkout), `events.py` (tickets).
+(requests and comments), `sales.py` / `ticketsales.py` (offers, checkout), `events.py` (tickets),
+`sitenotify.py` (which e-mails someone gets).
 
 **The security limit.** The website never holds a signer (bunker) session. It makes a key in
 the browser; proving an e-mail address with a 6-digit code registers that key as a **site
@@ -97,7 +98,8 @@ endpoints below such a key is a browser key like any other, as before.
 
 ```json
 {"name": "Kim Cook", "username": "guest-12", "nip05": "guest-12@<domain>",
- "picture": "https://…" , "about": "…", "email": "kim@example.org", "role": "guest",
+ "picture": "https://…" , "about": "…", "tags": ["solar", "bread-making"],
+ "email": "kim@example.org", "role": "guest",
  "pubkey": "<64 hex>", "npub": "npub1…",
  "tickets": [{"event_link": "village-2027", "event_title": "The village",
    "start": "2027-01-25", "end": "2027-02-05", "ticket": "<event d>:pass",
@@ -114,6 +116,13 @@ endpoints below such a key is a browser key like any other, as before.
 - `name`, `picture`, `about`: the account's profile (kind 0; the community relay's for a
   member, the groups relay's for a guest), else the name on the account, else "Guest";
   `picture` / `about` `null` when not set. `username` / `nip05`: `null` when the signer has none.
+- `tags`: the words they put on their profile, `[]` when none. For a **member or an admin**
+  it is the list the chat shows and edits: the `tags` of their kind 30078 `d` =
+  `belfry:profile` event on the community relay, read as the chat reads it (lowercased, at
+  most 30, each at most 32 characters; the chat allows letters of any alphabet and `_`). For
+  a **guest** it is kept on their contact in the register: guests are not on the members'
+  relay, so **a guest's tags are not visible in the chat** (nor carried over when the guest
+  becomes a member: from then on the list is the chat's, empty until they set it).
 - `email`: their own proven address, in full. This is the only answer that carries one.
 - `tickets`: the events whose group has the account admitted with a ticket now (at most 30,
   by start). `ticket`: the ticket's d. `ticket_url`: the ticket's own link (its QR,
@@ -130,27 +139,119 @@ endpoints below such a key is a browser key like any other, as before.
 
 ### `POST /site/profile`
 
-`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null}`, at least one, nothing
-else. `name`: 1–80 characters, one line, not a key or an e-mail address. `about`: at most 1000
-characters. `picture`: an `https://` address, at most 500 characters. `null` or `""` takes
-`about` / `picture` out.
+`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "tags"?: ["…"]}`, at
+least one, nothing else. `name`: 1–80 characters, one line, not a key or an e-mail address.
+`about`: at most 1000 characters. `picture`: an `https://` address, at most 500 characters.
+`null` or `""` takes `about` / `picture` out.
+
+`tags`: the whole list (`[]` empties it), at most 20, each 1–30 characters of `a-z`, `0-9`
+and `-`. The server trims and lowercases them and drops doubles; a `#`, a space inside, or
+any other character is 422 `invalid` (nothing is saved). One exception: a tag the account
+**already has** (written in the chat, whose rule is wider: `café`, `solar_power`) may be sent
+back as `GET /site/me` gave it, so the list can be edited without losing it.
+
+- **Member, admin:** the server reads their latest `belfry:profile` event (kind 30078) on the
+  community relay and publishes it again **through the signer** with only `tags` in its
+  content changed: `share`, `place`, any other field and the event's own tags are kept. No
+  event yet: one with `{"tags": […]}` and the `d` tag. When that relay can't be read: 503
+  `unavailable`, nothing written. The chat shows the new list at its next sync.
+- **Guest:** saved on the contact (see `tags` above).
 
 The server publishes the account's kind 0 **through the signer**, the current one with these
 fields changed and everything else kept (`nip05`, fields this API doesn't know; `display_name`
 follows `name` when the profile has one): on the groups relay (where the website's names are
 read from, and the only relay a guest is on) and, for a member, on the community relay. A
 `name` also becomes the name on the contact. → `{"ok": true, "changed": true}`; `"changed":
-false` when nothing changes (no event).
+false` when nothing changes (no event). `changed` is true when the tags or the profile changed.
 
 Errors: 422 `invalid`; 409 `own_key` (they hold their own key: the belfry can't sign for
-them); 429 `too_many` (10 changes an hour per account); 503 `signer` / `unavailable`; 401
+them; also for `tags` alone, guest or member); 429 `too_many` (10 changes an hour per account); 503 `signer` / `unavailable`; 401
 `no_session`.
 
 The site treats the name "Guest" as "ask for a name": after `{"name"}` what they wrote before
 reads under the new name (docs/requests.md: names come from the profile; a guest with no
 profile shows under the account's name).
 
-## 3. Requests and comments (docs/requests.md)
+## 3. Which e-mails they get
+
+### `GET /site/notifications`
+
+```json
+{"items": [
+  {"id": "replies",  "value": "asap",  "default": "asap",  "choices": ["asap", "daily", "weekly", "off"]},
+  {"id": "mentions", "value": "daily", "default": "daily", "choices": ["daily", "weekly", "off"]},
+  {"id": "requests", "value": "off",   "default": "off",   "choices": ["asap", "daily", "off"]},
+  {"id": "events",   "value": "asap",  "default": "asap",  "choices": ["asap", "off"]}
+]}
+```
+
+**An item is there only when the belfry really sends that mail to this account.** The site
+shows what it gets, in this order, and nothing else. An account with no proven address gets
+`{"items": []}`. 401 `no_session`. `no-store`.
+
+### `POST /site/notifications`
+
+`{"<id>": "<choice>", …}`: one or more of the ids the account has. → the same shape, with the
+new values. 422 `invalid` for an empty body, an id the account doesn't have (also one that
+exists for others) or a choice the id doesn't take: nothing is changed then. 503
+`unavailable` (`events`, when the relay or the register can't be reached; nothing changed).
+401 `no_session`.
+
+### What each one is
+
+| id | members, admins | guests | what is sent, when |
+|---|---|---|---|
+| `replies` | yes | yes | Answers in a thread they **opened from the web** (a request), and in a thread they **commented on from the website** (what came after their first comment). Their own comments never. `asap`: gathered, at most one mail an hour (`webthreads.notify`). `daily`: one mail at the morning's digest hour (`DIGEST_HOUR`, `DIGEST_TZ`). `weekly`: that mail on Mondays. `off`: none. Listed when some channel of the belfry has a page on the web. |
+| `mentions` | yes | yes | The digest of the chat messages that name them (`mentions.py`): `daily` at the digest hour, `weekly` on Mondays, `off`. There is no `asap`: the belfry has no immediate mention mail (the phone apps' push is another thing). A guest who came in from the web starts at `off` (so `value` is `off` while `default` says `daily`); members are at `daily` unless they changed it. |
+| `requests` | when they can read the requests channel | guests of the requests channel | New **public** requests in the requests channel, never their own. `asap`: gathered, at most one mail an hour. `daily`: one mail at the digest hour. `off` (the default): none. Not listed when the belfry has no public requests channel or the account doesn't have it. |
+| `events` | yes | yes | The **announcements** of the events they hold a ticket for (a host's message flagged as an announcement in the event's chat; `followers.py`), a few minutes after each. Not every message of the event's chat: the belfry mails no such thing. `off`: none. |
+
+Not there, because the belfry sends no such mail: `messages` (direct messages are not mailed
+to anyone) and `digest` (there is no digest of the activity). They appear when they exist.
+
+**Always sent, whatever `events` says:** the ticket itself ("You're going"), "Cancelled",
+the reminder the day before, and an answer to an application.
+
+**`default` is what the belfry does for someone who never chose.** `events` is `asap`
+because a ticket has always made its holder follow the event's announcements; the switch
+did not change that.
+
+### One store per setting
+
+- `mentions` is the choice the mention digest's own footer page changes
+  (`belfry.<domain>/mentions/<token>`): both read and write the same value.
+- `events` is the account's follows of the events' groups (`ev-<d>`; what the chat's bell
+  "Also e-mail me its announcements" and each mail's footer change, one event at a time).
+  `off` stops all of them and keeps a new ticket from following; `asap` follows the events
+  they hold a ticket for now. `value` says the account's switch: an event unfollowed alone,
+  in the chat or from a mail, stays unfollowed and the switch still reads `asap`.
+- `replies` and `requests` are register params (`belfry.notify.<contact>.<id>`), read by the
+  senders. Nothing is stored for someone who never chose.
+- Changing `replies` loses nothing: going to `daily` / `weekly`, the first digest starts
+  where the hourly mails stopped; going back to `asap`, the next hourly mail carries what
+  was waiting for the next digest. A daily mail looks back two days at most, a weekly one
+  eight. Going to `requests: daily` starts from that moment.
+
+### The mails
+
+Each mail about replies or new requests ends with "Change or stop these e-mails": the
+account's own page `https://belfry.<domain>/notifications/<token>` (also in
+`List-Unsubscribe`), which shows the same items with a button per choice. Opening the link
+changes nothing (mail scanners open links); a button does. The token is an HMAC of the
+contact, and the page is the only thing it opens. The mention digest and the announcement
+mails keep their own footer links, as before.
+
+Mails go only to the account's own proven address, of an account with an active pass; one
+mail per person per round, at most 25 requests listed.
+
+**For members who never touch a setting nothing changed**: thread authors get the hourly
+mail as before (now with the link to the page), the mention digest and the event follows are
+as they were, and a reply written **in the chat** subscribes nobody to anything: only a
+comment made from the website (a site session) makes its writer a recipient of `replies`.
+The author of an older card (a thread posted for an address, before accounts) gets the
+hourly mail as before; when an account has that address now, its `replies` choice counts.
+
+## 4. Requests and comments (docs/requests.md)
 
 Signed by a site session, with no `X-Thread-Key`:
 
@@ -173,7 +274,7 @@ Signed by a site session, with no `X-Thread-Key`:
 
 Unsigned, or signed by the offer's key, or with `X-Thread-Key`: everything is as it was.
 
-## 4. Offers and the checkout (docs/sales.md)
+## 5. Offers and the checkout (docs/sales.md)
 
 `POST /offers`, `GET /offers/<id>`, `POST /checkout`, `GET /checkout/<order>`,
 `POST /checkout/<order>/pay` and `POST /codes/check`, signed by a site session, act **as the
@@ -198,7 +299,7 @@ Not for a site session (it is a key nobody knows there): `POST /codes`,
 `POST /offers/<id>/decide` and everything else an admin does, also for an admin's session;
 `GET /billing`.
 
-## 5. Tickets
+## 6. Tickets
 
 - `GET /events/<link>` signed by a site session reads as the account (`me` / `viewer`: its
   ticket, `ticket_url`, `checked_in`; a members-only event for a member), and each ticket
@@ -211,22 +312,23 @@ Not for a site session (it is a key nobody knows there): `POST /codes`,
 - `POST /events/<d>/apply` signed by a site session: 409 `use_chat`. An application is the
   person's own signed join request; the website holds no key that signs as them.
 
-## 6. CORS
+## 7. CORS
 
 No cookies anywhere; nothing is ever answered with `Access-Control-Allow-Credentials`.
 
 - The apex `https://<domain>`: every `/api/v1/*` path, as before.
 - `https://preview.<domain>` (anyone's draft site): what it could call before (the sales
   endpoints, reading events and requests), plus `login/start`, `login/verify`, `site/me`,
-  `site/profile`, `site/logout`. Still **not**: a comment or an edit on a request,
+  `site/profile`, `site/logout`, `site/notifications`. Still **not**: a comment or an edit on a request,
   `events/<d>/join`.
 
 A preview is another origin: its browser key is its own, and a session made there is not the
 real site's.
 
-## 7. What a site session can and cannot do
+## 8. What a site session can and cannot do
 
-Can, for its own account only: read `/site/me`; change name, about, picture; comment on public
+Can, for its own account only: read `/site/me`; change name, about, picture, tags; choose
+which e-mails it gets; comment on public
 requests and edit its own comments, title and text; open a request (an offer); order through
 the checkout and read its own orders; check a code; take a free open ticket; read events as
 the account; log out.
@@ -236,7 +338,7 @@ messages or mail; invite; administer anything (an admin's site session has no ad
 anywhere); change the account's e-mail address or username; apply for a ticket; reach any
 endpoint not named in this document as the account.
 
-## 8. Known limits, not verified
+## 9. Known limits, not verified
 
 - **The belfry cannot tell the website from another client.** Any key that proves an address
   with a code through `login/verify` **without** `site`, `POST /session`, a guest link, or a
@@ -251,4 +353,15 @@ endpoint not named in this document as the account.
   1111 from someone who has the channel, was not run against a live relay.
 - A profile's `name` on the contact also changes what the belfry calls a member in its mails
   and lists.
+- A preview's session can also change which e-mails the account gets (it can already change
+  the profile).
+- Someone who gets a reply both as a mention (the reply's `p` tag names the thread's author)
+  and as `replies` reads it twice when both are on: the mention digest and the thread mail
+  are separate mails, as before.
+- `replies` covers the threads opened from the web and the comments made from the website.
+  Threads and replies written in the chat are not mailed to their writers.
+- A guest's tags are not shown anywhere but `GET /site/me`.
+- Not run: a member's `belfry:profile` event written by the server and read back by the
+  chat on a live relay (the test uses an event as the chat writes it); any of these mails
+  through a real mail provider.
 - Nothing here ran against a live signer, relay, Stripe or Odoo.
