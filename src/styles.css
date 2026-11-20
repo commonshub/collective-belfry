@@ -1991,3 +1991,4 @@ a.buy .ico { width: 14px; height: 14px; }
 .link-phone { display: flex; flex-direction: column; gap: 10px; text-align: center; }
 .link-phone .qr-box { margin: 6px auto; }
 .link-phone .drop-qr { width: 220px; height: 220px; }
+.dir-hit { font-weight: 650; color: var(--text); }
