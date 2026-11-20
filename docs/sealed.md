@@ -80,7 +80,7 @@ always without `since`.
 - Roster n: `prev` is the id of a valid roster n−1; its signer is a device of roster n−1;
   at least one device; `p` = A; when any device of n−1 is missing, `lb` differs from the
   `lb` of every earlier roster of the chain; when none is missing, `lb` equals the previous one.
-- Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev` (a tag given twice makes the event invalid; the same for the anchor's `d`, `root`, `head`, a wrap's `lb`, and the `p` of an 8561 or 8564); `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
+- Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev` (a tag given twice makes the event invalid; the same for the anchor's `d` and `root`, a wrap's `lb`, and the `p` of an 8561 or 8564; an anchor with more than one `head`, or a malformed one, stays valid with `head` read as absent, as the vectors check); `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
 - The anchored path: the rosters from the root to the anchor's `head`, when `head` is a valid
   roster descending from the root; otherwise the root alone. A roster that is not on that path
   and does not descend from its end is ignored, whatever its id: a device dropped by the path
