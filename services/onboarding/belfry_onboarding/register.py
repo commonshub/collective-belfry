@@ -149,6 +149,13 @@ class Register(OdooApi):
                 key TEXT PRIMARY KEY, partner_id INTEGER NOT NULL, label TEXT NOT NULL,
                 created INTEGER NOT NULL, used INTEGER NOT NULL);
             CREATE INDEX IF NOT EXISTS site_sessions_partner ON site_sessions (partner_id);
+            CREATE TABLE IF NOT EXISTS remote_apps (
+                id TEXT PRIMARY KEY, partner_id INTEGER NOT NULL, pubkey TEXT NOT NULL,
+                client TEXT NOT NULL, relays TEXT NOT NULL, perms TEXT, decrypt INTEGER NOT NULL,
+                name TEXT, url TEXT, image TEXT, created INTEGER NOT NULL, used INTEGER,
+                revoked INTEGER NOT NULL DEFAULT 0);
+            CREATE INDEX IF NOT EXISTS remote_apps_partner ON remote_apps (partner_id);
+            CREATE INDEX IF NOT EXISTS remote_apps_client ON remote_apps (client);
             """
         )
         self._push_one_row_per_identity()
@@ -2507,4 +2514,103 @@ class Register(OdooApi):
         """Remove the sessions not used since BEFORE."""
         with self._lock:
             cur = self._db.execute("DELETE FROM site_sessions WHERE used < ?", (int(before),))
+        return cur.rowcount
+
+    # ── remote apps (remoteapps.py): a Nostr app the belfry signs for, as a member ──────────
+    REMOTE_FIELDS = (
+        "id",
+        "partner_id",
+        "pubkey",
+        "client",
+        "relays",
+        "perms",
+        "decrypt",
+        "name",
+        "url",
+        "image",
+        "created",
+        "used",
+        "revoked",
+    )
+
+    def _remote_row(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        out = dict(zip(self.REMOTE_FIELDS, row, strict=True))
+        out["relays"] = json.loads(out["relays"])
+        out["perms"] = json.loads(out["perms"]) if out["perms"] is not None else None
+        out["decrypt"] = bool(out["decrypt"])
+        out["revoked"] = bool(out["revoked"])
+        return out
+
+    def remote_put(self, row: dict[str, Any]) -> None:
+        """Store a connection. The account's older rows for the same client key go: an app
+        that connects again replaces its connection."""
+        with self._lock:
+            self._db.execute(
+                "DELETE FROM remote_apps WHERE partner_id = ? AND client = ?",
+                (int(row["partner_id"]), row["client"]),
+            )
+            self._db.execute(
+                "INSERT INTO remote_apps (id, partner_id, pubkey, client, relays, perms, decrypt,"
+                " name, url, image, created, used, revoked) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
+                (
+                    row["id"],
+                    int(row["partner_id"]),
+                    row["pubkey"],
+                    row["client"],
+                    json.dumps(row["relays"]),
+                    json.dumps(row["perms"]) if row.get("perms") is not None else None,
+                    1 if row.get("decrypt") else 0,
+                    row.get("name"),
+                    row.get("url"),
+                    row.get("image"),
+                    int(row["created"]),
+                    row.get("used"),
+                ),
+            )
+
+    def remote_get(self, app_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                f"SELECT {', '.join(self.REMOTE_FIELDS)} FROM remote_apps WHERE id = ?", (app_id,)
+            ).fetchone()
+        return self._remote_row(row) if row else None
+
+    def remote_list(
+        self, partner_id: int | None = None, client: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Connections, the newest first: an account's, a client key's, or all (revoked and
+        lapsed ones included; remoteapps.live tells)."""
+        where, args = [], []
+        if partner_id is not None:
+            where.append("partner_id = ?")
+            args.append(int(partner_id))
+        if client is not None:
+            where.append("client = ?")
+            args.append(client)
+        sql = f"SELECT {', '.join(self.REMOTE_FIELDS)} FROM remote_apps"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        with self._lock:
+            rows = self._db.execute(sql + " ORDER BY created DESC, id", args).fetchall()
+        return [self._remote_row(r) for r in rows]
+
+    def remote_touch(self, app_id: str, at: int) -> None:
+        with self._lock:
+            self._db.execute("UPDATE remote_apps SET used = ? WHERE id = ?", (int(at), app_id))
+
+    def remote_revoke(self, app_id: str | None = None, partner_id: int | None = None) -> int:
+        """End one connection or every connection of an account. The rows stay: a client key
+        that was one account's is never another's."""
+        with self._lock:
+            if app_id is not None:
+                cur = self._db.execute(
+                    "UPDATE remote_apps SET revoked = 1 WHERE id = ? AND revoked = 0", (app_id,)
+                )
+            elif partner_id is not None:
+                cur = self._db.execute(
+                    "UPDATE remote_apps SET revoked = 1 WHERE partner_id = ? AND revoked = 0",
+                    (int(partner_id),),
+                )
+            else:
+                return 0
         return cur.rowcount

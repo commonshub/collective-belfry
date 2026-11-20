@@ -1252,6 +1252,12 @@ def _close_pass(svc: Services, pass_row: dict[str, Any], state: str, reason: str
         sitesessions.closed(svc, pass_row)
     except Exception:  # noqa: BLE001 — a session without a pass is refused when used anyway
         log.exception("pass %s: website sessions not ended", pass_row["id"])
+    try:  # the other Nostr apps they signed in to are disconnected (remoteapps.py)
+        from . import remoteapps
+
+        remoteapps.closed(svc, pass_row)
+    except Exception:  # noqa: BLE001 — retried when another pass closes; they lapse in 30 days
+        log.exception("pass %s: remote apps not disconnected", pass_row["id"])
     # Always re-evaluate the suspension so a retry after a failed Keycast call completes the job.
     _suspend_unless_other_active(svc, pass_row, reason)
     return result

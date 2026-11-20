@@ -73,6 +73,7 @@ from . import (
     plugins,
     programme,
     push,
+    remoteapps,
     reports,
     roles,
     sales,
@@ -256,6 +257,7 @@ def create_app(services: Services | None = None) -> FastAPI:
             website.running(app),  # a website proposal that passed goes live (website.py)
             actions.running(app),  # buttons on messages: the belfry answers belfry: presses
             agents.running(app),  # members' agents follow their member into channels (agents.py)
+            remoteapps.running(app),  # the remote signer of members' other Nostr apps
         ):
             yield
 
@@ -315,6 +317,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     applyverified.register(app)  # /api/apply/*, /api/login/*: the chat's own form and log-in
     villagers.register(app)  # /api/villagers: a profile page per person (villagers.py)
     sitesessions.register(app)  # /api/site/*: the website's own accounts (sitesessions.py)
+    remoteapps.register(app)  # /api/remote-apps: sign in to other Nostr apps (remoteapps.py)
     eventchat.register(app)  # /api/events/<link>/chat, photos, links, participants
     sitenotify.register(app)  # /api/site/notifications, /notifications/<token> (sitenotify.py)
     volunteer.register(app)  # /shifts, /admin/shifts: volunteers' shifts (volunteer.py)

@@ -830,6 +830,53 @@ class FakeAuthentik:
         return httpx.Response(201, json=conn)
 
 
+def nip04_encrypt(secret: bytes, peer: str, text: str) -> str:
+    """NIP-04 (AES-256-CBC under the ECDH x coordinate), for the fake signer and test clients."""
+    import base64
+    import os
+
+    from coincurve import PublicKey
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    key = PublicKey(b"\x02" + bytes.fromhex(peer)).multiply(secret).format(compressed=True)[1:33]
+    iv = os.urandom(16)
+    pad = padding.PKCS7(128).padder()
+    data = pad.update(text.encode()) + pad.finalize()
+    enc = Cipher(algorithms.AES(key), modes.CBC(iv)).encryptor()
+    ct = enc.update(data) + enc.finalize()
+    return base64.b64encode(ct).decode() + "?iv=" + base64.b64encode(iv).decode()
+
+
+def nip04_decrypt(secret: bytes, peer: str, payload: str) -> str:
+    import base64
+
+    from coincurve import PublicKey
+    from cryptography.hazmat.primitives import padding
+    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+    ct, iv = payload.split("?iv=")
+    key = PublicKey(b"\x02" + bytes.fromhex(peer)).multiply(secret).format(compressed=True)[1:33]
+    dec = Cipher(algorithms.AES(key), modes.CBC(base64.b64decode(iv))).decryptor()
+    data = dec.update(base64.b64decode(ct)) + dec.finalize()
+    unpad = padding.PKCS7(128).unpadder()
+    return (unpad.update(data) + unpad.finalize()).decode()
+
+
+def real_crypt(secret: bytes, method: str, peer: str, text: str) -> str:
+    """What a signer holding SECRET answers to a NIP-46 encryption method."""
+    from belfry_onboarding.nip46check import conversation_key, nip44_decrypt, nip44_encrypt
+
+    if method.startswith("nip44"):
+        conv = conversation_key(secret, bytes.fromhex(peer))
+        if method.endswith("encrypt"):
+            return nip44_encrypt(conv, text)
+        return nip44_decrypt(conv, text)
+    if method.endswith("encrypt"):
+        return nip04_encrypt(secret, peer, text)
+    return nip04_decrypt(secret, peer, text)
+
+
 class FakeKeycast:
     """respx routes for preload-user (idempotent on vine_id) and the status endpoint."""
 
@@ -842,6 +889,9 @@ class FakeKeycast:
         self.derived = False
         self.status_calls: list[tuple[str, str]] = []
         self.signed: list[dict[str, Any]] = []
+        self.keys: dict[str, bytes] = {}  # pubkey -> secret key, for users with a real key
+        self.rpc: list[tuple[str, str]] = []  # (method, acting pubkey) of every /api/nostr call
+        self.down = False  # /api/nostr answers 503
         base = base_url.rstrip("/")
         self.preload_route = router.post(f"{base}/api/admin/preload-user").mock(
             side_effect=self._preload
@@ -978,13 +1028,42 @@ class FakeKeycast:
 
     def _sign(self, request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
-        if request.headers.get("Authorization") != "Bearer ucan-token":
+        auth = request.headers.get("Authorization") or ""
+        # one token for the last preloaded user, or "ucan-token/<pubkey>" for a user of
+        # ``self.keys`` (tests with real keys: remote apps)
+        acting = self.last_pubkey
+        if auth.startswith("Bearer ucan-token/"):
+            acting = auth.removeprefix("Bearer ucan-token/")
+        elif auth != "Bearer ucan-token":
             return httpx.Response(401, json={"error": "unauthorized"})
+        self.rpc.append((body["method"], acting))
+        if self.down:
+            return httpx.Response(503, json={"error": "down"})
+        secret = self.keys.get(acting)
+        if body["method"] == "get_public_key":
+            return httpx.Response(200, json={"result": acting})
+        if body["method"] in ("nip44_encrypt", "nip44_decrypt", "nip04_encrypt", "nip04_decrypt"):
+            if secret is None:
+                return httpx.Response(200, json={"error": "no key for this user in the fake"})
+            peer, text = body["params"]
+            try:
+                out = real_crypt(secret, body["method"], peer, text)
+            except Exception as exc:  # noqa: BLE001 — what the signer answers
+                return httpx.Response(200, json={"error": f"{body['method']}: {exc}"})
+            return httpx.Response(200, json={"result": out})
         if body["method"] != "sign_event":
             return httpx.Response(400, json={"error": f"unsupported {body['method']}"})
         event = dict(body["params"][0])
         if "pubkey" not in event:
             return httpx.Response(400, json={"error": "event must include pubkey"})
+        if event["pubkey"] in self.keys:  # a real key: a real signature
+            from belfry_onboarding.nip46check import sign_event as real_sign
+
+            event.pop("id", None)
+            event.pop("sig", None)
+            done = real_sign(self.keys[event["pubkey"]], event)
+            self.signed.append(done)
+            return httpx.Response(200, json={"result": done})
         event["id"] = f"{len(self.signed) + 1:064x}"
         event["sig"] = "fake-sig"
         self.signed.append(event)

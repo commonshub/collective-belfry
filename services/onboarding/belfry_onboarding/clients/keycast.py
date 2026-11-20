@@ -63,6 +63,40 @@ class KeycastClient:
             raise RuntimeError(f"keycast sign_event failed: {data['error']}")
         return data["result"]
 
+    def nostr_rpc(self, token: str, method: str, params: list[Any]) -> Any:
+        """One call of ``POST /api/nostr`` with a user's UCAN: ``get_public_key``,
+        ``sign_event`` ([event]), ``nip44_encrypt`` / ``nip44_decrypt`` / ``nip04_encrypt`` /
+        ``nip04_decrypt`` ([the other side's pubkey, text]). The result, as the signer gave
+        it; RuntimeError (naming the method only) when it answers with an error."""
+        r = self._client.post(
+            f"{self.url}/api/nostr",
+            json={"method": method, "params": params},
+            headers={"Authorization": f"Bearer {token}", **self._common},
+        )
+        r.raise_for_status()
+        data = r.json()
+        if not isinstance(data, dict) or data.get("error") or "result" not in data:
+            raise RuntimeError(f"keycast {method} failed")
+        return data["result"]
+
+    def _text(self, token: str, method: str, peer: str, text: str) -> str:
+        out = self.nostr_rpc(token, method, [peer, text])
+        if not isinstance(out, str):
+            raise RuntimeError(f"keycast {method}: not a string")
+        return out
+
+    def nip44_encrypt(self, token: str, peer: str, plaintext: str) -> str:
+        return self._text(token, "nip44_encrypt", peer, plaintext)
+
+    def nip44_decrypt(self, token: str, peer: str, ciphertext: str) -> str:
+        return self._text(token, "nip44_decrypt", peer, ciphertext)
+
+    def nip04_encrypt(self, token: str, peer: str, plaintext: str) -> str:
+        return self._text(token, "nip04_encrypt", peer, plaintext)
+
+    def nip04_decrypt(self, token: str, peer: str, ciphertext: str) -> str:
+        return self._text(token, "nip04_decrypt", peer, ciphertext)
+
     def preload_user(
         self,
         vine_id: str,
