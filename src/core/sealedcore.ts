@@ -240,6 +240,8 @@ export function openWrap(secret: Uint8Array, wrap: unknown): { seal: NostrEvent;
 
 /** The letterbox a sealed wrap names (its one lb tag), or undefined for an old-style wrap. */
 export const wrapLb = (wrap: NostrEvent) => { const lb = one(wrap, 'lb'); return isKey(lb) ? lb : undefined }
+/** A sealed wrap's lb tag is malformed (given twice, or not a key): the wrap is invalid (§3.3). */
+export const badLb = (wrap: NostrEvent) => wrap.tags.some((t) => t[0] === 'lb') && !wrapLb(wrap)
 
 /** (seal, rumor with its computed id) of a sealed wrap opened with the letterbox secret its lb names. */
 export function openSealed(lbSecret: Uint8Array, wrap: NostrEvent): { seal: NostrEvent; rumor: Rumor } {

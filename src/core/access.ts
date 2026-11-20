@@ -35,12 +35,14 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
   if (!belfryAdmins.length) belfryAdmins = (await kvGet<string[]>('belfry-admins')) ?? []
   if (!Object.keys(belfryAgents).length) belfryAgents = (await kvGet<Record<string, string>>('belfry-agents')) ?? {}
   if (!handlerKeys.length) handlerKeys = (await kvGet<string[]>('belfry-handler-keys')) ?? []
+  nostrKey ||= (await kvGet<string>('belfry-nostr-key')) ?? ''
   try {
     const res = await fetch(DISCOVERY, { cache: 'no-store' })
     const doc = (await res.json()) as { access?: AccessInfo; admins?: string[]; agents?: Record<string, string>; branding?: unknown; nostr?: { pubkey?: string }; groups_key?: { pubkey?: string } }
     // the keys that answer presses on belfry: buttons (buttons.ts, docs/actions.md §3)
     const keys = [doc.nostr?.pubkey, doc.groups_key?.pubkey].filter((k): k is string => typeof k === 'string' && /^[0-9a-f]{64}$/.test(k))
     if (keys.length) { handlerKeys = keys; await kvSet('belfry-handler-keys', keys) }
+    if (typeof doc.nostr?.pubkey === 'string' && /^[0-9a-f]{64}$/.test(doc.nostr.pubkey)) { nostrKey = doc.nostr.pubkey; await kvSet('belfry-nostr-key', nostrKey) }
     if (doc.access) {
       info = doc.access
       await kvSet('access-info', info)
@@ -62,6 +64,10 @@ export async function loadAccessInfo(): Promise<AccessInfo | null> {
 // The belfry's own key and its groups key (belfry.json "nostr" and "groups_key").
 let handlerKeys: string[] = []
 export const belfryHandlerKeys = () => handlerKeys
+/** The belfry's own key from belfry.json ("nostr"): the only key whose seal is taken on its own
+ *  mail (sealed.md §4), never a name looked up at the time. */
+let nostrKey = ''
+export const belfryNostrKey = () => nostrKey
 
 // A member's own agent (belfry.json "agents", Belfry's agents.py): a member for as long as its
 // member is one. Not a guest.

@@ -2,13 +2,14 @@ import { finalizeEvent, generateSecretKey, getEventHash, getPublicKey, nip44, ve
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY, TEST_RELAYS } from '../config'
-import { kvGet, kvSet } from './db'
+import { kvDel, kvGet, kvPrefix, kvSet } from './db'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
-import { acceptedSealed, decryptForLb, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
+import { NoHead, acceptedSealed, decryptForLb, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
+import { belfryNostrKey } from './access'
 import type { Rumor } from './sealedcore'
 
 // Direct messages: NIP-17 (kind 14 in NIP-59 gift wraps), old NIP-04 (kind 4, read only) and
@@ -114,12 +115,12 @@ export async function sendAsChannel(m: { channel: string; /** the channel's addr
   const { raw, messageId } = buildMail({ fromName: channelSignature(m.channelName), from, to: m.to, subject: m.subject, text: m.text, inReplyTo: m.inReplyTo, references: m.references, domain: BELFRY.domain })
   const emailId = crypto.randomUUID()
   const rumor = rumorOf(1301, [['email-id', emailId], ['mail-from', from], ['rcpt-to', m.to], ['subject', m.subject], ['e', m.cardId]], raw)
+  lastRaw = raw
+  if (isLocalOnly()) { reports.set(emailId, { status: 'queued', details: 'Sending…' }); channelSends.add(emailId); touch(); demoSent({ ...m, messageId }, emailId); return emailId }
+  await deliver(rumor, [b], false, 'm:' + m.to.toLowerCase()) // throws before anything shows as sending
   reports.set(emailId, { status: 'queued', details: 'Sending…' })
   channelSends.add(emailId)
   touch()
-  lastRaw = raw
-  if (isLocalOnly()) { demoSent({ ...m, messageId }, emailId); return emailId }
-  await deliver(rumor, [b], false, 'm:' + m.to.toLowerCase())
   for (const wait of [2000, 5000, 10000, 30000]) setTimeout(() => void checkReports(), wait)
   return emailId
 }
@@ -151,9 +152,17 @@ async function load() {
   for (const id of (await kvGet<string[]>('dm-seen')) ?? []) seen.add(id)
   for (const r of (await kvGet<DmReaction[]>('dm-reactions')) ?? []) dmReacts.set(r.rid, r)
   for (const [k, v] of Object.entries((await kvGet<Record<string, Report>>('dm-reports')) ?? {})) reports.set(k, v)
+  for (const h of await kvPrefix<Held>(KV_HELD).catch(() => [] as Held[])) held.set(h.rumor.id, h)
+  for (const r of await kvPrefix<Rumor>(KV_OUT).catch(() => [] as Rumor[])) outRumors.set(r.id, r)
+  // once per version of the app: sealed wraps an older version handed to the signer (which failed)
+  // and marked seen are read again
+  if ((await kvGet<string>('dm-seen-sealed-v')) !== __CHAT_VERSION__) {
+    for (const e of all()) if (e.kind === 1059 && e.tags.some((t) => t[0] === 'lb')) seen.delete(e.id)
+    void kvSet('dm-seen-sealed-v', __CHAT_VERSION__)
+  }
   await readReady // read marks: readstate.ts (shared across my devices; seeded from the old 'dm-read')
   // mail stored before threads: one conversation per address → one per subject
-  const waiting = new Set(outboxItems().map((o) => o.dm).filter(Boolean))
+  const waiting = new Set([...outboxItems().map((o) => o.dm).filter(Boolean), ...held.keys()])
   for (const d of items.values()) if (d.pending && !waiting.has(d.rid)) d.pending = false
   // sent by an older version, which kept no copy: stuck at "Sending…" with nothing left to send
   for (const d of items.values()) {
@@ -286,15 +295,23 @@ async function process() {
         if (e.kind === 1059 && e.tags.some((t) => t[0] === 'lb')) {
           // sealed (docs/sealed.md §4): opened with my letterbox key, never by the signer; no key
           // or chain yet: keep the wrap and try again later (not marked seen)
-          const o = await openDm(e, await bridge())
+          // the belfry's own mail: its key from belfry.json (demo and tests: the demo bridge)
+          const o = await openDm(e, isLocalOnly() || TEST_RELAYS ? await bridge() : belfryNostrKey() || undefined)
           if (!o.ok) { if (!o.retry) seen.add(e.id); continue }
           const rumor = o.rumor as unknown as NostrEvent
           if (rumor.kind === 7 || rumor.kind === 5) reactionRumor(rumor)
           else { d = await fromRumor(rumor); if (d) { d.sealed = true; acceptedSealed(d.conv) } }
         } else if (e.kind === 1059) {
           const rumor = await unwrap(e)
-          if (rumor && (rumor.kind === 7 || rumor.kind === 5)) reactionRumor(rumor)
-          else if (rumor) d = await fromRumor(rumor)
+          if (rumor) {
+            rumor.id = getEventHash(rumor) // computed by the opener on the old path too (§6)
+            // in a sealed conversation, after this device first saw it sealed: an old-style
+            // reaction or take-back is ignored, an old-style message never replaces one held
+            const c = convOf(rumor, await bridge())
+            const after = isSealedConv(c) && rumor.created_at * 1000 >= (firstSeenOf(c) ?? Infinity)
+            if (rumor.kind === 7 || rumor.kind === 5) { if (!after) reactionRumor(rumor) }
+            else { d = await fromRumor(rumor); if (d && items.has(d.rid) && after) d = null }
+          }
         } else if (e.pubkey === self || e.tags.some((t) => t[0] === 'p' && t[1] === self)) {
           const peer = e.pubkey === self ? tag(e, 'p') ?? self : e.pubkey
           const s = currentSigner()
@@ -319,22 +336,24 @@ export function startDms() {
   if (started) return
   started = true
   watchOutbox()
-  // §9: a queued sealed wrap is sealed again to a new head: its rumor, rebuilt from the message
-  // (the outbox holds only finished wraps); the same id or nothing
-  void loadOut()
+  // §9: a queued sealed wrap is sealed again to a new head from the rumor kept here until it is out
   setRumorSource((rid) => outRumors.get(rid))
   onOutbox((item) => { if (item.dm) setTimeout(() => outSent(item.dm!), 0) }, () => {})
-  // keys arrived (or this start): sealed wraps once marked seen (an older version handed them to
-  // the signer, which failed) are read again
-  onKeysArrived(() => {
+  // letterbox keys arrived: wraps naming them that were marked seen are read again
+  onKeysArrived((lbs) => {
+    const set = new Set(lbs)
     let n = 0
-    for (const e of all()) if (e.kind === 1059 && seen.has(e.id) && e.tags.some((t) => t[0] === 'lb')) { seen.delete(e.id); n++ }
+    for (const e of all()) if (e.kind === 1059 && seen.has(e.id) && e.tags.some((t) => t[0] === 'lb' && set.has(t[1]))) { seen.delete(e.id); n++ }
     if (n) { save(); void process() }
   })
-  // §8: a history shared with this device: its rumors, marked (sealedrt keeps who shared them)
+  // a complete answer arrived: held messages are decided (§6)
+  onDecidable(() => void sendHeld())
+  setInterval(() => { if (held.size && navigator.onLine) void sendHeld(true) }, 15_000) // a silent relay: asked again
+  // §8: a history shared with this device: its messages, marked (sealedrt keeps who shared them);
+  // its reactions are not applied (not proven to be authentic)
   onHistory((rumors) => void (async () => {
     for (const r of rumors) {
-      if (items.has(r.id)) continue
+      if (items.has(r.id) || r.kind !== 14) continue
       const d = await fromRumor(r as unknown as NostrEvent)
       if (d) items.set(d.rid, { ...d, sealed: true })
     }
@@ -409,30 +428,76 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
 async function deliver(rumor: NostrEvent, to: string[], self = true, conv?: Conv) {
-  // §6: sealed, or the old way only on knowledge; when this device can't tell, sendMode throws
-  // and the composer keeps the text. CONV 'm:' (an e-mail, a channel's answer): my own chain decides.
-  const sealed = !!conv && (await sendMode(conv)) === 'sealed'
+  // §6: sealed, or the old way only on knowledge; when this device can't tell (offline, before
+  // the relay's answer), or a sealed conversation has no head yet, the message is held here,
+  // shown as waiting, and decided at the first complete answer. CONV 'm:': my own chain decides.
+  const mode = conv ? await sendMode(conv) : 'old'
+  if (mode === 'undecided') return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv! })
   let wraps: NostrEvent[]
-  if (sealed) {
-    const r = rumor as unknown as Rumor
-    wraps = isMail(conv!) ? [sealMailOut(r, to[0]), ...(self ? sealWraps(r, []) : [])] : sealWraps(r, to)
-    const it = items.get(rumor.id); if (it) it.sealed = true
-    outRumors.set(rumor.id, { pubkey: rumor.pubkey, created_at: rumor.created_at, kind: rumor.kind, tags: rumor.tags, content: rumor.content, id: rumor.id })
-    saveOut()
+  if (mode === 'sealed') {
+    try { wraps = sealedWrapsOf(rumor as unknown as Rumor, to, self, conv!) } catch (e) { if (e instanceof NoHead) return hold({ rumor: rumor as unknown as Rumor, to, self, conv: conv! }); throw e }
   } else wraps = await Promise.all([...new Set([...to, ...(self ? [me()] : [])])].map((p) => giftWrap(rumor, p)))
   if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
   for (const w of wraps) await enqueueSigned('main', w, rumor.id)
 }
 
-// §9: the rumor of a sealed message, kept here (this account's own database, like the messages)
+function sealedWrapsOf(r: Rumor, to: string[], self: boolean, conv: Conv): NostrEvent[] {
+  const wraps = isMail(conv) ? [sealMailOut(r, to[0]), ...(self ? sealWraps(r, []) : [])] : sealWraps(r, to)
+  const it = items.get(r.id); if (it) it.sealed = true
+  keepOut(r)
+  return wraps
+}
+
+// held: decided neither sealed nor old yet (§6), one kv entry each (this account's own database,
+// like the messages), sent at the first complete answer
+interface Held { rumor: Rumor; to: string[]; self: boolean; conv: Conv }
+const KV_HELD = 'dm-held:', KV_OUT = 'dm-out:'
+const held = new Map<string, Held>()
+/** Held on this device until it can be decided (shown as waiting). */
+export const isHeld = (rid: string) => held.has(rid)
+function hold(h: Held) {
+  held.set(h.rumor.id, h)
+  void kvSet(KV_HELD + h.rumor.id, h).catch(() => {})
+  const it = items.get(h.rumor.id); if (it) it.pending = true
+  save()
+}
+let sending = false, sendAgain = false
+/** REFRESH: ask the relay first (the periodic try); after a complete answer it is known already. */
+async function sendHeld(refresh = false) {
+  if (sending) { sendAgain = true; return }
+  sending = true
+  try {
+    let fresh = refresh
+    do {
+      sendAgain = false
+      for (const h of [...held.values()]) {
+        const mode = await sendMode(h.conv, fresh)
+        if (mode === 'undecided') continue
+        let wraps: NostrEvent[]
+        try {
+          wraps = mode === 'sealed' ? sealedWrapsOf(h.rumor, h.to, h.self, h.conv)
+            : await Promise.all([...new Set([...h.to, ...(h.self ? [me()] : [])])].map((p) => giftWrap(h.rumor as unknown as NostrEvent, p)))
+        } catch (e) { if (e instanceof NoHead) continue; wraps = []; const it = items.get(h.rumor.id); if (it) { it.pending = false; it.failed = e instanceof Error ? e.message : String(e) } }
+        held.delete(h.rumor.id); void kvDel(KV_HELD + h.rumor.id).catch(() => {})
+        for (const w of wraps) await enqueueSigned('main', w, h.rumor.id)
+        save()
+      }
+      fresh = false
+    } while (sendAgain)
+  } finally { sending = false }
+  void flush()
+}
+
+// §9: the rumor of a sealed message, kept here (one kv entry each, this account's own database)
 // until all of its wraps are out, so a queued wrap can be sealed again to a new head; never in the outbox
 const outRumors = new Map<string, Rumor>()
-let outLoaded = false
-const saveOut = () => void kvSet('dm-out-rumors', [...outRumors.values()]).catch(() => {})
-async function loadOut() { if (outLoaded) return; outLoaded = true; for (const r of (await kvGet<Rumor[]>('dm-out-rumors')) ?? []) outRumors.set(r.id, r) }
+function keepOut(r: Rumor) {
+  outRumors.set(r.id, { id: r.id, pubkey: r.pubkey, created_at: r.created_at, kind: r.kind, tags: r.tags, content: r.content })
+  void kvSet(KV_OUT + r.id, outRumors.get(r.id)).catch(() => {})
+}
 function outSent(rid: string) {
   if (!outRumors.has(rid) || outboxItems().some((o) => o.dm === rid)) return
-  outRumors.delete(rid); saveOut()
+  outRumors.delete(rid); void kvDel(KV_OUT + rid).catch(() => {})
 }
 
 /** Where a message stands in the outbox: waiting (and why, after a failed try). */
@@ -523,8 +588,8 @@ export async function reactDm(d: Dm, emoji: string, mine?: DmReaction) {
   const rumor = rumorOf(7, [['e', d.rid, '', d.from], ['p', d.from], ['k', String(d.kind)], ...to.filter((p) => p !== me() && p !== d.from).map((p) => ['p', p])], emoji)
   dmReacts.set(rumor.id, { rid: rumor.id, target: d.rid, from: me(), emoji, at: rumor.created_at, pending: !isLocalOnly() })
   save()
-  await deliver(rumor, to, true, d.conv)
-  const r = dmReacts.get(rumor.id); if (r) r.pending = false
+  try { await deliver(rumor, to, true, d.conv) } catch (e) { dmReacts.delete(rumor.id); save(); throw e }
+  const r = dmReacts.get(rumor.id); if (r && !held.has(rumor.id)) r.pending = false
   save()
 }
 

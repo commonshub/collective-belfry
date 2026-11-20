@@ -6,20 +6,29 @@
 // clientSecret (kv 'session'); the key chain, pins, sealed conversations and "shared by" marks are
 // ONE kv entry of this account's own IndexedDB ('sealed:state'), wiped exactly when the device key
 // changes (sign-out, a new sign-in, Forget this device delete the database). Every write is a
-// read-merge-write under a lock, and other tabs of this device reload it (BroadcastChannel): two
-// tabs never overwrite each other. Never in localStorage, never logged, never in an error, toast or
-// outbox label. Roster writes run under their own lock.
+// read-merge-write under a lock, and other tabs of this device reload it (BroadcastChannel); what
+// can be deleted (history packs) has one kv entry per item, so a delete never comes back. Never in
+// localStorage, never logged, never in an error, toast or outbox label.
+//
+// A change of my roster (§3.2) is done only when the relay accepted the roster and the anchor
+// naming it and, read again, the roster is on the anchored path; otherwise it is done again on the
+// new head, and the action shows as not done until then.
 import { getPublicKey, nip44, type Filter, type NostrEvent } from 'nostr-tools'
 import { bytesToHex, hexToBytes, randomBytes } from '@noble/hashes/utils'
 import { BELFRY } from '../config'
-import { kvGet, kvSet } from './db'
+import { kvDel, kvGet, kvPrefix, kvSet } from './db'
 import * as C from './sealedcore'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
-import { currentSigner, enqueue, enqueueSigned, flush, isLocalOnly, me, onOutbox, publishNow, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setExtraMainFilters, signedFetch } from './sync'
+import { currentSigner, enqueue, enqueueSigned, flush, isLocalOnly, me, onEose, onOutbox, publishNow, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setExtraMainFilters, signedFetch } from './sync'
 
 type Conv = string
 
-interface Pin { root: string; head: string; heads: Record<string, string> /* lb of every head accepted, by roster id */; prevRoot?: string /* the root pinned before a fresh start */ }
+interface Pin {
+  root: string; head: string
+  heads: Record<string, string> // lb of every head accepted, by roster id
+  prevRoot?: string // the root pinned before a fresh start
+  path?: NostrEvent[] // the pinned head's rosters, kept so the pin holds even if the store lacks them
+}
 interface Fresh { root: string; at: number; shared: Conv[] }
 /** What this device remembers (one kv entry, merged on every write). */
 interface State {
@@ -31,20 +40,19 @@ interface State {
   fresh: Record<string, Fresh> // person → their latest fresh start noticed
   first: Record<Conv, number> // conv → when this device first saw it sealed
   asked: number // my last device request
-  packs: Record<string, C.Rumor> // history packs still in the outbox (rebuilt if a head changes)
 }
-const emptyState = (): State => ({ keys: {}, pins: {}, convs: [], shared: {}, unshared: [], fresh: {}, first: {}, asked: 0, packs: {} })
+const emptyState = (): State => ({ keys: {}, pins: {}, convs: [], shared: {}, unshared: [], fresh: {}, first: {}, asked: 0 })
 let st: State = emptyState()
 
 /** B into A: the union of what two tabs know (keys, sealed conversations, marks), the earliest
- *  "first seen", the latest request, the pin that knows more heads. */
+ *  "first seen", the latest request, the pin that knows more of its path. */
 function merge(a: State, b: State): State {
   const pins: Record<string, Pin> = { ...a.pins }
   for (const [pk, p] of Object.entries(b.pins)) {
     const q = pins[pk]
     if (!q) { pins[pk] = p; continue }
     const heads = { ...q.heads, ...p.heads }
-    const winner = q.root === p.root ? (Object.keys(p.heads).length > Object.keys(q.heads).length ? p : q) : (p.prevRoot === q.root ? p : q)
+    const winner = q.root === p.root ? ((p.path?.length ?? 0) > (q.path?.length ?? 0) ? p : q) : (p.prevRoot === q.root ? p : q)
     pins[pk] = { ...winner, heads, prevRoot: winner.prevRoot ?? (q.root !== p.root ? (winner === p ? q.root : p.root) : undefined) }
   }
   const fresh = { ...a.fresh }
@@ -57,7 +65,7 @@ function merge(a: State, b: State): State {
   const unshared = [...new Set([...a.unshared, ...b.unshared])]
   const shared = { ...b.shared, ...a.shared }
   for (const r of unshared) delete shared[r]
-  return { keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked), packs: { ...b.packs, ...a.packs } }
+  return { keys: { ...a.keys, ...b.keys }, pins, convs: [...new Set([...a.convs, ...b.convs])], shared, unshared, fresh, first, asked: Math.max(a.asked, b.asked) }
 }
 
 let device: { secret: Uint8Array; pub: string } | null = null
@@ -65,7 +73,7 @@ let started = false
 let partners: string[] = []
 let currentFilters: () => Filter[] = () => []
 const nowS = () => Math.floor(Date.now() / 1000)
-const KV = 'sealed:state', KV_DEVICE = 'sealed:device'
+const KV = 'sealed:state', KV_DEVICE = 'sealed:device', KV_PACK = 'sealed:pack:'
 let channel: BroadcastChannel | undefined
 
 const lockOf = (name: string) => <T,>(f: () => Promise<T>): Promise<T> =>
@@ -87,10 +95,11 @@ async function commit(change: (s: State) => void) {
 }
 
 async function reloadFromKv() {
-  const before = Object.keys(st.keys).length
+  const before = new Set(Object.keys(st.keys))
   const stored = await kvGet<State>(KV).catch(() => undefined)
   if (stored) st = merge(st, { ...emptyState(), ...stored })
-  if (Object.keys(st.keys).length > before) keysArrived()
+  const fresh = Object.keys(st.keys).filter((lb) => !before.has(lb))
+  if (fresh.length) keysArrived(fresh)
   touch()
 }
 
@@ -131,6 +140,7 @@ export async function startSealed(clientSecret: string) {
     if (stored && stored !== device.pub) await kvSet(KV, emptyState()).catch(() => {})
     else { const s = await kvGet<State>(KV).catch(() => undefined); if (s) st = { ...emptyState(), ...s } }
     await kvSet(KV_DEVICE, device.pub).catch(() => {})
+    for (const p of await kvPrefix<C.Rumor>(KV_PACK).catch(() => [] as C.Rumor[])) packs.set(p.id, p)
     started = true
     try { channel = new BroadcastChannel('belfry-sealed-' + me()); channel.onmessage = () => void reloadFromKv() } catch { /* old browser: no other tabs told */ }
     currentFilters = () => device ? [
@@ -143,28 +153,34 @@ export async function startSealed(clientSecret: string) {
     ] as Filter[] : []
     setExtraMainFilters(currentFilters)
     setBeforeFlush(beforeFlush)
-    onOutbox((item) => { if (item.dm && st.packs[item.dm]) void commit((s) => { delete s.packs[item.dm!] }) }, () => {})
+    onOutbox((item) => { if (item.dm && packs.has(item.dm)) void dropPack(item.dm) }, () => {})
+    // the relay answered after AUTH: what was waiting for an answer runs (my own path, held messages)
+    onEose((t) => { if (t === 'main' && relayAuthed('main')) { if (pathDue) scheduleMyDevice(0); decidable() } })
     let t: ReturnType<typeof setTimeout> | null = null
     subscribe(() => { t ??= setTimeout(() => { t = null; void onStore() }, 400) })
-    setTimeout(() => void myDevice(), 3000)
-    setInterval(() => void myDevice(), 6 * 3600e3)
-    keysArrived() // once at start: wraps a previous version gave up on are read again
+    scheduleMyDevice(3000)
+    setInterval(() => scheduleMyDevice(0), 6 * 3600e3)
   } finally { loadedResolve() }
 }
 
 const keyOf = (lb: string) => st.keys[lb]
-async function addKeys(list: C.LbKey[]): Promise<boolean> {
+async function addKeys(list: C.LbKey[]): Promise<string[]> {
   const fresh = list.filter((k) => !st.keys[k.lb])
-  if (!fresh.length) return false
+  if (!fresh.length) return []
   await commit((s) => { for (const k of fresh) s.keys[k.lb] = k.secret })
   void navigator.storage?.persist?.().catch(() => false) // Safari evicts unvisited sites' storage: ask once we hold keys
-  return true
+  return fresh.map((k) => k.lb)
 }
 
-let keysListener: (() => void) | undefined
-/** dm.ts: keys arrived (or this start): wraps with an lb that were marked seen are read again. */
-export const onKeysArrived = (f: () => void) => { keysListener = f }
-function keysArrived() { missingLbs.clear(); keysListener?.(); replayWraps(); touch() }
+let keysListener: ((lbs: string[]) => void) | undefined
+/** dm.ts: letterbox keys arrived: wraps naming them that were marked seen are read again. */
+export const onKeysArrived = (f: (lbs: string[]) => void) => { keysListener = f }
+function keysArrived(lbs: string[]) { for (const lb of lbs) missingLbs.delete(lb); keysListener?.(lbs); replayWraps(); touch() }
+
+let decideListener: (() => void) | undefined
+/** dm.ts: held messages are decided again (a complete answer arrived). */
+export const onDecidable = (f: () => void) => { decideListener = f }
+function decidable() { decideListener?.() }
 
 // ---- chains ---------------------------------------------------------------------------------
 
@@ -172,38 +188,48 @@ let memo: { v: number; of: Map<string, C.Chain | null> } = { v: -1, of: new Map(
 let storeV = 0
 subscribe(() => { storeV++ })
 
-/** A person's valid chain from what the store holds (null: none, or not loaded yet). */
+/** A person's valid chain from what the store holds plus the pinned path (null: none, or not loaded yet). */
 export function chainOf(pk: string): C.Chain | null {
   if (memo.v !== storeV) memo = { v: storeV, of: new Map() }
   if (memo.of.has(pk)) return memo.of.get(pk)!
   const evs = all()
   const anchor = C.newestAnchor(evs.filter((e) => e.kind === C.ANCHOR && e.pubkey === pk), pk)
   const pin = st.pins[pk]
-  const c = anchor ? C.validChain(anchor, evs.filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === pk)), pin && pin.root === C.anchorRoot(anchor) ? pin.head : undefined) : null
+  const rosters: NostrEvent[] = evs.filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === pk))
+  const have = new Set(rosters.map((e) => e.id))
+  for (const e of pin?.path ?? []) if (!have.has(e.id)) rosters.push(e) // the pin's rosters stay known (review caveat)
+  const c = anchor ? C.validChain(anchor, rosters, pin && pin.root === C.anchorRoot(anchor) ? pin.head : undefined) : null
   memo.of.set(pk, c)
-  if (c) notePin(pk, c)
+  if (c) notePin(pk, c, rosters)
   return c
 }
 
-/** People for whom this device holds a complete answer of the relay (after AUTH, to EOSE) since
- *  this start: "no ready chain" is known for them, not guessed (§6). */
-const answered = new Set<string>()
-const inflight = new Map<string, Promise<C.Chain | null>>()
-const askedFor = new Map<string, number>()
+/** People for whom this device holds a complete answer of the relay (after AUTH, to EOSE, on a
+ *  live connection): when; and when last asked at all (a back-off when the relay doesn't answer). */
+const answeredAt = new Map<string, number>()
+const triedAt = new Map<string, number>()
+const KNOW = 10 * 60e3 // §6: knowledge lasts 10 minutes
+const known = (pk: string) => relayAuthed('main') && Date.now() - (answeredAt.get(pk) ?? 0) < KNOW
 
 /** Ask the relay for these people's anchors and rosters, always without since (§3.3); at most
- *  WAIT ms, then what is known. One question per person at a time. */
-async function fetchChains(people: string[], waitMs = 3000): Promise<void> {
+ *  WAIT ms, then what is known. True when it answered completely after AUTH. */
+async function fetchChains(people: string[], waitMs = 3000): Promise<boolean> {
+  if (!people.length) return true
+  for (const p of people) triedAt.set(p, Date.now())
   const authed = relayAuthed('main')
   const got = await queryComplete('main', [{ kinds: [C.ANCHOR], authors: people, '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': people }] as Filter[], waitMs)
-  if (got === null) return
+  if (got === null) return false
   addEvents(got)
-  if (authed && relayAuthed('main')) for (const p of people) { answered.add(p); askedFor.set(p, Date.now()) }
+  if (!authed || !relayAuthed('main')) return false
+  for (const p of people) answeredAt.set(p, Date.now())
+  decidable()
+  return true
 }
 
-/** One person's chain, asked again when not asked in the last MAX_AGE ms (never twice at once). */
-export function loadChain(pk: string, maxAgeMs = 15e3): Promise<C.Chain | null> {
-  if (Date.now() - (askedFor.get(pk) ?? 0) < maxAgeMs) return Promise.resolve(chainOf(pk))
+const inflight = new Map<string, Promise<C.Chain | null>>()
+/** One person's chain, asked again when not asked in the last MIN_GAP ms (never twice at once). */
+export function loadChain(pk: string, minGapMs = 30e3): Promise<C.Chain | null> {
+  if (Date.now() - (triedAt.get(pk) ?? 0) < minGapMs) return Promise.resolve(chainOf(pk))
   const running = inflight.get(pk)
   if (running) return running
   const p = fetchChains([pk]).then(() => chainOf(pk)).finally(() => inflight.delete(pk))
@@ -211,22 +237,25 @@ export function loadChain(pk: string, maxAgeMs = 15e3): Promise<C.Chain | null> 
   return p
 }
 
-/** §3.4: remember the root first accepted and the head last accepted; a new root = they started fresh. */
-function notePin(pk: string, c: C.Chain) {
+/** §3.4: remember the root first accepted and the head last accepted (with its rosters); a new
+ *  root = they started fresh. */
+function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
   const head = C.headOf(c)
   const p = st.pins[pk]
   if (p && p.root === c.rosters[0].id && p.head === head.id) return
+  const ids = new Set(c.rosters.map((r) => r.id))
+  const path = rosterEvents.filter((e) => ids.has(e.id))
   void commit((s) => {
     const q = s.pins[pk]
-    if (!q) { s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { [head.id]: head.lb } }; return }
+    if (!q) { s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { [head.id]: head.lb }, path }; return }
     if (q.root !== c.rosters[0].id) {
       s.fresh[pk] = { root: c.rosters[0].id, at: c.rosters[0].created_at * 1000, shared: [] }
-      s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { ...q.heads, [head.id]: head.lb }, prevRoot: q.root }
+      s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { ...q.heads, [head.id]: head.lb }, prevRoot: q.root, path }
       return
     }
-    q.head = head.id; q.heads[head.id] = head.lb
+    q.head = head.id; q.heads[head.id] = head.lb; q.path = path
   })
-  if (p && p.root === c.rosters[0].id) p.head = head.id // at once in memory too (commit merges)
+  if (p && p.root === c.rosters[0].id) { p.head = head.id; p.path = path } // at once in memory too (commit merges)
 }
 
 /** The letterbox to seal to for PK: the head's, else the last head this device accepted (§6). */
@@ -264,7 +293,7 @@ export function isSealedConv(conv: Conv): boolean {
 /** Ask for the chains of a conversation's people not ready here yet (views). */
 export async function ensureChains(conv: Conv) {
   if (!active()) return
-  const missing = peopleOf(conv).filter((p) => !readyChain(p) && Date.now() - (askedFor.get(p) ?? 0) > 10 * 60e3)
+  const missing = peopleOf(conv).filter((p) => !readyChain(p) && Date.now() - (triedAt.get(p) ?? 0) > 10 * 60e3)
   if (!missing.length) return
   const before = peopleOf(conv).filter(readyChain).length
   await fetchChains(missing)
@@ -278,42 +307,41 @@ export async function refreshChains(conv: Conv, waitMs = 3000) {
   await fetchChains(peopleOf(conv), waitMs)
 }
 
-/** §6: how a message to CONV goes. 'sealed' when the conversation is remembered sealed or every
- *  participant has a ready chain; 'old' only on knowledge: a complete answer of the relay since
- *  this start shows someone with no ready chain. Otherwise it throws (no text in it): the
- *  composer keeps the text. Waits for startSealed to have loaded. */
-export async function sendMode(conv: Conv): Promise<'sealed' | 'old'> {
+/** §6: how a message to CONV goes. 'sealed': remembered sealed, or every participant has a ready
+ *  chain. 'old': only on knowledge (a complete answer within 10 minutes on a live connection shows
+ *  someone with no ready chain). 'undecided': this device can't tell now: the message is held on
+ *  the device (shown as waiting) and decided at the first complete answer. Waits for the runtime. */
+export async function sendMode(conv: Conv, refresh = true): Promise<'sealed' | 'old' | 'undecided'> {
   await loaded
   if (!active()) return 'old' // demo, guest, or no device key: today's way
-  await refreshChains(conv)
+  if (refresh) await refreshChains(conv)
   if (sealedSet().has(conv)) return 'sealed'
   const people = peopleOf(conv)
   if (people.every(readyChain)) { markSealed(conv); return 'sealed' }
-  if (people.some((p) => !readyChain(p) && answered.has(p))) return 'old'
-  throw new Error('Not sent: this device can’t tell yet whether the conversation is locked. Try again in a moment.')
+  if (people.some((p) => !readyChain(p) && known(p))) return 'old'
+  return 'undecided'
 }
 
 /** A sealed rumor was accepted in CONV: the conversation is sealed from now on (§6). */
 export const acceptedSealed = (conv: Conv) => { if (active()) markSealed(conv) }
 
+const notInHead = () => { const c = chainOf(me()); return !!c && !!device && !C.headOf(c).devices.includes(device.pub) }
 /** This device is in my head and holds its letterbox secret. */
 export function deviceIn(): boolean {
   const c = chainOf(me())
   return !!c && !!device && C.headOf(c).devices.includes(device.pub) && !!keyOf(C.headOf(c).lb)
 }
 
-/** §5.3: the list says "Locked on this device" for a conversation this device knows whose
- *  participants all have a ready chain, while this device isn't in my head. */
-export const lockedConv = (conv: Conv) => active() && !!chainOf(me()) && !deviceIn() && peopleOf(conv).every(readyChain)
+/** §5.3: "Locked on this device" (and no composer) only when this device is not in my head. */
+export const lockedConv = (conv: Conv) => active() && notInHead() && peopleOf(conv).every(readyChain)
 /** The banner: this device isn't in my head, or it holds a wrap whose lb is one of MY chain's
  *  letterboxes and lacks its secret (a made-up lb pins nothing). */
 const missingLbs = new Set<string>()
+const myLbs = () => { const c = chainOf(me()); return c ? new Set(c.rosters.map((r) => r.lb)) : null }
 export function showBanner(): boolean {
-  if (!active()) return false
-  const c = chainOf(me())
-  if (!c) return false
-  if (!deviceIn()) return true
-  const mine = new Set(c.rosters.map((r) => r.lb))
+  if (!active() || !chainOf(me())) return false
+  if (notInHead()) return true
+  const mine = myLbs()!
   return [...missingLbs].some((lb) => mine.has(lb) && !keyOf(lb))
 }
 /** Remove is offered only on a device that can change the list. */
@@ -327,30 +355,40 @@ const KEEP = 30 * 86400 // §4: a wrap waiting for its author's chain is kept 30
 /** wraps waiting for their author's chain: wrap id → (author, the head it was tried against) */
 const waiting = new Map<string, { author: string; head: string }>()
 const headId = (pk: string) => { const c = chainOf(pk); return c ? C.headOf(c).id : '' }
+const normalAccepted = new Set<string>() // rumor ids that came sealed the normal way (never "shared")
 
 /** A sealed wrap to me: its rumor when it opens and is its author's. retry: keep the wrap and try
- *  again (no key yet; the author's device not in a chain I have, or their chain unreadable: again
- *  at each new roster of theirs and at each start, for 30 days). Not retried: a wrap that doesn't
- *  decrypt with the right letterbox secret, or whose seal signature is bad. */
+ *  again (no key yet; the author's device not in a chain I have, or their chain not read yet:
+ *  again at each new roster of theirs and at each start, for 30 days). Not retried: a malformed lb,
+ *  an lb that is none of my chain's letterboxes, a wrap that doesn't decrypt with the right secret
+ *  or whose seal signature is bad. BELFRY: the belfry's key from belfry.json (its own mail only).
+ *  Never waits on the network: an author's chain is asked for, and the wrap tried again when it comes. */
 export async function openDm(wrap: NostrEvent, belfry?: string): Promise<Opened> {
+  if (C.badLb(wrap)) return { ok: false, retry: false }
   const lb = C.wrapLb(wrap)
   if (!lb || !active()) return { ok: false, retry: true }
   const w = waiting.get(wrap.id)
   if (w && headId(w.author) === w.head) return { ok: false, retry: nowS() - wrap.created_at < KEEP } // nothing new for that author
   const secret = keyOf(lb)
-  if (!secret) { missingLbs.add(lb); return { ok: false, retry: true } }
+  if (!secret) {
+    const mine = myLbs()
+    if (mine && !mine.has(lb)) return { ok: false, retry: false } // anyone can name an lb: not one of mine
+    missingLbs.add(lb)
+    return { ok: false, retry: true }
+  }
   let o: { seal: NostrEvent; rumor: C.Rumor }
   try { o = C.openSealed(hexToBytes(secret), wrap) } catch { return { ok: false, retry: false } }
   if (belfry && o.seal.pubkey === belfry) return C.accept(null, o.seal, o.rumor, belfry) ? { ok: true, ...o } : { ok: false, retry: false }
-  let author = chainOf(o.rumor.pubkey)
-  if (!author || !C.hasDevice(author, o.seal.pubkey, o.rumor.created_at)) author = await loadChain(o.rumor.pubkey)
+  const author = chainOf(o.rumor.pubkey)
   if (!author || !C.accept(author, o.seal, o.rumor, belfry)) {
+    void loadChain(o.rumor.pubkey) // asked for (backed off per author); the wrap is tried again when it comes
     waiting.set(wrap.id, { author: o.rumor.pubkey, head: headId(o.rumor.pubkey) })
     return { ok: false, retry: nowS() - wrap.created_at < KEEP }
   }
   waiting.delete(wrap.id)
-  if (o.rumor.kind === C.HISTORY) { takeHistory(o.rumor); return { ok: false, retry: false } }
-  if (st.shared[o.rumor.id]) void commit((s) => { delete s.shared[o.rumor.id]; s.unshared = [...new Set([...s.unshared, o.rumor.id])] }) // came sealed the normal way: no longer "shared"
+  if (o.rumor.kind === C.HISTORY) { await takeHistory(o.rumor); return { ok: false, retry: false } }
+  normalAccepted.add(o.rumor.id)
+  if (st.shared[o.rumor.id]) await commit((s) => { delete s.shared[o.rumor.id]; s.unshared = [...new Set([...s.unshared, o.rumor.id])] }) // came sealed the normal way: no longer "shared"
   return { ok: true, ...o }
 }
 
@@ -363,23 +401,25 @@ export function decryptForLb(lb: string, peer: string, content: string): string 
 
 // ---- sealing (dm.ts) ------------------------------------------------------------------------
 
+/** Thrown when a sealed message has no head to go to yet: dm.ts holds it (never the old way). */
+export class NoHead extends Error {}
+
 /** The wraps of a sealed message: one per participant's head letterbox and one to mine, sealed by
- *  this device (no signer call). Throws (no text in it) when a letterbox is unknown or it's too big:
- *  never the old way. */
+ *  this device (no signer call). NoHead when a letterbox is unknown; an Error when too big. */
 export function sealWraps(rumor: C.Rumor, to: string[]): NostrEvent[] {
-  if (!device) throw new Error('This device has no key for sealed messages.')
+  if (!device) throw new NoHead('no device key')
   const r = C.withId(rumor)
   if (!C.fits(r)) throw new Error('This message is too long to send sealed.')
   return [...new Set([...to, me()])].map((p) => {
     const lb = lbFor(p)
-    if (!lb) throw new Error('Not sent: a letterbox isn’t known on this device yet. Try again in a moment.')
+    if (!lb) throw new NoHead('no letterbox')
     return C.sealToLetterbox(device!.secret, r, p, lb)
   })
 }
 
 /** §7 out: a mail to the belfry's key sealed by this device (wrap to the belfry, no lb). */
 export function sealMailOut(rumor: C.Rumor, belfry: string): NostrEvent {
-  if (!device) throw new Error('This device has no key for sealed messages.')
+  if (!device) throw new NoHead('no device key')
   const r = C.withId(rumor)
   if (!C.fits(r)) throw new Error('This e-mail is too long to send sealed.')
   return C.sealToKey(device.secret, r, belfry, [['p', belfry]])
@@ -402,72 +442,139 @@ export async function mySessions(maxAgeMs = 60e3): Promise<SessionRow[] | null> 
     return sessionsCache.rows
   } catch { return null }
 }
+const liveChat = (rows: SessionRow[]) => new Set(rows.filter((s) => s.chat === true && s.client_pubkey).map((s) => s.client_pubkey!))
 
-/** A roster, then the anchor naming it as head (§3.2: a device always anchors its own roster). */
-async function publishRoster(c: C.Chain | null, a: { n: number; prev?: string; lb: string; devices: string[]; ready?: boolean }, now = false) {
+export class NotDone extends Error {}
+type RosterArgs = { n: number; prev?: string; lb: string; devices: string[]; ready?: boolean }
+const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** §3.2: sign the roster, then the anchor naming it (nothing goes out if that fails); send both,
+ *  the roster first, each waiting for the relay's OK. NotDone when it could not be. */
+async function sendRosterAndAnchor(c: C.Chain | null, a: RosterArgs): Promise<NostrEvent> {
   const ev = C.makeRoster(device!.secret, { account: me(), ...a })
   const root = c ? c.rosters[0].id : ev.id
-  addEvents([ev])
-  if (now) {
-    await publishNow('main', ev)
-    const anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: nowS(), tags: C.anchorTags(root, ev.id), content: '' })
-    await publishNow('main', anchor)
-    addEvents([anchor])
-  } else {
-    await enqueueSigned('main', ev)
-    await enqueue('main', { kind: C.ANCHOR, tags: C.anchorTags(root, ev.id) })
-    void flush()
-  }
+  let anchor: NostrEvent
+  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: nowS(), tags: C.anchorTags(root, ev.id), content: '' }) } catch { throw new NotDone('not signed') }
+  try { await publishNow('main', ev) } catch { throw new NotDone('roster refused') }
+  let sent = false
+  for (const wait of [0, 2000, 5000]) { await sleepMs(wait); try { await publishNow('main', anchor); sent = true; break } catch { /* again */ } }
+  addEvents([ev]) // accepted by the relay: kept
+  if (!sent) throw new NotDone('anchor refused')
+  addEvents([anchor])
   return ev
 }
 
-/** This device's own path, at start and every 6 h. */
+/** The change BUILD makes to my head, done per §3.2: read again, checked on the anchored path,
+ *  redone on the new head when another branch was anchored (at most 3 times). BEFORE runs first
+ *  each time (the keys of a hand-over). Null when there was nothing to do. Under the roster lock. */
+async function changeMyRoster(build: (c: C.Chain, sessions: SessionRow[] | null) => RosterArgs | null, before?: (c: C.Chain, a: RosterArgs) => Promise<void>): Promise<NostrEvent | null> {
+  for (let i = 0; i < 3; i++) {
+    if (!(await fetchChains([me()]))) throw new NotDone('no answer')
+    let c = chainOf(me())
+    if (!c || !deviceIn()) throw new NotDone('not in the head')
+    // a roster of mine the relay took but whose anchor it refused (an earlier try): anchor it now,
+    // so the change is finished before another is built on it
+    if (await anchorMyTail(c)) { c = chainOf(me()); if (!c) throw new NotDone('no chain') }
+    const a = build(c, await mySessions(0))
+    if (!a) return null
+    if (before) await before(c, a)
+    const ev = await sendRosterAndAnchor(c, a)
+    await sleepMs(500)
+    if (!(await fetchChains([me()]))) throw new NotDone('no answer')
+    const c2 = chainOf(me())
+    const anchor = C.newestAnchor(all().filter((e) => e.kind === C.ANCHOR && e.pubkey === me()), me())
+    const ids = c2?.rosters.map((r) => r.id) ?? []
+    const at = ids.indexOf(ev.id), headAt = anchor ? ids.indexOf(C.anchorHead(anchor)!) : -1
+    if (at >= 0 && headAt >= at) return ev // on the anchored path: done
+  }
+  throw new NotDone('another change won three times')
+}
+
+/** The end of the anchored path (the anchor's head when it is in the chain, else the root). */
+export function anchoredEnd(c: C.Chain): C.Roster {
+  const a = C.newestAnchor(all().filter((e) => e.kind === C.ANCHOR && e.pubkey === c.account), c.account)
+  const h = a ? C.anchorHead(a) : undefined
+  return c.rosters.find((r) => r.id === h) ?? c.rosters[0]
+}
+
+/** Rosters after the anchored path that this device signed (its anchor was refused): the anchor
+ *  naming the last of them, signed and sent; true when it went out and was read back. */
+async function anchorMyTail(c: C.Chain): Promise<boolean> {
+  const end = anchoredEnd(c)
+  const tail = c.rosters.slice(c.rosters.indexOf(end) + 1)
+  if (!tail.length || !tail.every((r) => r.signer === device!.pub)) return false
+  const head = tail[tail.length - 1]
+  let anchor: NostrEvent
+  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: nowS(), tags: C.anchorTags(c.rosters[0].id, head.id), content: '' }) } catch { throw new NotDone('not signed') }
+  try { await publishNow('main', anchor) } catch { throw new NotDone('anchor refused') }
+  addEvents([anchor])
+  await sleepMs(500)
+  await fetchChains([me()])
+  return true
+}
+
+// this device's own path: at start, when the relay answers after AUTH, with a back-off, every 6 h
+let pathDue = true
+let pathTimer: ReturnType<typeof setTimeout> | null = null
+let backoff = 5000
+function scheduleMyDevice(ms: number) {
+  if (pathTimer) clearTimeout(pathTimer)
+  pathTimer = setTimeout(() => { pathTimer = null; void myDevice() }, ms)
+}
+
 async function myDevice() {
   if (!active()) return
-  const gone = await withRosterLock(async (): Promise<string[]> => {
-    if (!relayAuthed('main')) return [] // only an answer given after AUTH says anything (§5.1)
-    const got = await queryComplete('main', [{ kinds: [C.ANCHOR], authors: [me()], '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': [me()] }] as Filter[])
-    if (got === null || !relayAuthed('main')) return [] // nothing known: try later
-    addEvents(got)
-    answered.add(me())
-    const sessions = await mySessions()
-    const c = chainOf(me())
-    if (!c) { await firstDevice(sessions); return [] }
-    const head = C.headOf(c)
-    if (!head.devices.includes(device!.pub) || !keyOf(head.lb)) { await ask(); return [] }
-    await writeMyName()
-    // §6: ready once every counted chat session is a device of the head
-    if (sessions && !C.isReady(c) && C.mayCarryReady(sessions, head.devices)) await publishRoster(c, { n: head.n + 1, prev: head.id, lb: head.lb, devices: head.devices, ready: true })
-    // §5.6: removal by absence needs a well-formed list that has this device's own session
-    if (!sessions || !sessions.some((s) => s.client_pubkey === device!.pub)) return []
-    const live = new Set(sessions.map((s) => s.client_pubkey).filter(Boolean))
-    return head.devices.filter((d) => d !== device!.pub && !live.has(d))
-  })
+  let ok = false
+  let gone: string[] = []
+  try {
+    gone = await withRosterLock(async (): Promise<string[]> => {
+      if (!relayAuthed('main')) return [] // only an answer given after AUTH says anything (§5.1)
+      if (!(await fetchChains([me()]))) return []
+      const sessions = await mySessions()
+      const c = chainOf(me())
+      if (!c) { await firstDevice(sessions); ok = true; return [] }
+      const head = C.headOf(c)
+      if (!head.devices.includes(device!.pub) || !keyOf(head.lb)) { await ask(); ok = true; return [] }
+      await writeMyName()
+      // §6: ready once every counted chat session is a device of the head
+      if (sessions && !C.isReady(c) && C.mayCarryReady(sessions, head.devices)) {
+        await changeMyRoster((c2) => { const h = C.headOf(c2); return C.isReady(c2) ? null : { n: h.n + 1, prev: h.id, lb: h.lb, devices: h.devices, ready: true } })
+      }
+      ok = true
+      // §5.6: removal by absence needs a well-formed list that has this device's own session
+      if (!sessions || !sessions.some((s) => s.client_pubkey === device!.pub)) return []
+      const live = new Set(sessions.map((s) => s.client_pubkey).filter(Boolean))
+      return head.devices.filter((d) => d !== device!.pub && !live.has(d))
+    })
+  } catch { ok = false }
+  pathDue = !ok
+  if (!ok) { scheduleMyDevice(backoff); backoff = Math.min(backoff * 2, 5 * 60e3); return }
+  backoff = 5000
   if (!gone.length) return
-  await new Promise((r) => setTimeout(r, Math.random() * 60e3)) // outside the lock (§5.6)
+  await sleepMs(Math.random() * 60e3) // outside the lock (§5.6)
   await withRosterLock(async () => {
     const sessions = await mySessions(0)
     if (!sessions || !sessions.some((s) => s.client_pubkey === device!.pub)) return
     const live = new Set(sessions.map((s) => s.client_pubkey).filter(Boolean))
     const still = gone.filter((d) => !live.has(d))
-    if (still.length) await rotate(still).catch(() => { /* not in the head any more: nothing to do */ })
+    if (still.length) await rotate(still).catch(() => { /* not in the head, or not done: next time */ })
   })
 }
 
 /** §5.1: no anchor for my account (a complete answer after AUTH said so): a letterbox, roster 1
- *  with this device, then the anchor, both PUBLISHED while the lock is held, then checked again. */
+ *  with this device and the anchor, signed, sent together and accepted, under the lock; then read
+ *  again: when another device was first, ask like any new device. */
 async function firstDevice(sessions: SessionRow[] | null) {
   const again = await queryComplete('main', [{ kinds: [C.ANCHOR], authors: [me()], '#d': [C.ANCHOR_D] }] as Filter[])
-  if (again === null || !relayAuthed('main')) return
+  if (again === null || !relayAuthed('main')) throw new NotDone('no answer')
   if (again.some((e) => C.anchorRoot(e, me()))) { addEvents(again); return ask() } // another device was first
   const lbSecret = randomBytes(32)
   const lb = getPublicKey(lbSecret)
   await addKeys([{ lb, secret: bytesToHex(lbSecret) }])
   const ready = !!sessions && C.mayCarryReady(sessions, [device!.pub])
-  try { await publishRoster(null, { n: 1, lb, devices: [device!.pub], ready }, true) } catch { return } // not out: next time
-  // two devices at once: the newest anchor decides; if it isn't mine, ask like any new device
-  const check = await queryComplete('main', [{ kinds: [C.ANCHOR], authors: [me()], '#d': [C.ANCHOR_D] }] as Filter[])
-  if (check) addEvents(check)
+  await sendRosterAndAnchor(null, { n: 1, lb, devices: [device!.pub], ready })
+  await sleepMs(500)
+  await fetchChains([me()])
   const c = chainOf(me())
   if (c && !C.headOf(c).devices.includes(device!.pub)) await ask()
 }
@@ -496,14 +603,14 @@ export const dropLinkSecret = () => { try { sessionStorage.removeItem(LINK) } ca
 let myUsername = ''
 export const setSealedUsername = (u: string) => { myUsername = u.toLowerCase() }
 
-/** §5.2: this device isn't in my head: ask (again every 24 h while waiting). */
+/** §5.2: this device isn't in my head: ask (again every 24 h while waiting). Published at once
+ *  (the relay's OK), else tried again. No automatic fresh start (the lead, until Xavier decides). */
 async function ask() {
   const linkSecret = linkFor(myUsername)
   if (!linkSecret && Date.now() - st.asked < 24 * 3600e3) return
   const ev = C.deviceRequest(device!.secret, me(), linkSecret)
+  try { await publishNow('main', ev) } catch { throw new NotDone('request not sent') }
   addEvents([ev])
-  await enqueueSigned('main', ev)
-  void flush()
   await commit((s) => { s.asked = Date.now() })
   dropLinkSecret()
 }
@@ -525,17 +632,17 @@ let headsSeen = ''
 
 async function onStore() {
   if (!active()) return
-  // a head changed (mine or someone's): what waits in the outbox goes to the new letterboxes
+  // a head changed (mine or someone's) with sealed wraps waiting: the flush re-seals them (§9)
   const recipients = queuedRecipients()
   const heads = [me(), ...recipients].map((pk) => pk + headId(pk)).join()
-  if (heads !== headsSeen) { headsSeen = heads; await resealQueued(); void writeMyName() }
+  if (heads !== headsSeen) { headsSeen = heads; if (recipients.length) void flush(); void writeMyName() }
   await takeHandovers()
   // a request from a new device of mine (§5.2)
   const c = chainOf(me())
   if (!c || !deviceIn()) return
   const head = C.headOf(c)
   for (const r of all().filter((e) => e.kind === C.REQUEST && e.tags.some((t) => t[0] === 'p' && t[1] === me())).sort((a, b) => b.created_at - a.created_at)) {
-    if (head.devices.includes(r.pubkey)) { if (asking?.device === r.pubkey) { asking = undefined; touch() } continue }
+    if (anchoredEnd(c).devices.includes(r.pubkey)) { if (asking?.device === r.pubkey) { asking = undefined; touch() } continue }
     if (doneRequests.has(r.id) || asking?.id === r.id) continue
     if (!C.validEvent(r as unknown)) { doneRequests.add(r.id); continue }
     const sessions = await mySessions(30e3)
@@ -544,8 +651,7 @@ async function onStore() {
     if (!row) { doneRequests.add(r.id); continue } // not a live chat session of mine: ignored
     const fresh = shownCodes.filter((x) => Date.now() - x.at < 15 * 60e3)
     if (fresh.some((x) => C.linkOk(x.secret, r))) {
-      doneRequests.add(r.id)
-      try { await allow(r.pubkey); linked = row.device || row.application_name || 'Your new device' } catch { /* asked again below next time */ }
+      try { await allow(r.pubkey); doneRequests.add(r.id); linked = row.device || row.application_name || 'Your new device' } catch { /* not done: next time */ }
       touch(); continue
     }
     asking = { id: r.id, device: r.pubkey, name: row.device || row.application_name || 'A new device', at: r.created_at * 1000 }
@@ -569,30 +675,35 @@ async function takeHandovers() {
     const got = C.acceptKeys(me(), chains, opened.seal, opened.rumor)
     if (!got.length) { if (!chains.length) void loadChain(me(), 0); continue }
     handoverTried.set(w.id, 'done')
-    if (await addKeys(got)) { keysArrived(); setTimeout(() => void myDevice(), 2000) /* in the head now: my name (§3.5) */ }
+    const added = await addKeys(got)
+    if (added.length) { keysArrived(added); scheduleMyDevice(2000) /* in the head now: my name (§3.5) */ }
   }
 }
 
 /** Canvas v90: Allow on a 21st device. */
 export const FULL = `You already have ${C.MAX_DEVICES} devices. Remove one in Devices, then try again.`
 
-/** Allow: hand the whole key chain to the new device (several 8561 if needed), then roster n+1
- *  with it (same letterbox) and the anchor. At 20 devices: refused, nothing sent. */
+/** Allow: hand the whole key chain to the new device (several 8561 if needed, each accepted by the
+ *  relay), then roster n+1 with it and the anchor, done per §3.2. At 20 devices: refused, nothing
+ *  sent. Throws (NotDone, or a reason) when it isn't done. */
 export async function allow(newDevice: string) {
-  await withRosterLock(async () => {
-    await loadChain(me(), 0)
-    const c = chainOf(me())
-    if (!c || !deviceIn()) throw new Error('This device can’t allow others right now.')
-    const head = C.headOf(c)
-    if (head.devices.includes(newDevice)) return // another device answered first
-    if (head.devices.length >= C.MAX_DEVICES) throw new Error(FULL)
-    const sessions = await mySessions(0)
-    if (!sessions?.some((s) => s.client_pubkey === newDevice && s.chat === true)) throw new Error('That device isn’t signed in any more.')
-    const all_ = Object.entries(st.keys).map(([lb, secret]) => ({ lb, secret }))
-    for (const chunk of C.keyChunks(device!.pub, me(), all_, nowS())) await enqueueSigned('main', C.handKeys(device!.secret, me(), chunk, newDevice))
-    const devices = [...head.devices, newDevice]
-    await publishRoster(c, { n: head.n + 1, prev: head.id, lb: head.lb, devices, ready: C.isReady(c) || C.mayCarryReady(sessions, devices) })
-  })
+  try {
+    await withRosterLock(async () => {
+      await changeMyRoster((c, sessions) => {
+        const head = C.headOf(c)
+        if (anchoredEnd(c).devices.includes(newDevice)) return null // another device answered first (anchored)
+        if (head.devices.length >= C.MAX_DEVICES) throw new Error(FULL)
+        if (!sessions?.some((s) => s.client_pubkey === newDevice && s.chat === true)) throw new Error('That device isn’t signed in any more.')
+        const devices = [...head.devices, newDevice]
+        return { n: head.n + 1, prev: head.id, lb: head.lb, devices, ready: C.isReady(c) || C.mayCarryReady(sessions, devices) }
+      }, async () => {
+        const keys = Object.entries(st.keys).map(([lb, secret]) => ({ lb, secret }))
+        for (const chunk of C.keyChunks(device!.pub, me(), keys, nowS())) {
+          try { await publishNow('main', C.handKeys(device!.secret, me(), chunk, newDevice)) } catch { throw new NotDone('keys not sent') }
+        }
+      })
+    })
+  } catch (e) { throw e instanceof NotDone ? new Error('Not allowed yet: the change didn’t go through. Try again in a moment.') : e }
   if (asking?.device === newDevice) { doneRequests.add(asking.id); asking = undefined }
   touch()
 }
@@ -612,24 +723,32 @@ export async function refuse(newDevice: string) {
 /** The Allow card closes without an answer (it comes back next time the app opens). */
 export const dismissAsk = () => { asking = undefined; touch() }
 
-/** §5.6: a new letterbox, sent to each remaining device, roster n+1 without the removed ones, the
- *  anchor. Throws when this device can't (not in the head). Run under the roster lock. */
+let pendingLb: C.LbKey | undefined
+/** §5.6: a new letterbox, its key sent (accepted by the relay) to each device that stays AND has a
+ *  live chat session, roster n+1 without the removed ones, the anchor; done per §3.2. Under the lock. */
 async function rotate(gone: string[]) {
-  await loadChain(me(), 0)
-  const c = chainOf(me())
-  if (!c || !deviceIn()) throw new Error('This device can’t change the list: it isn’t allowed yet.')
-  const head = C.headOf(c)
-  const left = head.devices.filter((d) => !gone.includes(d))
-  if (left.length === head.devices.length) return // done already
-  if (!left.length) throw new Error('No device would be left.')
-  const lbSecret = randomBytes(32)
-  const lb = getPublicKey(lbSecret)
-  await addKeys([{ lb, secret: bytesToHex(lbSecret) }]) // this device's other tabs get it through kv
-  for (const d of left) if (d !== device!.pub) await enqueueSigned('main', C.handKeys(device!.secret, me(), [{ lb, secret: bytesToHex(lbSecret) }], d))
-  await publishRoster(c, { n: head.n + 1, prev: head.id, lb, devices: left, ready: C.isReady(c) })
+  await changeMyRoster((c) => {
+    const head = C.headOf(c)
+    const left = head.devices.filter((d) => !gone.includes(d))
+    if (left.length === head.devices.length) return null // done already
+    if (!left.length) throw new Error('No device would be left.')
+    const lbSecret = randomBytes(32)
+    pendingLb = { lb: getPublicKey(lbSecret), secret: bytesToHex(lbSecret) }
+    return { n: head.n + 1, prev: head.id, lb: pendingLb.lb, devices: left, ready: C.isReady(c) }
+  }, async (_c, a) => {
+    const k = pendingLb!
+    await addKeys([k]) // this device's other tabs get it through kv
+    const live = liveChat((await mySessions(0)) ?? [])
+    for (const d of a.devices) {
+      if (d === device!.pub || !live.has(d)) continue
+      try { await publishNow('main', C.handKeys(device!.secret, me(), [k], d)) } catch { throw new NotDone('keys not sent') }
+    }
+  })
+  await writeMyName()
 }
 
-/** Remove one of my devices (Me → Devices): its session ends, then the letterbox changes at once. */
+/** Remove one of my devices (Me → Devices): its session ends FIRST (nothing changes when that
+ *  fails), then the letterbox changes at once, done per §3.2. */
 export async function removeMyDevice(d: string) {
   if (d === device?.pub) throw new Error('Use Sign out for this device.')
   const sessions = await mySessions(0)
@@ -640,7 +759,9 @@ export async function removeMyDevice(d: string) {
     if (!r.ok) throw new Error('The belfry did not end that session.')
   }
   sessionsCache = null
-  if (chainOf(me())) await withRosterLock(() => rotate([d]))
+  if (chainOf(me())) {
+    try { await withRosterLock(() => rotate([d])) } catch (e) { throw e instanceof NotDone ? new Error('Not removed yet: the change didn’t go through. Try again in a moment.') : e }
+  }
   touch()
 }
 
@@ -651,22 +772,26 @@ let haveRumor: (rid: string) => boolean = () => false
 /** dm.ts: what to add, and which rumors it already holds (those are left as they are). */
 export const onHistory = (f: (rumors: C.Rumor[]) => void, have: (rid: string) => boolean) => { historyListener = f; haveRumor = have }
 
-function takeHistory(h: C.Rumor) {
-  const rumors = C.historyRumors(h, me()).filter((r) => !haveRumor(r.id))
+async function takeHistory(h: C.Rumor) {
+  const rumors = C.historyRumors(h, me()).filter((r) => !haveRumor(r.id) && !normalAccepted.has(r.id))
   if (!rumors.length) return
-  void commit((s) => { for (const r of rumors) if (!s.unshared.includes(r.id)) s.shared[r.id] ??= h.pubkey })
+  await commit((s) => { for (const r of rumors) if (!s.unshared.includes(r.id)) s.shared[r.id] ??= h.pubkey })
   historyListener?.(rumors)
 }
 export const sharedByOf = (rid: string) => st.shared[rid]
+
+// history packs still in the outbox: one kv entry each (re-sealed if a head changes, deleted when out)
+const packs = new Map<string, C.Rumor>()
+async function dropPack(id: string) { packs.delete(id); await kvDel(KV_PACK + id).catch(() => {}) }
 
 /** Share a conversation's sealed history with PERSON's new head letterbox (any participant, by a tap). */
 export async function shareHistory(person: string, rumors: C.Rumor[], conv: Conv) {
   if (!device) throw new Error('This device has no key for sealed messages.')
   const c = await loadChain(person, 0)
   if (!c) throw new Error('Their new device isn’t ready yet.')
-  const { packs } = C.packHistory(me(), person, rumors.map((r) => C.withId(r)), nowS())
-  await commit((s) => { for (const p of packs) s.packs[p.id] = p })
-  for (const p of packs) await enqueueSigned('main', C.sealToLetterbox(device.secret, p, person, C.headOf(c).lb), p.id)
+  const { packs: list } = C.packHistory(me(), person, rumors.map((r) => C.withId(r)), nowS())
+  for (const p of list) { packs.set(p.id, p); await kvSet(KV_PACK + p.id, p).catch(() => {}) }
+  for (const p of list) await enqueueSigned('main', C.sealToLetterbox(device.secret, p, person, C.headOf(c).lb), p.id)
   void flush()
   await commit((s) => { const f = s.fresh[person]; if (f && !f.shared.includes(conv)) f.shared.push(conv) })
   touch()
@@ -757,7 +882,8 @@ function queuedRecipients(): string[] {
 }
 
 /** Queued sealed wraps (failed ones too) whose letterbox is no longer their recipient's head:
- *  sealed again to the head, from the rumor dm.ts keeps or the history pack kept here. */
+ *  sealed again to the head, from the rumor dm.ts keeps or the history pack kept here. Run only
+ *  from the flush (sync.setBeforeFlush), so it never races the sending loop. */
 async function resealQueued() {
   if (!device) return
   for (const o of sealedQueued()) {
@@ -767,7 +893,7 @@ async function resealQueued() {
     if (!lb || !to) continue
     const want = lbFor(to)
     if (!want || want === lb) continue
-    const r = st.packs[o.dm!] ?? rumorSource?.(o.dm!)
+    const r = packs.get(o.dm!) ?? rumorSource?.(o.dm!)
     if (!r) continue
     try {
       const nw = C.sealToLetterbox(device.secret, r, to, want)
@@ -776,12 +902,13 @@ async function resealQueued() {
   }
 }
 
-/** sync.flush: before sealed wraps go out (a reconnect, a retry), their recipients' heads are
- *  asked for again (3 s at most) and the wraps re-sealed when a head moved. */
+/** sync.flush, before anything goes out: the heads of queued sealed wraps' recipients asked again
+ *  (when not answered in the last minute; 3 s at most), then the wraps re-sealed when a head moved. */
 async function beforeFlush() {
   if (!active()) return
   const to = queuedRecipients()
   if (!to.length) return
-  await fetchChains(to)
+  const stale = to.filter((p) => Date.now() - (answeredAt.get(p) ?? 0) > 60e3 && Date.now() - (triedAt.get(p) ?? 0) > 15e3)
+  if (stale.length) await fetchChains(stale)
   await resealQueued()
 }

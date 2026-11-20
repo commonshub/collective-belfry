@@ -68,6 +68,13 @@ export async function kvSet(key: string, value: unknown) {
   await (await db()).put('kv', value, key)
 }
 
+/** Every kv entry whose key starts with PREFIX (one entry per item: nothing a tab deleted comes back). */
+export async function kvPrefix<T>(prefix: string): Promise<T[]> {
+  const d = await db()
+  const range = IDBKeyRange.bound(prefix, prefix + '\uffff')
+  return (await d.getAll('kv', range)) as T[]
+}
+
 export async function kvDel(key: string) {
   await (await db()).delete('kv', key)
 }

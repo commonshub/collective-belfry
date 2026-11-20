@@ -6,7 +6,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -242,7 +242,7 @@ function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
   const q = queueState(d)
   if (d.failed) return <span className="dm-state failed">Not sent: {d.failed} · <button className="link" onClick={() => void retryDm(d)}>Retry</button></span>
   if (d.pending || q.waiting)
-    return <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine ? 'Saved · waiting for the connection' : 'Sending…'}</span>
+    return <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine || isHeld(d.rid) ? 'Saved · waiting for the connection' : 'Sending…'}</span>
   if (d.kind !== 1301) return null
   const label = r?.status === 'delivered' ? 'Delivered' : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, retrying' : r?.details || 'Sent'
   return <span className={'dm-state ' + (r?.status ?? 'queued')}>{label}</span>

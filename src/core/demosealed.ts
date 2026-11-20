@@ -16,7 +16,9 @@ const keyOf = (name: string) => sha256(new TextEncoder().encode('demo-sealed:' +
 const DAY = 864e5
 
 /** today (or DAYS ago) at H:M, in ms */
-const at = (days: number, h: number, m: number) => { const d = new Date(); d.setDate(d.getDate() - days); d.setHours(h, m, 0, 0); return Math.min(+d, Date.now() - 60e3) }
+// before 10:00 the boards' "today 9:40" hasn't happened yet: the whole demo moves a day back
+const shift = () => (new Date().getHours() < 10 ? 1 : 0)
+const at = (days: number, h: number, m: number) => { const d = new Date(); d.setDate(d.getDate() - days - shift()); d.setHours(h, m, 0, 0); return Math.min(+d, Date.now() - 60e3) }
 const s = (ms: number) => Math.floor(ms / 1000)
 
 export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: string; askKind?: DeviceKind; linked?: string } = {}) {
