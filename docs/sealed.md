@@ -61,11 +61,13 @@ Signed by the **account** (through the signer), replaceable:
 
 ```
 kind 30078, pubkey = account, content ""
-["d", "belfry:sealed"], ["root", <id of the roster with n = 1>]
+["d", "belfry:sealed"], ["root", <id of the roster with n = 1>], ["head", <id of the newest roster>]
 ```
 
-It stops another member from publishing a roster "for" someone. Only a session of the
-account (or the server) can make it.
+It stops another member from publishing a roster "for" someone, and a removed device from
+taking the chain back: only a live session of the account (or the server) can make it, and a
+removed device's session is revoked. Every device that publishes a roster publishes the anchor
+again right after it, with `head` = that roster (and the same `root`). `head` absent = the root.
 
 ### 3.3 Valid chain
 
@@ -77,13 +79,22 @@ always without `since`.
   at least one device; `p` = A; when any device of n−1 is missing, `lb` differs from the
   `lb` of every earlier roster of the chain; when none is missing, `lb` equals the previous one.
 - Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev`; `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
-- Two valid rosters with the same `prev` (ids compared as lower-case hex strings): the lower id wins; the other and its descendants are ignored.
-- Head: the last roster of the valid chain. Its `lb` is where to seal for A. Its devices are A's devices.
+- The anchored path: the rosters from the root to the anchor's `head`, when `head` is a valid
+  roster descending from the root; otherwise the root alone. A roster that is not on that path
+  and does not descend from its end is ignored, whatever its id: a device dropped by the path
+  cannot fork it.
+- After the end of the anchored path (rosters published but not anchored yet): each step must be
+  valid as above; when two valid rosters have the same `prev` there, the lower id wins for now
+  (ids compared as lower-case hex strings) and the next anchor settles it. A device whose roster
+  lost re-reads the chain and does its change again.
+- Head: the last roster reached. Its `lb` is where to seal for A. Its devices are A's devices.
+- No going back: a client that has pinned head H for a person ignores an anchor whose `head`
+  is an ancestor of H (it keeps H). An anchor naming another branch of the same root is followed.
 - Anything else is ignored silently (wrong signature, unknown prev, signer not in the previous roster).
 
 ### 3.4 Pinning and resets
 
-A client remembers, per person, the root it first accepted (and the head it last saw).
+A client remembers, per person, the root it first accepted and the head it last accepted.
 When the anchor later names a root that is not the pinned one: the person started fresh.
 Accept the new chain, pin it, and show in each conversation with them, once:
 "‹Name› signed in on a new device that can't read earlier messages yet" (amber, opens Share history, §8).
@@ -161,7 +172,7 @@ Reactions, taking a reaction back, e-mail threads, conversation ids, read state:
 
 ### 5.1 The first device
 
-No anchor for my account and I am capable: make a letterbox, publish roster n = 1 with this
+Members and admins only (never a guest session). No anchor for my account — known from an answer the relay gave AFTER authentication, complete to EOSE; never from a timeout or a pre-AUTH answer — and I am capable: make a letterbox, publish roster n = 1 with this
 device, then the anchor, then its device name (§3.5). If an anchor appeared meanwhile (two devices at
 once), drop mine and go to 5.2.
 
@@ -183,7 +194,8 @@ An existing device (in the head), on seeing a request `{kinds:[8562], "#p":[me]}
    otherwise ignore it. The prompt's device name comes from that session.
 2. With a valid `link` for a code this device showed in the last 15 minutes: allow at once.
    Otherwise ask: Allow / Not me.
-3. Allow: send the keys (5.5) to the new device, then publish roster n+1 = same `lb`, devices + the new one.
+3. Allow: when the roster already has 20 devices, refuse and say so. Else send the keys (5.5) to the
+   new device, then publish roster n+1 = same `lb`, devices + the new one, then the anchor.
 4. Not me: `POST /api/me/sessions/revoke` for that session. No roster change.
 
 "Link a phone or tablet": the QR becomes `https://chat.<domain>/login/<username>#l=<64 hex>`
@@ -220,14 +232,15 @@ kind 8561, tags [["p", <account>]], content =
 {"v":1,"account":"<hex>","keys":[{"lb":"<pub>","secret":"<hex>"}, ...]}
 ```
 
-`keys` = the giver's whole chain. The receiver reads `{kinds:[1059], "#p":[my device pubkey]}`,
+`keys` = the giver's whole chain, in several 8561 wraps when one would pass the 40 000-byte ceiling. The receiver reads `{kinds:[1059], "#p":[my device pubkey]}`,
 accepts when the seal's signer is a device of any roster of its own account's chains (current
 or, after a fresh start, the previous pinned one), checks each secret against its `lb`, merges,
 and reads its wraps again from 0.
 
 ### 5.6 A device leaves
 
-- Removed from the list by the user, or its session is gone from `/api/me/sessions` (checked at
+- Removed from the list by the user, or its session is gone from `/api/me/sessions` (a well-formed
+  answer that lists this device's own session; an empty or odd answer removes nobody; checked at
   start and every 6 h by each device; wait a random 0–60 s, re-read the head, skip if done):
   make a new letterbox, send keys (5.5) with the new secret to each remaining device, publish
   roster n+1 with the new `lb` and without the device; each device rewrites its name (§3.5) when it sees the new head.
@@ -246,10 +259,13 @@ for everybody (later rosters without the tag don't unset it).
 
 A conversation is sealed when every participant, me included, has a ready chain. From then on
 it is never sent the old way again: each device remembers its sealed conversations (a local
-set of conversation ids, not published), and re-checks at each send until the conversation is
+set of conversation ids, not published; a conversation also enters the set the moment this device
+accepts a sealed rumor in it), and re-checks at each send until the conversation is
 sealed. If a participant of a sealed conversation later has no ready chain (a fresh start not
 finished, an anchor that disappeared), seal to the last valid head this device knew for them;
-never fall back. Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
+never fall back. If there is no head to seal to at all, the message waits in the outbox; it is
+never sent the old way. An old-style message (no `lb`) that arrives in a sealed conversation dated
+after this device first saw it sealed is shown with a "not sealed" mark. Before a conversation is sealed: exactly today's behaviour, no lock. An account with no chain (an agent, a member holding their own key, an old
 app) keeps the conversation unsealed.
 
 The lock shows on a sealed conversation, always.
@@ -263,7 +279,7 @@ Otherwise as today. The plain text is not kept or logged. When the member's chai
 it is never delivered unsealed because of a failure.
 
 Out: unchanged wrap to the belfry's key. A member with a ready chain always seals with the
-device (content conv(device secret, belfry key), no signer call); without one, today's path.
+device, replies sent as a channel's address included, (content conv(device secret, belfry key), no signer call); without one, today's path.
 The belfry accepts a seal signed by a device of the sender's
 valid chain (`rumor.pubkey` = the member) instead of the account key; the belfry checks the
 chain (the device must be in its head) and that the device is the `client_pubkey` of one of the member's live chat sessions. The
@@ -282,7 +298,7 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-Only the conversation's sealed messages are shared (older ones are still opened by the person's
+Only kinds 14, 7 and 5 are shared and taken (never an e-mail). The 8564's `p` must be the receiver. A rumor the receiver already holds is left as it is, and one that later arrives sealed in the normal way loses its "shared" mark. Only the conversation's sealed messages are shared (older ones are still opened by the person's
 signer). At most 200 rumors per wrap (in practice the size decides), and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
 65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
 A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
