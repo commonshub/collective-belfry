@@ -234,7 +234,7 @@ export function ShareHistorySheet({ conv, l, onClose }: { conv: Conv; l: DeviceL
   return (
     <Sheet title={`Share ${group ? 'this group’s' : 'this conversation’s'} history with ${first}’s new device?`} onClose={() => { if (!busy) onClose() }}>
       <div className="seal-share">
-        <p>{first} signed in on a new device that can’t read earlier messages yet. Only do this if you’re sure it’s {first}: ask in person or by phone if you’re not.</p>
+        <p>{first} started over on a new device and can’t read your earlier messages. Only do this if you’re sure it’s {first}: ask in person or by phone if you’re not.</p>
         <p className="seal-meta"><DeviceIcon kind={l.kind} /> A new {kind} · signed in {whenWord(l.at)} {t.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>
         {error && <div className="error">{error}</div>}
         <button className="btn" disabled={!!busy} aria-busy={busy === 'share' || undefined} onClick={run('share', async () => { await shareHistory(conv, l.id); onClose() })}>{busy === 'share' ? <><Spin /> Sharing…</> : 'Share history'}</button>

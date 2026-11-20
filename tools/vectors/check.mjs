@@ -3,6 +3,7 @@
 //   node tools/vectors/check.mjs
 import { build } from 'esbuild'
 import { readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
@@ -151,5 +152,81 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const line = l.offers.length ? `${l.text} ${D.orList(l.offers)}` : l.text
     check(`way-in username: ${c.name}`, line === c.line && (!c.offers || eq(l.offers, c.offers)), { line, offers: l.offers })
   }
+}
+
+// sealed.json (collective-belfry docs/sealed-vectors.json, docs/sealed.md v1): chains, wraps, the
+// size ceiling and history packing, key hand-over, the link proof, shared history, ready
+{
+  const S = M.S
+  const sv = vec('sealed.json')
+  const hex = (b) => Buffer.from(b).toString('hex')
+  const unhex = (h) => Uint8Array.from(Buffer.from(h, 'hex'))
+  const h = (s) => Uint8Array.from(createHash('sha256').update('belfry sealed vectors/' + s).digest())
+  const K = Object.fromEntries(Object.entries(sv.keys).map(([n, k]) => [n, { secret: unhex(k.secret), pubkey: k.pubkey }]))
+  const chainCase = Object.fromEntries(sv.chains.map((c) => [c.name, c]))
+  const chainOf = (ref) => { if (!ref) return null; const c = typeof ref === 'string' ? chainCase[ref] : ref; return c ? S.validChain(c.anchor, c.rosters) : null }
+  const sum = (c) => c ? { valid_ids: c.rosters.map((r) => r.id), head: S.headOf(c).id, devices: S.headOf(c).devices, lb: S.headOf(c).lb, ready: S.isReady(c) } : { valid_ids: [], head: null, devices: [], lb: null, ready: false }
+  for (const c of sv.chains) { const got = sum(S.validChain(c.anchor, c.rosters)); check(`sealed chain: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
+  const pickR = (r) => r && { pubkey: r.pubkey, created_at: r.created_at, kind: r.kind, tags: r.tags, content: r.content, id: r.id }
+  for (const c of sv.wraps) {
+    let got
+    try {
+      const { seal, rumor } = S.openSealed(unhex(c.letterbox_secret), c.wrap)
+      const author = chainOf(c.author_chain ?? c.author_chain_events)
+      got = { opens: true, seal_pubkey: seal.pubkey, rumor: pickR(rumor), accepted: S.accept(author, seal, rumor, c.belfry) }
+    } catch { got = { opens: false } }
+    const want = c.expected.opens ? { ...c.expected, rumor: pickR(c.expected.rumor) } : c.expected
+    check(`sealed wrap: ${c.name}`, eq(got, want), { got, want })
+  }
+  const T0 = sv.fixed.T0, AUX = new Uint8Array(32)
+  const fixed = (name, sealAt, wrapAt) => ({ sealAt, wrapAt, oneTime: h('once/' + name), sealNonce: h('nonce/seal/' + name), wrapNonce: h('nonce/wrap/' + name), aux: AUX })
+  for (const c of sv.ceiling.cases) {
+    const r = S.withId({ ...c.rumor, content: c.rumor.content.repeat.repeat(c.rumor.content.times) })
+    const got = { rumor_id: r.id, rumor_json_bytes: S.rumorBytes(r), may_seal: S.fits(r) }
+    const want = { rumor_id: c.rumor_id, rumor_json_bytes: c.rumor_json_bytes, may_seal: c.may_seal }
+    if (c.may_seal) {
+      const w = S.sealToLetterbox(K.alice_phone.secret, r, K.bob.pubkey, K.bob_lb1.pubkey, fixed(c.name, T0, T0))
+      const { seal } = S.openWrap(K.bob_lb1.secret, w)
+      Object.assign(got, { seal_content_chars: seal.content.length, wrap_content_chars: w.content.length, wrap_id: w.id })
+      Object.assign(want, { seal_content_chars: c.seal_content_chars, wrap_content_chars: c.wrap_content_chars, wrap_id: c.wrap_id })
+    } else { let threw = false; try { S.sealToLetterbox(K.alice_phone.secret, r, K.bob.pubkey, K.bob_lb1.pubkey) } catch { threw = true }; got.refused = threw; want.refused = true }
+    check(`sealed ceiling: ${c.name}`, eq(got, want), { got, want })
+  }
+  {
+    const hp = sv.ceiling.history_packing
+    const rumors = []
+    for (let i = 0; i < 300; i++) {
+      const from = i % 2 ? 'alice' : 'bob', to = i % 2 ? 'bob' : 'alice'
+      rumors.push(S.withId({ pubkey: K[from].pubkey, created_at: T0 + i, kind: 14, tags: [['p', K[to].pubkey]], content: `Message ${i}: "quoted" \\ and é` }))
+      if (i === 149) rumors.push(S.withId({ pubkey: K.bob.pubkey, created_at: T0 + 150, kind: 14, tags: [['p', K.alice.pubkey]], content: 'x'.repeat(39700) }))
+    }
+    const { packs, leftOut } = S.packHistory(K.bob.pubkey, K.alice.pubkey, rumors, T0 + 800)
+    const got = { rumors_per_8564: packs.map((p) => JSON.parse(p.content).rumors.length), json_bytes_per_8564: packs.map((p) => S.rumorBytes(p)), ids_of_8564: packs.map((p) => p.id), left_out: leftOut }
+    check(`sealed history packing: ${hp.name}`, eq(got, hp.expected), { got, want: hp.expected })
+  }
+  for (const c of sv.keys_handover) {
+    let got
+    try {
+      const { seal, rumor } = S.openKeys(unhex(c.device_secret), c.wrap)
+      got = { giver: seal.pubkey, rumor: pickR(rumor), keys: S.acceptKeys(c.account, [chainOf(c.chain)].filter(Boolean), seal, rumor) }
+    } catch (e) { got = { error: String(e.message) } }
+    const want = { ...c.expected, rumor: pickR(c.expected.rumor) }
+    check(`sealed keys: ${c.name}`, eq(got, want), { got, want })
+  }
+  for (const c of sv.link) {
+    const got = { link_for_this_device: S.linkProof(c.link_secret, c.request.pubkey), valid: S.linkOk(c.link_secret, c.request) }
+    check(`sealed link: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
+  }
+  for (const c of sv.history) {
+    let got
+    try {
+      const { seal, rumor } = S.openSealed(unhex(c.letterbox_secret), c.wrap)
+      const ok = S.accept(S.validChain(c.sharer_chain_events.anchor, c.sharer_chain_events.rosters), seal, rumor)
+      got = { sharer: rumor.pubkey, seal_pubkey: seal.pubkey, added_ids: ok ? S.historyRumors(rumor).map((r) => r.id) : [] }
+    } catch (e) { got = { error: String(e.message) } }
+    check(`sealed history: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
+  }
+  for (const c of sv.ready.cases) { const got = { may_carry_ready: S.mayCarryReady(c.sessions, c.roster_devices, sv.ready.now) }; check(`sealed ready: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
+  console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
 process.exit(bad ? 1 : 0)
