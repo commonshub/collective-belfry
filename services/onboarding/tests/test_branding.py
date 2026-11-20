@@ -128,3 +128,29 @@ def test_mails_carry_the_logo_and_the_primary_colour(world):
     assert (
         "background:#fafafa" not in page and "border:1px solid" not in page
     )  # no grey page, no frame
+
+
+def test_the_accent_reads_in_both_modes():
+    from belfry_onboarding import branding
+
+    # a dark green and a lime: the green on white, the lime on black
+    got = branding.colors("#2b3a31", "#d6ff52")
+    assert got["light"] == {"accent": "#2b3a31", "on_accent": "#ffffff"}
+    assert got["dark"] == {"accent": "#d6ff52", "on_accent": "#111111"}
+    # no secondary: the primary is lightened until it reads on black, and stays itself on white
+    got = branding.colors("#2b3a31", "")
+    assert got["light"]["accent"] == "#2b3a31"
+    assert branding.contrast(got["dark"]["accent"], "#000000") >= 4.5
+    assert branding.contrast(got["dark"]["accent"], "#1c1c1e") >= 3.0
+    # a pale primary: darkened for the light mode, itself in the dark one
+    got = branding.colors("#ffe98a", "")
+    assert got["dark"]["accent"] == "#ffe98a" and got["dark"]["on_accent"] == "#111111"
+    assert branding.contrast(got["light"]["accent"], "#ffffff") >= 4.5
+    # nothing set: the default reads in both, or is moved until it does
+    for mode, ground in (("light", "#ffffff"), ("dark", "#000000")):
+        assert branding.contrast(branding.colors("", "")[mode]["accent"], ground) >= 4.5
+    # every primary gives something readable
+    for primary in ("#000000", "#ffffff", "#808080", "#ff0000", "#0000ff", "#00ff00"):
+        for mode, (page, surface) in branding.GROUNDS.items():
+            a = branding.colors(primary, "")[mode]["accent"]
+            assert branding.contrast(a, page) >= 4.5 and branding.contrast(a, surface) >= 3.0

@@ -8,6 +8,9 @@ key of belfry.json) on the community relay: ``picture`` (the logo), ``banner`` (
 ``primary_color`` / ``secondary_color`` (``#rrggbb``), next to its ``name``, ``about`` and
 ``website``. Any Nostr client sees the logo and cover; Belfry's apps read the colours too.
 
+- ``colors`` in the answer (and in belfry.json's ``branding``) when a colour is set:
+  ``{"light": {"accent", "on_accent"}, "dark": {…}}``, what the apps draw with instead of the raw
+  primary, so a brand colour never vanishes in one of the two modes (``accent``).
 - ``GET /api/branding`` (belfry.<domain>/api/v1/branding): ``{"logo","cover","primary",
   "secondary","description","name"}``, anyone. ``description`` is the profile's ``about``: the
   line under the name on the default homepage.
@@ -84,13 +87,80 @@ def _latest(svc: Services) -> tuple[dict[str, Any], int]:
     return (content if isinstance(content, dict) else {}), int(latest.get("created_at", 0))
 
 
-def _view(profile: dict[str, Any]) -> dict[str, str]:
-    out = {k: str(profile.get(v) or "") for k, v in FIELDS.items()}
-    out["name"] = str(profile.get("name") or "")
+# What the apps draw on, per mode: the page and the raised surface (sheets, cards, bars).
+GROUNDS = {"light": ("#ffffff", "#f2f2f7"), "dark": ("#000000", "#1c1c1e")}
+TEXT_CONTRAST = 4.5  # words and icons in the accent, on the page (WCAG AA)
+SURFACE_CONTRAST = 3.0  # the same on a raised surface
+
+
+def _rgb(color: str) -> tuple[int, int, int]:
+    c = color.lstrip("#")
+    return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+
+
+def _luminance(color: str) -> float:
+    def lin(v: float) -> float:
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (lin(v / 255) for v in _rgb(color))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _reads(color: str, mode: str) -> bool:
+    page, surface = GROUNDS[mode]
+    return contrast(color, page) >= TEXT_CONTRAST and contrast(color, surface) >= SURFACE_CONTRAST
+
+
+def _toward(color: str, target: str, share: float) -> str:
+    return "#" + "".join(
+        f"{round(c + (t - c) * share):02x}"
+        for c, t in zip(_rgb(color), _rgb(target), strict=True)
+    )
+
+
+def accent(primary: str, secondary: str, mode: str) -> str:
+    """The colour for words, icons and filled buttons in MODE (light | dark): the primary when it
+    reads on that mode's page; else the secondary when that one does; else the primary moved
+    toward white (dark) or black (light), 4 % at a time, until it does. A dark green that
+    vanishes on a black page gives way to the community's lime, not to an invisible button."""
+    for color in (primary, secondary):
+        if COLOR.match(color or "") and _reads(color.lower(), mode):
+            return color.lower()
+    base = (primary if COLOR.match(primary or "") else DEFAULT_PRIMARY).lower()
+    target = "#ffffff" if mode == "dark" else "#000000"
+    for step in range(1, 26):
+        moved = _toward(base, target, step * 0.04)
+        if _reads(moved, mode):
+            return moved
+    return target
+
+
+def colors(primary: str, secondary: str) -> dict[str, dict[str, str]]:
+    """``{"light": {"accent", "on_accent"}, "dark": {…}}``: what every app uses instead of the raw
+    primary, so a brand colour never disappears in one of the two modes. ``on_accent`` is the
+    colour of words on a button filled with the accent (near black or white)."""
+    out = {}
+    for mode in GROUNDS:
+        a = accent(primary, secondary, mode)
+        on = "#111111" if contrast(a, "#111111") >= contrast(a, "#ffffff") else "#ffffff"
+        out[mode] = {"accent": a, "on_accent": on}
     return out
 
 
-def current(svc: Services, fresh: bool = False) -> dict[str, str]:
+def _view(profile: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {k: str(profile.get(v) or "") for k, v in FIELDS.items()}
+    out["name"] = str(profile.get("name") or "")
+    if out["primary"] or out["secondary"]:  # nothing set: each app keeps its own look
+        out["colors"] = colors(out["primary"], out["secondary"])
+    return out
+
+
+def current(svc: Services, fresh: bool = False) -> dict[str, Any]:
     """The branding, read from the relay at most every TTL seconds (best effort)."""
     if fresh or time.monotonic() - _cache["at"] > TTL:
         try:
@@ -103,7 +173,7 @@ def current(svc: Services, fresh: bool = False) -> dict[str, str]:
     return _view(_cache["profile"])
 
 
-def cached() -> dict[str, str]:
+def cached() -> dict[str, Any]:
     """The last branding read, without asking the relay (the mailer has no services)."""
     return _view(_cache["profile"])
 
