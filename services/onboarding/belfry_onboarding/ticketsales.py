@@ -249,6 +249,9 @@ def fields(
             and _why_not(svc, ev, t, st["currency"]) is None
             and (lft is None or lft > 0)
         )
+        if ok and t.requires is not None:
+            got = events.required(svc, t, viewer)  # only who holds the ticket it needs
+            ok = bool(got and got[1])
         if ok and _members_only(ev, t):
             if inside is None:
                 inside = bool(viewer) and (viewer in ev.hosts or events.is_member(svc, viewer))
@@ -427,6 +430,8 @@ def check(
         if not (key in w.ev.hosts or events.is_member(svc, key)):
             raise ApiError(403, "members_only", "This ticket is for members.")
     who = _pubkey_of(svc, tester) if tester is not None else (key if owner else "")
+    # a ticket that needs another one: only an account that holds that one (409 requires)
+    events.refuse_requires(svc, w.t, who or None)
     if who and who in events.people(svc, w.ev).holders:
         raise ApiError(409, "already", "You have a ticket for this event already.")
     for o in sales.store(svc).orders(("paid", "active"), key=key):

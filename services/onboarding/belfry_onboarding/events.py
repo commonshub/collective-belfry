@@ -374,6 +374,41 @@ def price_of(e: dict[str, Any], now: int | None = None) -> dict[str, Any]:
     return out
 
 
+COORD_RE = re.compile(r"^(31922|31923):([0-9a-f]{64}):((?:\d{4}-)?[a-z0-9]{6})$")
+
+
+def requires_of(e: dict[str, Any]) -> dict[str, Any] | None:
+    """A ticket's ``["requires", "<event>", "<ticket d>"?]`` tag (docs/checkin.md "Tickets that
+    need another ticket"): ``{"event": <the required event's d>, "coord": <its coordinate when
+    the tag gave one>, "ticket": <the required ticket's d> | None, "ok": True}``. <event> is the
+    event's ``a`` coordinate (``31922|31923:<pubkey>:<d>``) or its d; <ticket> the ticket's d
+    (``<event d>:<id>``) or its id. A tag that can't be read, or more than one such tag, is
+    ``{"ok": False}``: nobody qualifies. None: the ticket has no such tag."""
+    found = [t for t in e.get("tags", []) if t[:1] == ["requires"]]
+    if not found:
+        return None
+    bad = {"ok": False, "event": None, "coord": None, "ticket": None}
+    if len(found) != 1 or not 2 <= len(found[0]) <= 3:
+        return bad
+    raw = str(found[0][1]).strip()
+    m = COORD_RE.match(raw)
+    if m:
+        d, coord = m.group(3), raw
+    elif D_RE.match(raw):
+        d, coord = raw, None
+    else:
+        return bad
+    ticket = None
+    if len(found[0]) == 3:
+        want = str(found[0][2]).strip()
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", want):
+            want = f"{d}:{want}"
+        if not want.startswith(d + ":") or len(want) > 100 or len(want) == len(d) + 1:
+            return bad
+        ticket = want
+    return {"ok": True, "event": d, "coord": coord, "ticket": ticket}
+
+
 @dataclass
 class Ticket:
     d: str
@@ -394,6 +429,9 @@ class Ticket:
     until: int | None = None  # when the current price ends (unix), if it does
     on_sale: bool = True  # False: it has dated prices and none of them is now
     prices: list[dict[str, Any]] = field(default_factory=list)
+    # ["requires", <event>, <ticket>?]: only for someone who holds a ticket of that event
+    # (``requires_of``); None: no such tag
+    requires: dict[str, Any] | None = None
 
     @property
     def asks(self) -> bool:
@@ -726,6 +764,7 @@ def tickets(svc: Services, ev: Event) -> list[Ticket]:
                 until=cost["until"],
                 on_sale=cost["on_sale"],
                 prices=cost["prices"],
+                requires=requires_of(e),
             )
         )
     if not out:
@@ -809,6 +848,61 @@ def people(svc: Services, ev: Event) -> People:
         rsvps={k: v[1] for k, v in rsvps.items()},
         tests={p for p in holders if has(put[p], "test")},
     )
+
+
+# ── a ticket that needs another ticket ──────────────────────────────────────────────────────
+def required(svc: Services, t: Ticket, pubkey: str | None) -> tuple[dict[str, Any], bool] | None:
+    """For a ticket with a ``requires`` tag: (what it needs, by name, for the API:
+    ``{"event_link", "event_title", "ticket"?, "ticket_title"?}``; whether PUBKEY has it now).
+    None: the ticket needs nothing. Having it = holding a ticket of the required event now
+    (admitted with one, not taken out since), that ticket when the tag names one. An admission
+    made by a tester's test order counts only while its holder is a tester. A tag that can't be
+    read, or an event that can't be found: nobody has it."""
+    req = t.requires
+    if req is None:
+        return None
+    info: dict[str, Any] = {"event_link": None, "event_title": None}
+    if not req["ok"]:
+        return info, False
+    rev = load(svc, req["event"])
+    if rev is None or (req["coord"] and req["coord"] != rev.coord):
+        return info, False
+    info = {"event_link": link_of(svc, rev), "event_title": rev.title}
+    if req["ticket"]:
+        info["ticket"] = req["ticket"]
+        rt = next((x for x in tickets(svc, rev) if x.d == req["ticket"]), None)
+        if rt is None:
+            return info, False  # the required ticket is gone: nobody can have it
+        info["ticket_title"] = rt.title
+    if not pubkey:
+        return info, False
+    ppl = people(svc, rev)
+    held = ppl.holders.get(pubkey)
+    if not held or (req["ticket"] and held != req["ticket"]):
+        return info, False
+    if pubkey in ppl.tests:
+        from . import testers
+
+        if not testers.is_tester_key(svc, pubkey):
+            return info, False
+    return info, True
+
+
+def refuse_requires(svc: Services, t: Ticket, pubkey: str | None) -> None:
+    """409 ``requires`` (with ``event_link``, ``event_title`` and ``ticket_title`` when the tag
+    names a ticket) unless PUBKEY holds the ticket T needs. Asked wherever T is handed out: the
+    join, the application, the checkout, a request for it."""
+    from .holder_invites import ApiError
+
+    got = required(svc, t, pubkey)
+    if got is None or got[1]:
+        return
+    info = got[0]
+    what = info.get("ticket_title") or "a ticket"
+    where = info.get("event_title") or "another event"
+    exc = ApiError(409, "requires", f"This ticket is for people who have {what} of {where}.")
+    exc.extra.update({k: v for k, v in info.items() if k != "ticket"})
+    raise exc
 
 
 # ── who is asking ───────────────────────────────────────────────────────────────────────────
@@ -947,7 +1041,10 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
         "hosts": [{"pubkey": h, "name": _known(host_names, h)} for h in sorted(ev.hosts)],
         # who to SHOW as hosting it: the creator and co-hosts, no service keys
         "hosted_by": [{"pubkey": h, "name": _known(host_names, h)} for h in shown_hosts(svc, ev)],
-        "tickets": [{**t.public(ppl.taken(t.d)), **sold.get(t.d, NOT_SOLD)} for t in tks],
+        "tickets": [
+            {**t.public(ppl.taken(t.d)), **sold.get(t.d, NOT_SOLD), **_needs(svc, t, viewer)}
+            for t in tks
+        ],
         "going": ppl.going(),
         "community": _community_name(),
         "me": me,
@@ -956,6 +1053,20 @@ def public_json(svc: Services, ev: Event, viewer: str | None) -> dict[str, Any]:
 
 
 NOT_SOLD = {"can_pay": False, "checkout_url": None}
+
+
+def _needs(svc: Services, t: Ticket, viewer: str | None) -> dict[str, Any]:
+    """A ticket's ``requires`` for the API (None when it needs nothing) and, for a signed
+    request, ``eligible``: whether the viewer may take it as far as that goes."""
+    try:
+        got = required(svc, t, viewer)
+    except Exception as exc:  # noqa: BLE001 — the event still shows; taking it asks again
+        log.warning("events: a required ticket was not read: %s", type(exc).__name__)
+        got = ({"event_link": None, "event_title": None}, False)
+    out: dict[str, Any] = {"requires": got[0] if got else None}
+    if viewer:
+        out["eligible"] = got is None or got[1]
+    return out
 
 
 def sale_fields(
@@ -1129,6 +1240,7 @@ def join(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[st
     member = is_member(svc, caller)
     if (t.members or ev.visibility == "members") and not member and caller not in ev.hosts:
         raise ApiError(403, "members_only", "This ticket is for members.")
+    refuse_requires(svc, t, caller)  # a ticket that needs another one: 409 requires
     name = " ".join(str(data.get("name") or "").split())[:100]
     email = str(data.get("email") or "").strip()[:254]
     if email and "@" not in email:
@@ -1220,6 +1332,7 @@ def apply(svc: Services, ev: Event, caller: str, data: dict[str, Any]) -> dict[s
         return {"already": True, "ticket": ppl.holders[caller]}
     if t.priced and not t.on_sale:
         raise ApiError(409, "not_on_sale", "This ticket is not on sale now.")
+    refuse_requires(svc, t, caller)  # also for the waitlist: only who could take it queues
     full = t.quantity is not None and ppl.taken(t.d) >= t.quantity
     if not t.asks and not full:
         raise ApiError(409, "use_join", "This ticket is open: take it.")
@@ -1947,10 +2060,20 @@ def register(app: FastAPI) -> None:
             raise ApiError(503, "unavailable", "The events can't be read just now.") from exc
         return JSONResponse({"events": found}, headers={"Cache-Control": "public, max-age=60"})
 
+    async def _acting(s: Services, key: str | None) -> tuple[str | None, bool]:
+        """(the key to act as, whether KEY is a website session): a website session
+        (sitesessions.py) reads an event and takes an open ticket as its account."""
+        from . import sitesessions
+
+        if not key:
+            return key, False
+        acting, acct = await run_in_threadpool(sitesessions.acting, s, key)
+        return acting, acct is not None
+
     @app.get(API + "/{link}")
     async def event_json(request: Request, link: str) -> JSONResponse:
         s = request.app.state.services
-        who = _viewer(request, f"{API}/{link}")
+        who, _site = await _acting(s, _viewer(request, f"{API}/{link}"))
         ev, _moved = await run_in_threadpool(resolve, s, link)
         if ev is None:
             raise ApiError(404, "not_found", "No such event.")
@@ -1991,6 +2114,8 @@ def register(app: FastAPI) -> None:
         s, caller, data = await _signed(request, "POST", f"{API}/{d}/join")
         own(s)
         _limit(request, d)
+        # a website session: its account takes the ticket (never a new guest, never a session)
+        caller, _site = await _acting(s, caller)
         ev = await run_in_threadpool(load, s, d)
         if ev is None:
             raise ApiError(404, "not_found", "No such event.")
@@ -2011,6 +2136,10 @@ def register(app: FastAPI) -> None:
         s, caller, data = await _signed(request, "POST", f"{API}/{d}/apply")
         own(s)
         _limit(request, d)
+        if (await _acting(s, caller))[1]:
+            # an application is the person's own signed request (a 9021): a website session
+            # holds no key that signs as them, and gets no signer session here
+            raise ApiError(409, "use_chat", "Apply for this ticket in the chat.")
         ev = await run_in_threadpool(load, s, d)
         if ev is None:
             raise ApiError(404, "not_found", "No such event.")

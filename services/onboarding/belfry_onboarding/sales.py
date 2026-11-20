@@ -1534,8 +1534,11 @@ def _with_order(url: str, oid: str) -> str:
     return f"{url}?order={oid}"
 
 
-def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[str, Any]:
-    """The order as the API shows it (section 4)."""
+def answer(
+    svc: Services, o: dict[str, Any], viewer: str | None = None, site: bool = False
+) -> dict[str, Any]:
+    """The order as the API shows it (section 4). SITE: asked by a website session
+    (sitesessions.py), which never gets a signer session, whatever the order holds."""
     tot = o["total"]
     out: dict[str, Any] = {
         "order": o["id"],
@@ -1575,7 +1578,7 @@ def answer(svc: Services, o: dict[str, Any], viewer: str | None = None) -> dict[
             # with an invoice: the transfer details; without (a card order): a button there
             # asks for the invoice to pay by transfer instead
             out["pay_url"] = pay_url(svc, o["id"])
-    if o["state"] == "active" and o.get("bunker_url") and viewer == o["key"]:
+    if o["state"] == "active" and o.get("bunker_url") and viewer == o["key"] and not site:
         out["bunker_url"] = o["bunker_url"]
     return out
 
@@ -1656,12 +1659,36 @@ def erase_of(svc: Services, partner_id: int | None) -> bool:
     return bool(row.get(ERASE))
 
 
+def site_form(site: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """The body of a ``POST /checkout`` or ``POST /offers`` signed by a website session
+    (sitesessions.py), for its account SITE: the e-mail address is the account's proven one (a
+    body that names another: 409 ``email_mismatch``), the name defaults to the account's."""
+    from .holder_invites import ApiError
+
+    if not site.get("email"):
+        raise ApiError(409, "not_verified", "This account has no proven e-mail address.")
+    typed = str(data.get("email") or "").strip().lower()
+    if typed and typed != site["email"]:
+        raise ApiError(
+            409, "email_mismatch", "You are logged in with another address: leave it out."
+        )
+    name = " ".join(str(data.get("name") or "").split()) or site.get("name") or "Guest"
+    return {**data, "email": site["email"], "name": name}
+
+
 def checkout(
-    svc: Services, key: str, data: dict[str, Any], ip: str = "", thread_key: str = ""
+    svc: Services,
+    key: str,
+    data: dict[str, Any],
+    ip: str = "",
+    thread_key: str = "",
+    site: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """POST /checkout. Returns (the order's answer, HTTP status). Refused checkouts count per
     IP on their own (FAILS_PER_IP_HOUR), apart from the orders made. THREAD_KEY: the request's
-    ``X-Thread-Key`` (proves the author of the offer the body names)."""
+    ``X-Thread-Key`` (proves the author of the offer the body names). SITE: the account of the
+    website session that signed (KEY is then that account's own key): the order goes on it,
+    for its proven address, with no confirmation by mail and never a ``bunker_url``."""
     from .holder_invites import ApiError
 
     st = store(svc)
@@ -1669,7 +1696,12 @@ def checkout(
     if st.hits_count(fails, 3600) >= FAILS_PER_IP_HOUR:
         raise ApiError(429, "too_many", "Too many refused tries from here. Try again in an hour.")
     try:
-        return _checkout(svc, key, data, ip, thread_key)
+        if site is not None:
+            data = site_form(site, data)
+        out, status = _checkout(svc, key, data, ip, thread_key)
+        if site is not None:
+            out.pop("bunker_url", None)
+        return out, status
     except ApiError as exc:
         if exc.status != 429 and exc.error not in ("unsupported", "cannot_sell", "accounting"):
             st.hit(fails, 10**9, 3600)  # recorded, never refused here
@@ -1706,7 +1738,11 @@ def _offer_code(svc: Services, key: str, fid: Any, thread_key: str) -> str:
     if f is None:
         raise ApiError(404, "not_found", "No such offer.")
     if key != f["key"] and not _offer_author(svc, f, thread_key):
-        raise ApiError(403, "not_author", "Only the request's author uses its approval.")
+        # …or an account proven with the address the request was made with (the address its
+        # personal code is bound to, and mailed to)
+        acct = account_of(svc, key)
+        if not (acct and acct["verified"] and acct["email"].lower() == f["email"].lower()):
+            raise ApiError(403, "not_author", "Only the request's author uses its approval.")
     if f["state"] != "accepted" or not f.get("code"):
         raise ApiError(409, "not_approved", "This request is not approved.")
     return f["code"]
@@ -2692,17 +2728,27 @@ def title_in_subject(title: str) -> str:
     return title if len(title) <= SUBJECT_TITLE_MAX else title[:SUBJECT_TITLE_MAX].rstrip() + "…"
 
 
-def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> dict[str, Any]:
-    """POST /offers: a public request, posted once its author confirmed the mailed link."""
+def make_offer(
+    svc: Services,
+    key: str,
+    data: dict[str, Any],
+    ip: str = "",
+    site: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """POST /offers: a public request, posted once its author confirmed the mailed link. SITE:
+    the account of the website session that signed (KEY is then that account's own key): its
+    address is proven already, so the thread is posted at once, by the person's own key."""
     from . import webthreads
     from .holder_invites import ApiError
 
     if not own(svc):
         raise ApiError(409, "unsupported", "Selling needs the belfry's own register.")
+    if site is not None:
+        data = site_form(site, data)
     found = requests_site(svc)
     if found is None:
         raise ApiError(409, "no_requests_channel", "This belfry takes no offers in kind yet.")
-    slug, site = found
+    slug, page = found
     wanted = None  # an event ticket instead of a product (ticketsales.py)
     if (data.get("product") is None) == (data.get("ticket") is None):
         raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
@@ -2713,6 +2759,10 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
             raise ApiError(422, "invalid", 'Send "product" or "ticket", one of them.')
         # the ticket need not be on sale yet, nor the checkout's switch on: only asked for
         wanted = ticketsales.find(svc, data["ticket"], offer=True)
+        # a ticket that needs another one: only for someone who holds that one (409 requires)
+        from . import events
+
+        events.refuse_requires(svc, wanted.t, key)
         p = {"id": ticketsales.PREFIX + wanted.t.d, "name": ticketsales.name(wanted)}
     else:
         p = product(svc, str(data.get("product") or ""))
@@ -2767,22 +2817,29 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         *([["offer-days", *days]] if days else []),
         *offer_buttons(),
     ]
-    token = webthreads.start_thread(
-        svc,
-        slug,
-        site,
-        title,
-        text,
-        name,
-        email,
-        ip,
-        extra=extra,
-        hook={"kind": "offer", "id": fid},
-        public_note=True,
-        subject=f"Confirm your request: {title_in_subject(title)}",
-    )
-    if token is None:
-        raise ApiError(429, "too_many", "Too many requests in a short time: try in an hour.")
+    posted = None
+    if site is not None:
+        # proven by the session: no confirmation link, the thread is public now
+        posted = webthreads.post_thread(
+            svc, slug, page, title, text, name, email, ip, site["partner"], extra
+        )
+    else:
+        token = webthreads.start_thread(
+            svc,
+            slug,
+            page,
+            title,
+            text,
+            name,
+            email,
+            ip,
+            extra=extra,
+            hook={"kind": "offer", "id": fid},
+            public_note=True,
+            subject=f"Confirm your request: {title_in_subject(title)}",
+        )
+        if token is None:
+            raise ApiError(429, "too_many", "Too many requests in a short time: try in an hour.")
     f = {
         "id": fid,
         "key": key,
@@ -2801,12 +2858,18 @@ def make_offer(svc: Services, key: str, data: dict[str, Any], ip: str = "") -> d
         "label": label,
         "days": days,
         "state": "confirm",
-        "channel": site["channel"],
+        "channel": page["channel"],
         "slug": slug,
         "created": iso(now()),
     }
+    if posted is not None:
+        f.update(state="open", card=posted["id"], url=posted["url"], my_url=posted["my_url"])
     st.put_offer(f)
-    log.info("sales: offer %s for %s (%s), waiting for its link", fid, p["id"], mask(email))
+    if posted is not None:
+        _requests_changed()
+        log.info("sales: offer %s for %s (%s), posted from the website", fid, p["id"], mask(email))
+    else:
+        log.info("sales: offer %s for %s (%s), waiting for its link", fid, p["id"], mask(email))
     return f
 
 
@@ -3046,7 +3109,7 @@ def register(app: FastAPI) -> None:
 
     @app.post(API + "/codes/check")
     async def api_code_check(request: Request) -> JSONResponse:
-        s, key, data = await _signed(request)
+        s, key, data, _site = await _buyer(request)
         if not CODE_CHECKS.allow("key:" + key):
             raise ApiError(429, "too_many", "Too many codes tried. Try again in an hour.")
         pid = str(data.get("product") or "")
@@ -3083,32 +3146,48 @@ def register(app: FastAPI) -> None:
             {"codes": [code_row(c) for c in made]}, status_code=201, headers=NO_STORE
         )
 
+    async def _buyer(request: Request, method: str = "POST") -> tuple[Any, str, dict, Any]:
+        """(services, the key to act as, the body, the website session's account or None). A
+        request signed by a website session (sitesessions.py) acts as its account's own key,
+        on these buyer's endpoints only: the admins' ones never ask this."""
+        from . import sitesessions
+
+        s, key, data = await _signed(request, method)
+        acting, site = await run_in_threadpool(sitesessions.acting, s, key)
+        return s, acting or key, data, site
+
     @app.post(API + "/checkout")
     async def api_checkout(request: Request) -> JSONResponse:
-        s, key, data = await _signed(request)
+        s, key, data, site = await _buyer(request)
         out, status = await run_in_threadpool(
-            checkout, s, key, data, client_ip(request), request.headers.get("x-thread-key") or ""
+            checkout,
+            s,
+            key,
+            data,
+            client_ip(request),
+            request.headers.get("x-thread-key") or "",
+            site,
         )
         return JSONResponse(out, status_code=status, headers=NO_STORE)
 
     @app.get(API + "/checkout/{oid}")
     async def api_checkout_get(oid: str, request: Request) -> JSONResponse:
-        s, key, _ = await _signed(request, "GET")
+        s, key, _, site = await _buyer(request, "GET")
         o = store(s).order(oid) if ORDER_RE.match(oid) else None
         if o is None or o["key"] != key:
             raise ApiError(404, "not_found", "No such order.")
         if o["state"] in OPEN:
             o = await run_in_threadpool(_refresh, s, o)
-        return JSONResponse(answer(s, o, key), headers=NO_STORE)
+        return JSONResponse(answer(s, o, key, site is not None), headers=NO_STORE)
 
     @app.post(API + "/checkout/{oid}/pay")
     async def api_checkout_pay(oid: str, request: Request) -> JSONResponse:
-        s, key, data = await _signed(request)
+        s, key, data, site = await _buyer(request)
         o = store(s).order(oid) if ORDER_RE.match(oid) else None
         if o is None or o["key"] != key:
             raise ApiError(404, "not_found", "No such order.")
         o = await run_in_threadpool(switch_pay, s, oid, str(data.get("pay") or ""))
-        return JSONResponse(answer(s, o, key), headers=NO_STORE)
+        return JSONResponse(answer(s, o, key, site is not None), headers=NO_STORE)
 
     @app.get(API + "/billing")
     async def api_billing(request: Request) -> JSONResponse:
@@ -3125,13 +3204,13 @@ def register(app: FastAPI) -> None:
 
     @app.post(API + "/offers")
     async def api_offer(request: Request) -> JSONResponse:
-        s, key, data = await _signed(request)
-        f = await run_in_threadpool(make_offer, s, key, data, client_ip(request))
-        return JSONResponse(offer_answer(s, f), status_code=201, headers=NO_STORE)
+        s, key, data, site = await _buyer(request)
+        f = await run_in_threadpool(make_offer, s, key, data, client_ip(request), site)
+        return JSONResponse(offer_answer(s, f, site is not None), status_code=201, headers=NO_STORE)
 
     @app.get(API + "/offers/{fid}")
     async def api_offer_get(fid: str, request: Request) -> JSONResponse:
-        s, key, _ = await _signed(request, "GET")
+        s, key, _, _site = await _buyer(request, "GET")
         f = store(s).offer(fid) if OFFER_RE.match(fid) else None
         if f is None or f["key"] != key:
             raise ApiError(404, "not_found", "No such offer.")
