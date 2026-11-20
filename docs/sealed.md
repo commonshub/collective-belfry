@@ -67,7 +67,7 @@ kind 30078, pubkey = account, content ""
 It stops another member from publishing a roster "for" someone, and a removed device from
 taking the chain back: only a live session of the account (or the server) can make it, and a
 removed device's session is revoked. Every device that publishes a roster publishes the anchor
-again right after it, with `head` = that roster (and the same `root`). `head` absent = the root.
+again together with it (both sent in the same moment, the roster first), with `head` = that roster (and the same `root`). `head` absent = the root.
 
 ### 3.3 Valid chain
 
