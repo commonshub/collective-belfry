@@ -114,6 +114,16 @@ makes a key in the browser and signs every call with it (NIP-98). There are no u
   (sessions.py) answers `no_email`. A signed-in guest without an address gets the typed one as
   pending on their own contact.
 
+**Logged in on the website (2026-11-20, [website-accounts.md](website-accounts.md)).** A key
+that is a *site session* of an account buys and asks as that account: `POST /checkout`,
+`GET /checkout/<order>`, `POST /checkout/<order>/pay`, `POST /offers`, `GET /offers/<id>` and
+`POST /codes/check` then act with the account's own key. The address is the account's proven
+one (a body naming another: 409 `email_mismatch`), a free order opens at once and an offer's
+thread is posted at once (no `confirm` state, no confirmation mail), the pass or the ticket goes
+on the account, and the answer never carries a `bunker_url`. A ticket with a `requires` tag
+(docs/checkin.md) is sold, and asked for with `POST /offers`, only to an account that holds the
+ticket it needs: 409 `requires` (with `event_link`, `event_title`, `ticket_title`).
+
 ## 4. API (https://belfry.<domain>/api/v1, CORS open to the apex)
 
 CORS (discovery.py, `api_cors` middleware; not Caddy): the apex `https://<domain>` (and

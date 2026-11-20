@@ -816,3 +816,29 @@ def test_parallel_readers_share_one_relay_answer_and_a_slow_relay_is_tried_again
     assert got == [[{"id": "a"}]] * 12 and len(calls) == 2  # one failure, one read for all twelve
     events.forget_reads()  # a publish empties it
     assert events._shared("k", fetch) == [{"id": "a"}] and len(calls) == 3
+
+
+def test_a_requires_tag_is_read_strictly():
+    """docs/checkin.md "Tickets that need another ticket": one tag, an event's coordinate or
+    its d, optionally one of its tickets; anything else is unreadable (nobody qualifies)."""
+    key = "a" * 64
+
+    def read(*tags):
+        return events.requires_of({"tags": [list(t) for t in tags]})
+
+    assert read(["title", "Day"]) is None
+    assert read(["requires", D]) == {"ok": True, "event": D, "coord": None, "ticket": None}
+    got = read(["requires", f"31923:{key}:{D}", f"{D}:pass"])
+    assert got == {"ok": True, "event": D, "coord": f"31923:{key}:{D}", "ticket": f"{D}:pass"}
+    assert read(["requires", "k7p2xq", "pass"])["ticket"] == "k7p2xq:pass"  # a ticket's id
+    for bad in (
+        [["requires"]],
+        [["requires", "The village"]],
+        [["requires", f"30402:{key}:{D}"]],  # not an event's kind
+        [["requires", f"31923:{key[:-1]}:{D}"]],
+        [["requires", D, "2026-zzzzzz:pass"]],  # another event's ticket
+        [["requires", D, f"{D}:"]],
+        [["requires", D, "pass", "more"]],
+        [["requires", D], ["requires", D]],  # more than one
+    ):
+        assert read(*bad)["ok"] is False, bad

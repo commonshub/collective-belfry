@@ -245,3 +245,50 @@ place.
 - `GET /events/<link>`: a ticket's `price` is `{amount, currency, vat, vat_included, until}` (the
   current one; `until` = when it ends or the next one starts, or null), `prices` lists every row
   (`{amount, currency, from, until}`), `on_sale` says whether it can be asked for now.
+
+## Tickets that need another ticket (2026-11-20)
+
+A ticket type (kind 30402) may carry **one** tag
+
+```
+["requires", "<event>", "<ticket>"?]
+```
+
+- `<event>`: the required event, as its `a` coordinate (`31922:<pubkey>:<d>` or
+  `31923:<pubkey>:<d>`) or as its d alone. A coordinate must be the event's real one (its kind
+  and its creator), else the tag can't be read.
+- `<ticket>` (optional): one ticket type of that event, as its d (`<event d>:<id>`) or its id.
+  Without it any ticket of the event will do.
+
+**Meaning.** Only a key that holds that ticket **now** may take this one: admitted to the
+required event with a ticket (the group's 9000 with the `ticket` tag) and not taken out since
+(a later 9001). An RSVP alone is not a ticket. An admission made by a tester's test order
+(`["test", "1"]`) counts only while its holder still is a tester. The check is made when the
+ticket is handed out, not afterwards: someone who loses the required ticket later keeps this one.
+
+**Unreadable = nobody.** A tag with a value that is neither a coordinate nor a d, a coordinate
+that is not the event's, a ticket that is not one of that event's (or was deleted), an event
+that can't be found, or more than one `requires` tag on the ticket: nobody qualifies.
+
+**Where it is enforced** (409 `requires`, with `event_link`, `event_title` and, when the tag
+names a ticket, `ticket_title`, so a page can say which ticket is needed; all three are absent
+or null for an unreadable tag):
+
+- `POST /events/<d>/join` (a free ticket taken directly), for the caller's account. A key
+  nobody knows holds nothing: it is refused before any guest is made.
+- `POST /events/<d>/apply`, also for the waitlist.
+- `POST /checkout {"ticket"}` (docs/sales.md §10), for the account the order is on: the
+  signed-in account, or the tester a test order is for. A browser key with no account is
+  refused: the buyer logs in first (docs/website-accounts.md).
+- `POST /offers {"ticket"}` (a request for the ticket in kind or sponsored), for the same
+  account; and again at the checkout that uses the approval.
+
+Not enforced: a host admitting someone themselves (their own 9000 on the relay, or `/decide`):
+that is the host's word, as for a price. Places count as for any ticket.
+
+**`GET /events/<link>`.** Each ticket gains `requires`: `null`, or `{"event_link",
+"event_title", "ticket"?, "ticket_title"?}` (`event_link`: the required event's address, its
+slug or its id; `ticket`: the required ticket's d; `{"event_link": null, "event_title": null}`
+for an unreadable tag). When the request is signed (NIP-98, also by a website session, which
+reads as its account) each ticket also gains `eligible`: `true` when it needs nothing or the
+viewer holds what it needs. `can_pay` is false for a viewer who is not eligible.

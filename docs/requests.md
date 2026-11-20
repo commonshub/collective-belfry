@@ -280,13 +280,39 @@ setting gives the HTML pages back; links of the `<page>?id=…` shape are then t
 handle. Without a `page`, links are as they were (`<domain>/<slug>/<id>`, `?k=`); that HTML
 page shows an edited title or text with a small "edited" mark.
 
+## Logged in on the website (2026-11-20)
+
+With a website session ([website-accounts.md](website-accounts.md)) the same five endpoints
+answer for the account, signed (NIP-98) by the session's key, with no `X-Thread-Key`:
+
+- `GET /requests`: the same public list, each of the account's own requests with
+  `"mine": true`; `Cache-Control: no-store`.
+- `GET /requests/<id or number>`: `me` as for the author when the request is theirs (they made
+  its offer, they signed the thread, or it is an older card written for their proven address);
+  `"mine": true` on every comment they signed, also under someone else's request; and
+  `"viewer": {"role": "admin" | "member" | "guest", "author": bool, "can_comment": bool}`.
+- `POST …/comments`: besides the author, anyone whose account **has the requests channel**: a
+  guest of it (everyone who logs in on the website is one), a member when members read the
+  channel (it is open, or they are in it), an admin. Signed with their own key through the
+  signer. 403 `not_allowed` otherwise; 409 `own_key` for someone who holds their own key; 429
+  `too_many` (20 comments an hour per account); 409 `archived`.
+- `POST …/edit`: the author as before; anyone else only `{"comment", "text"}` for a comment
+  they signed (403 `not_author` for a title or a text, 403 `not_yours` for someone else's
+  comment).
+
+A **guest** with no profile shows under the name on their account (the one they gave when they
+logged in or opened their thread; "Guest" when they gave none). A member with no profile stays
+"Somebody", as before. `POST /site/profile {"name"}` sets the profile's name and the
+account's, so what they wrote before reads under the new name.
+
 ## Not in this version
 
 - `program` items.
 - Tickets taken for free on an event's page (no order) are not in the activity; nor are
   membership passes bought as products (only event tickets are).
-- Closing a request from the web; comments by anyone but the author (members answer in the
-  chat); edits of anything but the author's own title, text and comments.
+- Closing a request from the web; comments by anyone who is not logged in on the website, but
+  the author (members also answer in the chat); edits of anything but one's own title, text
+  and comments.
 - Nothing here was run against a live relay or a real website yet.
 
 ### Which ticket a request asks for (2026-11-20)
