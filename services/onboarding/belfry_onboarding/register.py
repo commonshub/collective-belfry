@@ -145,6 +145,10 @@ class Register(OdooApi):
                 pubkey TEXT NOT NULL, partner_id INTEGER NOT NULL, since TEXT NOT NULL,
                 seen INTEGER NOT NULL, UNIQUE (token, pubkey));
             CREATE INDEX IF NOT EXISTS push_devices_pubkey ON push_devices (pubkey);
+            CREATE TABLE IF NOT EXISTS site_sessions (
+                key TEXT PRIMARY KEY, partner_id INTEGER NOT NULL, label TEXT NOT NULL,
+                created INTEGER NOT NULL, used INTEGER NOT NULL);
+            CREATE INDEX IF NOT EXISTS site_sessions_partner ON site_sessions (partner_id);
             """
         )
         self._push_one_row_per_identity()
@@ -2436,3 +2440,63 @@ class Register(OdooApi):
                         "DELETE FROM push_devices WHERE pubkey = ?", (pubkey,)
                     ).rowcount
         return n
+
+    # ── website sessions (sitesessions.py): a browser key registered on an account ──────────
+    SITE_FIELDS = ("key", "partner_id", "label", "created", "used")
+
+    def site_put(self, key: str, partner_id: int, label: str, at: int, keep: int) -> None:
+        """KEY is a website session of PARTNER from now on (a key is one account's: logging in
+        as someone else moves it). At most KEEP per account: the least recently used go."""
+        with self._lock:
+            self._db.execute(
+                "INSERT OR REPLACE INTO site_sessions (key, partner_id, label, created, used)"
+                " VALUES (?, ?, ?, ?, ?)",
+                (key, int(partner_id), label, int(at), int(at)),
+            )
+            rows = self._db.execute(
+                "SELECT key FROM site_sessions WHERE partner_id = ? ORDER BY used DESC, key",
+                (int(partner_id),),
+            ).fetchall()
+            for (old,) in rows[int(keep) :]:
+                self._db.execute("DELETE FROM site_sessions WHERE key = ?", (old,))
+
+    def site_get(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT key, partner_id, label, created, used FROM site_sessions WHERE key = ?",
+                (key,),
+            ).fetchone()
+        return dict(zip(self.SITE_FIELDS, row, strict=True)) if row else None
+
+    def site_touch(self, key: str, at: int) -> None:
+        with self._lock:
+            self._db.execute("UPDATE site_sessions SET used = ? WHERE key = ?", (int(at), key))
+
+    def site_list(self, partner_id: int) -> list[dict[str, Any]]:
+        """The account's website sessions, the most recently used first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key, partner_id, label, created, used FROM site_sessions"
+                " WHERE partner_id = ? ORDER BY used DESC, key",
+                (int(partner_id),),
+            ).fetchall()
+        return [dict(zip(self.SITE_FIELDS, r, strict=True)) for r in rows]
+
+    def site_drop(self, key: str | None = None, partner_id: int | None = None) -> int:
+        """End one session (KEY) or every session of an account (PARTNER_ID)."""
+        with self._lock:
+            if key is not None:
+                cur = self._db.execute("DELETE FROM site_sessions WHERE key = ?", (key,))
+            elif partner_id is not None:
+                cur = self._db.execute(
+                    "DELETE FROM site_sessions WHERE partner_id = ?", (int(partner_id),)
+                )
+            else:
+                return 0
+        return cur.rowcount
+
+    def site_prune(self, before: int) -> int:
+        """Remove the sessions not used since BEFORE."""
+        with self._lock:
+            cur = self._db.execute("DELETE FROM site_sessions WHERE used < ?", (int(before),))
+        return cur.rowcount

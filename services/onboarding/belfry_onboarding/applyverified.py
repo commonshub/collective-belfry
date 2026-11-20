@@ -23,7 +23,8 @@ only ever bound to the key that signed the request.
   like any other.
 - ``POST /api/login/verify`` ``{"email", "code"}`` → ``signed_in`` (an account), ``pending``
   (an application that waits: this key becomes its applicant key) or ``unknown`` with a
-  ``proof`` for ``/api/apply/start``.
+  ``proof`` for ``/api/apply/start``. With ``"site": true`` (the community's website,
+  sitesessions.py): the key becomes a site session of the account, no ``bunker_url``.
 
 Accepting such an application (membership.accept: an admin, or enough vouches) makes the person a
 member at once: contact (their name), free membership, the username they asked for when it is
@@ -389,11 +390,18 @@ def login_start(svc: Services, key: str, body: dict[str, Any], ip: str) -> dict[
     return {"sent": True}
 
 
-def login_verify(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
+def login_verify(svc: Services, key: str, body: dict[str, Any], agent: str = "") -> dict[str, Any]:
     email = str(body.get("email") or "").strip()
     if EMAIL.match(email) and len(email) <= 200:
         email = own_address(svc, email)
+    site = body.get("site") is True  # the community's website: a site session, never a bunker
+    if site:
+        from . import sitesessions
+
+        sitesessions.before_code(svc, key, body)
     _check(svc, email, key, str(body.get("code") or ""), "login")
+    if site:
+        return sitesessions.login(svc, key, email, body, agent)
     opened = sign_in(svc, email, key, str(body.get("client") or ""))
     if opened is not None:
         return opened
@@ -594,4 +602,6 @@ def register(app: FastAPI) -> None:
     @app.post("/api/login/verify")
     async def login_verify_api(request: Request) -> JSONResponse:
         s, key, body = await signed(request, "/api/login/verify")
-        return JSONResponse(await run_in_threadpool(login_verify, s, key, body), headers=NO_STORE)
+        agent = request.headers.get("user-agent") or ""
+        out = await run_in_threadpool(login_verify, s, key, body, agent)
+        return JSONResponse(out, headers=NO_STORE)

@@ -79,6 +79,7 @@ from . import (
     sessions,
     setup,
     signin,
+    sitesessions,
     steward,
     theme,
     usernames,
@@ -296,6 +297,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     signin.register(app)  # /signin, /welcome: one-time sign-in links, the page after paying
     apply.register(app)  # /apply: applications to join (apply.py)
     applyverified.register(app)  # /api/apply/*, /api/login/*: the chat's own form and log-in
+    sitesessions.register(app)  # /api/site/*: the website's own accounts (sitesessions.py)
     volunteer.register(app)  # /shifts, /admin/shifts: volunteers' shifts (volunteer.py)
     wallet_tokens.register(app)  # /wallet/pass-tokens: the pass's tokens for the wallet
     holder_invites.register(app)  # /api/invites: invites by e-mail, signed with the holder's key

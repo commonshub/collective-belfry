@@ -284,7 +284,11 @@ PREVIEW_PATHS = re.compile(
     r"|billing|offers|offers/[^/]+|events|events/[^/]+"
     # reading the public requests and an event's activity (webrequests.py); a comment is the
     # author's own, from the real site only: /requests/<id>/comments never matches
-    r"|requests|requests/[^/]+|events/[^/]+/activity)$"
+    r"|requests|requests/[^/]+|events/[^/]+/activity"
+    # the website's own accounts (sitesessions.py): logging in with a code, the account's own
+    # page, its profile, logging out. A preview's key is its own (another origin's storage): a
+    # session made there is not the real site's. Still never a comment, an edit or a join
+    r"|login/start|login/verify|site/me|site/profile|site/logout)$"
 )
 
 
