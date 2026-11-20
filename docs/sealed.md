@@ -92,8 +92,8 @@ The same when it is my own account and this device is not in the new chain: this
 Notices for ordinary changes, one roster step at a time (compare the devices of each valid
 roster with the one before it, dated by that roster; two changes while away give two lines): "‹Name› added a device" for each device
 that appears, "‹Name› removed a device" for each that disappears. Never a device's name or kind
-for someone else. Date = the roster's `created_at`. Don't show notices for changes older than
-the newest message already shown at first sync of a conversation; the Encryption screen's grey
+for someone else. Date = the roster's `created_at`. Show them only for roster steps dated at or after the moment this
+device first saw the conversation sealed; the Encryption screen's grey
 line covers the last 30 days.
 
 "Added from ‹device›" on my own list: the signer of the first roster that contains the device
@@ -282,7 +282,8 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-At most 200 rumors per wrap (in practice the size decides), and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
+Only the conversation's sealed messages are shared (older ones are still opened by the person's
+signer). At most 200 rumors per wrap (in practice the size decides), and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
 65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
 A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
 a sender never seals a rumor whose JSON (the exact string that is encrypted, as UTF-8 bytes) is over 40 000 bytes.
