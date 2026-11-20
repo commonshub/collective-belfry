@@ -76,7 +76,7 @@ always without `since`.
 - Roster n: `prev` is the id of a valid roster n−1; its signer is a device of roster n−1;
   at least one device; `p` = A; when any device of n−1 is missing, `lb` differs from the
   `lb` of every earlier roster of the chain; when none is missing, `lb` equals the previous one.
-- Also invalid: `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
+- Also invalid: not exactly one `p`, one `n` and one `lb`, more than one `prev`; `n` that is not the previous `n` + 1, a device listed twice, more than 20 devices.
 - Two valid rosters with the same `prev` (ids compared as lower-case hex strings): the lower id wins; the other and its descendants are ignored.
 - Head: the last roster of the valid chain. Its `lb` is where to seal for A. Its devices are A's devices.
 - Anything else is ignored silently (wrong signature, unknown prev, signer not in the previous roster).
@@ -164,7 +164,7 @@ Device request, kind 8562, signed by the new device:
 
 ```
 kind 8562, pubkey = new device, content ""
-["p", <account>], ["link", <hex HMAC-SHA256(link secret, device pubkey bytes)>]   link optional
+["p", <account>], ["link", <hex HMAC-SHA256(key = the 32 bytes of the link secret, message = the 32 device pubkey bytes)>]   link optional
 ```
 
 Published at sign-in when a chain exists and this device is not in its head; again every 24 h
@@ -251,13 +251,15 @@ The lock shows on a sealed conversation, always.
 
 In: for `<username>@`, when the member's chain is ready the belfry seals the 1301 rumor to the
 head letterbox: wrap as §4 with `["lb", …]`; the seal is signed by the belfry's key as today.
-Otherwise as today. The plain text is not kept or logged.
+Otherwise as today. The plain text is not kept or logged. When the member's chain cannot be read
+(the relay does not answer), the mail is refused for now (451) and the sending server tries again:
+it is never delivered unsealed because of a failure.
 
 Out: unchanged wrap to the belfry's key. A member with a ready chain always seals with the
 device (content conv(device secret, belfry key), no signer call); without one, today's path.
 The belfry accepts a seal signed by a device of the sender's
 valid chain (`rumor.pubkey` = the member) instead of the account key; the belfry checks the
-chain and that the device is the `client_pubkey` of one of the member's live sessions. The
+chain (the device must be in its head) and that the device is the `client_pubkey` of one of the member's live chat sessions. The
 delivery report (7679) is encrypted to the sender's head letterbox when they have a ready chain,
 with `["lb", …]`.
 
@@ -273,11 +275,14 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-At most 200 rumors per wrap, and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
+At most 200 rumors per wrap (in practice the size decides), and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
 65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
 A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
-a sender never seals a rumor whose JSON (the exact string that is encrypted, as UTF-8 bytes) is over 40 000 bytes. The receiver, when the sharer is
-a participant of each rumor's conversation, adds the rumors it doesn't have, marked as shared
+a sender never seals a rumor whose JSON (the exact string that is encrypted, as UTF-8 bytes) is over 40 000 bytes.
+Sealed rumors are serialised compactly (no spaces), keys in the order `id`, `pubkey`, `created_at`,
+`kind`, `tags`, `content`, non-ASCII characters and `/` not escaped; the ceiling is the sender's
+business only, an opener never refuses a rumor for its size. The receiver takes the rumors one by one: a rumor is added when the sharer and the receiver are
+both participants of its conversation (author or `p`) and the receiver doesn't have it yet, marked as shared
 by that person (they are not proven to be authentic). The mark is kept on the receiving
 device only.
 
