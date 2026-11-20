@@ -1,5 +1,5 @@
 {
- "about": "References in a message (SPEC 19.44): any address of this belfry's chat, https://chat.<domain>/#/… or https://<domain>/chat/#/… (segments percent-encoded or not): #/c/<id> and its pages (/group, /info, /about, /members, /photos, /files, /todos, /log, /events, /t/<topic>) = group; #/c/<id>/todo/<task> = todo {group, task}; #/c/<id>/m/<event> and #/c/<id>/thread/<event> (64 hex) = message {group, id}; #/cal/<31922|31923 coord> = event {coord}; #/events/<link> = event {link}; #/events/<link>/m/<event> = message {link, id}; #/u/<npub or hex> = person {pubkey}; the drop box links https://<domain>/drop/<token> = drop {token}; other routes (the app's places, a ticket) stay links, its event pages https://chat.<domain>/events/<link> and https://<domain>/events/<slug-or-d> (not /t/<code>), and nostr:naddr1… of kind 39000 (group id), 31922/31923 (event coord), 30023 (proposal coord). parts: {text}, {ref} = shown inside the text as its name, {box} = the last reference when the text, trimmed of trailing white space, ends with it: taken out (with the white space before it) and shown as a preview box under the text; a text that is only a reference = the box alone. A group is typed when shown (channel, group, an event's chat = its event, prop-… = its proposal). Anything else stays as written.",
+ "about": "References in a message (SPEC 19.44): any address of this belfry's chat, https://chat.<domain>/#/… or https://<domain>/chat/#/… (segments percent-encoded or not): #/c/<id> and its pages (/group, /info, /about, /members, /photos, /files, /todos, /log, /events, /t/<topic>) = group; #/c/<id>/todo/<task> = todo {group, task}; #/c/<id>/m/<event> and #/c/<id>/thread/<event> (64 hex) = message {group, id}; #/cal/<31922|31923 coord> = event {coord}; #/events/<link> = event {link}; #/events/<link>/m/<event> = message {link, id}; #/u/<npub or hex> = person {pubkey}; the drop box links https://<domain>/drop/<token> = drop {token}; other routes (the app's places, a ticket) stay links, its event pages https://chat.<domain>/events/<link> and https://<domain>/events/<slug-or-d> (not /t/<code>), and nostr:naddr1… of kind 39000 (group id), 31922/31923 (event coord), 30023 (proposal coord). parts: {text}, {ref} = shown inside the text as its name, {box} = the last reference when the text, trimmed of trailing white space, ends with it: taken out (with the white space before it) and shown as a preview box under the text; a text that is only a reference = the box alone. A group is typed when shown (channel, group, an event's chat = its event, prop-… = its proposal). Anything else stays as written. plain: the text as one line of plain text (the channel list, notifications, the pinned line, reply quotes, search results, the DM list): a nostr:npub as \"@…\"; each reference, inside or at the end, as the name of the thing when it is known on the device (`known`, by refKey: group:<id>, event:<coord or link>, proposal:<coord>, todo:<group>/<task>, message:<id>, person:<pubkey>, drop:<token>; the names: a channel or group \"#<name>\", an event or proposal its title, a to-do \"☐ <title>\" (done: \"☑ <title>\"), a message \"a message from <name>\", a person \"@<name>\", a drop box \"the drop box of #<channel>\"; locked: \"a members-only channel\", \"a closed group\", …; deleted: \"a deleted <kind>\", \"an ended drop box\"), else its generic word, never the address: \"#channel\", \"#group\", \"an event\", \"a proposal\", \"a to-do\", \"a message\", \"someone\", \"a drop box\" (an event's chat id ev-/ws- = \"an event\", prop- = \"a proposal\"). A box at the end follows the text after one space.",
  "generated_by": "tools/vectors/references.mjs (nostr-tools from village-app); forms added 2026-11-20 by belfry-webapp (chat tools/vectors/check.mjs)",
  "domain": "riverside.example",
  "cases": [
@@ -16,7 +16,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "Seed talk carries on here #Garden"
   },
   {
    "name": "a channel naddr at the end",
@@ -31,7 +32,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "Seed talk carries on here #Garden"
   },
   {
    "name": "a group (pod) naddr, trailing spaces and a new line",
@@ -46,7 +48,8 @@
       "id": "pod-garden-crew"
      }
     }
-   ]
+   ],
+   "plain": "If you want to help, ask to join #Garden crew"
   },
   {
    "name": "the event page people share (slug)",
@@ -61,7 +64,8 @@
       "link": "repair-cafe"
      }
     }
-   ]
+   ],
+   "plain": "Bring anything broken! Repair café"
   },
   {
    "name": "the event page by its d",
@@ -73,7 +77,8 @@
       "link": "2026-ab12cd"
      }
     }
-   ]
+   ],
+   "plain": "an event"
   },
   {
    "name": "the chat host event link",
@@ -88,7 +93,8 @@
       "link": "repair-cafe"
      }
     }
-   ]
+   ],
+   "plain": "See Repair café"
   },
   {
    "name": "an event naddr",
@@ -103,7 +109,8 @@
       "coord": "31923:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:2026-ab12cd"
      }
     }
-   ]
+   ],
+   "plain": "Bring anything broken! an event"
   },
   {
    "name": "a proposal naddr",
@@ -118,7 +125,8 @@
       "coord": "30023:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:quiet-hours"
      }
     }
-   ]
+   ],
+   "plain": "Please vote before Friday a proposal"
   },
   {
    "name": "only a reference: the box alone",
@@ -130,7 +138,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "#Garden"
   },
   {
    "name": "inside the text: names",
@@ -166,7 +175,8 @@
     {
      "text": " by Friday."
     }
-   ]
+   ],
+   "plain": "Ask #Garden crew about the seeds, then add them to an event and vote on a proposal by Friday."
   },
   {
    "name": "two references: the last one is the box",
@@ -190,7 +200,8 @@
       "id": "pod-garden-crew"
      }
     }
-   ]
+   ],
+   "plain": "Moved from #Garden to #Garden crew"
   },
   {
    "name": "a message link (/m/) is a message",
@@ -206,7 +217,8 @@
       "id": "abababababababababababababababababababababababababababababababab"
      }
     }
-   ]
+   ],
+   "plain": "Read this a message from Ana"
   },
   {
    "name": "another belfry stays a link",
@@ -215,7 +227,8 @@
     {
      "text": "Look https://chat.elsewhere.example/#/c/garden"
     }
-   ]
+   ],
+   "plain": "Look https://chat.elsewhere.example/#/c/garden"
   },
   {
    "name": "a ticket link stays a link",
@@ -224,7 +237,8 @@
     {
      "text": "My ticket https://chat.riverside.example/events/repair-cafe/t/abcdefghijklmnop"
     }
-   ]
+   ],
+   "plain": "My ticket https://chat.riverside.example/events/repair-cafe/t/abcdefghijklmnop"
   },
   {
    "name": "the /chat/ path of the main host",
@@ -239,7 +253,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "Here #Garden"
   },
   {
    "name": "an encoded channel id",
@@ -254,7 +269,8 @@
       "id": "général"
      }
     }
-   ]
+   ],
+   "plain": "Ici #channel"
   },
   {
    "name": "punctuation after a link: not at the end",
@@ -272,7 +288,8 @@
     {
      "text": "?"
     }
-   ]
+   ],
+   "plain": "Is it #Garden?"
   },
   {
    "name": "another kind of naddr stays as written",
@@ -281,7 +298,8 @@
     {
      "text": "My list nostr:naddr1qvzqqqr4xypzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqyd35hxaq9zx9pm"
     }
-   ]
+   ],
+   "plain": "My list nostr:naddr1qvzqqqr4xypzpg42ajk0le3hdkvzdkyfuh3fs5upak4h0yjwamz3hr3vy5mn5hf8qyj8wumn8ghj7emjda6hquedwfjkccte9eexjan9wfekjer99ejhsctdwpkx2qqyd35hxaq9zx9pm"
   },
   {
    "name": "a reference then more text",
@@ -296,7 +314,8 @@
     {
      "text": " is where it happens"
     }
-   ]
+   ],
+   "plain": "#Garden is where it happens"
   },
   {
    "name": "no reference",
@@ -305,7 +324,8 @@
     {
      "text": "Just words, https://example.org/page and #garden typed by hand"
     }
-   ]
+   ],
+   "plain": "Just words, https://example.org/page and #garden typed by hand"
   },
   {
    "name": "the older event address, percent-encoded (#/cal/<coord>)",
@@ -320,7 +340,8 @@
       "coord": "31923:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:session-a6fe77"
      }
     }
-   ]
+   ],
+   "plain": "Coordination call in a minute: Coordination call"
   },
   {
    "name": "the older event address, not encoded",
@@ -332,7 +353,8 @@
       "coord": "31922:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:2026-ab12cd"
      }
     }
-   ]
+   ],
+   "plain": "an event"
   },
   {
    "name": "another kind in #/cal/ stays a link",
@@ -341,7 +363,8 @@
     {
      "text": "See https://chat.riverside.example/#/cal/30023%3Aa2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27%3Ax"
     }
-   ]
+   ],
+   "plain": "See https://chat.riverside.example/#/cal/30023%3Aa2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27%3Ax"
   },
   {
    "name": "the event's chat address (#/events/<link>)",
@@ -356,7 +379,8 @@
       "link": "repair-cafe"
      }
     }
-   ]
+   ],
+   "plain": "Join us Repair café"
   },
   {
    "name": "a message in an event's chat",
@@ -369,7 +393,8 @@
       "id": "abababababababababababababababababababababababababababababababab"
      }
     }
-   ]
+   ],
+   "plain": "a message from Ana"
   },
   {
    "name": "a ticket in the chat's hash form stays a link",
@@ -378,7 +403,8 @@
     {
      "text": "Mine https://chat.riverside.example/#/events/repair-cafe/t/abcdefghijklmnop"
     }
-   ]
+   ],
+   "plain": "Mine https://chat.riverside.example/#/events/repair-cafe/t/abcdefghijklmnop"
   },
   {
    "name": "a group's page",
@@ -393,7 +419,8 @@
       "id": "pod-garden-crew"
      }
     }
-   ]
+   ],
+   "plain": "Our crew #Garden crew"
   },
   {
    "name": "a channel's members page",
@@ -405,7 +432,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "#Garden"
   },
   {
    "name": "a channel's files page, a trailing slash",
@@ -417,7 +445,8 @@
       "id": "garden"
      }
     }
-   ]
+   ],
+   "plain": "#Garden"
   },
   {
    "name": "a to-do",
@@ -433,7 +462,8 @@
       "task": "k3j9x2"
      }
     }
-   ]
+   ],
+   "plain": "Who can take this? ☐ Print the posters"
   },
   {
    "name": "a to-do inside the text",
@@ -452,7 +482,8 @@
     {
      "text": ", next one"
     }
-   ]
+   ],
+   "plain": "Done with ☐ Print the posters, next one"
   },
   {
    "name": "a thread",
@@ -465,7 +496,8 @@
       "id": "abababababababababababababababababababababababababababababababab"
      }
     }
-   ]
+   ],
+   "plain": "a message from Ana"
   },
   {
    "name": "a message id that isn't one stays a link",
@@ -474,7 +506,8 @@
     {
      "text": "https://chat.riverside.example/#/c/garden/m/abc"
     }
-   ]
+   ],
+   "plain": "https://chat.riverside.example/#/c/garden/m/abc"
   },
   {
    "name": "a person (npub)",
@@ -489,7 +522,8 @@
       "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27"
      }
     }
-   ]
+   ],
+   "plain": "Ask @Ana"
   },
   {
    "name": "a person (hex) inside the text",
@@ -504,7 +538,8 @@
     {
      "text": " knows"
     }
-   ]
+   ],
+   "plain": "@Ana knows"
   },
   {
    "name": "a drop box link",
@@ -519,7 +554,8 @@
       "token": "Zx81kQ_p-3aB9cD0"
      }
     }
-   ]
+   ],
+   "plain": "Send your photos here the drop box of #Garden"
   },
   {
    "name": "the app's places stay links",
@@ -528,7 +564,8 @@
     {
      "text": "https://chat.riverside.example/#/calendar and https://chat.riverside.example/#/home"
     }
-   ]
+   ],
+   "plain": "https://chat.riverside.example/#/calendar and https://chat.riverside.example/#/home"
   },
   {
    "name": "a percent-encoded to-do in the /chat/ path",
@@ -541,7 +578,99 @@
       "task": "k3j9x2"
      }
     }
-   ]
+   ],
+   "plain": "a to-do"
+  },
+  {
+   "name": "unknown here: a message",
+   "text": "See https://chat.riverside.example/#/c/garden/m/cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+   "parts": [
+    {
+     "text": "See"
+    },
+    {
+     "box": {
+      "type": "message",
+      "group": "garden",
+      "id": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+     }
+    }
+   ],
+   "plain": "See a message"
+  },
+  {
+   "name": "unknown here: a person",
+   "text": "Ping https://chat.riverside.example/#/u/9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f please",
+   "parts": [
+    {
+     "text": "Ping "
+    },
+    {
+     "ref": {
+      "type": "person",
+      "pubkey": "9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f9f"
+     }
+    },
+    {
+     "text": " please"
+    }
+   ],
+   "plain": "Ping someone please"
+  },
+  {
+   "name": "unknown here: a drop box",
+   "text": "https://riverside.example/drop/unknownToken12",
+   "parts": [
+    {
+     "box": {
+      "type": "drop",
+      "token": "unknownToken12"
+     }
+    }
+   ],
+   "plain": "a drop box"
+  },
+  {
+   "name": "unknown here: a group",
+   "text": "https://chat.riverside.example/#/c/pod-quiet-9z9z",
+   "parts": [
+    {
+     "box": {
+      "type": "group",
+      "id": "pod-quiet-9z9z"
+     }
+    }
+   ],
+   "plain": "#group"
+  },
+  {
+   "name": "unknown here: an event's chat",
+   "text": "Talk in https://chat.riverside.example/#/c/ev-2026-zz99zz then",
+   "parts": [
+    {
+     "text": "Talk in "
+    },
+    {
+     "ref": {
+      "type": "group",
+      "id": "ev-2026-zz99zz"
+     }
+    },
+    {
+     "text": " then"
+    }
+   ],
+   "plain": "Talk in an event then"
   }
- ]
+ ],
+ "known": {
+  "group:garden": "#Garden",
+  "group:pod-garden-crew": "#Garden crew",
+  "event:repair-cafe": "Repair café",
+  "event:31923:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27:session-a6fe77": "Coordination call",
+  "todo:garden/k3j9x2": "☐ Print the posters",
+  "message:abababababababababababababababababababababababababababababababab": "a message from Ana",
+  "person:a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27": "@Ana",
+  "drop:Zx81kQ_p-3aB9cD0": "the drop box of #Garden"
+ }
 }

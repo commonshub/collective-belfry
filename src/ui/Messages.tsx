@@ -8,7 +8,7 @@ import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
 import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
-import { displayName, profiles } from '../core/model'
+import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
@@ -48,7 +48,7 @@ export function MessagesList() {
             <Who conv={t.conv} size={36} />
             <span className="t">
               <b>{isMail(t.conv) ? threadName(t.conv) : convName(t.conv)}</b>
-              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{t.last.text.split('\n')[0]}</small>
+              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(t.last.text).split('\n')[0]}</small>
             </span>
             <span className="dm-meta">
               <time>{fmtTime(t.last.at)}</time>

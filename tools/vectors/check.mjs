@@ -57,6 +57,8 @@ for (const c of vec('reply-reactions.json').cases) {
 // references.json (SPEC 19.44): names inside the text, the box at the end
 const refs = vec('references.json')
 for (const c of refs.cases) { const got = M.parts(c.text, refs.domain); check(`references ${c.name}`, eq(got, c.parts), { got, want: c.parts }) }
+// … and as plain text (one-line previews): each reference as its known name, else its generic word
+for (const c of refs.cases) { const got = M.plainOf(c.text, (r) => refs.known[M.refKey(r)], refs.domain); check(`references plain ${c.name}`, got === c.plain, { got, want: c.plain }) }
 // ticket-prices.json (from belfry-ios, the server's price_of as reference): the price now, and its words
 for (const c of vec('ticket-prices.json').cases) {
   const r = M.pricesOf(c.tags, c.now)

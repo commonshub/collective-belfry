@@ -4,6 +4,7 @@ import { nip19 } from 'nostr-tools'
 import { BELFRY, LABEL_NS, getBackend } from '../config'
 import { all, type Ev } from './store'
 import { me, setWriteGuard } from './sync'
+import { plainName, plainOf } from './refs'
 import { agentOwner, belfryAdminKeys, isAdmin as isAdminNow } from './access'
 import { CHARTER_ID, placeName } from './places'
 
@@ -167,12 +168,10 @@ export function channelRef(id: string): string | undefined {
 export function channelOfNaddr(naddr: string): string | undefined {
   try { const d = nip19.decode(naddr); return d.type === 'naddr' && d.data.kind === 39000 ? d.data.identifier : undefined } catch { return undefined }
 }
-/** Text for one-line previews: mentions as "@…", channel references as "#name". */
+/** Text for one-line previews: mentions as "@…", each reference to something of this belfry (a
+ *  channel, event, to-do, message, person, drop box…) as its name, never its address (refs.ts). */
 export function plainRefs(text: string, npub = '@…'): string {
-  return text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub).replace(NADDR, (all, a: string) => {
-    const id = channelOfNaddr(a)
-    return id ? '#' + refName(id) : all
-  })
+  return plainOf(text, (r) => plainName(r, me()), BELFRY.domain, npub)
 }
 export const isPodId = (id: string) => id.startsWith('pod-')
 export const isProposalId = (id: string) => id.startsWith('prop-')

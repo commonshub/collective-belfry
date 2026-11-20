@@ -16,7 +16,7 @@
 // are names inside the text. Anything else stays as written.
 import { nip19 } from 'nostr-tools'
 import { BELFRY } from '../config'
-import { calendar, deletedGroup, eventByLinkLocal, eventOfGroup, group, isPodId, isProposalId, proposals, tasklist, type CalEvent, type Group, type Proposal, type Task } from './model'
+import { calendar, deletedGroup, displayName, eventByLinkLocal, eventOfGroup, group, isPodId, isProposalId, proposals, tasklist, type CalEvent, type Group, type Proposal, type Task } from './model'
 import { all, type Ev } from './store'
 const tag = (e: Ev, k: string) => e.tags.find((t) => t[0] === k)?.[1]
 
@@ -235,4 +235,62 @@ export function refCoords(text: string): string[] {
     if (r && (r.type === 'event' || r.type === 'proposal') && r.coord) out.add(r.coord)
   }
   return [...out]
+}
+
+// ---- plain text (one-line previews: the channel list, notifications, the pinned line, reply
+// quotes, search results, the DM list; lead 2026-11-20): every reference reads as the thing's
+// name, never its address; a thing not known on this device reads as a generic word.
+
+/** The key a name is known by (vectors/references.json `known`). */
+export function refKey(r: Ref): string {
+  switch (r.type) {
+    case 'group': return 'group:' + r.id
+    case 'event': return 'event:' + (r.coord ?? r.link)
+    case 'proposal': return 'proposal:' + r.coord
+    case 'todo': return `todo:${r.group}/${r.task}`
+    case 'message': return 'message:' + r.id
+    case 'person': return 'person:' + r.pubkey
+    case 'drop': return 'drop:' + r.token
+  }
+}
+
+/** The word for a thing not known (yet) on this device: never its address. A channel keeps
+ *  "#channel" (vectors/channel-refs.json, SPEC 19.44). */
+export function genericWord(r: Ref): string {
+  if (r.type === 'group') {
+    const k = kindOfId(r.id)
+    return k === 'event' ? 'an event' : k === 'proposal' ? 'a proposal' : k === 'group' ? '#group' : '#channel'
+  }
+  return { event: 'an event', proposal: 'a proposal', todo: 'a to-do', message: 'a message', person: 'someone', drop: 'a drop box' }[r.type]
+}
+
+/** TEXT as one line of plain text: mentions as NPUB, each reference as NAME(r) (else its generic word). */
+export function plainOf(text: string, name: (r: Ref) => string | undefined, domain = BELFRY.domain, npub = '@…'): string {
+  let out = ''
+  for (const p of parts(text, domain)) {
+    if ('text' in p) out += p.text.replace(/nostr:npub1[02-9ac-hj-np-z]+/g, npub)
+    else {
+      const r = 'ref' in p ? p.ref : p.box
+      if ('box' in p && out && !/\s$/.test(out)) out += ' '
+      out += name(r) ?? genericWord(r)
+    }
+  }
+  return out
+}
+
+/** A reference's name in plain text, as far as this device knows (else undefined). */
+export function plainName(r: Ref, me: string): string | undefined {
+  const x = resolveRef(r, me)
+  if (x.state === 'locked') return lockedWords(x.kind)
+  if (x.state === 'deleted') return deletedWords(x.kind)
+  if (x.state !== 'ok') return undefined
+  switch (x.kind) {
+    case 'person': return '@' + displayName(x.pubkey!)
+    case 'todo': return (x.task!.done ? '☑ ' : '☐ ') + x.task!.title
+    case 'message': return 'a message from ' + displayName(x.msg!.pubkey)
+    case 'drop': return x.group && !x.group.unnamed ? 'the drop box of #' + x.group.name : undefined
+    case 'event': return x.event?.title || (x.group && !x.group.unnamed ? x.group.name : undefined)
+    case 'proposal': return x.proposal?.title || (x.group && !x.group.unnamed ? x.group.name : undefined)
+    default: return x.group && !x.group.unnamed ? '#' + x.group.name : undefined
+  }
 }

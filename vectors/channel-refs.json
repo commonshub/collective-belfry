@@ -1,5 +1,5 @@
 {
-  "about": "Channel references (NIP-19 naddr of a NIP-29 group's kind 39000 metadata, by the relay's key, d = group id, relay = the groups relay; NIP-27 nostr: in text). TLVs: 0 identifier (UTF-8), 1 relay (each, UTF-8), 2 author (32 bytes), 3 kind (u32 big-endian), written in the order 3, 2, 1 (relays in order), 0 as nostr-tools does; a reader takes any order. plain: one-line previews as plainRefs does (npub → \"@…\", channel → \"#<name>\", or its id when the channel is unknown; anything else left as is). groups = the names known in the plain cases.",
+  "about": "Channel references (NIP-19 naddr of a NIP-29 group's kind 39000 metadata, by the relay's key, d = group id, relay = the groups relay; NIP-27 nostr: in text). TLVs: 0 identifier (UTF-8), 1 relay (each, UTF-8), 2 author (32 bytes), 3 kind (u32 big-endian), written in the order 3, 2, 1 (relays in order), 0 as nostr-tools does; a reader takes any order. plain: one-line previews as plainRefs does (npub → \"@…\", channel → \"#<name>\", or its id when the channel is unknown; an naddr of another kind left as is; since 2026-11-20 a 30023 naddr is a proposal and reads as its title, else \"a proposal\" (references.json plain)). groups = the names known in the plain cases.",
   "generated_by": "tools/vectors/channel-refs.mjs with nostr-tools 2.10.4 (the web chat's)",
   "groups": {
     "general": "General",
@@ -97,7 +97,7 @@
     },
     {
       "text": "An article nostr:naddr1qvzqqqr4gupzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznd0ykkzun5d93kcegut4vjz stays",
-      "plain": "An article nostr:naddr1qvzqqqr4gupzp9vuysszk26xvqk0sc2vfkfs74c4rp23l0cjryctxudzegephmwaqy08wumn8ghj7emjda6hquedwfjkccte9ejhsctdwpkx2tn0wfnsqznd0ykkzun5d93kcegut4vjz stays"
+      "plain": "An article a proposal stays"
     },
     {
       "text": "No refs, a #topic only",
