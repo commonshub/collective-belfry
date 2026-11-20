@@ -15,6 +15,7 @@ import { RolePickerSheet } from './RolePicker'
 import { DOOR, STEWARD } from '../core/places'
 import { agentOwner, agentOwners, isAdmin } from '../core/access'
 import { isAgent, isGuest, LINK_ERRORS, LinkFailed, makeInviteLink, myAgents, setMyAgent, type MyAgents } from '../core/invite'
+import { guestTags, loadGuestTags } from '../core/requests'
 import { useVersion } from '../core/store'
 import { me, setAvatar } from '../core/sync'
 import { Avatar, back, go, Sheet, Form, Btn } from './common'
@@ -43,12 +44,14 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const [picking, setPicking] = useState(false)
   const [shared_, setShared] = useState(false)
   useEffect(() => { if (isAdmin() && !rolesLoaded()) void loadRoles() }, [])
+  // a guest's tags come from whois (they have no kind 30078 here): asked once per guest
+  useEffect(() => { if (pk && isGuest(pk)) void loadGuestTags(pk) }, [pk])
   if (!pk) return <div className="screen"><div className="topbar"><button className="icon-btn" aria-label="Back" onClick={() => back('c')}>‹</button><h1>Profile</h1></div><div className="empty">This link doesn't point to a person.</div></div>
   const mine = pk === me()
   const p = profiles().get(pk)
   const x = extras().get(pk)
   const about = aboutOf(pk)
-  const joins = allGroups().flatMap((g) => guestJoins(g.id)).filter((j) => j.pubkey === pk && !j.member)
+  const joins = allGroups().flatMap((g) => guestJoins(g.id).map((j) => ({ ...j, group: g }))).filter((j) => j.pubkey === pk && !j.member)
   const guest = joins[0]
   // a guest can become an admin (and so a member) once their account has an e-mail; an agent never
   const noAdmin = joins.some((j) => j.agent) ? 'An agent has no role.' : joins.length && joins.every((j) => j.unsaved) ? 'This guest has no e-mail yet. Once they save their account, you can make them a member.' : ''
@@ -85,15 +88,17 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
         <div className="profile-head card-head">
           <Avatar pubkey={pk} size={96} />
           <div className="profile-name">{p?.name || displayName(pk)}</div>
-          {address && <div className="hint profile-address">{address}</div>}
+          {guest && !guest.agent
+            ? <div className="hint profile-address profile-guest">Guest in #{guest.group.name || 'a channel'}{guest.unsaved ? ' (not saved)' : ''}{guest.by && <> · invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></>}</div>
+            : address && <div className="hint profile-address">{address}</div>}
           <div className="profile-badges">
             {owner && <><span className="chip">agent</span><span className="hint" style={{ fontSize: 13 }}>of <button className="link" onClick={() => openProfile(owner)}>{owner === me() ? 'you' : displayName(owner)}</button></span></>}
-            {guest && <span className="chip">{guest.agent ? 'agent' : guest.unsaved ? 'guest · not saved' : 'guest'}</span>}
-            {guest?.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
+            {guest?.agent && <span className="chip">agent</span>}
+            {guest?.agent && guest.by && <span className="hint" style={{ fontSize: 13 }}>invited by <button className="link" onClick={() => openProfile(guest.by!)}>{displayName(guest.by)}</button></span>}
           </div>
           <div className="profile-acts">
             {!mine && !guest && !isGuest(me()) && <button className="profile-act" onClick={() => go('dm/' + encodeURIComponent('n:' + pk))}><span className="bx"><MessageIcon /></span>Message</button>}
-            {!mine && address && <a className="profile-act" href={'mailto:' + address}><span className="bx"><MailIcon /></span>E-mail</a>}
+            {!mine && !guest && address && <a className="profile-act" href={'mailto:' + address}><span className="bx"><MailIcon /></span>E-mail</a>}
             <button className="profile-act" onClick={() => void share()}><span className="bx"><ShareIcon /></span>{shared_ ? 'Copied' : 'Share'}</button>
           </div>
         </div>
@@ -117,7 +122,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
         {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
         {x?.place && <div className="profile-place"><PinIcon /> {placeLabel(x.place)}</div>}
         {about ? <Markdown text={about} className="profile-about" /> : mine && <p className="hint">Say a few words about yourself: tap Edit.</p>}
-        {x && x.tags.length > 0 && <div className="profile-tags">{x.tags.map((t) => <span key={t} className="chip">#{t}</span>)}</div>}
+        {(() => { const tags = (guest ? guestTags(pk) : undefined) ?? x?.tags ?? []; return tags.length > 0 && <div className="profile-tags" aria-label="Tags">{tags.map((t) => <span key={t} className="chip">#{t}</span>)}</div> })()}
         {(canOwn || canDrop) && (
           <div className="card">
             {canOwn && <>

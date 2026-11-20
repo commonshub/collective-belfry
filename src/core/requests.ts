@@ -17,7 +17,7 @@ import { BELFRY, getBackend } from '../config'
 import { agentOwner, agentOwners } from './access'
 import { isAgent, isGuest } from './invite'
 import { groups, vouchesFor, type Application, type Group } from './model'
-import { isBelfryAdmin } from './people'
+import { cleanTag, isBelfryAdmin } from './people'
 import { touch } from './store'
 import { isLocalOnly, me, signedFetch } from './sync'
 import { vouch } from './actions'
@@ -228,4 +228,23 @@ export async function loadDirectory(): Promise<void> {
       }))
   } catch { dir = dir ?? [] }
   touch()
+}
+
+// ---- a guest's tags (whois {"pubkeys"} answers "tags": {"<hex>": [..]} for guests; board
+// home/profile-guest, canvas v66). A guest edits them on the website: here they are read only.
+const guestTagsOf = new Map<string, string[]>()
+const askedTags = new Set<string>()
+export const guestTags = (pk: string) => guestTagsOf.get(pk)
+/** Asks once per key; an older server leaves `tags` out and nothing shows. */
+export async function loadGuestTags(pk: string): Promise<void> {
+  if (askedTags.has(pk)) return
+  askedTags.add(pk)
+  if (isLocalOnly()) { guestTagsOf.set(pk, ['repair', 'bikes']); touch(); return }
+  try {
+    const d = await call('/whois', 'POST', { pubkeys: [pk] })
+    const t = d.tags && typeof d.tags === 'object' ? (d.tags as Record<string, unknown>)[pk] : undefined
+    if (!Array.isArray(t)) return
+    const clean = [...new Set(t.filter((x): x is string => typeof x === 'string').map(cleanTag).filter(Boolean))].slice(0, 30)
+    guestTagsOf.set(pk, clean); touch()
+  } catch { askedTags.delete(pk) }
 }
