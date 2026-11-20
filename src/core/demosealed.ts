@@ -37,11 +37,13 @@ export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: 
   const two = 'n:' + [pk.emma, pk.ben].sort().join(',')
   const mailConv = mailThreadOf('events@townhall.example.org', 'Street party permit')
 
+  const unsealed: string[] = []
   if (as === 'old') {
     await demoDm([pk.lina], 'Can you bring the long ladder on Saturday?', s(at(1, 18, 2)), sk('lina'))
     await demoDm([pk.lina], 'Yes, I’ll drop it at the hall at 8:30.', s(at(1, 18, 10)))
     await demoDm([pk.lina], 'Thanks! The key is under the blue pot.', s(at(0, 9, 14)), sk('lina'))
     await demoDm([pk.lina], 'Writing from my new phone 👋', s(at(0, 9, 40)), sk('lina'))
+    unsealed.push((await demoDm([pk.lina], 'Sent from the old tablet', s(at(0, 9, 50)), sk('lina')))!) // v89: came unsealed after sealing
     await demoDm([pk.ana, pk.ben, pk.emma, pk.lina], 'Who has the keys to the shed this weekend?', s(at(0, 8, 30)), sk('ana'))
     await demoDm([pk.ana, pk.ben, pk.emma, pk.lina], 'I do, until Sunday.', s(at(0, 8, 41)), sk('ben'))
     await demoMail('Town Hall <events@townhall.example.org>', 'Street party permit', 'Hello, your request for Mill Lane on 14 June is approved. Please put the signs out by 8:00.')
@@ -87,6 +89,7 @@ export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: 
     ...(opts.ask ? { asking: { name: opts.ask, kind: opts.askKind ?? 'computer', at: Date.now() - 120e3 } } : {}),
     ...(opts.linked ? { linked: { name: opts.linked, kind: 'tablet' as const } } : {}),
   }
+  d.unsealed = unsealed
   if (as === 'received') {
     const { thread } = await import('./dm')
     await new Promise((r) => setTimeout(r, 600)) // dm.ts reads the wraps

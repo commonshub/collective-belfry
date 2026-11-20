@@ -166,7 +166,7 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
   const chainCase = Object.fromEntries(sv.chains.map((c) => [c.name, c]))
   const chainOf = (ref) => { if (!ref) return null; const c = typeof ref === 'string' ? chainCase[ref] : ref; return c ? S.validChain(c.anchor, c.rosters) : null }
   const sum = (c) => c ? { valid_ids: c.rosters.map((r) => r.id), head: S.headOf(c).id, devices: S.headOf(c).devices, lb: S.headOf(c).lb, ready: S.isReady(c) } : { valid_ids: [], head: null, devices: [], lb: null, ready: false }
-  for (const c of sv.chains) { const got = sum(S.validChain(c.anchor, c.rosters)); check(`sealed chain: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
+  for (const c of sv.chains) { const got = sum(S.validChain(c.anchor, c.rosters, c.pinned_head)); check(`sealed chain: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
   const pickR = (r) => r && { pubkey: r.pubkey, created_at: r.created_at, kind: r.kind, tags: r.tags, content: r.content, id: r.id }
   for (const c of sv.wraps) {
     let got
@@ -203,6 +203,15 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const { packs, leftOut } = S.packHistory(K.bob.pubkey, K.alice.pubkey, rumors, T0 + 800)
     const got = { rumors_per_8564: packs.map((p) => JSON.parse(p.content).rumors.length), json_bytes_per_8564: packs.map((p) => S.rumorBytes(p)), ids_of_8564: packs.map((p) => p.id), left_out: leftOut }
     check(`sealed history packing: ${hp.name}`, eq(got, hp.expected), { got, want: hp.expected })
+  }
+  if (sv.ceiling.keys_packing) {
+    const kp = sv.ceiling.keys_packing
+    const many = Array.from({ length: 600 }, (_, i) => { const sk = h('key/many-lb-' + i); return { lb: S.getPub(sk), secret: hex(sk) } })
+    const chunks = S.keyChunks(K.alice_phone.pubkey, K.alice.pubkey, many, T0 + 600)
+    const rumors = chunks.map((k) => S.keysRumor(K.alice_phone.pubkey, K.alice.pubkey, k, T0 + 600))
+    const got = { keys_per_8561: chunks.map((k) => k.length), json_bytes_per_8561: rumors.map((r) => S.rumorBytes(r)), ids_of_8561: rumors.map((r) => r.id) }
+    const want = { keys_per_8561: kp.expected.keys_per_8561, json_bytes_per_8561: kp.expected.json_bytes_per_8561, ids_of_8561: kp.expected.ids_of_8561 }
+    check(`sealed keys packing: ${kp.name}`, eq(got, want), { got, want })
   }
   for (const c of sv.keys_handover) {
     let got

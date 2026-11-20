@@ -2057,3 +2057,6 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-why p { margin: 0 0 14px; font-size: 15px; line-height: 21px; }
 .seal-why .btn { width: 100%; }
 .popover .seal-why { max-width: 300px; padding: 4px; }
+.seal-notsealed { display: inline-flex; align-items: center; gap: 3px; margin-left: 6px; padding: 0; background: none; border: 0; font: inherit; font-size: 11px; color: var(--muted); cursor: pointer; }
+.dm.mine .seal-notsealed { color: inherit; opacity: .75; }
+.seal-close { margin-top: 8px; font-size: 14px; }

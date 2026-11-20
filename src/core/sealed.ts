@@ -51,15 +51,19 @@ interface State {
   lockedHere: Set<Conv>
   /** when each conversation was sealed (ms): messages from before read as usual */
   sealedAt: Map<Conv, number>
+  /** demo: messages that came unsealed after sealing (rumor ids) */
+  unsealed: Set<string>
   /** §8: messages received in a shared history, by rumor id → who shared them (this device only) */
   shared: Map<string, string>
   /** on this (older) device: a new device of mine waits for Allow */
   asking?: { id: string; name: string; kind: DeviceKind; at: number }
+  /** demo: the account has 20 devices already (canvas v90) */
+  full?: boolean
   /** Link a phone or tablet: the device that just came in by scanning my code */
   linked?: { name: string; kind: DeviceKind }
 }
 
-const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map() })
+const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map(), unsealed: new Set() })
 let state: State = empty()
 
 // Demo mode: the boards' people (setDemoSealed). On a belfry: the real chains (sealedrt.ts).
@@ -140,6 +144,18 @@ export function asking() {
   return a && { id: a.id, name: a.name, kind: kindOf(a.name), at: a.at }
 }
 export const linkedByScan = () => (real() ? (R.linkedName() ? { name: R.linkedName()!, kind: kindOf(R.linkedName()!) } : undefined) : state.linked)
+/** Board messages/encryption-thread (v89): a message that came the old way in a sealed
+ *  conversation, dated after this device first saw it sealed. */
+export function notSealed(conv: Conv, d: { rid: string; at: number; sealed?: boolean; pending?: boolean; failed?: string }): boolean {
+  if (!real()) return state.unsealed.has(d.rid)
+  if (d.sealed || d.pending || d.failed || !R.isSealedConv(conv)) return false
+  const first = R.firstSeenOf(conv)
+  return first !== undefined && d.at * 1000 >= first
+}
+/** Remove is offered only on a device that can change the list (demo: always). */
+export const canRemoveDevices = () => (real() ? R.canRemove() : true)
+/** The Allow card closes without an answer (it comes back next time). */
+export const dismissAsking = () => { if (real()) R.dismissAsk(); else { state.asking = undefined; touch() } }
 export const clearLinked = () => { if (real()) R.clearLinkedName(); state.linked = undefined; touch() }
 
 const DAY = 864e5
@@ -185,7 +201,8 @@ const rumorsOf = (conv: Conv) => thread(conv).filter((d) => d.kind === 14 && d.s
 /** Allow on an older device: the new one reads everything (its banner goes). */
 export async function allowAsking() {
   if (real()) { const a = R.pendingAsk(); if (a) await R.allow(a.device); return }
-  ready(); const a = state.asking; if (!a) return
+  ready()
+  if (state.full) { await later(300); throw new Error(R.FULL) } const a = state.asking; if (!a) return
   await later()
   if (state.asking?.id !== a.id) return // another device answered first
   state.mine.push({ id: a.id, name: a.name, kind: a.kind, added: a.at, from: state.mine.find((d) => d.here)?.name, active: Date.now() })
@@ -241,6 +258,7 @@ export interface DemoSealed {
   lockedHere?: Conv[]
   sealedAt?: Record<Conv, number>
   shared?: Record<string, string>
+  unsealed?: string[]
   asking?: { name: string; kind: DeviceKind; at: number }
   linked?: { name: string; kind: DeviceKind }
 }
@@ -249,7 +267,7 @@ export interface DemoSealed {
 export function setDemoSealed(d: DemoSealed) {
   demo = true
   state = {
-    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})), shared: new Map(Object.entries(d.shared ?? {})),
+    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})), shared: new Map(Object.entries(d.shared ?? {})), unsealed: new Set(d.unsealed ?? []),
     lines: new Map(Object.entries(d.lines ?? {}).map(([c, ls]) => [c, ls.map((l) => ({ id: crypto.randomUUID(), ...l }))])),
     asking: d.asking && { id: crypto.randomUUID(), ...d.asking }, linked: d.linked,
   }
@@ -259,7 +277,7 @@ export function setDemoSealed(d: DemoSealed) {
 /** Demo: unlock this new device (as if another device allowed it). */
 export function demoUnlockHere() { state.lockedHere.clear(); touch() }
 /** Demo: a new device of mine asks (the prompt on this device). */
-export function demoAsk(name: string, kind: DeviceKind = 'computer') { demo = true; state.asking = { id: crypto.randomUUID(), name, kind, at: Date.now() - 120e3 }; touch() }
+export function demoAsk(name: string, kind: DeviceKind = 'computer', full = false) { demo = true; state.full = full; state.asking = { id: crypto.randomUUID(), name, kind, at: Date.now() - 120e3 }; touch() }
 /** Demo: a device came in by scanning my Link code. */
 export function demoLinked(name: string, kind: DeviceKind = 'tablet') { demo = true; state.linked = { name, kind }; touch() }
 export const resetSealed = () => { state = empty(); demo = false; touch() }

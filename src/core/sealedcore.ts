@@ -19,6 +19,8 @@ const BACKDATE = 2 * 86400 // as dm.ts: seal and wrap dated up to two days back
 
 const HEX64 = /^[0-9a-f]{64}$/
 export const isKey = (v: unknown): v is string => typeof v === 'string' && HEX64.test(v)
+/** The public key of a secret (hex). */
+export const getPub = (secret: Uint8Array) => getPublicKey(secret)
 const N = /^[1-9][0-9]{0,8}$/
 
 const values = (e: { tags?: unknown }, name: string): string[] =>
@@ -90,35 +92,70 @@ function follows(prev: Roster, earlierLbs: Set<string>, r: Roster): boolean {
   return r.lb === prev.lb
 }
 
-/** The valid chain of the anchor's account (§3.3), or null (no valid anchor, or no valid root). */
-export function validChain(anchor: unknown, rosterEvents: unknown[]): Chain | null {
-  const rootId = anchorRoot(anchor)
-  if (!rootId) return null
-  return chainFromRoot((anchor as NostrEvent).pubkey, rootId, rosterEvents)
+/** The head an anchor names (§3.2): its one head tag, else its root. */
+export function anchorHead(a: unknown): string | undefined {
+  const root = anchorRoot(a)
+  if (!root) return undefined
+  const h = one(a as NostrEvent, 'head')
+  return isKey(h) ? h : root
 }
 
-/** The valid chain from a root this device pinned earlier (§3.4, §5.5: after a fresh start the
- *  previous chain's devices may still hand their old keys over). */
-export function chainFromRoot(account: string, rootId: string, rosterEvents: unknown[]): Chain | null {
+/** The valid chain of the anchor's account (§3.3), or null (no valid anchor, or no valid root).
+ *  PINNED: the head this device last accepted for the account; an anchor naming one of its
+ *  ancestors is not followed back (the pinned head is kept). */
+export function validChain(anchor: unknown, rosterEvents: unknown[], pinned?: string): Chain | null {
+  const rootId = anchorRoot(anchor)
+  if (!rootId) return null
+  return chainFromRoot((anchor as NostrEvent).pubkey, rootId, rosterEvents, anchorHead(anchor), pinned)
+}
+
+/** The valid chain from ROOT_ID: the anchored path root → HEAD_ID (when it is a valid descent
+ *  of the root, else the root alone), then valid steps after its end with the lower id winning
+ *  for now. A roster off that path is ignored whatever its id. PINNED as in validChain. Without
+ *  HEAD_ID (a root pinned before a fresh start, §5.5): the root, then lower-id-wins. */
+export function chainFromRoot(account: string, rootId: string, rosterEvents: unknown[], headId?: string, pinned?: string): Chain | null {
   const parsed = new Map<string, Roster>()
   for (const e of rosterEvents ?? []) { const r = parseRoster(e, account); if (r) parsed.set(r.id, r) }
   const root = parsed.get(rootId)
   if (!root || root.n !== 1 || root.prev !== undefined || !root.devices.includes(root.signer)) return null
+  // a valid descent root → id, checked forward (each step follows the one before)
+  const pathTo = (id: string | undefined): Roster[] | null => {
+    if (!id) return null
+    const back: Roster[] = []
+    const seen = new Set<string>()
+    for (let r = parsed.get(id); r; r = r.prev ? parsed.get(r.prev) : undefined) {
+      if (seen.has(r.id)) return null
+      seen.add(r.id); back.push(r)
+      if (r.id === rootId) break
+    }
+    if (back[back.length - 1]?.id !== rootId) return null
+    const path = back.reverse()
+    const lbs = new Set([root.lb])
+    for (let i = 1; i < path.length; i++) { if (!follows(path[i - 1], lbs, path[i])) return null; lbs.add(path[i].lb) }
+    return path
+  }
+  let path = pathTo(headId) ?? [root]
+  // no going back: when the anchored head is an ancestor of the pinned one, the pinned path stays
+  const pin = pathTo(pinned)
+  if (pin && pin.some((r) => r.id === path[path.length - 1].id) && pin.length > path.length) path = pin
   const children = new Map<string, Roster[]>()
   for (const r of parsed.values()) if (r.prev) (children.get(r.prev) ?? children.set(r.prev, []).get(r.prev)!).push(r)
   const rosters = [root]
   const lbs = new Set([root.lb])
   const added = new Map(root.devices.map((d) => [d, root] as const))
   const dropped = new Map<string, Roster>()
-  for (;;) {
-    const head = rosters[rosters.length - 1]
-    const valid = (children.get(head.id) ?? []).filter((r) => follows(head, lbs, r))
-    if (!valid.length) break
-    const next = valid.reduce((a, b) => (b.id.toLowerCase() < a.id.toLowerCase() ? b : a)) // a fork: the lower id wins
+  const step = (head: Roster, next: Roster) => {
     for (const d of head.devices) if (!next.devices.includes(d)) dropped.set(d, next)
     for (const d of next.devices) { if (!added.has(d)) added.set(d, next); dropped.delete(d) }
     rosters.push(next)
     lbs.add(next.lb)
+  }
+  for (const r of path.slice(1)) step(rosters[rosters.length - 1], r)
+  for (;;) { // after the anchored path: rosters published but not anchored yet
+    const head = rosters[rosters.length - 1]
+    const valid = (children.get(head.id) ?? []).filter((r) => follows(head, lbs, r))
+    if (!valid.length) break
+    step(head, valid.reduce((a, b) => (b.id.toLowerCase() < a.id.toLowerCase() ? b : a))) // for now: the lower id; the next anchor settles it
   }
   return { account, rosters, added, dropped }
 }
@@ -229,6 +266,18 @@ export function keysRumor(giver: string, account: string, keys: LbKey[], at: num
   return withId({ kind: KEYS, pubkey: giver, created_at: at, tags: [['p', account]], content: JSON.stringify({ v: 1, account, keys }) })
 }
 
+/** KEYS split so that each 8561 rumor stays within the 40 000-byte ceiling (§5.5). */
+export function keyChunks(giver: string, account: string, keys: LbKey[], at: number): LbKey[][] {
+  const out: LbKey[][] = []
+  let cur: LbKey[] = []
+  for (const k of keys) {
+    if (cur.length && !fits(keysRumor(giver, account, [...cur, k], at))) { out.push(cur); cur = [] }
+    cur.push(k)
+  }
+  if (cur.length) out.push(cur)
+  return out
+}
+
 /** The giver's key chain gift-wrapped to a device: ["p", <receiving device>], no lb. */
 export function handKeys(giver: Uint8Array, account: string, keys: LbKey[], toDevice: string, f?: Fixed & { rumorAt?: number }): NostrEvent {
   const r = keysRumor(getPublicKey(giver), account, keys, f?.rumorAt ?? Math.floor(Date.now() / 1000))
@@ -290,6 +339,9 @@ export function deviceRequest(device: Uint8Array, account: string, linkSecret?: 
   return signWith(device, { kind: REQUEST, created_at: now, tags, content: '' })
 }
 
+/** The anchor's tags (§3.2): root, and head = the newest roster (absent: the root). */
+export const anchorTags = (root: string, head?: string) => [['d', ANCHOR_D], ['root', root], ...(head && head !== root ? [['head', head]] : [['head', root]])]
+
 /** A roster signed by DEVICE (§3.1). */
 export function makeRoster(device: Uint8Array, a: { account: string; n: number; prev?: string; lb: string; devices: string[]; ready?: boolean }, now = Math.floor(Date.now() / 1000)): NostrEvent {
   if (a.devices.length < 1 || a.devices.length > MAX_DEVICES || new Set(a.devices).size !== a.devices.length) throw new Error('1 to 20 different devices')
@@ -322,6 +374,8 @@ export function packHistory(sharer: string, person: string, rumors: Rumor[], at:
  *  sharer and the RECEIVER are in (author or a p tag), with computed ids; HAVE: ids already here. */
 export function historyRumors(h: Rumor, receiver: string, have: Set<string> = new Set()): Rumor[] {
   if (h.kind !== HISTORY) return []
+  const hp = values(h, 'p')
+  if (hp.length !== 1 || hp[0] !== receiver) return [] // the 8564's p must be the receiver
   let body: { v?: unknown; rumors?: unknown }
   try { body = JSON.parse(h.content) } catch { return [] }
   if (!body || body.v !== 1 || !Array.isArray(body.rumors)) return []
@@ -329,6 +383,7 @@ export function historyRumors(h: Rumor, receiver: string, have: Set<string> = ne
   for (const x of body.rumors) {
     let r: Rumor
     try { r = withId(x) } catch { continue }
+    if (r.kind !== 14 && r.kind !== 7 && r.kind !== 5) continue // never an e-mail (§8)
     const inIt = (pk: string) => r.pubkey === pk || values(r, 'p').includes(pk)
     if (!inIt(h.pubkey) || !inIt(receiver)) continue
     if (!have.has(r.id) && !out.some((o) => o.id === r.id)) out.push(r)

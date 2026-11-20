@@ -35,7 +35,7 @@ import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
 import { demoSealed } from '../core/demosealed'
 import { AllowPrompt, DevicesScreen, EncryptionScreen, ShowHowScreen } from './Sealed'
-import { deviceIn, devicePub, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
+import { chainOf, deviceIn, devicePub, expectSealed, freshStart, keyCount, isSealedConv, readyChain, setSealedUsername, startSealed, takeLinkSecret } from '../core/sealedrt'
 import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
@@ -186,13 +186,16 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         // direct messages and e-mail (dm.ts); my address is my name@domain
         setMyAddress(session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? (session.backend === 'demo' ? `${(session.email ?? 'me').split('@')[0]}@${BELFRY.domain}` : undefined))
         void startReadState() // what I read, shared across my devices (before startDms: it reads the marks)
+        // sealed conversations (docs/sealed.md): this sign-in's device key is the session's client
+        // key; members and admins only, never a guest session (§5.1). Sends wait until it has loaded.
+        const sealedOn = (session.backend === 'belfry' || TEST_RELAYS) && !!session.clientSecret && !guestInfo()
+        if (sealedOn) expectSealed()
         startDms()
-        // sealed conversations (docs/sealed.md): this sign-in's device key is the session's client key
-        if ((session.backend === 'belfry' || TEST_RELAYS) && session.clientSecret) {
+        if (sealedOn && session.clientSecret) {
           setSealedUsername((session.membership.nip05 ?? profiles().get(signer.pubkey)?.nip05 ?? '').split('@')[0])
           void startSealed(session.clientSecret)
           // tests against a local relay only (sealedwire.cjs): public facts, never a secret
-          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv } })
+          if (TEST_RELAYS) Object.assign(window, { __sealed: { device: devicePub, inHead: deviceIn, ready: readyChain, sealed: isSealedConv, keys: keyCount, root: (pk: string) => chainOf(pk)?.rosters[0].id ?? '', fresh: (pk: string) => !!freshStart(pk) } })
         }
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()

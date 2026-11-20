@@ -125,6 +125,10 @@ export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, faile
   failListeners.add(failed)
 }
 
+let beforeFlushHook: (() => Promise<void>) | undefined
+/** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
+export function setBeforeFlush(f: () => Promise<void>) { beforeFlushHook = f }
+
 export async function flush() {
   if (!signer) return
   if (localOnly && demoHold) return // tests: a relay that takes its time
@@ -133,6 +137,7 @@ export async function flush() {
   again = false
   const stalled = new Set<Target>()
   try {
+    if (beforeFlushHook && !localOnly && navigator.onLine) await beforeFlushHook().catch(() => { /* heads unknown: what is queued goes as it is */ })
     for (const item of outboxItems()) {
       if (item.status === 'failed' || stalled.has(item.target)) continue
       if (!localOnly && !navigator.onLine) break

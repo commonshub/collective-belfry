@@ -14,8 +14,8 @@ import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
-import { anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
-import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, ShareHistorySheet, SharedByLine } from './Sealed'
+import { notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
+import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
@@ -214,6 +214,7 @@ function Bubble({ d, head, hold }: { d: Dm; head: string; hold: React.HTMLAttrib
       {d.attachments && d.attachments.length > 0 && <Attachments d={d} />}
       <div className="dm-foot">
         <time>{fmtTime(d.at)}</time>
+        {notSealed(d.conv, d) && <NotSealedMark />}
         {d.kind === 1301 && !d.mine && !d.verified && <span className="dm-warn" title="The sender's provider did not prove this address (no DKIM or SPF)">unverified sender</span>}
         {d.mine && <DmState d={d} r={r} />}
       </div>

@@ -5,10 +5,10 @@ import { useEffect, useRef, useState } from 'react'
 import { convName, isMail, mailAddress, peers, type Conv } from '../core/dm'
 import { displayName, realName } from '../core/model'
 import { touch, useVersion } from '../core/store'
-import { active as sealedOn, mySessions } from '../core/sealedrt'
+import { FULL, active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
-import { sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
+import { canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
 import { MailIcon } from './icons'
 import { Avatar, Sheet, SheetOrPopover, go, up, type Anchor } from './common'
 
@@ -197,6 +197,15 @@ export function AllowPrompt() {
   const { busy, error, run } = usePair()
   useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [a?.id])
   if (!a) return null
+  // canvas v90: a 21st device: said in the card, with Devices / OK; the new device stays locked
+  if (error === FULL) return (
+    <dialog ref={ref} className="seal-alert" role="alertdialog" aria-labelledby="seal-allow-t" onCancel={(e) => e.preventDefault()}>
+      <span className="seal-dvbig"><DeviceIcon kind={a.kind} size={30} /></span>
+      <h2 id="seal-allow-t">{FULL}</h2>
+      <button className="btn" onClick={() => { dismissAsking(); go('me/devices') }}>Devices</button>
+      <button className="btn ghost" onClick={dismissAsking}>OK</button>
+    </dialog>
+  )
   return (
     <dialog ref={ref} className="seal-alert" role="alertdialog" aria-labelledby="seal-allow-t" onCancel={(e) => e.preventDefault()}>
       <span className="seal-dvbig"><DeviceIcon kind={a.kind} size={30} /></span>
@@ -207,6 +216,7 @@ export function AllowPrompt() {
       <button className="btn" disabled={!!busy} aria-busy={busy === 'allow' || undefined} onClick={run('allow', allowAsking)}>{busy === 'allow' ? <><Spin /> Allowing…</> : 'Allow'}</button>
       <button className="btn seal-red" disabled={!!busy} aria-busy={busy === 'no' || undefined} onClick={run('no', refuseAsking)}>{busy === 'no' ? <><Spin /> Removing…</> : 'Not me'}</button>
       <span className="seal-note">Not me removes that device and signs it out.</span>
+      {error && <button className="link seal-close" onClick={dismissAsking}>Close</button>}
     </dialog>
   )
 }
@@ -268,7 +278,7 @@ export function DevicesScreen() {
               <span className="row-ico"><DeviceIcon kind={d.kind} size={22} /></span>
               <span className="t"><b>{d.name}{d.here && <> <span className="seal-here">This device</span></>}</b>
                 <small>{[addedLine(d), activeWord(d.active)].filter(Boolean).join(' · ')}</small></span>
-              {!d.here && (removing === d.id
+              {!d.here && canRemoveDevices() && (removing === d.id
                 ? <span className="seal-removing"><Spin /> Removing…</span>
                 : <button className="btn small ghost seal-remove" disabled={!!removing} onClick={() => setAsked(d)}>Remove</button>)}
             </div>
@@ -306,6 +316,29 @@ export function SharedByLine({ who }: { who: string }) {
         <SheetOrPopover title={`Shared by ${first}`} anchor={anchor} onClose={() => setAnchor(undefined)}>
           <div className="seal-why">
             <p>{first} sent you these earlier messages. They come from {first}’s device, so the app can’t check them the way it checks new ones.</p>
+            <button className="btn" onClick={() => setAnchor(undefined)}>OK</button>
+          </div>
+        </SheetOrPopover>
+      )}
+    </>
+  )
+}
+
+const OpenLock = () => <Ico size={12}><rect x="5" y="10.5" width="14" height="10" rx="2" /><path d="M8 10.5V8a4 4 0 0 1 7.5-2" /></Ico>
+
+/** Board messages/encryption-thread (v89): under a message that came the old way after the
+ *  conversation was sealed; a tap explains (a popover on a laptop, a sheet on a phone). */
+export function NotSealedMark() {
+  const [anchor, setAnchor] = useState<Anchor | null | undefined>(undefined)
+  return (
+    <>
+      <button className="seal-notsealed" aria-haspopup="dialog" onClick={(e) => { const el = e.currentTarget; setAnchor({ rect: () => el.getBoundingClientRect(), el }) }}>
+        <OpenLock />Not sealed
+      </button>
+      {anchor !== undefined && (
+        <SheetOrPopover title="Not sealed" anchor={anchor} onClose={() => setAnchor(undefined)}>
+          <div className="seal-why">
+            <p>This message was not sent with the lock. It may come from an old app version.</p>
             <button className="btn" onClick={() => setAnchor(undefined)}>OK</button>
           </div>
         </SheetOrPopover>
