@@ -502,6 +502,116 @@ Not for a site session (it is a key nobody knows there): `POST /codes`,
 - `POST /events/<d>/apply` signed by a site session: 409 `use_chat`. An application is the
   person's own signed join request; the website holds no key that signs as them.
 
+## 6b. An event's conversation, photos, links and participants
+
+Built 2026-11-20; code: `eventchat.py`. The website's event page shows what is said in the
+event's group (`ev-<d>`, the event's chat in the apps), its pictures, the links people wrote
+and who is there, and lets someone write. The website holds no signer session, so the belfry
+reads the groups relay for it and signs a message as the person through the signer.
+
+All under `/events/<link>` (`<link>` = the event's address or its id). **NIP-98 required**, by
+a site session (it acts as its account) or by an account's own key. Allowed: an account that
+**has the event's group**: admitted to it now, with or without a ticket (the relay's member
+list, or a 9000 not followed by a 9001); its creator and co-hosts; an admin of the belfry (a
+site session of an admin too: this is the one place where it counts). Everyone else: 403
+`not_in` (a key that is no account's and no session's, an agent's key, a member who is not in
+the event). Unsigned: 401 `unauthorized`. No such event: 404 `unknown`. 409 `unsupported`
+without the belfry's own register. 503 `unavailable` when a relay does not answer. Every
+answer is `Cache-Control: no-store`.
+
+**A person** is always exactly `{"name", "picture", "slug", "role"}`:
+
+- `name`: their profile's name (kind 0, `display_name` then `name`); a guest without a profile:
+  the name on their account; else `"Somebody"`. A name that is a key or an e-mail address is
+  `"Somebody"`.
+- `picture`: their profile's picture when it is an `https://` address, else `null`.
+- `slug`: their profile page's name (`/villagers/<slug>`; a member's username, a guest's own
+  slug, made the first time it is asked for), `null` for someone with no account here.
+- `role`: `"host"` (the event's creator and its co-hosts), `"door"` (the check-in role,
+  `steward` in docs/checkin.md) or `"attendee"`. The belfry's admins are not hosts for being
+  admins.
+
+No answer carries a key, an npub, a nip05 or an e-mail address. What people **wrote** is
+theirs: a text that spells out an address is given as written.
+
+### `GET /events/<link>/chat?before=<unix>&limit=<1–100, default 50>`
+
+→ `{"messages": [...], "more": bool}`: the newest `limit` messages older than `before`
+(`created_at < before`; without it, the newest), **oldest first**; `more`: older ones exist.
+422 `invalid` for a `limit` or `before` out of range.
+
+```json
+{"id": "<event id>", "at": 1795000000, "by": {…person…}, "mine": false,
+ "text": "Thanks @Bob!", "images": [{"url": "https://…", "alt": "beans.jpg"}],
+ "files": [{"url": "https://…", "type": "application/pdf", "name": "plan.pdf"}],
+ "reply_to": null, "edited_at": null}
+```
+
+- The group's kind 9 messages and kind 1111 thread replies, in one list by time.
+- The author's own latest kind 1010 edit is applied (text and attachments; `edited_at` = when).
+- Left out: deleted ones (the author's kind 5, a kind 5 by the belfry's posting key, any 9005);
+  the chat's cards (a kind 9 with a `pod`, `proposal` or `version` tag, or with an `a` tag and
+  a text starting with 📅, 📝 or ⬡); e-mail cards (`mail-from`, `mail-original`, client
+  `belfry-mail-out`); every other kind (to-dos, polls, join lines); everything by someone who
+  is only reading (their latest 9000 says `["reading", "1"]`).
+- `text`: the content with every attachment's address taken out, `nostr:npub…` /
+  `nostr:nprofile…` (and a bare `npub1…`) replaced by `@Name` (`@Somebody` when nobody is
+  known), and `nostr:note…` / `nevent…` / `naddr…` references removed.
+- `images`: `imeta` tags (NIP-92) whose `m` is `image/*` (no `m`: by the extension; neither:
+  an image), plus bare picture addresses on the belfry's own Blossom in the text. Every other
+  `imeta` is in `files` (`type` = its `m`, `name` = its `alt`).
+- `reply_to`: for a thread reply, the message it answers (its `e` tag, else `E`); for a kind 9
+  its `q` tag; else `null`. The message it names may be on another page, or gone.
+- `mine`: written by the account that asks.
+
+### `POST /events/<link>/chat`
+
+`{"text", "images"?, "reply_to"?}` → 201, the message as above.
+
+- `text`: 1–4000 characters after trimming; may be empty when there are images.
+- `images`: up to 6 addresses `https://<the belfry's Blossom>/<64 hex>[.jpg|.jpeg|.png|.gif|
+  .webp|.avif|.heic|.heif]`, uploaded first as in "A picture: straight to Blossom" (the same
+  one twice counts once).
+- `reply_to`: the `id` of a message of this conversation (one this API would list).
+
+Signed **as the person** through the signer and published on the groups relay, as the web
+chat writes it: kind 9 with `["h", "ev-<d>"]`, a `t` tag per hashtag, a `p` tag per
+`nostr:npub…` in the text; per image an `["imeta", "url …", "m <type by extension>", "x <hash>"]`
+tag and its address appended to the content on its own line. A reply is a kind 1111 (NIP-22):
+`h`, `E` / `K` / `P` = the thread's first message, `e` / `k` / `p` = the message answered (the
+same one unless that is itself a reply: the reply then joins its thread).
+
+Errors: 422 `invalid`; 403 `not_in` (also for someone who is only reading: they join first);
+409 `archived`; 409 `own_key` (they hold their own key: they write in the chat); 503 `signer`;
+429 `too_many` (30 an hour per account); 503 `unavailable` (the relay did not take it).
+There is no edit and no delete here.
+
+### `GET /events/<link>/photos?before=<unix>&limit=<1–100, default 60>`
+
+→ `{"photos": [{"url", "alt", "at", "by": person, "message": id}], "more"}`, **newest
+first**: the `images` of the messages above, paged like them.
+
+### `GET /events/<link>/links`
+
+→ `{"links": [{"url", "at", "by": person, "message": id}]}`, newest first, at most 200: the
+`http(s)://` addresses written in the messages' texts (attachments are not links); one row per
+message and address.
+
+### `GET /events/<link>/participants`
+
+→ `{"participants": [person + {"ticket_title", "checked_in"}], "count"}`: everyone in the
+event's group now, the creator and the co-hosts included; hosts first, then the door, then the
+others, each by name. `ticket_title`: the title of the ticket they were admitted with, `null`
+without one. `checked_in`: checked in at the door. Left out: people who are only
+reading, agents, the belfry's own keys.
+
+### Limits and freshness
+
+120 reads a minute per account (429 `too_many`). What is read from the relay is kept 10
+seconds per group, at most the newest 2000 messages; a message posted here, and anything the
+belfry publishes, empties it. Names, pictures and slugs are kept 60 seconds (a profile changed
+through `POST /site/profile` shows at once). Who may read is asked again each time.
+
 ## 7. CORS
 
 No cookies anywhere; nothing is ever answered with `Access-Control-Allow-Credentials`.
@@ -511,7 +621,8 @@ No cookies anywhere; nothing is ever answered with `Access-Control-Allow-Credent
   endpoints, reading events and requests), plus `login/start`, `login/verify`, `site/me`,
   `site/profile`, `site/logout`, `site/notifications`, and reading `villagers` and
   `villagers/<slug>`. Still **not**: a comment or an edit on a request,
-  `events/<d>/join`.
+  `events/<d>/join`, and nothing of an event's conversation (`events/<link>/chat`, `photos`,
+  `links`, `participants`): those answer the apex only.
 
 A preview is another origin: its browser key is its own, and a session made there is not the
 real site's.
@@ -523,10 +634,11 @@ its profile and (a guest) its page's name; read the profiles its account may see
 which e-mails it gets; comment on public
 requests and edit its own comments, title and text; open a request (an offer); order through
 the checkout and read its own orders; check a code; take a free open ticket; read events as
-the account; log out.
+the account; read an event's conversation, photos, links and participants and write in it,
+when the account has the event's group (§6b); log out.
 
-Cannot: get a signer session or a `bunker_url`; read or post in the chat; send or read
-messages or mail; invite; administer anything (an admin's site session has no admin rights
+Cannot: get a signer session or a `bunker_url`; read or post in any other channel or group;
+edit or delete a message; send or read direct messages or mail; invite; administer anything (an admin's site session has no admin rights
 anywhere); change the account's e-mail address or username; apply for a ticket; reach any
 endpoint not named in this document as the account.
 
@@ -566,4 +678,9 @@ endpoint not named in this document as the account.
   these checks (the first-run setup's admin name): the username wins the page then. Whether
   the website's Content-Security-Policy lets a page on the apex call `belfry.<domain>` was
   not looked at here (the site already calls the API).
+- An event's conversation (§6b): someone who is only reading is told apart by the group's
+  9000 events alone; a thread reply shows in the list by time, not under its thread; a kind 5
+  is taken as its author's only when the message it names was read too (the newest 2000);
+  the relay is not asked whether it stores a message signed this way for a guest (zooid lets a
+  guest write in their groups). Not run against a live relay or signer.
 - Nothing here ran against a live signer, relay, Stripe or Odoo.

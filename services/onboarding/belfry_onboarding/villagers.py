@@ -61,6 +61,9 @@ _list: dict[str, Any] = {"at": 0.0, "rows": None}
 def forget() -> None:
     """A profile, a slug or a visibility changed: the list is read again."""
     _list.update(at=0.0, rows=None)
+    from . import eventchat
+
+    eventchat.forget_people()  # names and slugs shown in an event's conversation
 
 
 def forget_names() -> None:

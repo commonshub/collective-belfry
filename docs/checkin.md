@@ -296,6 +296,9 @@ viewer holds what it needs. `can_pay` is false for a viewer who is not eligible.
 
 ## The website's event page
 
+The event's conversation, photos, links and participants for the website
+(`GET|POST /events/<link>/chat`, `/photos`, `/links`, `/participants`): docs/website-accounts.md §6b.
+
 When the community's published website has the file `/events/_.html`, `https://<domain>/events/<link>`
 answers with that file (status 200) instead of the belfry's own page, for an event that exists
 and is public or by link. The belfry puts the event's link-preview tags (`og:title`,
