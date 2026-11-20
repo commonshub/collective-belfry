@@ -1816,6 +1816,7 @@ def map_host(request: Request) -> Response | None:
                     "/static/",
                     "/invite/",
                     "/mentions/",
+                    "/notifications/",
                     "/mail-forward/",
                     "/skills/",
                 )

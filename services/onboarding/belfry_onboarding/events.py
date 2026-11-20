@@ -1501,7 +1501,9 @@ def _ticket_issued(svc: Services, ev: Event, pubkey: str, mailer: Any) -> None:
             button=(chat_url(svc, ev), "Open the event"),
         )
     partner = next((m2o_id(p.get("partner_id")) for p in rows if p.get("partner_id")), None)
-    if partner:
+    from . import sitenotify
+
+    if partner and sitenotify.pref(svc, partner, "events") != "off":  # their own switch
         try:
             svc.odoo.call(
                 "belfry.follower", "belfry_follow_member_set", [partner, ev.group, "asap"]

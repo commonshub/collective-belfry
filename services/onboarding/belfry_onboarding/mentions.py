@@ -408,7 +408,14 @@ def morning(svc: Services, now: dt.datetime | None = None) -> dict[str, int] | N
     if svc.odoo.param("belfry.mentions_day") >= day:
         return None
     svc.odoo.set_param("belfry.mentions_day", day)
-    return send_digests(svc, local)
+    out = send_digests(svc, local)
+    try:  # the other daily and weekly mails people chose (sitenotify.py) ride this morning
+        from . import sitenotify
+
+        sitenotify.daily(svc, local)
+    except Exception as exc:  # noqa: BLE001 — the mentions went out; these wait a day
+        log.warning("mentions: the daily notifications failed: %s", type(exc).__name__)
+    return out
 
 
 @contextlib.asynccontextmanager

@@ -1284,68 +1284,185 @@ def edit(
     return "ok", now
 
 
-# ── members' replies, mailed to the author from outside ───────────────────────────────────
-def notify(svc: Services, now: int | None = None) -> int:
-    """Mail each author from outside the replies by members since the last round: at most once an
-    hour (Xavier, 2026-11-11: "Email isn't supposed to be real time"), one mail per address that
-    gathers every thread of theirs with news. Returns how many mails went out."""
-    now = now or int(time.time())
-    last = int(_param(svc, "belfry.web.notified") or 0) or now - DIGEST_SECONDS
-    if now - last < DIGEST_SECONDS:
-        return 0
+# ── replies, mailed to the thread's author and to who commented from the website ──────────
+NEWS_DAYS = 8  # how far back a round ever looks
+
+
+def reply_news(svc: Services, since: int, until: int) -> dict[str, dict[str, Any]]:
+    """Who has news in (since, until]: address → ``{"partner": the contact or None, "items":
+    [(slug, site, root, replies, the thread link's key)]}``. A thread's news goes to its author
+    (replies that are not their own) and to whoever commented on it from the website with an
+    account (sitesessions.py; the replies after their first comment that are not theirs), each at their own proven
+    address. An older card's author (posted for an address, before accounts) has a contact only when
+    an account has that address now."""
     gk = _groups_pubkey(svc)
-    # address → [(slug, site, root, replies)]
-    news: dict[str, list[tuple[str, dict[str, Any], dict[str, Any], list[dict]]]] = {}
+    news: dict[str, dict[str, Any]] = {}
+    known: dict[str, tuple[int | None, str]] = {}
+    held: dict[str, int | None] = {}
+
+    def person(key: str) -> tuple[int | None, str]:
+        if key not in known:
+            pid = _partner_of_key(svc, key)
+            row = svc.odoo.read_one("res.partner", pid, ["email"]) if pid else None
+            known[key] = (pid, ((row or {}).get("email") or "").lower())
+        return known[key]
+
+    def holder(email: str) -> int | None:
+        """The contact whose account has this address now (their settings count), if any."""
+        from . import apps, sitenotify
+
+        if email not in held:
+            try:
+                found = apps.member_by_email(svc, email) if sitenotify.own(svc) else None
+            except Exception:  # noqa: BLE001 — mailed as before there were settings
+                found = None
+            held[email] = int(found["partner"]) if found else None
+        return held[email]
+
+    def add(email: str, partner: int | None, item: tuple) -> None:
+        rec = news.setdefault(email, {"partner": partner, "items": []})
+        if rec["partner"] is None:
+            rec["partner"] = partner
+        if all(x[2]["id"] != item[2]["id"] for x in rec["items"]):  # a thread once per address
+            rec["items"].append(item)
+
     for slug, site in sites(svc).items():
         roots, replies, edits = _read(svc, site["channel"])
         # the thread by the title it has now (its author may have edited it)
         by_id = {e["id"]: edited(e, edits) for e in roots if _tag(e, "client") == TAG}
         new: dict[str, list[dict]] = {}
+        commenters: dict[str, dict[str, int]] = {}  # thread → who → their first comment
         for r in replies:
             root = by_id.get(_root_of(r))
-            if root is None or not last < r["created_at"] <= now or r["pubkey"] == gk:
-                continue
-            if r["pubkey"] == root["pubkey"]:  # their own comment
-                continue
-            new.setdefault(root["id"], []).append(r)
+            if root is None or r["pubkey"] == gk or r["pubkey"] == root["pubkey"]:
+                continue  # not a thread from the web; the belfry's; the author's own comment
+            if _tag(r, "client") == TAG and r["kind"] == 1111:
+                first = commenters.setdefault(root["id"], {})
+                first[r["pubkey"]] = min(first.get(r["pubkey"], r["created_at"]), r["created_at"])
+            if since < r["created_at"] <= until:
+                new.setdefault(root["id"], []).append(r)
         for root_id, rs in new.items():
             root = by_id[root_id]
             owner = _owner(svc, root)
-            email = _email_of_key(svc, owner) if owner == root["pubkey"] else owner.lower()
+            if owner == root["pubkey"]:
+                partner, email = person(owner)
+            else:
+                partner, email = holder(owner.lower()), owner.lower()
             if email:
-                news.setdefault(email, []).append((slug, site, root, rs))
-    if news:
-        everyone = [r for items in news.values() for (_s, _site, _root, rs) in items for r in rs]
-        names, _roles = _who(svc, everyone)
+                add(email, partner, (slug, site, root, rs, thread_key(svc, root_id, owner)))
+            for who, first in sorted(commenters.get(root_id, {}).items()):
+                # what came after they joined the thread, and is not their own
+                theirs = [r for r in rs if r["pubkey"] != who and r["created_at"] > first]
+                partner, email = person(who)
+                if theirs and partner and email:
+                    add(email, partner, (slug, site, root, theirs, ""))
+    return news
+
+
+def reply_names(svc: Services, news: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Who wrote the replies: the name of their profile; a guest who has none yet (they wrote
+    from the website), the name they gave for it."""
+    from . import webrequests
+
+    everyone = [r for rec in news.values() for x in rec["items"] for r in x[3]]
+    if not everyone:
+        return {}
+    names = _who(svc, everyone)[0]
+    rest = {r["pubkey"] for r in everyone} - {k for k, v in names.items() if v}
+    return {**webrequests._account_names(svc, rest), **names} if rest else names
+
+
+def send_replies(
+    svc: Services,
+    email: str,
+    rec: dict[str, Any],
+    since: int,
+    names: dict[str, str],
+    said: str = "",
+) -> bool:
+    """One mail to EMAIL with the replies after SINCE in each of their threads; False when
+    there are none. SAID: how often they chose to get it (a daily or weekly mail)."""
+    items = []
+    for slug, site, root, rs, key in rec["items"]:
+        rs = sorted((r for r in rs if r["created_at"] > since), key=lambda x: x["created_at"])
+        if rs:
+            items.append((slug, site, root, rs, key))
+    if not items:
+        return False
+    lines: list[str] = []
+    for slug, site, root, rs, key in items:
+        if len(items) > 1:
+            lines.append(f"“{_title(root)}” ({site['name']}):")
+        for r in rs:
+            lines.append(f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}")
+        if len(items) > 1:
+            lines.append(f"Open it: {thread_url(svc, slug, site, root['id'], key)}")
+    slug, site, root, rs, key = items[0]
+    url = thread_url(svc, slug, site, root["id"], key)
+    mine = all(x[4] for x in items)  # every thread is their own
+    n = sum(len(x[3]) for x in items)
+    if len(items) == 1:
+        subject = f"Re: {_title(root)[:150]}"
+        whose = "your thread" if mine else "the thread"
+        head = f"New in {whose} “{_title(root)}” ({site['name']}):"
+    else:
+        subject = f"{n} new replies in your threads"
+        head = f"New in your {len(items)} threads:" if mine else f"New in {len(items)} threads:"
+    why = "you opened a thread" if mine else "you opened or commented on a thread"
+    how = f"sent {said}" if said else "gathered and sent at most once an hour"
+    more: dict[str, Any] = {}
+    if rec["partner"]:  # an account: its own page to change or stop these
+        from . import sitenotify
+
+        if sitenotify.own(svc):
+            page = sitenotify.settings_url(svc, rec["partner"])
+            more = {
+                "headers": {"List-Unsubscribe": f"<{page}>"},
+                "after": [[("Change or stop these e-mails", page)]],
+            }
+    _mailer(svc).send(
+        email,
+        subject,
+        [head, *lines],
+        (url, "Open the thread"),
+        f"You get this because {why}. Replies are {how}.",
+        **more,
+    )
+    return True  # built and handed to the mail provider (kept in tests)
+
+
+def notify(svc: Services, now: int | None = None) -> int:
+    """Mail the replies since the last round to each thread's author and to who commented on it
+    from the website: at most once an hour (Xavier, 2026-11-11: "Email isn't supposed to be real
+    time"), one mail per address that gathers every thread of theirs with news. Someone with an
+    account chooses how often (sitenotify.py: asap = here, daily or weekly = with the morning's
+    digests, off); an older card's author always gets them here. Returns how many mails went
+    out."""
+    from . import sitenotify
+
+    now = now or int(time.time())
+    last = int(_param(svc, "belfry.web.notified") or 0) or now - DIGEST_SECONDS
+    if now - last < DIGEST_SECONDS:
+        return 0
+    floor = now - NEWS_DAYS * 86400
+    catch = {p: max(at, floor) for p, at in sitenotify.catchups(svc).items()}
+    news = reply_news(svc, max(floor, min([last, *catch.values()])), now)
+    names = reply_names(svc, news)
     sent = 0
-    for email, items in news.items():
-        lines: list[str] = []
-        for slug, site, root, rs in items:
-            if len(items) > 1:
-                lines.append(f"“{_title(root)}” ({site['name']}):")
-            for r in sorted(rs, key=lambda x: x["created_at"]):
-                lines.append(f"{names.get(r['pubkey']) or 'A member'}: {_body(r)[:600]}")
-            if len(items) > 1:
-                link = thread_url(svc, slug, site, root["id"], thread_key(svc, root["id"], _owner(svc, root)))
-                lines.append(f"Open it: {link}")
-        slug, site, root, rs = items[0]
-        url = thread_url(svc, slug, site, root["id"], thread_key(svc, root["id"], _owner(svc, root)))
-        n = sum(len(x[3]) for x in items)
-        if len(items) == 1:
-            subject = f"Re: {_title(root)[:150]}"
-            head = f"New in your thread “{_title(root)}” ({site['name']}):"
-        else:
-            subject = f"{n} new replies in your threads"
-            head = f"New in your {len(items)} threads:"
-        _mailer(svc).send(
-            email,
-            subject,
-            [head, *lines],
-            (url, "Open the thread"),
-            "You get this because you opened a thread. Replies are gathered and sent at most once an hour.",
-        )
-        sent += 1  # built and handed to the mail provider (kept in tests)
+    for email, rec in news.items():
+        partner = rec["partner"]
+        if sitenotify.pref(svc, partner, "replies") != "asap":
+            continue
+        since = min(last, catch.get(partner, last)) if partner else last
+        if send_replies(svc, email, rec, since, names):
+            sent += 1
+    if catch:
+        sitenotify.caught_up(svc, catch)
     _set_param(svc, "belfry.web.notified", str(now))
+    try:
+        sitenotify.hourly(svc, last, now)  # new requests, for who asked to hear of them
+    except Exception as exc:  # noqa: BLE001 — a mail; the next round has the next ones
+        log.warning("webthreads: new requests not mailed: %s", type(exc).__name__)
     return sent
 
 

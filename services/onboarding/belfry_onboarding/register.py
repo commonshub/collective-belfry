@@ -192,6 +192,14 @@ class Register(OdooApi):
                 "INSERT OR REPLACE INTO params (key, value) VALUES (?, ?)", (key, value)
             )
 
+    def params_under(self, prefix: str) -> dict[str, str]:
+        """Every param whose key starts with PREFIX (sitenotify.py: who chose what)."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT key, value FROM params WHERE substr(key, 1, ?) = ?", (len(prefix), prefix)
+            ).fetchall()
+        return {k: v for k, v in rows}
+
     def _create(self, model: str, vals: dict[str, Any]) -> int:
         vals = dict(vals)
         self._defaults(model, vals)
