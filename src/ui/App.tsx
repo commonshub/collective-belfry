@@ -33,6 +33,9 @@ import { useGroupState } from '../core/groupstate'
 import { demoRequests, startRequests } from '../core/requests'
 import { demoRoles, loadRoles } from '../core/roles'
 import { demoEvent } from '../core/demoevent'
+import { demoSealed } from '../core/demosealed'
+import { EncryptionScreen } from './Sealed'
+import { demoAsk, demoLinked, demoUnlockHere } from '../core/sealed'
 import { demoCheckedIn, demoCode, demoSteward } from '../core/checkin'
 import { isBelfryAdmin } from '../core/people'
 import { EventsScreen, eventPath } from './Calendar'
@@ -184,7 +187,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
         startDms()
         startNames() // names never known: asked for, never a shortened npub
         void groupsKey()
-        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, __demoMe: () => me(), __demoOrder: () => orderContent() })
+        if (session.backend === 'demo') Object.assign(window, { demoButtons, demoMail, demoMailPost, demoInboxMail, demoInboxChannel, lastChannelMail, demoGuestJoin, demoGuestReading, demoPeople, demoApply, demoGuest, demoRoles, demoAgentPost, demoRequests, demoGroup, demoEvent, demoCheckedIn, demoSteward, demoCode, demoApplyStatus, demoCharter, demoSealed, demoAsk, demoLinked, demoUnlockHere, __demoMe: () => me(), __demoOrder: () => orderContent() })
         setReady(true)
         // the village's read-only state (admins, whether it needs a first admin)
         if (session.backend === 'belfry') void loadAccessInfo()
@@ -310,6 +313,7 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   else if (section === 'charter') view = <CharterScreen sub={a} id={b} />
   else if (section === 'welcome') view = <WelcomeFlow />
   else if (section === 'channels' && !wide) view = <ChannelList />
+  else if (section === 'dm' && a && b === 'lock') view = <EncryptionScreen conv={a} />
   else if (section === 'dm' && a) view = <MessageThread conv={a} />
   else if (section === 'dm') view = <MessagesList />
   else if (section === 'mentions') view = <MentionsScreen />

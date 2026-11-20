@@ -13,6 +13,8 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
+import { deviceLines, isSealed, type DeviceLine } from '../core/sealed'
+import { DeviceLineRow, LockButton, encConv } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
@@ -112,22 +114,30 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const who = mail ? convName(conv) : ''
   const sub = mail ? (who !== addr ? `${who} · ${addr}` : `E-mail · ${addr}`) : peers(conv).map((p) => profiles().get(p)?.nip05).filter(Boolean).join(', ')
   const title = mail ? (isNewMail(conv) ? `New e-mail to ${who}` : threadName(conv)) : convName(conv)
+  const sealed = isSealed(conv)
+  // the device lines between the messages, by time (core/sealed.ts; none unless sealed)
+  const lines = sealed ? deviceLines(conv) : []
+  const rows: ({ d: Dm } | { l: DeviceLine })[] = [...list.map((d) => ({ d, t: d.at * 1000 })), ...lines.map((l) => ({ l, t: l.at }))].sort((a, b) => a.t - b.t)
+  const onShare = (l: DeviceLine) => go('dm/' + encConv(conv) + '/lock') // step 8: the Share history sheet
   let day = ''
   return (
     <div className="screen">
       <div className="topbar">
         <button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button>
         {!mail && peers(conv).length === 1
-          ? <PersonHead pubkey={peers(conv)[0]} />
-          : <><Who conv={conv} size={30} /><h1>{title}{sub && <small>{sub}</small>}</h1></>}
+          ? <PersonHead pubkey={peers(conv)[0]} sealed={sealed ? conv : undefined} />
+          : <><Who conv={conv} size={30} /><h1><span className="seal-title">{title}{sealed && <LockButton conv={conv} />}</span>{sub && <small>{sub}</small>}</h1></>}
         {mail && !isNewMail(conv) && <button className="icon-btn" aria-label={`New e-mail to ${who}`} title="New e-mail (a new thread)" onClick={() => go('dm/' + enc('m:' + addr))}>＋</button>}
       </div>
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
           {list.length === 0 && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
-          {list.map((d) => {
-            const dd = fmtDay(new Date(d.at * 1000))
+          {rows.map((r) => {
+            const t = 'd' in r ? r.d.at * 1000 : r.l.at
+            const dd = fmtDay(new Date(t))
             const sep = dd !== day ? (day = dd) : ''
+            if ('l' in r) return <div key={r.l.id} className="dm-item seal-item">{sep && <div className="day">{sep}</div>}<DeviceLineRow conv={conv} l={r.l} onShare={onShare} /></div>
+            const d = r.d
             return <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
           })}
         </div>
@@ -143,14 +153,16 @@ const sameSubject = (a?: string, b?: string) => baseSubject(a).toLowerCase().rep
 
 /** Board home/conversation (2026-11-19): the other person's face and name at the top, a tap
  *  pushes their profile. */
-function PersonHead({ pubkey }: { pubkey: string }) {
+function PersonHead({ pubkey, sealed }: { pubkey: string; sealed?: Conv }) {
   const name = displayName(pubkey)
-  return (
+  const head = (
     <button className="dm-person" aria-label={`Open ${name}’s profile`} onClick={() => openProfile(pubkey)}>
       <Avatar pubkey={pubkey} size={34} />
       <span className="n"><PersonName pubkey={pubkey} /> <span className="chev" aria-hidden="true">›</span></span>
     </button>
   )
+  // board messages/encryption-thread: the small lock by the name opens the Encryption screen
+  return sealed ? <span className="dm-person-wrap">{head}<LockButton conv={sealed} /></span> : head
 }
 
 /** A message and, under it on its side, its reactions (the same chips as in channels). A hold or
@@ -272,7 +284,7 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
       {error && <div className="error" style={{ margin: '0 4px 6px' }}>{error}</div>}
       {needsSubject && <input className="input dm-subject-input" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
       <div className="bar">
-        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? 'Write an e-mail' : 'Message'} value={text} onChange={(e) => setText(e.target.value)}
+        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? (needsSubject ? 'Write an e-mail' : 'Reply by e-mail') : 'Message'} value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() } }} />
         <button className="send" aria-label="Send" disabled={!text.trim()} onClick={() => void send()}>↑</button>
       </div>

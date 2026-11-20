@@ -568,3 +568,18 @@ export async function demoMail(sender: string, subject: string, text: string, ve
   const one = generateSecretKey()
   addEvents([finalizeEvent({ kind: 1059, created_at: backdate(), tags: [['p', me()]], content: nip44.v2.encrypt(JSON.stringify(seal), nip44.v2.utils.getConversationKey(one, me())) }, one)])
 }
+
+/** Demo mode only (tests, the encryption boards): a kind 14 message at AT (seconds) in the
+ *  conversation of me and PEOPLE, from SK (a demo person's key) or from me (no SK), as my relay
+ *  would hold its gift wrap to me. */
+export async function demoDm(people: string[], text: string, at: number, sk?: Uint8Array) {
+  if (!isLocalOnly()) return
+  const from = sk ? getPublicKey(sk) : me()
+  const rumor = { kind: 14, pubkey: from, created_at: at, content: text, tags: [...new Set([...people, me()])].filter((p) => p !== from).map((p) => ['p', p]) } as unknown as NostrEvent
+  rumor.id = getEventHash(rumor)
+  const seal = sk
+    ? finalizeEvent({ kind: 13, created_at: at, tags: [], content: nip44.v2.encrypt(JSON.stringify(rumor), nip44.v2.utils.getConversationKey(sk, me())) }, sk)
+    : await currentSigner()!.sign({ kind: 13, created_at: at, tags: [], content: await currentSigner()!.encrypt(me(), JSON.stringify(rumor)) })
+  const one = generateSecretKey()
+  addEvents([finalizeEvent({ kind: 1059, created_at: at, tags: [['p', me()]], content: nip44.v2.encrypt(JSON.stringify(seal), nip44.v2.utils.getConversationKey(one, me())) }, one)])
+}
