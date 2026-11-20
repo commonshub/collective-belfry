@@ -78,16 +78,17 @@ def tax_ok(st: dict[str, Any], vat: bool = True, kind: str | None = None) -> boo
 
 
 def can_sell(svc: Services, env: str = "live", vat: bool = True, kind: str | None = None) -> bool:
-    """Tickets can be invoiced and paid in ENV (the switch is asked apart). The Odoo product is
-    never what is missing: with none picked Belfry finds or makes one ("Event ticket") at the
-    first sale (``prepare``), unless Odoo refused that. VAT, KIND: see ``tax_ok``."""
+    """Tickets can be paid in ENV (the switch is asked apart): a way to pay, and, when ENV has
+    an Odoo connected, what the invoice needs. Without Odoo the buyer gets Belfry's receipt
+    (sales.booked). The Odoo product is never what is missing: with none picked Belfry finds or
+    makes one ("Event ticket") at the first sale (``prepare``), unless Odoo refused that. VAT,
+    KIND: see ``tax_ok``."""
+    if not (sales.stripe_ready(svc, env) or sales.bank_ready(svc)):
+        return False
+    if not sales.odoo_ready(svc, env):
+        return True
     st = sales.settings(svc, env)
-    return bool(
-        sales.odoo_ready(svc, env)
-        and (odoo_product(st) or not st["ticket_product_refused"])
-        and tax_ok(st, vat, kind)
-        and (sales.stripe_ready(svc, env) or sales.bank_ready(svc))
-    )
+    return bool((odoo_product(st) or not st["ticket_product_refused"]) and tax_ok(st, vat, kind))
 
 
 def missing(svc: Services, env: str = "live", vat: bool = True, kind: str | None = None) -> str:
@@ -97,9 +98,7 @@ def missing(svc: Services, env: str = "live", vat: bool = True, kind: str | None
     st = sales.settings(svc, env)
     where = "Test" if env == "test" else "Production"
     parts = []
-    if not sales.odoo_ready(svc, env):
-        parts.append(f"connect Odoo (Plugins → Odoo → {where})")
-    else:
+    if sales.odoo_ready(svc, env):  # without Odoo nothing of it is needed: only a way to pay
         if not odoo_product(st) and st["ticket_product_refused"]:
             parts.append(
                 "Odoo did not let Belfry create the product “Event ticket” (its API key's user "

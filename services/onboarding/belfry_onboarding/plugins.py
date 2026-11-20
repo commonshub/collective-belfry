@@ -153,9 +153,14 @@ def email_status(svc: Services) -> tuple[str, str]:
 def tester_note(svc: Services) -> str:
     """What testers need, for the overview: fixed text and counts only."""
     n = len(testers.tester_partners(svc))
-    miss = [f"Stripe test: {m}" for m in stripe_missing(svc, "test")] + [
-        f"Odoo test: {m}" for m in odoo_missing(svc, "test")
-    ]
+    # a test Odoo is optional: without one a tester's order gets Belfry's receipt, no invoice
+    no_odoo = not sales.odoo_ready(svc, "test")
+    miss = [] if no_odoo else [f"Odoo test: {m}" for m in odoo_missing(svc, "test")]
+    if stripe_missing(svc, "test") and (
+        sales.stripe_ready(svc, "test") or not sales.bank_ready(svc)
+    ):
+        # no way to pay at all, or a key without its webhook secret (payments nobody hears of)
+        miss += [f"Stripe test: {m}" for m in stripe_missing(svc, "test")]
     who = f"{n} tester{'s' if n != 1 else ''}" if n else "No testers yet"
     head = (
         f"<p>{E(who)}. A tester is a member made for trying payments: what they buy goes through "
@@ -163,7 +168,11 @@ def tester_note(svc: Services) -> str:
         '<a href="/members">Members</a> (+, then Tester).</p>'
     )
     if not miss:
-        return head + '<p class="st ok">The test environment is ready.</p>'
+        note = " Without a test Odoo, a tester's order gets a receipt and no invoice."
+        return (
+            head
+            + f'<p class="st ok">The test environment is ready.{E(note) if no_odoo else ""}</p>'
+        )
     items = "".join(f"<li>{E(m)}</li>" for m in miss)
     return (
         head
@@ -213,7 +222,7 @@ def overview_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str
     cards = ""
     for path, name, about, (text, kind) in (
         ("stripe", "Stripe", "Card payments", stripe_status(svc)),
-        ("odoo", "Odoo", "Invoices, VAT and payments", odoo_status(svc)),
+        ("odoo", "Odoo", "Invoices, VAT and payments (optional)", odoo_status(svc)),
         ("email", "E-mail", "The belfry's mail provider", email_status(svc)),
     ):
         cards += (
@@ -359,7 +368,7 @@ def odoo_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
 <div class="actions" style="margin-top:8px">{_clears(svc, csrf, ("odoo_api_key",), env, "odoo")}</div>
 {picks}</section>"""
     body = f"""{salesconsole.STYLE}{STYLE}<div class="sales plugins"><p><a href="{PATH}">‹ Plugins</a></p><h1>Odoo</h1>
-<p class="muted">Invoices, VAT and payments live in your Odoo.</p>{_note(msg, err)}{parts}</div>"""
+<p class="muted">Invoices, VAT and payments live in your Odoo. Optional: without Odoo a paid order gets Belfry's own receipt by mail and no invoice, and bank transfers are marked paid by hand on the Sales page.</p>{_note(msg, err)}{parts}</div>"""
     return console.frame("Odoo", PATH, who, body)
 
 

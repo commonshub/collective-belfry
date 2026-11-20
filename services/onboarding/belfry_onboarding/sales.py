@@ -16,7 +16,10 @@ Where things live:
 An order is a small state machine: ``pending`` (made) → ``invoiced`` (the seller's invoice is
 posted) → ``paid`` (Stripe, the bank, or an admin) → ``active`` (the pass is open), or
 ``cancelled`` / ``expired``. Each order records its next ``step``; a step that fails (Odoo or
-Stripe down) is retried by the tick (``tick``), so an order is never lost halfway.
+Stripe down) is retried by the tick (``tick``), so an order is never lost halfway. With no Odoo
+connected in the order's environment there is no invoice (``booked``): ``pending`` → ``paid``
+(Stripe's event, or an admin marking a bank transfer) → ``active``, and the buyer gets Belfry's
+own receipt (docs/sales.md §11).
 
 The buyer (section 3 of the contract): the key that signs the checkout is a session key. When
 the pass opens, an unknown key gets a new contact whose address is *unverified*: it is kept in
@@ -776,9 +779,26 @@ def bank_ready(svc: Services) -> bool:
 
 
 def can_sell(svc: Services, env: str = "live") -> bool:
-    """Paid products can be sold: invoices, and at least one way to pay them (bank details are
-    shared by both environments)."""
-    return accounting_ready(svc, env) and (stripe_ready(svc, env) or bank_ready(svc))
+    """Paid products can be sold: at least one way to pay them (bank details are shared by both
+    environments) and, when ENV has an Odoo connected, what its invoices need. Without Odoo
+    the order is paid and its buyer gets Belfry's own receipt (``booked``)."""
+    if not (stripe_ready(svc, env) or bank_ready(svc)):
+        return False
+    return accounting_ready(svc, env) if odoo_ready(svc, env) else True
+
+
+def booked(o: dict[str, Any] | None) -> bool:
+    """Whether the order's books are kept in Odoo (invoice, payment, credit note). False for an
+    order made while its environment had no Odoo connected: it goes pending → paid → active
+    with no invoice, and its buyer gets Belfry's receipt. Fixed when the order is made (orders
+    made before this existed are Odoo's)."""
+    return (o or {}).get("books") != "none"
+
+
+def reference_of(oid: str) -> str:
+    """The payment reference of an order without an invoice: the communication of its bank
+    transfer, and the reference on its receipt."""
+    return f"ORDER {oid[2:6]}-{oid[6:10]}".upper()
 
 
 def summary(svc: Services) -> dict[str, bool]:
@@ -1570,6 +1590,9 @@ def answer(
     }
     if o.get("ticket"):  # an event ticket's order (docs/sales.md §10)
         out["ticket"] = o["ticket"]
+    if o.get("reference"):
+        # no Odoo, so no invoice: the order's own reference (a transfer's communication)
+        out["reference"] = o["reference"]
     inv = o.get("invoice") or {}
     if inv.get("number"):
         out["invoice"] = {
@@ -1867,6 +1890,7 @@ def _checkout(
         billing["kind"] == "organisation"
         and billing.get("vat")
         and vies_country(billing["kind"], billing["country"], billing["vat"])
+        and odoo_ready(svc, env)  # without Odoo nothing is invoiced: kept as typed (receipt)
         and sells(svc, env)
     ):
         # checked before the invoice is made (outside the lock: VIES can be slow)
@@ -1878,6 +1902,8 @@ def _checkout(
         if valid is None:
             flags.append("vies_down")  # taken; the admins check the number by hand
         vat_valid = valid is True and salesodoo.in_eu(billing["vat"])
+    # whose books: the environment's Odoo when one is connected, else Belfry's own receipt
+    books = "odoo" if odoo_ready(svc, env) else "none"
     with _checkout_lock:
         if len(st.orders(OPEN, key=key)) >= OPEN_PER_KEY:
             raise ApiError(429, "too_many", "Too many open orders. Pay or wait for one to end.")
@@ -1947,8 +1973,9 @@ def _checkout(
             raise ApiError(
                 409,
                 "test_not_set_up",
-                "This address is a tester's, and the test environment (Stripe test mode, test "
-                "Odoo) is not set up yet.",
+                "This address is a tester's, and the test environment is not set up yet: it "
+                "needs a way to pay (Stripe's test mode, or the bank details) and, when a test "
+                "Odoo is connected, its picks.",
             )
         if total["gross"] > 0 and not sells(svc, env):
             _give_back(svc, {"id": oid, "code": code})
@@ -1959,6 +1986,10 @@ def _checkout(
                     ("Tickets can't be bought here yet. " + lacks(env)).strip(),
                 )
             raise ApiError(409, "cannot_sell", "Paid passes can't be sold here yet.")
+        if total["gross"] > 0 and books == "none" and pay == "invoice" and not bank_ready(svc):
+            # no Odoo to make an invoice and no bank account to pay into: only the card
+            _give_back(svc, {"id": oid, "code": code})
+            raise ApiError(409, "no_transfer", "Paying by transfer is not set up here.")
         created = now()
         # a free product with no code makes no account from nothing: the address first
         gate = total["gross"] == 0 and not code and not (owner and owner["verified"])
@@ -1997,8 +2028,14 @@ def _checkout(
             "step": "confirm"
             if gate
             else (
-                "activate" if total["gross"] == 0 else ("invoice" if pay == "invoice" else "card")
+                "activate"
+                if total["gross"] == 0
+                else (
+                    ("invoice" if books == "odoo" else "transfer") if pay == "invoice" else "card"
+                )
             ),
+            "books": books,
+            "reference": reference_of(oid) if books == "none" and total["gross"] else None,
             "created": iso(created),
             "hold_until": hold,
             # a signed-in member or guest: the pass goes on their account
@@ -2060,6 +2097,8 @@ def advance(svc: Services, oid: str, first: bool = False, count: bool = False) -
                     from . import salesstripe
 
                     salesstripe.make_session(svc, o)
+                elif step == "transfer":
+                    wait_for_transfer(svc, o)
                 elif step == "register_payment":
                     from . import salesodoo
 
@@ -2158,6 +2197,8 @@ def _flag(o: dict[str, Any], *names: str) -> list[str]:
 def next_after_pass(o: dict[str, Any]) -> str:
     """What an active order still owes the books: an invoice (paid by hand before one existed,
     or paid after its first invoice was credited), then the payment on it."""
+    if not booked(o):
+        return "done"  # no Odoo: no invoice, nothing to register
     if o["total"]["gross"] > 0 and not (o.get("invoice") or {}).get("move_id"):
         return "invoice"
     if o.get("payment_due"):
@@ -2187,6 +2228,16 @@ def after_invoice(svc: Services, o: dict[str, Any]) -> None:
         if card:
             return  # the invoice mail goes once the card session exists (salesstripe)
     queue_invoice_mail(svc, o)
+
+
+def wait_for_transfer(svc: Services, o: dict[str, Any]) -> None:
+    """An order without an invoice (no Odoo) that is paid by bank transfer: it waits for an
+    admin to mark it paid; how to pay is mailed (when there is a bank account to pay into)."""
+    store(svc).update(o["id"], step="wait")
+    if bank_ready(svc):
+        from . import salesmail
+
+        salesmail.queue(svc, "transfer", o["id"], invoice_address(o))
 
 
 def queue_invoice_mail(svc: Services, o: dict[str, Any]) -> None:
@@ -2223,7 +2274,7 @@ def mark_paid(
         if o["state"] in ("cancelled", "expired"):
             o = _reopen(svc, o)
         inv = o.get("invoice") or {}
-        due = how in ("card", "hand") and o["total"]["gross"] > 0
+        due = how in ("card", "hand") and o["total"]["gross"] > 0 and booked(o)
         if how == "transfer" and inv.get("move_id"):
             due = False  # Odoo saw it: it is on the invoice already
         st.update(
@@ -2296,6 +2347,33 @@ def reopen_paid(svc: Services, oid: str, reason: str, by: str) -> dict[str, Any]
     """The console's "Reopen and mark paid": a transfer that came in time but was reconciled
     after the hold ended (or an order cancelled by mistake)."""
     return mark_paid(svc, oid, "hand", reason, by)
+
+
+def mark_refunded(svc: Services, oid: str, reason: str, by: str) -> dict[str, Any]:
+    """An admin says a paid order without an invoice (no Odoo) was refunded (by hand, in Stripe
+    or by transfer): what a full credit note in Odoo does for an invoiced one. A pass closes;
+    an event ticket's holder stays in the event, flagged for the admins (docs/sales.md §10).
+    Belfry moves no money."""
+    from . import core
+
+    st = store(svc)
+    with _order_lock(oid):
+        o = st.order(oid)
+        if o is None:
+            raise KeyError(oid)
+        if booked(o) or o["state"] != "active" or o.get("closed") or not o["total"]["gross"]:
+            return o
+        o = st.update(oid, refunded={"reason": reason[:200], "by": by[:100], "at": iso(now())})
+        if o.get("ticket"):
+            from . import ticketsales
+
+            ticketsales.refunded(svc, o)
+        else:
+            if o.get("pass_id"):
+                core.revoke_pass(svc, int(o["pass_id"]), "refunded")
+            st.update(oid, closed=iso(now()), flags=_flag(o, "refunded"))
+            log.info("sales: order %s: refunded by hand, its pass closed", oid)
+        return st.order(oid) or o
 
 
 def _existing_pass(svc: Services, oid: str) -> int | None:
@@ -2515,7 +2593,11 @@ def expire_holds(svc: Services) -> int:
                 o["state"] != "confirm"
                 and until - t <= dt.timedelta(days=REMIND_DAYS)
                 and o["total"]["gross"] > 0
-                and ((o.get("invoice") or {}).get("number") or o.get("pay") == "card")
+                and (
+                    (o.get("invoice") or {}).get("number")
+                    or o.get("pay") == "card"
+                    or not booked(o)
+                )
             ):
                 from . import salesmail
 
@@ -2533,6 +2615,7 @@ def retry(svc: Services) -> None:
             in (
                 "invoice",
                 "card",
+                "transfer",
                 "activate",
             )
         ) or (o["state"] == "active" and o.get("step") in ("invoice", "register_payment")):
@@ -3384,7 +3467,9 @@ def switch_pay(svc: Services, oid: str, pay: str) -> dict[str, Any]:
             raise ApiError(409, "no_card", "Paying by card is not set up here.")
         vals: dict[str, Any] = {"pay": pay}
         has_invoice = bool((o.get("invoice") or {}).get("move_id"))
-        if pay == "invoice" and not has_invoice:
+        if pay == "invoice" and not booked(o):
+            vals["step"] = "transfer"  # no Odoo: the transfer's details, no invoice
+        elif pay == "invoice" and not has_invoice:
             vals["step"] = "invoice"
         elif pay == "card":
             stripe = o.get("stripe") or {}
@@ -3409,7 +3494,7 @@ def _refresh(svc: Services, o: dict[str, Any]) -> dict[str, Any]:
     _polled[o["id"]] = t
     if len(_polled) > 10000:
         _polled.clear()
-    if o.get("step") in ("invoice", "card", "register_payment", "activate"):
+    if o.get("step") in ("invoice", "card", "transfer", "register_payment", "activate"):
         o = advance(svc, o["id"]) or o
     if o["state"] in ("pending", "invoiced") and (o.get("stripe") or {}).get("expires_at"):
         if int(o["stripe"]["expires_at"]) < time.time() + 60 and stripe_ready(svc, env_of(o)):

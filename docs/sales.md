@@ -6,6 +6,10 @@ invoices kept in an Odoo the community already has (Odoo Online works: only stan
 its JSON-2 API, no module to install). Decided by Xavier on 2026-11-17 for Open Source Village
 2027; first user: opensourcevillage.org.
 
+**Odoo is optional** (Xavier, 2026-11-20): a belfry with no Odoo connected sells too, with
+Belfry's own receipt instead of an invoice: §11. Everything below about invoices, credit notes
+and Odoo's bank reconciliation applies to an environment that has an Odoo connected.
+
 Status: **built** (2026-11-17, `sales.py`, `salesodoo.py`, `salesstripe.py`, `salespay.py`,
 `salesconsole.py`; tests `tests/test_sales*.py`). Tested against fakes only: the real Odoo
 Online, Stripe and VIES were never called (see §8). Nothing takes money until an admin has
@@ -16,12 +20,13 @@ entered the Odoo connection, the bank details and the Stripe key in the console.
 | Piece | Where | Needs |
 |---|---|---|
 | Products, prices, codes, orders | Belfry's register | nothing |
-| Invoices, VAT, payments, credit notes | the community's Odoo (JSON-2) | Odoo connection |
+| Invoices, VAT, payments, credit notes | the community's Odoo (JSON-2) | Odoo connection (optional: §11) |
 | Card payments | Stripe Checkout, the community's own account | Stripe key + webhook secret |
-| Bank transfers | `/pay` page + Odoo's bank reconciliation | bank details, Odoo connection |
+| Bank transfers | `/pay` page + Odoo's bank reconciliation (without Odoo: an admin's "Mark paid") | bank details |
 
-A product with a price can only be sold when the Odoo connection is set (invoice numbers and VAT
-live there). Free products and codes worth 100% work with nothing set.
+A product with a price can be sold when there is a way to pay it (Stripe, or the bank details)
+and, **when an Odoo is connected**, its picks are complete (a product and both taxes: invoice
+numbers and VAT live there). Free products and codes worth 100% work with nothing set.
 
 ## 2. Settings (console, admins only): belfry.<domain>/sales and belfry.<domain>/plugins
 
@@ -281,7 +286,9 @@ the fields named here); a body that isn't a JSON object is 400 `invalid_json`.
 - Instead of `product`, the body may name an event's ticket: `"ticket": "<the ticket's d tag>"`
   (§10, with its own errors).
 - Errors: `unknown_product`, `not_on_sale`, `sold_out`, `unknown_code`, `code_used`,
-  `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (Odoo not set),
+  `invalid_email`, `invalid_billing`, `invalid_vat`, `cannot_sell` (no way to pay, or the
+  connected Odoo's picks are incomplete), `no_transfer` (409: `pay: invoice` with no Odoo and
+  no bank details: §11),
   `email_mismatch` (409: an unverified account ordering for another address), `too_many`
   (429), `accounting` (Odoo refused), `test_not_set_up` (409: a tester's paid order while the
   test environment can't sell; §9).
@@ -530,9 +537,11 @@ must give nobody anything):
   (`belfry_odoo_partner`): each test invoice gets its own test contact.
 - No places: test orders don't count in `left` / `sold_out` for real buyers, and a code's use by
   a test order goes in `test_used`, never `used` (a code still has to be valid for it).
-- Paid orders need the test environment to be able to sell (test Odoo connection + picks, and
-  the test Stripe key or bank details): else **409 `test_not_set_up`**, never a fall back to
-  production.
+- Paid orders need the test environment to be able to sell (the test Stripe key or the bank
+  details; and, when a test Odoo is connected, its picks): else **409 `test_not_set_up`**,
+  never a fall back to production. **A test Odoo is optional** (§11): without one a tester's
+  order goes through Stripe's test mode (or a transfer an admin marks paid), gets a receipt and
+  no invoice, and production's Odoo is never used for it.
 - `pay: invoice` / transfer: the invoice is made in the test Odoo; "Mark paid" works as usual;
   the `/pay/<order>` page shows "Test order: no real money."
 
@@ -567,8 +576,9 @@ person and the hosts. A **tester's** order (§9: the checkout's e-mail is a test
 address) goes through while the switch is off, provided the test environment can sell tickets
 (else 409 `test_not_set_up`).
 
-**What must be set** (per environment): the Odoo connection, Stripe or the bank details, and
-the VAT tax the sale uses (below). Missing → 409 `cannot_sell` (a tester's order: 409
+**What must be set** (per environment): Stripe or the bank details; and, when an Odoo is
+connected in that environment, the VAT tax the sale uses (below). With no Odoo connected
+nothing else is needed (§11). Missing → 409 `cannot_sell` (a tester's order: 409
 `test_not_set_up`), whose `message` names what is missing and where in the console.
 
 **The Odoo product a ticket is invoiced as is never what blocks a sale** (Xavier, 2026-11-20).
@@ -702,8 +712,8 @@ ticket of this event before this order was paid: refund one).
 orders that hold one; null when unlimited), `can_pay` (this viewer could buy it through the
 checkout now: priced, on sale, in the sales currency, not `closed`, places left, the event not
 over, allowed for them when it is members-only, tickets can be invoiced (Odoo connected, the
-tax a person's invoice needs picked when the ticket states VAT, Odoo did not refuse to let
-Belfry make the product, a way to pay), and the switch is on
+a way to pay; and with an Odoo connected: the tax a person's invoice needs picked when the
+ticket states VAT, and Odoo did not refuse to let Belfry make the product), and the switch is on
 **or** the viewer is a tester with the test environment set up; without a viewer: the switch)
 and `checkout_url` (below; null when `can_pay` is false or no template is set).
 `needs_payment` is unchanged. `POST /events/<d>/join` on a priced ticket stays 409 `payment`,
@@ -767,4 +777,83 @@ Not in this version: several tickets in one order, codes for tickets made by han
 console (only an approved offer's), `POST /codes/check` for a ticket, a ticket that also gives
 a membership pass (a two-week ticket giving a village pass for its dates is an open question),
 removing someone automatically on a refund, tickets in the phone apps (they show the server's
-message), tickets on a belfry that keeps its register in Odoo.
+message), tickets on a belfry that keeps its register in Odoo (`REGISTER=odoo`; not to be
+confused with a belfry on its own register that has no Odoo connected for invoices: §11).
+
+## 11. Without Odoo (2026-11-20)
+
+Most belfries have no Odoo. The checkout works without one, for **event tickets and for
+products (passes) alike**: the order machinery is the same, so both were done. Per environment:
+an order is `books: "odoo"` when its environment had an Odoo connected (URL, database and key)
+when the order was made, else `books: "none"`; fixed on the order (orders made before this
+existed are Odoo's). Connecting an Odoo later changes nothing for the orders already made.
+
+**What can be sold.** `can_sell` (and a ticket's `can_pay`) needs only a way to pay: the
+Stripe key of that environment, or the bank details. `ticketsales.missing` then asks only for
+"connect Stripe … or set the bank account". The switch "Sell event tickets through the
+checkout" still decides for tickets.
+
+**An order without Odoo** goes `pending` → `paid` → `active` (or `cancelled` / `expired`):
+never `invoiced`, no invoice, payment or credit-note step, and nothing ever asks an Odoo.
+
+- `POST /checkout` answers as in §4 with `invoice: null` throughout and a new field
+  **`reference`**: the order's own reference, `ORDER XXXX-XXXX` (from the order id). It is the
+  communication of a bank transfer and the reference on the receipt.
+- `pay: card` → a Stripe Checkout session from Belfry's total (as a card order with Odoo).
+  `checkout.session.completed` at the environment's hook → paid → the pass opens / the buyer is
+  admitted. Signature, deduplication on the event id, the amount / currency / reference check,
+  `paid_twice`, `paid_old_amount`, `stripe_mismatch`: all as in §5.
+- `pay: invoice` (the API's word for "by bank transfer") → the order waits (`pending`); a
+  mail "How to pay for your …" goes to the address (amount, the reference as the
+  communication, until when the place is held, the cancel link) and `pay_url`
+  (`/pay/<order>`) shows the bank details and the EPC QR with the reference as the
+  communication. **Nothing reconciles a transfer: an admin marks the order paid** in the
+  console ("Waiting for a transfer" lists these orders too, with the reference and "No invoice
+  (no Odoo)"; reason required, the admin's name recorded). With no bank details: 409
+  `no_transfer` (also from `POST /checkout/<order>/pay`).
+- A card order with no Stripe key (bank details only) is a transfer order: same mail, same
+  page. A card order's `/pay/<order>` offers "Pay by transfer instead" when bank details are
+  set; the card session stays valid.
+- **Money safety**: an order becomes `paid` only by Stripe's verified event for it or by an
+  admin's "Mark paid" / "Reopen and mark paid". Nothing else marks one paid.
+- **Receipt.** When the order is active the buyer gets Belfry's receipt by mail (never called
+  an invoice, no PDF): "Receipt ORDER XXXX-XXXX, from <community>", the event and the ticket
+  (or the product), the discount when there is one, the amount ("€50.00 + 21% VAT €10.50 =
+  €60.50" when the ticket or the product states VAT, else the amount alone, with no word
+  about VAT), "Paid by card on <date>" / "Paid by bank transfer on <date>", and for an
+  organisation "Billed to: <name>, VAT / tax id <number>, <address>". The community is named
+  as the mails name it; Belfry holds no legal details of the community (company number,
+  address), so the receipt says nothing about them. The confirm-your-e-mail link rides in it
+  as in §3. Subject: "Your <name>: receipt".
+- **Billing and organisations.** The billing fields are accepted and stored as in §4 and
+  printed on the receipt. **Nothing is validated beyond the format checks**: the VAT number
+  of an EU organisation is **not** sent to VIES (there is no invoice to put it on; `vies_down`
+  and `invalid_vat`-by-VIES never happen), `vat_valid` stays false. The amount follows the
+  same rule as with Odoo: a person pays the price with its VAT in it, an organisation the
+  price plus VAT (a ticket: as its `vat` tag says, §10). A receipt is not a VAT invoice: an
+  organisation that needs one asks the community.
+- **Hold, reminder, expiry**: as in §5 (7 days, one reminder 2 days before, then `expired`;
+  the code's use and the place come back). No credit note. **Paid after it ended**: reopened
+  (`paid_late`, `oversold`, `event_over`), by a late Stripe event or by "Reopen and mark paid".
+- **Codes and offers**: unchanged; 100% opens at once and needs nothing set.
+- **Refunds.** Belfry moves no money and, without Odoo, can't see a refund. The admin refunds
+  by hand (in Stripe, or by transfer) and then presses **"Mark refunded"** on the order in
+  the console (reason required; only on a paid order without Odoo): a pass closes (flag
+  `refunded`); a ticket's holder stays in the event and the order is flagged
+  `refunded_admitted`, as a full credit note does with Odoo (§10). Stripe's refund events are
+  not read.
+- **Testers** (§9): each environment is asked apart. Production with Odoo and a test
+  environment with only Stripe's test key works (test orders get a receipt, production's Odoo
+  is never used), and the reverse too. With neither a test Stripe key nor a test Odoo, the
+  shared bank details alone make the test environment able to sell: a tester's order is then
+  a transfer order an admin marks paid (no money moves).
+- **Console.** `/sales` says "No Odoo connected: nothing is invoiced…", lists the transfer
+  orders under "Waiting for a transfer", shows the reference where the invoice number would
+  be, and offers "Mark refunded". Plugins → Odoo says it is optional.
+
+What still needs Odoo: an invoice (number, PDF), VIES, the reconciliation of bank transfers,
+booking payments in a journal, noticing a refund by its credit note.
+
+**Changed for belfries without Odoo**: a product with a price that was `cannot_sell` before is
+now sold as soon as a Stripe key or the bank details are set (`GET /products` → `can_sell:
+true`). Nothing changes for an environment with an Odoo connected.

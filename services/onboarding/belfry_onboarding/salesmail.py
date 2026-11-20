@@ -49,7 +49,12 @@ def not_me_line(svc: Services, o: dict[str, Any], address: str) -> str:
     return f"If you didn't order this, cancel it here: {url}"
 
 
-CANCEL_KINDS = ("invoice", "reminder", "order_confirm")  # the mails with the cancel link
+CANCEL_KINDS = (
+    "invoice",
+    "transfer",
+    "reminder",
+    "order_confirm",
+)  # the mails with the cancel link
 
 
 def _cancel_mailed(svc: Services, m: dict[str, Any]) -> None:
@@ -143,16 +148,14 @@ def _deliver(svc: Services, m: dict[str, Any]) -> bool:
     return False
 
 
-TEST_LINE = (
-    "TEST ORDER: made through the test environment (Stripe test mode, test Odoo). No real money."
-)
+TEST_LINE = "TEST ORDER: made through the test environment (Stripe's test mode). No real money."
 
 
 def _mark_test(svc: Services, m: dict[str, Any], built: Mail) -> Mail:
     """A test order's mails say so, in their subject and first line (fixed text)."""
     from . import sales
 
-    if m["kind"] not in ("receipt", "order_confirm", "invoice", "reminder"):
+    if m["kind"] not in ("receipt", "order_confirm", "invoice", "transfer", "reminder"):
         return built
     o = _order(svc, str(m["ref"]).split(":", 1)[0])
     if sales.env_of(o) != "test":
@@ -184,6 +187,10 @@ def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
     if o.get("valid_from") or o.get("valid_until"):
         lines.append(f"Valid {o.get('valid_from') or 'now'} to {o.get('valid_until') or '—'}.")
     files = _pdf(svc, o)
+    # no Odoo, so no invoice: the mail itself is the receipt of what was paid
+    own = bool(o["total"]["gross"]) and not sales.booked(o)
+    if own:
+        lines[2:3] = receipt_lines(svc, o)
     pid = o.get("partner_id")
     if pid and sales.is_unverified(svc, pid):
         row = svc.odoo.read_one("res.partner", pid, ["belfry_pending_email"]) or {}
@@ -195,16 +202,66 @@ def _receipt(svc: Services, oid: str, address: str) -> Mail | None:
             )
             url = confirm_url(svc, o["id"], pid, pending, "receipt")
             return (
-                f"Your {o['product_name']}: confirm your e-mail",
+                f"Your {o['product_name']}: "
+                + ("receipt, and confirm your e-mail" if own else "confirm your e-mail"),
                 lines,
                 (url, "Confirm your e-mail"),
                 files,
             )
     if o.get("ticket"):  # an event ticket: no pass, the event itself
         lines.append("Sign in with your address to see the event and your ticket.")
-        return f"Your {o['product_name']}", lines, None, files
+        return f"Your {o['product_name']}" + (": receipt" if own else ""), lines, None, files
     lines.append("Sign in with your address to see your pass in the apps.")
-    return f"Your {o['product_name']}", lines, None, files
+    return f"Your {o['product_name']}" + (": receipt" if own else ""), lines, None, files
+
+
+def _rate(o: dict[str, Any]) -> str:
+    return f"{float(o.get('vat_rate') or 0):g}"
+
+
+def receipt_lines(svc: Services, o: dict[str, Any]) -> list[str]:
+    """Belfry's own receipt of a paid order that has no invoice (no Odoo connected): what was
+    bought, the amount with the VAT as the ticket (or the product) states it, how and when it
+    was paid, the order's reference, who received it, and the billing details as the buyer
+    gave them (not checked). A receipt: never called an invoice."""
+    tot, paid = o["total"], o.get("paid") or {}
+    out = [f"Receipt {o.get('reference') or o['id']}, from {_mailer(svc).name}."]
+    if o.get("ticket"):
+        out.append(f"Event: {o.get('event_title') or ''}")
+        out.append(f"Ticket: {o.get('ticket_title') or o['product_name']}")
+    else:
+        out.append(f"For: {o['product_name']}")
+    if tot["percent_off"]:
+        out.append(f"Discount: {tot['percent_off']}%")
+    if tot["vat"]:
+        out.append(
+            f"Amount: {_money(tot['net'])} + {_rate(o)}% VAT {_money(tot['vat'])} = "
+            f"{_money(tot['gross'])}"
+        )
+    else:
+        out.append(f"Amount: {_money(tot['gross'])}")
+    day = (paid.get("at") or o.get("activated") or "")[:10]
+    if paid.get("how") == "card":
+        how = "Paid by card"
+    elif o.get("pay") == "invoice":
+        how = "Paid by bank transfer"
+    else:
+        how = "Payment received"
+    out.append(how + (f" on {day}." if day else "."))
+    b = o.get("billing") or {}
+    if b.get("kind") == "organisation":
+        city = " ".join(x for x in (b.get("zip"), b.get("city")) if x)
+        parts = [
+            b.get("name"),
+            ("VAT / tax id " + b["vat"]) if b.get("vat") else "",
+            b.get("street"),
+            b.get("street2"),
+            city,
+            b.get("region"),
+            b.get("country"),
+        ]
+        out.append("Billed to: " + ", ".join(x for x in parts if x))
+    return out
 
 
 def _pdf(svc: Services, o: dict[str, Any]) -> list[tuple[str, bytes, str]]:
@@ -283,6 +340,33 @@ def _invoice(svc: Services, ref: str, address: str) -> Mail | None:
     return f"Invoice {inv['number']}", lines, button, _pdf(svc, o)
 
 
+def _transfer(svc: Services, oid: str, address: str) -> Mail | None:
+    """How to pay an order that has no invoice (no Odoo) by bank transfer: the amount, the
+    order's reference as the communication, until when the place is held."""
+    from . import sales
+
+    o = _order(svc, oid)
+    if o is None or sales.booked(o) or o["state"] != "pending" or not o["total"]["gross"]:
+        return None
+    if not sales.bank_ready(svc):
+        return None
+    name = _mailer(svc).name
+    lines = [
+        f"Hello {_first(o['name'])},",
+        f"Thank you for your order of a {o['product_name']} for {name}.",
+        f"To pay {_money(o['total']['gross'])} by bank transfer, use the communication "
+        f"{o['reference']}. " + _held(o),
+    ]
+    if address == o["email"].strip().lower():
+        lines.append(not_me_line(svc, o, address))
+    return (
+        f"How to pay for your {o['product_name']}",
+        lines,
+        (sales.pay_url(svc, o["id"]), "How to pay"),
+        [],
+    )
+
+
 def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
     """The one reminder, 2 days before the hold ends: for an invoice, and for a card order
     (no invoice yet: its card link, and the transfer instead), with the cancel link."""
@@ -292,7 +376,7 @@ def _reminder(svc: Services, oid: str, address: str) -> Mail | None:
     inv = (o or {}).get("invoice") or {}
     if o is None or o["state"] not in ("pending", "invoiced") or not o["total"]["gross"]:
         return None
-    if not inv.get("number") and o.get("pay") != "card":
+    if not inv.get("number") and o.get("pay") != "card" and sales.booked(o):
         return None
     card = (o.get("stripe") or {}).get("url")
     if sales.bank_ready(svc):
@@ -359,6 +443,7 @@ BUILD = {
     "receipt": _receipt,
     "order_confirm": _order_confirm,
     "invoice": _invoice,
+    "transfer": _transfer,
     "reminder": _reminder,
     "offer_answer": _offer_answer,
 }

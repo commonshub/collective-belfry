@@ -354,9 +354,21 @@ def test_a_stranger_with_a_testers_address_gets_nothing(envs, keycast):
 def test_no_test_environment_means_409_never_production(stripe, keycast):
     (rsvc, live_odoo, _v), made, _s, _e = stripe
     make_tester(rsvc)
+    bank = {k: sales.settings(rsvc)[k] for k in ("bank_holder", "bank_iban", "bank_bic")}
     with TestClient(create_app(rsvc)) as c:
+        # no test Stripe key and no bank account: no way to pay in the test environment
+        sales.save_settings(rsvc, {"bank_holder": "", "bank_iban": ""})
         r = buy(c, PrivateKey(), email=TESTER, pay="card")
         assert r.status_code == 409 and r.json()["error"] == "test_not_set_up"
+        assert made == [] and not live_odoo.records.get("account.move")
+        assert sales.store(rsvc).orders() == []
+        # the bank account alone (shared) is a way to pay; no test Odoo: a receipt, no invoice.
+        # Still a test order, and production's Stripe and Odoo are never used for it
+        sales.save_settings(rsvc, bank)
+        r = buy(c, PrivateKey(), email=TESTER, pay="card")
+        assert r.status_code == 201 and r.json()["test"] is True
+        assert r.json()["card_url"] is None and r.json()["invoice"] is None
+        assert r.json()["reference"].startswith("ORDER ")
         assert made == [] and not live_odoo.records.get("account.move")
         # a normal buyer is not affected
         r = buy(c, PrivateKey(), email="ada@example.org", pay="card")

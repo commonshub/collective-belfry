@@ -71,6 +71,7 @@ FLAGS = {
     "remove them from the event yourself if they shouldn't come",
     "already_admitted": "they had a ticket of this event already: refund one",
     "event_over": "paid after the event ended or was cancelled",
+    "refunded": "refunded: its pass was closed",
 }
 
 MSG = {
@@ -90,6 +91,7 @@ MSG = {
     "reason": "Give a reason.",
     "not_open": "This order is not open any more.",
     "expired": "The form expired; try again.",
+    "refunded": "Order marked refunded.",
     "erase_cleared": "The request to erase their data after the event is cleared.",
     "tickets": "Saved.",
     "checkout_url_bad": "That address can't be used: https, on this belfry's own domain, with "
@@ -168,8 +170,14 @@ def billing_line(b: dict[str, Any] | None) -> str:
 
 
 def waiting_for_transfer(svc: Services) -> list[dict[str, Any]]:
-    """Orders with an invoice and no payment yet, the one whose hold ends soonest first."""
+    """Orders with an invoice and no payment yet, and the orders without an invoice (no Odoo)
+    whose buyer pays by transfer; the one whose hold ends soonest first."""
     rows = [o for o in sales.store(svc).orders(("invoiced",)) if not o.get("paid")]
+    rows += [
+        o
+        for o in sales.store(svc).orders(("pending",))
+        if not sales.booked(o) and o.get("pay") == "invoice" and o["total"]["gross"]
+    ]
     return sorted(rows, key=lambda o: (o.get("hold_until") is None, o.get("hold_until") or ""))
 
 
@@ -192,16 +200,23 @@ def waiting_html(svc: Services, csrf: str) -> str:
         number = inv.get("number") or ""
         comm = inv.get("communication") or number
         hold = o.get("hold_until") or ""
-        cards += f"""<div class="card"><p><b>{E(o["name"])}</b> · {_money(o["total"]["gross"])} · {E(o["product"])}</p>
+        if sales.booked(o):
+            ref = f"Invoice {E(number) if number else '(no number yet)'}" + (
+                f" · communication <code>{E(comm)}</code>" if comm and comm != number else ""
+            )
+        else:  # no Odoo: no invoice, the order's own reference is the communication
+            ref = f"No invoice (no Odoo) · communication <code>{E(o.get('reference') or '')}</code>"
+        what = o["product_name"] if o.get("ticket") else o["product"]
+        cards += f"""<div class="card"><p><b>{E(o["name"])}</b> · {_money(o["total"]["gross"])} · {E(what)}{" <span class=test-mark>TEST</span>" if sales.env_of(o) == "test" else ""}</p>
 {f'<p class="hint">{bl}</p>' if (bl := billing_line(o.get("billing"))) else ""}
-<p class="hint">Invoice {E(number) if number else "(no number yet)"}{f" · communication <code>{E(comm)}</code>" if comm and comm != number else ""}</p>
+<p class="hint">{ref}</p>
 <p class="hint">Held until {E(hold[:16].replace("T", " ")) if hold else "—"} · {E(days_left(hold))}</p>
 <form method="post" action="{PATH}/order" class="f">
 <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
 <label>Reason <input type="text" name="reason" required placeholder="seen on the bank statement of …"></label>
 <div class="actions"><button class="btn" type="submit" name="do" value="paid">Mark paid</button></div></form></div>"""
     return f"""<div class="waiting"><h2 id="waiting">Waiting for a transfer</h2>
-<p class="hint">Invoiced, not paid yet: the hold that ends soonest first. Odoo's bank reconciliation marks them paid by itself; mark one paid here when you saw the money.</p>
+<p class="hint">Not paid yet: the hold that ends soonest first. {"Odoo's bank reconciliation marks invoiced ones paid by itself; mark one paid here when you saw the money." if sales.odoo_ready(svc) or sales.odoo_ready(svc, "test") else "Mark one paid here when you saw the money on the bank statement: nothing else does."}</p>
 {cards}</div>"""
 
 
@@ -252,6 +267,13 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         + "</div>"
         + '<p class="hint">The Odoo and Stripe connections, for production and for testing, are on '
         '<a href="/plugins">Plugins</a>.</p>'
+        + (
+            ""
+            if s["odoo"]
+            else '<p class="hint">No Odoo connected: nothing is invoiced. A paid order gets '
+            "Belfry's own receipt by mail (not an invoice), a bank transfer is marked paid here "
+            "by hand, and a refund is made by hand and marked here.</p>"
+        )
     )
     # ── bank
     bank = f"""<h2>Bank</h2><div class="card"><form method="post" action="{PATH}/bank" class="f">
@@ -396,11 +418,23 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
             act = f"""<details><summary>Change</summary><form method="post" action="{PATH}/order" class="f">
 <input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
 <label>Reason <input type="text" name="reason" required></label>
-<p class="hint">The pass opens; a new invoice is made if the first was credited.</p>
+<p class="hint">{"The pass opens; a new invoice is made if the first was credited." if sales.booked(o) else "They paid: the pass opens (or they are admitted to the event)."}</p>
 <div class="actions"><button class="btn" type="submit" name="do" value="reopen">Reopen and mark paid</button></div></form></details>"""
         if o.get("flags") or o.get("step") == "stuck" or o.get("next_try_at"):
             act += f"""<form method="post" action="{PATH}/order"><input type="hidden" name="csrf" value="{csrf}">
 <input type="hidden" name="id" value="{E(o["id"])}"><button class="btn ghost" type="submit" name="do" value="retry">Try again</button></form>"""
+        if (
+            o["state"] == "active"
+            and not sales.booked(o)
+            and o["total"]["gross"] > 0
+            and not o.get("closed")
+        ):
+            # no Odoo, so no credit note to read: an admin says when it was refunded
+            act += f"""<details><summary>Refunded</summary><form method="post" action="{PATH}/order" class="f">
+<input type="hidden" name="csrf" value="{csrf}"><input type="hidden" name="id" value="{E(o["id"])}">
+<label>Reason <input type="text" name="reason" required placeholder="refunded in Stripe on …"></label>
+<p class="hint">Belfry moves no money: refund it yourself (Stripe, or a transfer), then mark it here. {"Nobody is taken out of the event by this." if o.get("ticket") else "The pass closes."}</p>
+<div class="actions"><button class="btn ghost" type="submit" name="do" value="refunded">Mark refunded</button></div></form></details>"""
         erase = ""
         if o.get("erase_after_event"):
             erase = "<br><span class=flags>Erase their data after the event (asked)</span>"
@@ -412,21 +446,21 @@ def page_html(svc: Services, who: dict[str, Any], msg: str, err: str) -> str:
         row = (
             f"<tr><td>{E(o['created'][:10])}{'<br><span class=test-mark>TEST</span>' if test else ''}</td><td>{E(o['name'])}<br><span class='hint'>{E(o['email'])}</span>"
             f"{f'<br><span class=hint>{bl}</span>' if (bl := billing_line(o.get('billing'))) else ''}</td>"
-            f"<td>{E(o['product_name'] if o.get('ticket') else o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else ''}</td>"
+            f"<td>{E(o['product_name'] if o.get('ticket') else o['product'])}</td><td>{_money(o['total']['gross'])}</td><td>{'invoice ' + E(inv) if inv else E(o.get('reference') or '')}</td>"
             f"<td>{E(o['state'])}{f'<br><span class=flags>{E(flags)}</span>' if flags else ''}{erase}</td><td>{act}</td></tr>"
         )
         if test:
             trow += row
         else:
             rrow += row
-    head = "<tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice</th><th>State</th><th></th></tr>"
+    head = "<tr><th>Date</th><th>Who</th><th>Product</th><th>Total</th><th>Invoice / reference</th><th>State</th><th></th></tr>"
     orders = f"""{waiting_html(svc, csrf)}<h2>Orders</h2>{f'<table class="list">{head}{rrow}</table>' if rrow else '<p class="hint">No orders yet.</p>'}"""
     if trow:
         orders += f"""<h2 id="test-orders">Test orders</h2>
 <p class="hint">Orders of testers: through Stripe's test mode and the test Odoo, no real money. They take no places and count in no totals.</p>
 <table class="list test">{head}{trow}</table>"""
     body = f"""{STYLE}<div class="sales"><h1>Sales</h1>
-<p class="muted">Passes people buy: free with a code, or paid by card or bank transfer against an invoice in your Odoo.</p>
+<p class="muted">Passes and event tickets people buy: free with a code, or paid by card or bank transfer{" against an invoice in your Odoo" if s["odoo"] else ""}.</p>
 {note}{state}{products}{tickets}{codes}{offers}{orders}{bank}</div>"""
     return console.frame("Sales", PATH, who, body)
 
@@ -626,6 +660,12 @@ def register(app: FastAPI) -> None:
                 return back(request, err="not_open")
             await run_in_threadpool(sales.clear_erase, s, o["partner_id"], by, reason)
             return back(request, msg="erase_cleared")
+        if o is not None and form.get("do") == "refunded":
+            if sales.booked(o) or o["state"] != "active":
+                return back(request, err="not_open")
+            await run_in_threadpool(sales.mark_refunded, s, oid, reason, by)
+            log.info("sales: order %s marked refunded by an admin", oid)
+            return back(request, msg="refunded")
         if o is not None and form.get("do") == "reopen" and o["state"] in ("cancelled", "expired"):
             try:
                 await run_in_threadpool(sales.reopen_paid, s, oid, reason, by)

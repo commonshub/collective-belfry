@@ -172,6 +172,8 @@ TEXT = {
     "lead": "A transfer to {holder}. Scan the code with your banking app, or copy each detail.",
     "keep": "Please keep the communication exactly as it is: it is how your transfer is matched "
     "to your invoice.",
+    "keep_order": "Please keep the communication exactly as it is: it is how your transfer is "
+    "matched to your order.",
     "slow": "Transfers take one or two working days.",
     "paid": "This order is paid. Thank you.",
     "ended": "This order has ended. If you paid by bank transfer before your place's date, "
@@ -223,7 +225,8 @@ def page_token(svc: Services, oid: str) -> str:
 
 TEST_BANNER = (
     '<p class="lead" style="padding:8px 12px;border-radius:8px;background:#fef3c7;color:#78350f">'
-    "<b>Test order: no real money.</b> It goes through Stripe's test mode and the test Odoo.</p>"
+    "<b>Test order: no real money.</b> It goes through the test environment (Stripe's test mode, "
+    "the test Odoo when one is connected).</p>"
 )
 
 
@@ -257,6 +260,8 @@ def _order_html(svc: Services, o: dict[str, Any]) -> str:
         return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(TEXT["paid"])}</p></div>'
     if o["state"] in ("cancelled", "expired"):
         return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(TEXT["ended"])}</p></div>'
+    if not sales.booked(o):
+        return _own_order_html(svc, o)
     if not inv.get("number"):
         if o.get("pay") == "card" and sales.bank_ready(svc):
             # a card order has no invoice (it is made once paid): ask for one to pay by transfer
@@ -284,6 +289,37 @@ def _order_html(svc: Services, o: dict[str, Any]) -> str:
             1,
         )
     return f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(held)}</p>{card_btn}</div>'
+
+
+def _own_order_html(svc: Services, o: dict[str, Any]) -> str:
+    """An open order that has no invoice (no Odoo connected): its reference and amount, until
+    when the place is held, and how to pay: the bank details with the reference as the
+    communication once the buyer pays by transfer, the card link when there is one."""
+    from . import sales
+
+    money = f"€{o['total']['gross'] / 100:,.2f}"
+    ref = o.get("reference") or ""
+    head = f'<p class="lead"><b>{E(ref)}</b> · {E(money)} · {E(o["product_name"])}</p>'
+    held = f"Your place is held until {(o.get('hold_until') or '')[:10]}."
+    card = (o.get("stripe") or {}).get("url")
+    card_btn = f'<p><a class="btn" href="{E(card)}">Pay by card</a></p>' if card else ""
+    if sales.bank_ready(svc) and (o.get("pay") == "invoice" or not card):
+        body = page_html(sales.settings(svc), o["total"]["gross"], ref)
+        return body.replace(TEXT["keep"], TEXT["keep_order"], 1).replace(
+            '<div class="box">',
+            f'{head}<p class="lead">{E(held)}</p>{card_btn}<div class="box">',
+            1,
+        )
+    switch = ""
+    if sales.bank_ready(svc):
+        switch = (
+            f'<form method="post" action="/pay/{E(o["id"])}/invoice">'
+            f'<input type="hidden" name="t" value="{E(page_token(svc, o["id"]))}">'
+            '<button class="btn ghost" type="submit">Pay by transfer instead</button></form>'
+        )
+    return (
+        f'{STYLE}<div class="pay"><h1>Your order</h1>{head}<p>{E(held)}</p>{card_btn}{switch}</div>'
+    )
 
 
 def _frame(body: str, status: int = 200) -> HTMLResponse:

@@ -103,7 +103,7 @@ def test_bad_products_are_refused():
             sales.clean_product(bad)
 
 
-def test_paid_product_without_odoo_cannot_sell(shop):
+def test_paid_product_without_a_way_to_pay_cannot_sell(shop):
     rsvc = shop[0]
     with TestClient(create_app(rsvc)) as c:
         r = buy(c, PrivateKey())

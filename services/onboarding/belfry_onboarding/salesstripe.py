@@ -72,6 +72,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         st.update(o["id"], step="wait")
         if inv.get("number"):
             sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
+        elif not sales.booked(o):
+            sales.wait_for_transfer(svc, o)  # no card and no Odoo: the transfer's details
         return
     old = o.get("stripe") or {}
     if old.get("id") and not old.get("expired"):
@@ -106,6 +108,8 @@ def make_session(svc: Services, o: dict[str, Any]) -> None:
         st.update(o["id"], step="wait", flags=flags, error=str(exc)[:200])
         if inv.get("number"):
             sales.queue_invoice_mail(svc, st.order(o["id"]) or o)
+        elif not sales.booked(o):
+            sales.wait_for_transfer(svc, o)
         return
     amounts = {**(o.get("stripe_amounts") or {}), got["id"]: int(o["total"]["gross"])}
     st.update(
