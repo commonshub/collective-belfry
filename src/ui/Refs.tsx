@@ -1,10 +1,13 @@
-// A reference to a channel, group, event or proposal (core/refs.ts): its name inside the text
+// A reference to a channel, group, event, proposal, to-do, message, person or drop box (core/refs.ts): its name inside the text
 // (tappable; grey words when I can't open it), a preview box when it ends the message. Loading:
 // a grey bar, then after ~5 s the kind's word (GroupName's shared rule).
 import { useEffect, useState } from 'react'
 import { useVersion } from '../core/store'
 import { me } from '../core/sync'
-import { channelIcon, group, proposalFor, STATUS_LABEL } from '../core/model'
+import { channelIcon, displayName, group, plainRefs, profiles, proposalFor, STATUS_LABEL } from '../core/model'
+import { onIt } from './ChannelInfo'
+import { Avatar } from './common'
+import { isGuest } from '../core/invite'
 import { deletedWords, kindWord, lockedWords, resolveRef, type Ref, type RefKind } from '../core/refs'
 import { EventCard } from './Calendar'
 import { go } from './common'
@@ -24,7 +27,11 @@ function useWaited() {
   return waited
 }
 
-const mark = (k: RefKind) => (k === 'channel' || k === 'group' ? '#' : k === 'event' ? '📅 ' : '☑️ ')
+const mark = (k: RefKind) => (k === 'channel' || k === 'group' ? '#' : k === 'event' ? '📅 ' : k === 'todo' ? '☐ ' : k === 'message' ? '💬 ' : k === 'person' ? '@' : k === 'drop' ? '📥 ' : '☑️ ')
+/** A drop box opens its page outside the chat, in a new tab. */
+const openOut = (href: string) => window.open(href, '_blank', 'noopener')
+const excerpt = (t: string) => { const s = plainRefs(t).replace(/\s+/g, ' ').trim(); return s.length > 160 ? s.slice(0, 159) + '…' : s }
+const until = (t?: number) => (t ? new Date(t * 1000).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) : '')
 
 /** Inside the text: the name, tappable. */
 export function RefName({ r }: { r: Ref }) {
@@ -33,10 +40,16 @@ export function RefName({ r }: { r: Ref }) {
   const x = resolveRef(r, me())
   if (x.state === 'deleted') return <span className="ref-off">{deletedWords(x.kind)}</span>
   if (x.state === 'locked') return <span className="ref-off">{lockedWords(x.kind)}</span>
-  if (x.state === 'loading' || (x.group?.unnamed && !x.event && !x.proposal)) {
+  if (x.state === 'loading' && x.kind === 'drop' && x.href) return <button type="button" className="mention channel-ref" onClick={(e) => { e.stopPropagation(); openOut(x.href!) }}>📥 a drop box</button>
+  if (x.state === 'loading' || (x.group?.unnamed && !x.event && !x.proposal && !x.task && !x.msg && x.kind !== 'drop')) {
     if (!waited) return <span className="name-skel ref-skel" role="img" aria-label="Loading" />
     return <span className="ref-off">{kindWord(x.kind)}</span>
   }
+  const tap = (e: React.MouseEvent) => { e.stopPropagation(); if (x.href) openOut(x.href); else go(x.route!) }
+  if (x.kind === 'person') return <button type="button" className="mention" onClick={tap}>@{displayName(x.pubkey!)}</button>
+  if (x.kind === 'todo') return <button type="button" className="mention channel-ref" onClick={tap}>{x.task!.done ? '☑ ' : '☐ '}{x.task!.title}</button>
+  if (x.kind === 'message') return <button type="button" className="mention channel-ref" onClick={tap}>a message from {displayName(x.msg!.pubkey)}</button>
+  if (x.kind === 'drop') return <button type="button" className="mention channel-ref" onClick={tap}>📥 the drop box{x.group ? ` of #${x.group.name}` : ''}</button>
   const name = x.event?.title || x.proposal?.title || x.group!.name
   const icon = x.kind === 'channel' || x.kind === 'group' ? channelIcon(x.group) : mark(x.kind)
   return (
@@ -46,7 +59,7 @@ export function RefName({ r }: { r: Ref }) {
   )
 }
 
-const KIND_LABEL: Record<RefKind, string> = { channel: 'Channel', group: 'Group', event: 'Event', proposal: 'Proposal' }
+const KIND_LABEL: Record<RefKind, string> = { channel: 'Channel', group: 'Group', event: 'Event', proposal: 'Proposal', todo: 'To-do', message: 'Message', person: 'Person', drop: 'Drop box' }
 const count = (n: number) => `${n} ${n === 1 ? 'member' : 'members'}`
 
 /** At the end of a message: a box that opens it. */
@@ -64,6 +77,48 @@ export function RefPreview({ r }: { r: Ref }) {
         <span className="rt"><span className="t1">{what[0].toUpperCase() + what.slice(1)}</span>
           {x.state === 'locked' && <span className="t2">{x.kind === 'channel' ? `Only members of ${community} can open it` : 'Only its members can open it'}</span>}</span>
       </div>
+    )
+  }
+  const tap = (e: React.MouseEvent) => { e.stopPropagation(); if (x.href) openOut(x.href); else go(x.route!) }
+  const inChan = x.group ? ` in #${x.group.name}` : ''
+  if (x.kind === 'person') {
+    const p = profiles().get(x.pubkey!)
+    const name = displayName(x.pubkey!)
+    return (
+      <button type="button" className="ref-pv" aria-label={`Open ${name}'s profile`} onClick={tap}>
+        <Avatar pubkey={x.pubkey!} size={40} />
+        <span className="rt"><span className="t1">{name}</span><span className="t2">{isGuest(x.pubkey!) ? 'Guest' : p?.nip05?.includes('@') ? p.nip05 : 'Person'}</span></span>
+      </button>
+    )
+  }
+  if (x.kind === 'drop' && (x.state === 'ok' || x.state === 'loading')) {
+    return (
+      <button type="button" className="ref-pv" aria-label="Open the drop box" onClick={tap}>
+        <span className="ib" aria-hidden="true">📥</span>
+        <span className="rt"><span className="t1">Drop box</span>
+          <span className="t2">{x.group ? `Files go to #${x.group.name}` : 'Send files without an account'}{x.until ? ` · until ${until(x.until)}` : ''}</span></span>
+      </button>
+    )
+  }
+  if (x.kind === 'todo' && x.task && x.state === 'ok') {
+    const t = x.task
+    return (
+      <button type="button" className={'ref-pv ref-pv-todo' + (t.done ? ' done' : '')} aria-label={`Open the to-do ${t.title}`} onClick={tap}>
+        <span className="ib" aria-hidden="true">{t.done ? '✓' : '☐'}</span>
+        <span className="rt"><span className="t1">{t.title}</span>
+          <span className="t2">{['To-do' + inChan, t.done ? 'Done' : onIt(t, false)].join(' · ')}</span></span>
+      </button>
+    )
+  }
+  if (x.kind === 'message' && x.msg && x.state === 'ok') {
+    const m = x.msg
+    return (
+      <button type="button" className="ref-pv ref-pv-msg" aria-label={`Open the message from ${displayName(m.pubkey)}`} onClick={tap}>
+        <Avatar pubkey={m.pubkey} size={40} />
+        <span className="rt"><span className="t1">{displayName(m.pubkey)}</span>
+          <span className="t2">{'Message' + (x.event ? ` in ${x.event.title}` : inChan)}</span>
+          {m.content && <span className="d">{excerpt(m.content)}</span>}</span>
+      </button>
     )
   }
   if (x.state === 'loading' || x.group?.unnamed) {

@@ -1197,7 +1197,7 @@ function MessageActions({ m, groupId, mine, onClose, thread, onThread, onReply, 
   }
   // an event's chat: the event's address (its slug when it has one), never the group id
   const evOf = eventOfGroup(groupId)
-  const link = `${location.origin}${location.pathname}#/${evOf?.isNew ? 'events/' + encodeURIComponent(eventLink(evOf)) : 'c/' + encodeURIComponent(groupId)}/m/${m.ev.id}`
+  const link = `${location.origin}${location.pathname}#/${evOf ? 'events/' + encodeURIComponent(eventLink(evOf)) : 'c/' + encodeURIComponent(groupId)}/m/${m.ev.id}`
   const Item = ({ icon, label, onClick, danger = false }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean }) => (
     <button className={'act' + (danger ? ' danger' : '')} onClick={onClick}>{icon}<span>{label}</span></button>
   )

@@ -28,7 +28,7 @@ export function inChannel(g: Group | undefined, pubkey: string): boolean {
 /** A channel's link in the chat; an event's chat: the event's own address, by its slug when it has one. */
 export const channelUrl = (id: string) => {
   const e = eventOfGroup(id)
-  return e?.isNew ? `https://chat.${BELFRY.domain}/#/events/${encodeURIComponent(eventLink(e))}` : `https://chat.${BELFRY.domain}/#/c/${encodeURIComponent(id)}`
+  return e ? `https://chat.${BELFRY.domain}/#/events/${encodeURIComponent(eventLink(e))}` : `https://chat.${BELFRY.domain}/#/c/${encodeURIComponent(id)}`
 }
 
 /** Invite a member: 'admitted' when they are in at once, 'asked' when they still have to apply

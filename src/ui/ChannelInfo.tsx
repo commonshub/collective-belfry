@@ -417,7 +417,7 @@ export function Tasks({ groupId }: { groupId: string }) {
 }
 
 /** "Chloé Martin is on it" / "You are working on it now" / "Nobody on it yet". */
-const onIt = (t: Task, busy: boolean) => t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Nobody on it yet'
+export const onIt = (t: Task, busy: boolean) => t.assignee ? `${displayName(t.assignee)} ${t.assignee === me() ? 'are' : 'is'} ${busy ? 'working on it now' : 'on it'}` : 'Nobody on it yet'
 
 /** The ring: a tap ticks it off (or back); it turns while someone is working on it now. */
 function TaskRing({ t, groupId, now }: { t: Task; groupId: string; now: number }) {

@@ -38,7 +38,7 @@ import { isBelfryAdmin } from '../core/people'
 import { EventsScreen, eventPath } from './Calendar'
 import { EventJoinScreen, EventScreen, EventWaitScreen } from './Events'
 import { demoApply, demoGuest, eventLinkFromUrl, pendingApplication, setPendingApplication, ticketLinkFromUrl } from '../core/events'
-import { eventOfGroup } from '../core/model'
+import { eventByCoord, eventOfGroup } from '../core/model'
 import { ChannelInfo, TodoScreen } from './ChannelInfo'
 import { Connections } from './Connections'
 import { ChannelList, ChannelView, ThreadView } from './Chat'
@@ -232,10 +232,12 @@ function Village({ session, onSignOut, onSignIn }: { session: Session; onSignOut
   const chanState = useGroupState((route[0] ?? 'c') === 'c' && route[1] ? chanId : undefined)
   // an event's chat has the event's own address: its slug when it has one (Xavier, 2026-11-18:
   // "Always use the custom slug if one is set as a general rule"), never #/c/ev-<d>
-  const evRoute = route[0] === 'c' && route[1] && (!route[2] || route[2] === 'm') ? eventOfGroup(route[1]) : undefined
+  // (older events too, lead 2026-11-20); an old #/cal/<coord> address moves to the event's link
+  const evRoute = route[0] === 'c' && route[1] && /^(ev|ws)-/.test(route[1]) && (!route[2] || route[2] === 'm') ? eventOfGroup(route[1])
+    : route[0] === 'cal' && route[1] ? eventByCoord(route[1]) : undefined
   useEffect(() => {
-    if (evRoute?.isNew) replaceHash('#/' + eventPath(evRoute) + (route[2] === 'm' && route[3] ? '/m/' + route[3] : ''))
-  }, [evRoute?.coord, evRoute?.slug, route[2], route[3]]) // eslint-disable-line react-hooks/exhaustive-deps
+    if (evRoute) replaceHash('#/' + eventPath(evRoute) + (route[0] === 'c' && route[2] === 'm' && route[3] ? '/m/' + route[3] : ''))
+  }, [evRoute?.coord, evRoute?.slug, route[0], route[2], route[3]]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (status.access === 'ok') dropCode() }, [status.access]) // in: a saved code is spent
   // a guest link opened while signed in (or kept while signing in): this account gets the channel
   const [joined, setJoined] = useState('')

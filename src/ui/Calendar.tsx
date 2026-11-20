@@ -13,7 +13,9 @@ import { Tabs } from './ChannelInfo'
 import { CalendarIcon, ImageIcon } from './icons'
 
 /** Where an event opens in the chat: #/events/<link>; an older session by its coordinate. */
-export const eventPath = (e: CalEvent) => (e.isNew ? 'events/' + encodeURIComponent(eventLink(e)) : 'cal/' + encodeURIComponent(e.coord))
+// every event by its link (its slug, else its d), never #/cal/<coord>: an address carries no key or
+// id (lead, 2026-11-20); old #/cal/<coord> links still open (App.tsx moves them here)
+export const eventPath = (e: CalEvent) => 'events/' + encodeURIComponent(eventLink(e))
 export const openEvent = (e: CalEvent) => go(eventPath(e))
 
 const timeIn = (d: Date, tz?: string) => {
