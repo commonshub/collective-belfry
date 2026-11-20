@@ -234,6 +234,34 @@ def display_name(svc: Services, uri: str) -> str:
     return app_name(named or own_title(svc, uri), uri)
 
 
+GUEST_CHAT = "Chat (guest)"  # the session of someone who joined from a guest link or a ticket
+
+
+def chat_names(svc: Services) -> set[str]:
+    """The names the belfry gives the signer sessions of its own chat clients (the web chat and
+    the phone apps): what tells them from any other app's in the signer's list (docs/sealed.md
+    §6, discovery.chat_session)."""
+    from .appshome import app_url
+
+    chat = app_url(svc.settings, "chat")
+    names = {"Chat", GUEST_CHAT, *NATIVE_APPS.values(), *NATIVE_CLIENTS.values()}
+    return names | ({display_name(svc, chat), own_title(svc, chat)} - {"", address(chat)})
+
+
+def session_label(svc: Services, uri: str, client_id: str = "") -> str:
+    """The name of the signer session the app at URI gets. Only the belfry's own chat clients
+    get one of ``chat_names``: another app an admin named "Chat" is called by its address."""
+    from .appshome import app_url
+
+    native = native_name(uri, client_id)
+    if native:
+        return native
+    label = display_name(svc, uri)
+    if uri != app_url(svc.settings, "chat") and label in chat_names(svc):
+        return address(uri)
+    return label
+
+
 def own_app(svc: Services, uri: str) -> bool:
     """An app this belfry serves itself (`belfry app install`): https://<domain>/<name>/, or
     https://chat.<domain>/ for the chat it ships: approved by being installed."""

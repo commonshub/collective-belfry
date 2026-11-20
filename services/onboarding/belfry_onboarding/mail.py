@@ -25,6 +25,10 @@ nostr.json:
   belfry already sends with, and answers with a kind 7679 delivery report (Nostr Mail DSN).
   Reports are also how a restart knows what was sent already.
 
+Sealed conversations (docs/sealed.md §7, sealed.py): a member whose devices hold a letterbox
+key gets their mail sealed to it (the signer cannot open it), may seal what they send with their
+device's key instead of the account's, and gets the delivery report under the letterbox.
+
 Every check that marks mail "verified" (``belfry-auth`` tag, true only on rumors from the belfry
 key) is DKIM or SPF aligned with the From domain (relaxed: same domain or a subdomain).
 """
@@ -57,7 +61,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, community, drops, followers, homepage
+from . import apps, community, drops, followers, homepage, sealed
 from .blossom import event_id, verify_signature
 from .core import Services
 from .nip46check import conversation_key, nip44_decrypt, nip44_encrypt, sign_event
@@ -478,6 +482,34 @@ def unwrap(secret: bytes, wrap: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     return seal["pubkey"], rumor
 
 
+def device_may_send(svc: Services, member: str, device: str) -> bool:
+    """docs/sealed.md §7 Out: DEVICE may seal MEMBER's outgoing mail: it is a device of the head
+    of their valid chain and the client key of one of their live chat sessions in the signer.
+    Raises when the relay or the signer does not answer (the wrap is tried again later)."""
+    chain = sealed.chain_for(svc, member, strict=True)
+    if chain is None or device not in chain.devices:
+        # a device added a moment ago: don't refuse it on a minute-old answer
+        chain = sealed.chain_for(svc, member, fresh=True, strict=True)
+    if chain is None or device not in chain.devices:
+        return False
+    return device in sealed.live_devices(svc, member)
+
+
+def unwrap_out(svc: Services, wrap: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """(member, rumor) of a gift wrap to the belfry key. The seal is signed by the rumor's
+    author (the account, through the signer) or by one of the author's devices (sealed.py)."""
+    seal, rumor = sealed.open_wrap(_belfry(svc).secret, wrap)
+    author, signer = rumor.get("pubkey"), seal["pubkey"]
+    if author == signer:
+        return signer, rumor  # as before sealing
+    if rumor.get("kind") != MAIL:
+        raise ValueError("not a mail")
+    rumor = sealed.with_id(rumor)
+    if not device_may_send(svc, author, signer):
+        raise ValueError("the seal is not signed by the rumor's author or a device of theirs")
+    return author, rumor
+
+
 def tag(event: dict[str, Any], name: str) -> str:
     return next((t[1] for t in event.get("tags", []) if len(t) > 1 and t[0] == name), "")
 
@@ -523,8 +555,17 @@ def store_large(svc: Services, raw: bytes) -> list[list[str]]:
 
 
 def mail_rumor(
-    svc: Services, raw: bytes, msg: EmailMessage, sender: str, auth: dict, to: str
+    svc: Services,
+    raw: bytes,
+    msg: EmailMessage,
+    sender: str,
+    auth: dict,
+    to: str,
+    ceiling: int | None = None,
 ) -> dict[str, Any]:
+    """The kind 1301 rumor of a mail for TO. CEILING: the most bytes the rumor's JSON may be
+    (a sealed rumor, docs/sealed.md §8): a mail that would go over it takes the Blossom route
+    whatever its size."""
     key = _belfry(svc)
     when = email.utils.parsedate_to_datetime(str(msg["Date"])) if msg["Date"] else None
     rumor_tags = [
@@ -539,25 +580,33 @@ def mail_rumor(
     with contextlib.suppress(TypeError, ValueError, OverflowError):
         if when:
             rumor_tags.append(["date", str(int(when.timestamp()))])
-    content = ""
-    if len(raw) <= INLINE:
-        content = raw.decode("utf-8", "replace")
-    else:
-        rumor_tags += store_large(svc, raw)
     rumor = {
         "kind": MAIL,
         "pubkey": key.public_key_xonly.format().hex(),
         "created_at": int(time.time()),
         "tags": rumor_tags,
-        "content": content,
+        "content": raw.decode("utf-8", "replace") if len(raw) <= INLINE else "",
     }
+    if not rumor["content"] or (
+        ceiling is not None and len(sealed.rumor_json(rumor).encode()) + 80 > ceiling
+    ):  # 80: the id that is added below
+        rumor["content"] = ""
+        rumor["tags"] = rumor_tags + store_large(svc, raw)
     rumor["id"] = event_id(rumor)
     return rumor
 
 
 def to_member(svc: Services, pubkey: str, raw: bytes, msg: EmailMessage, sender: str, auth: dict):
-    rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey)
-    _publish(svc, gift_wrap(_belfry(svc).secret, rumor, pubkey))
+    secret = _belfry(svc).secret
+    # sealed conversations (docs/sealed.md §7): a member whose chain is ready gets the mail
+    # under their head letterbox, which only their devices open; anyone else as before
+    chain = sealed.chain_for(svc, pubkey)
+    if chain is not None and chain.ready:
+        rumor = mail_rumor(svc, raw, msg, sender, auth, pubkey, ceiling=sealed.MAX_RUMOR)
+        wrap = sealed.seal_to_letterbox(secret, rumor, pubkey, chain.lb)
+    else:
+        wrap = gift_wrap(secret, mail_rumor(svc, raw, msg, sender, auth, pubkey), pubkey)
+    _publish(svc, wrap)
 
 
 # ── in: a channel's mail ────────────────────────────────────────────────────────────────────
@@ -878,7 +927,9 @@ def sent_card(
 
 
 def report(svc: Services, sender: str, email_id: str, rcpts: list[str], code: int, answer: str):
-    """A kind 7679 delivery report to SENDER (Nostr Mail DSN): an ephemeral key, no p tag."""
+    """A kind 7679 delivery report to SENDER (Nostr Mail DSN): an ephemeral key, no p tag.
+    Encrypted to the sender's head letterbox, named in an ``lb`` tag, when their chain is
+    ready (docs/sealed.md §7); else to their account key."""
     status = "delivered" if 200 <= code < 300 else "failed" if code >= 500 else "delayed"
     now = int(time.time())
     body = {
@@ -890,15 +941,18 @@ def report(svc: Services, sender: str, email_id: str, rcpts: list[str], code: in
         ("delivered_at" if status == "delivered" else "failed_at"): now,
         "details": answer[:500],
     }
+    chain = sealed.chain_for(svc, sender)
+    sealed_to = chain.lb if chain is not None and chain.ready else ""
+    to, lb_tag = (sealed_to, [["lb", sealed_to]]) if sealed_to else (sender, [])
     temp = PrivateKey()
-    content = nip44_encrypt(conversation_key(temp.secret, bytes.fromhex(sender)), json.dumps(body))
+    content = nip44_encrypt(conversation_key(temp.secret, bytes.fromhex(to)), json.dumps(body))
     pub = temp.public_key_xonly.format().hex()
     del temp
     event = _sign_as_belfry(svc)(
         {
             "kind": DSN,
             "created_at": now,
-            "tags": [["r", email_id], ["ephemeral-pubkey", pub]],
+            "tags": [["r", email_id], ["ephemeral-pubkey", pub], *lb_tag],
             "content": content,
         }
     )
@@ -916,7 +970,7 @@ def reported(svc: Services, email_id: str) -> bool:
 
 
 def handle_wrap(svc: Services, wrap: dict[str, Any]) -> None:
-    sender, rumor = unwrap(_belfry(svc).secret, wrap)
+    sender, rumor = unwrap_out(svc, wrap)
     if rumor.get("kind") != MAIL:
         return
     if rumor.get("created_at", 0) < time.time() - (WINDOW_DAYS + 1) * 86400:

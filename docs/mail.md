@@ -48,6 +48,16 @@ Only what the sender wrote is kept in the message: the quoted history (Gmail, Ou
 
 The chat app reads NIP-17 (kind 14), old NIP-04 (kind 4) and Nostr Mail in one Messages list.
 
+## Sealed mail
+
+Sealed conversations ([sealed.md](sealed.md), §7) change three things here, and nothing for a member without a ready chain of devices:
+
+- **In.** Mail for `<username>@` whose member has a ready chain is sealed to their head letterbox: the same kind 1301 rumor, the seal still signed by the belfry key, the gift wrap encrypted to the letterbox key and tagged `["lb", <letterbox>]` next to `["p", <member>]`. Only the member's devices open it; the signer cannot. A sealed rumor is at most 40 000 bytes of JSON, so a mail that would pass that goes to Blossom (the large-MIME scheme above) although it is under 60 kB. If the relay does not answer when the belfry reads the chain, the mail is delivered the old way.
+- **Out.** The wrap to the belfry key is unchanged, but its seal may be signed by one of the member's devices instead of the account key (the rumor's `pubkey` stays the member). The belfry takes it when the device is in the head of the member's valid chain and is the `client_pubkey` of one of their live chat sessions in the signer (`"chat": true` in `GET /api/me/sessions`). Anything else is dropped without a report, like any wrap whose seal is not its author's. This holds for a shared inbox's answers too. Seals by the account key are taken as before.
+- **Report.** The kind 7679 report is encrypted to the sender's head letterbox, with an `["lb", <letterbox>]` tag, when their chain is ready; else to their account key as before.
+
+The code is `belfry_onboarding/sealed.py`; the vectors all clients share are `docs/sealed-vectors.json` (written by `services/onboarding/tools/sealed_vectors.py`).
+
 ## Running it
 
 - `mail-in` (Compose, `belfry_onboarding/mailfront.py`) listens on port 25. It runs as Caddy's user and uses Caddy's certificate for STARTTLS. It keeps nothing: every address and message goes to the onboarding service (`/internal/mail/*`, hook token), and a sender whose mail could not be delivered tries again later (4xx).

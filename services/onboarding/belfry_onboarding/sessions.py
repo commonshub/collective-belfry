@@ -273,9 +273,7 @@ class Sessions:
         )
         if result.get("pubkey") != req["pubkey"]:
             raise SessionError(409, "mismatch", "The member's key moved; ask again.")
-        label = apps_mod.native_name(req["app"], req.get("client", "")) or apps_mod.display_name(
-            self.svc, req["app"]
-        )
+        label = apps_mod.session_label(self.svc, req["app"], req.get("client", ""))
         try:
             # bound to the session key when it is made: the URL alone opens nothing
             bunker = self.svc.keycast.create_bunker(result["token"], label, session)

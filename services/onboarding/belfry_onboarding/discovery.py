@@ -314,6 +314,32 @@ def cors_headers(origin: str) -> dict[str, str]:
     }
 
 
+def chat_session(svc: Any, r: dict[str, Any], names: set[str] | None = None) -> bool:
+    """Whether a signer session is one of the belfry's own chat clients (docs/sealed.md §6): the
+    web chat on chat.<domain> or one of the phone apps. The signer keeps no client id: what
+    tells is the name the belfry gave the connection when it made it (apps.chat_names; no other
+    app's session is ever given one of them, apps.session_label) and, when the signer recorded
+    where the session was opened from, that it is the chat's own address."""
+    from . import apps
+    from .appshome import app_url
+
+    name, _ = device.split(r.get("application_name"))
+    if name not in (apps.chat_names(svc) if names is None else names):
+        return False
+    origin = str(r.get("redirect_origin") or "").rstrip("/")
+    return origin in ("", app_url(svc.settings, "chat").rstrip("/"))
+
+
+def _session_rows(svc: Any, rows: list[dict[str, Any]], keep: tuple[str, ...]) -> list[dict]:
+    """The signer's sessions as /api/me/sessions gives them: the kept fields, ``device`` split
+    off the name, and ``chat`` (the phone apps decode this list strictly: fields are only
+    ever added)."""
+    from . import apps
+
+    names = apps.chat_names(svc) if rows else set()
+    return [{**_session_row(r, keep), "chat": chat_session(svc, r, names)} for r in rows]
+
+
 def _session_row(r: dict[str, Any], keep: tuple[str, ...]) -> dict[str, Any]:
     row = {k: r.get(k) for k in keep}
     row["application_name"], row["device"] = device.split(r.get("application_name"))
@@ -435,8 +461,9 @@ def register(app: FastAPI) -> None:
             "last_activity",
             "activity_count",
         )
+        shown = await run_in_threadpool(_session_rows, services, rows, keep)
         return JSONResponse(
-            {"sessions": [_session_row(r, keep) for r in rows]},
+            {"sessions": shown},
             headers={"Cache-Control": "no-store"},
         )
 

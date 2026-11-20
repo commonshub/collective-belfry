@@ -246,9 +246,7 @@ def token(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
         raise ConnectError(409, "own_key")
     bunker = svc.keycast.create_bunker(
         found[1],
-        device.name(
-            apps.native_name(c["uri"], c["client_id"]) or apps.display_name(svc, c["uri"]), ua
-        ),
+        device.name(apps.session_label(svc, c["uri"], c["client_id"]), ua),
     )
     return {
         "bunker_url": bunker["bunker_url"],

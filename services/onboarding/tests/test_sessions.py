@@ -85,7 +85,10 @@ def test_sign_in_by_dm(services, odoo, keycast, member, client):
     text, tags = say(f"Here it is: {code}")
     assert ["belfry", "open"] in tags
     bunker = next(t[1] for t in tags if t[0] == "bunker")
-    assert bunker == keycast.bunkers[-1]["bunker_url"] and keycast.bunkers[-1]["app_name"] == "Chat"
+    assert bunker == keycast.bunkers[-1]["bunker_url"]
+    # an app from elsewhere that an admin named "Chat" is called by its address in the signer:
+    # that name is kept for the belfry's own chat (docs/sealed.md §6, apps.session_label)
+    assert keycast.bunkers[-1]["app_name"] == "chat.example.org"
     assert keycast.bunkers[-1]["pubkey"] == member["pubkey"]
     # the session key never lands in the registry as the member's key
     assert odoo.tables["res.partner"][member["partner"]].get("belfry_verified_pubkey") != spk
