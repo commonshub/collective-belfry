@@ -19,7 +19,7 @@ const DAY = 864e5
 const at = (days: number, h: number, m: number) => { const d = new Date(); d.setDate(d.getDate() - days); d.setHours(h, m, 0, 0); return Math.min(+d, Date.now() - 60e3) }
 const s = (ms: number) => Math.floor(ms / 1000)
 
-export async function demoSealed(opts: { as?: 'old' | 'new'; ask?: string; askKind?: DeviceKind; linked?: string } = {}) {
+export async function demoSealed(opts: { as?: 'old' | 'new' | 'received'; ask?: string; askKind?: DeviceKind; linked?: string } = {}) {
   if (!isLocalOnly()) return null
   const as = opts.as ?? 'old'
   const names = ['Lina Moreau', 'Ana Silva', 'Ben Okafor', 'Emma Lind', 'Dev Patel', 'Lou (neighbour)']
@@ -45,6 +45,11 @@ export async function demoSealed(opts: { as?: 'old' | 'new'; ask?: string; askKi
     await demoDm([pk.ana, pk.ben, pk.emma, pk.lina], 'Who has the keys to the shed this weekend?', s(at(0, 8, 30)), sk('ana'))
     await demoDm([pk.ana, pk.ben, pk.emma, pk.lina], 'I do, until Sunday.', s(at(0, 8, 41)), sk('ben'))
     await demoMail('Town Hall <events@townhall.example.org>', 'Street party permit', 'Hello, your request for Mill Lane on 14 June is approved. Please put the signs out by 8:00.')
+  } else if (as === 'received') {
+    // canvas v86 messages/encryption-shared-history: I started fresh, Lina shared our history
+    await demoDm([pk.lina], 'Can you water the tomatoes while I’m away?', s(at(17, 18, 10)))
+    await demoDm([pk.lina], 'Of course, leave the key with Ana.', s(at(17, 18, 12)), sk('lina'))
+    await demoDm([pk.lina], 'Lost my old phone, writing from the new one', s(at(0, 9, 40)))
   } else {
     // before Lina's conversation was sealed (reads as usual), then sealed ones (locked here)
     await demoDm([pk.lina], 'Can you water the tomatoes while I’m away?', s(at(17, 18, 10)), sk('lina'))
@@ -81,6 +86,11 @@ export async function demoSealed(opts: { as?: 'old' | 'new'; ask?: string; askKi
     sealedAt: { [lina]: at(16, 0, 0), [ana]: at(40, 0, 0), [two]: at(40, 0, 0), [dev]: at(40, 0, 0), [five]: at(40, 0, 0), [mailConv]: at(40, 0, 0) },
     ...(opts.ask ? { asking: { name: opts.ask, kind: opts.askKind ?? 'computer', at: Date.now() - 120e3 } } : {}),
     ...(opts.linked ? { linked: { name: opts.linked, kind: 'tablet' as const } } : {}),
+  }
+  if (as === 'received') {
+    const { thread } = await import('./dm')
+    await new Promise((r) => setTimeout(r, 600)) // dm.ts reads the wraps
+    d.shared = Object.fromEntries(thread(lina).filter((m) => m.at * 1000 < at(1, 0, 0)).map((m) => [m.rid, pk.lina]))
   }
   setDemoSealed(d)
   touch()

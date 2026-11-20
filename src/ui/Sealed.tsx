@@ -9,7 +9,7 @@ import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
 import { sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
 import { MailIcon } from './icons'
-import { Avatar, Sheet, go, up } from './common'
+import { Avatar, Sheet, SheetOrPopover, go, up, type Anchor } from './common'
 
 export const encConv = (c: Conv) => encodeURIComponent(c)
 
@@ -285,5 +285,29 @@ export function DevicesScreen() {
         </Sheet>
       )}
     </div>
+  )
+}
+
+const ShareIco = () => <Ico><path d="M12 15V3M7 8l5-5 5 5" /><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7" /></Ico>
+
+/** Board messages/encryption-shared-history (+ -why): on the device that received a shared
+ *  history, one grey line above each sharer's block; a tap explains (a popover on a laptop). */
+export function SharedByLine({ who }: { who: string }) {
+  const [anchor, setAnchor] = useState<Anchor | null | undefined>(undefined)
+  const first = displayName(who).split(' ')[0]
+  return (
+    <>
+      <button className="seal-line seal-shby" aria-haspopup="dialog" onClick={(e) => { const el = e.currentTarget; setAnchor({ rect: () => el.getBoundingClientRect(), el }) }}>
+        <ShareIco /><span>Shared by {first}</span><Chev />
+      </button>
+      {anchor !== undefined && (
+        <SheetOrPopover title={`Shared by ${first}`} anchor={anchor} onClose={() => setAnchor(undefined)}>
+          <div className="seal-why">
+            <p>{first} sent you these earlier messages. They come from {first}’s device, so the app can’t check them the way it checks new ones.</p>
+            <button className="btn" onClick={() => setAnchor(undefined)}>OK</button>
+          </div>
+        </SheetOrPopover>
+      )}
+    </>
   )
 }

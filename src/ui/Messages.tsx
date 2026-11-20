@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type React from 'react'
 import { openProfile } from './Profile'
 import { MailIcon } from './icons'
@@ -13,8 +13,8 @@ import { useVersion } from '../core/store'
 import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
-import { anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, type DeviceLine } from '../core/sealed'
-import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, ShareHistorySheet } from './Sealed'
+import { anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
+import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
@@ -126,6 +126,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
   const [sharing, setSharing] = useState<DeviceLine | null>(null)
   const onShare = (l: DeviceLine) => setSharing(l)
   let day = ''
+  let shareRun: string | undefined
   return (
     <div className="screen">
       <div className="topbar">
@@ -142,9 +143,14 @@ export function MessageThread({ conv }: { conv: Conv }) {
             const t = 'd' in r ? r.d.at * 1000 : r.l.at
             const dd = fmtDay(new Date(t))
             const sep = dd !== day ? (day = dd) : ''
-            if ('l' in r) return <div key={r.l.id} className="dm-item seal-item">{sep && <div className="day">{sep}</div>}<DeviceLineRow conv={conv} l={r.l} onShare={onShare} /></div>
+            if ('l' in r) { shareRun = undefined; return <div key={r.l.id} className="dm-item seal-item">{sep && <div className="day">{sep}</div>}<DeviceLineRow conv={conv} l={r.l} onShare={onShare} /></div> }
             const d = r.d
-            return <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
+            // §8: a shared history sits in its sharer's block (a left rule), one line above it
+            const by = sharedBy(d.rid)
+            const opens = !!by && by !== shareRun
+            shareRun = by
+            const item = <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '') + (by ? ' seal-shared' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
+            return opens ? <Fragment key={d.rid}><div className="dm-item seal-item"><SharedByLine who={by} /></div>{item}</Fragment> : item
           })}
           {locked && <LockedBlock since={sealedAt(conv) || Date.now()} />}
         </div>

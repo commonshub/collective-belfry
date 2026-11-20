@@ -49,13 +49,15 @@ interface State {
   lockedHere: Set<Conv>
   /** when each conversation was sealed (ms): messages from before read as usual */
   sealedAt: Map<Conv, number>
+  /** §8: messages received in a shared history, by rumor id → who shared them (this device only) */
+  shared: Map<string, string>
   /** on this (older) device: a new device of mine waits for Allow */
   asking?: { id: string; name: string; kind: DeviceKind; at: number }
   /** Link a phone or tablet: the device that just came in by scanning my code */
   linked?: { name: string; kind: DeviceKind }
 }
 
-const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map() })
+const empty = (): State => ({ mine: [], people: new Map(), sealed: new Set(), lines: new Map(), lockedHere: new Set(), sealedAt: new Map(), shared: new Map() })
 let state: State = empty()
 
 export const isSealed = (conv: Conv) => state.sealed.has(conv)
@@ -66,6 +68,7 @@ export const deviceLines = (conv: Conv) => state.lines.get(conv) ?? []
 export const lockedHere = (conv: Conv) => state.lockedHere.has(conv)
 export const anyLockedHere = () => state.lockedHere.size > 0
 /** When the conversation was sealed (ms; 0 when unknown). */
+export const sharedBy = (rid: string) => state.shared.get(rid)
 export const sealedAt = (conv: Conv) => state.sealedAt.get(conv) ?? 0
 /** A device not yet allowed reads NO sealed message, old or new (canvas v84): only what came
  *  before the conversation was sealed reads as usual. */
@@ -160,6 +163,7 @@ export interface DemoSealed {
   lines?: Record<Conv, Omit<DeviceLine, 'id'>[]>
   lockedHere?: Conv[]
   sealedAt?: Record<Conv, number>
+  shared?: Record<string, string>
   asking?: { name: string; kind: DeviceKind; at: number }
   linked?: { name: string; kind: DeviceKind }
 }
@@ -168,7 +172,7 @@ export interface DemoSealed {
 export function setDemoSealed(d: DemoSealed) {
   demo = true
   state = {
-    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})),
+    mine: d.mine, people: new Map(Object.entries(d.people)), sealed: new Set(d.sealed), lockedHere: new Set(d.lockedHere ?? []), sealedAt: new Map(Object.entries(d.sealedAt ?? {})), shared: new Map(Object.entries(d.shared ?? {})),
     lines: new Map(Object.entries(d.lines ?? {}).map(([c, ls]) => [c, ls.map((l) => ({ id: crypto.randomUUID(), ...l }))])),
     asking: d.asking && { id: crypto.randomUUID(), ...d.asking }, linked: d.linked,
   }

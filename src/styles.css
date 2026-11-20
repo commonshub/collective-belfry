@@ -2028,7 +2028,7 @@ a.buy .ico { width: 14px; height: 14px; }
 .seal-banner .t { font-size: 15px; line-height: 20px; }
 .seal-banner .t b { display: block; font-size: 16px; }
 .seal-how { display: inline-block; margin-top: 6px; padding: 0; background: none; border: 0; font: inherit; font-weight: 600; color: inherit; text-decoration: underline; cursor: pointer; }
-.dm-list > .seal-banner { margin: 4px 0 10px; }
+.dm-list > .seal-banner { margin: 4px 0 10px; flex-direction: row; }
 .seal-locked-t { display: inline-flex; align-items: center; gap: 5px; color: var(--faint); }
 .seal-steps { margin: 12px 16px 8px; padding-left: 22px; display: flex; flex-direction: column; gap: 10px; font-size: 16px; line-height: 22px; }
 .seal-done { margin: 16px; font-weight: 600; }
@@ -2053,3 +2053,7 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-remove { flex: none; }
 .seal-removing { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); white-space: nowrap; }
 .seal-nocompose { padding: 14px 16px calc(14px + var(--bottom)); border-top: 1px solid var(--line); text-align: center; font-size: 14px; color: var(--muted); }
+.dm-item.seal-shared { border-left: 2px solid var(--line); padding-left: 10px; }
+.seal-why p { margin: 0 0 14px; font-size: 15px; line-height: 21px; }
+.seal-why .btn { width: 100%; }
+.popover .seal-why { max-width: 300px; padding: 4px; }
