@@ -527,7 +527,9 @@ class Event:
         now = now or dt.datetime.now(dt.UTC)
         x = self.end or self.start
         if isinstance(x, dt.datetime):
-            return x < now
+            # a timed event without an end lasts an hour (the apps' rule: it stays listed, and
+            # open to answers, while it is on)
+            return (x if self.end else x + dt.timedelta(hours=1)) < now
         if isinstance(x, dt.date):
             return x < now.date()
         return False
