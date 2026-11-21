@@ -324,7 +324,7 @@ def backfill(svc: Services) -> dict[str, str]:
     done: dict[str, str] = {}
     seen: set[int] = set()
     for row in svc.odoo.search_read(
-        "belfry.pass", [["state", "=", "active"]], ["partner_id", "tier", "guest_agent"]
+        "belfry.pass", [["state", "=", "active"]], core.pass_fields(svc, "partner_id", "tier")
     ):
         partner = core.m2o_id(row.get("partner_id"))
         if row.get("tier") in ("guest", "agent") or not partner or partner in seen:

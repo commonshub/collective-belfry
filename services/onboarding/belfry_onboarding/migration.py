@@ -529,7 +529,11 @@ def plan(
 def _tiers(svc: Any) -> dict[int, str]:
     """partner -> ``agent`` or ``guest`` when every pass they have is one (for the counts)."""
     out: dict[int, set[str]] = {}
-    for r in svc.odoo.search_read("belfry.pass", [], ["partner_id", "tier", "guest_agent"]):
+    from .core import pass_fields
+
+    # guest_agent is a field of Belfry's own register only: Odoo answers Invalid field
+    fields = pass_fields(svc, "partner_id", "tier", "guest_agent")
+    for r in svc.odoo.search_read("belfry.pass", [], fields):
         partner = signerguard._m2o(r.get("partner_id"))
         if not partner:
             continue

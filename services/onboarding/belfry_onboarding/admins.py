@@ -47,7 +47,7 @@ def change(svc: Services, caller: str, target: str, admin: bool) -> list[str]:
             for r in svc.odoo.search_read(
                 "belfry.pass",
                 [["state", "=", "active"], ["keycast_pubkey", "=", target]],
-                ["tier", "partner_id", "guest_agent"],
+                core.pass_fields(svc, "tier", "partner_id", "guest_agent"),
             )
             if r.get("tier") == "guest"
         ]

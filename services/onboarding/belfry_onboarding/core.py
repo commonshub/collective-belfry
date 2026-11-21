@@ -1134,6 +1134,32 @@ def _own_register(svc: Services) -> bool:
     return isinstance(svc.odoo, Register)
 
 
+# Fields of a pass that only Belfry's own register has (register.py: guests, agents, the
+# guests' grace). Odoo's belfry.pass has none of them and answers ``Invalid field`` to a read
+# that names one; it has no guest or agent passes either, so leaving them out changes no answer.
+REGISTER_ONLY_PASS_FIELDS = frozenset(
+    {
+        "guest_agent",
+        "guest_channel",
+        "guest_inviter",
+        "guest_unnamed",
+        "guest_grace_until",
+        "guest_client",
+        "guest_days",
+        "guest_event",
+        "guest_role",
+        "agent_owner",
+    }
+)
+
+
+def pass_fields(svc: Services, *fields: str) -> list[str]:
+    """FIELDS of ``belfry.pass`` as this register knows them (see REGISTER_ONLY_PASS_FIELDS)."""
+    if _own_register(svc):
+        return list(fields)
+    return [f for f in fields if f not in REGISTER_ONLY_PASS_FIELDS]
+
+
 MEMBERSHIP_END = dt.date(2099, 12, 31)  # a free membership has no end; revoking ends it
 
 
@@ -1273,7 +1299,8 @@ def _suspend_unless_other_active(svc: Services, pass_row: dict[str, Any], reason
     suspended = False
     partner_id = m2o_id(pass_row.get("partner_id"))
     if pass_row.get("tier") == "guest":
-        row = svc.odoo.read_one("belfry.pass", pass_row["id"], ["guest_agent"]) or {}
+        fields = pass_fields(svc, "guest_agent")
+        row = (svc.odoo.read_one("belfry.pass", pass_row["id"], fields) or {}) if fields else {}
         if row.get("guest_agent"):  # an agent's own key: no signer account to suspend
             return False
     if pass_row.get("tier") == "agent":  # a member's agent (agents.py): its own key too

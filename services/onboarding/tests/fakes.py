@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -35,6 +36,54 @@ UNIQUE: dict[str, list[str]] = {
     "belfry.stripe.event": ["event_id"],
     "res.partner": ["belfry_member_number"],
 }
+
+
+# The fields the Odoo add-on really has (odoo/addons/belfry_pass/models), read from its source: the
+# fake refuses any other field on the add-on's own models (and any ``belfry_*`` field the add-on
+# doesn't add to a standard model), like Odoo's ``Invalid field`` error. A field of Belfry's own
+# register only (register.py) asked of Odoo then fails a test instead of a real belfry.
+ADDON_MODELS = Path(__file__).resolve().parents[3] / "odoo" / "addons" / "belfry_pass" / "models"
+# fields every Odoo model has
+_BASE_FIELDS = {"id", "display_name", "create_date", "write_date", "create_uid", "write_uid"}
+
+
+def _addon_fields() -> tuple[dict[str, set[str]], set[str]]:
+    """``{model: fields}`` for every model the add-on defines or extends, and the models it
+    defines itself (``_name``): those have no other fields than these."""
+    out: dict[str, set[str]] = {}
+    own: set[str] = set()
+    for path in sorted(ADDON_MODELS.glob("*.py")):
+        model = None
+        for line in path.read_text().splitlines():
+            if re.match(r"^class \w+", line):
+                model = None
+            m = re.match(r"^\s+_(name|inherit)\s*=\s*['\"]([\w.]+)['\"]", line)
+            if m:
+                if m.group(1) == "name" or model is None:
+                    model = m.group(2)
+                if m.group(1) == "name":
+                    own.add(model)
+                out.setdefault(model, set())
+                continue
+            f = re.match(r"^\s+(\w+)\s*=\s*fields\.\w+\(", line)
+            if f and model:
+                out[model].add(f.group(1))
+    return out, own
+
+
+ADDON_FIELDS, ADDON_OWN = _addon_fields()
+
+
+def check_fields(model: str, fields: Any) -> None:
+    """Refuse a field the add-on doesn't have, as Odoo does (``Invalid field``)."""
+    known = ADDON_FIELDS.get(model)
+    if known is None:
+        return
+    for f in fields or []:
+        if f in _BASE_FIELDS or f in known:
+            continue
+        if model in ADDON_OWN or f.startswith("belfry_"):
+            raise OdooError(f"ValueError: Invalid field {f!r} on model {model!r}")
 
 
 SHIFT_METHODS = {
@@ -464,11 +513,16 @@ class FakeOdoo(OdooApi):
         self.calls.append((model, method))
         if model not in self.tables:
             raise OdooError(f"Object {model} doesn't exist")
+        if method in ("search_read", "search", "search_count"):
+            domain = args[0] if args else []
+            check_fields(model, [c[0] for c in domain if isinstance(c, (list, tuple))])
         if method == "search_read":
+            check_fields(model, kwargs.get("fields"))
             return self._search_read(
                 model, args[0], kwargs.get("fields"), kwargs.get("limit"), kwargs.get("order")
             )
         if method == "read":
+            check_fields(model, args[1] if len(args) > 1 else kwargs.get("fields"))
             return [
                 self._format(
                     model, self.tables[model][i], args[1] if len(args) > 1 else kwargs.get("fields")
@@ -478,12 +532,14 @@ class FakeOdoo(OdooApi):
             ]
         if method == "write":
             ids, vals = args
+            check_fields(model, list(vals))
             for i in ids:
                 self._check_unique(model, vals, i)
                 self.tables[model][i].update(vals)
             return True
         if method == "create":
             vals = dict(args[0])
+            check_fields(model, list(vals))
             return self.add(model, **vals)
         if model == "res.partner" and method == "belfry_ensure_member_number":
             if self.legacy_module:
