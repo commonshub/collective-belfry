@@ -114,7 +114,7 @@ function realLines(conv: Conv): DeviceLine[] {
       for (const d of st.removed) out.push({ id: `${pk}:${d}:-${st.at}`, at, who: pk, what: 'removed', ...(pk === me() ? { device: sessionName(d) || undefined, kind: kindOf(sessionName(d)) } : {}) })
     }
     const f = pk === me() ? undefined : R.freshStart(pk)
-    if (f) out.push({ id: `${pk}:fresh:${f.root}`, at: f.at, who: pk, what: 'new-locked', shared: f.shared.includes(conv) }) // their device's kind isn't known (v88)
+    if (f) out.push({ id: `${pk}:fresh:${f.head ?? f.root}`, at: f.at, who: pk, what: 'new-locked', shared: f.shared.includes(conv) }) // a fresh start or a switch (§3.3); their device's kind isn't known (v88)
   }
   return out.sort((a, b) => a.at - b.at)
 }
