@@ -461,11 +461,16 @@ export async function queryOnce(target: Target, filter: Filter, timeoutMs = 8000
 /** What the relay has for FILTERS, once it said that was all (EOSE). `null` when it never said
  *  so (no connection, a timeout, the subscription closed): then nothing is known, and an empty
  *  list would be a guess. */
-export async function queryComplete(target: Target, filters: Filter[], timeoutMs = 8000, knownFromStore = false): Promise<NostrEvent[] | null> {
+export async function queryComplete(target: Target, filters: Filter[], timeoutMs = 8000, knownFromStore = false, afterAuth = false): Promise<NostrEvent[] | null> {
   if (localOnly || !signer) return null
   let r: Relay
   try { r = await within(relay(target), timeoutMs, 'no connection to the relay') } catch { return null }
-  return new Promise((resolve) => {
+  // AFTER_AUTH (§5.1): the REQ goes out only on a socket already signed in, and the answer must come
+  // back on that same socket; else nothing is known. A CLOSED is never a complete answer (null).
+  const conn = connectionOf(target)
+  if (afterAuth && conn < 0) return null
+  const done = (v: NostrEvent[]) => (afterAuth && connectionOf(target) !== conn ? null : v)
+  return new Promise<NostrEvent[] | null>((resolve) => {
     const out: NostrEvent[] = []
     let over = false
     const end = (v: NostrEvent[] | null) => {
@@ -479,7 +484,7 @@ export async function queryComplete(target: Target, filters: Filter[], timeoutMs
     // KNOWN_FROM_STORE: an event the store holds already is taken from it (its signature was checked
     // when it came in), not checked again
     const sub = r.subscribe(filters, {
-      onevent: (e) => out.push(e), oneose: () => end(out), onclose: () => end(null),
+      onevent: (e) => out.push(e), oneose: () => end(done(out)), onclose: () => end(null),
       ...(knownFromStore ? { alreadyHaveEvent: (id: string) => { const e = heldEvent(id); if (e) out.push(e); return !!e } } : {}),
     })
   })
@@ -499,7 +504,7 @@ export async function queryPaged(target: Target, filters: Filter[], timeoutMs = 
     for (let i = 0; i < maxPages; i++) {
       const left = deadline - Date.now()
       if (left <= 0) return null // the whole read is bounded (§4: 3 s before a send)
-      const page = await queryComplete(target, [{ ...f, limit: PAGE, ...(until !== undefined ? { until } : {}) }], Math.min(timeoutMs, left), true)
+      const page = await queryComplete(target, [{ ...f, limit: PAGE, ...(until !== undefined ? { until } : {}) }], Math.min(timeoutMs, left), true, true)
       if (page === null) return null
       const fresh = page.filter((e) => !out.has(e.id))
       for (const e of fresh) out.set(e.id, e)

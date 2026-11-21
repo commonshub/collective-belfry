@@ -494,13 +494,21 @@ export class NotDone extends Error {}
 type RosterArgs = { n: number; prev?: string; lb: string; devices: string[]; ready?: boolean }
 const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** §3.2 (14a505a): an anchor is replaceable: dated max(now, the standing anchor + 1 s), never the bare
+ *  clock (a relay keeps the newer, the lower id on a tie, and drops an older one: a device whose clock
+ *  is behind would never land a change). */
+function anchorTime(): number {
+  const standing = C.newestAnchor(all().filter((e) => e.kind === C.ANCHOR && e.pubkey === me()), me())
+  return Math.max(nowS(), (standing?.created_at ?? 0) + 1)
+}
+
 /** §3.2: sign the roster, then the anchor naming it (nothing goes out if that fails); send both,
  *  the roster first, each waiting for the relay's OK. NotDone when it could not be. */
 async function sendRosterAndAnchor(c: C.Chain | null, a: RosterArgs): Promise<NostrEvent> {
   const ev = C.makeRoster(device!.secret, { account: me(), ...a })
   const root = c ? c.rosters[0].id : ev.id
   let anchor: NostrEvent
-  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: nowS(), tags: C.anchorTags(root, ev.id), content: '' }) } catch { throw new NotDone('not signed') }
+  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: anchorTime(), tags: C.anchorTags(root, ev.id), content: '' }) } catch { throw new NotDone('not signed') }
   try { await publishNow('main', ev) } catch (e) { throw new NotDone('roster refused: ' + (e instanceof Error ? e.message : String(e))) }
   let sent = false
   for (const wait of [0, 2000, 5000]) { await sleepMs(wait); try { await publishNow('main', anchor); sent = true; break } catch { /* again */ } }
@@ -559,7 +567,7 @@ async function anchorMyTail(c: C.Chain): Promise<boolean> {
   if (!tail.length || !tail.every((r) => r.signer === device!.pub)) return false
   const head = tail[tail.length - 1]
   let anchor: NostrEvent
-  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: nowS(), tags: C.anchorTags(c.rosters[0].id, head.id), content: '' }) } catch { throw new NotDone('not signed') }
+  try { anchor = await currentSigner().sign({ kind: C.ANCHOR, created_at: anchorTime(), tags: C.anchorTags(c.rosters[0].id, head.id), content: '' }) } catch { throw new NotDone('not signed') }
   try { await publishNow('main', anchor) } catch { throw new NotDone('anchor refused') }
   addEvents([anchor])
   await sleepMs(500)
