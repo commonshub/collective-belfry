@@ -18,7 +18,7 @@ import { me } from '../core/sync'
 import { useVisible } from '../core/unread'
 import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
-import { waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
+import { LOCKED_LINE, outOfHead, waitingForSibling, notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
 import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow } from './common'
 import { SendingLine } from './Sending'
@@ -179,7 +179,7 @@ export function MessageThread({ conv }: { conv: Conv }) {
           {locked && <LockedBlock since={sealedAt(conv) || Date.now()} />}
         </div>
       </div>
-      {locked ? <div className="seal-nocompose">You can write here once this device is allowed.</div>
+      {locked || outOfHead(conv) ? <div className="seal-nocompose">{LOCKED_LINE}</div>
         : waitingForSibling(conv) ? <div className="seal-nocompose seal-waiting" role="status"><span className="spinner" aria-hidden="true" /> Waiting for another of your devices…</div>
         : <DmComposer conv={conv} needsSubject={isNewMail(conv)} />}
       {sharing && <ShareHistorySheet conv={conv} l={sharing} onClose={() => setSharing(null)} />}
@@ -316,6 +316,8 @@ function HeldState({ d }: { d: Dm }) {
 function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
   const q = queueState(d)
   if (d.failed) return <span className="dm-state failed">Not sent: {d.failed} · <button className="link" onClick={() => void retryDm(d)}>Retry</button></span>
+  // out of my head: what was typed or queued before stays here, never sent, with the locked line's words
+  if ((d.pending || q.waiting) && outOfHead(d.conv)) return <span className="dm-state queued">{LOCKED_LINE}</span>
   if (d.pending || q.waiting)
     return isHeld(d.rid) ? <HeldState d={d} />
       : <span title={q.error}><SendingLine className="dm-state queued" since={q.since} step={q.step} onRetry={() => void retryDm(d)} /></span>

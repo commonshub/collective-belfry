@@ -136,6 +136,9 @@ export function onOutbox(sent: (item: OutboxItem, ev: NostrEvent) => void, faile
 let beforeFlushHook: (() => Promise<void>) | undefined
 /** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
 export function setBeforeFlush(f: () => Promise<void>) { beforeFlushHook = f }
+let holdBack: (item: OutboxItem) => boolean = () => false
+/** sealedrt.ts: items that must not go now (sealed wraps from a device that left my head): kept. */
+export function setHoldBack(f: (item: OutboxItem) => boolean) { holdBack = f }
 
 const queueOf = (o: OutboxItem) => {
   if (o.conv) return 'c:' + o.conv
@@ -161,7 +164,7 @@ export async function flush() {
     if (beforeFlushHook && !localOnly && navigator.onLine) await beforeFlushHook().catch(() => { /* heads unknown: what is queued goes as it is */ })
     const queues = new Map<string, OutboxItem[]>()
     for (const item of outboxItems()) {
-      if (item.status === 'failed') continue
+      if (item.status === 'failed' || holdBack(item)) continue
       const k = queueOf(item)
       if ((notBefore.get(k) ?? 0) > Date.now()) continue
       const q = queues.get(k)
