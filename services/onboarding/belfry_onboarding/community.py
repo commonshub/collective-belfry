@@ -115,6 +115,13 @@ def member_token(svc: Services, partner_id: int) -> tuple[str, str] | None:
     )
     if not rows or rows[0].get("belfry_key_custody") == "self":
         return None
+    from . import signerguard
+
+    if signerguard.own_key_person(svc, partner_id):
+        # an agent (or a person) that joined with its own key: no account of the signer's.
+        # Asking for one made Keycast mint a derived key for the agent's partner that signed
+        # as somebody else; the own signer refuses it (KeyNotHeld). Nothing to sign with.
+        return None
     partner = rows[0]
     number = partner.get("belfry_member_number") or f"member-{partner_id}"
     # idempotent: the existing account's key and a fresh token scoped to it

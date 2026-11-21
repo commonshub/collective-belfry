@@ -25,6 +25,14 @@ from .conftest import AUTHENTIK_URL
 from .fakes import FakeAuthentik
 
 NOW = 1_800_000_000
+SESSIONS0 = {
+    "imported": 0,
+    "existing": 0,
+    "revoked": 0,
+    "updated": 0,
+    "released": 0,
+    "revoked_gone": 0,
+}
 
 
 def pub(secret: bytes) -> str:
@@ -59,6 +67,8 @@ class FakeSignerAdmin:
         self.calls: list[tuple[str, int]] = []
         self.break_bunker_of: str = ""
         self.closed: bool | None = False  # the "no new accounts" switch (None: none)
+        self.skipped: dict[str, str] = {}  # bunker -> vine_id (GET /import/skipped)
+        self.archived: list[tuple[str, str, Any]] = []  # held keys replaced by an own key
 
     def health(self):
         return {"status": "ok", "seed": True, "bunker": {"state": "off"}}
@@ -136,47 +146,99 @@ class FakeSignerAdmin:
         return ""
 
     def import_connections(self, vine_id, rows):
+        """The signer's rules: all or nothing; a bunker key the formula does not give skips
+        that row only (and lists it); while the "no new accounts" switch is closed a row that
+        is there is brought to what the import says (the migration's window)."""
         self.calls.append(("connections", len(rows)))
         acct = self.accounts.get(vine_id)
         if acct is None:
             return {"error": "not_found: "}
         if acct["custody"] == "own":
             return {"error": "own_key: "}
-        new, counts = [], {"imported": 0, "existing": 0, "revoked": 0}
+        sync = self.closed is True
+        new, changes, skipped = [], [], []
+        counts = {"imported": 0, "existing": 0, "revoked": 0, "updated": 0, "released": 0}
+        conns = [*self.conns]
         for i, row in enumerate(rows):
-            derived = pub(bunker_secret(self.secrets[vine_id], row["keycast_secret_hash"]))
-            if derived != row["bunker_pubkey"] or row["bunker_pubkey"] == self.break_bunker_of:
-                return {"error": f"invalid: connections[{i}]: not the bunker key of this account"}
             client = row.get("client_pubkey")
             revoked = row.get("revoked_at")
             if not revoked and not client:
                 return {"error": f"invalid: connections[{i}]: a live row needs a client key"}
             if not 1 <= len(row["app"]) <= 64:
                 return {"error": f"invalid: connections[{i}]: app"}
-            same = [c for c in self.conns if c["bunker_pubkey"] == row["bunker_pubkey"]]
+            derived = pub(bunker_secret(self.secrets[vine_id], row["keycast_secret_hash"]))
+            if derived != row["bunker_pubkey"] or row["bunker_pubkey"] == self.break_bunker_of:
+                skipped.append(i)
+                continue
+            same = [c for c in conns if c["bunker_pubkey"] == row["bunker_pubkey"]]
+            want = {
+                "client_pubkey": client,
+                "revoked_at": revoked,
+                "app": row["app"],
+                "scope": row.get("scope", "own"),
+            }
             if same:
-                if same[0]["vine_id"] != vine_id:
+                c = same[0]
+                if c["vine_id"] != vine_id:
                     return {"error": "mismatch: another account's bunker key"}
-                counts["existing"] += 1
+                now = {k: c.get(k) for k in want}
+                if not sync or (
+                    now["client_pubkey"] == client
+                    and bool(now["revoked_at"]) == bool(revoked)
+                    and now["app"] == want["app"]
+                    and now["scope"] == want["scope"]
+                ):
+                    counts["existing"] += 1
+                    continue
+                if (
+                    client
+                    and client != now["client_pubkey"]
+                    and any(
+                        x["client_pubkey"] == client and x["vine_id"] != vine_id
+                        for x in [*conns, *new]
+                    )
+                ):
+                    return {"error": "client_key_taken: "}
+                if revoked and now["revoked_at"]:
+                    want["revoked_at"] = now["revoked_at"]
+                changes.append((c, want))
+                counts["updated"] += 1
+                if now["client_pubkey"] and not client:
+                    counts["released"] += 1
                 continue
             if client and any(
-                c["client_pubkey"] == client and c["vine_id"] != vine_id
-                for c in [*self.conns, *new]
+                c["client_pubkey"] == client and c["vine_id"] != vine_id for c in [*conns, *new]
             ):
                 return {"error": "client_key_taken: "}
-            new.append(
-                {
-                    "vine_id": vine_id,
-                    "bunker_pubkey": row["bunker_pubkey"],
-                    "client_pubkey": client,
-                    "revoked_at": revoked,
-                    "app": row["app"],
-                    "scope": row.get("scope", "own"),
-                }
-            )
+            new.append({"vine_id": vine_id, "bunker_pubkey": row["bunker_pubkey"], **want})
             counts["revoked" if revoked else "imported"] += 1
-        self.conns.extend(new)  # all or nothing
-        return counts
+        for c, want in changes:  # all or nothing
+            c.update(want)
+        self.conns.extend(new)
+        for row in rows:
+            self.skipped.pop(row["bunker_pubkey"], None)
+        for i in skipped:
+            self.skipped[rows[i]["bunker_pubkey"]] = vine_id
+        return {**counts, "skipped": skipped}
+
+    def move_own(self, vine_id, pubkey):
+        have = self.accounts[vine_id]
+        if have["custody"] != "own":
+            self.archived.append((vine_id, have["pubkey"], self.secrets.get(vine_id)))
+        have.update(pubkey=pubkey, custody="own")
+        for c in self.conns:
+            if c["vine_id"] == vine_id and not c["revoked_at"]:
+                c["revoked_at"] = NOW
+        return dict(have, vine_id=vine_id, archived_keys=len(self.archived))
+
+    def revoke(self, vine_id, bunker_pubkey):
+        for c in self.conns:
+            if c["vine_id"] == vine_id and c["bunker_pubkey"] == bunker_pubkey:
+                c["revoked_at"] = c["revoked_at"] or NOW
+        return ""
+
+    def import_skipped(self):
+        return [{"vine_id": v, "bunker_pubkey": b, "at": NOW} for b, v in self.skipped.items()]
 
     def connections(self, vine_id, all=False):
         return [
@@ -251,6 +313,40 @@ class World:
             self.derivable[vine_id] = key
         return SimpleNamespace(pubkey=key, vine_id=vine_id, partner=partner, label=label)
 
+    def make_agent(self, label, *, keycast=False):
+        """An agent as the register makes one (register._agent_pass): its OWN key on the pass
+        (keycast_pubkey = own_pubkey), and no account in Keycast. KEYCAST: Keycast has one all
+        the same, with another (derived) key: what an old token request for the agent's
+        partner left behind (a "phantom")."""
+        key = pub(secret_of(label))
+        partner = self.odoo.add("res.partner", name=label, belfry_key_custody="belfry")
+        owner = self.odoo.add("res.partner", name=f"owner of {label}")
+        self.odoo.add(
+            "belfry.pass",
+            partner_id=partner,
+            tier="agent",
+            agent_owner=owner,
+            keycast_pubkey=key,
+            own_pubkey=key,
+            state="active",
+        )
+        vine_id = f"odoo-partner-{partner}"
+        phantom = None
+        if keycast:
+            secret = secret_of(f"phantom {label}")
+            phantom = pub(secret)
+            self.accounts.append(
+                {
+                    "pubkey": phantom,
+                    "vine_id": vine_id,
+                    "username": None,
+                    "status": "active",
+                    "sealed": seal(secret),
+                }
+            )
+            self.secrets[phantom] = secret
+        return SimpleNamespace(pubkey=key, vine_id=vine_id, partner=partner, phantom=phantom)
+
     def session(
         self,
         who,
@@ -305,9 +401,13 @@ class World:
 
 
 @pytest.fixture
-def world(services, odoo):
+def world(services, odoo, monkeypatch):
     services.settings.nip05_domain = "belfry.test"
-    return World(services, odoo)
+    w = World(services, odoo)
+    # the outside apps an admin approved (apps.state reads them from the community relay)
+    w.approved = {"https://notes.example.org"}
+    monkeypatch.setattr(migration, "outside_origins", lambda svc: w.approved)
+    return w
 
 
 @pytest.fixture
@@ -317,7 +417,7 @@ def town(world):
     w.ana = w.person("Ana")  # a key the custody seed gives
     w.old = w.person("Old", derived=False)  # a random key from before the seed
     w.guest = w.person("Gus", tier="guest", username="guest-7")
-    w.agent = w.person("Bot", tier="agent")
+    w.agent = w.make_agent("Bot")  # its own key, no Keycast account (register._agent_pass)
     w.own = w.person("Owen", own=True)
     w.gone = w.person("Sue", status="suspended", state="revoked")
     w.banned = w.person("Ban", status="banned", state="revoked")
@@ -337,9 +437,12 @@ def test_the_plan_counts_every_kind(town):
     p = town.plan()
     c = migration.counts(p)
     assert p.problems == [] and p.lost == []
-    assert c["accounts"] == 7 and c["excluded"] == 0
-    assert c["by_kind"] == {"agent": 1, "guest": 1, "member": 4, "own_key": 1}
-    assert c["with_username"] == 7 and c["suspended"] == 2 and c["register_members"] == 7
+    assert c["accounts"] == 6 and c["excluded"] == 0
+    assert c["by_kind"] == {"guest": 1, "member": 4, "own_key": 1}
+    assert c["with_username"] == 6 and c["suspended"] == 2 and c["register_members"] == 7
+    # the agent: its own key in the register and no Keycast account, counted, not a problem
+    assert c["own_key_no_account"] == 1 and p.no_account == {town.agent.vine_id: town.agent.pubkey}
+    assert c["scope_guessed"] == 0
     assert c["sessions_by_state"] == {
         "expired": 1,
         "never_connected": 1,
@@ -402,9 +505,10 @@ def test_the_import_carries_everything_and_is_safe_to_repeat(town):
     res = migration.run_import(w.plan(), w.signer)
     assert res["errors"] == []
     # the key from before the seed comes in as it is; the others are the seed's
-    assert res["accounts"] == {"derived": 5, "imported": 1, "exists": 0, "own_key": 1}
-    assert res["usernames"] == 7 and res["suspended"] == 2  # banned is kept as suspended
-    assert res["sessions"] == {"imported": 5, "existing": 0, "revoked": 2}
+    assert res["accounts"] == {"derived": 4, "imported": 1, "exists": 0, "own_key": 1}
+    assert res["usernames"] == 6 and res["suspended"] == 2  # banned is kept as suspended
+    assert res["sessions"] == dict(SESSIONS0, imported=5, revoked=2)
+    assert w.agent.vine_id not in w.signer.accounts  # nothing to carry for the agent
     s = w.signer
     assert s.accounts[w.old.vine_id]["custody"] == "imported"
     assert s.accounts[w.own.vine_id] == {
@@ -423,8 +527,8 @@ def test_the_import_carries_everything_and_is_safe_to_repeat(town):
     # again, and again after Keycast moved on: only what is new is written
     again = migration.run_import(w.plan(), s)
     assert again["errors"] == [] and again["usernames"] == 0 and again["suspended"] == 0
-    assert again["accounts"]["exists"] == 6 and again["accounts"]["derived"] == 0
-    assert again["sessions"] == {"imported": 0, "existing": 7, "revoked": 0}
+    assert again["accounts"]["exists"] == 5 and again["accounts"]["derived"] == 0
+    assert again["sessions"] == dict(SESSIONS0, existing=7)
     new = w.person("New")
     late = w.session(new)
     w.sessions[0]["revoked_at"] = NOW - 1  # (the signer keeps the row it has: verify says so)
@@ -446,19 +550,29 @@ def test_a_key_that_does_not_open_to_its_public_key_is_refused(town):
     assert "account_not_imported" in [m["mismatch"] for m in report["mismatches"]]
 
 
-def test_a_bunker_key_the_formula_does_not_give_stops_that_accounts_sessions(town):
+def test_a_bunker_key_the_formula_does_not_give_skips_that_row_only(town):
     w = town
     w.signer.break_bunker_of = w.bound.bunker
     res = migration.run_import(w.plan(), w.signer)
-    assert [(e["step"], e["vine_id"]) for e in res["errors"]] == [("sessions", w.ana.vine_id)]
-    assert "connections[" in res["errors"][0]["error"]
-    assert w.signer.connections(w.ana.vine_id) == []  # all or nothing
-    assert w.signer.connections(w.guest.vine_id)  # the others went in
+    assert res["errors"] == []
+    assert res["skipped"] == [
+        {"vine_id": w.ana.vine_id, "bunker": w.bound.bunker[:8] + "…", "app": "Belfry for Android"}
+    ]
+    # the account and its other rows went in
+    assert {c["bunker_pubkey"] for c in w.signer.connections(w.ana.vine_id)} == {w.live.bunker}
     report = migration.verify(w.plan(), w.signer, w.svc)
-    # its revoked rows are missing too: they came in with the same all-or-nothing call
-    assert sorted({m["mismatch"] for m in report["mismatches"]}) == [
-        "revoked_session_missing",
-        "session_missing",
+    # listed, and blocking until accepted by its exact number
+    assert kinds(report) == ["session_skipped"] and report["skipped"] == res["skipped"]
+    assert migration.verify(w.plan(), w.signer, w.svc, accept_skipped=1)["ok"]
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc, accept_skipped=2)) == [
+        "session_skipped"
+    ]
+    # a later import that carries it takes it off the list
+    w.signer.break_bunker_of = ""
+    migration.run_import(w.plan(), w.signer)
+    assert w.signer.skipped == {} and migration.verify(w.plan(), w.signer, w.svc)["ok"]
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc, accept_skipped=1)) == [
+        "accept_skipped_does_not_match"
     ]
 
 
@@ -497,7 +611,7 @@ def test_a_client_key_two_accounts_share_stays_with_the_one_in_use(world, first)
     p = w.plan()
     assert p.problems == [] and p.lost == []  # nobody in use is signed out
     res = migration.run_import(p, w.signer)
-    assert res["errors"] == [] and res["sessions"] == {"imported": 1, "existing": 0, "revoked": 1}
+    assert res["errors"] == [] and res["sessions"] == dict(SESSIONS0, imported=1, revoked=1)
     marcel = w.signer.connections(made["Marcel"].vine_id)
     assert len(marcel) == 1 and marcel[0]["client_pubkey"] == shared
     assert w.signer.connections(made["Closed"].vine_id) == []
@@ -539,15 +653,20 @@ def test_a_clean_move_verifies(moved):
     report = migration.verify(w.plan(), w.signer, w.svc)
     assert report["ok"] and report["mismatches"] == []
     assert report["checked"] == {
-        "accounts": 7,
-        "keys_equal": 7,
-        "usernames": 7,
+        "accounts": 6,
+        "keys_equal": 6,
+        "usernames": 6,
         "live_sessions": 5,
         "revoked_sessions": 2,
-        "signer_accounts": 7,
+        "own_key_no_account": 1,
+        "signer_accounts": 6,
     }
     # the revoked rows are read back from the signer (GET …/connections?all=true)
-    assert report["not_verifiable"] == {"revoked_sessions": 0, "accounts_list": False}
+    assert report["not_verifiable"] == {
+        "revoked_sessions": 0,
+        "accounts_list": False,
+        "skipped_list": False,
+    }
     assert report["digest"] == migration.source_digest(w.doc())
     text = json.dumps(report)
     for a in w.accounts:
@@ -560,7 +679,7 @@ def test_a_clean_move_verifies(moved):
     [
         (
             lambda w: w.signer.accounts.pop(w.guest.vine_id),
-            ["account_not_imported", "member_not_in_signer"],
+            ["account_count", "account_not_imported", "member_not_in_signer"],
         ),
         (
             lambda w: w.signer.accounts[w.ana.vine_id].update(pubkey="9" * 64),
@@ -569,7 +688,10 @@ def test_a_clean_move_verifies(moved):
         (lambda w: w.signer.accounts[w.ana.vine_id].update(username="anna"), ["username"]),
         (lambda w: w.signer.accounts[w.ana.vine_id].update(username=None), ["username"]),
         (lambda w: w.signer.accounts[w.gone.vine_id].update(status="active"), ["status"]),
-        (lambda w: w.signer.accounts[w.own.vine_id].update(custody="derived"), ["custody"]),
+        (
+            lambda w: w.signer.accounts[w.own.vine_id].update(custody="derived"),
+            ["custody", "register_custody"],
+        ),
         (
             lambda w: w.signer.conns.remove(
                 next(c for c in w.signer.conns if c["bunker_pubkey"] == w.live.bunker)
@@ -643,7 +765,7 @@ def test_verify_fails_when_keycast_or_the_register_moved_on(moved):
     w.sessions.pop()
     w.person("Late")  # an account made after the import
     report = migration.verify(w.plan(), w.signer, w.svc)
-    assert kinds(report) == ["account_not_imported", "member_not_in_signer"]
+    assert kinds(report) == ["account_count", "account_not_imported", "member_not_in_signer"]
     w.accounts.pop()
     assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == [
         "member_not_in_signer",
@@ -683,8 +805,8 @@ def test_after_the_switch_only_the_keys_are_compared(moved):
     }
     assert not migration.verify(w.plan(), s, w.svc)["ok"]
     report = migration.verify(w.plan(), s, w.svc, keys_only=True)
-    assert report["ok"] and report["keys_only"] is True and report["checked"]["keys_equal"] == 7
-    assert report["checked"]["signer_accounts"] == 8  # Late is no surprise after the switch
+    assert report["ok"] and report["keys_only"] is True and report["checked"]["keys_equal"] == 6
+    assert report["checked"]["signer_accounts"] == 7  # Late is no surprise after the switch
     # a key is a key, for ever
     s.accounts[w.old.vine_id]["pubkey"] = "9" * 64
     assert kinds(migration.verify(w.plan(), s, w.svc, keys_only=True)) == [
@@ -831,7 +953,7 @@ def run_cli(w, phase, monkeypatch, **more):
 def test_the_command_prints_counts_and_never_a_key_or_an_address(town, monkeypatch):
     w = town
     code, out, err = run_cli(w, "plan", monkeypatch)
-    assert code == 0 and "accounts in Keycast: 7" in err and "problems: 0" in err
+    assert code == 0 and "accounts in Keycast: 6" in err and "problems: 0" in err
     assert w.signer.accounts == {}  # the plan writes nothing
     code, out, err = run_cli(w, "verify", monkeypatch)
     assert code == 1 and "MISMATCH" in err and "account_not_imported" in err
@@ -847,7 +969,7 @@ def test_the_command_prints_counts_and_never_a_key_or_an_address(town, monkeypat
     assert code == 0 and w.signer.closed is False and json.loads(out) == {"no_new_accounts": False}
     code, out, err = run_cli(w, "verify", monkeypatch)
     report = json.loads(out)
-    assert report["ok"] is True and report["checked"]["accounts"] == 7
+    assert report["ok"] is True and report["checked"]["accounts"] == 6
     everything = out + err
     for a in w.accounts:
         assert a["pubkey"] not in everything
@@ -921,8 +1043,13 @@ def test_the_script_parses_and_only_cleanup_deletes():
     # Keycast's database is only ever read outside cleanup: one query, in a read-only transaction
     assert "READ ONLY" in fns["rows"] and "encrypted_secret_key" in fns["rows"]
     for name, body in fns.items():
-        if name not in ("rows", "cmd_cleanup", "cmd_check"):
+        if name not in ("rows", "cmd_cleanup", "cmd_check", "box_id", "keycast_carry_back"):
             assert "psql" not in body, name
+    # the box's fingerprint reads; the rollback writes only revocations and suspensions
+    assert "select system_identifier" in fns["box_id"]
+    carry = fns["keycast_carry_back"]
+    assert "UPDATE oauth_authorizations SET revoked_at" in carry
+    assert "UPDATE users SET status" in carry and "ON_ERROR_STOP=1" in carry
     assert "select count(*) from users" in fns["cmd_check"]
     # cleanup: a typed sentence at a terminal, the two reports, seven days, a fresh backup
     c = fns["cmd_cleanup"]
@@ -945,6 +1072,25 @@ def test_the_script_parses_and_only_cleanup_deletes():
     assert s.index("py verify") < s.index("BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1")
     # rows never land in a file
     assert "rows |" in fns["py"] and "rows >" not in script.read_text()
+    # the switch holds the apply lock from before anything stops to the end, and the apply it
+    # runs knows the lock is held
+    assert s.index("take_apply_lock") < s.index("stop onboarding keycast")
+    assert "BELFRY_APPLY_LOCKED=1" in fns["take_apply_lock"]
+    assert "flock -w" in fns["take_apply_lock"]
+    # switch, rollback and cleanup refuse to run outside tmux/screen (unless --no-tmux)
+    for name in ("cmd_switch", "cmd_rollback", "cmd_cleanup"):
+        assert "need_tmux" in fns[name] and "need_this_box" in fns[name], name
+    assert "take_apply_lock" in fns["cmd_rollback"] and "take_apply_lock" in fns["cmd_cleanup"]
+    # rollback writes the signer's sign-outs and suspensions into Keycast before it starts
+    r = fns["cmd_rollback"]
+    assert r.index("keycast_carry_back") < r.index("BELFRY_SIGNER=keycast")
+    # cleanup stops at the first failed deletion, and asks for a backup of the signer's keys
+    assert "|| die" in c[c.index("DROP SCHEMA") :][:300]
+    assert "backup_holds_signer" in c and "report_of_this_box" in c
+    # the backup's time comes from the backup file, never from the environment
+    text = script.read_text()
+    assert "BELFRY_BACKUP_STAMP" not in text and "last-success" not in text
+    assert "+ 300" in fns["backup_age"]
 
 
 def test_apply_never_cleans_up_and_only_the_migration_starts_the_import_signer():
@@ -978,7 +1124,11 @@ def test_a_signer_that_cannot_list_says_so_instead_of_passing(moved):
 
     report = migration.verify(w.plan(), Older(w.signer), w.svc)
     assert report["ok"], report["mismatches"]
-    assert report["not_verifiable"] == {"revoked_sessions": 2, "accounts_list": True}
+    assert report["not_verifiable"] == {
+        "revoked_sessions": 2,
+        "accounts_list": True,
+        "skipped_list": True,
+    }
     assert report["checked"]["revoked_sessions"] == 0 and "signer_accounts" not in report["checked"]
 
 
@@ -999,3 +1149,262 @@ def test_the_import_carries_keycasts_origin():
     assert migration.connection_row(s)["origin"] == "https://chat.belfry.test"
     s.origin = ""
     assert "origin" not in migration.connection_row(s)
+
+
+# ── agents: their own key, no Keycast account ──────────────────────────────────────────────
+def test_agents_with_their_own_key_are_counted_not_carried_and_checked(town):
+    w = town
+    phantom = w.make_agent("Old bot", keycast=True)  # Keycast minted a key for its partner once
+    p = w.plan()
+    assert p.problems == []
+    assert set(p.no_account) == {w.agent.vine_id, phantom.vine_id}
+    assert [a.kind for a in p.accounts if a.vine_id == phantom.vine_id] == ["phantom"]
+    assert migration.counts(p)["by_kind"]["phantom"] == 1
+    res = migration.run_import(p, w.signer)
+    assert res["errors"] == []
+    assert w.agent.vine_id not in w.signer.accounts and phantom.vine_id not in w.signer.accounts
+    report = migration.verify(w.plan(), w.signer, w.svc)
+    assert report["ok"], report["mismatches"]
+    assert report["checked"]["own_key_no_account"] == 2
+    # a keyless account with the agent's own key is consistent too
+    w.signer.accounts[w.agent.vine_id] = {
+        "pubkey": w.agent.pubkey,
+        "custody": "own",
+        "key_version": 0,
+        "status": "active",
+        "username": None,
+    }
+    assert migration.verify(w.plan(), w.signer, w.svc)["ok"]
+    # a key held for an agent is never right (the phantom's, or any other)
+    w.signer.accounts[phantom.vine_id] = {
+        "pubkey": phantom.phantom,
+        "custody": "derived",
+        "key_version": 0,
+        "status": "active",
+        "username": None,
+    }
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == ["own_key_account"]
+    # also after the switch
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc, keys_only=True)) == ["own_key_account"]
+    # a phantom somebody signs in on stops the plan: it must be understood
+    w.signer.accounts.pop(phantom.vine_id)
+    w.secrets[phantom.phantom] = secret_of(f"phantom {'Old bot'}")
+    w.session(SimpleNamespace(pubkey=phantom.phantom))
+    assert [x["problem"] for x in w.plan().problems] == ["phantom_with_sessions"]
+
+
+def test_the_signer_is_never_asked_for_an_agents_account(services, odoo):
+    from belfry_onboarding import community, signerguard
+
+    key = "ab" * 32
+    partner = odoo.add("res.partner", name="Bot", belfry_key_custody="belfry")
+    odoo.add(
+        "belfry.pass",
+        partner_id=partner,
+        tier="agent",
+        keycast_pubkey=key,
+        own_pubkey=key,
+        state="active",
+    )
+    assert signerguard.own_key_person(services, partner)
+    asked = []
+    services.keycast.preload_user = lambda *a, **k: asked.append(a) or {}
+    assert community.member_token(services, partner) is None and asked == []
+    assert [m["own"] for m in signerguard.members(services) if m["partner"] == partner] == [True]
+
+
+# ── import is a sync: run again, it brings the signer to Keycast's state ───────────────────
+def test_running_import_again_follows_keycast_between_import_and_switch(world):
+    w = world
+    w.signer.closed = True  # the import closed new accounts: the migration's window
+    a, b, c = w.person("Aa"), w.person("Bb"), w.person("Cc", derived=False)
+    signed_out = w.session(a)
+    deleted = w.session(a)
+    shared = pub(secret_of("a shared tablet"))
+    a_tab = w.session(a, client=shared, used=NOW - 500)
+    b_tab = w.session(b, client=shared, used=NOW - 900)  # a uses it more lately: a keeps it
+    w.approved.add("https://late.example.org")
+    scoped = w.session(b, app="late.example.org", origin="https://late.example.org")
+    w.approved.discard("https://late.example.org")  # (not approved at the first import)
+    c_live = w.session(c)
+    p = w.plan()
+    assert len(p.lost) == 1
+    first = migration.run_import(p, w.signer)
+    assert first["errors"] == []
+    assert migration.verify(w.plan(), w.signer, w.svc, accept_lost=1)["ok"]
+    # since the first import, on Keycast: a sign-out, a row deleted, b used the tablet last,
+    # the outside app approved, and c took their own key
+    signed_out.row["revoked_at"] = NOW - 5
+    w.sessions.remove(deleted.row)
+    b_tab.row["last_used_at"] = NOW - 1
+    w.approved.add("https://late.example.org")
+    new_own = pub(secret_of("Cc's own key"))
+    for acct in w.accounts:
+        if acct["pubkey"] == c.pubkey:
+            acct.update(pubkey=new_own, sealed=None)
+    w.sessions.remove(c_live.row)  # Keycast deletes the sessions of a key taken over
+    for row in w.odoo.tables["belfry.pass"].values():
+        if row["partner_id"] == c.partner:
+            row["keycast_pubkey"] = new_own
+    w.odoo.write("res.partner", [c.partner], {"belfry_key_custody": "self"})
+    p = w.plan()
+    assert p.problems == [] and [x["kept_by"] for x in p.lost] == [b.vine_id]
+    second = migration.run_import(p, w.signer)
+    assert second["errors"] == [], second["errors"]
+    assert second["sessions"]["released"] == 1 and second["sessions"]["revoked_gone"] == 1
+    assert second["custody_moved"] == [
+        {
+            "vine_id": c.vine_id,
+            "from": "imported",
+            "from_key": c.pubkey[:8] + "…",
+            "to_key": new_own[:8] + "…",
+            "archived_keys": 1,
+        }
+    ]
+    assert w.signer.archived[0][1] == c.pubkey  # the held key is kept, not dropped
+    live_a = {x["bunker_pubkey"] for x in w.signer.connections(a.vine_id)}
+    assert live_a == set()  # signed out, deleted, and its tablet row went to b
+    live_b = {x["bunker_pubkey"]: x for x in w.signer.connections(b.vine_id)}
+    assert set(live_b) == {b_tab.bunker, scoped.bunker}
+    assert live_b[b_tab.bunker]["client_pubkey"] == shared
+    assert live_b[scoped.bunker]["scope"] == "outside"
+    report = migration.verify(w.plan(), w.signer, w.svc, accept_lost=1)
+    assert report["ok"], report["mismatches"]
+    # and once more: nothing left to do
+    third = migration.run_import(w.plan(), w.signer)
+    assert third["sessions"]["updated"] == 0 and third["sessions"]["revoked_gone"] == 0
+    assert third["custody_moved"] == []
+    del a_tab
+
+
+def test_a_session_signed_out_in_keycast_is_revoked_in_the_signer_by_the_next_import(world):
+    """The finding: an import that left a revoked session live made the switch abort."""
+    w = world
+    a = w.person("Aa")
+    live = w.session(a)
+    migration.run_import(w.plan(), w.signer)
+    live.row["revoked_at"] = NOW - 1
+    # outside the window (accounts open) the signer keeps what it has: verify says so
+    assert "session_unexpected" in kinds(migration.verify(w.plan(), w.signer, w.svc))
+    w.signer.closed = True
+    migration.run_import(w.plan(), w.signer)
+    assert migration.verify(w.plan(), w.signer, w.svc)["ok"]
+
+
+# ── custody against the register, scope, unverified, empty Keycast ─────────────────────────
+def test_custody_must_agree_with_the_register(town):
+    w = town
+    w.odoo.write("res.partner", [w.ana.partner], {"belfry_key_custody": "self"})
+    assert [x["problem"] for x in w.plan().problems] == ["register_custody"]
+    w.odoo.write("res.partner", [w.ana.partner], {"belfry_key_custody": "belfry"})
+    w.odoo.write("res.partner", [w.own.partner], {"belfry_key_custody": "belfry"})
+    assert [x["problem"] for x in w.plan().problems] == ["register_custody"]
+
+
+@pytest.mark.parametrize(
+    "origin, scope, guessed",
+    [
+        ("", "own", False),  # create_bunker: the onboarding service's sessions
+        ("https://chat.belfry.test", "own", False),
+        ("https://belfry.test", "own", False),  # the chat on the apex, earlier
+        ("https://calendar.belfry.test", "own", False),
+        ("sh.belfry.app://connect", "own", False),
+        ("https://notes.example.org", "outside", False),  # approved
+        ("https://unknown.example.org", "own", True),
+        ("nostrconnect://" + "ab" * 32, "own", True),
+        ("https://belfry.test.evil.org", "own", True),
+    ],
+)
+def test_scope_comes_from_keycasts_origin(world, origin, scope, guessed):
+    assert migration.scope_of(world.svc, origin, world.approved) == (scope, guessed)
+
+
+def test_guessed_scopes_are_counted_and_the_scope_is_verified(world):
+    w = world
+    a = w.person("Aa")
+    s = w.session(a, app="Who knows", origin="https://who.example.org")
+    p = w.plan()
+    assert migration.counts(p)["scope_guessed"] == 1
+    migration.run_import(p, w.signer)
+    report = migration.verify(w.plan(), w.signer, w.svc)
+    assert report["ok"] and [x["app"] for x in report["scope_guessed"]] == ["Who knows"]
+    next(c for c in w.signer.conns if c["bunker_pubkey"] == s.bunker)["scope"] = "outside"
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == ["session_scope"]
+    # the next import in the window corrects it
+    w.signer.closed = True
+    migration.run_import(w.plan(), w.signer)
+    assert migration.verify(w.plan(), w.signer, w.svc)["ok"]
+
+
+def test_unverified_sessions_block_until_accepted_by_number(town):
+    w = town
+    w.session(w.ana, "unverified")
+    migration.run_import(w.plan(), w.signer)
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == ["unverified_sessions"]
+    assert migration.verify(w.plan(), w.signer, w.svc, accept_unverified=1)["ok"]
+    assert not migration.verify(w.plan(), w.signer, w.svc, accept_unverified=2)["ok"]
+
+
+def test_no_keycast_rows_is_never_a_clean_verify(moved):
+    w = moved
+    w.accounts.clear()
+    w.sessions.clear()
+    for mode in (False, True):
+        report = migration.verify(w.plan(), w.signer, w.svc, keys_only=mode)
+        assert "keycast_empty" in kinds(report), mode
+
+
+def test_after_the_switch_a_member_may_take_their_own_key(moved):
+    w = moved
+    new = "7" * 64
+    w.signer.accounts[w.ana.vine_id].update(pubkey=new, custody="own")
+    for row in w.odoo.tables["belfry.pass"].values():
+        if row["partner_id"] == w.ana.partner:
+            row["keycast_pubkey"] = new
+    w.odoo.write("res.partner", [w.ana.partner], {"belfry_key_custody": "self"})
+    report = migration.verify(w.plan(), w.signer, w.svc, keys_only=True)
+    assert report["ok"], report["mismatches"]
+
+
+# ── rollback carries revocations and suspensions back ──────────────────────────────────────
+def test_rollback_carries_back_what_was_signed_out_and_suspended(moved):
+    w = moved
+    w.signer.revoke(w.ana.vine_id, w.live.bunker)  # signed out on the signer after the switch
+    w.signer.accounts[w.guest.vine_id]["status"] = "suspended"
+    back = migration.carry_back(w.plan(), w.signer)
+    assert back == {"revoke": [[w.live.bunker, NOW]], "suspend": [w.guest.pubkey]}
+
+
+def test_the_signers_messages_are_shortened():
+    r = httpx.Response(409, json={"error": "mismatch", "message": "the key is " + "ab" * 32})
+    assert migration.SignerAdmin._error(r) == "mismatch: the key is abababab…"
+
+
+def test_a_backup_is_as_old_as_its_own_name_says_and_never_from_the_future(tmp_path):
+    import subprocess
+    import time as _time
+
+    fns = functions((SCRIPTS / "migrate-to-own-signer.sh").read_text())
+    defs = "\n".join(
+        f"{n}() {{\n{fns[n]}}}" for n in ("latest_backup", "backup_time", "backup_age")
+    )
+
+    def age(*names: str) -> str:
+        d = tmp_path / str(len(list(tmp_path.iterdir())))
+        d.mkdir()
+        for i, name in enumerate(names):
+            (d / name).write_text("x")
+            t = _time.time() - 100 + i
+            __import__("os").utime(d / name, (t, t))
+        script = f'now() {{ date +%s; }}\nBACKUP_DIR="{d}"\n{defs}\nbackup_age'
+        env = {"PATH": "/usr/bin:/bin", "BELFRY_BACKUP_STAMP": "/dev/null"}
+        return subprocess.run(
+            ["bash", "-c", script], capture_output=True, text=True, env=env
+        ).stdout.strip()
+
+    stamp = _time.strftime("%Y%m%dT%H%M%SZ", _time.gmtime(_time.time() - 600))
+    assert 590 <= int(age(f"belfry-box-{stamp}.tar.age")) <= 700
+    future = _time.strftime("%Y%m%dT%H%M%SZ", _time.gmtime(_time.time() + 86400))
+    assert age(f"belfry-box-{future}.tar.age") == ""  # from the future: no fresh backup
+    assert age("belfry-box-notastamp.tar.age") == ""
+    assert age() == ""

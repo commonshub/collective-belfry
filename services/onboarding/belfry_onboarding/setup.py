@@ -330,9 +330,16 @@ def has_admin(svc: Services) -> bool:
 
 
 def reopened(settings: Any) -> bool:
-    """``belfry setup-reset`` opened the setup again and nobody has claimed it since."""
+    """``belfry setup-reset`` opened the setup again and nobody has claimed it since.
+
+    A ``reset.json`` written before the ``open`` key existed counts as open, as it did then
+    (nothing changes for a belfry reset by the older code: it stays open to the first admin
+    until one is made, which writes ``"open": false``)."""
     folder = setup_dir(settings)
-    return folder is not None and read_json(folder / RESET_FILE).get("open") is True
+    if folder is None or not (folder / RESET_FILE).exists():
+        return False
+    data = read_json(folder / RESET_FILE)
+    return data.get("open", True) is True
 
 
 def _close_reopening(settings: Any) -> None:
@@ -340,7 +347,7 @@ def _close_reopening(settings: Any) -> None:
     if folder is None or not (folder / RESET_FILE).exists():
         return
     data = read_json(folder / RESET_FILE)
-    if data.get("open") is True:
+    if data.get("open", True) is True:  # an older file without the key counts as open
         data["open"] = False
         tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
         tmp.write_text(json.dumps(data))

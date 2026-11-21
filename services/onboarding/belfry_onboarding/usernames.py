@@ -68,9 +68,12 @@ RESERVED = {
     "_groups",
     "_",
 }
-# what an account is called before it has a name of its own: a member number ("0007",
-# "osv-0007"), "member-<id>", "guest-<id>"
-DEFAULT = re.compile(r"^(?:\d+|[a-z]{2,6}-\d{2,}|member-\d+|guest-\d+)$")
+# what an account is called before it has a name of its own, exactly as accounts are made: a
+# member number (digits, zero-padded to four: register._m_belfry_ensure_member_number, Odoo's
+# sequence with padding 4; belfry.sh's older numbers carry a prefix, "OSV-0001", lowercased),
+# "member-<id>" (community.member_token without a number), "guest-<id>". Nothing wider: "lina-10"
+# and "max-42" are names people choose.
+DEFAULT = re.compile(r"^(?:\d+|[a-z]{2,6}-\d{4}|member-\d+|guest-\d+)$")
 
 
 def slug(name: str) -> str:

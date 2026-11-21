@@ -188,8 +188,14 @@ cmd_run() {
   prune "$target" "$keep"
 
   mkdir -p "$HOME/belfry-backups"
-  mv "$work/$name" "$HOME/belfry-backups/"
-  ls -1t "$HOME/belfry-backups"/belfry-*.tar.age | tail -n +"$((local_keep + 1))" | xargs -r rm -f
+  # next to it, in the clear: what it holds (volume names and file counts, no content) and its
+  # checksum, so a check (migrate-to-own-signer.sh) can tell what a backup carries without
+  # the stewards' key
+  jq -n --arg at "$stamp" --arg sha "$(sha256sum "$work/$name" | cut -d' ' -f1)" \
+    --argjson volumes "$vols" '{created:$at, sha256:$sha, volumes:$volumes}' > "$work/$name.json"
+  mv "$work/$name" "$work/$name.json" "$HOME/belfry-backups/"
+  ls -1t "$HOME/belfry-backups"/belfry-*.tar.age | tail -n +"$((local_keep + 1))" \
+    | while read -r old; do rm -f "$old" "$old.json"; done
   date -u +%s > "$HOME/belfry-backups/last-success"
   say "$name ($out) sent to $target"
 }
