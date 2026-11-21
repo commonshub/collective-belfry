@@ -113,6 +113,11 @@ signer_files() {
   if own_signer; then
     printf '%s\n' -f infra/docker-compose.signer.yml -f infra/docker-compose.signer-prod.yml
     if [[ "${1:-}" == images ]]; then printf '%s\n' -f infra/docker-compose.images-signer.yml; fi
+  elif [[ "${BELFRY_SIGNER_IMPORT:-}" == 1 ]]; then
+    # the migration only (infra/scripts/migrate-to-own-signer.sh): the signer next to Keycast,
+    # without its bunker, to take the accounts in. Never set by apply or config.
+    printf '%s\n' -f infra/docker-compose.signer-import.yml
+    if [[ "${1:-}" == images ]]; then printf '%s\n' -f infra/docker-compose.images-signer.yml; fi
   fi
 }
 # the services whose images GitHub builds: Keycast's two, or the signer in their place

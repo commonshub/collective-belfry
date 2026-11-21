@@ -12,14 +12,20 @@ import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import community, console, core, setup, signerguard, steward, stewards
-from belfry_onboarding import usernames
-from belfry_onboarding.app import create_app
+from belfry_onboarding import (
+    community,
+    console,
+    core,
+    setup,
+    signerguard,
+    steward,
+    stewards,
+    usernames,
+)
 from belfry_onboarding.clients.signer import KeyNotHeld
-from belfry_onboarding.settings import Settings
 
-from .test_own_mode import APPS, CONSOLE, own, people, signer, web  # noqa: F401 — fixtures
 from .test_opensetup import open_wizard
+from .test_own_mode import APPS, CONSOLE, own, people, signer, web  # noqa: F401 — fixtures
 from .test_setup import folder, fresh, make_first_admin  # noqa: F401 — fixtures
 
 
@@ -102,10 +108,15 @@ def test_the_service_does_not_start_on_a_signer_without_its_members(guarded, odo
     # start; an app handed its services, as every test's, has run it or not on its own)
     ana, bob = member(guarded, odoo, "Ana"), member(guarded, odoo, "Bob")
     assert signerguard.check_start(guarded) == {
-        "checked": 2, "held": 2, "missing": 0, "wrong": 0, "skipped": "",
+        "checked": 2,
+        "held": 2,
+        "missing": 0,
+        "wrong": 0,
+        "skipped": "",
     }
     assert [m["vine_id"] for m in signerguard.members(guarded)] == [
-        f"odoo-partner-{ana['partner']}", f"odoo-partner-{bob['partner']}",
+        f"odoo-partner-{ana['partner']}",
+        f"odoo-partner-{bob['partner']}",
     ]
     # one account missing: a warning, the per-account guard decides
     kept = signer.users.pop(f"odoo-partner-{bob['partner']}")
@@ -131,6 +142,7 @@ def test_the_service_does_not_start_on_a_signer_without_its_members(guarded, odo
     assert signerguard.check_start(guarded)["checked"] == 0
     # a signer that is down stops nothing (nothing can be made meanwhile)
     odoo.write("res.partner", [ana["partner"]], {"belfry_key_custody": "belfry"})
+
     def unreachable(vine_id):
         raise httpx.ConnectError("no route")
 
@@ -161,8 +173,13 @@ def test_a_belfry_with_members_is_not_handed_to_the_first_comer(fresh, folder, a
     assert 'data-start="name"' not in stranger.get("/setup").text
     r = stranger.post(
         "/setup/first-admin",
-        json={"csrf": "x", "name": "Eve", "email": "eve@example.org", "username": "eve",
-              "session_pubkey": pk(PrivateKey())},
+        json={
+            "csrf": "x",
+            "name": "Eve",
+            "email": "eve@example.org",
+            "username": "eve",
+            "session_pubkey": pk(PrivateKey()),
+        },
     )
     assert r.status_code in (403, 409)
     # a pass that is over still counts: this belfry had members
@@ -199,8 +216,13 @@ def test_setup_reset_opens_such_a_belfry_on_purpose(fresh, folder, authentik, od
     csrf = open_wizard(nxt)
     r = nxt.post(
         "/setup/first-admin",
-        json={"csrf": csrf, "name": "Village Commons", "email": "nora@example.org",
-              "username": "nora", "session_pubkey": pk(PrivateKey())},
+        json={
+            "csrf": csrf,
+            "name": "Village Commons",
+            "email": "nora@example.org",
+            "username": "nora",
+            "session_pubkey": pk(PrivateKey()),
+        },
     )
     assert r.status_code == 200, r.text
     assert json.loads((folder / setup.RESET_FILE).read_text())["open"] is False

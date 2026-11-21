@@ -162,8 +162,10 @@ def check_start(svc: Services) -> dict[str, Any]:
             out["missing"] += 1
         elif str(account.get("pubkey") or "").lower() != m["pubkey"]:
             out["wrong"] += 1
-            wrong.append(f"{m['vine_id']} (register {short(m['pubkey'])}, signer "
-                         f"{short(account.get('pubkey'))})")
+            wrong.append(
+                f"{m['vine_id']} (register {short(m['pubkey'])}, signer "
+                f"{short(account.get('pubkey'))})"
+            )
         else:
             out["held"] += 1
     if wrong:
