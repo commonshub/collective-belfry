@@ -1318,6 +1318,43 @@ def _verify_stewards(svc: Any, authentik: Any, miss: Any, accept_missing: int) -
     }
 
 
+def admins_overview(svc: Any, emails: Iterable[str] | None = None) -> dict[str, Any]:
+    """Who is (``emails``: Authentik's stewards group, for check) or is marked (the register's
+    flag, after the import) an admin, and which of them have no active pass, with the addresses
+    masked. Information for the operator: on its own signer an admin signs in whatever their
+    pass (apps.signin_member), but they are left off the relay and the chat until a pass is
+    active again (``belfry add-steward`` gives one that lasts)."""
+    if emails is None:
+        emails = [str(r["email"]) for r in stewards._flagged(svc, ["email"]) if r.get("email")]
+    wanted = sorted({e.strip().lower() for e in emails if e and e.strip()})
+    active: set[int] = set()
+    for r in svc.odoo.search_read("belfry.pass", [["state", "=", "active"]], ["partner_id"]):
+        pid = signerguard._m2o(r.get("partner_id"))
+        if pid:
+            active.add(pid)
+    without: list[str] = []
+    for e in wanted:
+        people = stewards._partners(svc, e)
+        if people and not any(int(p["id"]) in active for p in people):
+            without.append(e)
+    return {
+        "admins": [mask(e) for e in wanted],
+        "without_active_pass": [mask(e) for e in without],
+    }
+
+
+def say_admins(say: Any, overview: dict[str, Any], becomes: bool) -> None:
+    names = ", ".join(overview["admins"]) or "nobody"
+    say(f"admins{' after the move' if becomes else ''} ({len(overview['admins'])}): {names}")
+    if overview["without_active_pass"]:
+        say(
+            f"admins without an active pass ({len(overview['without_active_pass'])}): "
+            + ", ".join(overview["without_active_pass"])
+            + ". They can still sign in to the console on the own signer; "
+            "'belfry add-steward <address>' gives them a pass that lasts (relay, chat)."
+        )
+
+
 # ── rollback ────────────────────────────────────────────────────────────────────────────────
 def carry_back(p: Plan, signer: Any) -> dict[str, Any]:
     """What a rollback writes back into Keycast so that it does not undo what happened on the
@@ -1401,7 +1438,25 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
     for lost in p.lost[:50]:
         say("  signed out by the move: " + json.dumps(lost, sort_keys=True))
     if args.phase == "plan":
-        json.dump({"counts": c, "problems": p.problems, "lost": p.lost, "digest": p.digest}, out)
+        doc_out: dict[str, Any] = {
+            "counts": c,
+            "problems": p.problems,
+            "lost": p.lost,
+            "digest": p.digest,
+        }
+        if not args.no_stewards and getattr(settings, "authentik_token", ""):
+            # who becomes an admin: Authentik's stewards group, as the import will mark it
+            try:
+                from .clients.authentik import AuthentikClient
+
+                group = AuthentikClient(
+                    settings.authentik_url, settings.authentik_token
+                ).group_member_emails(settings.steward_group)
+                doc_out["admins"] = admins_overview(svc, group)
+                say_admins(say, doc_out["admins"], becomes=True)
+            except Exception as exc:  # noqa: BLE001 — information only; check reads it again
+                say(f"admins: Authentik's stewards group not readable ({type(exc).__name__})")
+        json.dump(doc_out, out)
         out.write("\n")
         return 1 if p.problems else 0
     try:
@@ -1529,6 +1584,11 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
         say("  MISMATCH: " + json.dumps(m, sort_keys=True))
     if report["keys_only"]:
         say("(keys only: usernames, states, sessions and admins move on after a switch)")
+    try:
+        report["admins"] = admins_overview(svc)  # the register's flag: information only
+        say_admins(say, report["admins"], becomes=False)
+    except Exception as exc:  # noqa: BLE001 — a count for the operator, never a mismatch
+        say(f"admins: the register's admins not readable ({type(exc).__name__})")
     say("verify: clean" if report["ok"] else f"verify: {len(report['mismatches'])} mismatches")
     json.dump(report, out)
     out.write("\n")

@@ -62,6 +62,8 @@ PASS_FIELDS = [
     # joining with a key of one's own (invite page, belfry_pass models/nostr_proof.py)
     "own_pubkey",
     "own_pubkey_proof",
+    # an admin's free pass (belfry_steward.py): it ends with the role, not with the event
+    "steward_pass",
 ]
 
 # The proof of an own key: a NIP-98 event for the invite page, signed with that key.
@@ -998,6 +1000,11 @@ def _activate_pass(svc: Services, invoice_id: int) -> str:
         or today()
     )
     date_start, date_end = _pass_dates(svc.settings, tier, duration_days, payment_date)
+    if pass_row.get("steward_pass"):
+        # an admin's free pass (add-steward, belfry_steward.py) lasts as long as the role, like
+        # a membership of the own register (activate_free_pass): never the event's dates, which
+        # after the event made a pass that had ended the day it was opened
+        date_start, date_end = max(payment_date, today()), MEMBERSHIP_END
     extra: dict[str, Any] = {}
     if tx:
         extra["transaction_id"] = tx["id"]

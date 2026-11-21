@@ -451,6 +451,13 @@ legacy_settings() {
     say "SIGNER=belfry: PASS_SIGNIN set to belfry (there is no Authentik to sign in with)"
     env_set PASS_SIGNIN belfry
   fi
+  # the apps' sign-in (appsignin.py: apps.<domain>/api/oauth/authorize) sends people on to the
+  # console's /connect/authorize: without CONSOLE_URL it answers 404 and nobody new signs in to
+  # the chat. Boxes set up before prod-env.sh wrote it have it empty.
+  if own_signer && [[ -z "$(env_get CONSOLE_URL)" && -n "$(env_get BELFRY_DOMAIN)" ]]; then
+    say "CONSOLE_URL was empty: set to https://belfry.$(env_get BELFRY_DOMAIN) (the apps' sign-in goes there)"
+    env_set CONSOLE_URL "https://belfry.$(env_get BELFRY_DOMAIN)"
+  fi
   if own_signer; then
     # what the signer replaced: stopped and removed, their data (the postgres databases keycast
     # and authentik, the volumes) left where it is

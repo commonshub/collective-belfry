@@ -327,6 +327,10 @@ cmd_check() {
   say "code: $(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --short HEAD) on $(git -c safe.directory="$ROOT" -C "$ROOT" rev-parse --abbrev-ref HEAD)"
   say "domain: $(domain); register: $(env_get REGISTER); sign-in: $(env_get PASS_SIGNIN); signer: $(signer_now)"
   need_own_signin
+  # after the switch the apps' sign-in sends people to CONSOLE_URL/connect/authorize: empty, it
+  # answers 404 and nobody new signs in to the chat (sessions that exist keep working)
+  [[ -n "$(env_get CONSOLE_URL)" ]] \
+    || die "CONSOLE_URL is empty in $ENV_FILE: after the switch the apps' sign-in would answer 404. Add CONSOLE_URL=https://belfry.$(domain) to $ENV_FILE (the switch's 'belfry apply' would also fill it in) and run check again"
   [[ -f "$INFRA/docker-compose.signer.yml" && -d "$ROOT/services/signer" ]] || die "this checkout has no signer (services/signer): update the code first"
   docker --version | head -n1
   step "Disk"

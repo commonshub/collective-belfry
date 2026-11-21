@@ -144,6 +144,62 @@ def member_by_email(svc: Services, email: str) -> dict[str, Any] | None:
     return None
 
 
+def signin_member(svc: Services, email: str) -> dict[str, Any] | None:
+    """Who may sign in with EMAIL: a member (``member_by_email``) or, on a belfry on its own
+    signer, an admin whatever their pass's state. Under Keycast admins signed in through
+    Authentik, which needs no pass; after the move (docs/own-signer.md §6) the register's admin
+    flag is what makes them admins, and an admin whose pass lapsed (an event that ended) must
+    still reach the console to put things right."""
+    member = member_by_email(svc, email)
+    if member is not None:
+        return member
+    from . import stewards
+
+    return steward_member(svc, email) if stewards.own(svc) else None
+
+
+def steward_member(svc: Services, email: str) -> dict[str, Any] | None:
+    """An admin of the register (``belfry_steward``) with a key, whatever their passes: the
+    same shape as ``member_by_email``. The key is the contact's (``belfry_npub``), else the one
+    on their newest pass."""
+    from . import nostr
+
+    email = email.strip().lower()
+    if "@" not in email:
+        return None
+    partners = svc.odoo.search_read(
+        "res.partner",
+        [["email", "=ilike", email], ["belfry_steward", "=", True]],
+        ["name", "email", "belfry_npub"],
+        limit=5,
+    )
+    for p in partners:
+        if (p.get("email") or "").strip().lower() != email:  # =ilike's wildcards
+            continue
+        pubkey = ""
+        try:
+            pubkey = nostr.to_hex_pubkey(p.get("belfry_npub") or "") if p.get("belfry_npub") else ""
+        except ValueError:
+            pubkey = ""
+        if not pubkey:
+            rows = svc.odoo.search_read(
+                "belfry.pass",
+                [["partner_id", "=", p["id"]], ["keycast_pubkey", "!=", False]],
+                ["keycast_pubkey"],
+                limit=1,
+                order="id desc",
+            )
+            pubkey = (rows[0].get("keycast_pubkey") or "") if rows else ""
+        if pubkey:
+            return {
+                "partner": p["id"],
+                "pubkey": pubkey,
+                "name": p.get("name") or email.split("@")[0],
+                "email": (p.get("email") or email).lower(),
+            }
+    return None
+
+
 def member_by_partner(svc: Services, partner: int) -> dict[str, Any] | None:
     rows = svc.odoo.read("res.partner", [partner], ["name", "email"])
     if not rows:
@@ -164,7 +220,7 @@ def admin_pubkeys(svc: Services) -> set[str]:
     if now - _admin_keys["at"] > CACHE_SECONDS:
         keys = set()
         for email in console.admin_emails(svc):
-            m = member_by_email(svc, email)
+            m = signin_member(svc, email)
             if m:
                 keys.add(m["pubkey"])
         _admin_keys.update(at=now, keys=keys)

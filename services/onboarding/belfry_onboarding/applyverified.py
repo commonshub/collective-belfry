@@ -117,7 +117,7 @@ def _account(svc: Services, email: str) -> dict[str, Any] | None:
     buyer whose address was not proven yet has it from here on (sales.confirm, as connect.py)."""
     from . import apps, sales
 
-    member = apps.member_by_email(svc, email)
+    member = apps.signin_member(svc, email)  # an admin whose pass lapsed too (own signer)
     if member is None:
         buyer = sales.pending_member(svc, email)
         if buyer is not None:

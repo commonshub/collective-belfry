@@ -144,7 +144,7 @@ def outcome(svc: Services, f: dict[str, Any], member: dict[str, Any]) -> dict[st
 
 
 def send_code(svc: Services, f: dict[str, Any], email: str) -> dict[str, Any]:
-    member = apps.member_by_email(svc, email)
+    member = apps.signin_member(svc, email)
     if member is None:
         # a buyer whose address is not proven yet: this sign-in is its proof (sales.py)
         from . import sales
@@ -218,7 +218,7 @@ def _verify_unproven(
         raise ConnectError(410, "That code expired. Send a new one.")
     # the code went to this address: it proves this address, for this contact only
     sales.confirm(svc, member["partner"], member["email"])
-    found = apps.member_by_email(svc, member["email"])
+    found = apps.signin_member(svc, member["email"])
     if found is None:
         raise ConnectError(409, "This address does not belong to a member's account.")
     f["pending"] = found

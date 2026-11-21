@@ -110,11 +110,16 @@ def viewer(svc: Services, sess: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
     pid = sess["partner"]
     row = mypass.partner_pass(svc, pid)
-    if not row or row.get("state") != "active" or row.get("tier") == "guest":
+    member = bool(row) and row.get("state") == "active" and row.get("tier") != "guest"
+    # on its own signer an admin of the register is one whatever their pass (apps.signin_member:
+    # a lapsed pass must not lock the belfry's admins out of their console)
+    if not member and not stewards.own(svc):
         return None  # a channel's guest (guests.py) is no member of the belfry
     partner = (svc.odoo.read("res.partner", [pid], ["name", "email"]) or [{}])[0]
     email = (partner.get("email") or "").lower()
     admin = bool(email) and email in admin_emails(svc)
+    if not member and not (admin and apps_steward(svc, email, pid)):
+        return None
     return {
         "partner": pid,
         "name": partner.get("name") or "",
@@ -123,6 +128,14 @@ def viewer(svc: Services, sess: dict[str, Any] | None) -> dict[str, Any] | None:
         "csrf": sess.get("csrf", ""),
         "agents_waiting": agents_waiting(svc) if admin else 0,
     }
+
+
+def apps_steward(svc: Services, email: str, partner: int) -> bool:
+    """EMAIL is an admin of the register with a key, on this very contact (apps.steward_member)."""
+    from . import apps
+
+    found = apps.steward_member(svc, email)
+    return bool(found) and found["partner"] == partner
 
 
 def agents_waiting(svc: Services) -> int:
