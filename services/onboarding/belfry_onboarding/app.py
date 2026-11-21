@@ -35,6 +35,7 @@ from . import (
     applyverified,
     apps,
     appshome,
+    appsignin,
     avatar,
     blossom,
     branding,
@@ -82,10 +83,12 @@ from . import (
     salesstripe,
     sessions,
     setup,
+    signerguard,
     signin,
     sitenotify,
     sitesessions,
     steward,
+    stewards,
     theme,
     usernames,
     villagers,
@@ -103,6 +106,7 @@ from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
+from .clients.signer import SignerClient
 from .clients.verifier import VerifierClient
 from .core import Services
 from .git_members import GitMembers
@@ -132,7 +136,36 @@ def _load_json(path: str) -> Any:
     return json.loads(Path(path).read_text()) if path else None
 
 
+def build_signer(settings: Settings) -> KeycastClient | SignerClient:
+    """The client of the signer that holds the members' keys, by ``SIGNER``: Keycast (the
+    default) or Belfry's own (``services/signer``). Both have the same interface; the rest of
+    the service knows it as ``services.keycast``."""
+    which = (settings.signer or "keycast").strip().lower()
+    if which == "keycast":
+        return KeycastClient(
+            settings.keycast_url,
+            settings.keycast_admin_token,
+            settings.keycast_service_token,
+            tenant_domain=settings.keycast_tenant_domain,
+        )
+    if which == "belfry":
+        if len(settings.signer_token) < 16:
+            raise ValueError("SIGNER=belfry needs SIGNER_TOKEN (the secret signer_token)")
+        return SignerClient(
+            settings.signer_url, settings.signer_token, domain=settings.nip05_domain
+        )
+    raise ValueError(f"SIGNER must be keycast or belfry, not {settings.signer!r}")
+
+
 def build_services(settings: Settings) -> Services:
+    made = _build_services(settings)
+    # the own signer makes a new account only with the key the register has for the person
+    signerguard.install(made)
+    return made
+
+
+def _build_services(settings: Settings) -> Services:
+    stewards.check_settings(settings)
     registry = eudi.load(settings.eudi_dir)
     return Services(
         issuer=IssuerClient(settings.issuer_url) if settings.issuer_url else None,
@@ -160,13 +193,13 @@ def build_services(settings: Settings) -> Services:
                 settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
             )
         ),
-        authentik=AuthentikClient(settings.authentik_url, settings.authentik_token),
-        keycast=KeycastClient(
-            settings.keycast_url,
-            settings.keycast_admin_token,
-            settings.keycast_service_token,
-            tenant_domain=settings.keycast_tenant_domain,
+        # a belfry on its own signer has no Authentik: admins live in the register (stewards.py)
+        authentik=(
+            stewards.NoAuthentik()  # type: ignore[arg-type]
+            if stewards.own_mode(settings)
+            else AuthentikClient(settings.authentik_url, settings.authentik_token)
         ),
+        keycast=build_signer(settings),
         settings=settings,
         relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
         whitelist=(
@@ -231,6 +264,10 @@ def create_app(services: Services | None = None) -> FastAPI:
         theme.CURRENT = theme.load(app.state.services.settings)
         app.state.homepage = make_homepage(app.state.services.settings)
         app.state.gitview = gitview.make(app.state.services.settings)
+        if services is None:
+            # a belfry on its own signer whose signer does not hold its members' keys does
+            # not start (signerguard.py: never a new key for somebody who has one)
+            await run_in_threadpool(signerguard.check_start, app.state.services)
         # Bring the relay whitelist and the Authentik participants group up to date with Odoo
         # on every start (best effort).
         await run_in_threadpool(core.sync_relay_whitelist, app.state.services)
@@ -305,6 +342,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    appsignin.register(app)  # apps.<domain>/api/oauth/*: Keycast's sign-in, without Keycast
     appshome.register(app)  # apps.<domain>/: the installed apps (appshome.py)
     community.register(app)  # /monitor, /changelog (community.py)
     console.register(app)  # belfry.<domain>: overview, status, members, website (console.py)
@@ -388,6 +426,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         if site is not None and not on_apex:
             return RedirectResponse(str(site), status_code=302)
         return HTMLResponse(claim.home_page(settings))
+
+    @app.middleware("http")
+    async def request_memo(request: Request, call_next):
+        """Answers kept for one request only (signerguard.own_key_person_once)."""
+        from . import signerguard
+
+        token = signerguard.begin_request()
+        try:
+            return await call_next(request)
+        finally:
+            signerguard.end_request(token)
 
     @app.middleware("http")
     async def preview_host(request: Request, call_next):

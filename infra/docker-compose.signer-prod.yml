@@ -1,0 +1,11 @@
+# The proxy's side of a belfry on its own signer: with docker-compose.prod.yml and
+# docker-compose.signer.yml, after both (the belfry command adds it when SIGNER=belfry).
+services:
+  proxy:
+    depends_on:
+      authentik-server: !reset null
+      keycast: !reset null
+    environment:
+      # Caddyfile: login.<domain> leads to the chat, apps.<domain>/api/oauth/* and
+      # <domain>/.well-known/nostr.json go to the onboarding service
+      SIGNER: belfry

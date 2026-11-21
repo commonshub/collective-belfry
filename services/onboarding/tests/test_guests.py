@@ -16,6 +16,7 @@ from belfry_onboarding import console, core, guests, mail, mailer, steward
 from belfry_onboarding.app import create_app
 from belfry_onboarding.register import Register
 
+from .conftest import keycast_only
 from .test_holder_invites import BASE, post
 
 
@@ -635,6 +636,7 @@ def test_a_session_key_gets_one_identity(rsvc, published, keycast, monkeypatch):
         assert other.status_code == 200 and other.json()["pubkey"] != got.json()["pubkey"]
 
 
+@keycast_only
 def test_a_signer_without_the_binding_still_lets_guests_in(rsvc, published, keycast, monkeypatch):
     """A Keycast image built before patch 0022 ignores ``client_pubkey``: the session is bound
     by the first connect, as it was."""

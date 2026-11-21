@@ -61,7 +61,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from . import apps, community, drops, followers, homepage, sealed
+from . import apps, community, drops, followers, homepage, sealed, stewards
 from .blossom import event_id, verify_signature
 from .core import Services
 from .nip46check import conversation_key, nip44_decrypt, nip44_encrypt, sign_event
@@ -1148,6 +1148,27 @@ async def running(app: FastAPI):
 
 
 # ── the routes ──────────────────────────────────────────────────────────────────────────────
+
+async def member_name(services: Any, name: str) -> JSONResponse:
+    """NIP-05 for a member's username, read from the signer: ``{"names": {<name>: <pubkey>}}``
+    (the name in lowercase, as NIP-05 asks), or no names."""
+    from .usernames import VALID
+
+    cors = {"Access-Control-Allow-Origin": "*"}
+    low = name.strip().lower()
+    if not VALID.match(low):
+        return JSONResponse({"names": {}}, headers=cors)
+    try:
+        pub = await run_in_threadpool(services.keycast.pubkey_for_name, low)
+    except Exception as exc:  # noqa: BLE001 — the signer not answering is not "no such name"
+        log.warning("nostr.json: the signer did not answer: %s", exc)
+        return JSONResponse({"names": {}}, status_code=503, headers={**cors, "Retry-After": "5"})
+    if not pub:
+        return JSONResponse({"names": {}}, headers=cors)
+    return JSONResponse(
+        {"names": {low: pub}}, headers={**cors, "Cache-Control": "public, max-age=60"}
+    )
+
 def register(app: FastAPI) -> None:
     def svc(request: Request) -> Services:
         return request.app.state.services
@@ -1210,6 +1231,11 @@ def register(app: FastAPI) -> None:
                     "Cache-Control": "public, max-age=300",
                 },
             )
+        if name not in ("_smtp", "_groups") and stewards.own_mode(services.settings):
+            # Belfry's own signer has no web side: its usernames are answered here (Keycast
+            # answers them itself, and the proxy sends it everything but the two names above;
+            # docs/own-signer.md, "Still to move")
+            return await member_name(services, name)
         pub = homepage.belfry_pubkey(services.settings)
         if name != "_smtp" or not pub or not services.settings.mail_in:
             return JSONResponse({"names": {}}, headers={"Access-Control-Allow-Origin": "*"})

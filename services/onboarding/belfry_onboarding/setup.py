@@ -49,7 +49,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import claim, console, flash, mypass, nostr, pages, theme
+from . import claim, console, flash, mypass, nostr, pages, stewards, theme
 from .blossom import verify_signature
 from .core import Services
 
@@ -298,12 +298,60 @@ def save_first_admin(settings: Any, data: dict[str, Any]) -> None:
 
 
 def has_admin(svc: Services) -> bool:
+    """Whether the first admin's place is taken. It is while any of these holds:
+
+    - ``first-admin.json`` exists;
+    - somebody is an admin (the stewards group, or the register's flag on a belfry with its
+      own signer), or the admins' home cannot be read;
+    - **the belfry has people** (signerguard.has_people: a pass that is active or was ever
+      given a key) and nobody reopened the setup on purpose. A belfry with members and no
+      admin on record is not a new belfry: it is one whose record is missing (the file lost in
+      a restore, the admins not yet copied out of Authentik during a move to the own signer),
+      and "first come, first served" would hand it to a stranger. ``belfry setup-reset`` is
+      the deliberate way to open it again: it writes ``"open": true`` into ``reset.json``,
+      which lasts until the next first admin is made.
+
+    A new belfry (no file, no admin, nobody with a pass) is open, as before."""
     if first_admin(svc.settings):
         return True
     try:
-        return bool(svc.authentik.group_member_emails(svc.settings.steward_group))
+        if stewards.emails(svc):
+            return True
     except Exception:  # noqa: BLE001 — Authentik not answering: don't offer a second first admin
         return True
+    if reopened(svc.settings):
+        return False
+    from . import signerguard
+
+    try:
+        return signerguard.has_people(svc)
+    except Exception:  # noqa: BLE001 — the register not answering: not a new belfry for sure
+        return True
+
+
+def reopened(settings: Any) -> bool:
+    """``belfry setup-reset`` opened the setup again and nobody has claimed it since.
+
+    A ``reset.json`` written before the ``open`` key existed counts as open, as it did then
+    (nothing changes for a belfry reset by the older code: it stays open to the first admin
+    until one is made, which writes ``"open": false``)."""
+    folder = setup_dir(settings)
+    if folder is None or not (folder / RESET_FILE).exists():
+        return False
+    data = read_json(folder / RESET_FILE)
+    return data.get("open", True) is True
+
+
+def _close_reopening(settings: Any) -> None:
+    folder = setup_dir(settings)
+    if folder is None or not (folder / RESET_FILE).exists():
+        return
+    data = read_json(folder / RESET_FILE)
+    if data.get("open", True) is True:  # an older file without the key counts as open
+        data["open"] = False
+        tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, folder / RESET_FILE)
 
 
 def open_for_anyone(svc: Services) -> bool:
@@ -312,11 +360,25 @@ def open_for_anyone(svc: Services) -> bool:
 
 
 def admin_known(svc: Services) -> bool:
-    """For the public homepage: an admin exists (cached a minute, console.admin_emails). When the
-    stewards group can't be read the last answer stands; the claim itself checks again."""
-    if first_admin(svc.settings):
+    """For the public homepage, the console's front page and the agents' instructions: whether
+    they must NOT offer "Set up this belfry". The same rule as :func:`open_for_anyone` /
+    :func:`has_admin` (no setup folder, the first-admin file, an admin, or a belfry with people
+    that nobody reopened on purpose; the register not answering counts as people), so the
+    homepage never offers a setup that /setup then refuses. Only the admins are read from the
+    minute's cache (console.admin_emails: when the stewards group can't be read the last answer
+    stands); the claim itself checks again."""
+    if setup_dir(svc.settings) is None or first_admin(svc.settings):
         return True
-    return bool(console.admin_emails(svc))
+    if console.admin_emails(svc):
+        return True
+    if reopened(svc.settings):
+        return False
+    from . import signerguard
+
+    try:
+        return signerguard.has_people(svc)
+    except Exception:  # noqa: BLE001 — the register not answering: not a new belfry for sure
+        return True
 
 
 RESET_FILE = "reset.json"
@@ -363,6 +425,11 @@ def create_first_admin(
         raise ValueError("That is not an e-mail address.")
     if not USERNAME.fullmatch(username):
         raise ValueError("A username is 1 to 30 letters, digits, dots, dashes or underscores.")
+    from . import usernames
+
+    if usernames.DEFAULT.fullmatch(username):
+        # "7", "member-7", "osv-0007": what accounts are called before they have a name
+        raise ValueError("That name is kept for member numbers: choose another.")
     if not re.fullmatch(r"[0-9a-f]{64}", session_pubkey or ""):
         raise ValueError("The browser did not make a session key.")
     with claim_lock(svc.settings):
@@ -396,7 +463,11 @@ def _create_first_admin(
     pubkey, token = result["pubkey"], result["token"]
     svc.keycast.set_username(token, username)
     publish_profile(svc, partner, username)
-    bunker = svc.keycast.create_bunker(token, "Setup page (first session)")
+    # for the browser's session key from the start: no other key can take this session, and
+    # nothing waits for a first connect (an unclaimed session ends after ten minutes in
+    # Belfry's own signer)
+    bound = session_pubkey if re.fullmatch(r"[0-9a-f]{64}", session_pubkey or "") else None
+    bunker = svc.keycast.create_bunker(token, "Setup page (first session)", bound)
     from .nip46check import parse_bunker_url
 
     bunker_pk, relays, secret = parse_bunker_url(bunker["bunker_url"])
@@ -414,6 +485,7 @@ def _create_first_admin(
         "at": int(time.time()),
     }
     save_first_admin(svc.settings, data)
+    _close_reopening(svc.settings)  # a reset's "open again" ends with this claim
     log.info("setup: first admin %s (%s), session key %s", username, email, session_pubkey[:12])
     return {
         **data,
@@ -529,7 +601,9 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
     so setup cookies made before stop working. With ALL_ADMINS every other admin goes too
     (/setup only opens when nobody is admin). Returns what was done, and ``revert``: the settings
     the setup page changed during the claim (secrets: always cleared by the CLI; others: put back
-    to ``before``). Members the claimant invited stay. Idempotent: with no admin it does nothing.
+    to ``before``). Members the claimant invited stay. Idempotent: with no admin and an open
+    setup it does nothing. On a belfry that has members but no admin on record (``has_admin``
+    keeps /setup closed there) it opens the setup: ``closed_without_admin`` in the answer.
     """
     folder = setup_dir(svc.settings)
     if folder is None:
@@ -550,7 +624,13 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
         "open": not remaining,
         "dry_run": dry_run,
     }
-    if dry_run or not gone:
+    # nobody to remove, nobody is admin, and still closed: a belfry with members and no admin
+    # on record (has_admin). Opening it is this command's job too, and only this command's.
+    stuck = not gone and not remaining and has_admin(svc)
+    out["closed_without_admin"] = stuck
+    if stuck:
+        out["open"] = False
+    if dry_run or not (gone or stuck):
         return out
     if fa and fa.get("partner"):
         try:
@@ -568,14 +648,19 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
         if (folder / CHANGES_FILE).exists():
             os.replace(folder / CHANGES_FILE, folder / f"first-admin-changes.reset-{at}.json")
     tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
-    tmp.write_text(json.dumps({"at": int(time.time()), "removed": gone}))
+    # "open": the setup is open again on purpose, although the belfry may have members
+    # (has_admin); it stays so until the next first admin is made
+    tmp.write_text(json.dumps({"at": int(time.time()), "removed": gone, "open": not remaining}))
     os.replace(tmp, folder / RESET_FILE)
     console._admins["at"] = 0.0
     with contextlib.suppress(Exception):
         from . import apps
 
         apps.forget()
-    log.warning("setup-reset: removed %s; /setup open: %s", ", ".join(gone), not remaining)
+    out["open"] = not remaining
+    log.warning(
+        "setup-reset: removed %s; /setup open: %s", ", ".join(gone) or "nobody", not remaining
+    )
     return out
 
 
@@ -1548,7 +1633,7 @@ def register(app: FastAPI) -> None:
             console.COOKIE,
             mypass._sign(
                 services,
-                {"kind": "console", "partner": made["partner"], "csrf": ok[0]},
+                console.session_claims(services, made["partner"], ok[0]),
                 days * 86400,
             ),
             max_age=days * 86400,

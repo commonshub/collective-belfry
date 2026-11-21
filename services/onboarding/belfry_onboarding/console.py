@@ -39,7 +39,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import community, core, flash, homepage, mypass, pages, steward
+from . import community, core, flash, homepage, mypass, pages, steward, stewards
 from .core import Services
 from .nip46check import sign_event
 
@@ -69,7 +69,23 @@ def console_host(settings: Any) -> str:
 
 # ── sessions ────────────────────────────────────────────────────────────────────────────────
 def read_session(svc: Services, cookie: str | None) -> dict[str, Any] | None:
-    return mypass._verify(svc, cookie, "console") if mypass.enabled(svc) else None
+    claims = mypass._verify(svc, cookie, "console") if mypass.enabled(svc) else None
+    if claims and claims.get("sid"):
+        from . import appsignin
+
+        if appsignin.session_ended(svc, claims):  # signed out: the cookie is worth nothing
+            return None
+    return claims
+
+
+def session_claims(svc: Services, partner: int, csrf: str | None = None) -> dict[str, Any]:
+    """The claims of a new session of belfry.<domain>. On a belfry with its own signer the
+    session has an id, so a logout ends it on the server too (appsignin.end_session)."""
+    from . import appsignin
+
+    claims = {"kind": "console", "partner": partner, "csrf": csrf or secrets.token_urlsafe(24)}
+    sid = appsignin.new_sid(svc)
+    return {**claims, "sid": sid} if sid else claims
 
 
 _admins: dict[str, Any] = {"at": 0.0, "emails": set()}
@@ -79,7 +95,7 @@ def admin_emails(svc: Services) -> set[str]:
     now = time.monotonic()
     if now - _admins["at"] > ADMINS_SECONDS:
         try:
-            emails = svc.authentik.group_member_emails(svc.settings.steward_group)
+            emails = stewards.emails(svc)
             _admins.update(at=now, emails={e.lower() for e in emails if e})
         except Exception as exc:
             # keep the last known admins and ask again after the same pause, not on every page
@@ -132,10 +148,13 @@ def checks(settings: Any) -> list[tuple[str, str, dict[str, str]]]:
         out.append(
             ("Registry and billing (Odoo)", settings.odoo_url.rstrip("/") + "/web/health", {})
         )
-    out += [
-        ("Sign-in (Authentik)", settings.authentik_url.rstrip("/") + "/-/health/live/", {}),
-        ("Signer (Keycast)", settings.keycast_url.rstrip("/") + "/", {}),
-    ]
+    if stewards.own_mode(settings):  # Belfry's own signer; no Authentik to ask
+        out.append(("Signer", settings.signer_url.rstrip("/") + "/health", {}))
+    else:
+        out += [
+            ("Sign-in (Authentik)", settings.authentik_url.rstrip("/") + "/-/health/live/", {}),
+            ("Signer (Keycast)", settings.keycast_url.rstrip("/") + "/", {}),
+        ]
     if settings.relay_url:
         out.append(("Community relay", settings.relay_url.replace("ws", "http", 1), nostr))
     out.append(("Files (Blossom)", settings.homepage_blossom_url.rstrip("/") + "/", {}))
@@ -346,15 +365,10 @@ def set_admin(svc: Services, email: str, admin: bool) -> None:
         )
         if any(r.get(testers.FIELD) for r in rows):
             raise ValueError("A tester can't be an admin.")
-    ak = svc.authentik
-    group = ak.find_group(svc.settings.steward_group)
-    if group is None:
-        raise RuntimeError(f"group {svc.settings.steward_group} missing")
     if admin:
         steward.add_steward(svc, email)
     else:
-        for user in ak.find_users_by_email(email):
-            ak.remove_user_from_group(group["pk"], int(user["pk"]))
+        stewards.remove(svc, email)
     _admins["at"] = 0.0
 
 
@@ -393,7 +407,9 @@ def my_devices(svc: Services, partner: int) -> list[dict[str, Any]] | None:
     if found is None:
         return None
     try:
-        return list(svc.keycast.list_sessions(found[1]))
+        from . import appsignin
+
+        return appsignin.with_grants(svc, partner, list(svc.keycast.list_sessions(found[1])))
     except Exception as exc:  # noqa: BLE001 — the page still opens
         log.warning("console: sessions of partner %s unknown: %s", partner, exc)
         return []
@@ -407,6 +423,9 @@ def revoke_device(svc: Services, partner: int, bunker: str) -> None:
     found = community.member_token(svc, partner)
     if found is None:
         raise ValueError("Your key is your own: sign devices out in your signer.")
+    from . import appsignin
+
+    appsignin.session_revoked(svc, partner, bunker)
     svc.keycast.revoke_session(found[1], bunker)
 
 
@@ -1484,7 +1503,7 @@ def register(app: FastAPI) -> None:
             return RedirectResponse("/login", status_code=303)
         cookie = mypass._sign(
             services,
-            {"kind": "console", "partner": claims["partner"], "csrf": secrets.token_urlsafe(24)},
+            session_claims(services, claims["partner"]),
             services.settings.pass_page_session_days * 86400,
         )
         to = to if to.startswith("/") and not to.startswith("//") else "/"
@@ -1501,7 +1520,13 @@ def register(app: FastAPI) -> None:
         return response
 
     @app.get("/console/logout")
-    async def logout():
+    async def logout(request: Request):
+        from . import appsignin
+
+        services = svc(request)
+        await run_in_threadpool(
+            appsignin.end_session, services, read_session(services, request.cookies.get(COOKIE))
+        )
         response = RedirectResponse("/", status_code=303)
         response.delete_cookie(COOKIE, path="/")
         return response

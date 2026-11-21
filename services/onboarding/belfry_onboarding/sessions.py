@@ -276,7 +276,17 @@ class Sessions:
         label = apps_mod.session_label(self.svc, req["app"], req.get("client", ""))
         try:
             # bound to the session key when it is made: the URL alone opens nothing
-            bunker = self.svc.keycast.create_bunker(result["token"], label, session)
+            # what the signer may sign follows the app, as in the browser's sign-in
+            # (connect.redeem): an outside app an admin approved stays an outside app
+            from .connect import scope_of
+
+            bunker = self.svc.keycast.create_bunker(
+                result["token"],
+                label,
+                session,
+                scope=scope_of(self.svc, req["app"]),
+                origin=apps_mod.origin_of(req["app"]),
+            )
         except ClientKeyTaken as exc:
             raise SessionError(
                 409, "key_taken", "This device's key is linked to another account: start again."

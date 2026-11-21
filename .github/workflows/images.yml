@@ -1,6 +1,7 @@
 # Prebuilt images for the parts of Belfry that are the same for every community: the signer
 # (Keycast with Belfry's patches, a long Rust build), the git server (ngit-grasp, Rust), the reverse proxy (Caddy with the rate-limit
-# module), the groups relay and the onboarding service. A server pulls them instead of building
+# module), the groups relay, the onboarding service and Belfry's own signer (services/signer, Rust:
+# for a belfry with SIGNER=belfry, docker-compose.images-signer.yml). A server pulls them instead of building
 # (install.sh, `belfry apply`, docker-compose.images.yml). The community apps bake the domain in
 # at build time and are still built on the server.
 #
@@ -15,6 +16,7 @@ on:
     branches: [main, belfry-sh]
     paths:
       - infra/keycast/build/**
+      - services/signer/**
       - infra/proxy/**
       - infra/groups-relay/**
       - services/onboarding/**
@@ -23,6 +25,7 @@ on:
   pull_request:
     paths:
       - infra/keycast/build/**
+      - services/signer/**
       - infra/proxy/**
       - infra/groups-relay/**
       - services/onboarding/**
@@ -43,6 +46,8 @@ jobs:
         include:
           - name: keycast
             context: infra/keycast/build
+          - name: signer
+            context: services/signer
           - name: proxy
             context: infra/proxy
           - name: groups-relay

@@ -881,6 +881,7 @@ class FakeKeycast:
     """respx routes for preload-user (idempotent on vine_id) and the status endpoint."""
 
     def __init__(self, router: respx.MockRouter, base_url: str = "http://keycast.test"):
+        self.kind = "keycast"  # which signer this fake stands for (FakeSigner: "belfry")
         self.users: dict[str, dict[str, Any]] = {}  # vine_id -> user
         self.status: dict[str, str] = {}  # pubkey -> status
         self.preloads = 0
@@ -933,28 +934,44 @@ class FakeKeycast:
             self.users[vine_id] = {"pubkey": pubkey, "username": body["username"]}
             self.status[pubkey] = "active"
         self.last_pubkey = self.users[vine_id]["pubkey"]
+        # a token per user ("ucan-token/<pubkey>"); the bare "ucan-token" some tests pass
+        # stands for the user preloaded last
         return httpx.Response(
-            200, json={"pubkey": self.users[vine_id]["pubkey"], "token": "ucan-token"}
+            200,
+            json={
+                "pubkey": self.users[vine_id]["pubkey"],
+                "token": "ucan-token/" + self.users[vine_id]["pubkey"],
+            },
         )
 
+    def _acting(self, request: httpx.Request) -> str:
+        """The pubkey of the user a request's UCAN is for."""
+        auth = request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer ucan-token/"):
+            return auth.removeprefix("Bearer ucan-token/")
+        return self.last_pubkey
+
     def _profile(self, request: httpx.Request) -> httpx.Response:
+        me = self._acting(request)
         name = json.loads(request.content)["username"].lower()
         for u in self.users.values():
-            if u["username"].lower() == name and u["pubkey"] != self.last_pubkey:
+            if u["username"].lower() == name and u["pubkey"] != me:
                 return httpx.Response(409, json={"error": "Username is not available."})
         for u in self.users.values():
-            if u["pubkey"] == self.last_pubkey:
+            if u["pubkey"] == me:
                 u["username"] = name
         return httpx.Response(200, json={"success": True})
 
     def _get_profile(self, request: httpx.Request) -> httpx.Response:
-        u = next((u for u in self.users.values() if u["pubkey"] == self.last_pubkey), None)
+        me = self._acting(request)
+        u = next((u for u in self.users.values() if u["pubkey"] == me), None)
         name = u["username"] if u else None
         return httpx.Response(
             200, json={"username": name, "nip05": f"{name}@belfry.test" if name else None}
         )
 
     def _sessions(self, request: httpx.Request) -> httpx.Response:
+        me = self._acting(request)
         rows = [
             {
                 "application_name": b["app_name"],
@@ -966,7 +983,7 @@ class FakeKeycast:
                 "activity_count": 0,
             }
             for b in self.bunkers
-            if b["pubkey"] == self.last_pubkey and not b.get("revoked")
+            if b["pubkey"] == me and not b.get("revoked")
         ]
         return httpx.Response(200, json={"sessions": rows})
 
@@ -984,9 +1001,9 @@ class FakeKeycast:
         # Keycast patch 0022: a connection bound to a client key; one key, one account.
         # ``binds = False`` stands for a signer built without it (the field is ignored).
         client = (body.get("client_pubkey") or "").lower() if self.binds else ""
+        me = self._acting(request)
         if client and any(
-            b.get("client_pubkey") == client and b["pubkey"] != self.last_pubkey
-            for b in self.bunkers
+            b.get("client_pubkey") == client and b["pubkey"] != me for b in self.bunkers
         ):
             return httpx.Response(
                 409,
@@ -1001,7 +1018,7 @@ class FakeKeycast:
         url = f"bunker://{bunker_pk}?relay=wss%3A%2F%2Fbunker.belfry.test&secret={secret}"
         self.bunkers.append(
             {
-                "pubkey": self.last_pubkey,
+                "pubkey": me,
                 "app_name": body["app_name"],
                 "bunker_url": url,
                 "secret": secret,
@@ -1081,6 +1098,351 @@ class FakeKeycast:
         self.status[pubkey] = body["status"]
         self.status_calls.append((pubkey, body["status"]))
         return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})
+
+
+class FakeSigner(FakeKeycast):
+    """Belfry's own signer (``services/signer``) as respx routes, for ``SignerClient``.
+
+    It keeps the same books as :class:`FakeKeycast` (``users``, ``status``, ``bunkers``,
+    ``signed``, ``keys``, ``rpc``, ``preloads``, ``preload_bodies``, ``status_calls``,
+    ``down``, ``derived``), so a test written against one runs against the other. Accounts
+    are named in the path: ``acct:<vine_id>`` tokens become ``/accounts/<vine_id>``; the
+    Keycast fake's literal tokens still work (``ucan-token``: the account preloaded last,
+    ``ucan-token/<pubkey>``: the account with that key)."""
+
+    CREATED = 1793836800  # 2026-11-05T00:00:00Z, the Keycast fake's created_at
+
+    def __init__(
+        self,
+        router: respx.MockRouter,
+        base_url: str = "http://signer.test",
+        keycast_url: str = "http://keycast.test",
+    ):
+        super().__init__(router, keycast_url)
+        self.kind = "belfry"
+        # the signer's "no new accounts" switch (POST /settings; an import closes it)
+        self.no_new_accounts = False
+        base = re.escape(base_url.rstrip("/"))
+        acct = rf"{base}/accounts/(?P<acct>[^/]+)"
+        # no named group here: tests swap this route's side effect for one that takes the
+        # request alone, as they do with Keycast's preload-user
+        self.preload_route = router.put(url__regex=rf"{base}/accounts/[^/]+$").mock(
+            side_effect=self._s_put
+        )
+        router.get(url__regex=rf"{acct}$").mock(side_effect=self._s_get)
+        router.put(url__regex=rf"{acct}/username$").mock(side_effect=self._s_username)
+        router.post(url__regex=rf"{acct}/sign$").mock(side_effect=self._s_sign)
+        router.post(url__regex=rf"{acct}/(?P<op>encrypt|decrypt)$").mock(side_effect=self._s_crypt)
+        router.post(url__regex=rf"{acct}/derive$").mock(side_effect=self._s_derive)
+        router.post(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connect)
+        router.get(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connections)
+        router.post(url__regex=rf"{acct}/connections/revoke$").mock(side_effect=self._s_revoke)
+        router.post(url__regex=rf"{acct}/connections/consent$").mock(side_effect=self._s_consent)
+        router.get(url__regex=rf"{base}/settings$").mock(
+            side_effect=lambda request: httpx.Response(
+                200, json={"no_new_accounts": self.no_new_accounts, "by_environment": False}
+            )
+        )
+        router.get(url__regex=rf"{base}/names/(?P<name>[^/]+)$").mock(side_effect=self._s_name)
+        router.post(url__regex=rf"{base}/pubkeys/(?P<pubkey>[^/]+)/status$").mock(
+            side_effect=self._s_status
+        )
+
+    @staticmethod
+    def _err(status: int, code: str) -> httpx.Response:
+        return httpx.Response(status, json={"error": code, "message": code})
+
+    def _user(self, acct: str) -> dict[str, Any] | None:
+        """The account a path segment names: {"pubkey", "username"?}."""
+        from urllib.parse import unquote
+
+        name = unquote(acct)
+        if name == "ucan-token":
+            pubkey = self.last_pubkey
+        elif name.startswith("ucan-token/"):
+            pubkey = name.removeprefix("ucan-token/")
+        else:
+            return self.users.get(name)
+        found = next((u for u in self.users.values() if u["pubkey"] == pubkey), None)
+        return found or ({"pubkey": pubkey} if pubkey else None)
+
+    def _account_json(self, vine_id: str, u: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "vine_id": vine_id,
+            "pubkey": u["pubkey"],
+            "custody": "own" if u.get("own") else "derived",
+            "key_version": u.get("key_version", 0),
+            "status": "suspended" if self.status.get(u["pubkey"]) != "active" else "active",
+            "username": u.get("username"),
+        }
+
+    def _s_put(self, request: httpx.Request) -> httpx.Response:
+        from urllib.parse import unquote
+
+        self.preloads += 1
+        body = json.loads(request.content)
+        vine_id = unquote(request.url.raw_path.decode().rsplit("/", 1)[-1])
+        # the books show what Keycast's preload-user would have been sent
+        self.preload_bodies.append(
+            {
+                "vine_id": vine_id,
+                "username": body.get("username"),
+                "key_version": body.get("key_version", 0),
+                **({"pubkey": body["own_pubkey"]} if body.get("own_pubkey") else {}),
+            }
+        )
+        own = body.get("own_pubkey")
+        u = self.users.get(vine_id)
+        if u is None and self.no_new_accounts and not own and not body.get("expect_pubkey"):
+            return self._err(409, "no_new_accounts")  # nothing written
+        if u is None:
+            name = body.get("username")
+            if name and any(
+                (x.get("username") or "").lower() == name.lower() for x in self.users.values()
+            ):
+                return self._err(409, "username_taken")
+            if own:
+                pubkey = own
+            elif self.derived:
+                seed = f"{vine_id}/{body.get('key_version', 0)}".encode()
+                pubkey = hashlib.sha256(seed).hexdigest()
+            else:
+                pubkey = f"{len(self.users) + 1:064x}"
+            want = body.get("expect_pubkey")
+            if want and want != pubkey:
+                return self._err(409, "mismatch")  # nothing written
+            u = {"pubkey": pubkey, "username": name, "own": bool(own)}
+            self.users[vine_id] = u
+            self.status[pubkey] = "active"
+        else:
+            for want in (own, body.get("expect_pubkey")):
+                if want and want != u["pubkey"]:
+                    return self._err(409, "mismatch")
+        self.last_pubkey = u["pubkey"]
+        return httpx.Response(200, json=self._account_json(vine_id, u))
+
+    def _s_get(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        return httpx.Response(200, json=self._account_json(acct, u))
+
+    def _s_username(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        name = json.loads(request.content)["username"].lower()
+        for other in self.users.values():
+            if (other.get("username") or "").lower() == name and other["pubkey"] != u["pubkey"]:
+                return self._err(409, "username_taken")
+        u["username"] = name
+        return httpx.Response(200, json=self._account_json(acct, u))
+
+    def _s_name(self, request: httpx.Request, name: str) -> httpx.Response:
+        from urllib.parse import unquote
+
+        want = unquote(name).lower()
+        for vine_id, u in self.users.items():
+            if (u.get("username") or "").lower() == want:
+                return httpx.Response(
+                    200, json={"name": want, "pubkey": u["pubkey"], "vine_id": vine_id}
+                )
+        return self._err(404, "not_found")
+
+    def _s_status(self, request: httpx.Request, pubkey: str) -> httpx.Response:
+        if pubkey not in self.status:
+            return self._err(404, "not_found")
+        status = json.loads(request.content)["status"]
+        if status not in ("active", "suspended"):
+            return self._err(422, "invalid")
+        self.status[pubkey] = status
+        self.status_calls.append((pubkey, status))
+        return httpx.Response(200, json={"updated": 1})
+
+    def _s_derive(self, request: httpx.Request, acct: str) -> httpx.Response:
+        import hashlib
+
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        purpose = str(json.loads(request.content).get("purpose") or "")
+        if not purpose:
+            return self._err(422, "invalid")
+        self.rpc.append(("derive_secret", u["pubkey"]))
+        secret = hashlib.sha256(f"{u['pubkey']}/{purpose}".encode()).hexdigest()
+        return httpx.Response(200, json={"secret": secret})
+
+    def _s_sign(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        acting = u["pubkey"]
+        self.rpc.append(("sign_event", acting))
+        if self.down:
+            return httpx.Response(503, json={"error": "down"})
+        event = json.loads(request.content).get("event")
+        if not isinstance(event, dict):
+            return self._err(422, "invalid")
+        event = dict(event)
+        if event.get("pubkey") and event["pubkey"] != acting:
+            return self._err(422, "invalid")
+        event["pubkey"] = acting
+        if acting in self.keys:  # a real key: a real signature
+            from belfry_onboarding.nip46check import sign_event as real_sign
+
+            event.pop("id", None)
+            event.pop("sig", None)
+            done = real_sign(self.keys[acting], event)
+        else:
+            done = {**event, "id": f"{len(self.signed) + 1:064x}", "sig": "fake-sig"}
+        self.signed.append(done)
+        return httpx.Response(200, json={"event": done})
+
+    def _s_crypt(self, request: httpx.Request, acct: str, op: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        method = f"{body.get('scheme', 'nip44')}_{op}"
+        self.rpc.append((method, u["pubkey"]))
+        if self.down:
+            return httpx.Response(503, json={"error": "down"})
+        secret = self.keys.get(u["pubkey"])
+        if secret is None:
+            return self._err(422, "invalid")
+        try:
+            out = real_crypt(secret, method, body["peer"], body["text"])
+        except Exception:  # noqa: BLE001 — what the signer answers
+            return self._err(422, "invalid")
+        return httpx.Response(200, json={"result": out})
+
+    def _s_connect(self, request: httpx.Request, acct: str) -> httpx.Response:
+        from coincurve import PrivateKey
+
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        client = (body.get("client_pubkey") or "").lower()
+        if client and any(
+            b.get("client_pubkey") == client and b["pubkey"] != u["pubkey"] for b in self.bunkers
+        ):
+            return self._err(409, "client_key_taken")
+        key = PrivateKey()
+        bunker_pk = key.public_key_xonly.format().hex()
+        secret = f"secret-{len(self.bunkers) + 1}"
+        url = f"bunker://{bunker_pk}?relay=wss%3A%2F%2Fbunker.belfry.test&secret={secret}"
+        self.bunkers.append(
+            {
+                "pubkey": u["pubkey"],
+                "app_name": body["app"],
+                "bunker_url": url,
+                "secret": secret,
+                "bunker_secret": key.secret,
+                "client_pubkey": client or None,
+                "scope": body.get("scope", "own"),
+                "decrypt": body.get("decrypt") is True,
+                "origin": str(body.get("origin") or ""),
+                "kind": body.get("kind", "nip46"),
+            }
+        )
+        if body.get("scope", "own") not in ("own", "outside") or body.get("kind", "nip46") not in (
+            "nip46",
+            "http",
+        ):
+            return self._err(422, "invalid")
+        return httpx.Response(
+            200,
+            json={
+                "id": f"{len(self.bunkers):032x}",
+                "scope": body.get("scope", "own"),
+                "bunker_url": url,
+                "bunker_pubkey": bunker_pk,
+                "pubkey": u["pubkey"],
+                "app": body["app"],
+                "kind": body.get("kind", "nip46"),
+                "decrypt": body.get("decrypt") is True,
+                "origin": str(body.get("origin") or ""),
+                "created_at": self.CREATED,
+                **({"client_pubkey": client} if client else {"expires_at": self.CREATED + 600}),
+            },
+        )
+
+    def expire_unclaimed(self) -> int:
+        """Ten minutes later (``SIGNER_UNCLAIMED_SECONDS``): a connection made without a client
+        key that nobody connected to is gone, as in the signer (store.rs ``expire_unclaimed``);
+        one of kind ``http`` (an app's sign-in used over the API) stays."""
+        n = 0
+        for b in self.bunkers:
+            if b.get("kind") == "http":
+                continue
+            if not b.get("revoked") and not b.get("client_pubkey"):
+                b["revoked"] = True
+                n += 1
+        return n
+
+    def _s_connections(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        rows = [
+            {
+                "id": f"{i + 1:032x}",
+                "app": b["app_name"],
+                "label": b["app_name"],
+                "bunker_pubkey": PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex(),
+                "client_pubkey": b.get("client_pubkey"),
+                "derive": [],
+                "created_at": self.CREATED,
+                "last_used_at": None,
+                "uses": 0,
+                "expires_at": None,
+                "scope": b.get("scope", "own"),
+                "decrypt": bool(b.get("decrypt")),
+                "origin": b.get("origin", ""),
+                "kind": b.get("kind", "nip46"),
+                "revoked_at": None,
+            }
+            for i, b in enumerate(self.bunkers)
+            if b["pubkey"] == u["pubkey"] and not b.get("revoked")
+        ]
+        return httpx.Response(200, json=rows)
+
+    def _s_consent(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        if not isinstance(body.get("decrypt"), bool):
+            return self._err(422, "invalid")
+        for b in self.bunkers:
+            if (
+                b["pubkey"] == u["pubkey"]
+                and not b.get("revoked")
+                and PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex()
+                == body.get("bunker_pubkey")
+            ):
+                b["decrypt"] = body["decrypt"]
+                return httpx.Response(200, json={"decrypt": body["decrypt"]})
+        return self._err(404, "not_found")
+
+    def _s_revoke(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        bp = json.loads(request.content).get("bunker_pubkey")
+        if not bp:
+            return self._err(422, "invalid")
+        n = 0
+        for b in self.bunkers:
+            if (
+                b["pubkey"] == u["pubkey"]
+                and not b.get("revoked")
+                and PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex() == bp
+            ):
+                b["revoked"] = True
+                n += 1
+        return httpx.Response(200, json={"revoked": n})
 
 
 class FakeIssuer:
@@ -1427,3 +1789,131 @@ class FakeSellerOdoo:
                 moves[wiz["context"]["active_id"]]["invoice_pdf_report_id"] = [att, "inv.pdf"]
             return True
         raise AssertionError(f"unexpected {model}.{method}")
+
+
+class _RegisterMembers:
+    """The members of the stewards "group" of a belfry without Authentik: the people flagged
+    ``belfry_steward`` in the register, behind the set operations the tests use on the
+    Authentik fake's groups."""
+
+    def __init__(self, book: RegisterStewards):
+        self.book = book
+
+    def _pks(self) -> set[int]:
+        return {self.book.pk_of(p) for p in self.book.people() if p.get("belfry_steward")}
+
+    def add(self, pk: int) -> None:
+        self.book.flag(pk, True)
+
+    def discard(self, pk: int) -> None:
+        self.book.flag(pk, False)
+
+    def clear(self) -> None:
+        for pk in self._pks():
+            self.book.flag(pk, False)
+
+    def __iter__(self):
+        return iter(self._pks())
+
+    def __len__(self) -> int:
+        return len(self._pks())
+
+    def __contains__(self, pk: object) -> bool:
+        return pk in self._pks()
+
+    def __eq__(self, other: object) -> bool:
+        return self._pks() == other
+
+
+class _RegisterGroups(dict):
+    def __init__(self, book: RegisterStewards):
+        super().__init__()
+        self.book = book
+
+    def __setitem__(self, name: str, group: dict[str, Any]) -> None:
+        if name != "belfry-stewards":
+            return super().__setitem__(name, group)
+        members = _RegisterMembers(self.book)
+        members.clear()
+        for pk in group.get("members", ()):
+            members.add(pk)
+        super().__setitem__(name, {"pk": group.get("pk", "register"), "members": members})
+
+
+class _RegisterUsers(list):
+    def __init__(self, book: RegisterStewards):
+        super().__init__()
+        self.book = book
+
+    def append(self, user: dict[str, Any]) -> None:
+        super().append(user)
+        self.book.person(user.get("email") or "", user.get("name") or "")
+
+    def __iter__(self):
+        own = list(super().__iter__())
+        seen = {u.get("email") for u in own}
+        yield from own
+        for p in self.book.people():
+            if p.get("email") and p["email"] not in seen:
+                yield {"pk": self.book.pk_of(p), "email": p["email"], "name": p.get("name")}
+
+
+class RegisterStewards:
+    """What the tests get as ``authentik`` when the suite runs as a belfry WITHOUT Authentik
+    (BELFRY_TEST_SIGNER=belfry): no HTTP routes at all (the service must not call Authentik),
+    only the handful of handles the tests use to say who is an admin (``users``, ``groups``,
+    ``members``), kept in the register's ``belfry_steward`` flag, which is what the service
+    itself reads. A user "pk" is a number the tests made up, or 10 000 000 + the person's id."""
+
+    OFFSET = 10_000_000
+
+    def __init__(self, odoo: Any):
+        self._odoo = odoo
+        self.services: Any = None  # set by the ``services`` fixture: a test may swap its register
+        self.users = _RegisterUsers(self)
+        self.groups = _RegisterGroups(self)
+        self.groups["belfry-stewards"] = {"pk": "register", "members": set()}
+        # what a test of Authentik's side would count: always nothing here
+        self.user_creates = 0
+        self.connection_creates = 0
+        self.connections: list[dict[str, Any]] = []
+        self.group_calls: list[tuple[str, str, int]] = []
+        self.recovery_links: list[tuple[int, str]] = []
+
+    @property
+    def odoo(self) -> Any:
+        return self.services.odoo if self.services is not None else self._odoo
+
+    def people(self) -> list[dict[str, Any]]:
+        return self.odoo.search_read("res.partner", [], ["email", "name", "belfry_steward"])
+
+    def pk_of(self, person: dict[str, Any]) -> int:
+        for u in list.__iter__(self.users):
+            if u.get("email") and u["email"] == person.get("email"):
+                return int(u["pk"])
+        return self.OFFSET + int(person["id"])
+
+    def person(self, email: str, name: str = "") -> list[int]:
+        if not email:
+            return []
+        ids = [p["id"] for p in self.people() if (p.get("email") or "").lower() == email.lower()]
+        if not ids:
+            ids = [self.odoo.create("res.partner", {"name": name or email, "email": email})]
+        return ids
+
+    def flag(self, pk: int, steward: bool) -> None:
+        from belfry_onboarding import console
+
+        if isinstance(pk, int) and pk >= self.OFFSET:
+            ids = [pk - self.OFFSET]
+        else:
+            email = next(
+                (u.get("email") for u in list.__iter__(self.users) if u.get("pk") == pk), ""
+            )
+            ids = self.person(email or "")
+        if ids:
+            self.odoo.write("res.partner", ids, {"belfry_steward": steward})
+        console._admins["at"] = 0.0
+
+    def members(self, name: str = "belfry-stewards") -> set[int]:
+        return set(self.groups[name]["members"]) if name in self.groups else set()
