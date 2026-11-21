@@ -37,6 +37,7 @@ function fileTags(others, s, m) {
     ["ox", s.ox],
     ["size", String(m.size)]
   ];
+  if (m.name) t.push(["name", m.name]);
   if (m.dim) t.push(["dim", m.dim]);
   if (m.blurhash) t.push(["blurhash", m.blurhash]);
   if (m.thumb && m.thumbNonce) t.push(["thumb", m.thumb], ["thumb-nonce", m.thumbNonce]);
@@ -62,6 +63,7 @@ function fileRefOf(r) {
     nonce,
     x,
     ox,
+    name: shownName(tagOf(t, "name"), (tagOf(t, "file-type") || "").toLowerCase()),
     size: Number.isFinite(size) && size >= 0 ? size : 0,
     ...dimM ? { dim: [Number(dimM[1]), Number(dimM[2])] } : {},
     ...Number.isFinite(dur) && dur > 0 ? { duration: dur } : {},
@@ -94,6 +96,12 @@ function bubbles(rumors) {
   }
   return [...out.values()].sort((a, b) => a.at - b.at || (a.first < b.first ? -1 : 1)).map(({ files, caption, at }) => ({ files, caption, at }));
 }
+function shownName(name, mime) {
+  const last = (name ?? "").split(/[/\\]/).pop() ?? "";
+  const clean = last.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "").trim().slice(0, 200);
+  if (clean) return clean;
+  return mime.startsWith("image/") ? "Picture" : mime.startsWith("audio/") ? "Audio recording" : "File";
+}
 function fileLabel(mime) {
   const sub = mime.split("/")[1] ?? "";
   if (mime === "application/pdf") return "PDF";
@@ -121,6 +129,7 @@ export {
   fileTags,
   openFile,
   sha256hex,
+  shownName,
   sizeLabel,
   tooLarge
 };

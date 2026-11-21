@@ -44,7 +44,7 @@ export async function encryptThumb(plain: Uint8Array, key: string, nonce?: strin
   return { cipher: await gcm(unhex(key), n, plain, 'encrypt'), nonce: hex(n) }
 }
 
-export interface FileMeta { mime: string; size: number; dim?: string; blurhash?: string; thumb?: string; thumbNonce?: string; duration?: number; group?: string }
+export interface FileMeta { mime: string; size: number; name?: string; dim?: string; blurhash?: string; thumb?: string; thumbNonce?: string; duration?: number; group?: string }
 
 /** The kind 15 tags, in the contract's order. */
 export function fileTags(others: string[], s: Sealed, m: FileMeta): string[][] {
@@ -53,6 +53,7 @@ export function fileTags(others: string[], s: Sealed, m: FileMeta): string[][] {
     ['file-type', m.mime], ['encryption-algorithm', 'aes-gcm'], ['decryption-key', s.key], ['decryption-nonce', s.nonce],
     ['x', s.x], ['ox', s.ox], ['size', String(m.size)],
   ]
+  if (m.name) t.push(['name', m.name])
   if (m.dim) t.push(['dim', m.dim])
   if (m.blurhash) t.push(['blurhash', m.blurhash])
   if (m.thumb && m.thumbNonce) t.push(['thumb', m.thumb], ['thumb-nonce', m.thumbNonce])
@@ -64,7 +65,7 @@ export function fileTags(others: string[], s: Sealed, m: FileMeta): string[][] {
 const tagOf = (tags: string[][], k: string) => tags.find((t) => t[0] === k)?.[1]
 
 /** What a kind 15 says about its file; null when a required tag is missing or malformed. */
-export interface FileRef { url: string; mime: string; key: string; nonce: string; x: string; ox: string; size: number; dim?: [number, number]; duration?: number; thumb?: string; thumbNonce?: string; group?: string }
+export interface FileRef { url: string; mime: string; key: string; nonce: string; x: string; ox: string; size: number; name: string; dim?: [number, number]; duration?: number; thumb?: string; thumbNonce?: string; group?: string }
 export function fileRefOf(r: { content: string; tags: string[][] }): FileRef | null {
   const t = r.tags
   const key = tagOf(t, 'decryption-key'), nonce = tagOf(t, 'decryption-nonce'), x = tagOf(t, 'x'), ox = tagOf(t, 'ox')
@@ -77,6 +78,7 @@ export function fileRefOf(r: { content: string; tags: string[][] }): FileRef | n
   const thumb = tagOf(t, 'thumb'), thumbNonce = tagOf(t, 'thumb-nonce')
   return {
     url, mime: (tagOf(t, 'file-type') || 'application/octet-stream').toLowerCase(), key, nonce, x, ox,
+    name: shownName(tagOf(t, 'name'), (tagOf(t, 'file-type') || '').toLowerCase()),
     size: Number.isFinite(size) && size >= 0 ? size : 0,
     ...(dimM ? { dim: [Number(dimM[1]), Number(dimM[2])] as [number, number] } : {}),
     ...(Number.isFinite(dur) && dur > 0 ? { duration: dur } : {}),
@@ -116,7 +118,18 @@ export function bubbles<T extends BubbleIn>(rumors: T[]): { files: T[]; caption:
   return [...out.values()].sort((a, b) => a.at - b.at || (a.first < b.first ? -1 : 1)).map(({ files, caption, at }) => ({ files, caption, at }))
 }
 
-/** "PDF · 1.2 MB", the label of a file without a name. */
+/** How a file's name shows (dm-files.json "names"): its last path segment, without control
+ *  characters or direction marks, trimmed, at most 200 UTF-16 units; else File / Picture /
+ *  Audio recording by its type. */
+export function shownName(name: string | null | undefined, mime: string): string {
+  const last = (name ?? '').split(/[/\\]/).pop() ?? ''
+  // eslint-disable-next-line no-control-regex
+  const clean = last.replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '').trim().slice(0, 200)
+  if (clean) return clean
+  return mime.startsWith('image/') ? 'Picture' : mime.startsWith('audio/') ? 'Audio recording' : 'File'
+}
+
+/** "PDF · 1.2 MB", the label of a file's kind. */
 export function fileLabel(mime: string): string {
   const sub = mime.split('/')[1] ?? ''
   if (mime === 'application/pdf') return 'PDF'

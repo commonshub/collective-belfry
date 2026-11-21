@@ -3,7 +3,7 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY, TEST_RELAYS } from '../config'
 import { kvGet, kvSet } from './db'
-import { FILE_KIND, MAX_FILE, MAX_FILE_GUEST, UNREADABLE, encryptFile, fileLabel, fileRefOf, fileTags, openFile, tooLarge, type FileRef } from './dmfiles'
+import { FILE_KIND, MAX_FILE, MAX_FILE_GUEST, UNREADABLE, encryptFile, fileRefOf, fileTags, openFile, tooLarge, type FileRef } from './dmfiles'
 import { isGuest } from './invite'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
@@ -514,7 +514,9 @@ export async function sendDmFiles(conv: Conv, files: { file: File; duration?: nu
     const sealed = await encryptFile(plain)
     const mime = file.type || 'application/octet-stream'
     const dim = mime.startsWith('image/') ? await dimsOf(file) : undefined
-    const tags = fileTags(others, sealed, { mime, size: plain.length, dim, duration, group })
+    // a file's name goes with it (inside the sealed rumor); pictures and recordings have none
+    const name = mime.startsWith('image/') || mime.startsWith('audio/') ? undefined : file.name || undefined
+    const tags = fileTags(others, sealed, { mime, size: plain.length, name, dim, duration, group })
     const rumor = rumorOf(FILE_KIND, tags, `${BELFRY.blossom.replace(/\/+$/, '')}/${sealed.x}`, nextAt())
     localPlain.set(rumor.id, URL.createObjectURL(file))
     items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 15, text: '', fileTags: tags, file: fileRefOf(rumor) ?? undefined, ...(group ? { group } : {}), pending: true })
@@ -571,7 +573,7 @@ export function fileUrl(d: Dm): Promise<string> {
 }
 
 /** One line for the list of conversations. */
-export const previewOf = (d: Dm) => (d.kind === 15 ? (d.file ? fileLabel(d.file.mime) : 'File') : d.text)
+export const previewOf = (d: Dm) => (d.kind === 15 ? (d.file ? d.file.name : 'File') : d.text)
 
 /** Send TEXT in CONV: a NIP-17 message, or an e-mail through the belfry. */
 export async function sendDm(conv: Conv, text: string, subject?: string) {

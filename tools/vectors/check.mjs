@@ -165,7 +165,7 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     check(`dm-files crypto: ${c.note}`, hx(s.cipher) === c.ciphertext_hex && s.x === c.x && s.ox === c.ox, { x: s.x, ox: s.ox })
   }
   const others = (r) => r.tags.filter((t) => t[0] === 'p').map((t) => t[1])
-  const meta = (r) => { const g = (k) => r.tags.find((t) => t[0] === k)?.[1]; return { mime: g('file-type'), size: Number(g('size')), dim: g('dim'), blurhash: g('blurhash'), thumb: g('thumb'), thumbNonce: g('thumb-nonce'), duration: g('duration') === undefined ? undefined : Number(g('duration')), group: g('group') } }
+  const meta = (r) => { const g = (k) => r.tags.find((t) => t[0] === k)?.[1]; return { mime: g('file-type'), size: Number(g('size')), name: g('name'), dim: g('dim'), blurhash: g('blurhash'), thumb: g('thumb'), thumbNonce: g('thumb-nonce'), duration: g('duration') === undefined ? undefined : Number(g('duration')), group: g('group') } }
   const sendCase = async (name, c) => {
     const g = (k) => c.rumor.tags.find((t) => t[0] === k)?.[1]
     const s = await F.encryptFile(uh(c.plain_hex), g('decryption-key'), g('decryption-nonce'))
@@ -180,6 +180,7 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const got = r.ok ? { ok: true, plain_hex: hx(r.plain), ...(c.expect.mime ? { mime: r.mime } : {}) } : { ok: false }
     check(`dm-files read: ${c.note}`, eq(got, c.expect), got)
   }
+  for (const n of v.names ?? []) { const got = F.shownName(n.name, n.mime); check(`dm-files name: ${JSON.stringify(n.name)} (${n.mime})`, got === n.shown, got) }
   const bs = F.bubbles(v.bubbles.rumors).map((b) => ({ files: b.files.map((r) => r.id), caption: b.caption?.id ?? null }))
   check('dm-files bubbles', eq(bs, v.bubbles.expect), bs)
 }

@@ -1,5 +1,5 @@
 {
- "about": "Files, pictures and audio recordings in direct messages (the lead's contract, 2026-11-21; NIP-17 kind 15). Each file = one kind 15 rumor, sealed and gift-wrapped like a kind 14 to every participant and to yourself (in a sealed conversation through the device seal, as for 14). Before upload the device encrypts the file with AES-256-GCM, a fresh random 32-byte key and 12-byte nonce per file, no associated data, the 16-byte tag appended to the ciphertext; it uploads the CIPHERTEXT to the belfry's Blossom (Content-Type application/octet-stream; same limits as channels). Rumor content = the blob URL. Tags in this order: p per other participant; [\"file-type\", mime]; [\"encryption-algorithm\", \"aes-gcm\"]; [\"decryption-key\", hex]; [\"decryption-nonce\", hex]; [\"x\", sha256 of the ciphertext]; [\"ox\", sha256 of the plain file]; [\"size\", bytes of the plain file]; then optional [\"dim\", \"WxH\"], [\"blurhash\", ...], [\"thumb\", url] + [\"thumb-nonce\", hex] (the thumbnail encrypted with the file's key and its own nonce), [\"duration\", seconds] (audio: m4a/AAC as in channels), [\"group\", 16 hex]. Several pictures sent together: kind 15s in order sharing one group tag, created_at strictly increasing (the outbox rule max(last + 1, now)); a caption = a kind 14 right after with the same group tag. Readers show a group (same author, same group) as one bubble: files by created_at (ties: rumor id), the caption under them. Reactions on a file: dm-reactions.json with [\"k\", \"15\"]. Deleting: as for 14. Readers: download, check x, decrypt, check ox; any mismatch or a missing / malformed tag shows \"This file can't be opened\", never the bytes. Decrypted files are cached only in the app's private storage. Sending goes through the outbox like a direct message: the upload is a step of the item (in the send trace); a refused upload (4xx except 401 / 408 / 429) fails the item (outbox.json).",
+ "about": "Files, pictures and audio recordings in direct messages (the lead's contract, 2026-11-21; NIP-17 kind 15). Each file = one kind 15 rumor, sealed and gift-wrapped like a kind 14 to every participant and to yourself (in a sealed conversation through the device seal, as for 14). Before upload the device encrypts the file with AES-256-GCM, a fresh random 32-byte key and 12-byte nonce per file, no associated data, the 16-byte tag appended to the ciphertext; it uploads the CIPHERTEXT to the belfry's Blossom (Content-Type application/octet-stream; same limits as channels). Rumor content = the blob URL. Tags in this order: p per other participant; [\"file-type\", mime]; [\"encryption-algorithm\", \"aes-gcm\"]; [\"decryption-key\", hex]; [\"decryption-nonce\", hex]; [\"x\", sha256 of the ciphertext]; [\"ox\", sha256 of the plain file]; [\"size\", bytes of the plain file]; then optional [\"name\", file name] (sent for files; inside the sealed rumor, so the server never sees it; shown as in the names section: the last path segment, no control characters or direction marks, trimmed, at most 200 UTF-16 units, else File / Picture / Audio recording), [\"dim\", \"WxH\"], [\"blurhash\", ...], [\"thumb\", url] + [\"thumb-nonce\", hex] (the thumbnail encrypted with the file's key and its own nonce), [\"duration\", seconds] (audio: m4a/AAC as in channels), [\"group\", 16 hex]. Several pictures sent together: kind 15s in order sharing one group tag, created_at strictly increasing (the outbox rule max(last + 1, now)); a caption = a kind 14 right after with the same group tag. Readers show a group (same author, same group) as one bubble: files by created_at (ties: rumor id), the caption under them. Reactions on a file: dm-reactions.json with [\"k\", \"15\"]. Deleting: as for 14. Readers: download, check x, decrypt, check ox; any mismatch or a missing / malformed tag shows \"This file can't be opened\", never the bytes. Decrypted files are cached only in the app's private storage. Sending goes through the outbox like a direct message: the upload is a step of the item (in the send trace); a refused upload (4xx except 401 / 408 / 429) fails the item (outbox.json).",
  "generated_by": "tools/vectors/dm_files.py (belfry-android)",
  "people": {
   "me": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
@@ -152,9 +152,13 @@
      [
       "size",
       "900"
+     ],
+     [
+      "name",
+      "Garden plan 2027.pdf"
      ]
     ],
-    "id": "fcb99ae62a9a1d4cac5c92898d52c8e2a989c252dbc8b367116f80671831fe1f"
+    "id": "649b8ccc40ad3bb4c5ecd4a65b07ec65e1edd2b611ae20b696f60c9dd9e62659"
    },
    "wrapped_to": [
     "959c24202b2b46602cf8614c4d930f571518551fbf121930b371a2ca321beddd",
@@ -1095,7 +1099,7 @@
     "group": "0123456789abcdef"
    },
    {
-    "id": "fcb99ae62a9a1d4cac5c92898d52c8e2a989c252dbc8b367116f80671831fe1f",
+    "id": "649b8ccc40ad3bb4c5ecd4a65b07ec65e1edd2b611ae20b696f60c9dd9e62659",
     "kind": 15,
     "pubkey": "a2aaecacffe6376d9826d889e5e2985381edab77924eeec51b8e2c25373a5d27",
     "created_at": 1800000010,
@@ -1118,7 +1122,7 @@
    },
    {
     "files": [
-     "fcb99ae62a9a1d4cac5c92898d52c8e2a989c252dbc8b367116f80671831fe1f"
+     "649b8ccc40ad3bb4c5ecd4a65b07ec65e1edd2b611ae20b696f60c9dd9e62659"
     ],
     "caption": null
    },
@@ -1146,5 +1150,72 @@
     "caption": null
    }
   ]
- }
+ },
+ "names": [
+  {
+   "name": "Garden plan 2027.pdf",
+   "mime": "application/pdf",
+   "shown": "Garden plan 2027.pdf"
+  },
+  {
+   "name": "../../etc/passwd",
+   "mime": "text/plain",
+   "shown": "passwd"
+  },
+  {
+   "name": "C:\\Users\\ana\\Desktop\\notes.txt",
+   "mime": "text/plain",
+   "shown": "notes.txt"
+  },
+  {
+   "name": "bad\u0000na\u0007me\n.pdf",
+   "mime": "application/pdf",
+   "shown": "badname.pdf"
+  },
+  {
+   "name": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.pdf",
+   "mime": "application/pdf",
+   "shown": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  {
+   "name": "",
+   "mime": "application/pdf",
+   "shown": "File"
+  },
+  {
+   "name": null,
+   "mime": "application/zip",
+   "shown": "File"
+  },
+  {
+   "name": null,
+   "mime": "image/jpeg",
+   "shown": "Picture"
+  },
+  {
+   "name": null,
+   "mime": "audio/mp4",
+   "shown": "Audio recording"
+  },
+  {
+   "name": "dir/",
+   "mime": "video/mp4",
+   "shown": "File"
+  },
+  {
+   "name": "photo‮gnp.exe",
+   "mime": "application/octet-stream",
+   "shown": "photognp.exe"
+  },
+  {
+   "name": "‮\u0001",
+   "mime": "image/png",
+   "shown": "Picture"
+  },
+  {
+   "name": "  spaced  .txt  ",
+   "mime": "text/plain",
+   "shown": "spaced  .txt"
+  }
+ ]
 }

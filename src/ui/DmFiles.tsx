@@ -45,13 +45,14 @@ function FileCard({ d }: { d: Dm }) {
     setBusy(true)
     try {
       const url = await fileUrl(d)
-      Object.assign(document.createElement('a'), { href: url, download: `${label.toLowerCase()}.${extOf(mime)}` }).click()
+      const name = d.file!.name
+      Object.assign(document.createElement('a'), { href: url, download: /\.[a-z0-9]{1,5}$/i.test(name) ? name : `${name}.${extOf(mime)}` }).click()
     } catch { setBad(true) } finally { setBusy(false) }
   }
   return (
     <button type="button" className="dm-filecard" onClick={() => void save()} aria-busy={busy || undefined} disabled={busy}>
       <span className="dm-filebadge" aria-hidden="true">{extOf(mime).toUpperCase().slice(0, 4)}</span>
-      <span className="t"><b>{label === 'PDF' ? 'Document' : label}</b><small>{label === 'PDF' ? 'PDF' : extOf(mime).toUpperCase()} · {sizeLabel(d.file!.size)}{busy ? ' · opening…' : ''}</small></span>
+      <span className="t"><b>{d.file!.name}</b><small>{label === 'PDF' ? 'PDF' : extOf(mime).toUpperCase()} · {sizeLabel(d.file!.size)}{busy ? ' · opening…' : ''}</small></span>
     </button>
   )
 }
