@@ -435,12 +435,8 @@ export async function openDm(wrap: NostrEvent, belfry?: string): Promise<Opened>
   return { ok: true, ...o }
 }
 
-/** §7: a delivery report encrypted to one of my letterboxes (its lb tag); undefined without the key. */
-export function decryptForLb(lb: string, peer: string, content: string): string | undefined {
-  const secret = keyOf(lb)
-  if (!secret) return undefined
-  return nip44.v2.decrypt(content, nip44.v2.utils.getConversationKey(hexToBytes(secret), peer))
-}
+/** §7: a delivery report (kind 7679) as sealedcore.openReport reads it with my key chain. */
+export const openReportHere = (report: NostrEvent, belfry: string) => C.openReport(report, belfry, Object.entries(st.keys).map(([lb, secret]) => ({ lb, secret })))
 
 // ---- sealing (dm.ts) ------------------------------------------------------------------------
 

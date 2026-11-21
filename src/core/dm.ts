@@ -8,7 +8,7 @@ import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
 import { markRead as markReadState, ownMark, readReady, readUpTo } from './readstate'
 import { currentSigner, enqueueSigned, flush, isLocalOnly, me, onOutbox, queryOnce } from './sync'
-import { NoHead, TOO_LONG, acceptedSealed, decryptForLb, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
+import { NoHead, TOO_LONG, acceptedSealed, openReportHere, firstSeenOf, isSealedConv, onDecidable, onHistory, onKeysArrived, openDm, sealMailOut, sealWraps, sendMode, setPartners, setRumorSource } from './sealedrt'
 import { belfryNostrKey, onAccessInfo } from './access'
 import type { Rumor } from './sealedcore'
 
@@ -699,10 +699,12 @@ export async function checkReports() {
   if (!b || !s || !open.length || isLocalOnly()) return
   for (const e of await queryOnce('main', { kinds: [7679], authors: [b], '#r': open.slice(-50) })) {
     try {
-      const lb = tag(e, 'lb') // §7: encrypted to my head letterbox when my chain is ready
-      const plain = lb ? decryptForLb(lb, tag(e, 'ephemeral-pubkey')!, e.content) : await s.decrypt(tag(e, 'ephemeral-pubkey')!, e.content)
-      if (plain === undefined) continue // no key for it on this device (yet)
-      const body = JSON.parse(plain) as { status: Report['status']; details?: string; smtp_response?: string }
+      // §7 (sealedcore.openReport): with an lb, opened with that letterbox's secret only; without,
+      // the old kind, by the signer as before; an lb this device lacks: tried again next time
+      const r = openReportHere(e, b)
+      if (r.state === 'locked' || r.state === 'error') continue
+      const raw = r.state === 'opened' ? r.body : JSON.parse(await s.decrypt(tag(e, 'ephemeral-pubkey')!, e.content))
+      const body = raw as { status: Report['status']; details?: string; smtp_response?: string }
       reports.set(tag(e, 'r')!, { status: body.status, details: body.details || body.smtp_response || '' })
       if (body.status !== 'queued') channelSends.delete(tag(e, 'r')!)
     } catch { /* not mine */ }

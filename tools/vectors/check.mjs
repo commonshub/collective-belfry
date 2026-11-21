@@ -259,6 +259,11 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     const wrong = asks.filter((a) => a.got !== a.want)
     check(`sealed trust: ${c.name} (${asks.length} asks)`, !fails.length && !wrong.length, fails[0] ?? wrong)
   }
+  for (const c of sv.reports?.cases ?? []) {
+    const r = S.openReport(c.report, sv.reports.belfry, c.key_chain)
+    const got = r.state === 'opened' ? { state: 'opened', body: r.body } : { state: r.state }
+    check(`sealed reports: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
+  }
   console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
 process.exit(bad ? 1 : 0)

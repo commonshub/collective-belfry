@@ -507,3 +507,27 @@ export function answerWithoutPrompt(c: Chain | null, pin: Pin | null, device: st
   if (added === undefined || requestAt <= added) return false
   return lastHandoverAt == null || requestAt > lastHandoverAt
 }
+
+// ---- the delivery report of a mail (§7, kind 7679) ---------------------------------------------
+
+export const REPORT = 7679
+export type ReportState = { state: 'opened'; body: Record<string, unknown> } | { state: 'signer' } | { state: 'locked' } | { state: 'error' }
+
+/** What a device does with a kind 7679 given its key chain: opened (with the body); signer (no lb:
+ *  the old kind, for the signer as before, never tried with a letterbox); locked (its lb isn't in
+ *  the key chain: kept, tried again when keys arrive); error (not a report of BELFRY, no valid
+ *  ephemeral-pubkey, more than one lb, or it doesn't open with its own lb's secret: dropped). */
+export function openReport(report: unknown, belfry: string, keyChain: LbKey[]): ReportState {
+  if (!validEvent(report) || report.kind !== REPORT || report.pubkey !== belfry) return { state: 'error' }
+  const eph = one(report, 'ephemeral-pubkey')
+  if (!isKey(eph)) return { state: 'error' }
+  const lbs = values(report, 'lb')
+  if (!lbs.length) return { state: 'signer' }
+  if (lbs.length !== 1 || !isKey(lbs[0])) return { state: 'error' }
+  const held = keyChain.find((k) => k.lb === lbs[0])
+  if (!held) return { state: 'locked' }
+  try {
+    const body = JSON.parse(nip44.v2.decrypt(report.content, conv(hexToBytes(held.secret), eph)))
+    return body && typeof body === 'object' && !Array.isArray(body) ? { state: 'opened', body } : { state: 'error' }
+  } catch { return { state: 'error' } }
+}

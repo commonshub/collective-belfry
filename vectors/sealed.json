@@ -14945,5 +14945,169 @@
     ]
    }
   ]
+ },
+ "reports": {
+  "note": "The kind 7679 delivery report of a member's outgoing mail, signed by the belfry key, found by its r tag (the mail's email-id), no p tag. content = NIP-44 with conv(secret, the key in ephemeral-pubkey) of a JSON object. With an lb tag the secret is that letterbox's; without, the account's (the signer). 'key_chain' is what the device holds. expected.state: opened (with the body), signer (no lb: not the device's to open), locked (lb not in the key chain: kept), error (does not open with the secret held for its lb). The throwaway key is SHA-256('belfry sealed vectors/once/' + the first case's name) and the nonce SHA-256('belfry sealed vectors/nonce/report/' + that name); the third case uses its own name.",
+  "belfry": "9626d2339917e002f7841e07a98cd147fd0054e2eb362010f6d184e87fd85d36",
+  "account": "6c7c210cb2e6586af32d45151f056117ce2842c00a0f567d639555ce259c29c2",
+  "cases": [
+   {
+    "name": "a report to the sender's head letterbox",
+    "note": "§7: Alice's chain is ready, so the report of her mail is encrypted to her head letterbox (alice_lb2) and says so in an lb tag. Her device has that secret.",
+    "report": {
+     "kind": 7679,
+     "created_at": 1795000960,
+     "tags": [
+      [
+       "r",
+       "0123456789abcdef0123456789abcdef"
+      ],
+      [
+       "ephemeral-pubkey",
+       "02edea2d307d180bcbe59a7160d8fffe76b4e87c3e9d0f1a25ddd4b6f2614dae"
+      ],
+      [
+       "lb",
+       "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39"
+      ]
+     ],
+     "content": "ApkvUDmujVw5OuqLTKlkg5dUCRcVESSJz/nInBhSf5nyK4Cq4veRH5GyMNug+Y1VQkqPge7i7DPZxwbT4g6I1eGoZYcAY+DBVoWYEI5n7zqGVoT4R9FFzrwSa3yHwPxhVHJ3hWS11cvAmxf3vDGfFxQbfNy6msCMIpi0H7nCHsy4ABlVUWXGQ9tWZgdKPkLRKPuDaN6KAv1Kz0bRR9QLQqatfIDZmxbV+1xD0fGPnp94eYB+dIDlUwZy4EdhtVZMWJYeDj5j5IGzDIzVJdCxPWZPv8CpZ0xbKfnai6zw89uuXPOwqDhK6SFM8HyufvPb2HHQI10WKrQPsX7SpScgrmtB2w==",
+     "pubkey": "9626d2339917e002f7841e07a98cd147fd0054e2eb362010f6d184e87fd85d36",
+     "id": "531209547c6e475a81bc11168f41ae2d8c95a31966a64b9a929f1ab3f1c64a24",
+     "sig": "9aa710b79a2526b47d808b46a61999d20da7f4a45a429866814a942c0a58dc700ef9dbeda9191750562ee683bed91d28907facfc9b4fc4d15de402dc21d9af39"
+    },
+    "key_chain": [
+     {
+      "lb": "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0",
+      "secret": "4e41b66bcf3e993d6d0b7d759a4e4ad8a4474ded52b91ce20d363e129b34c214"
+     },
+     {
+      "lb": "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39",
+      "secret": "81d4e1c270212117d34e4b717adfce48d463e9594a97130b858848d361112d41"
+     }
+    ],
+    "expected": {
+     "state": "opened",
+     "body": {
+      "status": "delivered",
+      "recipient": "carol@example.org",
+      "smtp_code": 250,
+      "smtp_response": "OK",
+      "attempted_at": 1795000960,
+      "delivered_at": 1795000960,
+      "details": "OK"
+     }
+    }
+   },
+   {
+    "name": "the wrong letterbox secret",
+    "note": "The same report; the key chain pairs alice_lb2 with another secret (alice_lb3's): it does not open.",
+    "report": {
+     "kind": 7679,
+     "created_at": 1795000960,
+     "tags": [
+      [
+       "r",
+       "0123456789abcdef0123456789abcdef"
+      ],
+      [
+       "ephemeral-pubkey",
+       "02edea2d307d180bcbe59a7160d8fffe76b4e87c3e9d0f1a25ddd4b6f2614dae"
+      ],
+      [
+       "lb",
+       "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39"
+      ]
+     ],
+     "content": "ApkvUDmujVw5OuqLTKlkg5dUCRcVESSJz/nInBhSf5nyK4Cq4veRH5GyMNug+Y1VQkqPge7i7DPZxwbT4g6I1eGoZYcAY+DBVoWYEI5n7zqGVoT4R9FFzrwSa3yHwPxhVHJ3hWS11cvAmxf3vDGfFxQbfNy6msCMIpi0H7nCHsy4ABlVUWXGQ9tWZgdKPkLRKPuDaN6KAv1Kz0bRR9QLQqatfIDZmxbV+1xD0fGPnp94eYB+dIDlUwZy4EdhtVZMWJYeDj5j5IGzDIzVJdCxPWZPv8CpZ0xbKfnai6zw89uuXPOwqDhK6SFM8HyufvPb2HHQI10WKrQPsX7SpScgrmtB2w==",
+     "pubkey": "9626d2339917e002f7841e07a98cd147fd0054e2eb362010f6d184e87fd85d36",
+     "id": "531209547c6e475a81bc11168f41ae2d8c95a31966a64b9a929f1ab3f1c64a24",
+     "sig": "9aa710b79a2526b47d808b46a61999d20da7f4a45a429866814a942c0a58dc700ef9dbeda9191750562ee683bed91d28907facfc9b4fc4d15de402dc21d9af39"
+    },
+    "key_chain": [
+     {
+      "lb": "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39",
+      "secret": "70d1c396fcc1bfb8ba6ff139854d0d0edc493ca53194154f490dfe5fb2fa2964"
+     }
+    ],
+    "expected": {
+     "state": "error"
+    }
+   },
+   {
+    "name": "a report without lb is the signer's",
+    "note": "The old kind: encrypted to Alice's account key, no lb tag. The app hands it to the signer as before and never tries a letterbox secret on it.",
+    "report": {
+     "kind": 7679,
+     "created_at": 1795000960,
+     "tags": [
+      [
+       "r",
+       "0123456789abcdef0123456789abcdef"
+      ],
+      [
+       "ephemeral-pubkey",
+       "f060290e4a86c6544d009d26c07d278879e713fd68b258a403bc99c5269158cf"
+      ]
+     ],
+     "content": "ApIMcrw2RpFlNJxTcRPlNOBd4kVf8Y2f7p77VyNG6kblIFEGK3LiMgoRrRlE9S2yCQjovR3ECKDWoz5kzFeV7axGmxEWz4nxCRYXeu2o0rr+lvgquWJnrqtnj5OFDEirAYRECOANN6KXR3ygb3MrHkig0vzhVqHXbKcx/dawPhGzvDPVq/K+fyQ9qxONGAEdmSz2lf4/BcfdCDiitiOzbSJJDmrr3x4/2BBFpa3+MMCSmp8dg7KyAYjBT27/xwmMRepbLUxPaBwmpgJ756IAXK0TvBN2y1iftoUdW0BtvOPrcfCn06sbPc1Gb9ZPgjE1OUTEdcdTuNJlUq2rrbIo8gimDg==",
+     "pubkey": "9626d2339917e002f7841e07a98cd147fd0054e2eb362010f6d184e87fd85d36",
+     "id": "f60efe34e5f6a032b738e9d178ed85fe7bff712493fa505b0b66f92cf7acb4b8",
+     "sig": "fe2390fa19b161e9722d3f0be0579f3204696e2bb319585ec1c6eff6baf0359777019131617faf01a3ccf3bbe0ca85698c8f27a04f69c0341df229c8db583368"
+    },
+    "key_chain": [
+     {
+      "lb": "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0",
+      "secret": "4e41b66bcf3e993d6d0b7d759a4e4ad8a4474ded52b91ce20d363e129b34c214"
+     },
+     {
+      "lb": "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39",
+      "secret": "81d4e1c270212117d34e4b717adfce48d463e9594a97130b858848d361112d41"
+     }
+    ],
+    "expected": {
+     "state": "signer"
+    }
+   },
+   {
+    "name": "a report whose lb is not in the key chain",
+    "note": "The same sealed report on a device that holds only alice_lb1 and alice_lb3: kept, not opened, tried again when keys arrive.",
+    "report": {
+     "kind": 7679,
+     "created_at": 1795000960,
+     "tags": [
+      [
+       "r",
+       "0123456789abcdef0123456789abcdef"
+      ],
+      [
+       "ephemeral-pubkey",
+       "02edea2d307d180bcbe59a7160d8fffe76b4e87c3e9d0f1a25ddd4b6f2614dae"
+      ],
+      [
+       "lb",
+       "4eaafd980a2bcda4950bc634b94b7346d2c34a242e84584aee9f041434d39c39"
+      ]
+     ],
+     "content": "ApkvUDmujVw5OuqLTKlkg5dUCRcVESSJz/nInBhSf5nyK4Cq4veRH5GyMNug+Y1VQkqPge7i7DPZxwbT4g6I1eGoZYcAY+DBVoWYEI5n7zqGVoT4R9FFzrwSa3yHwPxhVHJ3hWS11cvAmxf3vDGfFxQbfNy6msCMIpi0H7nCHsy4ABlVUWXGQ9tWZgdKPkLRKPuDaN6KAv1Kz0bRR9QLQqatfIDZmxbV+1xD0fGPnp94eYB+dIDlUwZy4EdhtVZMWJYeDj5j5IGzDIzVJdCxPWZPv8CpZ0xbKfnai6zw89uuXPOwqDhK6SFM8HyufvPb2HHQI10WKrQPsX7SpScgrmtB2w==",
+     "pubkey": "9626d2339917e002f7841e07a98cd147fd0054e2eb362010f6d184e87fd85d36",
+     "id": "531209547c6e475a81bc11168f41ae2d8c95a31966a64b9a929f1ab3f1c64a24",
+     "sig": "9aa710b79a2526b47d808b46a61999d20da7f4a45a429866814a942c0a58dc700ef9dbeda9191750562ee683bed91d28907facfc9b4fc4d15de402dc21d9af39"
+    },
+    "key_chain": [
+     {
+      "lb": "3906db386388c8b8581d732bcc8dc80a90b222dd41007a96bca4d657447a91c0",
+      "secret": "4e41b66bcf3e993d6d0b7d759a4e4ad8a4474ded52b91ce20d363e129b34c214"
+     },
+     {
+      "lb": "602dec18014cd8bb93f1ccc9b6776b9fc4beb9cdce7b0bee4af4be1a72ce63c8",
+      "secret": "70d1c396fcc1bfb8ba6ff139854d0d0edc493ca53194154f490dfe5fb2fa2964"
+     }
+    ],
+    "expected": {
+     "state": "locked"
+    }
+   }
+  ]
  }
 }
