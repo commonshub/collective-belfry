@@ -126,6 +126,10 @@ async def main() -> None:
                 decode_data=False,
                 tls_context=ctx,
                 require_starttls=False,
+                # inbound only: nobody logs in here, so AUTH is not offered at all (scanners
+                # tried AUTH LOGIN every few seconds on OSV; it always failed, without an
+                # authenticator)
+                auth_exclude_mechanism=["LOGIN", "PLAIN"],
             )
 
         loop = asyncio.get_running_loop()
