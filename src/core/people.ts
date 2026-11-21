@@ -63,10 +63,29 @@ export function allTags(): { tag: string; count: number }[] {
 
 export const cleanTag = clean
 
-export async function saveExtras(x: { tags: string[]; share: Share; place?: Place }) {
+/** The content of my latest belfry:profile event as it is (every key, also the ones the chat
+ *  doesn't know: the website writes headline and links), or {} when there is none or it isn't
+ *  a JSON object. */
+function myRawExtras(): Record<string, unknown> {
+  const mine = me()
+  const e = all(mine)
+    .filter((x) => x.kind === 30078 && x.pubkey === mine && x.tags.some((t) => t[0] === 'd' && t[1] === PROFILE_D))
+    .sort((a, b) => b.created_at - a.created_at)[0]
+  try { const c = e ? JSON.parse(e.content) : {}; return c && typeof c === 'object' && !Array.isArray(c) ? c : {} } catch { return {} }
+}
+
+/** The new content: BASE with the chat's own keys (tags, share, place) overwritten; place
+ *  removed when there is none. Every other key is kept as it was. */
+export function extrasContent(base: Record<string, unknown>, x: { tags: string[]; share: Share; place?: Place }): string {
   const place = x.share === 'none' || !x.place ? undefined : x.share === 'country' ? { country: x.place.country } : x.place
-  const content = JSON.stringify({ tags: [...new Set(x.tags.map(clean).filter(Boolean))].slice(0, 30), share: x.share, ...(place ? { place } : {}) })
-  await enqueue('main', { kind: 30078, content, tags: [['d', PROFILE_D]] })
+  const out: Record<string, unknown> = { ...base, tags: [...new Set(x.tags.map(clean).filter(Boolean))].slice(0, 30), share: x.share }
+  if (place) out.place = place
+  else delete out.place
+  return JSON.stringify(out)
+}
+
+export async function saveExtras(x: { tags: string[]; share: Share; place?: Place }) {
+  await enqueue('main', { kind: 30078, content: extrasContent(myRawExtras(), x), tags: [['d', PROFILE_D]] })
 }
 
 /** Name and about in the kind-0 profile, the rest of it kept. */
