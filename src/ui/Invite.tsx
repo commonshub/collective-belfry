@@ -8,6 +8,7 @@
 // may not invite members gets the guest link (board -guest): People and Works for only. Agent
 // swaps the QR for the line to paste to the agent (inviting/add-agent); its link works once.
 // Belfry's POST /channel-invites (guests.py, roles.py): never offer what the server refuses.
+import { LinkPair } from './LinkPair'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import qrcode from 'qrcode-generator'
 import { channelIcon, displayName, group, profiles, nameOf } from '../core/model'
@@ -78,7 +79,6 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
   const [agentUrl, setAgentUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [copied, setCopied] = useState(false)
   const asked = useRef(0)
   const label = `${channelIcon(g)}${g?.isPod || g?.isEvent || g?.isProposal ? ' ' : ''}${nameOf(id)}`
   const fetchLink = async () => {
@@ -96,7 +96,7 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
   }
   const key = JSON.stringify([who, link.linkDays, people])
   // no link is made before the part for someone from outside is open
-  useEffect(() => { setCopied(false); if (outside) void fetchLink() }, [key, outside]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (outside) void fetchLink() }, [key, outside]) // eslint-disable-line react-hooks/exhaustive-deps
   const pending = !url
   const agentLine = who.as === 'agent' && agentUrl ? `Join ${community} as my agent: read ${agentUrl} and follow it.` : ''
   const qr = useMemo(() => {
@@ -106,12 +106,6 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
     return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(q.createSvgTag({ cellSize: 6, margin: 2, scalable: true }))
   }, [url])
   const text = who.as === 'agent' ? agentLine : url
-  const copy = async () => {
-    try { await navigator.clipboard.writeText(text) } catch {
-      const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
-    }
-    setCopied(true); setTimeout(() => setCopied(false), 1500)
-  }
   const roleLabel = (r: string) => (r === 'agent' ? 'Agent' : roleById(r)?.label ?? 'Member')
   const roleLine = (r: string) => (r === 'agent' ? 'Your agent, a member while you are one.' : ROLE_LINE[r] ?? roleById(r)?.description ?? '')
   const back = () => setView('main')
@@ -193,10 +187,7 @@ export function InviteSheet({ id, onClose, preset }: { id: string; onClose: () =
           </button>}
         </div>
       )}
-      <div className="row" style={{ gap: 8, marginTop: 10 }}>
-        <Btn className="btn ghost" style={{ flex: 1 }} disabled={!text} onClick={() => copy()}>{copied ? 'Copied' : who.as === 'agent' ? 'Copy' : 'Copy link'}</Btn>
-        {'share' in navigator && <Btn className="btn ghost" style={{ flex: 1 }} disabled={!text} onClick={() => navigator.share(who.as === 'agent' ? { text } : { title: label, url }).catch(() => {})}>Share…</Btn>}
-      </div>
+      <LinkPair text={text} disabled={!text} copyLabel={who.as === 'agent' ? 'Copy' : 'Copy link'} share={who.as === 'agent' ? { text } : { title: label, url }} />
       </>}
     </Sheet>
   )

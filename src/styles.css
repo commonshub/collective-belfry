@@ -2042,3 +2042,13 @@ a.buy .ico { width: 14px; height: 14px; }
 @media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; opacity: .7; } }
 .dm-row small.typing-row { display: flex; align-items: center; gap: 6px; color: var(--muted); }
 .privacy-sec { margin: 8px 4px 8px; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+
+/* Copy link · Share… (canvas v113): equal widths, 50 px */
+.link-pair { display: flex; gap: 10px; margin-top: 10px; }
+.link-pair .btn { flex: 1 1 0; min-width: 0; height: 50px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; }
+.link-pair .btn svg { width: 20px; height: 20px; flex: none; }
+.link-pair .btn.ok { color: var(--ok, #1f7a35); }
+.ev-url.ev-address { display: block; }
+.ev-address code { display: block; font-family: ui-monospace, Menlo, monospace; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.ev-address .link-pair .btn { flex: 1 1 0; width: auto; display: inline-flex; }
+.ev-address .ev-qr-link { display: inline-block; margin-top: 8px; width: auto; }
