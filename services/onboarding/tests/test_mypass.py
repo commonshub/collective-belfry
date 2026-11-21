@@ -9,10 +9,10 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from belfry_onboarding import mypass
+from belfry_onboarding import core, mypass
 from belfry_onboarding.app import create_app
 
-from .conftest import AUTHENTIK_URL
+from .conftest import AUTHENTIK_URL, TEST_SIGNER, authentik_only
 
 TODAY = dt.datetime.now(dt.UTC).date()
 
@@ -49,6 +49,16 @@ def web(services):
 
 
 def login(web) -> None:
+    if TEST_SIGNER == "belfry":
+        # a belfry without Authentik signs in with its own page (passlogin.py, tested in
+        # test_login_link / test_own_mode); here the session it ends with, for the pass holder
+        svc = web.app.state.services
+        rows = svc.odoo.search_read("belfry.pass", [], ["partner_id"])
+        holder = min(core.m2o_id(p["partner_id"]) for p in rows)
+        web.cookies.set(
+            mypass.SESSION_COOKIE, mypass._sign(svc, {"kind": "session", "partner": holder}, 3600)
+        )
+        return
     start = web.get("/me", follow_redirects=False)
     assert start.status_code == 303 and start.headers["location"] == "/me/login"
     start = web.get("/me/login", follow_redirects=False)
@@ -78,6 +88,7 @@ def test_signed_in_participant_sees_a_qr(web, passing):
     assert qr["svg"].startswith("data:image/svg+xml") and qr["expires"] > 0
 
 
+@authentik_only
 def test_account_without_partner_is_refused(web, passing):
     passing["user"].pop("keycast_vine_id")
     start = web.get("/me/login", follow_redirects=False)
@@ -86,6 +97,7 @@ def test_account_without_partner_is_refused(web, passing):
     assert r.status_code == 403 and "no pass" in r.text
 
 
+@authentik_only
 def test_forged_state_is_refused(web, passing):
     web.get("/me/login", follow_redirects=False)
     r = web.get("/me/callback", params={"code": "c", "state": "forged"}, follow_redirects=False)

@@ -12,7 +12,7 @@ from coincurve import PrivateKey
 from belfry_onboarding import core, steward
 from belfry_onboarding.blossom import event_id
 
-from .conftest import seed_paid_invoice
+from .conftest import TEST_SIGNER, seed_paid_invoice
 
 BASE = "https://pass.belfry.test"
 URL = BASE + "/api/invites"
@@ -42,7 +42,9 @@ def holder(services, odoo, authentik=None, steward_group=False) -> tuple[Private
     p = next(p for p in odoo.tables["belfry.pass"].values() if p["invoice_id"] == ids["invoice"])
     key = PrivateKey()
     p["keycast_pubkey"] = key.public_key_xonly.format().hex()
-    if steward_group:
+    if steward_group and TEST_SIGNER == "belfry":  # no Authentik: the flag in the register
+        odoo.write("res.partner", [ids["partner"]], {"belfry_steward": True})
+    elif steward_group:
         user_pk = odoo.tables["res.partner"][ids["partner"]]["belfry_authentik_user_id"]
         authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": {user_pk}}
     return key, ids["partner"]

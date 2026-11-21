@@ -31,6 +31,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from . import stewards
 from .blossom import BlossomAuthError, parse_authorization, tag_values
 from .clients.odoo import OdooError
 from .core import Services, m2o_id
@@ -109,9 +110,7 @@ def holder(svc: Services, pubkey: str) -> dict[str, Any]:
         or {}
     )
     user_pk = partner.get("belfry_authentik_user_id")
-    steward = bool(user_pk) and int(user_pk) in svc.authentik.group_member_pks(
-        svc.settings.steward_group
-    )
+    steward = stewards.is_steward(svc, partner_id, user_pk)
     return {"partner_id": partner_id, "email": partner.get("email") or "", "steward": steward}
 
 

@@ -269,6 +269,15 @@ def own_app(svc: Services, uri: str) -> bool:
 
     if uri in NATIVE_APPS:
         return True
+    from . import stewards
+
+    if stewards.own(svc):
+        # without Keycast the suite's apps (calendar.<domain>, wallet.<domain>, …; the ones
+        # that run here) sign in through the belfry too: they were Keycast's trusted clients
+        from . import appsignin
+
+        if appsignin.suite_name(svc, uri):
+            return True
 
     u = urllib.parse.urlsplit(uri)
     if u.scheme != "https" or u.query or u.fragment:

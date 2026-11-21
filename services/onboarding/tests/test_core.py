@@ -9,8 +9,13 @@ import pytest
 from belfry_onboarding import core
 from belfry_onboarding.nostr import hex_to_npub
 
-from .conftest import HOOK_TOKEN, seed_paid_invoice
+from .conftest import HOOK_TOKEN, TEST_SIGNER, authentik_only, seed_paid_invoice
 from .fakes import FakeOdoo
+
+# With Authentik every member gets a user there and a place in its participants group; a belfry
+# on its own signer (BELFRY_TEST_SIGNER=belfry) has no Authentik and makes none of it.
+AK = TEST_SIGNER == "keycast"
+USERS = 1 if AK else 0
 
 
 def active_pass(odoo: FakeOdoo, invoice_id: int) -> dict:
@@ -35,23 +40,26 @@ def test_paid_invoice_activates_everything(services, odoo, authentik, keycast):
     assert p["stripe_payment_intent"] == "pi_123"
     assert p["activated_at"]
 
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
-    user = authentik.users[0]
-    assert user["username"] == "0001"
-    assert user["path"] == "belfry/participants"
-    assert user["attributes"] == {
-        "belfry_member_number": "0001",
-        "odoo_partner_id": ids["partner"],
-    }
-    assert authentik.connections[0] == {
-        "pk": 1,
-        "user": 1,
-        "source": "pass-bridge",
-        "identifier": "0001",
-    }
-    assert partner["belfry_authentik_user_id"] == 1
-    assert p["authentik_user_id"] == 1
+    if AK:
+        assert authentik.user_creates == 1
+        assert authentik.connection_creates == 1
+        user = authentik.users[0]
+        assert user["username"] == "0001"
+        assert user["path"] == "belfry/participants"
+        assert user["attributes"] == {
+            "belfry_member_number": "0001",
+            "odoo_partner_id": ids["partner"],
+        }
+        assert authentik.connections[0] == {
+            "pk": 1,
+            "user": 1,
+            "source": "pass-bridge",
+            "identifier": "0001",
+        }
+        assert partner["belfry_authentik_user_id"] == 1
+        assert p["authentik_user_id"] == 1
+    else:  # no Authentik: nothing made there, nothing kept about it
+        assert not partner["belfry_authentik_user_id"] and not p["authentik_user_id"]
 
     assert keycast.preloads == 1
     kc_user = keycast.users[f"odoo-partner-{ids['partner']}"]
@@ -145,6 +153,7 @@ def test_no_relay_configured_skips_profile(services, odoo, keycast):
     assert keycast.signed == []
 
 
+@authentik_only
 def test_activation_survives_authentik_refusing_the_source_link(services, odoo, authentik, keycast):
     """authentik 2026.8.5 rejects API-created source connections; activation must still complete."""
     authentik.reject_connections = True
@@ -183,8 +192,8 @@ def test_webhook_replayed_three_times_creates_nothing_new(client, odoo, authenti
         results.append(r.json()["result"])
     assert results == ["activated", "already_active", "already_active"]
     assert len(odoo.tables["belfry.pass"]) == 1
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
+    assert authentik.user_creates == USERS
+    assert authentik.connection_creates == USERS
     assert keycast.preloads == 1
     assert len(keycast.users) == 1
     npub = active_pass(odoo, ids["invoice"])["npub"]
@@ -199,13 +208,13 @@ def test_activation_resumes_after_partial_failure(services, odoo, authentik, key
     preload.side_effect = lambda request: httpx.Response(500, json={"error": "boom"})
     with pytest.raises(httpx.HTTPStatusError):
         core.activate_pass(services, ids["invoice"])
-    assert authentik.user_creates == 1
+    assert authentik.user_creates == USERS
     assert active_pass(odoo, ids["invoice"])["state"] == "pending"
 
     preload.side_effect = original
     assert core.activate_pass(services, ids["invoice"]) == "activated"
-    assert authentik.user_creates == 1
-    assert authentik.connection_creates == 1
+    assert authentik.user_creates == USERS
+    assert authentik.connection_creates == USERS
     assert keycast.preloads == 1
     assert active_pass(odoo, ids["invoice"])["state"] == "active"
 
@@ -355,13 +364,15 @@ def test_reconcile_activates_missed_invoices_and_revokes_refunds(
         p["invoice_id"] == unpaid["invoice"] for p in odoo.tables["belfry.pass"].values()
     )
     # the participants group follows the active passes: the refunded holder was dropped
-    assert result["participants"] == {"members": 1, "added": [], "removed": []}
-    assert authentik.members() == {active_pass(odoo, missed["invoice"])["authentik_user_id"]}
+    group = {"members": 1, "added": [], "removed": []} if AK else None
+    assert result["participants"] == group
+    if AK:
+        assert authentik.members() == {active_pass(odoo, missed["invoice"])["authentik_user_id"]}
     # second run is a no-op
     assert core.reconcile(services) == {
         "activated": {},
         "revoked": {},
-        "participants": {"members": 1, "added": [], "removed": []},
+        "participants": group,
         "tokens": {},
     }
 
@@ -372,7 +383,7 @@ def test_reconcile_endpoint_requires_token(client):
     assert r.status_code == 200 and r.json() == {
         "activated": {},
         "revoked": {},
-        "participants": {"members": 0, "added": [], "removed": []},
+        "participants": {"members": 0, "added": [], "removed": []} if AK else None,
         "tokens": {},
     }
 
@@ -399,6 +410,7 @@ def test_legacy_module_fallbacks(settings, authentik, keycast):
     assert p["date_end"] == "2027-01-26"
 
 
+@authentik_only
 def test_existing_authentik_user_found_by_email_is_reused(services, odoo, authentik):
     authentik.users.append(
         {"pk": 7, "username": "alice", "email": "alice@example.com", "attributes": {}}

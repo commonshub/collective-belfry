@@ -35,6 +35,7 @@ from . import (
     applyverified,
     apps,
     appshome,
+    appsignin,
     avatar,
     blossom,
     branding,
@@ -87,6 +88,7 @@ from . import (
     sitenotify,
     sitesessions,
     steward,
+    stewards,
     theme,
     usernames,
     villagers,
@@ -156,6 +158,7 @@ def build_signer(settings: Settings) -> KeycastClient | SignerClient:
 
 
 def build_services(settings: Settings) -> Services:
+    stewards.check_settings(settings)
     registry = eudi.load(settings.eudi_dir)
     return Services(
         issuer=IssuerClient(settings.issuer_url) if settings.issuer_url else None,
@@ -183,7 +186,12 @@ def build_services(settings: Settings) -> Services:
                 settings.odoo_url, settings.odoo_db, settings.odoo_user, settings.odoo_api_key
             )
         ),
-        authentik=AuthentikClient(settings.authentik_url, settings.authentik_token),
+        # a belfry on its own signer has no Authentik: admins live in the register (stewards.py)
+        authentik=(
+            stewards.NoAuthentik()  # type: ignore[arg-type]
+            if stewards.own_mode(settings)
+            else AuthentikClient(settings.authentik_url, settings.authentik_token)
+        ),
         keycast=build_signer(settings),
         settings=settings,
         relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
@@ -324,6 +332,7 @@ def create_app(services: Services | None = None) -> FastAPI:
     gitview.register(app)  # /git: the community's code from ngit (gitview.py)
     steward.register(app)  # /steward: the steward pages (steward.py)
     mypass.register(app)  # /me and /check: the pass on the phone without a wallet (mypass.py)
+    appsignin.register(app)  # apps.<domain>/api/oauth/*: Keycast's sign-in, without Keycast
     appshome.register(app)  # apps.<domain>/: the installed apps (appshome.py)
     community.register(app)  # /monitor, /changelog (community.py)
     console.register(app)  # belfry.<domain>: overview, status, members, website (console.py)

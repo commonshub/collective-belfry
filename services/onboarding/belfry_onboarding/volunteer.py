@@ -27,6 +27,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from starlette.concurrency import run_in_threadpool
 
 from . import core, flash
+from . import stewards as admins_home
 from .claim import page
 from .clients.odoo import OdooError
 from .core import Services
@@ -196,7 +197,7 @@ def role_of(svc: Services, partner_id: int) -> tuple[str | None, dict[str, Any] 
     if email:
         try:
             stewards = {
-                e.lower() for e in svc.authentik.group_member_emails(svc.settings.steward_group)
+                e.lower() for e in admins_home.emails(svc)
             }
         except Exception:  # noqa: BLE001 - no steward role when authentik does not answer
             log.exception("shifts: could not list the stewards")
@@ -215,7 +216,7 @@ def signup(svc: Services, partner_id: int, shift_id: int) -> dict[str, Any]:
 
 def leave(svc: Services, partner_id: int, shift_id: int) -> dict[str, Any]:
     try:
-        stewards = svc.authentik.group_member_emails(svc.settings.steward_group)
+        stewards = admins_home.emails(svc)
     except Exception:  # noqa: BLE001 - the mail to the stewards is best effort
         stewards = []
     return svc.odoo.call("belfry.shift", "belfry_shift_leave", [partner_id, shift_id, stewards])

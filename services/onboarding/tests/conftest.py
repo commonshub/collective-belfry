@@ -79,7 +79,12 @@ def settings(tmp_path) -> Settings:
         # the first belfry's setup: its app suite and Authentik's sign-in (tests for a belfry
         # without them set these back)
         OSV_APPS=True,
-        PASS_SIGNIN="authentik",
+        # with Belfry's own signer there is no Authentik at all (stewards.own_mode): the suite
+        # then runs as a belfry with its own sign-in and its admins in the register
+        PASS_SIGNIN="belfry" if TEST_SIGNER == "belfry" else "authentik",
+        SIGNER=TEST_SIGNER,
+        SIGNER_URL=SIGNER_URL,
+        SIGNER_TOKEN="signer-token-for-tests",
         COMMUNITY_NAME="Open Source Village",
         _env_file=None,
     )
@@ -140,7 +145,12 @@ def odoo() -> FakeOdoo:
 
 
 @pytest.fixture
-def authentik(router) -> FakeAuthentik:
+def authentik(router, request) -> FakeAuthentik:
+    if TEST_SIGNER == "belfry":
+        from .fakes import RegisterStewards
+
+        # no Authentik in this run: the same handles over the register's steward flag
+        return RegisterStewards(request.getfixturevalue("odoo"))  # type: ignore[return-value]
     return FakeAuthentik(router, AUTHENTIK_URL)
 
 
@@ -149,6 +159,23 @@ def keycast(router) -> FakeKeycast:
     if TEST_SIGNER == "belfry":
         return FakeSigner(router, SIGNER_URL, KEYCAST_URL)
     return FakeKeycast(router, KEYCAST_URL)
+
+
+def directory():
+    """``services.authentik``: the client, or what stands in its place on a belfry without
+    Authentik (every use of it raises)."""
+    if TEST_SIGNER == "belfry":
+        from belfry_onboarding.stewards import NoAuthentik
+
+        return NoAuthentik()
+    return AuthentikClient(AUTHENTIK_URL, "ak-token")
+
+
+# Tests about Authentik itself (its users, groups, sign-in links, the pages that sign in through
+# it): they have nothing to say about a belfry that runs without it.
+authentik_only = pytest.mark.skipif(
+    TEST_SIGNER != "keycast", reason="about Authentik (a belfry on its own signer has none)"
+)
 
 
 def signer_client(kind: str = TEST_SIGNER):
@@ -186,9 +213,9 @@ def services(
     from belfry_onboarding.clients.issuer import IssuerClient
     from belfry_onboarding.clients.verifier import VerifierClient
 
-    return Services(
+    made = Services(
         odoo=odoo,
-        authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
+        authentik=directory(),
         keycast=signer_client(),
         settings=settings,
         relay=relay,  # type: ignore[arg-type]
@@ -199,6 +226,9 @@ def services(
         issuer_x5c=["MIIBfake"],
         bridge_jwk=bridge_jwk,
     )
+    if TEST_SIGNER == "belfry":
+        authentik.services = made
+    return made
 
 
 @pytest.fixture
