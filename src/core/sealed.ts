@@ -159,6 +159,15 @@ export function notSealed(conv: Conv, d: { rid: string; at: number; sealed?: boo
   return first !== undefined && d.at * 1000 >= first
 }
 /** Remove is offered only on a device that can change the list (demo: always). */
+/** §5.4: Start fresh is offered when this device isn't in my head (it can never read what is sealed
+ *  to my devices without another device's Allow). */
+export const canStartFresh = () => (real() ? R.active() && !!R.chainOf(me()) && !R.deviceIn() && !R.inHeadNoKey() : state.lockedHere.size > 0)
+export const FRESH_NOT_DONE = 'Not done: this device can’t reach the belfry just now. Try again in a moment.'
+/** Start fresh on this device (canvas v84 messages/encryption-start-fresh-confirm). */
+export async function startFresh() {
+  if (!real()) { state.lockedHere.clear(); touch(); return }
+  try { await R.startFresh() } catch { throw new Error(FRESH_NOT_DONE) }
+}
 export const canRemoveDevices = () => (real() ? R.canRemove() : true)
 /** The Allow card closes without an answer (it comes back next time). */
 export const dismissAsking = () => { if (real()) R.dismissAsk(); else { state.asking = undefined; touch() } }

@@ -8,7 +8,7 @@ import { touch, useVersion } from '../core/store'
 import { FULL, PENDING_OTHER, active as sealedOn, mySessions } from '../core/sealedrt'
 import { me } from '../core/sync'
 import { replaceHash } from '../core/nav'
-import { canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
+import { canStartFresh, startFresh, canRemoveDevices, dismissAsking, sealedAt, activeWord, allowAsking, asking, refuseAsking, removeDevice, shareHistory, anyLockedHere, dayMonth, devicesWord, isSealed, myDevices, recentChange, theirDevices, whenWord, type DeviceKind, type DeviceLine, type MyDevice } from '../core/sealed'
 import { MailIcon } from './icons'
 import { Avatar, Sheet, SheetOrPopover, go, up, type Anchor } from './common'
 
@@ -159,19 +159,57 @@ export const LockedHereText = () => <span className="seal-locked-t"><SealIcon />
 /** "Show how" (a pushed page): the three steps. */
 export function ShowHowScreen() {
   useVersion()
+  const [confirming, setConfirming] = useState(false)
+  // canvas v84 messages/encryption-start-fresh: Unlock this device, with another device or by
+  // starting fresh (only while this device isn't in my head)
   return (
     <div className="screen seal-screen">
-      <div className="topbar"><button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button><h1>Unlock with another device</h1></div>
+      <div className="topbar"><button className="icon-btn" aria-label="Back to Messages" onClick={() => up('dm')}>‹</button><h1>Unlock this device</h1></div>
       <div className="scroll pad">
-        <ol className="seal-steps">
-          <li>Open Belfry on a phone, tablet or computer where you’re already signed in.</li>
-          <li>It asks whether to give this device access: tap Allow.</li>
-          <li>Your conversations open here.</li>
-        </ol>
+        <h3 className="privacy-sec">With another device</h3>
+        <div className="home-card">
+          <ol className="seal-steps">
+            <li>Open Belfry on a phone, tablet or computer where you’re already signed in.</li>
+            <li>It asks whether to give this device access: tap Allow.</li>
+            <li>Your conversations open here.</li>
+          </ol>
+        </div>
         <p className="seal-only">No other device? The people you write to can share a conversation’s history with this device.</p>
+        {canStartFresh() && (
+          <div className="home-card seal-fresh">
+            <button className="home-row" onClick={() => setConfirming(true)}>
+              <span className="t"><b className="seal-fresh-t">I don’t have another device</b><small>Start fresh on this device</small></span>
+              <span className="hint" aria-hidden="true">›</span>
+            </button>
+          </div>
+        )}
         {!anyLockedHere() && <p className="seal-done">Your conversations are unlocked on this device.</p>}
       </div>
+      {confirming && <StartFreshConfirm onClose={() => setConfirming(false)} />}
     </div>
+  )
+}
+
+/** Board messages/encryption-start-fresh-confirm: Start fresh (red, locks and shows progress) / Cancel. */
+function StartFreshConfirm({ onClose }: { onClose: () => void }) {
+  const ref = useRef<HTMLDialogElement>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => { const d = ref.current; if (d && !d.open) d.showModal() }, [])
+  const go2 = async () => {
+    setBusy(true); setError('')
+    try { await startFresh(); onClose() } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+  }
+  return (
+    <dialog ref={ref} className="seal-alert seal-fresh-confirm" role="alertdialog" aria-labelledby="seal-fresh-t" onCancel={(e) => { e.preventDefault(); if (!busy) onClose() }}>
+      <span className="seal-dvbig"><Ico size={30}><rect x="7" y="2.5" width="10" height="19" rx="2.5" /><path d="M11 18.5h2" /></Ico></span>
+      <h2 id="seal-fresh-t">Start fresh on this device?</h2>
+      <p>Earlier sealed messages stay locked here unless someone shares them with you or an old device comes back.</p>
+      <p>The people you write with will see that you started on a new device.</p>
+      {error && <div className="error">{error}</div>}
+      <button className="btn seal-red" style={{ marginTop: 14 }} disabled={busy} aria-busy={busy || undefined} onClick={() => void go2()}>{busy ? <><Spin /> Starting fresh…</> : 'Start fresh'}</button>
+      <button className="btn ghost" disabled={busy} onClick={onClose}>Cancel</button>
+    </dialog>
   )
 }
 

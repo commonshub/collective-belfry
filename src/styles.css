@@ -2127,3 +2127,9 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .ev-address code { display: block; font-family: ui-monospace, Menlo, monospace; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
 .ev-address .link-pair .btn { flex: 1 1 0; width: auto; display: inline-flex; }
 .ev-address .ev-qr-link { display: inline-block; margin-top: 8px; width: auto; }
+
+/* Start fresh (canvas v84 messages/encryption-start-fresh) */
+.seal-screen .home-card .seal-steps { margin: 0; padding: 14px 16px 14px 36px; }
+.seal-fresh { margin-top: 18px; }
+.seal-fresh .home-row { width: 100%; text-align: left; justify-content: space-between; }
+.seal-fresh .seal-fresh-t { color: var(--danger); font-weight: 400; }

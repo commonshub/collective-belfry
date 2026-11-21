@@ -665,6 +665,30 @@ async function firstDevice(sessions: SessionRow[] | null) {
   if (c && !C.headOf(c).devices.includes(device!.pub)) await ask()
 }
 
+/** §5.4 Start fresh (canvas v84 messages/encryption-start-fresh): this device isn't in my head and
+ *  the person has no other device. From my chain as the relay answered it after AUTH, complete, on
+ *  this connection (never what the device had stored): a new letterbox, a new root (n = 1, this
+ *  device), the anchor replaced. Everyone sees the amber notice (§3.4); my old devices that come
+ *  back ask like any new device and, once allowed, hand the old keys over (§5.5). */
+export async function startFresh(): Promise<void> {
+  if (!active()) throw new NotDone('not started')
+  await withRosterLock(async () => {
+    if (!relayAuthed('main') || !(await fetchChains([me()]))) throw new NotDone('no answer')
+    const c = chainOf(me())
+    if (c && C.headOf(c).devices.includes(device!.pub)) return // in my head already: nothing to start
+    const sk = randomBytes(32)
+    const k = { lb: getPublicKey(sk), secret: bytesToHex(sk) }
+    await addKeys([k]) // kept before anything names it
+    const sessions = await mySessions()
+    const ready = !!sessions && C.mayCarryReady(sessions, [device!.pub])
+    await sendRosterAndAnchor(null, { n: 1, lb: k.lb, devices: [device!.pub], ready })
+    await sleepMs(500)
+    if (!(await fetchChains([me()]))) throw new NotDone('no answer')
+  })
+  if (!deviceIn()) throw new NotDone('not done')
+  touch()
+}
+
 let pendingRoot: C.LbKey | undefined
 let rootTries = 0, rootLastTry = 0, rootRefused = false
 
