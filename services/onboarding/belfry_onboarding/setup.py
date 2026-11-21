@@ -360,11 +360,25 @@ def open_for_anyone(svc: Services) -> bool:
 
 
 def admin_known(svc: Services) -> bool:
-    """For the public homepage: an admin exists (cached a minute, console.admin_emails). When the
-    stewards group can't be read the last answer stands; the claim itself checks again."""
-    if first_admin(svc.settings):
+    """For the public homepage, the console's front page and the agents' instructions: whether
+    they must NOT offer "Set up this belfry". The same rule as :func:`open_for_anyone` /
+    :func:`has_admin` (no setup folder, the first-admin file, an admin, or a belfry with people
+    that nobody reopened on purpose; the register not answering counts as people), so the
+    homepage never offers a setup that /setup then refuses. Only the admins are read from the
+    minute's cache (console.admin_emails: when the stewards group can't be read the last answer
+    stands); the claim itself checks again."""
+    if setup_dir(svc.settings) is None or first_admin(svc.settings):
         return True
-    return bool(console.admin_emails(svc))
+    if console.admin_emails(svc):
+        return True
+    if reopened(svc.settings):
+        return False
+    from . import signerguard
+
+    try:
+        return signerguard.has_people(svc)
+    except Exception:  # noqa: BLE001 — the register not answering: not a new belfry for sure
+        return True
 
 
 RESET_FILE = "reset.json"

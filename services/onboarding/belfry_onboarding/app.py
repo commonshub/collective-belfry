@@ -428,6 +428,17 @@ def create_app(services: Services | None = None) -> FastAPI:
         return HTMLResponse(claim.home_page(settings))
 
     @app.middleware("http")
+    async def request_memo(request: Request, call_next):
+        """Answers kept for one request only (signerguard.own_key_person_once)."""
+        from . import signerguard
+
+        token = signerguard.begin_request()
+        try:
+            return await call_next(request)
+        finally:
+            signerguard.end_request(token)
+
+    @app.middleware("http")
     async def preview_host(request: Request, call_next):
         """preview.<domain>: a proposed version of the website (website.py)."""
         settings = svc(request).settings
