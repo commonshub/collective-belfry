@@ -15,7 +15,7 @@
 //! POST /accounts/{vine_id}/export                                          -> {nsec}
 //! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?}
 //! GET  /accounts/{vine_id}/connections                                     -> [{id, app, ...}]
-//! POST /accounts/{vine_id}/connections/revoke   {id? | bunker_pubkey? | app?} -> {revoked}
+//! POST /accounts/{vine_id}/connections/revoke   {id | bunker_pubkey | app | all: true} -> {revoked}
 //! GET  /names/{username}                                                   -> {name, pubkey, vine_id}
 //! POST /pubkeys/{pubkey}/status                 {status}                   -> {updated}
 //! POST /import                                  {accounts: [{vine_id, pubkey, sealed}]}
@@ -387,6 +387,13 @@ async fn revoke_connections(
     let id = opt_text(&body, "id");
     let bunker = opt_text(&body, "bunker_pubkey");
     let app = opt_text(&body, "app");
+    // an empty or missing selector never means "all of them"
+    let all = body.get("all").and_then(Value::as_bool) == Some(true);
+    if id.is_none() && bunker.is_none() && app.is_none() && !all {
+        return Err(
+            Error::Invalid("say which: id, bunker_pubkey, app, or all: true".into()).into(),
+        );
+    }
     let n = state
         .signer
         .revoke(&vine_id, id.as_deref(), bunker.as_deref(), app.as_deref())?;
@@ -742,6 +749,39 @@ mod tests {
         )
         .await;
         assert!(list.as_array().unwrap().is_empty());
+        // a long name with wide characters; and "all" has to be said
+        let name = "é".repeat(60);
+        for _ in 0..2 {
+            let (s, c) = call(
+                &app,
+                "POST",
+                "/accounts/guest-2/connections",
+                "t0ken",
+                json!({"app": name}),
+            )
+            .await;
+            assert_eq!((s, c["app"].as_str()), (200, Some(name.as_str())));
+        }
+        for body in [json!({}), json!({"bunker_pubkey": ""}), json!({"id": ""})] {
+            let (s, e) = call(
+                &app,
+                "POST",
+                "/accounts/guest-2/connections/revoke",
+                "t0ken",
+                body,
+            )
+            .await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        }
+        let (_, r) = call(
+            &app,
+            "POST",
+            "/accounts/guest-2/connections/revoke",
+            "t0ken",
+            json!({"all": true}),
+        )
+        .await;
+        assert_eq!(r["revoked"], 2);
     }
 
     #[tokio::test]

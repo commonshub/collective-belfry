@@ -157,7 +157,7 @@ onboarding service, the bunker relay and the signer), bearer token `SIGNER_TOKEN
 | `POST /accounts/{vine_id}/export` | | `{nsec}` (the onboarding service asks for a fresh sign-in first) |
 | `POST /accounts/{vine_id}/connections` | `{app, label?, client_pubkey?, derive?, keep?}` | `{id, bunker_url, bunker_pubkey, pubkey, app, created_at, client_pubkey?, expires_at?}`; 409 `client_key_taken` |
 | `GET /accounts/{vine_id}/connections` | | the live connections: `{id, app, label, bunker_pubkey, client_pubkey, derive, created_at, last_used_at, uses, expires_at}` (times in seconds; never a secret) |
-| `POST /accounts/{vine_id}/connections/revoke` | `{id}` or `{bunker_pubkey}` or `{app}` or `{}` (all) | `{revoked}` |
+| `POST /accounts/{vine_id}/connections/revoke` | `{id}` or `{bunker_pubkey}` or `{app}` or `{all: true}` | `{revoked}` |
 | `POST /import` | `{accounts: [{vine_id, pubkey, sealed}]}` | per account `derived`, `imported`, `exists` (same key) or `error` (`mismatch` when the account exists with another key) |
 
 `connection` (the id behind an app's access token) must be live and the account's, else 403
@@ -210,7 +210,8 @@ BUNKER_TEST_RELAY=ws://127.0.0.1:7791 cargo test -- --ignored
 ```
 
 Set `CARGO_TARGET_DIR` outside a small `/tmp`. The image:
-`docker compose --profile own-signer build signer` (`Dockerfile`, Rust 1.93 and Debian slim).
+`docker compose -f infra/docker-compose.yml -f infra/docker-compose.signer.yml build signer`
+(`Dockerfile`, Rust 1.93 and Debian slim; the second file is the only place the signer is in Compose).
 
 ## Security
 

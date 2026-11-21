@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import os
 from pathlib import Path
 
 import pytest
@@ -14,10 +15,25 @@ from belfry_onboarding.core import Services
 from belfry_onboarding.relay_whitelist import RelayWhitelist
 from belfry_onboarding.settings import Settings
 
-from .fakes import FakeAuthentik, FakeIssuer, FakeKeycast, FakeOdoo, FakeRelay, FakeVerifier
+from .fakes import (
+    FakeAuthentik,
+    FakeIssuer,
+    FakeKeycast,
+    FakeOdoo,
+    FakeRelay,
+    FakeSigner,
+    FakeVerifier,
+)
 
 AUTHENTIK_URL = "http://authentik.test"
 KEYCAST_URL = "http://keycast.test"
+SIGNER_URL = "http://signer.test"
+# Which signer the suite runs against: Keycast (the default) or, with BELFRY_TEST_SIGNER=belfry,
+# Belfry's own (clients/signer.py and its fake). The ``keycast`` fixture is the fake of either,
+# with the same books; ``services.keycast`` the matching client. docs/own-signer.md.
+TEST_SIGNER = os.environ.get("BELFRY_TEST_SIGNER", "keycast").strip().lower() or "keycast"
+if TEST_SIGNER not in ("keycast", "belfry"):
+    raise RuntimeError(f"BELFRY_TEST_SIGNER must be keycast or belfry, not {TEST_SIGNER!r}")
 ISSUER_URL = "http://issuer.test"
 VERIFIER_URL = "http://verifier.test"
 BRIDGE_SECRET = "bridge-secret"
@@ -130,7 +146,23 @@ def authentik(router) -> FakeAuthentik:
 
 @pytest.fixture
 def keycast(router) -> FakeKeycast:
+    if TEST_SIGNER == "belfry":
+        return FakeSigner(router, SIGNER_URL, KEYCAST_URL)
     return FakeKeycast(router, KEYCAST_URL)
+
+
+def signer_client(kind: str = TEST_SIGNER):
+    """The client of the signer the suite (or one test) runs against."""
+    if kind == "belfry":
+        from belfry_onboarding.clients.signer import SignerClient
+
+        return SignerClient(SIGNER_URL, "signer-token-for-tests", domain="belfry.test")
+    return KeycastClient(KEYCAST_URL, "kc-admin", "kc-service")
+
+
+keycast_only = pytest.mark.skipif(
+    TEST_SIGNER != "keycast", reason="about Keycast itself (a build without a patch, its API)"
+)
 
 
 @pytest.fixture
@@ -157,7 +189,7 @@ def services(
     return Services(
         odoo=odoo,
         authentik=AuthentikClient(AUTHENTIK_URL, "ak-token"),
-        keycast=KeycastClient(KEYCAST_URL, "kc-admin", "kc-service"),
+        keycast=signer_client(),
         settings=settings,
         relay=relay,  # type: ignore[arg-type]
         whitelist=whitelist,
