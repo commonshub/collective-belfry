@@ -18,6 +18,13 @@ anything of theirs:
 - ``signer-migrate open``: the signer makes new accounts again. ``import`` closes that (the
   signer's "no new accounts" switch) so that nothing but the import puts an account there
   until the belfry runs on the signer; ``switch`` opens it once the verify after it is clean.
+- **The migration's window** (the signer's ``migration`` setting): ``import`` opens it, and
+  only inside it does the signer honour an import's ``sync`` (rows that are there brought to
+  Keycast's state) or archive a held key a move to an own key replaces.
+  ``signer-migrate close-window`` (the switch, after the verify that decides) and ``open``
+  close it. ``import`` and ``carry-back`` check the mode first: ``import`` only while the
+  belfry runs on Keycast (after the switch an import would bring the signer back to Keycast's
+  past), ``carry-back`` only after the switch (what it reads is what happened on the signer).
 
 **What is never printed or logged**: keys of any kind other than public keys, and those only
 shortened (the report file holds them shortened too); sealed keys; session secrets' hashes;
@@ -222,17 +229,20 @@ def classify(row: dict[str, Any], now: int) -> tuple[str, str, int | None]:
     return "served", connected, None
 
 
-def outside_origins(svc: Any) -> set[str] | None:
+def outside_origins(svc: Any) -> set[str]:
     """The origins of the outside apps an admin approved (apps.state), as Keycast stores them
-    (``redirect_origin``: scheme, host and port of the app's redirect URI). None when the
-    approvals cannot be read (the community relay does not answer)."""
+    (``redirect_origin``: scheme, host and port of the app's redirect URI). Raises
+    :class:`MigrationError` when the approvals cannot be read (the community relay does not
+    answer): without them every outside app would be guessed own, with an own app's powers."""
     from . import apps
 
     try:
         state = apps.state(svc)
-    except Exception as exc:  # noqa: BLE001 — every unknown origin is then guessed own
-        log.warning("migration: the apps' approvals could not be read: %s", exc)
-        return None
+    except Exception as exc:  # noqa: BLE001
+        raise MigrationError(
+            f"the apps' approvals could not be read ({type(exc).__name__}): nothing is "
+            "planned without them (an outside app would be taken for one of the belfry's own)"
+        ) from exc
     return {
         apps.origin_of(uri) for uri, a in state.items() if a.get("approved") and apps.origin_of(uri)
     }
@@ -250,9 +260,14 @@ def scope_of(svc: Any, origin: str, approved: set[str] | None) -> tuple[str, boo
       its own apps (the chat on chat.<domain>, earlier on the apex, the suite). **own**.
     - the origin of an outside app an admin approved: **outside**.
     - anything else (``nostrconnect://<client>`` of nostr-login, an https origin nobody
-      approved, approvals that could not be read): **own, guessed** and counted. A chat session
-      carried as outside would lock its member out of their sealed history; an outside app
-      keeping own powers is the lesser harm, and the report lists how many."""
+      approved): **own, guessed**, counted, and blocking verify unless accepted by number
+      (``--accept-guessed N``). A chat session carried as outside would lock its member out
+      of their sealed history; an outside app keeping own powers is the lesser harm once
+      somebody has looked at the list. Approvals that cannot be read stop the plan
+      (:func:`outside_origins`); APPROVED None is only for callers that read none.
+
+    The import never turns a connection the signer has as ``outside`` into ``own`` (the signer
+    refuses to widen a row in its sync): a later guess cannot give an outside app powers."""
     origin = (origin or "").strip().rstrip("/").lower()
     if not origin:
         return "own", False
@@ -624,8 +639,8 @@ class SignerAdmin:
 
     def move_own(self, vine_id: str, pubkey: str) -> dict[str, Any]:
         """``POST …/own-key``: the account's key is the member's own from now on (Keycast says
-        so). A held key it replaces is archived by the signer, never dropped. The account, or
-        ``{"error"}``."""
+        so). Inside the migration's window a held key it replaces is archived by the signer
+        (until the cleanup); outside it the signer drops it. The account, or ``{"error"}``."""
         r = self._call("POST", self._path(vine_id) + "/own-key", {"pubkey": pubkey})
         if r.status_code != 200:
             return {"error": self._error(r)}
@@ -655,9 +670,16 @@ class SignerAdmin:
         r = self._call("POST", self._path(vine_id) + "/status", {"status": status})
         return "" if r.status_code == 200 else self._error(r)
 
-    def import_connections(self, vine_id: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
-        """``POST /import/connections``: ``{imported, existing, revoked}`` or ``{"error"}``."""
-        r = self._call("POST", "/import/connections", {"vine_id": vine_id, "connections": rows})
+    def import_connections(
+        self, vine_id: str, rows: list[dict[str, Any]], sync: bool = False
+    ) -> dict[str, Any]:
+        """``POST /import/connections``: ``{imported, existing, revoked, updated, released}``
+        or ``{"error"}``. SYNC: rows that are there are brought to these (the signer honours
+        it only inside the migration's window, :meth:`set_window`, and refuses it outside)."""
+        body: dict[str, Any] = {"vine_id": vine_id, "connections": rows}
+        if sync:
+            body["sync"] = True
+        r = self._call("POST", "/import/connections", body)
         if r.status_code != 200:
             return {"error": self._error(r)}
         return dict(r.json())
@@ -684,6 +706,23 @@ class SignerAdmin:
             after = str(data.get("next") or "")
             if not after:
                 return out
+
+    def set_window(self, on: bool) -> bool | None:
+        """The migration's window (``POST /settings {migration}``): opened by the import,
+        closed by the switch. Returns it as it now is, or None from a signer without one."""
+        r = self._call("POST", "/settings", {"migration": bool(on)})
+        if r.status_code == 404:
+            return None
+        if r.status_code != 200:
+            raise MigrationError(f"the signer refused the migration's window: {self._error(r)}")
+        return bool(r.json().get("migration"))
+
+    def delete_archived_keys(self) -> int:
+        """``DELETE /archived-keys`` (the cleanup): how many archived held keys went."""
+        r = self._call("DELETE", "/archived-keys")
+        if r.status_code != 200:
+            raise MigrationError(f"the signer kept its archived keys: {self._error(r)}")
+        return int(r.json().get("deleted") or 0)
 
     def close_accounts(self, closed: bool) -> bool | None:
         """The signer's "no new accounts" switch (``POST /settings``); returns it as it now
@@ -712,11 +751,15 @@ def batches(rows: list[dict[str, Any]], most: int) -> Iterable[list[dict[str, An
 
 
 def connection_row(s: Session) -> dict[str, Any]:
+    """One session as ``POST /import/connections`` takes it. An outside app's session keeps
+    ``decrypt``: Keycast let an approved outside app decrypt, so the consent is the one the
+    app has today (docs/own-signer.md §6, "scope"); the belfry's own apps decrypt anyway."""
     row: dict[str, Any] = {
         "bunker_pubkey": s.bunker,
         "keycast_secret_hash": s.secret_hash,
         "app": s.app,
         "scope": s.scope,
+        "decrypt": s.scope == "outside",
         "created_at": s.created_at,
         "uses": s.uses,
     }
@@ -740,13 +783,14 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
 
     Between the first import and the switch the belfry runs on Keycast and people sign out,
     take their own key, move to a new one, or a shared client key changes hands. The import
-    closes the signer's "no new accounts" switch before it writes, and while it is closed the
-    signer treats the import's rows as the truth for rows it has (``POST /import/connections``
-    updates them: revoked or live, client key, name, scope, origin). On top of that:
+    opens the signer's migration window before it writes and asks for a sync, and inside that
+    window the signer treats the import's rows as the truth for rows it has (``POST
+    /import/connections`` with ``sync``: revoked or live, client key, name, origin, scope and
+    consent, except that an ``outside`` row never becomes ``own``). On top of that:
 
     - an account Keycast now shows with the member's own key (or a new own key) is moved to it
-      (``POST …/own-key``): a key the signer held is archived sealed, never dropped, and the
-      report lists the account (``custody_moved``);
+      (``POST …/own-key``): inside the window a key the signer held is archived sealed (the
+      cleanup deletes the archive), and the report lists the account (``custody_moved``);
     - a held key the signer has that is not Keycast's key is an error, never an overwrite;
     - sessions run in two passes: first the rows that carry no client key (one that went to
       another account is released), then all of them, so a key that changed hands is free when
@@ -759,6 +803,10 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
             f"{len(p.problems)} problems in what Keycast holds: nothing was imported "
             "(signer-migrate plan lists them)"
         )
+    # the migration's window: the signer follows the import's rows (sync) and archives a held
+    # key replaced by an own key only inside it, never because new accounts are closed
+    window = signer.set_window(True) if hasattr(signer, "set_window") else None
+    sync = window is True
     out: dict[str, Any] = {
         "accounts": {"derived": 0, "imported": 0, "exists": 0, "own_key": 0},
         "custody_moved": [],
@@ -862,7 +910,7 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
         """One account's rows in batches; how many were sent without an error."""
         sent = 0
         for run in batches_of(sessions, SESSION_BATCH):
-            res = signer.import_connections(a.vine_id, [connection_row(s) for s in run])
+            res = signer.import_connections(a.vine_id, [connection_row(s) for s in run], sync)
             if "error" in res:
                 errors.append({"step": "sessions", "vine_id": a.vine_id, "error": res["error"]})
                 stopped.add(a.vine_id)
@@ -930,6 +978,7 @@ def verify(
     keys_only: bool = False,
     accept_unverified: int = 0,
     accept_skipped: int = 0,
+    accept_guessed: int = 0,
 ) -> dict[str, Any]:
     """Everything a migration carries, compared: for every account the signer's key, Keycast's
     and the register's; custody (Keycast, the signer and the register's belfry_key_custody),
@@ -942,7 +991,14 @@ def verify(
     Blocking unless accepted by their exact number: sessions lost to a shared client key
     (ACCEPT_LOST), connected sessions Keycast does not verify (ACCEPT_UNVERIFIED: if Keycast
     served them after all, those members would be signed out), rows whose bunker key does not
-    derive and were left out (ACCEPT_SKIPPED), admins without a person (ACCEPT_MISSING_STEWARDS).
+    derive and were left out (ACCEPT_SKIPPED), admins without a person (ACCEPT_MISSING_STEWARDS),
+    carried sessions whose scope was guessed own (ACCEPT_GUESSED: an outside app among them
+    would keep an own app's powers).
+
+    Every carried session is compared on its bunker key, client key, ``origin``, ``kind``
+    (``nip46``) and, for the live ones, scope and ``decrypt`` (true exactly for outside apps).
+    A row the signer has as ``outside`` that the plan guessed ``own`` is the sync's rule (it
+    never widens a row) and counts as checked (``kept_outside``).
 
     KEYS_ONLY is for a belfry that already runs on its signer: people have signed in and out,
     joined, been renamed since, and Keycast's rows are a picture of the past. What must hold
@@ -986,6 +1042,14 @@ def verify(
             accepted=int(accept_unverified or 0),
             vine_ids=sorted({_acct(p, s.user).vine_id for s in unverified})[:50],
         )
+    guessed = [s for s in p.sessions if s.carried and s.guessed and s.user in inc_keys]
+    if not keys_only and len(guessed) != int(accept_guessed or 0):
+        miss(
+            "scope_guessed",
+            count=len(guessed),
+            accepted=int(accept_guessed or 0),
+            vine_ids=sorted({_acct(p, s.user).vine_id for s in guessed})[:50],
+        )
     listed_skipped = signer.import_skipped() if hasattr(signer, "import_skipped") else None
     skipped_bunkers = {str(r.get("bunker_pubkey") or "") for r in listed_skipped or []}
     skipped_rows = [
@@ -1008,6 +1072,7 @@ def verify(
         "live_sessions": 0,
         "revoked_sessions": 0,
         "own_key_no_account": 0,
+        "kept_outside": 0,
     }
     unreadable = 0  # revoked rows of a signer that cannot list them
     found = 0  # Keycast's accounts the signer has
@@ -1068,6 +1133,8 @@ def verify(
                 miss("revoked_session_live", vine_id=a.vine_id, bunker=short(bunker))
             elif s.client and str(c.get("client_pubkey") or "").lower() != s.client:
                 miss("session_client_key", vine_id=a.vine_id, bunker=short(bunker))
+            elif not _same_fields(a, bunker, s, c, miss, scope=False):
+                pass
             else:
                 checked["revoked_sessions"] += 1
         for bunker, s in want.items():
@@ -1076,16 +1143,12 @@ def verify(
                 miss("session_missing", vine_id=a.vine_id, bunker=short(bunker), app=s.app)
             elif str(c.get("client_pubkey") or "").lower() != s.client:
                 miss("session_client_key", vine_id=a.vine_id, bunker=short(bunker))
-            elif "scope" in c and str(c.get("scope") or "") != s.scope:
-                miss(
-                    "session_scope",
-                    vine_id=a.vine_id,
-                    bunker=short(bunker),
-                    keycast=s.scope,
-                    signer=str(c.get("scope")),
-                )
+            elif not _same_fields(a, bunker, s, c, miss, scope=True):
+                pass
             else:
                 checked["live_sessions"] += 1
+                if str(c.get("scope") or "") != s.scope:
+                    checked["kept_outside"] += 1
         for bunker in live.keys() - want.keys():
             # nothing may be live in the signer that Keycast did not serve (a session made on
             # the signer before the switch, or a revoked row that came in live)
@@ -1158,9 +1221,9 @@ def verify(
             "accepted_skipped": int(accept_skipped or 0),
             "scope_guessed": [
                 {"vine_id": _acct(p, s.user).vine_id, "bunker": short(s.bunker), "app": s.app}
-                for s in p.sessions
-                if s.carried and s.guessed and s.user in inc_keys
+                for s in guessed
             ][:200],
+            "accepted_guessed": int(accept_guessed or 0),
             "mismatches": mismatches,
             "ok": not mismatches,
             "not_verifiable": {
@@ -1174,6 +1237,45 @@ def verify(
         }
     )
     return report
+
+
+def _same_fields(
+    a: Account, bunker: str, s: Session, c: dict[str, Any], miss: Any, scope: bool
+) -> bool:
+    """Origin, kind, and (SCOPE) scope and consent of one carried session against the signer's
+    row; each difference reported. True when all agree."""
+    ok = True
+    want_origin = s.origin[:200].strip()
+    if str(c.get("origin") or "") != want_origin:
+        miss("session_origin", vine_id=a.vine_id, bunker=short(bunker))
+        ok = False
+    if str(c.get("kind") or "") != "nip46":
+        miss("session_kind", vine_id=a.vine_id, bunker=short(bunker), signer=str(c.get("kind")))
+        ok = False
+    if not scope:
+        return ok
+    got = str(c.get("scope") or "")
+    # the sync never widens a row: outside where the plan only guessed own is kept
+    effective = "outside" if got == "outside" and s.scope == "own" and s.guessed else s.scope
+    if got != effective:
+        miss(
+            "session_scope",
+            vine_id=a.vine_id,
+            bunker=short(bunker),
+            keycast=s.scope,
+            signer=got,
+        )
+        return False
+    if c.get("decrypt") is not (effective == "outside"):
+        miss(
+            "session_decrypt",
+            vine_id=a.vine_id,
+            bunker=short(bunker),
+            want=effective == "outside",
+            signer=c.get("decrypt"),
+        )
+        ok = False
+    return ok
 
 
 def _acct(p: Plan, pubkey: str) -> Account:
@@ -1263,13 +1365,24 @@ def summary(c: dict[str, Any]) -> list[str]:
 
 
 def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> int:
-    """``python -m belfry_onboarding signer-migrate plan|import|verify|open`` with the rows on
-    stdin. The report (JSON, one line) goes to stdout, what a person reads to stderr.
+    """``python -m belfry_onboarding signer-migrate
+    plan|import|verify|close-window|open|carry-back|drop-archive`` with the rows on stdin.
+    The report (JSON, one line) goes to stdout, what a person reads to stderr.
     Exit 0: clean; 1: problems or mismatches; 2: a source that does not answer."""
 
     def say(line: str) -> None:
         print(line, file=err)
 
+    mode = str(getattr(settings, "signer", "") or "keycast").strip().lower()
+    if args.phase == "import" and mode == "belfry":
+        # after the switch the signer is the truth: an import would bring it back to Keycast's
+        # past (sign-outs, own-key moves and suspensions made since undone)
+        say("signer-migrate: this belfry runs on its own signer (SIGNER=belfry): no import")
+        return 2
+    if args.phase == "carry-back" and mode != "belfry":
+        # what it reads is what happened on the signer since the switch: nothing before it
+        say("signer-migrate: carry-back is for a rollback after the switch (SIGNER=belfry)")
+        return 2
     try:
         doc = json.load(stdin)
         p = plan(svc, doc, exclude=args.exclude or ())
@@ -1305,9 +1418,31 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             return 2
         authentik = AuthentikClient(settings.authentik_url, settings.authentik_token)
     try:
+        if args.phase == "close-window":
+            # the switch, once the verify that decides is clean: no import syncs any more, and a
+            # move to an own key drops the held key again
+            window = signer.set_window(False)
+            say(
+                "the migration's window: " + ("none on this signer" if window is None else "closed")
+            )
+            json.dump({"migration": window}, out)
+            out.write("\n")
+            return 0
+        if args.phase == "drop-archive":
+            # the cleanup, after its guards: the held keys archived during the window go
+            if mode != "belfry":
+                say("signer-migrate: drop-archive is for the cleanup after the switch")
+                return 2
+            signer.set_window(False)
+            n = signer.delete_archived_keys()
+            say(f"archived held keys deleted: {n}")
+            json.dump({"deleted": n}, out)
+            out.write("\n")
+            return 0
         if args.phase == "open":
             # the belfry runs on its signer and the verify after the switch is clean: people
-            # may join again (docs/own-signer.md, "Moving a belfry")
+            # may join again (docs/own-signer.md, "Moving a belfry"); the window is over
+            signer.set_window(False)
             state = signer.close_accounts(False)
             say("new accounts: " + ("the signer has no such switch" if state is None else "open"))
             json.dump({"no_new_accounts": state}, out)
@@ -1370,6 +1505,7 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             keys_only=bool(getattr(args, "keys_only", False)),
             accept_unverified=int(getattr(args, "accept_unverified", 0) or 0),
             accept_skipped=int(getattr(args, "accept_skipped_rows", 0) or 0),
+            accept_guessed=int(getattr(args, "accept_guessed", 0) or 0),
         )
     except MigrationError as exc:
         say(f"signer-migrate: {exc}")

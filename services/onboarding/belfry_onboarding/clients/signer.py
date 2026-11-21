@@ -272,8 +272,8 @@ class SignerClient:
         return r.json()
 
     def settings(self) -> dict[str, Any]:
-        """The signer's switches: ``{"no_new_accounts", "by_environment"}``; ``{}`` from a
-        signer that has none."""
+        """The signer's switches: ``{"no_new_accounts", "by_environment", "migration"}``;
+        ``{}`` from a signer that has none."""
         r = self._request("GET", f"{self.url}/settings")
         if r.status_code == 404:
             return {}
