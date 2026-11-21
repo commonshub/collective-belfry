@@ -47,6 +47,8 @@ export interface Chain {
   added: Map<string, Roster>
   /** device no longer in the head → the roster that dropped it (the latest, if it came back and left again) */
   dropped: Map<string, Roster>
+  /** the end of the anchored path (the anchor's head when valid, else the root), before any pinned extension */
+  anchored: string
 }
 export const headOf = (c: Chain) => c.rosters[c.rosters.length - 1]
 /** Ready ever (§6): once a roster of the chain had the tag, later ones don't unset it. */
@@ -135,6 +137,7 @@ export function chainFromRoot(account: string, rootId: string, rosterEvents: unk
     return path
   }
   let path = pathTo(headId) ?? [root]
+  const anchored = path[path.length - 1].id
   // no going back: when the anchored head is an ancestor of the pinned one, the pinned path stays
   const pin = pathTo(pinned)
   if (pin && pin.some((r) => r.id === path[path.length - 1].id) && pin.length > path.length) path = pin
@@ -157,7 +160,7 @@ export function chainFromRoot(account: string, rootId: string, rosterEvents: unk
     if (!valid.length) break
     step(head, valid.reduce((a, b) => (b.id.toLowerCase() < a.id.toLowerCase() ? b : a))) // for now: the lower id; the next anchor settles it
   }
-  return { account, rosters, added, dropped }
+  return { account, rosters, added, dropped, anchored }
 }
 
 /** §3.4 notices, one roster step at a time: who appeared / disappeared, dated by the roster. */
@@ -406,3 +409,101 @@ export function counted(s: SessionRow, now: number): boolean {
 /** A roster may carry ready when every counted session's client key is one of its devices. */
 export const mayCarryReady = (sessions: SessionRow[], devices: string[], now = Math.floor(Date.now() / 1000)) =>
   sessions.filter((s) => counted(s, now)).every((s) => !!s.client_pubkey && devices.includes(s.client_pubkey))
+
+// ---- what a client remembers of a person's chain: the pin (§3.3 "No going back", §3.4) -------
+// Port of sealed.py follow / allow_locally / answer_without_prompt (the vectors' reference).
+
+export interface Pin {
+  root: string
+  head: string
+  path: string[] // roster ids root → head
+  anchored: boolean // anchored_head === head
+  anchored_head: string // the furthest roster of the path seen as the end of the anchored path
+  trusted: string[] | null // after a switch: the devices answered without a prompt (sorted)
+  switch_head: string | null // the head followed at the switch
+  prev_root: string | null // the root pinned before a fresh start
+}
+export type FollowEvent = 'none' | 'moved' | 'ignored_back' | 'switch' | 'fresh_start'
+
+function makePin(c: Chain, seen: string, was?: Partial<Pin> | null, change: Partial<Pin> = {}): Pin {
+  const trusted = 'trusted' in change ? change.trusted : was?.trusted
+  return {
+    root: c.rosters[0].id, head: headOf(c).id, path: c.rosters.map((r) => r.id),
+    anchored: seen === headOf(c).id, anchored_head: seen,
+    trusted: trusted == null ? null : [...trusted].sort(),
+    switch_head: ('switch_head' in change ? change.switch_head : was?.switch_head) ?? null,
+    prev_root: ('prev_root' in change ? change.prev_root : was?.prev_root) ?? null,
+  }
+}
+
+/** One roster after a switch: a device it drops is no longer trusted; a device it adds is trusted
+ *  only when its signer is (as the signer stood before this roster); keeping: nothing. */
+function trustStep(trusted: Set<string>, before: Roster, r: Roster) {
+  const vouches = trusted.has(r.signer)
+  for (const d of before.devices) if (!r.devices.includes(d)) trusted.delete(d)
+  if (vouches) for (const d of r.devices) if (!before.devices.includes(d)) trusted.add(d)
+}
+
+/** PIN moved onto chain C (same root, no switch): new head and path; after a switch, trust carried
+ *  over the rosters new to this client that descend from the switch head, in chain order. */
+function carry(pin: Pin, c: Chain, seen: string): Pin {
+  const ids = c.rosters.map((r) => r.id)
+  if (!ids.includes(seen) || ids.indexOf(c.anchored) > ids.indexOf(seen)) seen = c.anchored
+  let trusted: Set<string> | null = pin.trusted ? new Set(pin.trusted) : null
+  if (trusted && pin.switch_head && ids.includes(pin.switch_head)) {
+    let known = 0
+    while (known < Math.min(ids.length, pin.path.length) && ids[known] === pin.path[known]) known++
+    for (let i = Math.max(known, ids.indexOf(pin.switch_head) + 1); i < ids.length; i++) trustStep(trusted, c.rosters[i - 1], c.rosters[i])
+  }
+  return makePin(c, seen, pin, { trusted: trusted ? [...trusted] : null })
+}
+
+const changedEvent = (pin: Pin, next: Pin): FollowEvent => (next.head !== pin.head ? 'moved' : 'none')
+
+/** (chain, pin', event): the chain a client holding PIN follows now, what it remembers after, and
+ *  what happened (none · moved · ignored_back · switch · fresh_start). */
+export function follow(anchor: unknown, rosterEvents: unknown[], pin: Pin | null): { chain: Chain | null; pin: Pin | null; event: FollowEvent } {
+  const c = validChain(anchor, rosterEvents)
+  if (!c) return { chain: null, pin, event: 'none' }
+  if (!pin) return { chain: c, pin: makePin(c, c.anchored), event: 'none' }
+  if (c.rosters[0].id !== pin.root) return { chain: c, pin: makePin(c, c.anchored, null, { trusted: null, switch_head: null, prev_root: pin.root }), event: 'fresh_start' }
+  const path = pin.path, seen = pin.anchored_head || pin.root
+  const ids = c.rosters.map((r) => r.id)
+  if (path.slice(0, -1).includes(c.anchored)) {
+    // the anchor names an ancestor of the pinned head: the pinned head is kept; told as going back
+    // only when it is behind what was seen anchored
+    const kept = validChain(anchor, rosterEvents, pin.head)
+    const back = path.includes(seen) && path.indexOf(c.anchored) < path.indexOf(seen)
+    if (!kept || !kept.rosters.some((r) => r.id === pin.head)) return { chain: null, pin, event: back ? 'ignored_back' : 'none' }
+    const next = carry(pin, kept, seen)
+    return { chain: kept, pin: next, event: back ? 'ignored_back' : changedEvent(pin, next) }
+  }
+  if (ids.includes(pin.head)) { const next = carry(pin, c, seen); return { chain: c, pin: next, event: changedEvent(pin, next) } }
+  if (ids.includes(seen)) return { chain: c, pin: carry(pin, c, seen), event: 'moved' } // a tail never anchored gave way
+  // the anchor left a head this client saw anchored: a switch
+  const account = (anchor as NostrEvent).pubkey
+  let held: Roster | null = null
+  for (const e of rosterEvents ?? []) { const r = parseRoster(e, account); if (r && r.id === pin.head) { held = r; break } }
+  let before = new Set(held ? held.devices : [])
+  if (pin.trusted) before = new Set([...before].filter((d) => pin.trusted!.includes(d))) // a second switch never widens the first
+  const trusted = [...before].filter((d) => headOf(c).devices.includes(d)) // one the new head lacks comes back untrusted
+  return { chain: c, pin: makePin(c, c.anchored, pin, { trusted, switch_head: headOf(c).id }), event: 'switch' }
+}
+
+/** The person allowed DEVICE on this device (the Allow prompt): trusted from now on. */
+export function allowLocally(pin: Pin, device: string): Pin {
+  if (!pin.trusted) return { ...pin }
+  return { ...pin, trusted: [...new Set([...pin.trusted, device])].sort() }
+}
+
+/** §5.5: whether a device request of a device already in the head is answered with the keys at once. */
+export function answerWithoutPrompt(c: Chain | null, pin: Pin | null, device: string, liveChat: Iterable<string>, requestAt: number, addedAt?: number | null, lastHandoverAt?: number | null): boolean {
+  if (!c || !pin || headOf(c).id !== pin.head || c.rosters[0].id !== pin.root) return false
+  const end = c.rosters.find((r) => r.id === c.anchored)
+  if (!end || !end.devices.includes(device) || !headOf(c).devices.includes(device)) return false
+  if (pin.trusted && !pin.trusted.includes(device)) return false
+  if (!new Set(liveChat).has(device)) return false
+  const added = addedAt ?? c.added.get(device)?.created_at
+  if (added === undefined || requestAt <= added) return false
+  return lastHandoverAt == null || requestAt > lastHandoverAt
+}

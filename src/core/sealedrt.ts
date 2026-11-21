@@ -23,16 +23,9 @@ import { connectionOf, queryPaged, setPagedMainFilters, currentSigner, enqueue, 
 
 type Conv = string
 
-interface Pin {
-  root: string; head: string
-  heads: Record<string, string> // lb of every head accepted, by roster id
-  prevRoot?: string // the root pinned before a fresh start
-  anchored?: boolean // the pinned head was seen anchored (an anchor named it): another branch after that is a switch
-  /** after a switch (§3.3): the devices of the head held before it; a device not among them is
-   *  never answered without a prompt (§5.5), it goes through Allow (and is added here once allowed) */
-  trusted?: string[]
-  switchHead?: string // the head followed at the switch: only rosters after it on the followed chain vouch or drop (chain order, never dates)
-}
+/** What this client remembers of a person's chain: the core's pin (sealedcore.follow, the vectors'
+ *  reference), plus the letterbox of every head it accepted (sealing falls back to the last one). */
+type Pin = C.Pin & { heads: Record<string, string> }
 interface Fresh { root: string; at: number; shared: Conv[]; head?: string /* a switch: the new branch's head */ }
 /** What this device remembers (one kv entry, merged on every write). */
 interface State {
@@ -55,9 +48,9 @@ function merge(a: State, b: State): State {
   for (const [pk, p] of Object.entries(b.pins)) {
     const q = pins[pk]
     if (!q) { pins[pk] = p; continue }
-    const heads = { ...q.heads, ...p.heads }
-    const winner = q.root === p.root ? (Object.keys(p.heads).length > Object.keys(q.heads).length ? p : q) : (p.prevRoot === q.root ? p : q)
-    pins[pk] = { ...winner, heads, prevRoot: winner.prevRoot ?? (q.root !== p.root ? (winner === p ? q.root : p.root) : undefined) }
+    // the same root: the pin that has seen further; another root: the one that started fresh from the other
+    const winner = q.root === p.root ? (p.path.length > q.path.length ? p : q) : (p.prev_root === q.root ? p : q)
+    pins[pk] = { ...winner, heads: { ...q.heads, ...p.heads } }
   }
   const fresh = { ...a.fresh }
   for (const [pk, f] of Object.entries(b.fresh)) {
@@ -159,6 +152,7 @@ export async function startSealed(clientSecret: string) {
       await kvSet(KV, emptyState()).catch(() => {})
       for (const pre of [KV_PACK, KV_PATH, KV_ANSWERED, KV_HANDED, 'dm-held:', 'dm-out:']) await kvDelPrefix(pre).catch(() => {})
     } else { const s = await kvGet<State>(KV).catch(() => undefined); if (s) st = { ...emptyState(), ...s } }
+    for (const [pk, p] of Object.entries(st.pins)) if (!Array.isArray((p as Partial<Pin>).path)) delete st.pins[pk] // an earlier shape
     for (const path of await kvPrefix<NostrEvent[]>(KV_PATH).catch(() => [] as NostrEvent[][])) { const pk = path[0]?.tags.find((t) => t[0] === 'p')?.[1]; if (pk) pinPaths.set(pk, path) }
     await kvSet(KV_DEVICE, device.pub).catch(() => {})
     for (const p of await kvPrefix<C.Rumor>(KV_PACK).catch(() => [] as C.Rumor[])) packs.set(p.id, p)
@@ -226,10 +220,11 @@ export function chainOf(pk: string): C.Chain | null {
   const rosters: NostrEvent[] = evs.filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === pk))
   const have = new Set(rosters.map((e) => e.id))
   for (const e of pinPaths.get(pk) ?? []) if (!have.has(e.id)) rosters.push(e) // the pin's rosters stay known (review caveat)
-  const c = anchor ? C.validChain(anchor, rosters, pin && pin.root === C.anchorRoot(anchor) ? pin.head : undefined) : null
-  memo.of.set(pk, c)
-  if (c) notePin(pk, c, rosters)
-  return c
+  // §3.3/§3.4 as the vectors fix it: the chain this client follows, its pin after, what happened
+  const r = anchor ? C.follow(anchor, rosters, pin ?? null) : { chain: null, pin: pin ?? null, event: 'none' as const }
+  memo.of.set(pk, r.chain)
+  if (r.chain && r.pin && (!pin || r.event !== 'none' || JSON.stringify({ ...pin, heads: undefined }) !== JSON.stringify({ ...r.pin, heads: undefined }))) notePin(pk, r.chain, r.pin, r.event, rosters)
+  return r.chain
 }
 
 /** People for whom this device holds a complete answer of the relay (after AUTH, to EOSE, on a
@@ -266,67 +261,31 @@ export function loadChain(pk: string, minGapMs = 30e3): Promise<C.Chain | null> 
   return p
 }
 
-/** §3.4: remember the root first accepted and the head last accepted (with its rosters); a new
- *  root = they started fresh. */
-function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
+/** The pin after a read (sealedcore.follow): kept at once in memory and in kv; a fresh start or a
+ *  switch tells it in each conversation with that person (the amber line); a switch of my own
+ *  account: is this device in the new head? */
+function notePin(pk: string, c: C.Chain, next: C.Pin, event: C.FollowEvent, rosterEvents: NostrEvent[]) {
   const head = C.headOf(c)
-  const p = st.pins[pk]
-  const anchoredNow = anchoredEnd(c).id === head.id
-  if (p && p.root === c.rosters[0].id && p.head === head.id) {
-    if (anchoredNow && !p.anchored) { p.anchored = true; void commit((s) => { const q = s.pins[pk]; if (q && q.head === head.id) q.anchored = true }) }
-    return
-  }
+  const old = st.pins[pk]
+  const pin: Pin = { ...next, heads: { ...(event === 'fresh_start' ? {} : old?.heads ?? {}), [head.id]: head.lb } }
+  st.pins[pk] = pin
   const ids = new Set(c.rosters.map((r) => r.id))
-  const path = rosterEvents.filter((e) => ids.has(e.id))
-  // §3.3: the same root, the pinned head not in the chain followed now (another branch), and it had
-  // been seen anchored: a SWITCH, treated like a fresh start (the account key that signs anchors is
-  // the server's); the devices of the head held before are kept as the only ones answered without a prompt
-  const switched = !!p && p.root === c.rosters[0].id && !ids.has(p.head) && !!p.anchored
-  const before = switched ? (pinPaths.get(pk) ?? []).find((e) => e.id === p!.head)?.tags.filter((t) => t[0] === 'device').map((t) => t[1]) ?? [] : undefined
-  savePath(pk, path)
-  void commit((s) => {
-    const q = s.pins[pk]
-    if (!q) { s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { [head.id]: head.lb }, anchored: anchoredNow }; return }
-    if (q.root !== c.rosters[0].id) {
-      s.fresh[pk] = { root: c.rosters[0].id, at: c.rosters[0].created_at * 1000, shared: [] }
-      s.pins[pk] = { root: c.rosters[0].id, head: head.id, heads: { ...q.heads, [head.id]: head.lb }, prevRoot: q.root, anchored: anchoredNow }
-      return
-    }
-    if (switched) {
-      s.fresh[pk] = { root: c.rosters[0].id, head: head.id, at: Date.now(), shared: [] }
-      q.trusted = [...new Set([...(before ?? [])])]
-      q.switchHead = head.id
-    }
-    q.head = head.id; q.heads[head.id] = head.lb; q.anchored = anchoredNow
-  })
-  if (p && p.root === c.rosters[0].id) { p.head = head.id; p.anchored = anchoredNow }
-  if (switched && pk === me()) scheduleMyDevice(1000) // my own account: is this device in the new head?
+  savePath(pk, rosterEvents.filter((e) => ids.has(e.id)))
+  const fresh: Fresh | undefined = event === 'fresh_start' ? { root: c.rosters[0].id, at: c.rosters[0].created_at * 1000, shared: [] }
+    : event === 'switch' ? { root: c.rosters[0].id, head: head.id, at: Date.now(), shared: [] } : undefined
+  if (fresh) st.fresh[pk] = fresh
+  void commit((s) => { s.pins[pk] = { ...pin, heads: { ...(event === 'fresh_start' ? {} : s.pins[pk]?.heads ?? {}), ...pin.heads } }; if (fresh) s.fresh[pk] = fresh })
+  if (event === 'switch' && pk === me()) scheduleMyDevice(1000)
 }
 
-/** §3.3/§5.5 (a6ac9a0): after a switch, only devices of the head held before it are answered without a
- *  prompt. A device joins them when the person allows it here, or when a later roster of the followed
- *  chain, signed by a trusted device, ADDS it (one that merely keeps it vouches for nothing: our own
- *  devices publish rosters by themselves). A device a later roster drops leaves them, and comes back
- *  untrusted even if it was once allowed. Only rosters descending from the head followed at the switch
- *  count (chain order). No expiry. */
-function trustedAfterSwitch(pk: string, dev: string): boolean {
-  const q = st.pins[pk]
-  if (!q?.trusted) return true
-  const t = new Set(q.trusted)
-  const rs = chainOf(pk)?.rosters ?? []
-  // chain order, not dates (a signer picks its roster's date): only rosters descending from the head
-  // followed at the switch count; at or before it on the new branch, nothing
-  const from = q.switchHead ? rs.findIndex((r) => r.id === q.switchHead) : -1
-  for (let i = from < 0 ? rs.length : from + 1; i < rs.length; i++) {
-    const r = rs[i], before = rs[i - 1]
-    for (const d of before.devices) if (!r.devices.includes(d)) t.delete(d) // dropped: untrusted from now on
-    if (t.has(r.signer)) for (const d of r.devices) if (!before.devices.includes(d)) t.add(d) // added by a trusted device
-  }
-  const changed = t.size !== q.trusted.length || q.trusted.some((d) => !t.has(d))
-  if (changed) { q.trusted = [...t]; void commit((s) => { const p = s.pins[pk]; if (p) p.trusted = [...t] }) }
-  return t.has(dev)
+/** The person allowed DEV through the card on this device: trusted from now on (after a switch). */
+function trustDevice(dev: string) {
+  const p = st.pins[me()]
+  if (!p?.trusted) return
+  const next = { ...C.allowLocally(p, dev), heads: p.heads }
+  st.pins[me()] = next
+  void commit((s) => { const q = s.pins[me()]; if (q) s.pins[me()] = { ...q, trusted: [...new Set([...(q.trusted ?? []), dev])].sort() } })
 }
-function trustDevice(dev: string) { void commit((s) => { const q = s.pins[me()]; if (q?.trusted && !q.trusted.includes(dev)) q.trusted.push(dev) }) }
 
 /** The letterbox to seal to for PK: the head's, else the last head this device accepted (§6). */
 function lbFor(pk: string): string | undefined {
@@ -411,7 +370,7 @@ function myLbs(): Set<string> | null {
   const c = chainOf(me())
   if (!c) return null
   const out = new Set(c.rosters.map((r) => r.lb))
-  const prev = st.pins[me()]?.prevRoot
+  const prev = st.pins[me()]?.prev_root
   if (prev) for (const r of C.chainFromRoot(me(), prev, all().filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === me())))?.rosters ?? []) out.add(r.lb)
   return out
 }
@@ -589,9 +548,7 @@ async function changeMyRoster(build: (c: C.Chain, sessions: SessionRow[] | null)
 
 /** The end of the anchored path (the anchor's head when it is in the chain, else the root). */
 export function anchoredEnd(c: C.Chain): C.Roster {
-  const a = C.newestAnchor(all().filter((e) => e.kind === C.ANCHOR && e.pubkey === c.account), c.account)
-  const h = a ? C.anchorHead(a) : undefined
-  return c.rosters.find((r) => r.id === h) ?? c.rosters[0]
+  return c.rosters.find((r) => r.id === c.anchored) ?? c.rosters[0]
 }
 
 /** Rosters after the anchored path that this device signed (its anchor was refused): the anchor
@@ -768,20 +725,24 @@ async function onStore() {
   const head = C.headOf(c)
   for (const r of all().filter((e) => e.kind === C.REQUEST && e.tags.some((t) => t[0] === 'p' && t[1] === me())).sort((a, b) => b.created_at - a.created_at)) {
     if (doneRequests.has(r.id) || asking?.id === r.id) continue
-    if (anchoredEnd(c).devices.includes(r.pubkey) && C.headOf(c).devices.includes(r.pubkey) && trustedAfterSwitch(me(), r.pubkey)) {
+    const pin = st.pins[me()] ?? null
+    const inBoth = anchoredEnd(c).devices.includes(r.pubkey) && C.headOf(c).devices.includes(r.pubkey)
+    if (inBoth && (!pin?.trusted || pin.trusted.includes(r.pubkey))) {
       if (asking?.device === r.pubkey) { asking = undefined; touch() }
-      // §5.5: newer than the roster that added it and than my last hand-over to it
-      const addedAt = c.added.get(r.pubkey)?.created_at ?? Infinity
-      if (r.created_at <= addedAt || r.created_at <= (handedAt.get(r.pubkey) ?? 0)) { requestDone(r.id); continue }
-      // §5.5: a device of the head without the key asks again: answered at once, no prompt
+      // §5.5 (sealedcore.answerWithoutPrompt): a device of the head without the key asks again:
+      // answered at once, no prompt, when live and its request is newer than the roster that added
+      // it and than my last hand-over to it
       if (!C.validEvent(r as unknown)) { requestDone(r.id); continue }
       let rows = await mySessions(30e3)
       if (rows && !rows.some((x) => x.client_pubkey === r.pubkey && x.chat === true)) rows = await mySessions(0) // a session newer than the cache
       if (!rows) continue
-      if (!rows.some((x) => x.client_pubkey === r.pubkey && x.chat === true)) { doneRequests.add(r.id); continue } // not live now: ignored for this run only
+      const live = [...liveChat(rows)]
+      if (!live.includes(r.pubkey)) { doneRequests.add(r.id); continue } // not live now: ignored for this run only
+      if (!C.answerWithoutPrompt(c, pin, r.pubkey, live, r.created_at, undefined, handedAt.get(r.pubkey) ?? null)) { requestDone(r.id); continue } // too old
       if (await handAllKeys(r.pubkey)) requestDone(r.id)
       continue
     }
+    // in the head but not trusted after a switch: the person decides (the Allow card below)
     if (!C.validEvent(r as unknown)) { requestDone(r.id); continue }
     let sessions = await mySessions(30e3)
     if (sessions && !sessions.some((s) => s.client_pubkey === r.pubkey && s.chat === true)) sessions = await mySessions(0) // a session newer than the cache
@@ -809,7 +770,7 @@ async function takeHandovers() {
     handoverTried.set(w.id, myHead)
     // the giver: a device of any roster of my chain, or after a fresh start of the one pinned before
     const mineRosters = all().filter((e) => e.kind === C.ROSTER && e.tags.some((t) => t[0] === 'p' && t[1] === me()))
-    const prev = st.pins[me()]?.prevRoot
+    const prev = st.pins[me()]?.prev_root
     const chains = [chainOf(me()), prev ? C.chainFromRoot(me(), prev, mineRosters) : null].filter(Boolean) as C.Chain[]
     const got = C.acceptKeys(me(), chains, opened.seal, opened.rumor)
     if (!got.length) { if (!chains.length) void loadChain(me(), 0); continue }

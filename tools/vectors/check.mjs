@@ -236,6 +236,29 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     check(`sealed history: ${c.name}`, eq(got, c.expected), { got, want: c.expected })
   }
   for (const c of sv.ready.cases) { const got = { may_carry_ready: S.mayCarryReady(c.sessions, c.roster_devices, sv.ready.now) }; check(`sealed ready: ${c.name}`, eq(got, c.expected), { got, want: c.expected }) }
+  // follow (pins: none / moved / ignored_back / switch / fresh_start) and trust (who is answered without a prompt)
+  const pinOut = (p) => p && { root: p.root, head: p.head, path: p.path, anchored: p.anchored, anchored_head: p.anchored_head, trusted: p.trusted, switch_head: p.switch_head, prev_root: p.prev_root }
+  const runSteps = (c) => {
+    let pin = c.pin, chainNow = null, fails = []
+    c.steps.forEach((st, i) => {
+      const r = S.follow(st.anchor, st.rosters, pin)
+      pin = r.pin; chainNow = r.chain
+      for (const d of st.allow_locally ?? []) pin = S.allowLocally(pin, d)
+      if (st.expected) {
+        const got = { event: r.event, pin: pinOut(pin), chain: sum(r.chain) }
+        const want = { event: st.expected.event, pin: st.expected.pin, chain: st.expected.chain ?? sum(null) }
+        if (!eq(got, want)) fails.push({ step: i, got, want })
+      }
+    })
+    return { pin, chainNow, fails }
+  }
+  for (const c of sv.follow?.cases ?? []) { const { fails } = runSteps(c); check(`sealed follow: ${c.name}`, !fails.length, fails[0]) }
+  for (const c of sv.trust?.cases ?? []) {
+    const { pin, chainNow, fails } = runSteps(c)
+    const asks = (c.asks ?? []).map((a) => ({ name: a.device_name, got: S.answerWithoutPrompt(chainNow, pin, a.device, a.live_chat_devices, a.request_created_at, a.added_at, a.last_handover_at), want: a.expected }))
+    const wrong = asks.filter((a) => a.got !== a.want)
+    check(`sealed trust: ${c.name} (${asks.length} asks)`, !fails.length && !wrong.length, fails[0] ?? wrong)
+  }
   console.log(bad ? `vectors (with sealed): ${bad} failed` : 'vectors (with sealed): all ok')
 }
 process.exit(bad ? 1 : 0)
