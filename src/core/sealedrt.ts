@@ -840,7 +840,8 @@ export const dismissAsk = () => { asking = undefined; touch() }
 
 let pendingLb: C.LbKey | undefined
 /** §5.6: a new letterbox; roster n+1 without the removed ones and its anchor, done per §3.2; then
- *  its key (accepted by the relay) to each device that stays AND has a live chat session. When the
+ *  its key (accepted by the relay) to each device that stays AND has a live chat session AND (after
+ *  a switch) is trusted on this device. When the
  *  session list can't be read, nothing at all: never a letterbox whose secret was handed to nobody.
  *  A hand-over lost on the way: that device asks again and is answered at once (§5.5). Under the lock. */
 async function rotate(gone: string[]) {
@@ -858,8 +859,9 @@ async function rotate(gone: string[]) {
   if (!ev) return
   const k = pendingLb!
   const live = liveChat((await mySessions(0)) ?? rows)
+  const trusted = st.pins[me()]?.trusted // after a switch (§5.6, 52808c2): never to a device this one wouldn't answer without a prompt
   for (const d of ev.tags.filter((t) => t[0] === 'device').map((t) => t[1])) {
-    if (d === device!.pub || !live.has(d)) continue
+    if (d === device!.pub || !live.has(d) || (trusted && !trusted.includes(d))) continue
     try { await publishNow('main', C.handKeys(device!.secret, me(), [k], d)); noteHanded(d) } catch { /* it asks again (§5.5) */ }
   }
   await writeMyName()
