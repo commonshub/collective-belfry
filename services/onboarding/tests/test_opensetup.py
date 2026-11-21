@@ -136,6 +136,26 @@ def test_setup_reset_undoes_a_claim(fresh, folder, authentik, keycast, monkeypat
     assert setup.reset(svc)["removed"] == []  # again: nothing left to do
 
 
+def test_a_reset_file_of_the_older_code_is_open_only_until_a_first_admin_was_made(settings, folder):
+    """The older reset() wrote no ``open``: such a file stays open until a first admin made
+    after it is seen, and that is written down, so losing first-admin.json later (a restore)
+    never reopens the belfry to the first comer."""
+    settings.setup_dir = str(folder)
+    at = int(time.time()) - 100
+    (folder / setup.RESET_FILE).write_text(json.dumps({"at": at, "removed": []}))
+    assert setup.reopened(settings) is True  # reset, nobody claimed it since
+    (folder / setup.FIRST_ADMIN).write_text(json.dumps({"at": at - 50, "email": "x@y"}))
+    import os
+
+    os.utime(folder / setup.FIRST_ADMIN, (at - 50, at - 50))
+    assert setup.reopened(settings) is True  # a claim from before the reset does not count
+    (folder / setup.FIRST_ADMIN).write_text(json.dumps({"at": at + 10, "email": "x@y"}))
+    assert setup.reopened(settings) is False  # claimed again under the older code
+    assert json.loads((folder / setup.RESET_FILE).read_text())["open"] is False
+    (folder / setup.FIRST_ADMIN).unlink()  # lost in a restore
+    assert setup.reopened(settings) is False
+
+
 def test_setup_revert_clears_secrets_and_puts_values_back(tmp_path):
     env = tmp_path / ".env"
     env.write_text(

@@ -332,14 +332,33 @@ def has_admin(svc: Services) -> bool:
 def reopened(settings: Any) -> bool:
     """``belfry setup-reset`` opened the setup again and nobody has claimed it since.
 
-    A ``reset.json`` written before the ``open`` key existed counts as open, as it did then
-    (nothing changes for a belfry reset by the older code: it stays open to the first admin
-    until one is made, which writes ``"open": false``)."""
+    A ``reset.json`` written before the ``open`` key existed (the older ``reset()`` never wrote
+    it) counts as open only while no first admin was made after it: a ``first-admin.json``
+    whose time (its ``at``, or the file's own) is later than the reset's ``at`` means the
+    setup was claimed again under the older code, which never closed the file. That answer is
+    then written into ``reset.json`` (``"open": false``) the first time it is seen, so that a
+    ``first-admin.json`` lost later (a restore, a move whose admins are not imported yet) does
+    not reopen a belfry with members to the first comer (Friedger's review of #8)."""
     folder = setup_dir(settings)
     if folder is None or not (folder / RESET_FILE).exists():
         return False
     data = read_json(folder / RESET_FILE)
-    return data.get("open", True) is True
+    if "open" in data:
+        return data["open"] is True
+    at = data.get("at", 0)
+    at = int(at) if isinstance(at, (int, float)) else 0
+    fa_path = folder / FIRST_ADMIN
+    if fa_path.exists():
+        fa_at = first_admin(settings).get("at", 0)
+        fa_at = int(fa_at) if isinstance(fa_at, (int, float)) else 0
+        try:
+            fa_at = max(fa_at, int(fa_path.stat().st_mtime))
+        except OSError:
+            pass
+        if fa_at > at:
+            _close_reopening(settings)  # remembered: claimed since the reset
+            return False
+    return True
 
 
 def _close_reopening(settings: Any) -> None:
