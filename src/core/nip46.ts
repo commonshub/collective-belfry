@@ -29,7 +29,7 @@ export function remoteSigner(clientSecret: Uint8Array, bp: BunkerPointer): Remot
 
   const listen = (r: NonNullable<Sock['relay']>) => {
     connected = null
-    sub = r.subscribe([{ kinds: [KIND], authors: [bp.pubkey], '#p': [me] }], {
+    sub = r.subscribe([{ kinds: [KIND], authors: [bp.pubkey], '#p': [me], since: Math.floor(Date.now() / 1000) - 10 }], {
       onevent: async (e: NostrEvent) => {
         let o: { id?: string; result?: string; error?: string }
         try { o = JSON.parse(nip44.v2.decrypt(e.content, conv)) } catch {
