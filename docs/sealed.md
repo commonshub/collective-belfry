@@ -97,7 +97,13 @@ always without `since`.
   (another of my devices was a moment later), it re-reads the chain and does its change again.
 - Head: the last roster reached. Its `lb` is where to seal for A. Its devices are A's devices.
 - No going back: a client that has pinned head H for a person ignores an anchor whose `head`
-  is an ancestor of H (it keeps H). An anchor naming another branch of the same root is followed.
+  is an ancestor of H (it keeps H). An anchor naming another branch of the same root is followed, but
+  when the pinned head had already been seen anchored it is a SWITCH: the client treats it like a
+  fresh start (§3.4: the amber notice in each conversation with that person), because the account
+  key that signs anchors is held by the server. After a switch, a device of the new head that was
+  not in the head this client held before is never answered without a prompt (§5.5): it goes
+  through Allow. (Two of a person's devices anchoring different rosters within seconds can cause
+  a false notice; rare, accepted.)
 - Anything else is ignored silently (wrong signature, unknown prev, signer not in the previous roster).
 
 ### 3.4 Pinning and resets
