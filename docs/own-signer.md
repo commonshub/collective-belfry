@@ -22,6 +22,9 @@ without changing anybody's key.
 - The migration's review (same branch, section 12): agents, the import as a sync, custody and
   scope checked, the apply lock, rollback carrying sign-outs back, blocking counts, and the
   default-mode changes listed and two of them undone.
+- The last fix round before the pull request (section 13): the migration window, outside apps
+  never widened, guessed scopes accepted by number, archived keys deleted by cleanup, verify of
+  origin / consent / kind, the box guard, the homepage following `/setup`.
 - Still ahead: a rehearsal on a copy of a real belfry, the switch of one belfry, then what
   Keycast had that Belfry does not have yet (section 10).
 
@@ -346,7 +349,7 @@ So the migration carries, for every account:
 | The account and its id | `users.pubkey`, `users.vine_id` (unique per tenant). Every account Belfry makes has `vine_id = odoo-partner-<partner id>`: members, guests (username `guest-<n>`), agents, testers | `accounts.vine_id`, `pubkey` |
 | An account without a `vine_id` | possible in principle (someone who registered on Keycast's own pages before they were closed): **not verified** on any box. The migration must list them and stop, not skip them | to decide per account |
 | The key | `personal_keys.encrypted_secret_key` by `user_pubkey`: `nonce \|\| AES-256-GCM` under `infra/keycast/master.key` | `POST /import` (opens Keycast's format under the same master key, checks the key against the public key, seals it again bound to its row). `derived` when the custody seed gives the same key at version 0 to 8, else `imported`: **random keys** (made before a seed existed, or by a Keycast without `KEYCAST_CUSTODY_SEED_FILE`) exist only in this blob and in the backups |
-| An account whose member holds their own key | a `users` row with no `personal_keys` row (patch 0012 deletes it; patch 0014's preload creates it without one) | `PUT /accounts/{id}` with `own_pubkey`; an account the signer already holds a key for (the member took their own key in Keycast after the first import) is moved with `POST …/own-key`, and the held key is archived sealed (`archived_keys`), never dropped |
+| An account whose member holds their own key | a `users` row with no `personal_keys` row (patch 0012 deletes it; patch 0014's preload creates it without one) | `PUT /accounts/{id}` with `own_pubkey`; an account the signer already holds a key for (the member took their own key in Keycast after the first import) is moved with `POST …/own-key`; inside the migration's window the held key is archived sealed (`archived_keys`) until `cleanup` deletes it (outside the window a move drops the held key, as members are promised) |
 | An agent | **no Keycast row at all**: `register._agent_pass` and `accept_agent_guest` write the agent's own key into the pass (`keycast_pubkey` = `own_pubkey`) and make no signer account (belfry.sh has six or more). A Keycast row for such a partner (a "phantom": something asked for the partner's token and Keycast minted a derived key) may exist | nothing: counted as `own_key_no_account`, verify checks the signer has no account for them or a keyless one with that key. A phantom is left behind (`phantom` in the counts); one somebody signs in on stops the plan (`phantom_with_sessions`) |
 | The key version | not in Keycast: `res.partner.belfry_key_version` in the register | found by the import (the version whose derived key matches) |
 | The username | `users.username` (lowercase, unique per tenant since migration `20260417120000`) | `PUT /accounts/{id}/username`. The signer accepts 1 to 63 of `a-z 0-9 . _ -`: a name outside that (**not verified** that none exists) must be reported, not dropped |
@@ -478,9 +481,19 @@ How the rows go in:
   admin approved (`apps.state`); nostr-login stores `nostrconnect://<client>` (`oauth.rs:5071`)
   and the OIDC path the authorize request's origin or the app origin (`oidc.rs`
   `redirect_origin_for`). **Anything not known is carried `own` and counted as "scope guessed"**
-  (in every phase's counts, listed in the verify report): a chat session carried as outside
-  would lock its member out of their sealed history, which is worse than an outside app keeping
-  own scope. Verify compares the scope; the next import corrects it.
+  (in every phase's counts, listed in the verify report) and **blocks verify unless
+  `--accept-guessed N` names their exact number**: a chat session carried as outside would
+  lock its member out of their sealed history, which is worse than an outside app keeping own
+  scope, but only once somebody has read the list. **Approvals that cannot be read stop the
+  plan** (exit 2): without them every outside app would be guessed own. **The sync never turns
+  an `outside` row into `own`** (only own → outside, or unchanged; an outside row keeps its
+  consent): an app un-approved later, or a guess, cannot widen a row; verify counts such a row
+  as checked (`kept_outside`). Verify compares scope, `decrypt`, `origin` and `kind`.
+- **`decrypt`** (consent to decrypt): Keycast let an approved outside app decrypt (no consent
+  existed there), so an imported **outside** session keeps `decrypt = true`: the consent is
+  implied by the app having it today; taking it away at the move would break the app with no
+  page to ask the member. Own sessions are imported without it (the signer lets own apps
+  decrypt anyway).
 - **Agents** (their own key on the pass, no Keycast row): nothing to carry, not a problem.
   `community.member_token` returns None for them in both modes (it used to make Keycast mint a
   derived key for the agent's partner).
@@ -553,38 +566,55 @@ belfry that signs in through Authentik cannot move: section 10); backups are set
 | 1 | `migrate-to-own-signer.sh check` | Read-only. The code's commit, the settings, free disk (stops under 1 GB; a signer built on the box needs about 3 GB for 15 to 30 minutes), the master key, the seed; that Keycast's database, Authentik and the register answer; then the plan: accounts by kind (`member`, `guest`, `agent`, `own_key`, `no_vine_id`), usernames, suspended, sessions by state (`served`, `revoked`, `expired`, `never_connected`, `unverified`), how many live ones are the belfry's own apps' and how many outside apps', and every problem | nothing |
 | 2 | `… backup` | A backup from the last hour, or `backup.sh run` now. Without a successful one nothing else runs (import wants one from the last 24 hours, switch and cleanup one from the last hour). Its age is read from the newest backup file's own name (`belfry-<host>-<UTC stamp>.tar.age`), never from the environment; a time in the future is no backup. Path and checksum go into the state | as every night: the services with a data volume are paused for the copy |
 | 3 | `… import` | Makes `signer_token` and `signer_master_key` if missing and checks the latter **is** Keycast's `master.key`; starts the signer next to Keycast with its bunker off (`docker-compose.signer-import.yml`: it answers no NIP-46 request, so no request gets two answers); **closes the signer's "no new accounts" switch** (from now on it makes no account a caller does not name the key of); imports keys with the public key each must open to, members' own keys, usernames, suspended state, sessions (per account, 400 rows or 256 kB a call: the signer's body limit is 2 MB), and Authentik's admins into the register's flag. **A sync**: run again, it brings the signer to Keycast's current state (below). A row whose bunker key does not derive is skipped and listed; the rest of the account goes in | nothing; the belfry runs on Keycast |
-| 4 | `… verify` | For every account: the signer's key = Keycast's = the register's; custody in Keycast, in the signer and in the register's `belfry_key_custody`; username, state; every served session is live in the signer with its bunker key, client key and scope, and nothing else is; agents with their own key have no signer account or a keyless one; no Keycast rows while the register has people is a failure, and the account counts come from Keycast and from the signer's own list; unverified sessions and skipped rows block unless accepted by exact number; every revoked or expired row is there **as revoked** with its client key (`?all=true`); no account in the signer that Keycast did not have (`GET /accounts`); every person of the register is in the signer; the admins. A report file. Exit 1 on any difference | nothing |
-| 5 | `… switch` | Under tmux; takes the apply lock; a fresh backup; asks for `switch <domain>`; **stops Keycast and the service** (nothing writes to Keycast's database from here); a last import (the sync: whatever changed since the rehearsal); the verify that decides (not clean: Keycast and the service start again, nothing was switched); `BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1 belfry config`; `belfry apply`; then waits for the signer, asks the service, verifies the keys once more and, when that is clean, **opens new accounts again** (`signer-migrate open`; `… open` by hand if the switch stopped before) | **the belfry**, from the stop to the end of `belfry apply` |
+| 4 | `… verify` | For every account: the signer's key = Keycast's = the register's; custody in Keycast, in the signer and in the register's `belfry_key_custody`; username, state; every served session is live in the signer with its bunker key, client key, scope, `decrypt`, `origin` and `kind`, and nothing else is; sessions whose scope was guessed block unless `--accept-guessed N` matches; agents with their own key have no signer account or a keyless one; no Keycast rows while the register has people is a failure, and the account counts come from Keycast and from the signer's own list; unverified sessions and skipped rows block unless accepted by exact number; every revoked or expired row is there **as revoked** with its client key (`?all=true`); no account in the signer that Keycast did not have (`GET /accounts`); every person of the register is in the signer; the admins. A report file. Exit 1 on any difference | nothing |
+| 5 | `… switch` | Under tmux; takes the apply lock; a fresh backup; asks for `switch <domain>`; **stops Keycast and the service** (nothing writes to Keycast's database from here); a last import (the sync: whatever changed since the rehearsal); the verify that decides (not clean: Keycast and the service start again, nothing was switched); **closes the migration's window** (`signer-migrate close-window`: no sync, no archiving from here); `BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1 belfry config`; `belfry apply`; then waits for the signer, asks the service, verifies the keys once more and, when that is clean, **opens new accounts again** (`signer-migrate open`; `… open` by hand if the switch stopped before) | **the belfry**, from the stop to the end of `belfry apply` |
 | 6 | `… rollback` | Under tmux; asks for `rollback <domain>`; takes the apply lock; stops the service; **writes into Keycast what was signed out or suspended on the signer since the switch** (`signer-migrate carry-back`: `oauth_authorizations.revoked_at` for sessions Keycast still has live and the signer revoked, `users.status = 'suspended'` for accounts Keycast has active and the signer suspended; one transaction; never run against a real Keycast database); stops the signer and removes its container (not its volume); `BELFRY_SIGNER=keycast`; `belfry apply` brings Keycast, Authentik and Redis back | the belfry, for one `belfry apply` |
-| 7 | `… cleanup` | Under tmux, only at a terminal, only with the two clean reports of **this box** (the one the switch was decided on and one from after it), only seven days after the switch (`--before-seven-days` overrides), after a fresh backup, and when accounts hold `imported` keys (random, from before the seed: only signer-data has them once Keycast is emptied) only when that backup is from after the switch and its own record (`<backup>.json`, written by `backup.sh`: volume file counts and the file's checksum) says it carries signer-data and the checksum matches (path and checksum go into the state), after the typed sentence `delete keycast and authentik of <domain>`. Stops at the first failed deletion (and records nothing): empties Keycast's and Authentik's databases (they stay, empty: Postgres' health check looks for `keycast`), removes Authentik's two volumes and the five containers. Keeps `infra/keycast/master.key`, the seed, the backups | nothing |
+| 7 | `… cleanup` | Under tmux, only at a terminal, only with the two clean reports of **this box** (the one the switch was decided on and one from after it), only seven days after the switch (`--before-seven-days` overrides), after a fresh backup, and when accounts hold `imported` keys (random, from before the seed: only signer-data has them once Keycast is emptied) only when that backup is from after the switch and its own record (`<backup>.json`, written by `backup.sh`: volume file counts and the file's checksum) says it carries signer-data and the checksum matches (path and checksum go into the state), after the typed sentence `delete keycast and authentik of <domain>`. Stops at the first failed deletion (and records nothing): deletes the held keys the signer archived during the migration's window (`signer-migrate drop-archive` → `DELETE /archived-keys`), empties Keycast's and Authentik's databases (they stay, empty: Postgres' health check looks for `keycast`), removes Authentik's two volumes and the five containers. Keeps `infra/keycast/master.key`, the seed, the backups | nothing |
 
 `… status` shows where a belfry is. Options: `--exclude <pubkey>` (leave one Keycast account
 out on purpose: an account without a `vine_id` stops check, import and verify until it is named),
 `--accept-lost-sessions N`, `--accept-missing-stewards N`, `--accept-unverified N`,
-`--accept-skipped-rows N` (below; each must match the count exactly), `--yes` (no question
+`--accept-skipped-rows N`, `--accept-guessed N` (below; each must match the count exactly),
+`--yes` (no question
 before switch or rollback; never for cleanup), `--no-tmux`.
 
 **Reports are bound to the box.** `state.json` and the reports in `infra/data/setup/migration/`
 travel in backups. Each report carries `box`: the domain, the first 16 hex of the SHA-256 of
 the signer's master key file (never the key), and the system identifier of the Postgres
-cluster Keycast's database lives in. `import` records it in the state; every later phase
-refuses a state from another box, and switch and cleanup refuse reports from another box.
+cluster Keycast's database lives in. `backup` and `import` record it in the state; every later
+phase refuses a state from another box **or a state with no `box`**, and switch and cleanup
+refuse reports from another box. When Postgres does not answer the script says "Postgres
+didn't answer" and stops (it used to record `keycast_db: none`, after which every guard said
+"made on another box").
+
+**The migration's window.** A setting of the signer (`migration` in `GET`/`POST /settings`),
+separate from "no new accounts": `import` opens it each time it runs, the switch closes it
+(`signer-migrate close-window`) right after the verify that decides, and `open` closes it too.
+Only inside it does the signer honour an import's `sync: true` (refused with 422 outside it;
+"no new accounts", whether set by the import, by `POST /settings` or by
+`SIGNER_NO_NEW_ACCOUNTS`, no longer makes an import a sync) and archive a held key that a move
+to an own key replaces. `signer-migrate import` refuses on a belfry with `SIGNER=belfry` (no
+`--after-switch` exists): after the switch the signer is the truth and an import would undo
+sign-outs, moves and suspensions made on it. `carry-back` is refused before the switch (what it
+reads is what happened on the signer since).
 
 **How writes between import and switch are kept out.** They are not kept out: the belfry runs
 normally between steps 3 and 5, people join, sign in and out, take their own key, and the
 rehearsal's verify goes stale (it then says `account_not_imported`, `session_missing`,
 `session_unexpected`: run import again). **Import is a sync.** It closes the signer's "no new
-accounts" switch first, and while that is closed nothing but the import writes connections, so
-the signer takes the import's rows as the truth for rows it has: a session signed out in Keycast
+accounts" switch and opens the migration's window first, asks for `sync`, and inside that window
+nothing but the import writes connections, so the signer takes the import's rows as the truth
+for rows it has: a session signed out in Keycast
 is revoked, a row whose client key went to another account (the shared-key owner changed, it is
 ranked by `last_used_at`) releases it, and the account that keeps it gets it in the same run
-(sessions go in two passes: rows without a client key first); scope, origin and names are
-corrected; a row Keycast serves again comes back live. A live session the signer has that
+(sessions go in two passes: rows without a client key first); origin, names and an own scope
+are corrected (an outside row stays outside); a row Keycast serves again comes back live. A live session the signer has that
 Keycast no longer has at all (deleted, as patch 0012 does when a member takes their key) is
 revoked. An account Keycast now shows with the member's own key (or a new one) is moved to it,
-the held key archived sealed (`archived_keys`), and listed as `custody_moved`. A held key that
-differs from Keycast's is an error, never an overwrite. Outside that window (accounts open:
-after the switch) the signer never changes a row it has from an import. What decides is
+the held key archived sealed (`archived_keys`, deleted by `cleanup` through `DELETE
+/archived-keys` once its other guards passed), and listed as `custody_moved`. A held key that
+differs from Keycast's is an error, never an overwrite. Outside that window (after the switch)
+the signer never changes a row it has from an import. What decides is
 the verify inside `switch`, made after Keycast (its API and its signer daemon, one container)
 and the onboarding service are stopped: with those two down nothing writes to Keycast's
 database, the last import reads its final state, and the report carries a digest of the rows
@@ -674,8 +704,9 @@ first: **sign-outs and suspensions made on the signer since the switch** (a sess
 still had live that the signer revoked is revoked in Keycast; an account active in Keycast and
 suspended on the signer is suspended), so a rollback does not sign anybody back in nor lift a
 suspension. What does not go back: sessions opened since end (those devices sign in again),
-reactivations (they stay suspended in Keycast), usernames and admins changed since are as they
-were before, people who joined since get the same key from Keycast when it is a derived one
+reactivations (they stay suspended in Keycast), moves to an own key made on the signer (Keycast
+still has the old held key and the account; the sessions such a move revoked are revoked in
+Keycast too by the carry-back), usernames and admins changed since are as they were before, people who joined since get the same key from Keycast when it is a derived one
 (the same seed), and nobody else has any other. The signer's volume is kept, so a second
 attempt starts from it (`existing` rows).
 
@@ -984,3 +1015,61 @@ What this branch changes on a belfry that stays on Keycast, each with its reason
 - `belfry`: local edits under `services/signer` make it build every image on the box (as any
   local change does); new CLI commands (`import-stewards`, `signer-migrate`, `has-people`) exist
   in every mode.
+- **The proxy image changes on every box.** The three Caddyfile blocks gated on `{$SIGNER}`
+  (`@own_signin`, `@own_signer`, the names answered by the onboarding service) do nothing with
+  `SIGNER=keycast`, but they change the Caddyfile, so the proxy's tree hash: on its next
+  `belfry apply` every box builds the proxy again, or pulls it once a prebuilt image exists.
+  The change is Caddyfile-only (the proxy's Dockerfile only builds Caddy), so on a box short of
+  disk or time the old image can be re-tagged before the apply: `docker tag
+  belfry-proxy:tree-<old> belfry-proxy:tree-<new>` (as done for earlier Caddyfile-only changes).
+- **Odoo belfries upgrade `belfry_pass`.** The new field `res.partner.belfry_steward` (the
+  register's admin flag, read by `stewards.py`, the migration's verify and `import-stewards`)
+  needs a module upgrade; the manifest version is raised (19.0.1.31.0 → 19.0.1.32.0), so the
+  next `belfry apply` runs `bootstrap.sh`'s `-u belfry_pass` and restarts Odoo (a minute or
+  two). Belfries on their own register (`REGISTER=belfry`, all four we run) are not affected.
+- **The image workflow** (`.github/workflows/images.yml`) also builds the signer's image on
+  pushes that touch `services/signer/**`; boxes on Keycast never pull it.
+- **Fewer usernames count as placeholders.** `usernames.DEFAULT` narrowed from
+  `[a-z]{2,6}-\d{2,}` to `[a-z]{2,6}-\d{4}` (digits, `member-N` and `guest-N` unchanged). The new
+  set is inside the old one, so `give_default`, `backfill` and `suggestions` now treat **fewer**
+  names as placeholders, never more: a name like `ab-12`, `lina-10` or `osv-12345` is kept as
+  the person's own instead of being replaced by a name from their real name. Nobody can be
+  renamed by this change. On the four boxes: their own registers number members with digits
+  only (no prefix), and belfry.sh's one old prefixed number is `OSV-0001` (four digits, still a
+  placeholder): reasoned from the code and the notes, **not checked on the boxes** (no access
+  from this round).
+- **`has_admin` closes `/setup` when the register cannot be read** (an error there counts as "has
+  people": not a new belfry for sure), as it does when the stewards group cannot be read.
+- **The homepage follows the same rule.** `setup.admin_known` (used by the apex placeholder,
+  the console's front page and the agents' instructions) now applies `has_admin`'s rule (setup
+  folder, first-admin file, admins from the minute's cache, `reset.json`, people in the
+  register), so "Set up this belfry" is never offered where `/setup` would refuse it (a belfry
+  with members and no admin on record).
+- **`community.member_token` asks the register once more** (`signerguard.own_key_person`, a
+  search of the person's passes). Measured on the own register with 2000 passes: about 14 ms a
+  search (the register scans: the same cost as the pass lookup every console page already
+  makes), against the signer round trip that follows (`preload_account`). The answer is kept
+  for the rest of the request (`own_key_person_once`, a context variable the app's
+  `request_memo` middleware sets; nothing is kept between requests or outside them).
+
+## 13. The last fix round before the pull request
+
+| | Finding | What was done | Where |
+| --- | --- | --- | --- |
+| 1 | The sync could give an outside app full powers: approvals that could not be read made every origin "own, guessed", and the sync rewrote `scope` on rows it had | (a) the plan stops (exit 2) when the approvals cannot be read; (b) the signer's sync never turns `outside` into `own` (an outside row keeps its scope and consent; own may become outside); (c) guessed sessions block verify unless `--accept-guessed N` matches exactly; a row kept outside where the plan guessed own counts as checked (`kept_outside`) | `migration.py` `outside_origins`, `verify`, `_same_fields`; `store.rs` `import_connections`; `__main__.py`; script flag; tests `the_sync_never_turns_an_outside_connection_into_an_own_one`, `test_the_sync_never_turns_an_outside_app_into_an_own_one`, `test_guessed_scopes_block_until_accepted_…`, `test_approvals_that_cannot_be_read_stop_the_plan` |
+| 2 | An import after the switch would undo things; the sync followed "no new accounts", which `SIGNER_NO_NEW_ACCOUNTS` can also set | `signer-migrate import` refuses with `SIGNER=belfry` (no override); the import opens a **migration window** (`POST /settings {migration: true}`) and sends `sync: true`; the signer honours `sync` only inside the window (422 outside it), never from `accounts_closed()`; `close-window` (the switch, after the verify that decides) and `open` close it | `signer.rs` `in_migration`, `set_migration`, `import_connections(…, sync)`; `api.rs` `post_settings`, `import_connections`; `migration.py` `cli`, `run_import`, `SignerAdmin.set_window`; script `cmd_switch`; tests `the_sync_and_the_archive_need_the_migrations_window`, `test_import_refuses_after_the_switch_and_carry_back_before_it`, `test_a_session_signed_out_in_keycast_…` |
+| 3 | Archived held keys | Archived only inside the migration window; outside it `move_to_own_key` drops the held key (comment fixed); `DELETE /archived-keys` (token; refused while the window is open), called by `cleanup` through `signer-migrate drop-archive` after its other guards and the typed sentence | `store.rs` `put_account_archiving`, `delete_archived_keys`; `signer.rs` `move_to_own_key`, `delete_archived_keys`; `api.rs`; script `cmd_cleanup`; tests `a_held_key_replaced_by_an_own_key_is_archived_sealed_only_when_asked`, `test_a_held_key_is_archived_only_inside_the_window` |
+| 4 | Verify did not compare `origin`, `decrypt`, `kind` | Compared (origin and kind for every carried row, scope and decrypt for live ones); `connection_row` carries `decrypt = true` for outside sessions (section 6, "decrypt"); the sync now also brings `decrypt` to the import's value | `migration.py` `connection_row`, `_same_fields`; `store.rs`; test `test_imported_outside_sessions_keep_decrypt_…` |
+| 5 | Smaller | `box_id` stops with "Postgres didn't answer" instead of recording `keycast_db: none`; `need_this_box` refuses a state with no `box` (`backup` now records it); the rollback text names own-key moves made on the signer | script `box_id`, `need_this_box`, `fresh_backup`, `cmd_rollback`; test `test_the_box_guard_stops_on_a_silent_postgres_…` |
+| 6 | Default-mode changes missing from section 12 | Added there (proxy tree hash, Odoo upgrade, image workflow, usernames, `has_admin`, homepage, `member_token`); the homepage's set-up offer now follows `has_admin`; `member_token`'s register search kept per request; the module version raised | `setup.py` `admin_known`; `signerguard.py` `own_key_person_once`; `app.py` `request_memo`; `__manifest__.py`; tests `test_placeholder_until_the_website_is_published`, `test_own_key_person_is_asked_once_per_request_…` |
+
+**Decided differently**: `carry-back` is refused **before** the switch, not after it: it is
+the rollback's step and runs while `SIGNER=belfry` (it reads what the signer did since the
+switch); refusing it there would make rollback impossible. A sync asked outside the window is
+refused (422), not silently done as a plain import, so a misuse is seen. `DELETE
+/archived-keys` is refused while the window is open.
+
+**Not verified**: as section 12, nothing here ran against a real Keycast, signer, Postgres or
+Docker; the script's new calls (`close-window` in switch, `drop-archive` in cleanup) and the
+box guard ran only as unit tests of the functions; the usernames claim about the four boxes is
+reasoned, not read from them.
