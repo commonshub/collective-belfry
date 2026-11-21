@@ -2,18 +2,22 @@
 //! published port), with the bearer token from `/run/secrets/signer_token`.
 //!
 //! ```text
-//! GET  /health                                  {status, seed, accounts}   (no token)
-//! PUT  /accounts/{vine_id}                      {key_version?, own_pubkey?, expect_pubkey?}
+//! GET  /health                                  {status, seed, bunker}     (no token)
+//! PUT  /accounts/{vine_id}                      {key_version?, own_pubkey?, expect_pubkey?, username?}
 //! GET  /accounts/{vine_id}
 //! POST /accounts/{vine_id}/status               {status: active|suspended}
+//! POST /accounts/{vine_id}/own-key              {pubkey}        (the move to the member's key)
+//! PUT  /accounts/{vine_id}/username             {username}
 //! POST /accounts/{vine_id}/sign                 {event}                    -> {event}
 //! POST /accounts/{vine_id}/encrypt              {scheme: nip44|nip04, peer, text} -> {result}
 //! POST /accounts/{vine_id}/decrypt              {scheme, peer, text}       -> {result}
 //! POST /accounts/{vine_id}/derive               {purpose}                  -> {secret}
 //! POST /accounts/{vine_id}/export                                          -> {nsec}
-//! POST /accounts/{vine_id}/connections          {app, label, derive?, keep?} -> {id, bunker_url, ...}
+//! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?}
 //! GET  /accounts/{vine_id}/connections                                     -> [{id, app, ...}]
-//! POST /accounts/{vine_id}/connections/revoke   {id?, app?}                -> {revoked}
+//! POST /accounts/{vine_id}/connections/revoke   {id? | bunker_pubkey? | app?} -> {revoked}
+//! GET  /names/{username}                                                   -> {name, pubkey, vine_id}
+//! POST /pubkeys/{pubkey}/status                 {status}                   -> {updated}
 //! POST /import                                  {accounts: [{vine_id, pubkey, sealed}]}
 //! ```
 //!
@@ -21,9 +25,12 @@
 //! access token): it must be live, and derive allows only that connection's purposes.
 //!
 //! Errors are `{"error": <code>, "message"}` with 404 not_found, 503 seed_locked,
-//! 409 own_key / mismatch, 403 suspended / forbidden, 422 invalid, 401 unauthorized.
+//! 409 own_key / mismatch / client_key_taken / username_taken, 403 suspended / forbidden,
+//! 422 invalid, 401 unauthorized.
 
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -55,7 +62,9 @@ impl IntoResponse for ApiError {
         let status = match &self.0 {
             Error::NotFound => StatusCode::NOT_FOUND,
             Error::SeedLocked => StatusCode::SERVICE_UNAVAILABLE,
-            Error::OwnKey | Error::Mismatch(_) => StatusCode::CONFLICT,
+            Error::OwnKey | Error::Mismatch(_) | Error::ClientKeyTaken | Error::UsernameTaken => {
+                StatusCode::CONFLICT
+            }
             Error::Suspended | Error::Forbidden(_) => StatusCode::FORBIDDEN,
             Error::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Error::SeedMalformed | Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -118,12 +127,29 @@ fn account_json(a: &crate::store::Account) -> Value {
         "custody": a.custody,
         "key_version": a.key_version,
         "status": a.status,
+        "username": a.username,
     })
 }
 
+/// No token, and nothing about who is here: whether the signer can make accounts (the seed)
+/// and whether its bunker hears the relay.
 async fn health(State(state): State<AppState>) -> Json<Value> {
-    let accounts = state.signer.store.count_accounts().unwrap_or(-1);
-    Json(json!({"status": "ok", "seed": state.signer.seed_state(), "accounts": accounts}))
+    let b = &state.signer.bunker;
+    let enabled = b.enabled.load(Ordering::SeqCst);
+    let connected = b.connected.load(Ordering::SeqCst);
+    let last = b.last_event_at.load(Ordering::SeqCst);
+    let bunker = json!({
+        "state": if !enabled { "off" } else if connected { "connected" } else { "disconnected" },
+        "last_event_at": if last > 0 { json!(last) } else { Value::Null },
+        "restarts": b.restarts.load(Ordering::SeqCst),
+        "filtered": b.filtered.load(Ordering::SeqCst),
+    });
+    let ok = !enabled || connected;
+    Json(json!({
+        "status": if ok { "ok" } else { "degraded" },
+        "seed": state.signer.seed_state(),
+        "bunker": bunker,
+    }))
 }
 
 async fn put_account(
@@ -141,6 +167,7 @@ async fn put_account(
         version,
         opt_text(&body, "own_pubkey").as_deref(),
         opt_text(&body, "expect_pubkey").as_deref(),
+        opt_text(&body, "username").as_deref(),
     )?;
     Ok(Json(account_json(&a)).into_response())
 }
@@ -163,6 +190,55 @@ async fn set_status(
     guard!(state, headers);
     state.signer.set_status(&vine_id, &text(&body, "status")?)?;
     Ok(Json(json!({"ok": true})).into_response())
+}
+
+async fn own_key(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vine_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    guard!(state, headers);
+    let a = state
+        .signer
+        .move_to_own_key(&vine_id, &text(&body, "pubkey")?)?;
+    Ok(Json(account_json(&a)).into_response())
+}
+
+async fn set_username(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vine_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    guard!(state, headers);
+    let a = state
+        .signer
+        .set_username(&vine_id, &text(&body, "username")?)?;
+    Ok(Json(account_json(&a)).into_response())
+}
+
+async fn name(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(username): Path<String>,
+) -> Result<Response, ApiError> {
+    guard!(state, headers);
+    let a = state.signer.by_username(&username)?;
+    Ok(Json(json!({"name": a.username, "pubkey": a.pubkey, "vine_id": a.vine_id})).into_response())
+}
+
+async fn status_by_pubkey(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(pubkey): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    guard!(state, headers);
+    let n = state
+        .signer
+        .set_status_by_pubkey(&pubkey, &text(&body, "status")?)?;
+    Ok(Json(json!({"updated": n})).into_response())
 }
 
 async fn sign(
@@ -258,6 +334,9 @@ struct NewConnectionBody {
     derive: Vec<String>,
     #[serde(default)]
     keep: Option<usize>,
+    /// The NIP-46 client key the connection is for (bound from the start).
+    #[serde(default)]
+    client_pubkey: Option<String>,
 }
 
 async fn create_connection(
@@ -272,10 +351,19 @@ async fn create_connection(
     } else {
         body.label
     };
-    let created =
-        state
-            .signer
-            .create_connection(&vine_id, &body.app, &label, &body.derive, body.keep)?;
+    let (created, change) = state.signer.create_connection(
+        &vine_id,
+        &body.app,
+        &label,
+        &body.derive,
+        body.keep,
+        body.client_pubkey.as_deref().filter(|c| !c.is_empty()),
+    )?;
+    // the client may connect the moment it has the URL: the bunker listens for it first
+    state
+        .signer
+        .wait_subscribed(change, Duration::from_millis(1500))
+        .await;
     Ok(Json(serde_json::to_value(created).unwrap_or(Value::Null)).into_response())
 }
 
@@ -297,10 +385,11 @@ async fn revoke_connections(
 ) -> ApiResult {
     guard!(state, headers);
     let id = opt_text(&body, "id");
+    let bunker = opt_text(&body, "bunker_pubkey");
     let app = opt_text(&body, "app");
     let n = state
         .signer
-        .revoke(&vine_id, id.as_deref(), app.as_deref())?;
+        .revoke(&vine_id, id.as_deref(), bunker.as_deref(), app.as_deref())?;
     Ok(Json(json!({"revoked": n})).into_response())
 }
 
@@ -341,6 +430,10 @@ pub fn router(state: AppState) -> Router {
         .route("/import", post(import))
         .route("/accounts/{vine_id}", put(put_account).get(get_account))
         .route("/accounts/{vine_id}/status", post(set_status))
+        .route("/accounts/{vine_id}/own-key", post(own_key))
+        .route("/accounts/{vine_id}/username", put(set_username))
+        .route("/names/{username}", get(name))
+        .route("/pubkeys/{pubkey}/status", post(status_by_pubkey))
         .route("/accounts/{vine_id}/sign", post(sign))
         .route("/accounts/{vine_id}/encrypt", post(encrypt))
         .route("/accounts/{vine_id}/decrypt", post(decrypt))
@@ -514,5 +607,304 @@ mod tests {
         )
         .await;
         assert_eq!(s, 404);
+    }
+
+    fn app(name: &str) -> (Router, Arc<Signer>) {
+        let signer = Arc::new(signer_with_seed(&tempdir(name)));
+        let app = router(AppState {
+            signer: signer.clone(),
+            token: Arc::new("t0ken".into()),
+        });
+        (app, signer)
+    }
+
+    #[tokio::test]
+    async fn health_says_how_the_bunker_is_and_nothing_about_who_is_here() {
+        let (app, signer) = app("health");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        let (s, h) = call(&app, "GET", "/health", "", Value::Null).await;
+        assert_eq!(s, 200);
+        assert_eq!(h["status"], "ok");
+        assert_eq!(h["bunker"]["state"], "off");
+        assert!(h.get("accounts").is_none(), "{h}");
+        signer.bunker.enabled.store(true, Ordering::SeqCst);
+        let (_, h) = call(&app, "GET", "/health", "", Value::Null).await;
+        assert_eq!(
+            (h["status"].as_str(), h["bunker"]["state"].as_str()),
+            (Some("degraded"), Some("disconnected"))
+        );
+        assert_eq!(h["bunker"]["last_event_at"], Value::Null);
+        signer.bunker.connected.store(true, Ordering::SeqCst);
+        signer
+            .bunker
+            .last_event_at
+            .store(1_700_000_000, Ordering::SeqCst);
+        let (_, h) = call(&app, "GET", "/health", "", Value::Null).await;
+        assert_eq!(
+            (h["status"].as_str(), h["bunker"]["state"].as_str()),
+            (Some("ok"), Some("connected"))
+        );
+        assert_eq!(h["bunker"]["last_event_at"], 1_700_000_000);
+    }
+
+    #[tokio::test]
+    async fn sessions_are_made_for_a_client_listed_and_revoked_by_their_bunker_key() {
+        let (app, _) = app("sessions");
+        for id in ["odoo-partner-1", "guest-2"] {
+            call(&app, "PUT", &format!("/accounts/{id}"), "t0ken", json!({})).await;
+        }
+        let client = nostr::prelude::Keys::generate().public_key().to_hex();
+        let (s, c) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            json!({"app": "Chat · Firefox on Linux", "client_pubkey": client}),
+        )
+        .await;
+        assert_eq!(s, 200, "{c}");
+        assert_eq!(c["client_pubkey"], client);
+        assert_eq!(c["app"], "Chat · Firefox on Linux");
+        assert!(c["created_at"].as_i64().unwrap() > 0);
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/accounts/guest-2/connections",
+            "t0ken",
+            json!({"app": "Chat", "client_pubkey": client}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("client_key_taken")));
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/accounts/guest-2/connections",
+            "t0ken",
+            json!({"app": "Chat", "client_pubkey": "zz"}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        let row = &list[0];
+        assert_eq!(row["bunker_pubkey"], c["bunker_pubkey"]);
+        assert_eq!(row["client_pubkey"], client);
+        assert_eq!(row["app"], "Chat · Firefox on Linux");
+        assert_eq!(
+            (row["uses"].as_i64(), row["last_used_at"].clone()),
+            (Some(0), Value::Null)
+        );
+        assert!(row["created_at"].as_i64().unwrap() > 0);
+        for hidden in ["secret", "secret_hash", "bunker_sealed"] {
+            assert!(row.get(hidden).is_none(), "{hidden}");
+        }
+        // another account cannot revoke it; its own does, once
+        let body = json!({"bunker_pubkey": c["bunker_pubkey"]});
+        let (_, r) = call(
+            &app,
+            "POST",
+            "/accounts/guest-2/connections/revoke",
+            "t0ken",
+            body.clone(),
+        )
+        .await;
+        assert_eq!(r["revoked"], 0);
+        let (_, r) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections/revoke",
+            "t0ken",
+            body.clone(),
+        )
+        .await;
+        assert_eq!(r["revoked"], 1);
+        let (_, r) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections/revoke",
+            "t0ken",
+            body,
+        )
+        .await;
+        assert_eq!(r["revoked"], 0);
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert!(list.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn usernames_statuses_by_key_and_the_move_to_an_own_key() {
+        let (app, _) = app("names");
+        let (s, a) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-1",
+            "t0ken",
+            json!({"username": "0001"}),
+        )
+        .await;
+        assert_eq!((s, a["username"].as_str()), (200, Some("0001")));
+        let (s, e) = call(
+            &app,
+            "PUT",
+            "/accounts/guest-2",
+            "t0ken",
+            json!({"username": "0001"}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("username_taken")));
+        let (s, _) = call(&app, "GET", "/accounts/guest-2", "t0ken", Value::Null).await;
+        assert_eq!(s, 404, "nothing was created");
+        call(
+            &app,
+            "PUT",
+            "/accounts/guest-2",
+            "t0ken",
+            json!({"username": "guest-2"}),
+        )
+        .await;
+        let (s, n) = call(
+            &app,
+            "PUT",
+            "/accounts/guest-2/username",
+            "t0ken",
+            json!({"username": "Lina"}),
+        )
+        .await;
+        assert_eq!((s, n["username"].as_str()), (200, Some("lina")));
+        let (s, e) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-1/username",
+            "t0ken",
+            json!({"username": "LINA"}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("username_taken")));
+        let (s, e) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-1/username",
+            "t0ken",
+            json!({"username": "no spaces"}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        let (s, n) = call(&app, "GET", "/names/LINA", "t0ken", Value::Null).await;
+        assert_eq!(s, 200);
+        assert_eq!(
+            (n["name"].as_str(), n["vine_id"].as_str()),
+            (Some("lina"), Some("guest-2"))
+        );
+        let (s, _) = call(&app, "GET", "/names/guest-2", "t0ken", Value::Null).await;
+        assert_eq!(s, 404, "the old name is free");
+        let (s, _) = call(&app, "GET", "/names/lina", "wrong", Value::Null).await;
+        assert_eq!(s, 401);
+
+        let pk = a["pubkey"].as_str().unwrap();
+        let (s, r) = call(
+            &app,
+            "POST",
+            &format!("/pubkeys/{pk}/status"),
+            "t0ken",
+            json!({"status": "suspended"}),
+        )
+        .await;
+        assert_eq!((s, r["updated"].as_i64()), (200, Some(1)));
+        let (_, a2) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(a2["status"], "suspended");
+        let other = nostr::prelude::Keys::generate().public_key().to_hex();
+        let (s, _) = call(
+            &app,
+            "POST",
+            &format!("/pubkeys/{other}/status"),
+            "t0ken",
+            json!({"status": "active"}),
+        )
+        .await;
+        assert_eq!(s, 404);
+
+        // a key the caller expects, and one it does not
+        let (s, _) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-1",
+            "t0ken",
+            json!({"expect_pubkey": pk}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        for body in [
+            json!({"expect_pubkey": other}),
+            json!({"own_pubkey": other}),
+        ] {
+            let (s, e) = call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", body).await;
+            assert_eq!((s, e["error"].as_str()), (409, Some("mismatch")));
+        }
+        let (_, same) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(
+            (same["pubkey"].as_str(), same["custody"].as_str()),
+            (Some(pk), Some("derived"))
+        );
+        // the move is its own call
+        let (s, moved) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/own-key",
+            "t0ken",
+            json!({"pubkey": other}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(
+            (moved["pubkey"].as_str(), moved["custody"].as_str()),
+            (Some(other.as_str()), Some("own"))
+        );
+        assert_eq!(moved["username"], "0001", "the name stays");
+
+        // an import that names another key for an account that exists is an error
+        let (s, r) = call(
+            &app,
+            "POST",
+            "/import",
+            "t0ken",
+            json!({"accounts": [
+            {"vine_id": "guest-2", "pubkey": other, "sealed": "00"}]}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        assert_eq!(
+            (
+                r["results"][0]["result"].as_str(),
+                r["results"][0]["error"].as_str()
+            ),
+            (Some("error"), Some("mismatch"))
+        );
     }
 }
