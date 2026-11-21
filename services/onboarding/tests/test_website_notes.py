@@ -334,3 +334,26 @@ def test_the_api_takes_screenshots_and_a_summary(rsvc, monkeypatch):  # noqa: F8
         # the short link names a site too
         r = post({"ref": f"https://preview.belfry.test/v/{code}"})
         assert r.status_code == 200 and len(calls) == 2
+
+
+def test_without_a_summary_the_title_is_used_unless_it_is_a_default(pub):  # noqa: F811
+    svc, state = pub
+    svc.settings.community_name = "Example Commons"
+
+    def summary(tags):
+        return asyncio.run(
+            website.publish_from(
+                svc, AUTHOR, "website", "Ada", ["/ios/screenshots/"], source={"tags": tags}
+            )
+        )["summary"]
+
+    assert summary([["title", "Website: /ios/screenshots/ — new onboarding screens"]]) == (
+        "/ios/screenshots/ — new onboarding screens"
+    )
+    assert summary([["title", "New screens"], ["summary", "Better"]]) == "Better"
+    assert summary([["subject", "New website: a fresh home page"]]) == "a fresh home page"
+    for default in ("", "Website", "website", "Example Commons", "Proposal", "Website: "):
+        assert summary([["title", default]]) == "", default
+    assert summary([["title", "x" * 201]]) == ""  # too long: no summary, never cut
+    assert summary([["title", "two\nlines"]]) == ""
+    assert state["logged"][-1].startswith("**Website updated** by Ada\n---\n")

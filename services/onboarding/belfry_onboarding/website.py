@@ -574,12 +574,36 @@ def resolve_screenshots(
     return out
 
 
-def summary_of(event: dict[str, Any] | None) -> str | None:
-    """A proposal's (or a button message's) ``["summary", …]`` tag, when it is one short line."""
+def summary_of(
+    event: dict[str, Any] | None, svc: Services | None = None, name: str = ""
+) -> str | None:
+    """A proposal's (or a button message's) ``["summary", …]`` tag, when it is one short line;
+    else its ``title`` (or ``subject``) tag by the same rules, unless that is only a default: empty,
+    "Website", "New website", "Proposal", the site's name or the community's name. A leading
+    "Website:" / "New website:" is dropped ("Website: /ios/ — new screens" → "/ios/ — new
+    screens")."""
     try:
-        return clean_summary(_tagv(event or {}, "summary"))
+        got = clean_summary(_tagv(event or {}, "summary"))
     except SummaryError:
-        return None
+        got = None
+    if got:
+        return got
+    for key in ("title", "subject"):
+        try:
+            title = clean_summary(_tagv(event or {}, key))
+        except SummaryError:
+            continue
+        if not title:
+            continue
+        title = re.sub(r"(?i)^(new\s+)?website\s*:\s*", "", title).strip()
+        defaults = {"", "website", "new website", "proposal", "the website", (name or "").lower()}
+        community = getattr(getattr(svc, "settings", None), "community_name", "") or ""
+        if community:
+            defaults |= {community.lower(), f"{community} website".lower()}
+        if title.lower() in defaults:
+            continue
+        return title
+    return None
 
 
 def screenshots_of(svc: Services, event: dict[str, Any] | None) -> list[dict[str, str]]:
@@ -720,7 +744,7 @@ async def publish_from(
     screenshot raises SummaryError / ScreenshotsError before anything is copied."""
     from . import community
 
-    summary = clean_summary(summary) if summary is not None else summary_of(source)
+    summary = clean_summary(summary) if summary is not None else summary_of(source, svc, name)
     shots = parse_screenshots(svc, screenshots, allow_paths=True)
     if shots is None:
         shots = screenshots_of(svc, source)
@@ -974,7 +998,7 @@ def note_for(svc: Services, p: dict[str, Any], head: str, body: str) -> tuple[st
     preview = preview_url(svc, *p["ref"]) if p.get("ref") else ""
     return folded(
         head,
-        summary_of(p.get("version")) if ok else None,
+        summary_of(p.get("version"), svc, (p.get("ref") or ("", ""))[1]) if ok else None,
         screenshots_of(svc, p.get("version")) if ok else [],
         [body, f"Preview: {preview}" if preview else ""],
     )

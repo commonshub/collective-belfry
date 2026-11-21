@@ -587,7 +587,7 @@ def approve_website(svc: Services, proposal_id: str, approver: str) -> dict[str,
 
     text, tags = website.folded(
         f"**Website updated** by {approver}",
-        website.summary_of(prop),
+        website.summary_of(prop, svc, d),
         website.screenshots_of(svc, prop),
         [
             f"{website._files(len(paths))}, the whole site. "
