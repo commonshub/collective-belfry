@@ -34,6 +34,9 @@
 #   --accept-unverified N       exactly N connected sessions Keycast does not verify are left
 #                               out (read Keycast's validate_client before accepting)
 #   --accept-skipped-rows N     exactly N sessions whose bunker key does not derive are left out
+#   --accept-guessed N          exactly N carried sessions have a scope guessed own (an origin
+#                               neither the belfry's nor an approved outside app's: read the
+#                               report's scope_guessed list before accepting)
 #   --yes                       no question before `switch` (never for `cleanup`)
 #   --before-seven-days         `cleanup` although the switch is less than seven days old
 #   --no-tmux                   switch, rollback and cleanup outside tmux or screen (a dropped
@@ -85,7 +88,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --exclude) [[ "${2:-}" =~ ^[0-9a-f]{64}$ ]] || die "--exclude takes a public key (64 hex)"
                PY_FLAGS+=(--exclude "$2"); shift 2 ;;
-    --accept-lost-sessions|--accept-missing-stewards|--accept-unverified|--accept-skipped-rows)
+    --accept-lost-sessions|--accept-missing-stewards|--accept-unverified|--accept-skipped-rows|--accept-guessed)
                [[ "${2:-}" =~ ^[0-9]+$ ]] || die "$1 takes a number"
                PY_FLAGS+=("$1" "$2"); shift 2 ;;
     --yes) YES=1; shift ;;
@@ -232,7 +235,8 @@ fresh_backup() { # a backup from the last hour, or one made now; dies without
     [[ -n "$age" && "$age" -lt 3600 ]] || die "backup.sh ran but no backup from the last hour is in $BACKUP_DIR"
   fi
   local f; f=$(latest_backup)
-  state_set backup_at "$(backup_time "$f")" backup_path "$f" backup_sha "$(sha256sum "$f" | cut -d' ' -f1)"
+  box_id >/dev/null
+  state_set backup_at "$(backup_time "$f")" backup_path "$f" backup_sha "$(sha256sum "$f" | cut -d' ' -f1)" box "$BOX"
 }
 # backup_holds_signer FILE: the backup's own record (FILE.json, written by backup.sh) says it
 # carries the signer's volume, and its checksum is the file's
@@ -256,6 +260,8 @@ sys.exit(0 if ok else 1)' "$f" "$side"
 # box's guards. A report is bound to the domain, a fingerprint of the signer's master key (the
 # file's hash, never the key) and the identifier of the Postgres cluster Keycast's database
 # lives in.
+# box_id must first run in the script's own shell (need_this_box, stamp_report do), so that a
+# Postgres that does not answer stops the script instead of an empty "$(box_id)".
 BOX=""
 box_id() {
   if [[ -z "$BOX" ]]; then
@@ -263,12 +269,15 @@ box_id() {
     [[ -s "$master" ]] || master="$INFRA/keycast/master.key"
     if [[ -s "$master" ]]; then fp=$(sha256sum "$master" | cut -c1-16); else fp=none; fi
     db=$(compose exec -T postgres psql -U postgres -d keycast -tAc "select system_identifier from pg_control_system()" 2>/dev/null | tr -d '[:space:]')
-    BOX=$(python3 -c 'import json,sys; print(json.dumps({"domain": sys.argv[1], "master": sys.argv[2], "keycast_db": sys.argv[3]}, sort_keys=True))' "$(domain)" "$fp" "${db:-none}")
+    # never a box without its database: every guard would then say "made on another box"
+    [[ -n "$db" ]] || die "Postgres didn't answer (the system identifier of Keycast's database cluster could not be read): start it ('$BELFRY compose up -d postgres') and run this again"
+    BOX=$(python3 -c 'import json,sys; print(json.dumps({"domain": sys.argv[1], "master": sys.argv[2], "keycast_db": sys.argv[3]}, sort_keys=True))' "$(domain)" "$fp" "$db")
   fi
   echo "$BOX"
 }
 stamp_report() { # stamp_report FILE: the box goes into the report
   [[ -s "$1" ]] || return 0
+  box_id >/dev/null
   python3 -c '
 import json, os, sys
 path, box = sys.argv[1], json.loads(sys.argv[2])
@@ -372,6 +381,7 @@ print(len(AuthentikClient(s.authentik_url, s.authentik_token).group_member_email
 # ── backup ──────────────────────────────────────────────────────────────────────────────────
 cmd_backup() {
   step "Backup"
+  need_this_box
   fresh_backup
   say "backup: done. import and switch may go on."
 }
@@ -395,8 +405,12 @@ start_import_signer() {
 }
 
 need_this_box() { # the state on record was made here, not restored from another box's backup
+  box_id >/dev/null   # here, not in a subshell: a Postgres that does not answer stops us
+  [[ -s "$STATE" ]] || return 0   # nothing on record yet: the first backup writes the box
   local box; box=$(state_get box)
-  [[ -z "$box" || "$box" == "$(box_id)" ]] \
+  [[ -n "$box" ]] \
+    || die "$STATE names no box: it cannot be told apart from another box's record. Move it aside to start over."
+  [[ "$box" == "$BOX" ]] \
     || die "$STATE was made on another box (domain, master key or Keycast's database differ): it is not this belfry's record. Move it aside to start over."
 }
 
@@ -477,6 +491,10 @@ cmd_switch() {
   [[ "$(report_field "$out" ok)" == true ]] && report_of_this_box "$out" \
     || die "the verify report does not say ok for this box: nothing was switched"
   state_set verified_at "$(now)" verify_report "$out" switch_report "$out" verify_digest "$(report_field "$out" digest)" box "$(box_id)"
+  # the migration's window ends with the verify that decides: from here no import syncs, and
+  # a move to an own key drops the held key as everywhere else
+  py close-window "$STATE_DIR/close-window-$(stamp).json" \
+    || die "the signer's migration window could not be closed: nothing was switched"
   step "Switching"
   trap - EXIT   # from here on the way back is '$0 rollback', not a restart of the old services
   STOPPED=0
@@ -554,7 +572,9 @@ cmd_rollback() {
   say "  first (sessions it still had live are revoked there, accounts suspended)."
   say "- NOT carried back: sessions opened since the switch (those devices sign in again),"
   say "  reactivated accounts (they stay suspended in Keycast), usernames, admins, people who"
-  say "  joined since (they get the same key from Keycast when it is a derived one)."
+  say "  joined since (they get the same key from Keycast when it is a derived one), and moves"
+  say "  to an own key made on the signer: Keycast still has the old held key and account (the"
+  say "  sessions such a move signed out are revoked in Keycast by the carry-back)."
   if [[ $YES -ne 1 ]]; then
     [[ -t 0 ]] || die "add --yes to roll back without a terminal"
     local answer
@@ -614,7 +634,8 @@ cmd_cleanup() {
     say "Backup with the signer's keys: $bf (sha256 $(state_get backup_sha | cut -c1-16)…)."
   fi
   say ""
-  say "This deletes, for good: every table of Keycast's database (accounts, sealed keys, sessions)"
+  say "This deletes, for good: the held keys the signer archived during the migration (members who"
+  say "took their own key between import and switch), every table of Keycast's database (accounts, sealed keys, sessions)"
   say "and of Authentik's (users, groups, flows), Authentik's volumes (media, certificates), and"
   say "their containers. After it there is no rollback to Keycast. It keeps infra/keycast/master.key"
   say "(the signer's key is a copy of it and old backups need it), the custody seed and the backups."
@@ -622,6 +643,11 @@ cmd_cleanup() {
   read -r -p "Type 'delete keycast and authentik of $d' to go on: " answer
   [[ "$answer" == "delete keycast and authentik of $d" ]] || die "nothing was deleted"
   step "Deleting"
+  # held keys the signer archived during the migration's window (moves to an own key made in
+  # Keycast between import and switch): kept until now as the window's safety net
+  py drop-archive "$STATE_DIR/drop-archive-$(stamp).json" \
+    || die "the signer's archived keys could not be deleted: cleanup stopped here (run it again)"
+  say "deleted the signer's archived keys"
   compose --profile keycast rm -sf keycast keycast-migrate authentik-server authentik-worker redis >/dev/null 2>&1 || true
   # the databases stay, empty, as on a belfry installed with its own signer (postgres' health
   # check looks for the database keycast). The first failure stops here: cleaned_at is only

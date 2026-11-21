@@ -69,6 +69,7 @@ class FakeSignerAdmin:
         self.closed: bool | None = False  # the "no new accounts" switch (None: none)
         self.skipped: dict[str, str] = {}  # bunker -> vine_id (GET /import/skipped)
         self.archived: list[tuple[str, str, Any]] = []  # held keys replaced by an own key
+        self.window = False  # the migration's window (POST /settings {migration})
 
     def health(self):
         return {"status": "ok", "seed": True, "bunker": {"state": "off"}}
@@ -145,17 +146,19 @@ class FakeSignerAdmin:
         self.accounts[vine_id]["status"] = status
         return ""
 
-    def import_connections(self, vine_id, rows):
+    def import_connections(self, vine_id, rows, sync=False):
         """The signer's rules: all or nothing; a bunker key the formula does not give skips
-        that row only (and lists it); while the "no new accounts" switch is closed a row that
-        is there is brought to what the import says (the migration's window)."""
+        that row only (and lists it); with SYNC, honoured only inside the migration's window,
+        a row that is there is brought to what the import says, except that an outside row
+        never becomes own."""
         self.calls.append(("connections", len(rows)))
         acct = self.accounts.get(vine_id)
         if acct is None:
             return {"error": "not_found: "}
         if acct["custody"] == "own":
             return {"error": "own_key: "}
-        sync = self.closed is True
+        if sync and not self.window:
+            return {"error": "invalid: sync is for the migration's window only"}
         new, changes, skipped = [], [], []
         counts = {"imported": 0, "existing": 0, "revoked": 0, "updated": 0, "released": 0}
         conns = [*self.conns]
@@ -176,17 +179,24 @@ class FakeSignerAdmin:
                 "revoked_at": revoked,
                 "app": row["app"],
                 "scope": row.get("scope", "own"),
+                "decrypt": bool(row.get("decrypt")),
+                "origin": (row.get("origin") or "").strip(),
+                "kind": "nip46",
             }
             if same:
                 c = same[0]
                 if c["vine_id"] != vine_id:
                     return {"error": "mismatch: another account's bunker key"}
+                if c.get("scope") == "outside" and want["scope"] != "outside":
+                    want["scope"], want["decrypt"] = "outside", c.get("decrypt", False)
                 now = {k: c.get(k) for k in want}
                 if not sync or (
                     now["client_pubkey"] == client
                     and bool(now["revoked_at"]) == bool(revoked)
                     and now["app"] == want["app"]
                     and now["scope"] == want["scope"]
+                    and now["decrypt"] == want["decrypt"]
+                    and now["origin"] == want["origin"]
                 ):
                     counts["existing"] += 1
                     continue
@@ -223,7 +233,7 @@ class FakeSignerAdmin:
 
     def move_own(self, vine_id, pubkey):
         have = self.accounts[vine_id]
-        if have["custody"] != "own":
+        if have["custody"] != "own" and self.window:
             self.archived.append((vine_id, have["pubkey"], self.secrets.get(vine_id)))
         have.update(pubkey=pubkey, custody="own")
         for c in self.conns:
@@ -253,6 +263,17 @@ class FakeSignerAdmin:
             return None
         self.closed = closed
         return closed
+
+    def set_window(self, on):
+        self.window = bool(on)
+        return self.window
+
+    def delete_archived_keys(self):
+        if self.window:
+            raise migration.MigrationError("the signer kept its archived keys: invalid: window")
+        n = len(self.archived)
+        self.archived.clear()
+        return n
 
 
 class World:
@@ -659,6 +680,7 @@ def test_a_clean_move_verifies(moved):
         "live_sessions": 5,
         "revoked_sessions": 2,
         "own_key_no_account": 1,
+        "kept_outside": 0,
         "signer_accounts": 6,
     }
     # the revoked rows are read back from the signer (GET …/connections?all=true)
@@ -887,7 +909,9 @@ def test_the_api_client_calls_the_signers_paths():
                 return httpx.Response(200, json={"accounts": [{"vine_id": "v2"}], "next": None})
             return httpx.Response(200, json={"accounts": [{"vine_id": "v1"}], "next": "v1"})
         if path == "/settings":
-            return httpx.Response(200, json={"no_new_accounts": body["no_new_accounts"]})
+            return httpx.Response(200, json=body)
+        if path == "/archived-keys":
+            return httpx.Response(200, json={"deleted": 3})
         if path == "/accounts/none":
             return httpx.Response(404, json={"error": "not_found"})
         if path.endswith("/username"):
@@ -910,6 +934,12 @@ def test_the_api_client_calls_the_signers_paths():
     assert api.connections("odoo-partner-1", all=True) == [{"bunker_pubkey": "b", "revoked_at": 5}]
     assert [a["vine_id"] for a in api.list_accounts()] == ["v1", "v2"]
     assert api.close_accounts(True) is True and api.close_accounts(False) is False
+    assert api.set_window(True) is True and seen[-1][2] == {"migration": True}
+    assert api.delete_archived_keys() == 3 and seen[-1][:2] == ("DELETE", "/archived-keys")
+    api.import_connections("v", [{}], sync=True)
+    assert seen[-1][2] == {"vine_id": "v", "connections": [{}], "sync": True}
+    assert seen[8][2] == {"vine_id": "bad", "connections": [{}]}, "no sync unless asked"
+    del seen[-3:]
     assert [(m, p) for m, p, _, _ in seen][:10] == [
         ("GET", "/health"),
         ("GET", "/accounts/odoo-partner-1"),
@@ -952,6 +982,7 @@ def run_cli(w, phase, monkeypatch, **more):
 
 def test_the_command_prints_counts_and_never_a_key_or_an_address(town, monkeypatch):
     w = town
+    monkeypatch.setattr(w.svc.settings, "signer", "keycast")  # import runs before the switch
     code, out, err = run_cli(w, "plan", monkeypatch)
     assert code == 0 and "accounts in Keycast: 6" in err and "problems: 0" in err
     assert w.signer.accounts == {}  # the plan writes nothing
@@ -967,6 +998,7 @@ def test_the_command_prints_counts_and_never_a_key_or_an_address(town, monkeypat
     assert w.signer.closed is True, "a verify changes nothing"
     code, out, err = run_cli(w, "open", monkeypatch)
     assert code == 0 and w.signer.closed is False and json.loads(out) == {"no_new_accounts": False}
+    assert w.signer.window is False, "open ends the migration's window too"
     code, out, err = run_cli(w, "verify", monkeypatch)
     report = json.loads(out)
     assert report["ok"] is True and report["checked"]["accounts"] == 6
@@ -1231,7 +1263,8 @@ def test_running_import_again_follows_keycast_between_import_and_switch(world):
     assert len(p.lost) == 1
     first = migration.run_import(p, w.signer)
     assert first["errors"] == []
-    assert migration.verify(w.plan(), w.signer, w.svc, accept_lost=1)["ok"]
+    # (the outside app not approved yet: its scope is guessed, and accepted by number)
+    assert migration.verify(w.plan(), w.signer, w.svc, accept_lost=1, accept_guessed=1)["ok"]
     # since the first import, on Keycast: a sign-out, a row deleted, b used the tablet last,
     # the outside app approved, and c took their own key
     signed_out.row["revoked_at"] = NOW - 5
@@ -1283,9 +1316,15 @@ def test_a_session_signed_out_in_keycast_is_revoked_in_the_signer_by_the_next_im
     a = w.person("Aa")
     live = w.session(a)
     migration.run_import(w.plan(), w.signer)
+    assert w.signer.window is True, "the import opens the migration's window"
     live.row["revoked_at"] = NOW - 1
-    # outside the window (accounts open) the signer keeps what it has: verify says so
     assert "session_unexpected" in kinds(migration.verify(w.plan(), w.signer, w.svc))
+    # outside the window (closed by the switch) the signer refuses a sync: nothing changes
+    w.signer.window = False
+    assert "error" in w.signer.import_connections(
+        a.vine_id, [migration.connection_row(s) for s in w.plan().sessions], True
+    )
+    # "no new accounts" alone is not the window: the next import opens it again and syncs
     w.signer.closed = True
     migration.run_import(w.plan(), w.signer)
     assert migration.verify(w.plan(), w.signer, w.svc)["ok"]
@@ -1319,21 +1358,127 @@ def test_scope_comes_from_keycasts_origin(world, origin, scope, guessed):
     assert migration.scope_of(world.svc, origin, world.approved) == (scope, guessed)
 
 
-def test_guessed_scopes_are_counted_and_the_scope_is_verified(world):
+def test_guessed_scopes_block_until_accepted_and_the_scope_is_verified(world):
     w = world
     a = w.person("Aa")
-    s = w.session(a, app="Who knows", origin="https://who.example.org")
+    w.session(a, app="Who knows", origin="https://who.example.org")
     p = w.plan()
     assert migration.counts(p)["scope_guessed"] == 1
     migration.run_import(p, w.signer)
     report = migration.verify(w.plan(), w.signer, w.svc)
-    assert report["ok"] and [x["app"] for x in report["scope_guessed"]] == ["Who knows"]
-    next(c for c in w.signer.conns if c["bunker_pubkey"] == s.bunker)["scope"] = "outside"
-    assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == ["session_scope"]
-    # the next import in the window corrects it
-    w.signer.closed = True
+    assert kinds(report) == ["scope_guessed"]
+    assert [x["app"] for x in report["scope_guessed"]] == ["Who knows"]
+    assert not migration.verify(w.plan(), w.signer, w.svc, accept_guessed=2)["ok"]
+    report = migration.verify(w.plan(), w.signer, w.svc, accept_guessed=1)
+    assert report["ok"], report["mismatches"]
+    # a scope the plan knows (not guessed) that differs is a mismatch
+    own = w.session(a, app="Chat", origin="https://chat.belfry.test")
     migration.run_import(w.plan(), w.signer)
+    row = next(c for c in w.signer.conns if c["bunker_pubkey"] == own.bunker)
+    row.update(scope="outside", decrypt=True)
+    assert kinds(migration.verify(w.plan(), w.signer, w.svc, accept_guessed=1)) == ["session_scope"]
+    row.update(scope="own", decrypt=False)
+
+
+def test_the_sync_never_turns_an_outside_app_into_an_own_one(world):
+    """The finding: the approvals changed (or a guess) and the sync rewrote outside to own."""
+    w = world
+    a = w.person("Aa")
+    s = w.session(a, app="notes.example.org", origin="https://notes.example.org")
+    migration.run_import(w.plan(), w.signer)
+    row = next(c for c in w.signer.conns if c["bunker_pubkey"] == s.bunker)
+    assert (row["scope"], row["decrypt"]) == ("outside", True)
+    # the app is no longer approved: the plan guesses own; the sync keeps it outside
+    w.approved.discard("https://notes.example.org")
+    p = w.plan()
+    assert [x.guessed for x in p.sessions] == [True]
+    migration.run_import(p, w.signer)
+    assert (row["scope"], row["decrypt"]) == ("outside", True)
+    report = migration.verify(w.plan(), w.signer, w.svc, accept_guessed=1)
+    assert report["ok"], report["mismatches"]
+    assert report["checked"]["kept_outside"] == 1
+
+
+def test_approvals_that_cannot_be_read_stop_the_plan(services, odoo, monkeypatch):
+    from belfry_onboarding import apps
+
+    def down(svc):
+        raise ConnectionError("relay down")
+
+    monkeypatch.setattr(apps, "state", down)
+    services.settings.nip05_domain = "belfry.test"
+    w = World(services, odoo)
+    w.person("Aa")
+    with pytest.raises(migration.MigrationError, match="approvals"):
+        w.plan()
+    args = SimpleNamespace(
+        phase="plan",
+        exclude=None,
+        no_stewards=True,
+        accept_lost_sessions=0,
+        accept_missing_stewards=0,
+    )
+    err = io.StringIO()
+    code = migration.cli(
+        args, services, services.settings, io.StringIO(json.dumps(w.doc())), io.StringIO(), err
+    )
+    assert code == 2 and "approvals" in err.getvalue()
+
+
+def test_imported_outside_sessions_keep_decrypt_and_origin_kind_decrypt_are_verified(moved):
+    w = moved
+    app_row = next(c for c in w.signer.conns if c["bunker_pubkey"] == w.app.bunker)
+    assert (app_row["scope"], app_row["decrypt"], app_row["origin"]) == (
+        "outside",
+        True,
+        "https://notes.example.org",
+    )
+    live = next(c for c in w.signer.conns if c["bunker_pubkey"] == w.live.bunker)
+    assert live["decrypt"] is False
+    revoked = next(c for c in w.signer.conns if c["bunker_pubkey"] == w.revoked.bunker)
+    for row, field, value, kind in [
+        (app_row, "decrypt", False, "session_decrypt"),
+        (live, "decrypt", True, "session_decrypt"),
+        (live, "origin", "https://elsewhere.example.org", "session_origin"),
+        (live, "kind", "http", "session_kind"),
+        (revoked, "origin", "https://elsewhere.example.org", "session_origin"),
+        (revoked, "kind", "http", "session_kind"),
+    ]:
+        old = row[field]
+        row[field] = value
+        assert kinds(migration.verify(w.plan(), w.signer, w.svc)) == [kind], (field, value)
+        row[field] = old
     assert migration.verify(w.plan(), w.signer, w.svc)["ok"]
+
+
+def test_import_refuses_after_the_switch_and_carry_back_before_it(town, monkeypatch):
+    w = town
+    monkeypatch.setattr(w.svc.settings, "signer", "belfry")
+    code, out, err = run_cli(w, "import", monkeypatch)
+    assert code == 2 and "own signer" in err and w.signer.accounts == {}
+    monkeypatch.setattr(w.svc.settings, "signer", "keycast")
+    code, out, err = run_cli(w, "carry-back", monkeypatch)
+    assert code == 2 and "after the switch" in err
+    code, out, err = run_cli(w, "import", monkeypatch)
+    assert code == 0 and w.signer.window is True
+    code, out, err = run_cli(w, "close-window", monkeypatch)
+    assert code == 0 and w.signer.window is False and json.loads(out) == {"migration": False}
+    # the archive is deleted only by the cleanup, after the switch
+    w.signer.archived.append(("v", "k", b"s"))
+    code, out, err = run_cli(w, "drop-archive", monkeypatch)
+    assert code == 2 and w.signer.archived
+    monkeypatch.setattr(w.svc.settings, "signer", "belfry")
+    code, out, err = run_cli(w, "drop-archive", monkeypatch)
+    assert code == 0 and json.loads(out) == {"deleted": 1} and w.signer.archived == []
+
+
+def test_a_held_key_is_archived_only_inside_the_window(world):
+    w = world
+    a = w.person("Aa")
+    migration.run_import(w.plan(), w.signer)
+    w.signer.window = False
+    w.signer.move_own(a.vine_id, "7" * 64)
+    assert w.signer.archived == []
 
 
 def test_unverified_sessions_block_until_accepted_by_number(town):
@@ -1408,3 +1553,39 @@ def test_a_backup_is_as_old_as_its_own_name_says_and_never_from_the_future(tmp_p
     assert age(f"belfry-box-{future}.tar.age") == ""  # from the future: no fresh backup
     assert age("belfry-box-notastamp.tar.age") == ""
     assert age() == ""
+
+
+def test_the_box_guard_stops_on_a_silent_postgres_and_a_state_without_a_box(tmp_path):
+    import subprocess
+
+    fns = functions((SCRIPTS / "migrate-to-own-signer.sh").read_text())
+    defs = "\n".join(f"{n}() {{\n{fns[n]}}}" for n in ("state_get", "box_id", "need_this_box"))
+
+    def run(db: str, state: str | None) -> subprocess.CompletedProcess:
+        st = tmp_path / "state.json"
+        if state is None:
+            st.unlink(missing_ok=True)
+        else:
+            st.write_text(state)
+        script = (
+            'die() { echo "migrate: $*" >&2; exit 1; }\n'
+            f'compose() {{ printf "%s" "{db}"; }}\n'
+            "domain() { echo belfry.test; }\n"
+            f'SECRETS="{tmp_path}"; INFRA="{tmp_path}"; STATE="{st}"; BELFRY=belfry; BOX=""\n'
+            f"{defs}\nneed_this_box && echo passed"
+        )
+        return subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    r = run("", None)
+    assert (
+        r.returncode == 1 and "Postgres didn't answer" in r.stderr and "another box" not in r.stderr
+    )
+    assert run("7123", None).stdout.strip() == "passed"  # nothing on record yet
+    r = run("7123", '{"backup_at": 1}')
+    assert r.returncode == 1 and "names no box" in r.stderr
+    box = json.dumps(
+        {"domain": "belfry.test", "keycast_db": "7123", "master": "none"}, sort_keys=True
+    )
+    assert run("7123", json.dumps({"box": box})).stdout.strip() == "passed"
+    r = run("9999", json.dumps({"box": box}))
+    assert r.returncode == 1 and "another box" in r.stderr
