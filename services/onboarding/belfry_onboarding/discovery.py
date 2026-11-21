@@ -28,7 +28,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import device, pages
+from . import device, pages, stewards
 from .core import Services, m2o_id
 from .holder_invites import ApiError, authenticate
 from .nostr import hex_to_npub
@@ -199,7 +199,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
     ]
     active = next((r for r in rows if r["state"] == "active"), None)
     partner_id = m2o_id((active or (rows[0] if rows else {})).get("partner_id"))
-    partner_fields = ["email", "belfry_member_number", "belfry_authentik_user_id"]
+    partner_fields = ["id", "email", "belfry_member_number", "belfry_authentik_user_id"]
     partner: dict[str, Any] = {}
     if partner_id:
         partner = svc.odoo.read_one("res.partner", partner_id, partner_fields) or {}
@@ -211,9 +211,7 @@ def me(svc: Services, pubkey: str) -> dict[str, Any]:
         partner = found_partners[0] if found_partners else {}
     number = partner.get("belfry_member_number") or ""
     user_pk = partner.get("belfry_authentik_user_id")
-    steward = bool(active and user_pk) and int(user_pk) in svc.authentik.group_member_pks(
-        svc.settings.steward_group
-    )
+    steward = bool(active) and stewards.is_steward(svc, partner.get("id") or partner_id, user_pk)
     return {
         "pubkey": pubkey,
         "npub": hex_to_npub(pubkey),

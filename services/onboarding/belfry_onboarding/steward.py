@@ -30,7 +30,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import core, flash
+from . import core, flash, stewards
 from .core import Services
 
 log = logging.getLogger(__name__)
@@ -51,8 +51,45 @@ class StewardError(Exception):
 
 
 def enabled(svc: Services) -> bool:
+    """With Authentik the pages sign in through its application belfry-steward; on a belfry
+    without it (SIGNER=belfry) through the belfry's own sign-in on the pass page (own_login)."""
     s = svc.settings
+    if stewards.own(svc):
+        from . import mypass
+
+        return bool(s.steward_session_secret and mypass.enabled(svc))
     return bool(s.steward_oidc_client_secret and s.steward_session_secret)
+
+
+def own_login(svc: Services, pass_cookie: str | None) -> str | None:
+    """A belfry without Authentik: whoever is signed in on the pass page (e-mail and code,
+    passlogin.py) and is an admin in the register gets the steward session. None: nobody is
+    signed in there yet. Raises 403 for a member who is no admin."""
+    from . import mypass
+
+    sess = mypass._verify(svc, pass_cookie, "session")
+    partner = int(sess["partner"]) if sess and sess.get("partner") else 0
+    if not partner:
+        return None
+    row = mypass.partner_pass(svc, partner)
+    person = svc.odoo.read_one("res.partner", partner, ["name", "email"]) or {}
+    email = (person.get("email") or "").strip()
+    if (
+        not row
+        or row.get("state") != "active"
+        or not email
+        or not stewards.is_steward(svc, partner)
+    ):
+        log.warning("steward login refused for person %s: not an admin", partner)
+        raise StewardError(403, "This account is not a steward.")
+    log.info("steward login: %s", email)
+    claims = {
+        "kind": "session",
+        "email": email,
+        "name": person.get("name") or email,
+        "csrf": secrets.token_urlsafe(24),
+    }
+    return _sign(svc, claims, svc.settings.steward_session_hours * 3600)
 
 
 def redirect_uri(svc: Services) -> str:
@@ -411,6 +448,18 @@ def add_steward(
     email = email.strip()
     if "@" not in email:
         raise ValueError(f"not an e-mail address: {email!r}")
+    if stewards.own(svc):
+        # a belfry without Authentik: the membership first (it makes the person when there is
+        # none), then the flag on that person in the register
+        made = steward_pass(svc, email, name, activate)
+        row = svc.odoo.read_one("belfry.pass", made["pass_id"], ["partner_id"]) or {}
+        partner = core.m2o_id(row.get("partner_id"))
+        if partner is None:
+            raise RuntimeError(f"add_steward: the pass of {email} has no person")
+        created = not stewards.is_steward(svc, partner)
+        stewards.mark(svc, partner, True)
+        log.info("add_steward: %s (person %s, new admin=%s)", email, partner, created)
+        return {"email": email, "partner": partner, "created": created, "pass": made}
     ak = svc.authentik
     group = ak.find_group(svc.settings.steward_group)
     if group is None:
@@ -485,7 +534,7 @@ def steward_passes(svc: Services, activate: Activate | None = None) -> dict[str,
     """A free pass for every member of the stewards group (CLI ``steward-passes``, run by
     deploys; ``add-steward`` gives new stewards theirs)."""
     done: dict[str, Any] = {}
-    for email in svc.authentik.group_member_emails(svc.settings.steward_group):
+    for email in stewards.emails(svc):
         try:
             done[email] = steward_pass(svc, email, activate=activate)
         except Exception as exc:  # one steward's failure must not stop the others
@@ -989,6 +1038,35 @@ def register(app: FastAPI) -> None:
     @app.get("/steward/login")
     async def steward_login(request: Request):
         services, _sess = guard(request)
+        if stewards.own(services):
+            from . import mypass, passlogin
+
+            cookie = await run_in_threadpool(
+                own_login, services, request.cookies.get(mypass.SESSION_COOKIE)
+            )
+            if cookie is None:  # sign in on the pass page first, then come back here
+                response = RedirectResponse("/me/login", status_code=303)
+                response.set_cookie(
+                    passlogin.NEXT,
+                    "/steward/login",
+                    max_age=900,
+                    httponly=True,
+                    secure=secure_cookies(services),
+                    samesite="lax",
+                    path="/me",
+                )
+                return response
+            response = RedirectResponse("/steward", status_code=303)
+            response.set_cookie(
+                SESSION_COOKIE,
+                cookie,
+                max_age=services.settings.steward_session_hours * 3600,
+                httponly=True,
+                secure=secure_cookies(services),
+                samesite="lax",
+                path="/steward",
+            )
+            return response
         url, flow = start_login(services)
         response = RedirectResponse(url, status_code=303)
         response.set_cookie(

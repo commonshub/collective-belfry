@@ -234,7 +234,11 @@ class SignerClient:
     # -- NIP-46 connections ---------------------------------------------------------------------
 
     def create_bunker(
-        self, token: str, app_name: str, client_pubkey: str | None = None
+        self,
+        token: str,
+        app_name: str,
+        client_pubkey: str | None = None,
+        scope: str = "own",
     ) -> dict[str, Any]:
         """A new NIP-46 connection for the token's account: ``{"bunker_url", "bunker_pubkey",
         "app_name", "origin", "created_at", "bound"}``.
@@ -242,8 +246,15 @@ class SignerClient:
         With ``client_pubkey`` (hex) the connection is bound to that client key when it is
         made: no other key can use it, and the URL's secret opens nothing. A key linked to
         another account raises :class:`ClientKeyTaken`. Without it, the URL's secret binds the
-        client key that first sends ``connect`` with it."""
-        body: dict[str, Any] = {"app": app_name[:60] or "App"}
+        client key that first sends ``connect`` with it, within ten minutes
+        (``SIGNER_UNCLAIMED_SECONDS``): after that the connection is gone.
+
+        ``scope``: ``own`` for the belfry's own apps, ``outside`` for any other app. The signer
+        never signs for an outside connection what remoteapps.py refuses a remote app (NIP-98
+        to the belfry's hosts, AUTH to its relays, kind 24133, NIP-29 moderation, …)."""
+        if scope not in ("own", "outside"):
+            raise ValueError(f"scope must be own or outside, not {scope!r}")
+        body: dict[str, Any] = {"app": app_name[:60] or "App", "scope": scope}
         if client_pubkey:
             body["client_pubkey"] = client_pubkey
         r = self._request("POST", self._account(token) + "/connections", body)
@@ -264,6 +275,15 @@ class SignerClient:
             str(data.get("client_pubkey") or "").lower() == str(client_pubkey).lower()
         )
         return out
+
+    def derive_secret(self, token: str, purpose: str) -> str:
+        """The account's secret for PURPOSE (64 hex; the wallet's seed and nutzap key, Keycast
+        patch 0011's formula). The caller decides which app may ask for which purpose."""
+        r = self._request("POST", self._account(token) + "/derive", {"purpose": purpose})
+        if r.status_code in (403, 422):
+            raise RuntimeError("signer derive_secret failed")
+        r.raise_for_status()
+        return str(r.json()["secret"])
 
     def list_sessions(self, token: str) -> list[dict[str, Any]]:
         """The token's account's NIP-46 connections: application_name, redirect_origin,

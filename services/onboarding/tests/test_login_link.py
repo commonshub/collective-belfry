@@ -10,7 +10,7 @@ import pytest
 
 from belfry_onboarding import core
 
-from .conftest import HOOK_TOKEN, seed_paid_invoice
+from .conftest import HOOK_TOKEN, authentik_only, seed_paid_invoice
 
 
 def pass_for(odoo, invoice_id):
@@ -30,6 +30,7 @@ def test_activation_stores_a_belfry_link_once(services, odoo, authentik):
     assert pass_for(odoo, ids["invoice"])["login_setup_url"] == p["login_setup_url"]
 
 
+@authentik_only
 def test_using_the_link_redirects_to_authentik_once(client, services, odoo, authentik):
     ids = seed_paid_invoice(odoo)
     core.activate_pass(services, ids["invoice"])
@@ -52,6 +53,7 @@ def test_using_the_link_redirects_to_authentik_once(client, services, odoo, auth
     assert client.post("/signin/not-a-real-token-at-all-xxxxxxxx").status_code == 410
 
 
+@authentik_only
 def test_welcome_page_and_mail_link_are_independent(client, services, odoo, authentik):
     ids = seed_paid_invoice(odoo)
     core.activate_pass(services, ids["invoice"])
@@ -70,6 +72,7 @@ def test_welcome_page_and_mail_link_are_independent(client, services, odoo, auth
     assert client.get("/welcome/unknown").status_code == 404
 
 
+@authentik_only
 def test_welcome_page_waits_for_the_activation(client, odoo):
     ids = seed_paid_invoice(odoo)
     odoo.add(
@@ -86,6 +89,7 @@ def test_welcome_page_waits_for_the_activation(client, odoo):
     assert client.post(f"/welcome/{'p' * 43}", follow_redirects=False).status_code == 410
 
 
+@authentik_only
 def test_missing_recovery_flow_fails_at_use_not_at_activation(client, services, odoo, authentik):
     authentik.recovery_flow_missing = True
     ids = seed_paid_invoice(odoo)
@@ -133,6 +137,7 @@ def test_admin_endpoint(client, odoo, services):
     assert r.json() == {"result": "not_found", "pass_id": 424242}
 
 
+@authentik_only
 def test_welcome_page_signs_in_and_returns_to_the_app(client, services, odoo, authentik):
     """A pass ordered by an app with a return_url: the welcome page waits, signs in by script,
     and the authentik link ends at the app (belfry_return); otherwise straight back to the app."""

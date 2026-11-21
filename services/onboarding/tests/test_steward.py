@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 from belfry_onboarding import core, steward
 from belfry_onboarding.app import create_app
 
-from .conftest import AUTHENTIK_URL, seed_paid_invoice
+from .conftest import AUTHENTIK_URL, TEST_SIGNER, authentik_only, seed_paid_invoice
 
 
 @pytest.fixture
@@ -20,6 +20,7 @@ def stewarding(services, router):
     """Steward pages configured; Authentik's token and userinfo endpoints mocked."""
     services.settings.steward_oidc_client_secret = "steward-secret"
     services.settings.steward_session_secret = "s" * 32
+    services.settings.pass_page_secret = "p" * 32  # the own sign-in of a belfry without Authentik
     user = {"email": "sam@belfry.test", "name": "Steward Sam", "groups": ["belfry-stewards"]}
     seen: dict = {}
 
@@ -42,7 +43,33 @@ def web(services):
         yield c
 
 
+def own_login(web, email: str = "sam@belfry.test", name: str = "Steward Sam") -> str:
+    """A belfry without Authentik: the admin is signed in on the pass page (e-mail and code,
+    passlogin.py; here its session cookie directly) and /steward/login takes it from there."""
+    from belfry_onboarding import mypass, stewards
+
+    svc = web.app.state.services
+    svc.settings.pass_page_secret = svc.settings.pass_page_secret or "p" * 32
+    found = svc.odoo.search_read("res.partner", [["email", "=ilike", email]], ["id"])
+    partner = found[0]["id"] if found else svc.odoo.create(
+        "res.partner", {"name": name, "email": email}
+    )
+    if not mypass.partner_pass(svc, partner):
+        svc.odoo.create("belfry.pass", {"partner_id": partner, "tier": "member", "state": "active"})
+    stewards.mark(svc, partner, True)
+    web.cookies.set(
+        mypass.SESSION_COOKIE, mypass._sign(svc, {"kind": "session", "partner": partner}, 3600)
+    )
+    start = web.get("/steward/login", follow_redirects=False)
+    assert start.status_code == 303 and start.headers["location"] == "/steward", start.text
+    page = web.get("/steward")
+    assert page.status_code == 200
+    return re.search(r'name="csrf" value="([^"]+)"', page.text).group(1)
+
+
 def login(web) -> str:
+    if TEST_SIGNER == "belfry":
+        return own_login(web)
     start = web.get("/steward/login", follow_redirects=False)
     assert start.status_code == 303
     location = start.headers["location"]
@@ -67,6 +94,7 @@ def test_disabled_without_secrets(web):
     assert web.get("/steward", follow_redirects=False).status_code == 503
 
 
+@authentik_only
 def test_login_exchanges_code_with_pkce_and_client_secret(web, stewarding):
     login(web)
     seen = stewarding["seen"]
@@ -80,6 +108,7 @@ def test_unauthenticated_is_sent_to_login(web, stewarding):
     assert r.status_code == 303 and r.headers["location"] == "/steward/login"
 
 
+@authentik_only
 def test_non_steward_is_refused(web, stewarding):
     stewarding["user"]["groups"] = ["belfry-participants"]
     start = web.get("/steward/login", follow_redirects=False)
@@ -92,6 +121,7 @@ def test_non_steward_is_refused(web, stewarding):
     assert "belfry_steward=" not in r.headers.get("set-cookie", "")
 
 
+@authentik_only
 def test_callback_with_wrong_state_is_refused(web, stewarding):
     web.get("/steward/login", follow_redirects=False)
     r = web.get(
@@ -164,6 +194,7 @@ def test_steward_mark_counts_even_with_a_failed_card_attempt(services, odoo, aut
     assert core.activate_pass(services, ids["invoice"]) == "activated"
 
 
+@authentik_only
 def test_add_steward_creates_or_reuses_the_user(services, authentik):
     authentik.groups["belfry-stewards"] = {"pk": "0000-stewards", "members": set()}
     first = steward.add_steward(services, "sam@belfry.test", "Steward Sam")

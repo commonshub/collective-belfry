@@ -8,7 +8,9 @@ import pytest
 
 from belfry_onboarding import core
 
-from .conftest import seed_paid_invoice
+from .conftest import authentik_only, seed_paid_invoice
+
+pytestmark = authentik_only  # the group is Authentik's: a belfry on its own signer has none
 
 
 def pass_for(odoo, invoice_id):

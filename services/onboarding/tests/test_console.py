@@ -13,6 +13,7 @@ from belfry_onboarding import console, homepage, mypass
 from belfry_onboarding.app import create_app
 from belfry_onboarding.nip46check import sign_event
 
+from .conftest import authentik_only
 from .fakes import flash_of
 
 CONSOLE = {"Host": "belfry.belfry.test"}
@@ -661,6 +662,7 @@ def test_apps_home_shows_what_can_be_added_to_admins_only(web, belfry, odoo, aut
     )
 
 
+@authentik_only
 def test_admins_are_not_asked_again_at_once_when_authentik_is_down(belfry, monkeypatch):
     """A failing Authentik was asked on every page view (30 s timeout each)."""
     calls = []

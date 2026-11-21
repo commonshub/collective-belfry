@@ -43,6 +43,11 @@ def main(argv: list[str] | None = None) -> int:
     add.add_argument("name", nargs="?", default="")
     sub.add_parser("steward-passes", help="give every member of the stewards group their free pass")
     sub.add_parser(
+        "import-stewards",
+        help="copy Authentik's stewards group into the register (for a belfry leaving Authentik; "
+        "needs AUTHENTIK_URL and AUTHENTIK_TOKEN; safe to run again)",
+    )
+    sub.add_parser(
         "usernames", help="members whose username is still a number get their name as a slug"
     )
     sub.add_parser(
@@ -157,6 +162,16 @@ def main(argv: list[str] | None = None) -> int:
         from . import usernames
 
         result = usernames.backfill(services)
+    elif args.command == "import-stewards":
+        from . import stewards
+        from .clients.authentik import AuthentikClient
+
+        if not settings.authentik_token:
+            print("AUTHENTIK_TOKEN is not set: nothing to read the stewards from", file=sys.stderr)
+            return 2
+        result = stewards.import_from_authentik(
+            services, AuthentikClient(settings.authentik_url, settings.authentik_token)
+        )
     elif args.command == "steward-passes":
         result = steward.steward_passes(services, steward.activation_via_hook(services))
     elif args.command == "sync-programme":

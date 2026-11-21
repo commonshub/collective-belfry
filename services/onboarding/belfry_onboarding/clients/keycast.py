@@ -153,7 +153,11 @@ class KeycastClient:
         r.raise_for_status()
 
     def create_bunker(
-        self, token: str, app_name: str, client_pubkey: str | None = None
+        self,
+        token: str,
+        app_name: str,
+        client_pubkey: str | None = None,
+        scope: str = "own",
     ) -> dict[str, Any]:
         """A new NIP-46 connection for the token's user: ``{"bunker_url", "bunker_pubkey", …}``.
         The URL's secret binds the client key that first sends ``connect`` with it.
@@ -162,7 +166,11 @@ class KeycastClient:
         key when it is made: no other key can connect, with or without the secret. A key linked
         to another account raises :class:`ClientKeyTaken`. ``"bound"`` in the answer says
         whether the signer did it: one built without the patch ignores the field, and the
-        connection is then bound by the first ``connect`` as before."""
+        connection is then bound by the first ``connect`` as before.
+
+        ``scope`` (``own`` or ``outside``) is for Belfry's own signer (clients/signer.py), which
+        limits what a connection of an outside app may have signed. Keycast has no such
+        limit: the argument is accepted and not sent."""
         body: dict[str, Any] = {"app_name": app_name[:60] or "App"}
         if client_pubkey:
             body["client_pubkey"] = client_pubkey
@@ -184,6 +192,12 @@ class KeycastClient:
             str(data.get("client_pubkey") or "").lower() == str(client_pubkey).lower()
         )
         return data
+
+    def derive_secret(self, token: str, purpose: str) -> str:
+        """Belfry's own signer has this (clients/signer.py). Keycast gives derived secrets only
+        to its own OAuth clients (patch 0011, ``/api/nostr`` with the app's token), never to
+        the service: always an error here."""
+        raise RuntimeError("keycast derive_secret failed: not offered to the service")
 
     def get_profile(self, token: str) -> dict[str, Any]:
         """The token's user: ``{"username", "nip05"}`` (either may be null)."""

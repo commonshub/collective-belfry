@@ -334,8 +334,11 @@ def test_with_belfrys_signer_the_service_answers_nip05_itself(services, client, 
 def test_the_status_page_checks_the_signer_that_is_in_use(settings):
     from belfry_onboarding import console
 
+    settings.signer, settings.signer_url = "keycast", "http://signer:8200"
     by_name = {c[0]: c[1] for c in console.checks(settings)}
     assert by_name["Signer (Keycast)"] == "http://keycast.test/"
+    assert "Sign-in (Authentik)" in by_name
     settings.signer = "belfry"
     by_name = {c[0]: c[1] for c in console.checks(settings)}
     assert by_name["Signer"] == "http://signer:8200/health" and "Signer (Keycast)" not in by_name
+    assert "Sign-in (Authentik)" not in by_name  # a belfry on its own signer has none

@@ -20,7 +20,7 @@ from typing import Any
 
 import httpx
 
-from . import accounting, avatar
+from . import accounting, avatar, stewards
 from .accounting import Accounting
 from .clients.authentik import AuthentikClient
 from .clients.issuer import IssuerClient
@@ -317,7 +317,13 @@ def issue_missing_tokens(svc: Services) -> dict[int, int]:
     return issued
 
 
-def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number: str) -> int:
+def _ensure_authentik_user(
+    svc: Services, partner: dict[str, Any], member_number: str
+) -> int | bool:
+    """The member's Authentik user (found or made). A belfry without Authentik (SIGNER=belfry,
+    stewards.own) makes none: False, which is what the register and the pass then keep."""
+    if stewards.own(svc):
+        return False
     ak = svc.authentik
     email = partner.get("email") or None
     users = ak.find_users_by_attribute("belfry_member_number", member_number)
@@ -355,7 +361,10 @@ def _ensure_authentik_user(svc: Services, partner: dict[str, Any], member_number
 def _set_participant(svc: Services, user_pk: int, member: bool) -> None:
     """Add the Authentik user to (or remove it from) the participants group, which gates the
     Keycast login (blueprint belfry-keycast-provider). Idempotent; raises if the group is
-    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran."""
+    missing, so a retry (webhook replay, reconcile) completes the job once the blueprint ran.
+    Nothing to do on a belfry without Authentik."""
+    if stewards.own(svc) or not user_pk:
+        return
     name = svc.settings.authentik_participants_group
     group = svc.authentik.find_group(name)
     if group is None:
@@ -370,7 +379,10 @@ def sync_participants(svc: Services, strict: bool = False) -> dict[str, Any] | N
     """Make the participants group equal to the Authentik users of all active passes.
 
     Run at startup and by reconcile, so passes activated before the group existed (or a missed
-    group call) converge. Best effort unless ``strict``."""
+    group call) converge. Best effort unless ``strict``. A belfry without Authentik has no
+    such group: None."""
+    if stewards.own(svc):
+        return None
     name = svc.settings.authentik_participants_group
     try:
         group = svc.authentik.find_group(name)
@@ -445,7 +457,7 @@ def send_login_link(svc: Services, pass_id: int) -> str:
         log.info("send_login_link: pass %s is %s, no link", pass_id, pass_row.get("state"))
         return "not_active"
     user_pk = _authentik_user_for(svc, pass_row)
-    if user_pk is None:
+    if user_pk is None and not stewards.own(svc):
         log.warning("send_login_link: pass %s has no Authentik user", pass_id)
         return "no_user"
     svc.odoo.write("belfry.pass", [pass_id], _login_link(svc))
@@ -1159,6 +1171,8 @@ def _keycast_pubkey_for(svc: Services, pass_row: dict[str, Any]) -> str | None:
 
 
 def _authentik_user_for(svc: Services, pass_row: dict[str, Any]) -> int | None:
+    if stewards.own(svc):
+        return None  # ids kept from before a migration mean nothing here
     user_id = pass_row.get("authentik_user_id")
     if user_id:
         return int(user_id)

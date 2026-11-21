@@ -38,7 +38,8 @@ class Settings(BaseSettings):
     # Authentik as the participant's browser reaches it. The sign-in links authentik
     # returns carry the host the service called, so they are rewritten to this origin.
     authentik_public_url: str = Field(default="http://localhost:9000", alias="AUTHENTIK_PUBLIC_URL")
-    authentik_token: str = Field(alias="AUTHENTIK_TOKEN")
+    # needed with Authentik only (SIGNER=keycast; stewards.check_settings refuses a start without)
+    authentik_token: str = Field(default="", alias="AUTHENTIK_TOKEN")
     authentik_source_slug: str = Field(default="pass-bridge", alias="AUTHENTIK_SOURCE_SLUG")
     authentik_user_path: str = Field(default="belfry/participants", alias="AUTHENTIK_USER_PATH")
     # Members of this group may use the Keycast OIDC application (blueprint
@@ -55,8 +56,9 @@ class Settings(BaseSettings):
     # The signer's API token (the secret signer_token); needed with SIGNER=belfry only.
     signer_token: str = Field(default="", alias="SIGNER_TOKEN")
     keycast_url: str = Field(default="http://keycast:3000", alias="KEYCAST_URL")
-    keycast_admin_token: str = Field(alias="KEYCAST_ADMIN_TOKEN")
-    keycast_service_token: str = Field(alias="KEYCAST_SERVICE_TOKEN")
+    # needed with SIGNER=keycast only (stewards.check_settings)
+    keycast_admin_token: str = Field(default="", alias="KEYCAST_ADMIN_TOKEN")
+    keycast_service_token: str = Field(default="", alias="KEYCAST_SERVICE_TOKEN")
     # Sent as the Host header to Keycast (tenant = Host); must be in ALLOWED_TENANT_DOMAINS.
     keycast_tenant_domain: str | None = Field(default=None, alias="KEYCAST_TENANT_DOMAIN")
 

@@ -1131,6 +1131,7 @@ class FakeSigner(FakeKeycast):
         router.put(url__regex=rf"{acct}/username$").mock(side_effect=self._s_username)
         router.post(url__regex=rf"{acct}/sign$").mock(side_effect=self._s_sign)
         router.post(url__regex=rf"{acct}/(?P<op>encrypt|decrypt)$").mock(side_effect=self._s_crypt)
+        router.post(url__regex=rf"{acct}/derive$").mock(side_effect=self._s_derive)
         router.post(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connect)
         router.get(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connections)
         router.post(url__regex=rf"{acct}/connections/revoke$").mock(side_effect=self._s_revoke)
@@ -1245,6 +1246,19 @@ class FakeSigner(FakeKeycast):
         self.status_calls.append((pubkey, status))
         return httpx.Response(200, json={"updated": 1})
 
+    def _s_derive(self, request: httpx.Request, acct: str) -> httpx.Response:
+        import hashlib
+
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        purpose = str(json.loads(request.content).get("purpose") or "")
+        if not purpose:
+            return self._err(422, "invalid")
+        self.rpc.append(("derive_secret", u["pubkey"]))
+        secret = hashlib.sha256(f"{u['pubkey']}/{purpose}".encode()).hexdigest()
+        return httpx.Response(200, json={"secret": secret})
+
     def _s_sign(self, request: httpx.Request, acct: str) -> httpx.Response:
         u = self._user(acct)
         if u is None:
@@ -1313,12 +1327,16 @@ class FakeSigner(FakeKeycast):
                 "secret": secret,
                 "bunker_secret": key.secret,
                 "client_pubkey": client or None,
+                "scope": body.get("scope", "own"),
             }
         )
+        if body.get("scope", "own") not in ("own", "outside"):
+            return self._err(422, "invalid")
         return httpx.Response(
             200,
             json={
                 "id": f"{len(self.bunkers):032x}",
+                "scope": body.get("scope", "own"),
                 "bunker_url": url,
                 "bunker_pubkey": bunker_pk,
                 "pubkey": u["pubkey"],
@@ -1713,3 +1731,131 @@ class FakeSellerOdoo:
                 moves[wiz["context"]["active_id"]]["invoice_pdf_report_id"] = [att, "inv.pdf"]
             return True
         raise AssertionError(f"unexpected {model}.{method}")
+
+
+class _RegisterMembers:
+    """The members of the stewards "group" of a belfry without Authentik: the people flagged
+    ``belfry_steward`` in the register, behind the set operations the tests use on the
+    Authentik fake's groups."""
+
+    def __init__(self, book: RegisterStewards):
+        self.book = book
+
+    def _pks(self) -> set[int]:
+        return {self.book.pk_of(p) for p in self.book.people() if p.get("belfry_steward")}
+
+    def add(self, pk: int) -> None:
+        self.book.flag(pk, True)
+
+    def discard(self, pk: int) -> None:
+        self.book.flag(pk, False)
+
+    def clear(self) -> None:
+        for pk in self._pks():
+            self.book.flag(pk, False)
+
+    def __iter__(self):
+        return iter(self._pks())
+
+    def __len__(self) -> int:
+        return len(self._pks())
+
+    def __contains__(self, pk: object) -> bool:
+        return pk in self._pks()
+
+    def __eq__(self, other: object) -> bool:
+        return self._pks() == other
+
+
+class _RegisterGroups(dict):
+    def __init__(self, book: RegisterStewards):
+        super().__init__()
+        self.book = book
+
+    def __setitem__(self, name: str, group: dict[str, Any]) -> None:
+        if name != "belfry-stewards":
+            return super().__setitem__(name, group)
+        members = _RegisterMembers(self.book)
+        members.clear()
+        for pk in group.get("members", ()):
+            members.add(pk)
+        super().__setitem__(name, {"pk": group.get("pk", "register"), "members": members})
+
+
+class _RegisterUsers(list):
+    def __init__(self, book: RegisterStewards):
+        super().__init__()
+        self.book = book
+
+    def append(self, user: dict[str, Any]) -> None:
+        super().append(user)
+        self.book.person(user.get("email") or "", user.get("name") or "")
+
+    def __iter__(self):
+        own = list(super().__iter__())
+        seen = {u.get("email") for u in own}
+        yield from own
+        for p in self.book.people():
+            if p.get("email") and p["email"] not in seen:
+                yield {"pk": self.book.pk_of(p), "email": p["email"], "name": p.get("name")}
+
+
+class RegisterStewards:
+    """What the tests get as ``authentik`` when the suite runs as a belfry WITHOUT Authentik
+    (BELFRY_TEST_SIGNER=belfry): no HTTP routes at all (the service must not call Authentik),
+    only the handful of handles the tests use to say who is an admin (``users``, ``groups``,
+    ``members``), kept in the register's ``belfry_steward`` flag, which is what the service
+    itself reads. A user "pk" is a number the tests made up, or 10 000 000 + the person's id."""
+
+    OFFSET = 10_000_000
+
+    def __init__(self, odoo: Any):
+        self._odoo = odoo
+        self.services: Any = None  # set by the ``services`` fixture: a test may swap its register
+        self.users = _RegisterUsers(self)
+        self.groups = _RegisterGroups(self)
+        self.groups["belfry-stewards"] = {"pk": "register", "members": set()}
+        # what a test of Authentik's side would count: always nothing here
+        self.user_creates = 0
+        self.connection_creates = 0
+        self.connections: list[dict[str, Any]] = []
+        self.group_calls: list[tuple[str, str, int]] = []
+        self.recovery_links: list[tuple[int, str]] = []
+
+    @property
+    def odoo(self) -> Any:
+        return self.services.odoo if self.services is not None else self._odoo
+
+    def people(self) -> list[dict[str, Any]]:
+        return self.odoo.search_read("res.partner", [], ["email", "name", "belfry_steward"])
+
+    def pk_of(self, person: dict[str, Any]) -> int:
+        for u in list.__iter__(self.users):
+            if u.get("email") and u["email"] == person.get("email"):
+                return int(u["pk"])
+        return self.OFFSET + int(person["id"])
+
+    def person(self, email: str, name: str = "") -> list[int]:
+        if not email:
+            return []
+        ids = [p["id"] for p in self.people() if (p.get("email") or "").lower() == email.lower()]
+        if not ids:
+            ids = [self.odoo.create("res.partner", {"name": name or email, "email": email})]
+        return ids
+
+    def flag(self, pk: int, steward: bool) -> None:
+        from belfry_onboarding import console
+
+        if isinstance(pk, int) and pk >= self.OFFSET:
+            ids = [pk - self.OFFSET]
+        else:
+            email = next(
+                (u.get("email") for u in list.__iter__(self.users) if u.get("pk") == pk), ""
+            )
+            ids = self.person(email or "")
+        if ids:
+            self.odoo.write("res.partner", ids, {"belfry_steward": steward})
+        console._admins["at"] = 0.0
+
+    def members(self, name: str = "belfry-stewards") -> set[int]:
+        return set(self.groups[name]["members"]) if name in self.groups else set()

@@ -49,7 +49,7 @@ from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
-from . import claim, console, flash, mypass, nostr, pages, theme
+from . import claim, console, flash, mypass, nostr, pages, stewards, theme
 from .blossom import verify_signature
 from .core import Services
 
@@ -301,7 +301,7 @@ def has_admin(svc: Services) -> bool:
     if first_admin(svc.settings):
         return True
     try:
-        return bool(svc.authentik.group_member_emails(svc.settings.steward_group))
+        return bool(stewards.emails(svc))
     except Exception:  # noqa: BLE001 — Authentik not answering: don't offer a second first admin
         return True
 
@@ -396,7 +396,11 @@ def _create_first_admin(
     pubkey, token = result["pubkey"], result["token"]
     svc.keycast.set_username(token, username)
     publish_profile(svc, partner, username)
-    bunker = svc.keycast.create_bunker(token, "Setup page (first session)")
+    # for the browser's session key from the start: no other key can take this session, and
+    # nothing waits for a first connect (an unclaimed session ends after ten minutes in
+    # Belfry's own signer)
+    bound = session_pubkey if re.fullmatch(r"[0-9a-f]{64}", session_pubkey or "") else None
+    bunker = svc.keycast.create_bunker(token, "Setup page (first session)", bound)
     from .nip46check import parse_bunker_url
 
     bunker_pk, relays, secret = parse_bunker_url(bunker["bunker_url"])
@@ -1548,7 +1552,7 @@ def register(app: FastAPI) -> None:
             console.COOKIE,
             mypass._sign(
                 services,
-                {"kind": "console", "partner": made["partner"], "csrf": ok[0]},
+                console.session_claims(services, made["partner"], ok[0]),
                 days * 86400,
             ),
             max_age=days * 86400,
