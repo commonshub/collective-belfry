@@ -366,12 +366,17 @@ async function upload(blob: Blob, a: Attachment): Promise<string> {
 
 // ---- relays ---------------------------------------------------------------------
 
+const connGen: Partial<Record<Target, number>> = {}
+/** Which socket to TARGET this is (a new one each reconnect): sealedrt's knowledge is per socket. */
+export const connectionOf = (target: Target) => (relayAuthed(target) ? connGen[target] ?? 0 : -1)
+
 async function relay(target: Target): Promise<Relay> {
   const existing = relays[target]
   if (existing?.connected) return existing
   const url = URLS[target]
   const r = new Relay(url)
   authed[target] = false // a new socket: not signed in until it says so
+  connGen[target] = (connGen[target] ?? 0) + 1 // answers given on an earlier socket say nothing about this one
   r._onauth = () => {
     setRelay(url, 'auth')
     r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)

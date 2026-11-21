@@ -6,7 +6,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -16,7 +16,7 @@ import { BELFRY } from '../config'
 import { refreshChains } from '../core/sealedrt'
 import { notSealed, anyLockedHere, deviceLines, isSealed, lockedHere, lockedMsg, sealedAt, sharedBy, type DeviceLine } from '../core/sealed'
 import { DeviceLineRow, LockButton, LockedBanner, LockedBlock, LockedHereText, NotSealedMark, ShareHistorySheet, SharedByLine } from './Sealed'
-import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName } from './common'
+import { Avatar, up, fmtDay, fmtTime, go, Sheet, Form, PersonName, useNow } from './common'
 
 // Direct messages and e-mail in one place (#/dm, #/dm/<conv>): members by NIP-17, anyone else
 // by e-mail through the belfry. Your address here is name@domain; mail to it lands here too.
@@ -237,12 +237,26 @@ function DmReactions({ d, picking, setPicking }: { d: Dm; picking: boolean; setP
   )
 }
 
+/** A message held on this device until it can be decided sealed or not (docs/sealed.md §6): after
+ *  a minute it says why; Cancel takes it back into the composer. */
+function HeldState({ d }: { d: Dm }) {
+  const now = useNow(15_000)
+  const long = now * 1000 - heldSince(d.rid) > 60_000 // useNow: seconds
+  return (
+    <span className="dm-state queued">
+      {long ? 'Not sent yet: this device can’t reach the belfry to check how to lock it.' : 'Saved · waiting for the connection'}
+      {' · '}<button className="link" onClick={async () => { const text = await cancelHeld(d.rid); window.dispatchEvent(new CustomEvent('belfry-compose', { detail: { conv: d.conv, text } })) }}>Cancel</button>
+    </span>
+  )
+}
+
 /** Where my message stands: saved here and waiting for the connection, out, delivered, refused. */
 function DmState({ d, r }: { d: Dm; r?: ReturnType<typeof report> }) {
   const q = queueState(d)
   if (d.failed) return <span className="dm-state failed">Not sent: {d.failed} · <button className="link" onClick={() => void retryDm(d)}>Retry</button></span>
   if (d.pending || q.waiting)
-    return <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine || isHeld(d.rid) ? 'Saved · waiting for the connection' : 'Sending…'}</span>
+    return isHeld(d.rid) ? <HeldState d={d} />
+      : <span className="dm-state queued" title={q.error}>{q.error || !navigator.onLine ? 'Saved · waiting for the connection' : 'Sending…'}</span>
   if (d.kind !== 1301) return null
   const label = r?.status === 'delivered' ? 'Delivered' : r?.status === 'failed' ? `Not delivered: ${r.details}` : r?.status === 'delayed' ? 'Delayed, retrying' : r?.details || 'Sent'
   return <span className={'dm-state ' + (r?.status ?? 'queued')}>{label}</span>
@@ -277,6 +291,12 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
   const [subject, setSubject] = useState('')
   const [error, setError] = useState('')
   const ta = useRef<HTMLTextAreaElement>(null)
+  // a held message cancelled: its text back here
+  useEffect(() => {
+    const on = (e: Event) => { const d = (e as CustomEvent<{ conv: string; text: string }>).detail; if (d.conv === conv && d.text) { setText(d.text); ta.current?.focus() } }
+    window.addEventListener('belfry-compose', on)
+    return () => window.removeEventListener('belfry-compose', on)
+  }, [conv])
   useLayoutEffect(() => {
     const el = ta.current
     if (!el) return

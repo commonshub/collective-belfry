@@ -75,6 +75,11 @@ export async function kvPrefix<T>(prefix: string): Promise<T[]> {
   return (await d.getAll('kv', range)) as T[]
 }
 
+/** Remove every kv entry whose key starts with PREFIX. */
+export async function kvDelPrefix(prefix: string) {
+  await (await db()).delete('kv', IDBKeyRange.bound(prefix, prefix + '\uffff'))
+}
+
 export async function kvDel(key: string) {
   await (await db()).delete('kv', key)
 }
