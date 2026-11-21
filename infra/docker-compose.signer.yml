@@ -40,7 +40,7 @@ services:
     cap_add: [CHOWN]
     network_mode: none
     volumes:
-      - signer-data:/w/signer
+      - {type: volume, source: signer-data, target: /w/signer, volume: {nocopy: true}}
     restart: "no"
 
   # The members' keys, derived from the custody seed and sealed at rest with the master key;
@@ -91,7 +91,11 @@ services:
       SIGNER_OWN_RELAY_HOSTS: relay keycast-relay groups-relay ${BUNKER_PUBLIC_RELAYS:-}
       RUST_LOG: ${SIGNER_LOG:-info}
     volumes:
-      - signer-data:/data
+      # nocopy: Docker would otherwise copy the image's /data (owned by 10001, the image's
+      # default user for a signer run on its own) onto the empty volume at its first mount,
+      # undoing signer-init's chown; the signer runs as HOST_UID here, and could then not open
+      # its database (a new --own-signer install and the migration's import signer alike)
+      - {type: volume, source: signer-data, target: /data, volume: {nocopy: true}}
       # the custody seed, as Keycast gets it: missing (locked) means new accounts wait (503)
       - ${CUSTODY_SEED_DIR:-./secrets/custody}:/run/belfry:ro
     restart: unless-stopped
