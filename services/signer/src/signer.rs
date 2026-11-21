@@ -703,7 +703,7 @@ impl Signer {
     ) -> Result<(NewBunker, u64)> {
         let account = self.account(vine_id)?;
         self.keys_of(&account)?;
-        if app.is_empty() || app.len() > 64 || label.len() > 120 {
+        if app.is_empty() || app.chars().count() > 64 || label.chars().count() > 120 {
             return Err(Error::Invalid(
                 "app must be 1 to 64 characters, label up to 120".into(),
             ));

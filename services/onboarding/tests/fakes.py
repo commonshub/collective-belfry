@@ -881,6 +881,7 @@ class FakeKeycast:
     """respx routes for preload-user (idempotent on vine_id) and the status endpoint."""
 
     def __init__(self, router: respx.MockRouter, base_url: str = "http://keycast.test"):
+        self.kind = "keycast"  # which signer this fake stands for (FakeSigner: "belfry")
         self.users: dict[str, dict[str, Any]] = {}  # vine_id -> user
         self.status: dict[str, str] = {}  # pubkey -> status
         self.preloads = 0
@@ -933,28 +934,44 @@ class FakeKeycast:
             self.users[vine_id] = {"pubkey": pubkey, "username": body["username"]}
             self.status[pubkey] = "active"
         self.last_pubkey = self.users[vine_id]["pubkey"]
+        # a token per user ("ucan-token/<pubkey>"); the bare "ucan-token" some tests pass
+        # stands for the user preloaded last
         return httpx.Response(
-            200, json={"pubkey": self.users[vine_id]["pubkey"], "token": "ucan-token"}
+            200,
+            json={
+                "pubkey": self.users[vine_id]["pubkey"],
+                "token": "ucan-token/" + self.users[vine_id]["pubkey"],
+            },
         )
 
+    def _acting(self, request: httpx.Request) -> str:
+        """The pubkey of the user a request's UCAN is for."""
+        auth = request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer ucan-token/"):
+            return auth.removeprefix("Bearer ucan-token/")
+        return self.last_pubkey
+
     def _profile(self, request: httpx.Request) -> httpx.Response:
+        me = self._acting(request)
         name = json.loads(request.content)["username"].lower()
         for u in self.users.values():
-            if u["username"].lower() == name and u["pubkey"] != self.last_pubkey:
+            if u["username"].lower() == name and u["pubkey"] != me:
                 return httpx.Response(409, json={"error": "Username is not available."})
         for u in self.users.values():
-            if u["pubkey"] == self.last_pubkey:
+            if u["pubkey"] == me:
                 u["username"] = name
         return httpx.Response(200, json={"success": True})
 
     def _get_profile(self, request: httpx.Request) -> httpx.Response:
-        u = next((u for u in self.users.values() if u["pubkey"] == self.last_pubkey), None)
+        me = self._acting(request)
+        u = next((u for u in self.users.values() if u["pubkey"] == me), None)
         name = u["username"] if u else None
         return httpx.Response(
             200, json={"username": name, "nip05": f"{name}@belfry.test" if name else None}
         )
 
     def _sessions(self, request: httpx.Request) -> httpx.Response:
+        me = self._acting(request)
         rows = [
             {
                 "application_name": b["app_name"],
@@ -966,7 +983,7 @@ class FakeKeycast:
                 "activity_count": 0,
             }
             for b in self.bunkers
-            if b["pubkey"] == self.last_pubkey and not b.get("revoked")
+            if b["pubkey"] == me and not b.get("revoked")
         ]
         return httpx.Response(200, json={"sessions": rows})
 
@@ -984,9 +1001,9 @@ class FakeKeycast:
         # Keycast patch 0022: a connection bound to a client key; one key, one account.
         # ``binds = False`` stands for a signer built without it (the field is ignored).
         client = (body.get("client_pubkey") or "").lower() if self.binds else ""
+        me = self._acting(request)
         if client and any(
-            b.get("client_pubkey") == client and b["pubkey"] != self.last_pubkey
-            for b in self.bunkers
+            b.get("client_pubkey") == client and b["pubkey"] != me for b in self.bunkers
         ):
             return httpx.Response(
                 409,
@@ -1001,7 +1018,7 @@ class FakeKeycast:
         url = f"bunker://{bunker_pk}?relay=wss%3A%2F%2Fbunker.belfry.test&secret={secret}"
         self.bunkers.append(
             {
-                "pubkey": self.last_pubkey,
+                "pubkey": me,
                 "app_name": body["app_name"],
                 "bunker_url": url,
                 "secret": secret,
@@ -1081,6 +1098,275 @@ class FakeKeycast:
         self.status[pubkey] = body["status"]
         self.status_calls.append((pubkey, body["status"]))
         return httpx.Response(200, json={"pubkey": pubkey, "status": body["status"]})
+
+
+class FakeSigner(FakeKeycast):
+    """Belfry's own signer (``services/signer``) as respx routes, for ``SignerClient``.
+
+    It keeps the same books as :class:`FakeKeycast` (``users``, ``status``, ``bunkers``,
+    ``signed``, ``keys``, ``rpc``, ``preloads``, ``preload_bodies``, ``status_calls``,
+    ``down``, ``derived``), so a test written against one runs against the other. Accounts
+    are named in the path: ``acct:<vine_id>`` tokens become ``/accounts/<vine_id>``; the
+    Keycast fake's literal tokens still work (``ucan-token``: the account preloaded last,
+    ``ucan-token/<pubkey>``: the account with that key)."""
+
+    CREATED = 1793836800  # 2026-11-05T00:00:00Z, the Keycast fake's created_at
+
+    def __init__(
+        self,
+        router: respx.MockRouter,
+        base_url: str = "http://signer.test",
+        keycast_url: str = "http://keycast.test",
+    ):
+        super().__init__(router, keycast_url)
+        self.kind = "belfry"
+        base = re.escape(base_url.rstrip("/"))
+        acct = rf"{base}/accounts/(?P<acct>[^/]+)"
+        # no named group here: tests swap this route's side effect for one that takes the
+        # request alone, as they do with Keycast's preload-user
+        self.preload_route = router.put(url__regex=rf"{base}/accounts/[^/]+$").mock(
+            side_effect=self._s_put
+        )
+        router.get(url__regex=rf"{acct}$").mock(side_effect=self._s_get)
+        router.put(url__regex=rf"{acct}/username$").mock(side_effect=self._s_username)
+        router.post(url__regex=rf"{acct}/sign$").mock(side_effect=self._s_sign)
+        router.post(url__regex=rf"{acct}/(?P<op>encrypt|decrypt)$").mock(side_effect=self._s_crypt)
+        router.post(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connect)
+        router.get(url__regex=rf"{acct}/connections$").mock(side_effect=self._s_connections)
+        router.post(url__regex=rf"{acct}/connections/revoke$").mock(side_effect=self._s_revoke)
+        router.get(url__regex=rf"{base}/names/(?P<name>[^/]+)$").mock(side_effect=self._s_name)
+        router.post(url__regex=rf"{base}/pubkeys/(?P<pubkey>[^/]+)/status$").mock(
+            side_effect=self._s_status
+        )
+
+    @staticmethod
+    def _err(status: int, code: str) -> httpx.Response:
+        return httpx.Response(status, json={"error": code, "message": code})
+
+    def _user(self, acct: str) -> dict[str, Any] | None:
+        """The account a path segment names: {"pubkey", "username"?}."""
+        from urllib.parse import unquote
+
+        name = unquote(acct)
+        if name == "ucan-token":
+            pubkey = self.last_pubkey
+        elif name.startswith("ucan-token/"):
+            pubkey = name.removeprefix("ucan-token/")
+        else:
+            return self.users.get(name)
+        found = next((u for u in self.users.values() if u["pubkey"] == pubkey), None)
+        return found or ({"pubkey": pubkey} if pubkey else None)
+
+    def _account_json(self, vine_id: str, u: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "vine_id": vine_id,
+            "pubkey": u["pubkey"],
+            "custody": "own" if u.get("own") else "derived",
+            "key_version": u.get("key_version", 0),
+            "status": "suspended" if self.status.get(u["pubkey"]) != "active" else "active",
+            "username": u.get("username"),
+        }
+
+    def _s_put(self, request: httpx.Request) -> httpx.Response:
+        from urllib.parse import unquote
+
+        self.preloads += 1
+        body = json.loads(request.content)
+        vine_id = unquote(request.url.raw_path.decode().rsplit("/", 1)[-1])
+        # the books show what Keycast's preload-user would have been sent
+        self.preload_bodies.append(
+            {
+                "vine_id": vine_id,
+                "username": body.get("username"),
+                "key_version": body.get("key_version", 0),
+                **({"pubkey": body["own_pubkey"]} if body.get("own_pubkey") else {}),
+            }
+        )
+        own = body.get("own_pubkey")
+        u = self.users.get(vine_id)
+        if u is None:
+            name = body.get("username")
+            if name and any(
+                (x.get("username") or "").lower() == name.lower() for x in self.users.values()
+            ):
+                return self._err(409, "username_taken")
+            if own:
+                pubkey = own
+            elif self.derived:
+                seed = f"{vine_id}/{body.get('key_version', 0)}".encode()
+                pubkey = hashlib.sha256(seed).hexdigest()
+            else:
+                pubkey = f"{len(self.users) + 1:064x}"
+            u = {"pubkey": pubkey, "username": name, "own": bool(own)}
+            self.users[vine_id] = u
+            self.status[pubkey] = "active"
+        else:
+            for want in (own, body.get("expect_pubkey")):
+                if want and want != u["pubkey"]:
+                    return self._err(409, "mismatch")
+        self.last_pubkey = u["pubkey"]
+        return httpx.Response(200, json=self._account_json(vine_id, u))
+
+    def _s_get(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        return httpx.Response(200, json=self._account_json(acct, u))
+
+    def _s_username(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        name = json.loads(request.content)["username"].lower()
+        for other in self.users.values():
+            if (other.get("username") or "").lower() == name and other["pubkey"] != u["pubkey"]:
+                return self._err(409, "username_taken")
+        u["username"] = name
+        return httpx.Response(200, json=self._account_json(acct, u))
+
+    def _s_name(self, request: httpx.Request, name: str) -> httpx.Response:
+        from urllib.parse import unquote
+
+        want = unquote(name).lower()
+        for vine_id, u in self.users.items():
+            if (u.get("username") or "").lower() == want:
+                return httpx.Response(
+                    200, json={"name": want, "pubkey": u["pubkey"], "vine_id": vine_id}
+                )
+        return self._err(404, "not_found")
+
+    def _s_status(self, request: httpx.Request, pubkey: str) -> httpx.Response:
+        if pubkey not in self.status:
+            return self._err(404, "not_found")
+        status = json.loads(request.content)["status"]
+        if status not in ("active", "suspended"):
+            return self._err(422, "invalid")
+        self.status[pubkey] = status
+        self.status_calls.append((pubkey, status))
+        return httpx.Response(200, json={"updated": 1})
+
+    def _s_sign(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        acting = u["pubkey"]
+        self.rpc.append(("sign_event", acting))
+        if self.down:
+            return httpx.Response(503, json={"error": "down"})
+        event = json.loads(request.content).get("event")
+        if not isinstance(event, dict):
+            return self._err(422, "invalid")
+        event = dict(event)
+        if event.get("pubkey") and event["pubkey"] != acting:
+            return self._err(422, "invalid")
+        event["pubkey"] = acting
+        if acting in self.keys:  # a real key: a real signature
+            from belfry_onboarding.nip46check import sign_event as real_sign
+
+            event.pop("id", None)
+            event.pop("sig", None)
+            done = real_sign(self.keys[acting], event)
+        else:
+            done = {**event, "id": f"{len(self.signed) + 1:064x}", "sig": "fake-sig"}
+        self.signed.append(done)
+        return httpx.Response(200, json={"event": done})
+
+    def _s_crypt(self, request: httpx.Request, acct: str, op: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        method = f"{body.get('scheme', 'nip44')}_{op}"
+        self.rpc.append((method, u["pubkey"]))
+        if self.down:
+            return httpx.Response(503, json={"error": "down"})
+        secret = self.keys.get(u["pubkey"])
+        if secret is None:
+            return self._err(422, "invalid")
+        try:
+            out = real_crypt(secret, method, body["peer"], body["text"])
+        except Exception:  # noqa: BLE001 — what the signer answers
+            return self._err(422, "invalid")
+        return httpx.Response(200, json={"result": out})
+
+    def _s_connect(self, request: httpx.Request, acct: str) -> httpx.Response:
+        from coincurve import PrivateKey
+
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        body = json.loads(request.content)
+        client = (body.get("client_pubkey") or "").lower()
+        if client and any(
+            b.get("client_pubkey") == client and b["pubkey"] != u["pubkey"] for b in self.bunkers
+        ):
+            return self._err(409, "client_key_taken")
+        key = PrivateKey()
+        bunker_pk = key.public_key_xonly.format().hex()
+        secret = f"secret-{len(self.bunkers) + 1}"
+        url = f"bunker://{bunker_pk}?relay=wss%3A%2F%2Fbunker.belfry.test&secret={secret}"
+        self.bunkers.append(
+            {
+                "pubkey": u["pubkey"],
+                "app_name": body["app"],
+                "bunker_url": url,
+                "secret": secret,
+                "bunker_secret": key.secret,
+                "client_pubkey": client or None,
+            }
+        )
+        return httpx.Response(
+            200,
+            json={
+                "id": f"{len(self.bunkers):032x}",
+                "bunker_url": url,
+                "bunker_pubkey": bunker_pk,
+                "pubkey": u["pubkey"],
+                "app": body["app"],
+                "created_at": self.CREATED,
+                **({"client_pubkey": client} if client else {"expires_at": self.CREATED + 600}),
+            },
+        )
+
+    def _s_connections(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        rows = [
+            {
+                "id": f"{i + 1:032x}",
+                "app": b["app_name"],
+                "label": b["app_name"],
+                "bunker_pubkey": PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex(),
+                "client_pubkey": b.get("client_pubkey"),
+                "derive": [],
+                "created_at": self.CREATED,
+                "last_used_at": None,
+                "uses": 0,
+                "expires_at": None,
+            }
+            for i, b in enumerate(self.bunkers)
+            if b["pubkey"] == u["pubkey"] and not b.get("revoked")
+        ]
+        return httpx.Response(200, json=rows)
+
+    def _s_revoke(self, request: httpx.Request, acct: str) -> httpx.Response:
+        u = self._user(acct)
+        if u is None:
+            return self._err(404, "not_found")
+        bp = json.loads(request.content).get("bunker_pubkey")
+        if not bp:
+            return self._err(422, "invalid")
+        n = 0
+        for b in self.bunkers:
+            if (
+                b["pubkey"] == u["pubkey"]
+                and not b.get("revoked")
+                and PrivateKey(b["bunker_secret"]).public_key_xonly.format().hex() == bp
+            ):
+                b["revoked"] = True
+                n += 1
+        return httpx.Response(200, json={"revoked": n})
 
 
 class FakeIssuer:

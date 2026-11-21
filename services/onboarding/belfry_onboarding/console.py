@@ -134,7 +134,11 @@ def checks(settings: Any) -> list[tuple[str, str, dict[str, str]]]:
         )
     out += [
         ("Sign-in (Authentik)", settings.authentik_url.rstrip("/") + "/-/health/live/", {}),
-        ("Signer (Keycast)", settings.keycast_url.rstrip("/") + "/", {}),
+        (
+            ("Signer", settings.signer_url.rstrip("/") + "/health", {})
+            if getattr(settings, "signer", "keycast") == "belfry"
+            else ("Signer (Keycast)", settings.keycast_url.rstrip("/") + "/", {})
+        ),
     ]
     if settings.relay_url:
         out.append(("Community relay", settings.relay_url.replace("ws", "http", 1), nostr))

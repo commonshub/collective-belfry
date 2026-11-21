@@ -104,6 +104,7 @@ from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooClient, OdooError
+from .clients.signer import SignerClient
 from .clients.verifier import VerifierClient
 from .core import Services
 from .git_members import GitMembers
@@ -131,6 +132,27 @@ def configure_logging(level: str) -> None:
 
 def _load_json(path: str) -> Any:
     return json.loads(Path(path).read_text()) if path else None
+
+
+def build_signer(settings: Settings) -> KeycastClient | SignerClient:
+    """The client of the signer that holds the members' keys, by ``SIGNER``: Keycast (the
+    default) or Belfry's own (``services/signer``). Both have the same interface; the rest of
+    the service knows it as ``services.keycast``."""
+    which = (settings.signer or "keycast").strip().lower()
+    if which == "keycast":
+        return KeycastClient(
+            settings.keycast_url,
+            settings.keycast_admin_token,
+            settings.keycast_service_token,
+            tenant_domain=settings.keycast_tenant_domain,
+        )
+    if which == "belfry":
+        if len(settings.signer_token) < 16:
+            raise ValueError("SIGNER=belfry needs SIGNER_TOKEN (the secret signer_token)")
+        return SignerClient(
+            settings.signer_url, settings.signer_token, domain=settings.nip05_domain
+        )
+    raise ValueError(f"SIGNER must be keycast or belfry, not {settings.signer!r}")
 
 
 def build_services(settings: Settings) -> Services:
@@ -162,12 +184,7 @@ def build_services(settings: Settings) -> Services:
             )
         ),
         authentik=AuthentikClient(settings.authentik_url, settings.authentik_token),
-        keycast=KeycastClient(
-            settings.keycast_url,
-            settings.keycast_admin_token,
-            settings.keycast_service_token,
-            tenant_domain=settings.keycast_tenant_domain,
-        ),
+        keycast=build_signer(settings),
         settings=settings,
         relay=RelayPublisher(settings.relay_url) if settings.relay_url else None,
         whitelist=(

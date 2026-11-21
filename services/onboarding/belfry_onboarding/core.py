@@ -27,6 +27,7 @@ from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
+from .clients.signer import SignerClient
 from .clients.verifier import VerifierClient
 from .eudi import RegistryCerts
 from .git_members import GitMembers
@@ -71,7 +72,8 @@ OWN_KEY_PROOF_KIND = 27235
 class Services:
     odoo: OdooApi
     authentik: AuthentikClient
-    keycast: KeycastClient
+    # the signer: Keycast, or Belfry's own with the same interface (SIGNER, app.build_signer)
+    keycast: KeycastClient | SignerClient
     settings: Settings
     relay: RelayPublisher | None = None
     whitelist: RelayWhitelist | None = None
