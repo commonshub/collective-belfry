@@ -230,7 +230,16 @@ def channel_id(svc: Services, local: str) -> str | None:
         return None
 
 
-INBOX_D = "belfry:inbox"  # a group's NIP-78 setting (kind 30078): {"on": true} = shared inbox
+# a group's NIP-78 setting (kind 30078): {"on": true} = shared inbox. The d tag names the channel
+# (belfry:inbox:<channel>): a 30078 is addressable by (kind, author, d) whatever its h, so the old
+# single d "belfry:inbox" let an admin's setting for one channel replace their setting for another
+# (OSV's #hello lost its inbox when #sponsors got one, 2026-11-21). The old d is still read, with
+# its h, for settings written before.
+INBOX_D = "belfry:inbox"
+
+
+def inbox_d(channel: str) -> str:
+    return f"{INBOX_D}:{channel}"
 
 
 def group_admins(svc: Services, channel: str) -> set[str]:
@@ -262,10 +271,17 @@ def inbox_on(svc: Services, channel: str) -> bool:
         relay, sign = got
         admins = group_admins(svc, channel)
         found = relay.query(
-            [{"kinds": [30078], "#d": [INBOX_D], "#h": [channel], "limit": 20}], sign
+            [{"kinds": [30078], "#d": [INBOX_D, inbox_d(channel)], "#h": [channel], "limit": 40}],
+            sign,
         )
         mine = sorted(
-            (e for e in found if e.get("pubkey") in admins), key=lambda e: e["created_at"]
+            (
+                e
+                for e in found
+                if e.get("pubkey") in admins
+                and channel in [t[1] for t in e.get("tags", []) if t[:1] == ["h"] and len(t) > 1]
+            ),
+            key=lambda e: e["created_at"],
         )
         if mine:
             with contextlib.suppress(ValueError, TypeError, AttributeError):
@@ -433,11 +449,24 @@ def text_of(msg: EmailMessage) -> str:
 
 
 def attachments(msg: EmailMessage) -> list[tuple[str, str, bytes]]:
+    """Every file in the mail: attachments AND pictures put inline (a picture pasted into a
+    Gmail mail sits in a multipart/related inside the body, which iter_attachments never shows:
+    OSV's hello@ lost one, 2026-11-21). The text and HTML bodies themselves are left out."""
+    bodies = {id(b) for b in (msg.get_body(("plain",)), msg.get_body(("html",))) if b is not None}
     out = []
-    for part in msg.iter_attachments():
+    for part in msg.walk():
+        if part.is_multipart() or id(part) in bodies:
+            continue
+        ctype = part.get_content_type()
+        if (
+            ctype in ("text/plain", "text/html")
+            and part.get_content_disposition() != "attachment"
+            and not part.get_filename()
+        ):
+            continue  # another text alternative, not a file
         body = part.get_payload(decode=True) or b""
         if body:
-            out.append((part.get_filename() or "", part.get_content_type(), body))
+            out.append((part.get_filename() or "", ctype, body))
     return out[:10]
 
 
@@ -829,6 +858,14 @@ def deliver(
             done += 1
             log.info("mail: in for %s (%s, auth %s)", target["kind"], rcpt, auth)
         except MailError as exc:
+            # never silent: the sender gets the refusal from their provider, the log says why
+            # (kind of recipient and the reason; no address)
+            log.info(
+                "mail: refused for %s: %s %s",
+                target["kind"] if target else "nobody",
+                exc.code,
+                exc.message if target else "no such recipient",
+            )
             errors.append(exc)
         except Exception as exc:  # noqa: BLE001 — the sender's server tries again later
             log.warning("mail: delivery to %s failed: %r", rcpt, exc, exc_info=True)

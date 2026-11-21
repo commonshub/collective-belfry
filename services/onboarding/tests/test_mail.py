@@ -592,3 +592,110 @@ def test_the_smtp_front_asks_the_belfry_for_every_address_and_message(tmp_path, 
         ctl.stop()
     [(rcpt, frm, raw)] = seen
     assert rcpt == "ana@belfry.test" and frm == "bob@example.org" and b"Subject: Hello" in raw
+
+
+def _gmail_with_picture_and_pdf(to="garden@belfry.test") -> bytes:
+    """What Gmail sends for a mail with a picture pasted in and a PDF attached (~300 kB)."""
+    from email.message import EmailMessage as Msg
+
+    msg = Msg()
+    msg["From"] = "Xavi <xavi@example.org>"
+    msg["To"] = to
+    msg["Subject"] = "Poster"
+    msg["Message-ID"] = "<g1@example.org>"
+    msg.set_content("Here is the poster.\n\n[image: poster.png]")
+    msg.add_alternative('<p>Here is the poster.</p><img src="cid:poster1">', subtype="html")
+    png = b"\x89PNG\r\n\x1a\n" + b"\0" * 200_000
+    msg.get_payload()[1].add_related(png, "image", "png", cid="<poster1>", filename="poster.png")
+    msg.add_attachment(b"%PDF-1.4\n" + b"0" * 90_000, "application", "pdf", filename="plan.pdf")
+    return msg.as_bytes()
+
+
+def test_a_pasted_picture_and_an_attachment_both_reach_the_shared_inbox(m, inbox, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        drops,
+        "upload",
+        lambda svc, files: (
+            seen.extend(files)
+            or [["imeta", f"url https://blossom.belfry.test/{f[0]}"] for f in files]
+        ),
+    )
+    monkeypatch.setattr(
+        mail,
+        "store_large",
+        lambda svc, raw: [
+            ["url", "https://b/x"],
+            ["decryption-key", "k"],
+            ["decryption-nonce", "n"],
+        ],
+    )
+    raw = _gmail_with_picture_and_pdf()
+    assert len(raw) > 60_000
+    code, _ = mail.deliver(m, raw, "203.0.113.5", "h", "", ["garden@belfry.test"])
+    assert code == 250
+    [card] = inbox
+    assert sorted((f[0], f[1]) for f in seen) == [
+        ("plan.pdf", "application/pdf"),
+        ("poster.png", "image/png"),
+    ]
+    assert [t for t in card["tags"] if t[0] == "imeta"] and "Here is the poster." in card["text"]
+    assert any(t[0] == "mail-original" for t in card["tags"])
+
+
+def test_a_refusal_is_logged_with_its_reason_and_never_the_address(m, inbox, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO, logger="belfry_onboarding.mail")
+    raw = message(frm="Bob <bob@example.org>", to="kitchen@belfry.test")
+    code, _ = mail.deliver(m, raw, "203.0.113.5", "h", "", ["kitchen@belfry.test"])
+    assert code == 550
+    line = next(r.getMessage() for r in caplog.records if "refused for" in r.getMessage())
+    assert "550" in line and "bob@example.org" not in line
+
+
+class _InboxRelay:
+    def __init__(self, events):
+        self.events = events
+
+    def query(self, filters, sign):
+        out = []
+        for f in filters:
+            for e in self.events:
+                tags = {}
+                for t in e["tags"]:
+                    tags.setdefault(t[0], []).append(t[1])
+                if e["kind"] not in f.get("kinds", [e["kind"]]):
+                    continue
+                if any(not set(v) & set(tags.get(k[1:], [])) for k, v in f.items() if k[0] == "#"):
+                    continue
+                out.append(e)
+        return out
+
+
+def test_the_inbox_setting_is_per_channel_and_old_settings_still_count(m, monkeypatch):
+    from belfry_onboarding import followers
+
+    def setting(d, h, on, at):
+        return {
+            "kind": 30078,
+            "pubkey": ANA_PUB,
+            "created_at": at,
+            "content": json.dumps({"on": on}),
+            "tags": [["d", d], ["h", h]],
+        }
+
+    events = [
+        # the old single d: the relay keeps only the latest per author, here for #sponsors
+        setting("belfry:inbox", "sponsors", True, 100),
+        setting("belfry:inbox:hello", "hello", True, 50),
+        setting("belfry:inbox:kitchen", "kitchen", False, 60),
+    ]
+    monkeypatch.setattr(followers, "_relay", lambda svc: (_InboxRelay(events), None))
+    monkeypatch.setattr(mail, "group_admins", lambda svc, ch: {ANA_PUB})
+    mail._cache.clear()
+    assert mail.inbox_on(m, "hello") is True
+    assert mail.inbox_on(m, "sponsors") is True
+    assert mail.inbox_on(m, "kitchen") is False
+    assert mail.inbox_on(m, "garden") is False
+    assert mail.inbox_d("hello") == "belfry:inbox:hello"
