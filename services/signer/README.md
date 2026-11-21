@@ -62,8 +62,10 @@ again Keycast's (patch 0011; the salt keeps its name so wallets keep their token
 
 A member who holds their own key has an account with `custody = own`: the signer keeps no key
 and refuses to sign (409 `own_key`). Moving there is a call of its own
-(`POST /accounts/{vine_id}/own-key`): it puts the held key away (sealed, in `archived_keys`:
-never dropped; the answer's `archived_keys` counts them) and revokes every connection;
+(`POST /accounts/{vine_id}/own-key`): it drops the held key (the member is promised Belfry
+stops holding it) and revokes every connection. Only inside the migration's window (below) is
+the held key archived sealed in `archived_keys` instead (the answer's `archived_keys` counts
+them) until the migration's cleanup deletes them (`DELETE /archived-keys`);
 because Belfry can recompute a derived key, self-custody always means a new key (the held key
 is refused).
 
@@ -81,6 +83,12 @@ kept in the database; or `SIGNER_NO_NEW_ACCOUNTS=1`, which the API cannot lift),
 made) or `expect_pubkey` (the account is made only if it comes out with that key). `/import`
 goes on. A migration turns it on before it imports and lifts it when the belfry runs on the
 signer, so that a caller that forgot to say which key it expects can never mint one in between.
+
+**The migration's window.** A setting of its own (`POST /settings {"migration": true}`), set
+by the migration's import and cleared by its switch, never by `no_new_accounts` or
+`SIGNER_NO_NEW_ACCOUNTS`. Only inside it does `POST /import/connections` honour `"sync": true`
+(rows that are there brought to the import's state; 422 outside the window) and does a move to
+an own key archive the held key. `DELETE /archived-keys` is refused while it is open.
 
 ## Usernames
 
@@ -234,7 +242,7 @@ the bunker key again, checks its public key against the row's `bunker_pubkey` (t
 also the proof of the formula for that row) and seals it bound to the new connection row.
 Vectors of the formula are in `src/keys.rs`.
 
-Body: `{"vine_id", "connections": [{"bunker_pubkey", "keycast_secret_hash", "client_pubkey",
+Body: `{"vine_id", "sync"?, "connections": [{"bunker_pubkey", "keycast_secret_hash", "client_pubkey",
 "app", "label"?, "scope"?, "decrypt"?, "origin"?, "created_at", "last_used_at"?, "uses"?,
 "revoked_at"?}]}` (times in seconds; `origin` is Keycast's `redirect_origin`). At most 1,000
 rows and 1 MB a call: a larger body is 413 `too_large`, in the API's own shape (every other
@@ -283,8 +291,9 @@ who is here: the seed's state and the bunker's.
 | Method and path | Body | Answer |
 | --- | --- | --- |
 | `GET /health` | | `{status: ok\|degraded, seed, bunker: {state: off\|connected\|disconnected, last_event_at, restarts, filtered}}` (no token; nothing about accounts) |
-| `GET /settings` | | `{no_new_accounts, by_environment}` |
-| `POST /settings` | `{no_new_accounts: true\|false}` | the same; 422 when the environment closes and the body opens |
+| `GET /settings` | | `{no_new_accounts, by_environment, migration}` |
+| `POST /settings` | `{no_new_accounts?: true\|false, migration?: true\|false}` (at least one) | the same; 422 when the environment closes and the body opens |
+| `DELETE /archived-keys` | | `{deleted}`; 422 while the migration's window is open |
 | `GET /accounts` | query `status=active\|suspended`, `after=<vine_id>`, `limit` (1 to 1000, default 500) | `{accounts: [the account, …], next, total, suspended}` in the order of the ids; `next` is the id to ask `after` while there is more; `total` and `suspended` count all accounts |
 | `PUT /accounts/{vine_id}` | `{key_version?, own_pubkey?, expect_pubkey?, username?}` | the account; creates it if missing, never changes its key. `own_pubkey`: a new account without a key. `expect_pubkey` / `own_pubkey` against another key: 409 `mismatch`. `username` for a new account: 409 `username_taken`. An unknown account while no accounts are made and no key is named: 409 `no_new_accounts` |
 | `GET /accounts/{vine_id}` | | `{vine_id, pubkey, custody, key_version, status, username}` |
@@ -302,7 +311,7 @@ who is here: the seed's state and the bunker's.
 | `POST /accounts/{vine_id}/connections/revoke` | `{id}` or `{bunker_pubkey}` or `{app}` or `{all: true}` | `{revoked}` |
 | `POST /accounts/{vine_id}/connections/consent` | `{id}` or `{bunker_pubkey}`, and `decrypt: true\|false` | `{decrypt}`; 404 when the account has no such live connection |
 | `POST /import` | `{accounts: [{vine_id, pubkey, sealed}]}` | per account `derived`, `imported`, `exists` (same key) or `error` (`mismatch` when the account exists with another key) |
-| `POST /import/connections` | `{vine_id, connections: [{bunker_pubkey, keycast_secret_hash, client_pubkey, app, label?, scope?, decrypt?, origin?, created_at, last_used_at?, uses?, revoked_at?}]}` | `{imported, existing, revoked, updated, released, skipped}`; all or nothing (but for skipped rows); 422 `invalid` naming the row, 409 `client_key_taken` / `own_key` / `mismatch`, 404, 413 `too_large` ("Carrying Keycast's sessions over") |
+| `POST /import/connections` | `{vine_id, sync?, connections: [{bunker_pubkey, keycast_secret_hash, client_pubkey, app, label?, scope?, decrypt?, origin?, created_at, last_used_at?, uses?, revoked_at?}]}` | `{imported, existing, revoked, updated, released, skipped}`; all or nothing (but for skipped rows); 422 `invalid` naming the row, 409 `client_key_taken` / `own_key` / `mismatch`, 404, 413 `too_large` ("Carrying Keycast's sessions over") |
 | `GET /import/skipped` | | `{skipped: [{vine_id, bunker_pubkey, at}]}`: rows imports left out because their bunker key does not derive |
 
 `connection` (the id behind an app's access token) must be live and the account's, else 403

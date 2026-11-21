@@ -193,6 +193,10 @@ impl Limiter {
 
 /// The setting that closes the making of accounts (`Signer::accounts_closed`).
 const NO_NEW_ACCOUNTS: &str = "no_new_accounts";
+/// The migration's window (`Signer::in_migration`): set by the migration's import, cleared by
+/// its switch. Only inside it does an import bring existing rows to its state (`sync`) and a
+/// move to an own key archive the held key.
+const MIGRATION: &str = "migration";
 
 pub struct Signer {
     pub store: Store,
@@ -431,6 +435,35 @@ impl Signer {
         )
     }
 
+    /// Whether the migration's window is open (`set_migration`). Never set by
+    /// `SIGNER_NO_NEW_ACCOUNTS` nor by the "no new accounts" switch: only the migration's
+    /// import opens it, and its switch closes it.
+    pub fn in_migration(&self) -> Result<bool> {
+        Ok(self.store.setting(MIGRATION)?.as_deref() == Some("1"))
+    }
+
+    /// Opens or closes the migration's window.
+    pub fn set_migration(&self, on: bool) -> Result<()> {
+        self.store
+            .set_setting(MIGRATION, if on { "1" } else { "0" })?;
+        tracing::warn!(on, "the migration's window was switched");
+        Ok(())
+    }
+
+    /// Deletes every archived held key (the migration's cleanup, once its guards passed);
+    /// refused while the migration's window is open (the archive is its safety net then).
+    pub fn delete_archived_keys(&self) -> Result<usize> {
+        if self.in_migration()? {
+            return Err(Error::Invalid(
+                "the migration's window is open: archived keys are kept until after the switch"
+                    .into(),
+            ));
+        }
+        let n = self.store.delete_archived_keys()?;
+        tracing::warn!(deleted = n, "archived keys deleted");
+        Ok(n)
+    }
+
     /// Sets the stored switch. `Invalid` when asked to open while the environment closes.
     pub fn close_accounts(&self, closed: bool) -> Result<()> {
         if !closed && self.no_new_accounts_env {
@@ -635,10 +668,13 @@ impl Signer {
         }
     }
 
-    /// Self-custody: the member's own key from now on. The held key is dropped and every
-    /// bunker connection is revoked (apps sign in again with the member's own signer). The
-    /// key the signer holds for the account is refused: Belfry can recompute it, so keeping it
-    /// is not self-custody.
+    /// Self-custody: the member's own key from now on. The held key is dropped (members who
+    /// move to their own key are promised Belfry stops holding it) and every bunker
+    /// connection is revoked (apps sign in again with the member's own signer). Only inside
+    /// the migration's window (`in_migration`), where the import follows a move made in
+    /// Keycast, is the held key archived sealed instead, until the migration's cleanup
+    /// deletes the archive. The key the signer holds for the account is refused: Belfry can
+    /// recompute it, so keeping it is not self-custody.
     pub fn move_to_own_key(&self, vine_id: &str, own_pubkey: &str) -> Result<Account> {
         valid_vine_id(vine_id)?;
         let own = parse_pubkey(own_pubkey)?.to_hex();
@@ -651,8 +687,15 @@ impl Signer {
                 "this is the key Belfry holds for the account: move to a new key".into(),
             ));
         }
-        self.store
-            .put_account(vine_id, &own, Custody::Own, existing.key_version, None)?;
+        let archive = self.in_migration()?;
+        self.store.put_account_archiving(
+            vine_id,
+            &own,
+            Custody::Own,
+            existing.key_version,
+            None,
+            archive,
+        )?;
         let revoked = self.store.revoke_connections(vine_id, None)?;
         self.changed();
         tracing::info!(vine_id, pubkey = %own, revoked, "account moved to the member's own key");
@@ -1021,11 +1064,21 @@ impl Signer {
     /// `client_key_taken`; `mismatch` when a bunker key is another account's connection.
     /// A suspended account's sessions are carried too (they answer once it is active again).
     /// Returns the counts and the number of the change (`wait_subscribed`).
+    ///
+    /// `sync` (the import asks for it) brings rows that are there to the import's state; it
+    /// is honoured only inside the migration's window (`in_migration`), never because new
+    /// accounts are closed, and refused (`invalid`, nothing written) outside it.
     pub fn import_connections(
         &self,
         vine_id: &str,
         sessions: &[KeycastSession],
+        sync: bool,
     ) -> Result<(ImportCounts, u64)> {
+        if sync && !self.in_migration()? {
+            return Err(Error::Invalid(
+                "sync is for the migration's window only, and it is not open".into(),
+            ));
+        }
         let account = self.account(vine_id)?;
         let sealed = account.sealed.as_deref().ok_or(Error::OwnKey)?;
         let keys = self
@@ -1095,10 +1148,9 @@ impl Signer {
                 revoked_at: s.revoked_at,
             });
         }
-        // the migration's window: nothing but the import writes connections, so its rows are
-        // the truth for the ones that are there already (a sign-out in Keycast since the first
-        // import, a client key that went to another account, a scope corrected)
-        let sync = self.accounts_closed()?;
+        // the migration's window (checked above): nothing but the import writes connections,
+        // so its rows are the truth for the ones that are there already (a sign-out in Keycast
+        // since the first import, a client key that went to another account, a scope narrowed)
         match self
             .store
             .import_connections(vine_id, &rows, sync, &skipped_keys)?

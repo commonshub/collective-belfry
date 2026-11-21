@@ -4,8 +4,9 @@
 //!
 //! ```text
 //! GET  /health                                  {status, seed, bunker}     (no token)
-//! GET  /settings                                                           -> {no_new_accounts, by_environment}
-//! POST /settings                                {no_new_accounts: bool}    -> the same
+//! GET  /settings                                                           -> {no_new_accounts, by_environment, migration}
+//! POST /settings                                {no_new_accounts?: bool, migration?: bool} -> the same
+//! DELETE /archived-keys                                                    -> {deleted}
 //! GET  /accounts?status=&after=&limit=                                     -> {accounts, next, total, suspended}
 //! PUT  /accounts/{vine_id}                      {key_version?, own_pubkey?, expect_pubkey?, username?}
 //! GET  /accounts/{vine_id}
@@ -25,7 +26,7 @@
 //! GET  /names/{username}                                                   -> {name, pubkey, vine_id}
 //! POST /pubkeys/{pubkey}/status                 {status}                   -> {updated}
 //! POST /import                                  {accounts: [{vine_id, pubkey, sealed}]}
-//! POST /import/connections                      {vine_id, connections: [{bunker_pubkey,
+//! POST /import/connections                      {vine_id, sync?, connections: [{bunker_pubkey,
 //!                                                keycast_secret_hash, client_pubkey, app, label?,
 //!                                                scope?, decrypt?, origin?, created_at,
 //!                                                last_used_at?, uses?, revoked_at?}]}
@@ -42,6 +43,11 @@
 //!
 //! `/import/connections` carries one account's Keycast sessions over, all or none
 //! (`Signer::import_connections`): at most 1000 rows and 1 MB a call (413 `too_large`).
+//! `sync: true` brings rows that are there to the import's state, and is refused (422) unless
+//! the migration's window is open (`migration` in `/settings`, set by the migration's import,
+//! cleared by its switch). Inside that window a move to an own key archives the held key;
+//! `DELETE /archived-keys` (the migration's cleanup) deletes the archive, refused while the
+//! window is open.
 //!
 //! Errors are `{"error": <code>, "message"}` with 404 not_found, 503 seed_locked /
 //! bunker_unavailable, 409 own_key / mismatch / client_key_taken / username_taken /
@@ -189,6 +195,7 @@ fn settings_json(signer: &Signer) -> Result<Value, Error> {
     Ok(json!({
         "no_new_accounts": signer.accounts_closed()?,
         "by_environment": signer.no_new_accounts_env,
+        "migration": signer.in_migration()?,
     }))
 }
 
@@ -203,12 +210,32 @@ async fn post_settings(
     Json(body): Json<Value>,
 ) -> ApiResult {
     guard!(state, headers);
-    let closed = body
-        .get("no_new_accounts")
-        .and_then(Value::as_bool)
-        .ok_or_else(|| Error::Invalid("no_new_accounts must be true or false".into()))?;
-    state.signer.close_accounts(closed)?;
+    let flag = |key: &str| match body.get(key) {
+        None => Ok(None),
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        Some(_) => Err(Error::Invalid(format!("{key} must be true or false"))),
+    };
+    let closed = flag("no_new_accounts")?;
+    let migration = flag("migration")?;
+    if closed.is_none() && migration.is_none() {
+        return Err(
+            Error::Invalid("no_new_accounts or migration must be true or false".into()).into(),
+        );
+    }
+    if let Some(closed) = closed {
+        state.signer.close_accounts(closed)?;
+    }
+    if let Some(on) = migration {
+        state.signer.set_migration(on)?;
+    }
     Ok(Json(settings_json(&state.signer)?).into_response())
+}
+
+/// The migration's cleanup: every archived held key deleted (`Signer::delete_archived_keys`).
+async fn delete_archived_keys(State(state): State<AppState>, headers: HeaderMap) -> ApiResult {
+    guard!(state, headers);
+    let deleted = state.signer.delete_archived_keys()?;
+    Ok(Json(json!({"deleted": deleted})).into_response())
 }
 
 /// The most accounts one page of the list carries.
@@ -686,6 +713,11 @@ async fn import_connections(
         }
     })?;
     let vine_id = text(&body, "vine_id")?;
+    let sync = match body.get("sync") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(Error::Invalid("sync must be true or false".into()).into()),
+    };
     let rows = body
         .get("connections")
         .and_then(Value::as_array)
@@ -704,7 +736,7 @@ async fn import_connections(
     // deriving and sealing a few thousand keys is not for the async threads
     let signer = state.signer.clone();
     let (counts, change) =
-        tokio::task::spawn_blocking(move || signer.import_connections(&vine_id, &sessions))
+        tokio::task::spawn_blocking(move || signer.import_connections(&vine_id, &sessions, sync))
             .await
             .map_err(|e| Error::Internal(format!("import: {e}")))??;
     // the carried sessions' apps are running: the bunker listens for them before the answer.
@@ -724,6 +756,10 @@ pub fn router(state: AppState) -> Router {
             post(import_connections).layer(DefaultBodyLimit::max(MAX_IMPORT_BODY)),
         )
         .route("/import/skipped", get(import_skipped))
+        .route(
+            "/archived-keys",
+            axum::routing::delete(delete_archived_keys),
+        )
         .route("/accounts", get(list_accounts))
         .route("/accounts/{vine_id}", put(put_account).get(get_account))
         .route("/accounts/{vine_id}/status", post(set_status))
@@ -2029,7 +2065,7 @@ mod tests {
             (s, st),
             (
                 200,
-                json!({"no_new_accounts": false, "by_environment": false})
+                json!({"no_new_accounts": false, "by_environment": false, "migration": false})
             )
         );
         assert_eq!(
@@ -2252,7 +2288,10 @@ mod tests {
             token: Arc::new("t0ken".into()),
         });
         let (_, st) = call(&app, "GET", "/settings", "t0ken", Value::Null).await;
-        assert_eq!(st, json!({"no_new_accounts": true, "by_environment": true}));
+        assert_eq!(
+            st,
+            json!({"no_new_accounts": true, "by_environment": true, "migration": false})
+        );
         let (s, e) = call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
         assert_eq!((s, e["error"].as_str()), (409, Some("no_new_accounts")));
         // the API cannot open what the environment closes
@@ -2390,5 +2429,130 @@ mod tests {
         assert!(results.iter().all(|r| r == &results[0]), "{results:?}");
         let stored = signer.account("guest-7").unwrap();
         assert_eq!((stored.pubkey, stored.username), results[0].clone());
+    }
+
+    #[tokio::test]
+    async fn the_sync_and_the_archive_need_the_migrations_window() {
+        use crate::keys;
+        use nostr::prelude::Keys;
+        let (app, signer) = app("window");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        let account = keys::derive_keys(&[7u8; 32], "odoo-partner-1", 0);
+        let hash = "$2b$10$N9qo8uLOickgx2ZMRZoMye0000000000000000000000000000001".to_string();
+        let client = Keys::generate().public_key().to_hex();
+        let row = |revoked: Option<i64>| {
+            json!({
+                "bunker_pubkey": keys::keycast_bunker_keys(&account, &hash).public_key().to_hex(),
+                "keycast_secret_hash": hash,
+                "client_pubkey": client,
+                "app": "Chat",
+                "created_at": 1_700_000_000,
+                "revoked_at": revoked,
+            })
+        };
+        let import = |rows: Value, sync: bool| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/import/connections",
+                    "t0ken",
+                    json!({"vine_id": "odoo-partner-1", "sync": sync, "connections": rows}),
+                )
+                .await
+            }
+        };
+        let (s, _) = import(json!([row(None)]), false).await;
+        assert_eq!(s, 200);
+        // "no new accounts" alone (the environment or the stored switch) is not the window
+        call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"no_new_accounts": true}),
+        )
+        .await;
+        let (s, r) = import(json!([row(Some(1_700_000_100))]), false).await;
+        assert_eq!(
+            (s, r["existing"].as_i64(), r["updated"].as_i64()),
+            (200, Some(1), Some(0))
+        );
+        let (s, e) = import(json!([row(Some(1_700_000_100))]), true).await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        assert_eq!(signer.connections("odoo-partner-1").unwrap().len(), 1);
+        for bad in [json!({}), json!({"migration": "yes"})] {
+            let (s, _) = call(&app, "POST", "/settings", "t0ken", bad).await;
+            assert_eq!(s, 422);
+        }
+        // the import opens the window: the sync is honoured
+        let (_, st) = call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"migration": true}),
+        )
+        .await;
+        assert_eq!(
+            (st["migration"].as_bool(), st["no_new_accounts"].as_bool()),
+            (Some(true), Some(true))
+        );
+        let (s, r) = import(json!([row(Some(1_700_000_100))]), true).await;
+        assert_eq!((s, r["updated"].as_i64()), (200, Some(1)), "{r}");
+        assert!(signer.connections("odoo-partner-1").unwrap().is_empty());
+
+        // a move to an own key in the window archives the held key; the archive can't be
+        // deleted while the window is open
+        let own = Keys::generate().public_key().to_hex();
+        let (s, m) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/own-key",
+            "t0ken",
+            json!({"pubkey": own}),
+        )
+        .await;
+        assert_eq!((s, m["archived_keys"].as_i64()), (200, Some(1)), "{m}");
+        let (s, _) = call(&app, "DELETE", "/archived-keys", "t0ken", Value::Null).await;
+        assert_eq!(s, 422);
+        assert_eq!(
+            call(&app, "DELETE", "/archived-keys", "wrong", Value::Null)
+                .await
+                .0,
+            401
+        );
+        // the switch closes it: the archive goes, and a move drops the held key
+        let (_, st) = call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"migration": false}),
+        )
+        .await;
+        assert_eq!(st["migration"], false);
+        let (s, d) = call(&app, "DELETE", "/archived-keys", "t0ken", Value::Null).await;
+        assert_eq!((s, d["deleted"].as_i64()), (200, Some(1)));
+        call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-2",
+            "t0ken",
+            json!({"expect_pubkey":
+            keys::derive_keys(&[7u8; 32], "odoo-partner-2", 0).public_key().to_hex()}),
+        )
+        .await;
+        let own2 = Keys::generate().public_key().to_hex();
+        let (s, m) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-2/own-key",
+            "t0ken",
+            json!({"pubkey": own2}),
+        )
+        .await;
+        assert_eq!((s, m["archived_keys"].as_i64()), (200, Some(0)), "{m}");
     }
 }
