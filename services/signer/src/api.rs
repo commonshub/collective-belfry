@@ -13,16 +13,24 @@
 //! POST /accounts/{vine_id}/decrypt              {scheme, peer, text}       -> {result}
 //! POST /accounts/{vine_id}/derive               {purpose}                  -> {secret}
 //! POST /accounts/{vine_id}/export                                          -> {nsec}
-//! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?}
+//! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?, scope?}
 //! GET  /accounts/{vine_id}/connections                                     -> [{id, app, ...}]
 //! POST /accounts/{vine_id}/connections/revoke   {id | bunker_pubkey | app | all: true} -> {revoked}
 //! GET  /names/{username}                                                   -> {name, pubkey, vine_id}
 //! POST /pubkeys/{pubkey}/status                 {status}                   -> {updated}
 //! POST /import                                  {accounts: [{vine_id, pubkey, sealed}]}
+//! POST /import/connections                      {vine_id, connections: [{bunker_pubkey,
+//!                                                keycast_secret_hash, client_pubkey, app, label?,
+//!                                                scope?, created_at, last_used_at?, uses?,
+//!                                                revoked_at?}]} -> {imported, existing, revoked}
 //! ```
 //!
 //! sign, encrypt, decrypt and derive take an optional `connection` (the id behind an app's
-//! access token): it must be live, and derive allows only that connection's purposes.
+//! access token): it must be live, derive allows only that connection's purposes, and sign
+//! through a connection of scope `outside` keeps to the limits of `limits.rs` (403).
+//!
+//! `/import/connections` carries one account's Keycast sessions over, all or none
+//! (`Signer::import_connections`).
 //!
 //! Errors are `{"error": <code>, "message"}` with 404 not_found, 503 seed_locked,
 //! 409 own_key / mismatch / client_key_taken / username_taken, 403 suspended / forbidden,
@@ -41,7 +49,9 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 
-use crate::signer::{Error, Scheme, Signer};
+use crate::limits;
+use crate::signer::{ConnectionSpec, Error, KeycastSession, Scheme, Signer};
+use crate::store::SCOPE_OUTSIDE;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -248,10 +258,16 @@ async fn sign(
     Json(body): Json<Value>,
 ) -> Result<Response, ApiError> {
     guard!(state, headers);
-    let (keys, _) = state
+    let (keys, conn) = state
         .signer
         .keys_via(&vine_id, opt_text(&body, "connection").as_deref())?;
     let template = body.get("event").cloned().unwrap_or(Value::Null);
+    // through an outside app's connection: the same limits as over the bunker
+    if conn.is_some_and(|c| c.scope == SCOPE_OUTSIDE)
+        && limits::forbidden(&template, &state.signer.own)
+    {
+        return Err(Error::Forbidden(limits::REFUSAL.into()).into());
+    }
     let event = state.signer.sign(&keys, &template)?;
     Ok(Json(json!({"event": event})).into_response())
 }
@@ -337,6 +353,9 @@ struct NewConnectionBody {
     /// The NIP-46 client key the connection is for (bound from the start).
     #[serde(default)]
     client_pubkey: Option<String>,
+    /// `own` (the default) or `outside`: an outside app, held to the signing limits.
+    #[serde(default)]
+    scope: Option<Value>,
 }
 
 async fn create_connection(
@@ -351,13 +370,24 @@ async fn create_connection(
     } else {
         body.label
     };
-    let (created, change) = state.signer.create_connection(
+    // a scope that is not text is refused like an unknown one, never read as "own"
+    let scope = match &body.scope {
+        None | Some(Value::Null) => None,
+        Some(Value::String(s)) => Some(s.as_str()),
+        Some(_) => {
+            return Err(Error::Invalid("scope must be \"own\" or \"outside\"".into()).into())
+        }
+    };
+    let (created, change) = state.signer.create_scoped(
         &vine_id,
-        &body.app,
-        &label,
-        &body.derive,
-        body.keep,
-        body.client_pubkey.as_deref().filter(|c| !c.is_empty()),
+        &ConnectionSpec {
+            app: &body.app,
+            label: &label,
+            derive: &body.derive,
+            keep: body.keep,
+            client_pubkey: body.client_pubkey.as_deref().filter(|c| !c.is_empty()),
+            scope,
+        },
     )?;
     // the client may connect the moment it has the URL: the bunker listens for it first
     state
@@ -431,10 +461,89 @@ async fn import(
     Ok(Json(json!({"results": results})).into_response())
 }
 
+/// The most sessions one call carries (one account's).
+const MAX_IMPORTED_CONNECTIONS: usize = 5000;
+
+fn session_of(i: usize, row: &Value) -> Result<KeycastSession, Error> {
+    let bad = |what: &str| Error::Invalid(format!("connections[{i}]: {what}"));
+    if !row.is_object() {
+        return Err(bad("must be an object"));
+    }
+    let need = |key: &str| {
+        row.get(key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| bad(&format!("{key} must be text")))
+    };
+    // missing or null: None; anything else must be of the right type
+    let opt_str = |key: &str| match row.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => Ok(Some(s.clone())),
+        Some(_) => Err(bad(&format!("{key} must be text or null"))),
+    };
+    let opt_int = |key: &str| match row.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_i64()
+            .map(Some)
+            .ok_or_else(|| bad(&format!("{key} must be a whole number or null"))),
+    };
+    Ok(KeycastSession {
+        bunker_pubkey: need("bunker_pubkey")?,
+        keycast_secret_hash: need("keycast_secret_hash")?,
+        client_pubkey: opt_str("client_pubkey")?,
+        app: need("app")?,
+        label: opt_str("label")?.unwrap_or_default(),
+        scope: opt_str("scope")?,
+        created_at: opt_int("created_at")?
+            .ok_or_else(|| bad("created_at must be a whole number"))?,
+        last_used_at: opt_int("last_used_at")?,
+        uses: opt_int("uses")?.unwrap_or(0),
+        revoked_at: opt_int("revoked_at")?,
+    })
+}
+
+async fn import_connections(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    guard!(state, headers);
+    let vine_id = text(&body, "vine_id")?;
+    let rows = body
+        .get("connections")
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Invalid("connections must be a list".into()))?;
+    if rows.len() > MAX_IMPORTED_CONNECTIONS {
+        return Err(Error::Invalid(format!(
+            "at most {MAX_IMPORTED_CONNECTIONS} connections a call"
+        ))
+        .into());
+    }
+    let sessions = rows
+        .iter()
+        .enumerate()
+        .map(|(i, row)| session_of(i, row))
+        .collect::<Result<Vec<_>, _>>()?;
+    // deriving and sealing a few thousand keys is not for the async threads
+    let signer = state.signer.clone();
+    let (counts, change) =
+        tokio::task::spawn_blocking(move || signer.import_connections(&vine_id, &sessions))
+            .await
+            .map_err(|e| Error::Internal(format!("import: {e}")))??;
+    // the carried sessions' apps are running: the bunker listens for them before the answer
+    state
+        .signer
+        .wait_subscribed(change, Duration::from_millis(1500))
+        .await;
+    Ok(Json(serde_json::to_value(counts).unwrap_or(Value::Null)).into_response())
+}
+
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         .route("/import", post(import))
+        .route("/import/connections", post(import_connections))
         .route("/accounts/{vine_id}", put(put_account).get(get_account))
         .route("/accounts/{vine_id}/status", post(set_status))
         .route("/accounts/{vine_id}/own-key", post(own_key))
@@ -782,6 +891,413 @@ mod tests {
         )
         .await;
         assert_eq!(r["revoked"], 2);
+    }
+
+    /// One NIP-46 request of `client` to the connection `bunker`, answered by the bunker's
+    /// own code (no relay in between).
+    fn nip46(
+        signer: &Signer,
+        bunker: &nostr::prelude::Keys,
+        client: &nostr::prelude::Keys,
+        method: &str,
+        params: Value,
+    ) -> Option<Value> {
+        use nostr::nips::nip44;
+        use nostr::prelude::{EventBuilder, FinalizeEvent, Kind, Tag};
+        let body = json!({"id": "1", "method": method, "params": params});
+        let content = nip44::encrypt(
+            client.secret_key(),
+            &bunker.public_key(),
+            body.to_string(),
+            nip44::Version::V2,
+        )
+        .unwrap();
+        let request = EventBuilder::new(Kind::NostrConnect, content)
+            .tag(Tag::public_key(bunker.public_key()))
+            .finalize(client)
+            .unwrap();
+        let answer = crate::bunker::respond(signer, &request)?;
+        assert_eq!(answer.pubkey, bunker.public_key());
+        let plain =
+            nip44::decrypt(client.secret_key(), &bunker.public_key(), &answer.content).unwrap();
+        Some(serde_json::from_str(&plain).unwrap())
+    }
+
+    #[tokio::test]
+    async fn keycast_sessions_are_carried_over_with_their_bunker_and_client_keys() {
+        use crate::keys;
+        use crate::store::{Imported, ImportedConnection};
+        use nostr::prelude::{Event, Keys};
+        let (app, signer) = app("carry");
+        for id in ["odoo-partner-1", "guest-2"] {
+            call(&app, "PUT", &format!("/accounts/{id}"), "t0ken", json!({})).await;
+        }
+        // what Keycast had: the account's key, and per session a stored secret_hash from
+        // which its bunker key derives
+        let account = keys::derive_keys(&[7u8; 32], "odoo-partner-1", 0);
+        let hash = |n: u32| format!("$2b$10$N9qo8uLOickgx2ZMRZoMye{n:031}");
+        let bunker = |n: u32| keys::keycast_bunker_keys(&account, &hash(n));
+        let (phone, laptop, old) = (Keys::generate(), Keys::generate(), Keys::generate());
+        let row = |n: u32, client: Option<&Keys>| {
+            json!({
+                "bunker_pubkey": bunker(n).public_key().to_hex(),
+                "keycast_secret_hash": hash(n),
+                "client_pubkey": client.map(|c| c.public_key().to_hex()),
+                "app": "Chat · Firefox on Linux",
+                "label": "",
+                "created_at": 1_700_000_000,
+                "last_used_at": 1_700_000_500,
+                "uses": 7,
+                "revoked_at": null,
+            })
+        };
+        let revoked = |n: u32, client: Option<&Keys>| {
+            let mut r = row(n, client);
+            r["revoked_at"] = json!(1_700_001_000);
+            r
+        };
+        let import = |vine_id: &'static str, rows: Value| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/import/connections",
+                    "t0ken",
+                    json!({"vine_id": vine_id, "connections": rows}),
+                )
+                .await
+            }
+        };
+        let listed = || async {
+            call(
+                &app,
+                "GET",
+                "/accounts/odoo-partner-1/connections",
+                "t0ken",
+                Value::Null,
+            )
+            .await
+            .1
+        };
+        let (s, _) = call(&app, "POST", "/import/connections", "wrong", json!({})).await;
+        assert_eq!(s, 401);
+
+        // a bunker key the formula does not give: the row is named, nothing is written
+        let mut wrong = row(2, Some(&laptop));
+        wrong["keycast_secret_hash"] = json!(hash(9));
+        let (s, e) = import("odoo-partner-1", json!([row(1, Some(&phone)), wrong])).await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        assert!(e["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("connections[1]:"));
+        assert!(listed().await.as_array().unwrap().is_empty());
+        // a live session nobody connected to has nothing to carry; odd fields are refused
+        let mut bad_scope = row(1, Some(&phone));
+        bad_scope["scope"] = json!("all");
+        let mut no_time = row(1, Some(&phone));
+        no_time["created_at"] = Value::Null;
+        let mut bad_client = row(1, Some(&phone));
+        bad_client["client_pubkey"] = json!("zz");
+        for bad in [row(2, None), bad_scope, no_time, bad_client, json!("row")] {
+            let (s, e) = import("odoo-partner-1", json!([row(1, Some(&phone)), bad])).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+            assert!(e["message"].as_str().unwrap().starts_with("connections[1]"));
+        }
+        assert!(listed().await.as_array().unwrap().is_empty());
+        assert_eq!(signer.bunker.changes(), 0);
+
+        // two live sessions (one of an outside app) and two revoked ones
+        let mut outside = row(2, Some(&laptop));
+        outside["scope"] = json!("outside");
+        outside["app"] = json!("Notes");
+        outside["label"] = json!("Notes on the laptop");
+        outside["last_used_at"] = Value::Null;
+        let rows = json!([
+            row(1, Some(&phone)),
+            outside,
+            revoked(3, Some(&old)),
+            revoked(4, None)
+        ]);
+        let (s, r) = import("odoo-partner-1", rows.clone()).await;
+        assert_eq!(s, 200, "{r}");
+        assert_eq!(r, json!({"imported": 2, "existing": 0, "revoked": 2}));
+        assert_eq!(signer.bunker.changes(), 1, "the bunker subscribes again");
+        let mut live = vec![
+            bunker(1).public_key().to_hex(),
+            bunker(2).public_key().to_hex(),
+        ];
+        live.sort();
+        assert_eq!(signer.store.live_bunker_pubkeys().unwrap(), live);
+        let list = listed().await;
+        assert_eq!(list.as_array().unwrap().len(), 2);
+        let of = |n: u32| {
+            let key = bunker(n).public_key().to_hex();
+            list.as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["bunker_pubkey"] == key.as_str())
+                .unwrap()
+                .clone()
+        };
+        let first = of(1);
+        assert_eq!(first["client_pubkey"], phone.public_key().to_hex());
+        assert_eq!(first["app"], "Chat · Firefox on Linux");
+        assert_eq!(first["label"], "Chat · Firefox on Linux");
+        assert_eq!(first["scope"], "own");
+        assert_eq!(
+            (
+                first["created_at"].as_i64(),
+                first["last_used_at"].as_i64(),
+                first["uses"].as_i64(),
+                first["expires_at"].clone()
+            ),
+            (
+                Some(1_700_000_000),
+                Some(1_700_000_500),
+                Some(7),
+                Value::Null
+            )
+        );
+        let second = of(2);
+        assert_eq!(
+            (
+                second["scope"].as_str(),
+                second["label"].as_str(),
+                second["last_used_at"].clone()
+            ),
+            (Some("outside"), Some("Notes on the laptop"), Value::Null)
+        );
+
+        // the phone goes on as if nothing happened: no connect, the same bunker key, its key
+        let r = nip46(&signer, &bunker(1), &phone, "get_public_key", json!([])).unwrap();
+        assert_eq!(r["result"], account.public_key().to_hex());
+        let template = json!({"kind": 9, "content": "still here", "tags": [["h", "general"]]});
+        let r = nip46(
+            &signer,
+            &bunker(1),
+            &phone,
+            "sign_event",
+            json!([template.to_string()]),
+        )
+        .unwrap();
+        let ev = Event::from_json(r["result"].as_str().unwrap()).unwrap();
+        ev.verify().unwrap();
+        assert_eq!(ev.pubkey, account.public_key());
+        let r = nip46(&signer, &bunker(1), &phone, "connect", json!([])).unwrap();
+        assert_eq!(r["result"], "ack");
+        // nobody else gets in on it (no secret was carried), and its scope came along
+        let r = nip46(&signer, &bunker(1), &laptop, "connect", json!(["", "x"])).unwrap();
+        assert!(r["error"].as_str().unwrap().starts_with("unauthorized"));
+        let profile = json!({"kind": 0, "content": "{}", "tags": []});
+        let r = nip46(
+            &signer,
+            &bunker(2),
+            &laptop,
+            "sign_event",
+            json!([profile.to_string()]),
+        )
+        .unwrap();
+        assert_eq!(r["error"], "not allowed for this app");
+        // a revoked session stays silent
+        assert!(nip46(&signer, &bunker(3), &old, "ping", json!([])).is_none());
+
+        // again: nothing changes, whatever the rows now say
+        let mut again = rows.clone();
+        again[0]["app"] = json!("Another name");
+        again[0]["revoked_at"] = json!(1_700_002_000);
+        let (s, r) = import("odoo-partner-1", again).await;
+        assert_eq!(s, 200);
+        assert_eq!(r, json!({"imported": 0, "existing": 4, "revoked": 0}));
+        assert_eq!(signer.bunker.changes(), 1);
+        let list = listed().await;
+        assert_eq!(list.as_array().unwrap().len(), 2);
+        assert!(list
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["app"] != "Another name"));
+        // one new row among known ones
+        let (_, r) = import(
+            "odoo-partner-1",
+            json!([row(1, Some(&phone)), row(5, Some(&phone))]),
+        )
+        .await;
+        assert_eq!(r, json!({"imported": 1, "existing": 1, "revoked": 0}));
+
+        // one client key, one identity: the revoked session's key stays the first account's
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/accounts/guest-2/connections",
+            "t0ken",
+            json!({"app": "Chat", "client_pubkey": old.public_key().to_hex()}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("client_key_taken")));
+        // and a session of another account with one of these keys is refused, with its
+        // neighbours
+        let guest = keys::derive_keys(&[7u8; 32], "guest-2", 0);
+        let guest_row = |n: u32, client: &Keys, revoked_at: Value| {
+            json!({
+                "bunker_pubkey": keys::keycast_bunker_keys(&guest, &hash(n)).public_key().to_hex(),
+                "keycast_secret_hash": hash(n),
+                "client_pubkey": client.public_key().to_hex(),
+                "app": "Chat",
+                "created_at": 1_700_000_000,
+                "revoked_at": revoked_at,
+            })
+        };
+        let tablet = Keys::generate();
+        for taken in [&phone, &old] {
+            for revoked_at in [Value::Null, json!(1_700_001_000)] {
+                let rows = json!([
+                    guest_row(1, &tablet, Value::Null),
+                    guest_row(2, taken, revoked_at)
+                ]);
+                let (s, e) = import("guest-2", rows).await;
+                assert_eq!((s, e["error"].as_str()), (409, Some("client_key_taken")));
+            }
+        }
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/guest-2/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert!(list.as_array().unwrap().is_empty(), "nothing was written");
+        let (s, r) = import("guest-2", json!([guest_row(1, &tablet, Value::Null)])).await;
+        assert_eq!((s, r["imported"].as_i64()), (200, Some(1)));
+        // the same bunker key under another account (it cannot be derived there; the store
+        // refuses it all the same)
+        let stray = ImportedConnection {
+            id: "stray".into(),
+            app: "Chat".into(),
+            label: "Chat".into(),
+            bunker_pubkey: bunker(1).public_key().to_hex(),
+            bunker_sealed: vec![0],
+            client_pubkey: None,
+            scope: "own".into(),
+            created_at: 1,
+            last_used_at: None,
+            uses: 0,
+            revoked_at: Some(2),
+        };
+        assert_eq!(
+            signer
+                .store
+                .import_connections("guest-2", &[stray])
+                .unwrap(),
+            Imported::OtherAccount(0)
+        );
+        // an account whose key Keycast held under another account's name derives nothing
+        let (s, e) = import("guest-2", json!([row(6, Some(&tablet))])).await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+
+        // a suspended account's sessions are carried; an own key has none; unknown: 404
+        call(
+            &app,
+            "POST",
+            "/accounts/guest-2/status",
+            "t0ken",
+            json!({"status": "suspended"}),
+        )
+        .await;
+        let (s, r) = import("guest-2", json!([guest_row(3, &tablet, Value::Null)])).await;
+        assert_eq!((s, r["imported"].as_i64()), (200, Some(1)), "{r}");
+        let own = Keys::generate().public_key().to_hex();
+        call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-3",
+            "t0ken",
+            json!({"own_pubkey": own}),
+        )
+        .await;
+        let (s, e) = import("odoo-partner-3", json!([])).await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("own_key")));
+        let (s, _) = import("odoo-partner-9", json!([])).await;
+        assert_eq!(s, 404);
+        let (s, r) = import("odoo-partner-1", json!([])).await;
+        assert_eq!(
+            (s, r),
+            (200, json!({"imported": 0, "existing": 0, "revoked": 0}))
+        );
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/import/connections",
+            "t0ken",
+            json!({"vine_id": "odoo-partner-1"}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+    }
+
+    #[tokio::test]
+    async fn a_connection_has_a_scope_and_an_outside_one_signs_within_the_limits() {
+        let (app, _) = app("scope");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        let make = |body: Value| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/accounts/odoo-partner-1/connections",
+                    "t0ken",
+                    body,
+                )
+                .await
+            }
+        };
+        for scope in [json!("everything"), json!(""), json!(1), json!(["outside"])] {
+            let (s, e) = make(json!({"app": "Notes", "scope": scope})).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        }
+        let (s, own) = make(json!({"app": "Chat"})).await;
+        assert_eq!((s, own["scope"].as_str()), (200, Some("own")));
+        let (s, own2) = make(json!({"app": "Chat", "scope": "own"})).await;
+        assert_eq!((s, own2["scope"].as_str()), (200, Some("own")));
+        let (s, outside) = make(json!({"app": "Notes", "scope": "outside"})).await;
+        assert_eq!((s, outside["scope"].as_str()), (200, Some("outside")));
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        let scopes: Vec<&str> = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["scope"].as_str().unwrap())
+            .collect();
+        assert_eq!(scopes, ["outside", "own", "own"]);
+        // the API's sign through a connection keeps to the same limits
+        let sign = |connection: &Value, kind: u32| {
+            let (app, connection) = (app.clone(), connection["id"].clone());
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/accounts/odoo-partner-1/sign",
+                    "t0ken",
+                    json!({"event": {"kind": kind}, "connection": connection}),
+                )
+                .await
+            }
+        };
+        let (s, e) = sign(&outside, 9000).await;
+        assert_eq!((s, e["error"].as_str()), (403, Some("forbidden")));
+        assert_eq!(e["message"], "not allowed for this app");
+        assert_eq!(sign(&outside, 1).await.0, 200);
+        assert_eq!(sign(&own, 9000).await.0, 200);
     }
 
     #[tokio::test]

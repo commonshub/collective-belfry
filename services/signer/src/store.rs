@@ -84,7 +84,13 @@ pub struct ConnectionRow {
     pub uses: i64,
     /// While no client is bound: when the unclaimed connection stops existing.
     pub expires_at: Option<i64>,
+    /// `own` (one of the belfry's own apps) or `outside` (an outside app: `sign_event` within
+    /// the limits of `limits.rs`).
+    pub scope: String,
 }
+
+pub const SCOPE_OWN: &str = "own";
+pub const SCOPE_OUTSIDE: &str = "outside";
 
 pub struct Store {
     db: Mutex<Connection>,
@@ -117,7 +123,8 @@ CREATE TABLE IF NOT EXISTS connections (
     revoked_at    INTEGER,
     secret_hash   TEXT NOT NULL DEFAULT '',
     uses          INTEGER NOT NULL DEFAULT 0,
-    expires_at    INTEGER
+    expires_at    INTEGER,
+    scope         TEXT NOT NULL DEFAULT 'own'
 );
 CREATE INDEX IF NOT EXISTS connections_vine_id ON connections (vine_id);
 ";
@@ -147,7 +154,7 @@ fn account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Account> {
 const ACCOUNT_COLS: &str =
     "vine_id, pubkey, custody, key_version, sealed, status, created_at, updated_at, username";
 const CONNECTION_COLS: &str = "id, vine_id, app, label, bunker_pubkey, bunker_sealed, \
-     secret_hash, client_pubkey, derive, created_at, last_used_at, uses, expires_at";
+     secret_hash, client_pubkey, derive, created_at, last_used_at, uses, expires_at, scope";
 /// A connection that exists: not revoked, and not an unclaimed one past its deadline.
 const LIVE: &str = "revoked_at IS NULL AND NOT (client_pubkey IS NULL AND expires_at IS NOT NULL \
      AND expires_at <= ?1)";
@@ -172,6 +179,7 @@ fn connection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionRo
         last_used_at: row.get(10)?,
         uses: row.get(11)?,
         expires_at: row.get(12)?,
+        scope: row.get(13)?,
     })
 }
 
@@ -187,6 +195,37 @@ pub struct NewConnection<'a> {
     pub client_pubkey: Option<&'a str>,
     pub derive: &'a [String],
     pub expires_at: Option<i64>,
+    pub scope: &'a str,
+}
+
+/// A session carried over from Keycast (`Store::import_connections`): bound to its client key
+/// from the start, or revoked.
+pub struct ImportedConnection {
+    pub id: String,
+    pub app: String,
+    pub label: String,
+    pub bunker_pubkey: String,
+    pub bunker_sealed: Vec<u8>,
+    pub client_pubkey: Option<String>,
+    pub scope: String,
+    pub created_at: i64,
+    pub last_used_at: Option<i64>,
+    pub uses: i64,
+    pub revoked_at: Option<i64>,
+}
+
+/// What an import of sessions came to. Anything but `Done` wrote nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Imported {
+    Done {
+        imported: usize,
+        existing: usize,
+        revoked: usize,
+    },
+    /// The row at this index names a client key linked to another account.
+    ClientTaken(usize),
+    /// The row at this index names a bunker key another account's connection has.
+    OtherAccount(usize),
 }
 
 /// What binding a client key to a connection came to.
@@ -269,6 +308,11 @@ impl Store {
         }
         if !has("expires_at") {
             conn.execute_batch("ALTER TABLE connections ADD COLUMN expires_at INTEGER")?;
+        }
+        if !has("scope") {
+            conn.execute_batch(
+                "ALTER TABLE connections ADD COLUMN scope TEXT NOT NULL DEFAULT 'own'",
+            )?;
         }
         if has("secret") {
             let mut waiting: Vec<(String, String)> = Vec::new();
@@ -429,8 +473,9 @@ impl Store {
         }
         db.execute(
             "INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
-                                      secret_hash, client_pubkey, derive, created_at, expires_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                                      secret_hash, client_pubkey, derive, created_at, expires_at,
+                                      scope)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 c.id,
                 c.vine_id,
@@ -443,9 +488,77 @@ impl Store {
                 c.derive.join(","),
                 now(),
                 c.expires_at,
+                c.scope,
             ],
         )?;
         Ok(true)
+    }
+
+    /// Adds the sessions of one account, all or none, in one transaction. A bunker key the
+    /// account already has a connection for (live or revoked) is left as it is and counted as
+    /// `existing`; under another account it stops the import, and so does a client key linked
+    /// to another account (revoked rows count on both sides: a key is never freed).
+    pub fn import_connections(
+        &self,
+        vine_id: &str,
+        rows: &[ImportedConnection],
+    ) -> rusqlite::Result<Imported> {
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        let (mut imported, mut existing, mut revoked) = (0, 0, 0);
+        for (i, c) in rows.iter().enumerate() {
+            let holder: Option<String> = tx
+                .query_row(
+                    "SELECT vine_id FROM connections WHERE bunker_pubkey = ?1",
+                    params![c.bunker_pubkey],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            match holder {
+                Some(h) if h == vine_id => {
+                    existing += 1;
+                    continue;
+                }
+                Some(_) => return Ok(Imported::OtherAccount(i)),
+                None => {}
+            }
+            if let Some(client) = &c.client_pubkey {
+                if client_of_another(&tx, vine_id, client)? {
+                    return Ok(Imported::ClientTaken(i));
+                }
+            }
+            tx.execute(
+                "INSERT INTO connections (id, vine_id, app, label, bunker_pubkey, bunker_sealed,
+                                          secret_hash, client_pubkey, derive, created_at,
+                                          last_used_at, revoked_at, uses, expires_at, scope)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, '', ?7, '', ?8, ?9, ?10, ?11, NULL, ?12)",
+                params![
+                    c.id,
+                    vine_id,
+                    c.app,
+                    c.label,
+                    c.bunker_pubkey,
+                    c.bunker_sealed,
+                    c.client_pubkey,
+                    c.created_at,
+                    c.last_used_at,
+                    c.revoked_at,
+                    c.uses,
+                    c.scope,
+                ],
+            )?;
+            if c.revoked_at.is_some() {
+                revoked += 1;
+            } else {
+                imported += 1;
+            }
+        }
+        tx.commit()?;
+        Ok(Imported::Done {
+            imported,
+            existing,
+            revoked,
+        })
     }
 
     pub fn connections(&self, vine_id: &str) -> rusqlite::Result<Vec<ConnectionRow>> {
@@ -625,6 +738,7 @@ mod tests {
             client_pubkey: None,
             derive: &[],
             expires_at: None,
+            scope: SCOPE_OWN,
         }
     }
 
@@ -789,6 +903,10 @@ mod tests {
             crate::signer::secret_hash("plain-secret")
         );
         assert_eq!(waiting.expires_at, None);
+        assert_eq!(
+            waiting.scope, SCOPE_OWN,
+            "connections made before scopes are own"
+        );
         let bound = s.connection("bound").unwrap().unwrap();
         assert_eq!(
             (bound.secret_hash.as_str(), bound.client_pubkey.as_deref()),

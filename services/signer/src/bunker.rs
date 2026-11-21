@@ -6,7 +6,9 @@
 //! NIP-44 (or NIP-04, for older clients) encrypted kind-24133 events p-tagged to the
 //! connection's key; the answer goes back the same way. Methods: connect, get_public_key,
 //! sign_event, nip04/nip44 encrypt and decrypt, ping, get_relays, switch_relays, and Belfry's
-//! derive_secret for the purposes the connection was given.
+//! derive_secret for the purposes the connection was given. A connection of an outside app
+//! (scope `outside`) is refused `sign_event` for the events `limits.rs` names; everything else
+//! is the same for both scopes.
 //!
 //! The loop (`run`) is supervised: when the relay client's notification stream ends or the
 //! loop panics it starts again with a growing pause and says so in the log. It asks the relay
@@ -30,6 +32,7 @@ use serde_json::{json, Value};
 use subtle::ConstantTimeEq;
 use tokio::sync::Semaphore;
 
+use crate::limits;
 use crate::signer::{secret_hash, Error, Scheme, Signer};
 use crate::store::{self, Bind, ConnectionRow};
 
@@ -155,6 +158,16 @@ pub fn handle(
         "sign_event" => {
             let template: Value = serde_json::from_str(&param(params, 0)?)
                 .map_err(|_| "sign_event: the event is not JSON".to_string())?;
+            if conn.scope == store::SCOPE_OUTSIDE && limits::forbidden(&template, &signer.own) {
+                let kind = template.get("kind").cloned().unwrap_or_default();
+                tracing::warn!(
+                    connection = %conn.id,
+                    app = %conn.app,
+                    kind = %kind,
+                    "sign_event refused: not for an outside app"
+                );
+                return Err(limits::REFUSAL.into());
+            }
             let event = signer.sign(&keys, &template).map_err(err_text)?;
             Ok(event.as_json())
         }
@@ -811,6 +824,114 @@ mod tests {
             json!(["", secret]),
         );
         assert_eq!(r["result"], "ack");
+    }
+
+    #[test]
+    fn an_outside_apps_connection_signs_within_the_limits_and_an_own_one_signs_anything() {
+        use crate::signer::ConnectionSpec;
+        let mut s = two_accounts("limits");
+        s.own = limits::Own::from_config("belfry.test", "", "", "");
+        let connect = |scope: &'static str| {
+            let client = Keys::generate();
+            let hex = client.public_key().to_hex();
+            let (c, _) = s
+                .create_scoped(
+                    "odoo-partner-1",
+                    &ConnectionSpec {
+                        app: "Notes",
+                        label: "",
+                        derive: &[],
+                        keep: None,
+                        client_pubkey: Some(&hex),
+                        scope: Some(scope),
+                    },
+                )
+                .unwrap();
+            assert_eq!(c.scope, scope);
+            (c, client)
+        };
+        let templates = [
+            json!({"kind": 9000, "content": "", "tags": [["h", "general"]]}),
+            json!({"kind": 27235, "content": "",
+                   "tags": [["u", "https://belfry.belfry.test/api/v1/whois"], ["method", "POST"]]}),
+            json!({"kind": 1, "content": "hello", "tags": []}),
+        ];
+        let sign = |c: &crate::signer::NewBunker, client: &Keys, template: &Value| {
+            ask(
+                &s,
+                &c.bunker_pubkey,
+                client,
+                "sign_event",
+                json!([template.to_string()]),
+            )
+        };
+        let (outside, app) = connect("outside");
+        for template in &templates[..2] {
+            let r = sign(&outside, &app, template);
+            assert_eq!(
+                (r["result"].as_str(), r["error"].as_str()),
+                (Some(""), Some("not allowed for this app")),
+                "{template}"
+            );
+        }
+        let r = sign(&outside, &app, &templates[2]);
+        let ev = Event::from_json(r["result"].as_str().unwrap()).unwrap();
+        ev.verify().unwrap();
+        assert_eq!(ev.pubkey.to_hex(), outside.pubkey);
+        // a NIP-98 for somewhere else is the app's own business; the rest is not limited
+        let elsewhere =
+            json!({"kind": 27235, "content": "", "tags": [["u", "https://example.org/x"]]});
+        assert!(sign(&outside, &app, &elsewhere).get("error").is_none());
+        let r = sign(&outside, &app, &json!("not an event"));
+        assert_eq!(r["error"], "not allowed for this app");
+        let peer = Keys::generate().public_key().to_hex();
+        let r = ask(
+            &s,
+            &outside.bunker_pubkey,
+            &app,
+            "nip44_encrypt",
+            json!([peer, "psst"]),
+        );
+        assert!(r.get("error").is_none(), "{r}");
+        assert_eq!(
+            ask(
+                &s,
+                &outside.bunker_pubkey,
+                &app,
+                "get_public_key",
+                json!([])
+            )["result"],
+            outside.pubkey
+        );
+
+        let (own, chat) = connect("own");
+        for template in &templates {
+            let r = sign(&own, &chat, template);
+            assert!(r.get("error").is_none(), "{template}: {r}");
+            Event::from_json(r["result"].as_str().unwrap())
+                .unwrap()
+                .verify()
+                .unwrap();
+        }
+        // and a connection made without a scope is an own one
+        let (plain, _) = s
+            .create_connection("odoo-partner-1", "Chat", "", &[], None, None)
+            .unwrap();
+        assert_eq!(s.store.connection(&plain.id).unwrap().unwrap().scope, "own");
+        assert!(matches!(
+            s.create_scoped(
+                "odoo-partner-1",
+                &ConnectionSpec {
+                    app: "Notes",
+                    label: "",
+                    derive: &[],
+                    keep: None,
+                    client_pubkey: None,
+                    scope: Some("everything"),
+                },
+            ),
+            Err(Error::Invalid(_))
+        ));
     }
 
     #[test]

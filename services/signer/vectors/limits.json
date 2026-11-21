@@ -1,0 +1,661 @@
+{
+ "about": "Which events a connection of an outside app is never given a signature for. One rule set: remoteapps.py (_forbidden with no perms, through allowed) and the signer (limits.rs) both pass these. `refused` is the answer to sign_event.",
+ "own": {
+  "domain": "belfry.test",
+  "api": [
+   "apps.belfry.test",
+   "belfry.belfry.test",
+   "belfry.test",
+   "chat.belfry.test",
+   "pass.belfry.test"
+  ],
+  "relays": [
+   "bunker.belfry.test",
+   "groups-relay.belfry.test",
+   "other-relay.example",
+   "relay",
+   "relay.belfry.test"
+  ],
+  "blossom": [
+   "blossom.belfry.test",
+   "files.example.org"
+  ]
+ },
+ "cases": [
+  {
+   "name": "a note",
+   "event": {
+    "kind": 1,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a reaction",
+   "event": {
+    "kind": 7,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a group message",
+   "event": {
+    "kind": 9,
+    "tags": [
+     [
+      "h",
+      "general"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip98 elsewhere",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://example.org/api"
+     ],
+     [
+      "method",
+      "GET"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip98 no u",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "method",
+      "GET"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 apex",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://belfry.test/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 apex upper case and port",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "HTTPS://BELFRY.TEST:443/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 subdomain",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://belfry.belfry.test/api/v1/whois"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 deep subdomain",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://a.b.belfry.test/"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 trailing dot",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://pass.belfry.test./api"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 userinfo trick",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://example.org@belfry.test/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 userinfo other way",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://belfry.test@example.org/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip98 lookalike suffix",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://notbelfry.test/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip98 lookalike prefix",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://belfry.test.example.org/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip98 two u one own",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "https://example.org/"
+     ],
+     [
+      "u",
+      "https://chat.belfry.test/"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 empty u",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      ""
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 no scheme own",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u",
+      "belfry.test/x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip98 u without value",
+   "event": {
+    "kind": 27235,
+    "tags": [
+     [
+      "u"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth elsewhere",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://relay.example.org"
+     ],
+     [
+      "challenge",
+      "c"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "auth no relay",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "challenge",
+      "c"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth own relay",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://relay.belfry.test/"
+     ],
+     [
+      "challenge",
+      "c"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth groups relay",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://groups-relay.belfry.test"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth bunker relay",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://bunker.belfry.test"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth configured relay with port",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://other-relay.example:444/"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth internal name",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "ws://relay:8080"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "auth other subdomain of the belfry",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      "wss://x.belfry.test"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "auth empty relay",
+   "event": {
+    "kind": 22242,
+    "tags": [
+     [
+      "relay",
+      ""
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip46",
+   "event": {
+    "kind": 24133,
+    "tags": [
+     [
+      "p",
+      "00"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 put user",
+   "event": {
+    "kind": 9000,
+    "tags": [
+     [
+      "h",
+      "g"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 remove user",
+   "event": {
+    "kind": 9001,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 edit metadata",
+   "event": {
+    "kind": 9002,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 delete event",
+   "event": {
+    "kind": 9005,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 create group",
+   "event": {
+    "kind": 9007,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 delete group",
+   "event": {
+    "kind": 9008,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 invite",
+   "event": {
+    "kind": 9009,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "kind 9010",
+   "event": {
+    "kind": 9010,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "kind 8999",
+   "event": {
+    "kind": 8999,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "nip29 join request",
+   "event": {
+    "kind": 9021,
+    "tags": [
+     [
+      "h",
+      "g"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "nip29 leave request",
+   "event": {
+    "kind": 9022,
+    "tags": [
+     [
+      "h",
+      "g"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "blossom elsewhere",
+   "event": {
+    "kind": 24242,
+    "tags": [
+     [
+      "t",
+      "upload"
+     ],
+     [
+      "server",
+      "https://cdn.example.org"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "blossom no server",
+   "event": {
+    "kind": 24242,
+    "tags": [
+     [
+      "t",
+      "upload"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "blossom own",
+   "event": {
+    "kind": 24242,
+    "tags": [
+     [
+      "server",
+      "https://blossom.belfry.test"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "blossom configured host",
+   "event": {
+    "kind": 24242,
+    "tags": [
+     [
+      "server",
+      "files.example.org"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "profile",
+   "event": {
+    "kind": 0,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "contacts",
+   "event": {
+    "kind": 3,
+    "tags": [],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "relay list",
+   "event": {
+    "kind": 10002,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "long form",
+   "event": {
+    "kind": 30023,
+    "tags": [
+     [
+      "d",
+      "x"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "kind as text",
+   "event": {
+    "kind": "1",
+    "tags": []
+   },
+   "refused": true
+  },
+  {
+   "name": "kind missing",
+   "event": {
+    "tags": []
+   },
+   "refused": true
+  },
+  {
+   "name": "kind true",
+   "event": {
+    "kind": true,
+    "tags": []
+   },
+   "refused": true
+  }
+ ]
+}
