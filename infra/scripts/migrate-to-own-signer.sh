@@ -7,14 +7,18 @@
 #   migrate-to-own-signer.sh backup     a fresh encrypted backup (backup.sh): one from the last
 #                                       hour, or it makes one; nothing goes on without it
 #   migrate-to-own-signer.sh import     the signer starts next to Keycast (no bunker: it answers
-#                                       nobody yet) and takes in accounts, keys, usernames,
+#                                       nobody yet), stops making accounts of its own ("no new
+#                                       accounts") and takes in accounts, keys, usernames,
 #                                       states, sessions, admins. The belfry keeps running.
 #   migrate-to-own-signer.sh verify     every account, key, username, session and admin compared
 #                                       between Keycast, the signer and the register; a report
 #                                       file; exit 1 on any difference
 #   migrate-to-own-signer.sh switch     the belfry goes down for a few minutes: Keycast and the
 #                                       service stop, a last import and a verify that must be
-#                                       clean, then SIGNER=belfry and `belfry apply`
+#                                       clean, then SIGNER=belfry and `belfry apply`; once the
+#                                       verify after it is clean, new accounts are open again
+#   migrate-to-own-signer.sh open       new accounts open again by hand (switch does it; for a
+#                                       switch that stopped after `belfry apply`)
 #   migrate-to-own-signer.sh rollback   back to Keycast and Authentik, which nothing here touched
 #   migrate-to-own-signer.sh cleanup    much later, and only when asked: empty Keycast's and
 #                                       Authentik's databases and volumes. Typed confirmation, a
@@ -387,13 +391,24 @@ cmd_switch() {
   compose exec -T onboarding python -m belfry_onboarding has-people >/dev/null \
     || die "the service does not answer after the switch (belfry logs onboarding; it refuses to start when the signer does not hold its members). '$0 rollback' goes back."
   out="$STATE_DIR/verify-after-$(stamp).json"
-  py verify "$out" "${PY_FLAGS[@]}" || die "the verify after the switch is NOT clean (report: $out). '$0 rollback' goes back to Keycast."
+  py verify "$out" "${PY_FLAGS[@]}" || die "the verify after the switch is NOT clean (report: $out). New accounts stay closed. '$0 rollback' goes back to Keycast."
   state_set verified_after "$(now)" after_report "$out"
+  # the signer made no account of its own since the import: people may join again
+  py open "$STATE_DIR/open-$(stamp).json" || die "new accounts could not be opened again: run '$0 open' (until then nobody new can join)"
+  state_set opened_at "$(now)"
   say ""
   say "switch: done in $(( ($(now) - t0) / 60 )) min $(( ($(now) - t0) % 60 )) s. This belfry runs on its own signer."
   say "Check by hand now: a web chat session, an iPhone and an Android still sign (no new sign-in);"
   say "https://$d/.well-known/nostr.json?name=<a username>; the console's Status page."
   say "Keycast's and Authentik's data are untouched: '$0 rollback' goes back. '$0 cleanup' removes them, not before $CLEANUP_DAYS days."
+}
+
+cmd_open() {
+  [[ "$(signer_now)" == belfry ]] || die "this belfry still runs on Keycast: new accounts open with the switch"
+  [[ -n "$(state_get verified_after)" ]] || die "no clean verify after the switch on record: run '$0 verify' first"
+  py open "$STATE_DIR/open-$(stamp).json" || die "the signer did not take it"
+  state_set opened_at "$(now)"
+  say "open: the signer makes new accounts again."
 }
 
 # ── rollback ────────────────────────────────────────────────────────────────────────────────
@@ -473,7 +488,7 @@ cmd_cleanup() {
 cmd_status() {
   say "signer: $(signer_now); sign-in: $(env_get PASS_SIGNIN)"
   local k v
-  for k in backup_at imported_at verified_at switched_at verified_after rolled_back_at cleaned_at; do
+  for k in backup_at imported_at verified_at switched_at verified_after opened_at rolled_back_at cleaned_at; do
     v=$(state_get "$k")
     say "$k: $([[ -n "$v" ]] && date -u -d "@$v" '+%F %T UTC' || echo -)"
   done
@@ -486,8 +501,9 @@ case "$PHASE" in
   import) cmd_import ;;
   verify) cmd_verify ;;
   switch) cmd_switch ;;
+  open) cmd_open ;;
   rollback) cmd_rollback ;;
   cleanup) cmd_cleanup ;;
   status) cmd_status ;;
-  *) sed -n '2,40p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,45p' "$SELF" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

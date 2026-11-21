@@ -113,7 +113,12 @@ def test_the_service_does_not_start_on_a_signer_without_its_members(guarded, odo
         "missing": 0,
         "wrong": 0,
         "skipped": "",
+        "closed": False,
     }
+    # an import left the signer making no new accounts: said, not a reason to stop
+    signer.no_new_accounts = True
+    assert signerguard.check_start(guarded)["closed"] is True
+    signer.no_new_accounts = False
     assert [m["vine_id"] for m in signerguard.members(guarded)] == [
         f"odoo-partner-{ana['partner']}",
         f"odoo-partner-{bob['partner']}",

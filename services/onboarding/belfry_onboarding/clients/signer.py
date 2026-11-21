@@ -36,11 +36,16 @@ Where the two signers differ, and what the caller sees:
 - **create_bunker.** ``app_name`` is the connection's application name. With ``client_pubkey``
   the connection is bound from the start and ``"bound"`` is always true. Without it the
   connection must be claimed by a first ``connect`` within ten minutes
-  (``SIGNER_UNCLAIMED_SECONDS``), where Keycast kept it for thirty days.
+  (``SIGNER_UNCLAIMED_SECONDS``), where Keycast kept it for thirty days; ``kind="http"`` makes
+  a sign-in that is used through the API and stays when nobody connects. While the bunker is
+  not listening on its relay the signer makes no NIP-46 connection: 503 ``bunker_unavailable``
+  (an ``httpx.HTTPStatusError``; the caller asks again).
 - **list_sessions.** The signer's connections in Keycast's shape: ``application_name``,
-  ``redirect_origin`` (always empty: the signer keeps no origin), ``bunker_pubkey``,
-  ``client_pubkey``, ``created_at`` and ``last_activity`` as ISO 8601 UTC (the signer stores
-  seconds), ``activity_count``.
+  ``redirect_origin`` (the ``origin`` the connection was made with; empty when none was
+  given), ``bunker_pubkey``, ``client_pubkey``, ``created_at`` and ``last_activity`` as ISO
+  8601 UTC (the signer stores seconds), ``activity_count``.
+- **No new accounts.** While the signer's switch is on (an import is under way) it makes no
+  account for a caller that names no key: :class:`NoNewAccounts`.
 - **revoke_session** of a bunker key that is not a live connection of the account does nothing
   and does not fail.
 - **get_profile.** ``nip05`` is ``<username>@<domain>`` with the domain this client was given
@@ -92,6 +97,16 @@ class KeyNotHeld(RuntimeError):
 
     def __init__(self, vine_id: str):
         super().__init__(f"the signer does not hold the key of {vine_id} and may not make another")
+        self.vine_id = vine_id
+
+
+class NoNewAccounts(RuntimeError):
+    """The signer makes no new accounts for now (an import is under way, or the operator has
+    not lifted the switch since: ``migrate-to-own-signer.sh open``). Nothing was
+    made."""
+
+    def __init__(self, vine_id: str):
+        super().__init__(f"the signer makes no new accounts for now: {vine_id} was not made")
         self.vine_id = vine_id
 
 
@@ -221,6 +236,14 @@ class SignerClient:
             if expect:
                 body["expect_pubkey"] = expect
         r = self._request("PUT", self._account(token), body)
+        if r.status_code == 409 and _code(r) == "no_new_accounts":
+            log.error(
+                "signer: no account %s here and the signer makes no new accounts for now (an "
+                "import was run: migrate-to-own-signer.sh open lifts it once this "
+                "belfry runs on its signer)",
+                vine_id,
+            )
+            raise NoNewAccounts(vine_id)
         if r.status_code == 409 and _code(r) == "mismatch":
             again = self._request("GET", self._account(token))
             if again.status_code == 404 and expect:
@@ -247,6 +270,16 @@ class SignerClient:
             return None
         r.raise_for_status()
         return r.json()
+
+    def settings(self) -> dict[str, Any]:
+        """The signer's switches: ``{"no_new_accounts", "by_environment"}``; ``{}`` from a
+        signer that has none."""
+        r = self._request("GET", f"{self.url}/settings")
+        if r.status_code == 404:
+            return {}
+        r.raise_for_status()
+        data = r.json()
+        return data if isinstance(data, dict) else {}
 
     def set_user_status(self, pubkey: str, status: str, reason: str | None = None) -> None:
         """``active``, ``suspended`` or ``banned`` (kept as suspended) for the account with
@@ -292,6 +325,9 @@ class SignerClient:
         app_name: str,
         client_pubkey: str | None = None,
         scope: str = "own",
+        decrypt: bool = False,
+        origin: str | None = None,
+        kind: str = "nip46",
     ) -> dict[str, Any]:
         """A new NIP-46 connection for the token's account: ``{"bunker_url", "bunker_pubkey",
         "app_name", "origin", "created_at", "bound"}``.
@@ -304,12 +340,27 @@ class SignerClient:
 
         ``scope``: ``own`` for the belfry's own apps, ``outside`` for any other app. The signer
         never signs for an outside connection what remoteapps.py refuses a remote app (NIP-98
-        to the belfry's hosts, AUTH to its relays, kind 24133, NIP-29 moderation, …)."""
+        to the belfry's hosts, AUTH to its relays, kind 24133, NIP-29 moderation, app data
+        and labels under the belfry's names, …).
+
+        ``decrypt``: the member's consent to decrypt, for an outside app (an own one decrypts
+        anyway). Only ``True`` is a yes. ``origin``: the address the session is opened from
+        (the app's registered address), given back by ``list_sessions`` as
+        ``redirect_origin``. ``kind``: ``nip46``, or ``http`` for an app's sign-in that is used
+        over ``/api/nostr`` (it stays when no NIP-46 client connects)."""
         if scope not in ("own", "outside"):
             raise ValueError(f"scope must be own or outside, not {scope!r}")
+        if kind not in ("nip46", "http"):
+            raise ValueError(f"kind must be nip46 or http, not {kind!r}")
         body: dict[str, Any] = {"app": app_name[:60] or "App", "scope": scope}
         if client_pubkey:
             body["client_pubkey"] = client_pubkey
+        if decrypt is True:
+            body["decrypt"] = True
+        if origin:
+            body["origin"] = str(origin)[:200]
+        if kind != "nip46":
+            body["kind"] = kind
         r = self._request("POST", self._account(token) + "/connections", body)
         if r.status_code == 409 and client_pubkey and _code(r) == "client_key_taken":
             raise ClientKeyTaken(client_pubkey)
@@ -319,7 +370,7 @@ class SignerClient:
             "bunker_url": data["bunker_url"],
             "bunker_pubkey": data["bunker_pubkey"],
             "app_name": data.get("app") or body["app"],
-            "origin": None,
+            "origin": data.get("origin") or None,
             "created_at": _iso(data.get("created_at")),
         }
         if data.get("client_pubkey"):
@@ -346,7 +397,7 @@ class SignerClient:
         return [
             {
                 "application_name": c.get("app") or "",
-                "redirect_origin": "",
+                "redirect_origin": str(c.get("origin") or ""),
                 "bunker_pubkey": c.get("bunker_pubkey"),
                 "client_pubkey": c.get("client_pubkey"),
                 "created_at": _iso(c.get("created_at")),
@@ -355,6 +406,21 @@ class SignerClient:
             }
             for c in (r.json() or [])
         ]
+
+    def set_consent(self, token: str, bunker_pubkey: str, decrypt: bool) -> bool:
+        """The member's consent to decrypt on one of the account's live connections (an
+        outside app's). False when the account has no such connection."""
+        if not bunker_pubkey:
+            raise ValueError("set_consent needs a bunker_pubkey")
+        r = self._request(
+            "POST",
+            self._account(token) + "/connections/consent",
+            {"bunker_pubkey": bunker_pubkey, "decrypt": decrypt is True},
+        )
+        if r.status_code == 404:
+            return False
+        r.raise_for_status()
+        return True
 
     def revoke_session(self, token: str, bunker_pubkey: str) -> None:
         if not bunker_pubkey:

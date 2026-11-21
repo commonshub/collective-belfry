@@ -336,7 +336,9 @@ def test_an_outside_app_is_limited_in_what_it_may_have_signed(web, odoo, signer,
 
 
 def test_one_rule_set_for_the_signer_and_the_service():
-    """The signer (limits.rs) and remoteapps.py are held to the same vectors."""
+    """The signer (limits.rs) and remoteapps.py are held to the same vectors: the events an
+    outside app never gets signed (app data and labels under the belfry's names among them),
+    and decrypting only with the member's consent (``methods``; ``decrypt`` is the flag)."""
     from pathlib import Path
 
     path = Path(__file__).resolve().parents[3] / "services/signer/vectors/limits.json"
@@ -347,27 +349,8 @@ def test_one_rule_set_for_the_signer_and_the_service():
         frozenset(data["own"]["relays"]),
         frozenset(data["own"]["blossom"]),
     )
-    assert len(data["cases"]) >= 50
-    for case in data["cases"]:
-        allowed = remoteapps.allowed(None, True, "sign_event", case["event"], hosts)
-        assert allowed is not case["refused"], case["name"]
-
-
-def test_more_limits_the_signer_does_not_have_yet():
-    """Vectors the service passes today and the signer (limits.rs) must pass next: app data
-    under the belfry's names, labels in its namespaces, decrypting only with consent."""
-    from pathlib import Path
-
-    path = Path(__file__).resolve().parents[3] / "services/signer/vectors/limits-next.json"
-    data = json.loads(path.read_text())
-    assert data["about"].startswith("PENDING FOR THE SIGNER")
-    hosts = remoteapps.Own(
-        data["own"]["domain"],
-        frozenset(data["own"]["api"]),
-        frozenset(data["own"]["relays"]),
-        frozenset(data["own"]["blossom"]),
-    )
-    assert len(data["cases"]) >= 20 and len(data["methods"]) >= 6
+    assert len(data["cases"]) >= 73 and len(data["methods"]) >= 7
+    assert not (path.parent / "limits-next.json").exists(), "one file for both"
     for case in data["cases"]:
         allowed = remoteapps.allowed(None, True, "sign_event", case["event"], hosts)
         assert allowed is not case["refused"], case["name"]
@@ -508,19 +491,23 @@ def test_revoking_and_signing_out_end_it_on_the_server(web, odoo, signer, own):
 
 
 def test_an_app_that_only_signs_over_http_keeps_its_sign_in(web, odoo, signer, own):
-    """The wallet never sends a NIP-46 connect: the signer drops its unclaimed connection after
-    ten minutes. The sign-in is the table's: it still signs, the member still sees it among
-    their sessions and can sign it out."""
+    """The wallet never sends a NIP-46 connect. Its sign-in is a connection of kind ``http``
+    in the signer: it stays when nobody connects (only its secret ends), carries the app's
+    origin, still signs, is listed once and can be signed out."""
     wallet = "https://wallet.belfry.test/oauth/callback"
     t = tokens_for(web, odoo, "bob@example.org", wallet, "x")
     bob = web.people["Bob"]["partner"]
+    assert signer.bunkers[-1]["kind"] == "http"
+    assert signer.bunkers[-1]["origin"] == "https://wallet.belfry.test"
+    assert signer.bunkers[-1]["decrypt"] is False  # nothing asks the member yet
     before = console.my_devices(own, bob)
     assert len(before) == 1  # one sign-in, one row: the signer's connection
-    assert signer.expire_unclaimed() == 1  # nobody connected within the window
+    assert signer.expire_unclaimed() == 0  # nobody connected within the window: it stays
     from belfry_onboarding import community
 
     found = community.member_token(own, bob)
-    assert own.keycast.list_sessions(found[1]) == []  # gone in the signer
+    listed = own.keycast.list_sessions(found[1])
+    assert [s["redirect_origin"] for s in listed] == ["https://wallet.belfry.test"]
     r = call(web, t["access_token"], "sign_event", [event(1)])
     assert r.status_code == 200 and r.json()["result"]["pubkey"] == web.people["Bob"]["pubkey"]
     assert call(web, t["access_token"], "derive_secret", ["cashu-wallet-v1"]).status_code == 200
@@ -646,3 +633,38 @@ def test_tokens_are_kept_as_marks_under_a_key_per_kind(own, web, odoo):
     kept = json.dumps(row)
     assert t["access_token"] not in kept and t["refresh_token"] not in kept
     assert appsignin.mark(s, "access", t["refresh_token"]) != row["refresh"]
+
+
+def test_sessions_carry_their_apps_origin(web, odoo, signer, own):
+    """The signer keeps where a session was opened from and gives it back as
+    ``redirect_origin`` (as Keycast did), so a chat session is told by its origin again."""
+    from belfry_onboarding import community, discovery
+
+    from .test_holder_invites import post
+
+    own.keycast.set_username(f"odoo-partner-{web.people['Bob']['partner']}", "bob")
+    key = PrivateKey()
+    with TestClient(create_app(own), base_url="https://pass.belfry.test") as c:
+        r = post(
+            c,
+            key,
+            "/api/session",
+            {"nip05": "bob@belfry.test", "app": "sh.belfry.app://connect", "client": "belfry-ios"},
+        )
+        assert r.status_code == 200, r.text
+        r = post(c, key, "/api/session/verify", {"code": odoo.mailed_codes["bob@example.org"]})
+        assert r.status_code == 200, r.text
+    assert signer.bunkers[-1]["origin"] == "sh.belfry.app://connect"
+    assert signer.bunkers[-1]["kind"] == "nip46"  # the phone app talks NIP-46
+    found = community.member_token(own, web.people["Bob"]["partner"])
+    row = own.keycast.list_sessions(found[1])[-1]
+    assert row["redirect_origin"] == "sh.belfry.app://connect"
+    assert discovery.chat_session(own, row)
+    # an app that took a chat name is still not the chat when its origin is elsewhere
+    assert not discovery.chat_session(
+        own, {"application_name": "Chat", "redirect_origin": "https://evil.example"}
+    )
+    assert discovery.chat_session(own, {"application_name": "Chat", "redirect_origin": ""})
+    assert apps.origin_of("https://notes.example.org/cb?x=1") == "https://notes.example.org"
+    assert apps.origin_of("http://localhost:5173/cb") == "http://localhost:5173"
+    assert apps.origin_of("not an address") == ""

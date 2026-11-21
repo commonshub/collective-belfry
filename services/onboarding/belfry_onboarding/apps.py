@@ -78,6 +78,23 @@ def app_uri(raw: str) -> str:
     return urllib.parse.urlunsplit((u.scheme, host, u.path or "/", "", ""))
 
 
+def origin_of(uri: str) -> str:
+    """Where a session of the app at URI is opened from, as the signer keeps it and
+    ``/api/me/sessions`` gives it back (``redirect_origin``): scheme and host of a web app
+    (``https://chat.belfry.sh``), the address itself for one of Belfry's phone apps, "" for
+    anything that is not an app's address."""
+    if uri in NATIVE_APPS:
+        return uri
+    try:
+        u = urllib.parse.urlsplit(uri or "")
+        port = f":{u.port}" if u.port else ""
+    except ValueError:
+        return ""
+    if u.scheme not in ("https", "http") or not u.hostname:
+        return ""
+    return f"{u.scheme}://{u.hostname}{port}"
+
+
 def address(uri: str) -> str:
     """How an app is shown: host and path (``apps.belfry.sh/chat``). Never a name the app gives
     itself in the sign-in URL: anyone can write any name there."""

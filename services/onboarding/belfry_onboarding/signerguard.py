@@ -168,6 +168,19 @@ def check_start(svc: Services) -> dict[str, Any]:
             )
         else:
             out["held"] += 1
+    settings_of = getattr(svc.keycast, "settings", None)
+    if callable(settings_of):
+        try:
+            closed = bool((settings_of() or {}).get("no_new_accounts"))
+        except Exception:  # noqa: BLE001 — the start check reads, it does not decide on this
+            closed = False
+        out["closed"] = closed
+        if closed:
+            log.warning(
+                "signer guard: the signer makes no new accounts (an import was run): nobody new "
+                "can join until migrate-to-own-signer.sh open (the switch does it once its "
+                "verify is clean)"
+            )
     if wrong:
         raise SignerNotMigrated(
             f"SIGNER=belfry: the signer holds another key than the register for {len(wrong)} of "

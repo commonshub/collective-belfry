@@ -58,6 +58,7 @@ class FakeSignerAdmin:
         self.conns: list[dict[str, Any]] = []
         self.calls: list[tuple[str, int]] = []
         self.break_bunker_of: str = ""
+        self.closed: bool | None = False  # the "no new accounts" switch (None: none)
 
     def health(self):
         return {"status": "ok", "seed": True, "bunker": {"state": "off"}}
@@ -177,8 +178,19 @@ class FakeSignerAdmin:
         self.conns.extend(new)  # all or nothing
         return counts
 
-    def connections(self, vine_id):
-        return [dict(c) for c in self.conns if c["vine_id"] == vine_id and not c["revoked_at"]]
+    def connections(self, vine_id, all=False):
+        return [
+            dict(c) for c in self.conns if c["vine_id"] == vine_id and (all or not c["revoked_at"])
+        ]
+
+    def list_accounts(self):
+        return [dict(a, vine_id=v) for v, a in sorted(self.accounts.items())]
+
+    def close_accounts(self, closed):
+        if self.closed is None:
+            return None
+        self.closed = closed
+        return closed
 
 
 class World:
@@ -443,7 +455,11 @@ def test_a_bunker_key_the_formula_does_not_give_stops_that_accounts_sessions(tow
     assert w.signer.connections(w.ana.vine_id) == []  # all or nothing
     assert w.signer.connections(w.guest.vine_id)  # the others went in
     report = migration.verify(w.plan(), w.signer, w.svc)
-    assert sorted({m["mismatch"] for m in report["mismatches"]}) == ["session_missing"]
+    # its revoked rows are missing too: they came in with the same all-or-nothing call
+    assert sorted({m["mismatch"] for m in report["mismatches"]}) == [
+        "revoked_session_missing",
+        "session_missing",
+    ]
 
 
 def test_big_tables_go_in_batches_under_the_body_limit(world):
@@ -527,8 +543,11 @@ def test_a_clean_move_verifies(moved):
         "keys_equal": 7,
         "usernames": 7,
         "live_sessions": 5,
+        "revoked_sessions": 2,
+        "signer_accounts": 7,
     }
-    assert report["not_verifiable"]["revoked_sessions"] == 2
+    # the revoked rows are read back from the signer (GET …/connections?all=true)
+    assert report["not_verifiable"] == {"revoked_sessions": 0, "accounts_list": False}
     assert report["digest"] == migration.source_digest(w.doc())
     text = json.dumps(report)
     for a in w.accounts:
@@ -567,7 +586,34 @@ def test_a_clean_move_verifies(moved):
             lambda w: next(
                 c for c in w.signer.conns if c["bunker_pubkey"] == w.revoked.bunker
             ).update(revoked_at=None),
-            ["session_unexpected"],
+            ["revoked_session_live", "session_unexpected"],
+        ),
+        (
+            lambda w: w.signer.conns.remove(
+                next(c for c in w.signer.conns if c["bunker_pubkey"] == w.revoked.bunker)
+            ),
+            ["revoked_session_missing"],
+        ),
+        (
+            lambda w: next(
+                c for c in w.signer.conns if c["bunker_pubkey"] == w.revoked.bunker
+            ).update(client_pubkey="5" * 64),
+            ["session_client_key"],
+        ),
+        (
+            # an account nobody imported (made on the signer between import and switch)
+            lambda w: w.signer.accounts.update(
+                {
+                    "odoo-partner-999": {
+                        "pubkey": "3" * 64,
+                        "custody": "derived",
+                        "key_version": 0,
+                        "status": "active",
+                        "username": None,
+                    }
+                }
+            ),
+            ["account_unexpected"],
         ),
         (
             lambda w: w.signer.conns.append(
@@ -638,6 +684,7 @@ def test_after_the_switch_only_the_keys_are_compared(moved):
     assert not migration.verify(w.plan(), s, w.svc)["ok"]
     report = migration.verify(w.plan(), s, w.svc, keys_only=True)
     assert report["ok"] and report["keys_only"] is True and report["checked"]["keys_equal"] == 7
+    assert report["checked"]["signer_accounts"] == 8  # Late is no surprise after the switch
     # a key is a key, for ever
     s.accounts[w.old.vine_id]["pubkey"] = "9" * 64
     assert kinds(migration.verify(w.plan(), s, w.svc, keys_only=True)) == [
@@ -710,7 +757,15 @@ def test_the_api_client_calls_the_signers_paths():
                 )
             return httpx.Response(200, json={"imported": 1, "existing": 0, "revoked": 0})
         if path.endswith("/connections"):
+            if request.url.params.get("all") == "true":
+                return httpx.Response(200, json=[{"bunker_pubkey": "b", "revoked_at": 5}])
             return httpx.Response(200, json=[{"bunker_pubkey": "b"}])
+        if path == "/accounts":
+            if request.url.params.get("after") == "v1":
+                return httpx.Response(200, json={"accounts": [{"vine_id": "v2"}], "next": None})
+            return httpx.Response(200, json={"accounts": [{"vine_id": "v1"}], "next": "v1"})
+        if path == "/settings":
+            return httpx.Response(200, json={"no_new_accounts": body["no_new_accounts"]})
         if path == "/accounts/none":
             return httpx.Response(404, json={"error": "not_found"})
         if path.endswith("/username"):
@@ -730,7 +785,10 @@ def test_the_api_client_calls_the_signers_paths():
     assert api.import_connections("v", [{}]) == {"imported": 1, "existing": 0, "revoked": 0}
     assert api.import_connections("bad", [{}]) == {"error": "invalid: connections[0]: x"}
     assert api.connections("odoo-partner-1") == [{"bunker_pubkey": "b"}]
-    assert [(m, p) for m, p, _, _ in seen] == [
+    assert api.connections("odoo-partner-1", all=True) == [{"bunker_pubkey": "b", "revoked_at": 5}]
+    assert [a["vine_id"] for a in api.list_accounts()] == ["v1", "v2"]
+    assert api.close_accounts(True) is True and api.close_accounts(False) is False
+    assert [(m, p) for m, p, _, _ in seen][:10] == [
         ("GET", "/health"),
         ("GET", "/accounts/odoo-partner-1"),
         ("GET", "/accounts/none"),
@@ -742,6 +800,14 @@ def test_the_api_client_calls_the_signers_paths():
         ("POST", "/import/connections"),
         ("GET", "/accounts/odoo-partner-1/connections"),
     ]
+    assert [(m, p) for m, p, _, _ in seen][10:] == [
+        ("GET", "/accounts/odoo-partner-1/connections"),
+        ("GET", "/accounts"),
+        ("GET", "/accounts"),
+        ("POST", "/settings"),
+        ("POST", "/settings"),
+    ]
+    assert seen[-2][2] == {"no_new_accounts": True}
     assert seen[4][2] == {"own_pubkey": "p"} and seen[6][2] == {"status": "suspended"}
     assert all(auth == "Bearer " + "t" * 32 for _, path, _, auth in seen if path != "/health")
     with pytest.raises(migration.MigrationError, match="token"):
@@ -772,8 +838,14 @@ def test_the_command_prints_counts_and_never_a_key_or_an_address(town, monkeypat
     code, out, err = run_cli(w, "import", monkeypatch)
     assert code == 0, err
     assert "keys: " in err and "1 imported as they are" in err and "1 members' own" in err
+    # the import closes the making of accounts until the switch opens it
+    assert w.signer.closed is True and "closed until the switch" in err
     code, out, err = run_cli(w, "verify", monkeypatch)
-    assert code == 0 and "verify: clean" in err
+    assert code == 0 and "verify: clean" in err and "2 revoked ones" in err
+    assert w.signer.closed is True, "a verify changes nothing"
+    code, out, err = run_cli(w, "open", monkeypatch)
+    assert code == 0 and w.signer.closed is False and json.loads(out) == {"no_new_accounts": False}
+    code, out, err = run_cli(w, "verify", monkeypatch)
     report = json.loads(out)
     assert report["ok"] is True and report["checked"]["accounts"] == 7
     everything = out + err
@@ -886,3 +958,44 @@ def test_apply_never_cleans_up_and_only_the_migration_starts_the_import_signer()
     # the switch of the signer asks the data, not one file
     assert "ever_had_people" in fns["cmd_config"]
     assert 'first-admin.json" &&' not in fns["cmd_config"]
+
+
+def test_a_signer_that_cannot_list_says_so_instead_of_passing(moved):
+    """An older signer: no GET /accounts, and its connection list has no revoked rows. The
+    report names what it could not read; nothing is taken as checked."""
+    w = moved
+
+    class Older:
+        def __init__(self, inner):
+            self.inner = inner
+
+        def account(self, vine_id):
+            return self.inner.account(vine_id)
+
+        def connections(self, vine_id, all=False):
+            rows = self.inner.connections(vine_id)  # live rows only, whatever is asked
+            return [{k: v for k, v in r.items() if k != "revoked_at"} for r in rows]
+
+    report = migration.verify(w.plan(), Older(w.signer), w.svc)
+    assert report["ok"], report["mismatches"]
+    assert report["not_verifiable"] == {"revoked_sessions": 2, "accounts_list": True}
+    assert report["checked"]["revoked_sessions"] == 0 and "signer_accounts" not in report["checked"]
+
+
+def test_the_import_carries_keycasts_origin():
+    s = migration.Session(
+        user="a" * 64,
+        bunker="b" * 64,
+        secret_hash="$2b$x",
+        app="Chat",
+        origin="https://chat.belfry.test",
+        client="c" * 64,
+        state="served",
+        created_at=1,
+        last_used_at=None,
+        uses=0,
+        revoked_at=None,
+    )
+    assert migration.connection_row(s)["origin"] == "https://chat.belfry.test"
+    s.origin = ""
+    assert "origin" not in migration.connection_row(s)

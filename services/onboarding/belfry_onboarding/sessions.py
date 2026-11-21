@@ -281,7 +281,11 @@ class Sessions:
             from .connect import scope_of
 
             bunker = self.svc.keycast.create_bunker(
-                result["token"], label, session, scope=scope_of(self.svc, req["app"])
+                result["token"],
+                label,
+                session,
+                scope=scope_of(self.svc, req["app"]),
+                origin=apps_mod.origin_of(req["app"]),
             )
         except ClientKeyTaken as exc:
             raise SessionError(

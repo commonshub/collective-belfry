@@ -335,8 +335,11 @@ def chat_session(svc: Any, r: dict[str, Any], names: set[str] | None = None) -> 
     name, _ = device.split(r.get("application_name"))
     if name not in (apps.chat_names(svc) if names is None else names):
         return False
+    # "" for a session made without an origin (the guests' and the buyers' chat sessions, and
+    # every session of a signer that keeps none); else the chat's own address, or the phone
+    # apps' (apps.origin_of)
     origin = str(r.get("redirect_origin") or "").rstrip("/")
-    return origin in ("", app_url(svc.settings, "chat").rstrip("/"))
+    return origin in ("", app_url(svc.settings, "chat").rstrip("/"), *apps.NATIVE_APPS)
 
 
 def _session_rows(svc: Any, rows: list[dict[str, Any]], keep: tuple[str, ...]) -> list[dict]:

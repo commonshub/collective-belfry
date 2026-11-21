@@ -158,6 +158,9 @@ class KeycastClient:
         app_name: str,
         client_pubkey: str | None = None,
         scope: str = "own",
+        decrypt: bool = False,
+        origin: str | None = None,
+        kind: str = "nip46",
     ) -> dict[str, Any]:
         """A new NIP-46 connection for the token's user: ``{"bunker_url", "bunker_pubkey", …}``.
         The URL's secret binds the client key that first sends ``connect`` with it.
@@ -170,7 +173,9 @@ class KeycastClient:
 
         ``scope`` (``own`` or ``outside``) is for Belfry's own signer (clients/signer.py), which
         limits what a connection of an outside app may have signed. Keycast has no such
-        limit: the argument is accepted and not sent."""
+        limit: the argument is accepted and not sent. The same for ``decrypt`` (the member's
+        consent to decrypt, for an outside app), ``origin`` (where the session is opened from)
+        and ``kind`` (``http``: a sign-in used through the API): the own signer's."""
         body: dict[str, Any] = {"app_name": app_name[:60] or "App"}
         if client_pubkey:
             body["client_pubkey"] = client_pubkey
