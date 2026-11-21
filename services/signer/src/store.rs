@@ -158,6 +158,24 @@ CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+-- A held key replaced by another custody (the move to an own key): kept sealed, never
+-- dropped silently (the backups need it, and so might the member).
+CREATE TABLE IF NOT EXISTS archived_keys (
+    vine_id     TEXT NOT NULL,
+    pubkey      TEXT NOT NULL,
+    custody     TEXT NOT NULL,
+    key_version INTEGER NOT NULL,
+    sealed      BLOB NOT NULL,
+    archived_at INTEGER NOT NULL,
+    PRIMARY KEY (vine_id, pubkey)
+);
+-- Sessions of Keycast's whose bunker key the formula does not give (the migration): left out
+-- and listed, until an import carries them.
+CREATE TABLE IF NOT EXISTS import_skipped (
+    bunker_pubkey TEXT PRIMARY KEY,
+    vine_id       TEXT NOT NULL,
+    at            INTEGER NOT NULL
+);
 ";
 
 /// After the columns exist (a database made by the first version of the signer gets them in
@@ -276,6 +294,10 @@ pub enum Imported {
         imported: usize,
         existing: usize,
         revoked: usize,
+        /// Rows that were there and were brought to what Keycast now holds (`sync`).
+        updated: usize,
+        /// Of those, rows whose client key went to another account (it is free for it now).
+        released: usize,
     },
     /// The row at this index names a client key linked to another account.
     ClientTaken(usize),
@@ -551,7 +573,17 @@ impl Store {
         sealed: Option<&[u8]>,
     ) -> rusqlite::Result<()> {
         let t = now();
-        self.db().execute(
+        let mut db = self.db();
+        let tx = db.transaction()?;
+        // a held key that this replaces is archived, sealed as it was: never dropped silently
+        tx.execute(
+            "INSERT OR IGNORE INTO archived_keys
+                 (vine_id, pubkey, custody, key_version, sealed, archived_at)
+             SELECT vine_id, pubkey, custody, key_version, sealed, ?3 FROM accounts
+             WHERE vine_id = ?1 AND sealed IS NOT NULL AND pubkey <> ?2",
+            params![vine_id, pubkey, t],
+        )?;
+        tx.execute(
             "INSERT INTO accounts (vine_id, pubkey, custody, key_version, sealed, status,
                                    created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, 'active', ?6, ?6)
@@ -559,7 +591,27 @@ impl Store {
                  sealed = ?5, updated_at = ?6",
             params![vine_id, pubkey, custody.as_str(), key_version, sealed, t],
         )?;
-        Ok(())
+        tx.commit()
+    }
+
+    /// How many held keys were archived for the account (`put_account`).
+    pub fn archived_keys(&self, vine_id: &str) -> rusqlite::Result<i64> {
+        self.db().query_row(
+            "SELECT count(*) FROM archived_keys WHERE vine_id = ?1",
+            params![vine_id],
+            |r| r.get(0),
+        )
+    }
+
+    /// The sessions an import left out because their bunker key could not be derived:
+    /// (vine_id, bunker_pubkey, at).
+    pub fn import_skipped(&self) -> rusqlite::Result<Vec<(String, String, i64)>> {
+        let db = self.db();
+        let mut stmt = db.prepare(
+            "SELECT vine_id, bunker_pubkey, at FROM import_skipped ORDER BY vine_id, bunker_pubkey",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect()
     }
 
     pub fn set_sealed(&self, vine_id: &str, sealed: &[u8]) -> rusqlite::Result<()> {
@@ -685,32 +737,92 @@ impl Store {
         Ok(true)
     }
 
-    /// Adds the sessions of one account, all or none, in one transaction. A bunker key the
-    /// account already has a connection for (live or revoked) is left as it is and counted as
-    /// `existing`; under another account it stops the import, and so does a client key linked
-    /// to another account (revoked rows count on both sides: a key is never freed).
+    /// Adds the sessions of one account, all or none, in one transaction. A bunker key under
+    /// another account stops the import, and so does a client key linked to another account
+    /// (revoked rows count on both sides: a key is never freed).
+    ///
+    /// A bunker key the account already has a connection for is left as it is and counted as
+    /// `existing`, unless `sync`: then the row is brought to what the import says (name,
+    /// scope, origin, use counts, revoked or not, its client key) and counted as `updated`.
+    /// `sync` is for the migration only, while the signer makes no new accounts (nothing but
+    /// the import has written a connection: Keycast's rows are the truth). A row that loses
+    /// its client key (another account keeps it) is `released`: the key is free for the
+    /// account that keeps it, in a later call.
+    ///
+    /// `skipped`: bunker keys of this account the caller could not derive; listed in
+    /// `import_skipped` until a later import carries them.
     pub fn import_connections(
         &self,
         vine_id: &str,
         rows: &[ImportedConnection],
+        sync: bool,
+        skipped: &[String],
     ) -> rusqlite::Result<Imported> {
         let mut db = self.db();
         let tx = db.transaction()?;
-        let (mut imported, mut existing, mut revoked) = (0, 0, 0);
+        let (mut imported, mut existing, mut revoked, mut updated, mut released) = (0, 0, 0, 0, 0);
         for (i, c) in rows.iter().enumerate() {
-            let holder: Option<String> = tx
+            type Have = (String, Option<String>, Option<i64>, String, String, String);
+            let holder: Option<Have> = tx
                 .query_row(
-                    "SELECT vine_id FROM connections WHERE bunker_pubkey = ?1",
+                    "SELECT vine_id, client_pubkey, revoked_at, app, scope, origin
+                     FROM connections WHERE bunker_pubkey = ?1",
                     params![c.bunker_pubkey],
-                    |r| r.get(0),
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
                 )
                 .optional()?;
             match holder {
-                Some(h) if h == vine_id => {
-                    existing += 1;
+                Some((h, ..)) if h != vine_id => return Ok(Imported::OtherAccount(i)),
+                Some((_, client, revoked_at, app, scope, origin)) => {
+                    let same = client == c.client_pubkey
+                        && revoked_at.is_some() == c.revoked_at.is_some()
+                        && app == c.app
+                        && scope == c.scope
+                        && origin == c.origin;
+                    if !sync || same {
+                        existing += 1;
+                        continue;
+                    }
+                    if let Some(want) = &c.client_pubkey {
+                        if client.as_deref() != Some(want.as_str())
+                            && client_of_another(&tx, vine_id, want)?
+                        {
+                            return Ok(Imported::ClientTaken(i));
+                        }
+                    }
+                    tx.execute(
+                        "UPDATE connections SET app = ?2, label = ?3, scope = ?4, origin = ?5,
+                             client_pubkey = ?6, revoked_at = ?7,
+                             last_used_at = max(coalesce(last_used_at, 0), coalesce(?8, 0)),
+                             uses = max(uses, ?9)
+                         WHERE bunker_pubkey = ?1",
+                        params![
+                            c.bunker_pubkey,
+                            c.app,
+                            c.label,
+                            c.scope,
+                            c.origin,
+                            c.client_pubkey,
+                            c.revoked_at.map(|t| revoked_at.unwrap_or(t)),
+                            c.last_used_at,
+                            c.uses,
+                        ],
+                    )?;
+                    updated += 1;
+                    if client.is_some() && c.client_pubkey.is_none() {
+                        released += 1;
+                    }
                     continue;
                 }
-                Some(_) => return Ok(Imported::OtherAccount(i)),
                 None => {}
             }
             if let Some(client) = &c.client_pubkey {
@@ -748,11 +860,27 @@ impl Store {
                 imported += 1;
             }
         }
+        let t = now();
+        for c in rows {
+            tx.execute(
+                "DELETE FROM import_skipped WHERE bunker_pubkey = ?1",
+                params![c.bunker_pubkey],
+            )?;
+        }
+        for b in skipped {
+            tx.execute(
+                "INSERT INTO import_skipped (bunker_pubkey, vine_id, at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT (bunker_pubkey) DO UPDATE SET vine_id = ?2, at = ?3",
+                params![b, vine_id, t],
+            )?;
+        }
         tx.commit()?;
         Ok(Imported::Done {
             imported,
             existing,
             revoked,
+            updated,
+            released,
         })
     }
 
@@ -1301,5 +1429,135 @@ mod tests {
         // revoked like any other
         assert!(s.revoke_connection("a", "h").unwrap());
         assert!(s.connection("h").unwrap().is_none());
+    }
+
+    fn imp(bunker: &str, client: Option<&str>, revoked_at: Option<i64>) -> ImportedConnection {
+        ImportedConnection {
+            id: format!("id-{bunker}"),
+            app: "Chat".into(),
+            label: "Chat".into(),
+            bunker_pubkey: bunker.into(),
+            bunker_sealed: vec![0],
+            client_pubkey: client.map(str::to_string),
+            scope: "own".into(),
+            decrypt: false,
+            origin: String::new(),
+            created_at: 1,
+            last_used_at: Some(5),
+            uses: 1,
+            revoked_at,
+        }
+    }
+
+    fn counts(r: Imported) -> (usize, usize, usize, usize, usize) {
+        match r {
+            Imported::Done {
+                imported,
+                existing,
+                revoked,
+                updated,
+                released,
+            } => (imported, existing, revoked, updated, released),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_import_run_again_in_the_migrations_window_brings_rows_to_what_keycast_now_holds() {
+        let s = Store::in_memory().unwrap();
+        for id in ["x", "y"] {
+            s.put_account(id, id, Custody::Derived, 0, Some(b"k"))
+                .unwrap();
+        }
+        // first import: x has a live session with client c, and another live one
+        let first = [imp("b1", Some("c"), None), imp("b2", Some("d"), None)];
+        assert_eq!(
+            counts(s.import_connections("x", &first, true, &[]).unwrap()),
+            (2, 0, 0, 0, 0)
+        );
+        // without sync (accounts open, after a switch) nothing that is there changes
+        let gone = [imp("b1", Some("c"), Some(9))];
+        assert_eq!(
+            counts(s.import_connections("x", &gone, false, &[]).unwrap()),
+            (0, 1, 0, 0, 0)
+        );
+        assert!(s.connection_by_bunker("b1").unwrap().is_some());
+        // since: b1 signed out in Keycast; b2's client key went to y (y used it last)
+        let mut scoped = imp("b2", None, Some(9));
+        scoped.scope = "outside".into();
+        let again = [imp("b1", Some("c"), Some(9)), scoped];
+        assert_eq!(
+            counts(s.import_connections("x", &again, true, &[]).unwrap()),
+            (0, 0, 0, 2, 1)
+        );
+        let all = s.all_connections("x").unwrap();
+        assert!(all.iter().all(|c| c.revoked_at.is_some()));
+        let b2 = all.iter().find(|c| c.bunker_pubkey == "b2").unwrap();
+        assert_eq!(
+            (b2.client_pubkey.as_deref(), b2.scope.as_str()),
+            (None, "outside")
+        );
+        let b1 = all.iter().find(|c| c.bunker_pubkey == "b1").unwrap();
+        assert_eq!(
+            b1.client_pubkey.as_deref(),
+            Some("c"),
+            "a revoked row keeps its key"
+        );
+        // the released key is free for y now; c is still x's
+        assert_eq!(
+            counts(
+                s.import_connections("y", &[imp("b3", Some("d"), None)], true, &[])
+                    .unwrap()
+            ),
+            (1, 0, 0, 0, 0)
+        );
+        assert_eq!(
+            s.import_connections("y", &[imp("b4", Some("c"), None)], true, &[])
+                .unwrap(),
+            Imported::ClientTaken(0)
+        );
+        // the same rows again: nothing to do
+        assert_eq!(
+            counts(s.import_connections("x", &again, true, &[]).unwrap()),
+            (0, 2, 0, 0, 0)
+        );
+        // and a row Keycast serves again (the import had revoked it: nothing else writes in
+        // the window) comes back live with its key
+        let back = [imp("b1", Some("c"), None)];
+        assert_eq!(
+            counts(s.import_connections("x", &back, true, &[]).unwrap()),
+            (0, 0, 0, 1, 0)
+        );
+        assert!(s.connection_by_bunker("b1").unwrap().is_some());
+        // skipped rows are listed until an import carries them
+        s.import_connections("x", &[], true, &["b9".to_string()])
+            .unwrap();
+        assert_eq!(s.import_skipped().unwrap().len(), 1);
+        let mut b9 = imp("b9", Some("e"), None);
+        b9.id = "id-9".into();
+        s.import_connections("x", &[b9], true, &[]).unwrap();
+        assert!(s.import_skipped().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_held_key_replaced_by_an_own_key_is_archived_sealed() {
+        let s = Store::in_memory().unwrap();
+        s.put_account("a", "held", Custody::Imported, 0, Some(b"sealed"))
+            .unwrap();
+        assert_eq!(s.archived_keys("a").unwrap(), 0);
+        s.put_account("a", "own", Custody::Own, 0, None).unwrap();
+        assert_eq!(s.archived_keys("a").unwrap(), 1);
+        let kept: Vec<u8> = s
+            .db()
+            .query_row(
+                "SELECT sealed FROM archived_keys WHERE vine_id = 'a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, b"sealed");
+        // a second move (own to another own) has nothing held to archive
+        s.put_account("a", "own2", Custody::Own, 0, None).unwrap();
+        assert_eq!(s.archived_keys("a").unwrap(), 1);
     }
 }
