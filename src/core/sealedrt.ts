@@ -31,7 +31,7 @@ interface Pin {
   /** after a switch (§3.3): the devices of the head held before it; a device not among them is
    *  never answered without a prompt (§5.5), it goes through Allow (and is added here once allowed) */
   trusted?: string[]
-  switchAt?: number // when the switch was seen (s): only rosters after it vouch or drop
+  switchHead?: string // the head followed at the switch: only rosters after it on the followed chain vouch or drop (chain order, never dates)
 }
 interface Fresh { root: string; at: number; shared: Conv[]; head?: string /* a switch: the new branch's head */ }
 /** What this device remembers (one kv entry, merged on every write). */
@@ -295,7 +295,7 @@ function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
     if (switched) {
       s.fresh[pk] = { root: c.rosters[0].id, head: head.id, at: Date.now(), shared: [] }
       q.trusted = [...new Set([...(before ?? [])])]
-      q.switchAt = nowS()
+      q.switchHead = head.id
     }
     q.head = head.id; q.heads[head.id] = head.lb; q.anchored = anchoredNow
   })
@@ -307,15 +307,18 @@ function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
  *  prompt. A device joins them when the person allows it here, or when a later roster of the followed
  *  chain, signed by a trusted device, ADDS it (one that merely keeps it vouches for nothing: our own
  *  devices publish rosters by themselves). A device a later roster drops leaves them, and comes back
- *  untrusted even if it was once allowed. Only rosters after the switch count. No expiry. */
+ *  untrusted even if it was once allowed. Only rosters descending from the head followed at the switch
+ *  count (chain order). No expiry. */
 function trustedAfterSwitch(pk: string, dev: string): boolean {
   const q = st.pins[pk]
   if (!q?.trusted) return true
   const t = new Set(q.trusted)
   const rs = chainOf(pk)?.rosters ?? []
-  for (let i = 1; i < rs.length; i++) {
+  // chain order, not dates (a signer picks its roster's date): only rosters descending from the head
+  // followed at the switch count; at or before it on the new branch, nothing
+  const from = q.switchHead ? rs.findIndex((r) => r.id === q.switchHead) : -1
+  for (let i = from < 0 ? rs.length : from + 1; i < rs.length; i++) {
     const r = rs[i], before = rs[i - 1]
-    if (r.created_at <= (q.switchAt ?? 0)) continue
     for (const d of before.devices) if (!r.devices.includes(d)) t.delete(d) // dropped: untrusted from now on
     if (t.has(r.signer)) for (const d of r.devices) if (!before.devices.includes(d)) t.add(d) // added by a trusted device
   }
