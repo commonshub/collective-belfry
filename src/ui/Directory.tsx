@@ -47,22 +47,32 @@ export function MembersDirectory() {
         <RequestSections />
         <div className="pad-x dir-search"><input className="input" type="search" placeholder="Search members" aria-label="Search members" value={q} onChange={(e) => setQ(e.target.value)} /></div>
         {!directory() && <div className="empty">{busy ? 'Loading…' : 'The list could not be loaded.'}</div>}
-        {list.map((m) => (
-          <div key={m.pubkey} className="dir-member">
-            <button className="dir-row" onClick={() => openProfile(m.pubkey)}>
-              <Avatar pubkey={m.pubkey} size={36} />
-              <span className="t"><b>{m.shown}</b>{ps.get(m.pubkey)?.nip05 && <small>{ps.get(m.pubkey)!.nip05}</small>}</span>
-              {roleBadge(m.pubkey) && <span className="badge role-badge">{roleBadge(m.pubkey)}</span>}
-            </button>
-            {m.agents.map((a) => (
-              <button key={a.pubkey} className="dir-row agent" onClick={() => openProfile(a.pubkey)}>
-                <Avatar pubkey={a.pubkey} size={28} />
-                <span className="t"><b>{nameOf(a.pubkey, a.name)}</b><small>🤖 {m.pubkey === me() ? 'Your agent' : `${m.shown}'s agent`}</small></span>
+        {/* board home/members (v93, Xavier): a member's agents have no row of their own; the
+            member's row says "+ N agents", or, when the search found an agent, "+ <its name>" */}
+        {list.map((m) => {
+          const needle = q.trim().toLowerCase()
+          const hit = needle && !m.shown.toLowerCase().includes(needle) ? m.agents.find((a) => nameOf(a.pubkey, a.name).toLowerCase().includes(needle)) : undefined
+          return (
+            <div key={m.pubkey} className="dir-member">
+              <button className="dir-row" onClick={() => openProfile(m.pubkey)}>
+                <Avatar pubkey={m.pubkey} size={36} />
+                <span className="t"><b>{m.shown}</b>
+                  {hit ? <small className="dir-agents">+ <Marked text={nameOf(hit.pubkey, hit.name)} q={needle} /></small>
+                    : m.agents.length ? <small className="dir-agents">+ {m.agents.length} {m.agents.length === 1 ? 'agent' : 'agents'}</small>
+                    : ps.get(m.pubkey)?.nip05 && <small>{ps.get(m.pubkey)!.nip05}</small>}</span>
+                {roleBadge(m.pubkey) && <span className="badge role-badge">{roleBadge(m.pubkey)}</span>}
               </button>
-            ))}
-          </div>
-        ))}
+            </div>
+          )
+        })}
       </div>
     </div>
   )
+}
+
+/** TEXT with the first match of Q in bold (the search's match). */
+function Marked({ text, q }: { text: string; q: string }) {
+  const i = text.toLowerCase().indexOf(q)
+  if (i < 0 || !q) return <>{text}</>
+  return <>{text.slice(0, i)}<b className="dir-hit">{text.slice(i, i + q.length)}</b>{text.slice(i + q.length)}</>
 }

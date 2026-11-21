@@ -60,6 +60,7 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
   const shared = groups().filter((g) => g.members.has(pk) && !g.isProposal)
   // a member's own agent (a member while its member is one), or a guest agent that can become mine
   const owner = agentOwner(pk)
+  const theirAgents = Object.entries(agentOwners()).filter(([, o]) => o === pk).map(([a]) => a)
   const guestAgent = !owner && joins.some((j) => j.agent)
   const canOwn = guestAgent && !isGuest(me()) && !agentOwner(me()) && (isAdmin() || joins.some((j) => j.by === me()))
   const canDrop = !!owner && (owner === me() || isAdmin())
@@ -132,6 +133,15 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
           </div>
         )}
         {inGroup && group(inGroup) && !group(inGroup)!.archived && <GroupRoleCard groupId={inGroup} pk={pk} />}
+        {/* board home/profile-agents (v93): a member's agents under Role, each opening its profile;
+            on my own profile the same section with "Add an agent" last */}
+        {!mine && theirAgents.length > 0 && (
+          <div className="card profile-agents">
+            <div className="hint card-title">Agents</div>
+            {theirAgents.map((a) => <button key={a} className="row link-row" onClick={() => openProfile(a)}><Avatar pubkey={a} size={32} /><span className="t"><b>{displayName(a)}</b></span></button>)}
+          </div>
+        )}
+        {mine && THEME === 'belfry' && !isGuest(me()) && !agentOwner(me()) && !isAgent(me()) && <MyAgentCard />}
         {x?.place && <div className="profile-place"><PinIcon /> {placeLabel(x.place)}</div>}
         {about ? <Markdown text={about} className="profile-about" /> : mine && <p className="hint">Say a few words about yourself: tap Edit.</p>}
         {(canOwn || canDrop) && (
@@ -160,7 +170,6 @@ export function ProfileView({ id, inGroup }: { id?: string; inGroup?: string }) 
             {shared.map((g) => <button key={g.id} className="link profile-chan" onClick={() => go('c/' + encodeURIComponent(g.id))}>{channelIcon(g)} {g.name}</button>)}
           </div>
         )}
-        {mine && THEME === 'belfry' && !isGuest(me()) && !agentOwner(me()) && !isAgent(me()) && <MyAgentCard />}
       </div>
       {picking && <RolePickerSheet title={`Role of ${displayName(pk)}`} value={role} onClose={() => setPicking(false)}
         onPick={async (id) => { setBusy(true); try { await setMemberRole(pk, id) } finally { setBusy(false) } }} />}
@@ -231,7 +240,7 @@ function MyAgentCard() {
   const room = mine.limit - mine.agents.length
   return (
     <div className="card my-agent">
-      <div className="hint card-title">{mine.agents.length ? (mine.agents.length === 1 ? 'Your agent' : 'Your agents') : 'An agent for you'}</div>
+      <div className="hint card-title">{mine.agents.length ? 'Agents' : 'An agent for you'}</div>
       {mine.agents.map((a) => (
         <div key={a.pubkey} className="agent-row">
           <button className="row link-row" onClick={() => openProfile(a.pubkey)}><Avatar pubkey={a.pubkey} size={36} /><span className="t"><b>{displayName(a.pubkey) || a.name}</b><small>Your agent · everyone sees it is yours</small></span></button>

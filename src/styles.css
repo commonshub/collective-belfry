@@ -953,8 +953,11 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 
 /* ---- the belfry's branding (core/branding.ts): the admins' colours ---- */
 :root[data-theme='belfry'][data-brand] { --accent: var(--brand); --on-accent: var(--on-brand); }
+/* Belfry's per-mode accent (branding.colors): never the raw primary for text or icons */
+:root[data-theme='belfry'][data-brand-colors] { --accent: var(--accent-light); --on-accent: var(--on-accent-light); }
+@media (prefers-color-scheme: dark) { :root[data-theme='belfry'][data-brand-colors] { --accent: var(--accent-dark); --on-accent: var(--on-accent-dark); } }
 :root[data-theme='belfry'] .badge.lime { background: var(--brand-2, var(--accent)); color: var(--on-brand-2, var(--on-accent)); }
-:root[data-theme='belfry'][data-brand] .input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent); }
+:root[data-theme='belfry'][data-brand] .input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
 .brand-logo { width: 26px; height: 26px; border-radius: 6px; object-fit: cover; flex: none; vertical-align: middle; margin-right: 8px; }
 .brand-cover { display: block; width: 100%; height: 96px; object-fit: cover; flex: none; }
 .brand-edit .brand-pick { display: flex; align-items: center; gap: 12px; margin: 8px 0 16px; }
@@ -975,7 +978,7 @@ form[aria-busy='true'] button.btn:not(.ghost):not([type='button'])::before, butt
 .todo-mark.busy { color: var(--accent); }
 .thread-line { display: flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 4px; padding: 3px 6px 3px 0; border: 0; background: none;
   color: var(--link, #2563eb); font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; border-radius: 6px; }
-:root[data-theme='belfry'][data-brand] .thread-line { color: var(--brand); }
+:root[data-theme='belfry'][data-brand] .thread-line { color: var(--accent); }
 .thread-line .faces { display: inline-flex; flex: none; }
 .thread-line .faces > * + * { margin-left: -6px; }
 .thread-line .n { flex: none; }
@@ -2062,3 +2065,65 @@ dialog.seal-alert::backdrop { background: rgba(0,0,0,.32); }
 .seal-close { margin-top: 8px; font-size: 14px; }
 .seal-waiting, .seal-allow-waiting { display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--muted); }
 .seal-allow-waiting { margin-top: 8px; font-size: 15px; min-height: 44px; }
+
+.dir-hit { font-weight: 650; color: var(--text); }
+
+/* About Belfry › Diagnostics */
+.diag-list { list-style: none; margin: 0 0 12px; padding: 0; background: var(--surface); border-radius: 16px; overflow: hidden; }
+.diag-list li { display: flex; flex-direction: column; gap: 2px; padding: 10px 14px; border-top: 1px solid var(--line, rgba(0,0,0,.08)); overflow-wrap: anywhere; }
+.diag-list li:first-child { border-top: 0; }
+.diag-list small { color: var(--muted); font-size: 13px; }
+.diag-list .diag-steps { font-variant-numeric: tabular-nums; }
+
+/* Pictures, files and recordings in direct messages (canvas v104, messages/attach-*) */
+.dm-files-bubble { display: flex; flex-direction: column; gap: 6px; max-width: min(320px, 78%); }
+.dm-files-body { display: flex; flex-direction: column; gap: 6px; }
+.dm-pic { display: block; position: relative; width: 100%; max-height: 360px; border-radius: 14px; overflow: hidden; background: var(--surface); }
+.dm-pic { padding: 0 !important; margin: 0; text-decoration: none; }
+.dm-pic img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: cover; border-radius: 0; }
+.dm-pic.tile { aspect-ratio: 1 / 1; }
+.dm-pic-wait { display: block; width: 100%; height: 100%; min-height: 120px; background: var(--surface); }
+.dm-pic.bad, .dm-filecard.bad { padding: 12px 14px; font-size: 14px; color: var(--muted); border-radius: 14px; background: var(--surface); }
+.dm-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); color: #fff; font-size: 22px; font-weight: 700; }
+.dm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-radius: 14px; overflow: hidden; }
+.dm-grid .dm-pic { border-radius: 0; }
+.dm-grid.n3 .dm-pic:first-child { grid-column: 1 / 3; aspect-ratio: 2 / 1; }
+.dm-filecard { display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 52px; border-radius: 14px; background: var(--surface); color: var(--text); text-align: left; border: 0; font: inherit; cursor: pointer; }
+.dm-filecard .t { display: flex; flex-direction: column; min-width: 0; }
+.dm-filecard small { color: var(--muted); font-size: 13px; }
+.dm-filebadge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: #dc2626; color: #fff; font-size: 11px; font-weight: 700; }
+.dm-audio { display: flex; align-items: center; gap: 8px; }
+.dm-audio audio { max-width: 100%; height: 40px; }
+.dm-audio small, .dm-audio-wait { color: var(--muted); font-size: 13px; }
+.dm.mine .dm-filecard, .dm.mine .dm-pic.bad { background: rgba(255,255,255,.14); color: inherit; }
+.dm.mine .dm-filecard small { color: inherit; opacity: .8; }
+.composer .plus { flex: none; width: 40px; height: 40px; border-radius: 20px; border: 0; background: var(--surface); font-size: 20px; color: var(--text); cursor: pointer; }
+.comp-files { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 4px 8px; }
+.comp-file { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; background: var(--surface); display: inline-flex; align-items: center; justify-content: center; }
+.comp-file img { width: 100%; height: 100%; object-fit: cover; }
+.comp-file button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 11px; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 14px; line-height: 22px; padding: 0; cursor: pointer; }
+.rec-clock { font-size: 32px; font-variant-numeric: tabular-nums; text-align: center; margin: 8px 0 16px; }
+
+/* typing indicators (canvas v110 messages/typing-*): one 22 px line above the composer, kept
+   when nobody types so the feed never moves; secondary colour, names semibold, dots in turn */
+.typing-line { flex: none; display: flex; align-items: center; gap: 6px; height: 22px; padding: 0 16px 2px; box-sizing: border-box; font-size: 13px; line-height: 18px; color: var(--muted); white-space: nowrap; overflow: hidden; }
+.typing-line > span:last-child { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.typing-line b { font-weight: 600; }
+.typing-dots { display: inline-flex; gap: 3px; align-items: center; flex: none; }
+.typing-dots i { display: block; width: 5px; height: 5px; border-radius: 3px; background: currentColor; opacity: .35; animation: typing-dot 1.2s infinite ease-in-out; }
+.typing-dots i:nth-child(2) { animation-delay: .2s; }
+.typing-dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes typing-dot { 0%, 60%, 100% { opacity: .35; transform: none; } 30% { opacity: 1; transform: translateY(-2px); } }
+@media (prefers-reduced-motion: reduce) { .typing-dots i { animation: none; opacity: .7; } }
+.dm-row small.typing-row { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+.privacy-sec { margin: 8px 4px 8px; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--muted); text-transform: uppercase; letter-spacing: .02em; }
+
+/* Copy link · Share… (canvas v113): equal widths, 50 px */
+.link-pair { display: flex; gap: 10px; margin-top: 10px; }
+.link-pair .btn { flex: 1 1 0; min-width: 0; height: 50px; padding: 0 10px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; }
+.link-pair .btn svg { width: 20px; height: 20px; flex: none; }
+.link-pair .btn.ok { color: var(--ok, #1f7a35); }
+.ev-url.ev-address { display: block; }
+.ev-address code { display: block; font-family: ui-monospace, Menlo, monospace; font-size: 14px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.ev-address .link-pair .btn { flex: 1 1 0; width: auto; display: inline-flex; }
+.ev-address .ev-qr-link { display: inline-block; margin-top: 8px; width: auto; }

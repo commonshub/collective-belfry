@@ -35,6 +35,13 @@ export interface OutboxItem {
    *  signed when it is sent). Its kind and tags still show in the app while it waits (a 9002:
    *  the channel's new name at once); what the belfry publishes comes back from the relay. */
   http?: { path: string; body: unknown }
+  /** When it was first saved (ms): the UI's "Still sending…" after 5 s, "Not sent yet" after 30 s. */
+  queuedAt?: number
+  /** The conversation a direct message belongs to: its order is kept within it (sync.ts). */
+  conv?: string
+  /** An encrypted file to upload before this item is published (a kind 15's ciphertext, in
+   *  'blobs' under BLOBKEY): the upload is a step of the item; done once the storage took it. */
+  upload?: { blobKey: string; size: number; done?: boolean }
 }
 
 type Schema = {

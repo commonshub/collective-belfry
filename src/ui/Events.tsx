@@ -1,6 +1,7 @@
 // An event's own screen (#/events/<link>): the channel header's pattern (one line, pulled down
 // for the rest), the event's chat under it, RSVP or apply in one tap, the guest list for hosts.
 // And the screen someone with no account sees when they open an event's URL in the chat.
+import { LinkPair, copyText } from './LinkPair'
 import { replaceHash } from '../core/nav'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import qrcode from 'qrcode-generator'
@@ -221,13 +222,13 @@ function EventView({ e, api: given, activeThread, ticketCode }: { e: CalEvent; a
               {maybe.length > 0 && <section><h3>Maybe · {maybe.length}</h3>{maybe.map((k) => <PersonRow key={k} k={k} />)}</section>}
               {!plain && <section><h3>Tickets</h3>{tks.map((t) => <TicketRow key={t.d} t={t} p={p} onPick={open && st === 'none' ? () => pick(t) : undefined} />)}</section>}
               {e.description && <section><Markdown className="ev-about" text={e.description} /></section>}
-              <section className="ev-url">
+              <section className="ev-url ev-address">
+                <h3>Address</h3>
                 <code>{eventUrl(e)}</code>
-                <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
-                  <ShareButton url={eventUrl(e)} title={e.title} />
-                  <button className="btn small ghost" onClick={() => setSheet('qr')}>QR code</button>
-                </div>
+                <LinkPair text={eventUrl(e)} share={{ url: eventUrl(e), title: e.title, text: e.title }} />
+                <button className="link ev-qr-link" onClick={() => setSheet('qr')}>QR code</button>
               </section>
+              {host && e.isNew && <h3 className="evh-host-h">For hosts</h3>}
               {host && e.isNew && (
                 <section className="act-group evh-host">
                   <button className="act" onClick={() => setSheet('edit')}><PencilIcon /><span>Edit the event</span></button>
@@ -291,15 +292,6 @@ function Cover({ url }: { url: string }) {
   return src ? <img className="evh-cover" src={src} alt="" draggable={false} /> : null
 }
 
-function ShareButton({ url, title }: { url: string; title: string }) {
-  const [done, setDone] = useState(false)
-  const share = async () => {
-    const nav = navigator as Navigator & { share?: (d: { url: string; title: string }) => Promise<void> }
-    if (nav.share) { try { await nav.share({ url, title }); return } catch { /* cancelled: nothing */ return } }
-    await copyText(url); setDone(true); setTimeout(() => setDone(false), 1500)
-  }
-  return <button className="btn small ghost" onClick={share}><ShareIcon /> {done ? 'Copied' : 'Share'}</button>
-}
 
 /** The event's photos, newest first; "Add photos" for everyone in the group. */
 function EventPhotos({ groupId, readOnly }: { groupId: string; readOnly: boolean }) {
@@ -529,11 +521,6 @@ function EventMenu({ e, host, may, onClose, open }: { e: CalEvent; host: boolean
   )
 }
 
-async function copyText(text: string) {
-  try { await navigator.clipboard.writeText(text) } catch {
-    const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove()
-  }
-}
 function CopyButton({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState(false)
   return <button className="btn small ghost" onClick={async () => { await copyText(text); setDone(true); setTimeout(() => setDone(false), 1500) }}>{done ? 'Copied' : label}</button>

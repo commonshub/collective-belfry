@@ -17,7 +17,8 @@ export function BrandingScreen({ parent, embedded = false }: { /** opened from t
   // a live preview of the colours while picking; leaving without saving puts the saved ones back
   // the homepage's line is not in belfry.json: ask the belfry (once), unless it is being typed
   useEffect(() => { void fetchBranding().then((got) => { if (got) setB((x) => (x.description ? x : { ...x, description: got.description })) }) }, [])
-  useEffect(() => { applyBranding({ ...b, primary: HEX.test(b.primary) ? b.primary : '', secondary: HEX.test(b.secondary) ? b.secondary : '' }) }, [b])
+  // while the primary is being changed, Belfry's per-mode accents (made from the saved one) step aside
+  useEffect(() => { applyBranding({ ...b, colors: b.primary === branding().primary ? b.colors : undefined, primary: HEX.test(b.primary) ? b.primary : '', secondary: HEX.test(b.secondary) ? b.secondary : '' }) }, [b])
   useEffect(() => () => applyBranding(), [])
   const set = (k: keyof Branding, v: string) => { setSaved(false); setB((x) => ({ ...x, [k]: v })) }
   const pick = async (k: 'logo' | 'cover', f?: File) => {

@@ -505,15 +505,24 @@ export function threadsOf(groupId: string): Map<string, ThreadInfo> {
 }
 
 // ---- shared inboxes: mail from anyone to <channel>@<domain> lands as e-mail cards ---------
-// The setting is the group admins' latest NIP-78 event (d = belfry:inbox); a card's state and
-// who has it are NIP-32 labels (namespace belfry/inbox) on the card, latest wins.
+// The setting is the group admins' latest NIP-78 event, d = belfry:inbox:<channel> and h = the
+// channel (docs/mail.md, belfry-sh 73a414f). Until 2026-11-21 the d was belfry:inbox alone: a 30078
+// is addressable by kind + author + d, so one admin's setting for a channel replaced theirs for
+// every other (OSV's #hello lost its inbox when #sponsors got one). Read: the new d, or the old one
+// whose h is the channel; written: the new d only. A card's state and who has it are NIP-32
+// labels (namespace belfry/inbox) on the card, latest wins.
 
 export const INBOX_D = 'belfry:inbox'
+export const inboxD = (groupId: string) => `${INBOX_D}:${groupId}`
 export const INBOX_NS = 'belfry/inbox'
 
 export function isInbox(g: Group | undefined): boolean {
   if (!g) return false
-  const own = all(me()).filter((e) => e.kind === 30078 && tag(e, 'd') === INBOX_D && tag(e, 'h') === g.id && g.admins.has(e.pubkey)).sort(byTime)
+  const own = all(me()).filter((e) => {
+    if (e.kind !== 30078 || tag(e, 'h') !== g.id || !g.admins.has(e.pubkey)) return false
+    const d = tag(e, 'd')
+    return d === inboxD(g.id) || d === INBOX_D
+  }).sort(byTime)
   try { return !!own.length && !!JSON.parse(own.at(-1)!.content || '{}').on } catch { return false }
 }
 

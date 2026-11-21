@@ -17,9 +17,13 @@ function confirmText(action: string, id = ''): { text: string; yes: string } | u
     const what = id === 'offer-no' ? 'Decline this request?' : pct ? `Give ${pct}% off?` : 'Answer this offer?'
     return { text: `${what} ${FIXED['confirm:belfry:offer-decide'].replace(/^Answer this offer\? /, '')}`, yes: id === 'offer-no' ? 'Decline' : pct ? `Give ${pct}% off` : 'Answer' }
   }
+  if (action === 'belfry:request-close') return { text: FIXED['confirm:belfry:request-close'], yes: 'Close' }
   if (action === 'belfry:website-publish') return { text: FIXED['confirm:belfry:website-publish'].replace('<domain>', BELFRY.domain), yes: 'Publish' }
   return undefined
 }
+
+/** The pressed button's words while the belfry answers (canvas v101: "Closing"). */
+const BUSY: Record<string, string> = { 'belfry:request-close': 'Closing' }
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 
@@ -67,7 +71,7 @@ export function MessageButtons({ ev, groupId, disabled = false }: { ev: NostrEve
         {buttons.map((b) => (
           <Btn key={b.id} className={'mb' + (b.style ? ' ' + b.style : '')} aria-busy={waiting || undefined}
             disabled={disabled || waiting || !knownAction(b.action)} onClick={() => tap(b)}>
-            {waiting && st.press?.button === b.id && <span className="mb-spin" aria-hidden />}{b.label}
+            {waiting && st.press?.button === b.id && <span className="mb-spin" aria-hidden />}{waiting && st.press?.button === b.id && BUSY[b.action] || b.label}
           </Btn>
         ))}
       </div>

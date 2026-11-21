@@ -3,7 +3,7 @@ import { archiveGroupMeta, editGroupMeta } from './checkin'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
 import { BELFRY, LABEL_NS, TZ } from '../config'
-import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, INBOX_D, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable, nameOf } from './model'
+import { EDIT_KIND, PIN_NS, hashtags, WEB_D, type WebPage, type ChannelVisibility, type Period, group, webPage, publicPeriods, slugify, inboxD, INBOX_NS, listIdFor, normTopic, PROPOSAL_NS, TOPIC_NS, VOTE_OPTIONS, type CalEvent, type Proposal, type ProposalStatus, type Rsvp, ANNOUNCE, mySeen, seenD, VOUCH_NS, allGroups, deletedGroup, archivable, nameOf } from './model'
 import { enqueue, me, newId } from './sync'
 import { all } from './store'
 import { reading } from './guestmode'
@@ -156,7 +156,7 @@ export async function setVisibility(groupId: string, visibility: ChannelVisibili
   return page
 }
 export const setInbox = (groupId: string, on: boolean) =>
-  enqueue('groups', { kind: 30078, content: JSON.stringify({ on }), tags: [['d', INBOX_D], ['h', groupId]] })
+  enqueue('groups', { kind: 30078, content: JSON.stringify({ on }), tags: [['d', inboxD(groupId)], ['h', groupId]] })
 
 /** Close or reopen an e-mail card; ASSIGNEE '' = nobody. */
 export const setCardStatus = (groupId: string, card: string, status: 'open' | 'closed') =>

@@ -1,4 +1,5 @@
-import { Relay, type Subscription } from 'nostr-tools/relay'
+import type { Relay, Subscription } from 'nostr-tools/relay'
+import { addTrace, backoffMs, onWake, sock, watchConnections, within, type Sock } from './conn'
 import type { EventTemplate, Filter, NostrEvent, VerifiedEvent } from 'nostr-tools'
 import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex } from '@noble/hashes/utils'
@@ -18,7 +19,9 @@ const URLS: Record<Target, string> = { groups: BELFRY.groupsRelay, main: BELFRY.
 
 let signer: Signer | null = null
 let localOnly = true
-const relays: Partial<Record<Target, Relay>> = {}
+/** the two relay sockets, owned by the connection manager (conn.ts) */
+const socks: Partial<Record<Target, Sock>> = {}
+const relayOf = (t: Target) => socks[t]?.relay
 let lastCreatedAt = 0
 
 export function me() {
@@ -90,6 +93,7 @@ async function put(
     attachments,
     status: 'queued',
     tries: 0,
+    queuedAt: Date.now(),
     ...(http ? { http } : {}),
   }
   await putOutbox(item)
@@ -115,8 +119,12 @@ let flushing = false
 let again = false // something was queued while a flush ran: run once more right after
 // Everything you send is saved on this device first (the outbox, IndexedDB), then published
 // when a relay answers, retried on every wake-up (online, back in the foreground, the 15 s
-// watchdog) until the relay says yes or refuses for good. Order is kept per relay: a message
-// waiting for one relay never holds back another relay's.
+// watchdog) until the relay says yes or refuses for good.
+// One queue per conversation, per group, and per relay for the rest, all sent side by side: order
+// is kept within a queue, and a direct message never waits behind anything else. A queue whose
+// item failed for now waits 1 s, 2 s, 4 s … up to 30 s before its next try. In the per-relay queue
+// (profile, read state, calendar…), an item that failed for now 3 times stops holding back the
+// items after it (it is still tried at each pass).
 const sentListeners = new Set<(item: OutboxItem, ev: NostrEvent) => void>()
 const failListeners = new Set<(item: OutboxItem) => void>()
 /** Called when an outbox item is out (accepted by its relay), or refused for good. */
@@ -129,63 +137,132 @@ let beforeFlushHook: (() => Promise<void>) | undefined
 /** sealedrt.ts: sealed wraps are checked against fresh heads before they go out. */
 export function setBeforeFlush(f: () => Promise<void>) { beforeFlushHook = f }
 
+const queueOf = (o: OutboxItem) => {
+  if (o.conv) return 'c:' + o.conv
+  if (o.dm) return 'd:' + o.dm
+  const h = o.tags.find((t) => t[0] === 'h')?.[1]
+  return h && o.target === 'groups' ? 'g:' + h : 't:' + o.target
+}
+/** a queue's back-off after a failure for now: when it may try again, and its step */
+const notBefore = new Map<string, number>()
+const steps = new Map<string, number>()
+
+/** Where a send stands right now (the UI's "Still sending… · <step>"). */
+const sending = new Map<string, { step: string; since: number }>()
+export const sendStep = (localId: string) => sending.get(localId)?.step
+
 export async function flush() {
   if (!signer) return
   if (localOnly && demoHold) return // tests: a relay that takes its time
   if (flushing) { again = true; return }
   flushing = true
   again = false
-  const stalled = new Set<Target>()
   try {
     if (beforeFlushHook && !localOnly && navigator.onLine) await beforeFlushHook().catch(() => { /* heads unknown: what is queued goes as it is */ })
+    const queues = new Map<string, OutboxItem[]>()
     for (const item of outboxItems()) {
-      if (item.status === 'failed' || stalled.has(item.target)) continue
-      if (!localOnly && !navigator.onLine) break
-      try {
-        const ev = await send(item)
-        retryStep = 0
-        if (!item.signed && !item.http) addEvents([ev])
-        await dropOutbox(item.localId)
-        sentListeners.forEach((f) => f(item, ev))
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        // a file the storage refuses (too big, a type it does not take, not allowed) will be refused
-        // again: fail this one message instead of holding back every later one to that relay.
-        // 401, 408 and 429 can pass on a later try.
-        const refusedUpload = /^upload failed \((4\d\d)/.exec(msg)
-        const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
-          || (!!refusedUpload && !['401', '408', '429'].includes(refusedUpload[1]))
-        if (msg.startsWith('restricted') && item.target === 'groups') noteRefusal(msg)
-        if (/^duplicate:/.test(msg)) { // the relay has it already: out
-          await dropOutbox(item.localId)
-          sentListeners.forEach((f) => f(item, item.signed ?? ({} as NostrEvent)))
-          continue
-        }
-        const next = { ...item, tries: item.tries + 1, status: permanent ? 'failed' as const : 'queued' as const, error: msg }
-        await putOutbox(next)
-        if (permanent) failListeners.forEach((f) => f(next))
-        else stalled.add(item.target) // keep this relay's order: retry this one before its later items
-      }
+      if (item.status === 'failed') continue
+      const k = queueOf(item)
+      if ((notBefore.get(k) ?? 0) > Date.now()) continue
+      const q = queues.get(k)
+      if (q) q.push(item)
+      else queues.set(k, [item])
     }
+    await Promise.all([...queues].map(([k, items]) => runQueue(k, items)))
   } finally {
     flushing = false
   }
-  if (again && !stalled.size) void flush()
-  else if (stalled.size) retrySoon()
+  if (again) void flush()
+  retrySoon()
 }
 
-// A send that failed for now (a dropped socket, a signer that was reconnecting) is tried again
-// within seconds, not at the next 15 s watchdog tick: 1.5 s, 3 s, 6 s, then every 12 s.
+/** One queue, in order: true when something in it waits for a later try. */
+async function runQueue(k: string, items: OutboxItem[]) {
+  let waits = false
+  for (const item of items) {
+    if (!localOnly && !navigator.onLine) return true
+    const r = await sendOne(item)
+    if (r === 'retry') {
+      waits = true
+      const tries = (outboxItems().find((o) => o.localId === item.localId)?.tries ?? item.tries + 1)
+      if (k.startsWith('t:') && tries >= 3) continue // stops holding back the rest of its queue
+      break
+    }
+  }
+  if (waits) { const n = steps.get(k) ?? 0; steps.set(k, n + 1); notBefore.set(k, Date.now() + backoffMs(n)) }
+  else { steps.delete(k); notBefore.delete(k) }
+  return waits
+}
+
+/** One try of one item: sent, refused for good, or to retry later; each try is traced. */
+async function sendOne(item: OutboxItem): Promise<'sent' | 'failed' | 'retry'> {
+  const t0 = Date.now()
+  const marks: [string, number][] = []
+  const step = (name: string) => {
+    const last = marks[marks.length - 1]
+    // upload progress: one line in the trace, with the time it was last reported
+    if (last && last[0].startsWith('uploading') && name.startsWith('uploading')) marks[marks.length - 1] = [name, Date.now() - t0]
+    else marks.push([name, Date.now() - t0])
+    sending.set(item.localId, { step: name, since: t0 })
+  }
+  const what = `${item.dm ? 'direct message' : 'kind ' + item.kind}${item.http ? ' (call to the belfry)' : ''} → ${item.target}`
+  const trace = (result: string) => addTrace({ at: t0, what, steps: marks, ms: Date.now() - t0, result, tries: item.tries + 1 })
+  try {
+    const ev = await send(item, step)
+    sending.delete(item.localId)
+    trace('sent')
+    if (!item.signed && !item.http) addEvents([ev])
+    await dropOutbox(item.localId)
+    sentListeners.forEach((f) => f(item, ev))
+    return 'sent'
+  } catch (e) {
+    sending.delete(item.localId)
+    const msg = e instanceof Error ? e.message : String(e)
+    trace(msg.split(/[:(]/)[0].trim().slice(0, 40) || 'error')
+    // a file the storage refuses (too big, a type it does not take, not allowed) will be refused
+    // again: fail this one message instead of holding back every later one to that relay.
+    // 401, 408 and 429 can pass on a later try.
+    const refusedUpload = /^upload failed \((4\d\d)/.exec(msg)
+    const permanent = /^(blocked|invalid|restricted|pow|duplicate|error):/.test(msg) || /not allowed|denied|unauthori[sz]ed/i.test(msg)
+      || (!!refusedUpload && !['401', '408', '429'].includes(refusedUpload[1]))
+    if (msg.startsWith('restricted') && item.target === 'groups') noteRefusal(msg)
+    if (/^duplicate:/.test(msg)) { // the relay has it already: out
+      await dropOutbox(item.localId)
+      sentListeners.forEach((f) => f(item, item.signed ?? ({} as NostrEvent)))
+      return 'sent'
+    }
+    const next = { ...item, tries: item.tries + 1, status: permanent ? 'failed' as const : 'queued' as const, error: msg }
+    await putOutbox(next)
+    if (permanent) {
+      failListeners.forEach((f) => f(next))
+      // the other copies of the same message (its gift wraps) can't go without this one: they fail
+      // with it (a refused upload, a refused wrap), and Retry puts them all back
+      if (item.dm) for (const o of outboxItems().filter((o) => o.dm === item.dm && o.localId !== item.localId && o.status === 'queued')) {
+        const f = { ...o, status: 'failed' as const, error: msg }
+        await putOutbox(f)
+        failListeners.forEach((l) => l(f))
+      }
+      return 'failed'
+    }
+    return 'retry'
+  }
+}
+
+// The next try of the queues that wait: when the first of them may go.
 let retryTimer: ReturnType<typeof setTimeout> | undefined
-let retryStep = 0
 function retrySoon() {
-  if (retryTimer) return
-  const ms = Math.min(12_000, 1500 * 2 ** retryStep++)
-  retryTimer = setTimeout(() => {
-    retryTimer = undefined
-    if (!outboxItems().some((o) => o.status === 'queued' && o.tries > 0)) retryStep = 0
-    void flush()
-  }, ms)
+  clearTimeout(retryTimer)
+  retryTimer = undefined
+  if (!notBefore.size) return
+  const at = Math.min(...notBefore.values())
+  retryTimer = setTimeout(() => { retryTimer = undefined; void flush() }, Math.max(50, at - Date.now()))
+}
+
+/** Every queue may try again now (back in the foreground, online, Retry). */
+export function retryNow() {
+  notBefore.clear()
+  steps.clear()
+  void flush()
 }
 
 /** Save an event that is signed already (gift wraps) and publish it when the relay answers. */
@@ -198,11 +275,13 @@ let demoShift = 0
 let demoHold = false
 if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoHold: (on: boolean) => void }).__demoHold = (on) => { demoHold = on; if (!on) void flush() }
 
-export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string) {
+export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string, conv?: string, upload?: Blob) {
   if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  let up: OutboxItem['upload']
+  if (upload) { const blobKey = newId(); await (await db()).put('blobs', upload, blobKey); up = { blobKey, size: upload.size } }
   const item: OutboxItem = {
     localId: 'local-' + newId(), target, kind: ev.kind, content: ev.content, tags: ev.tags, created_at: ev.created_at,
-    attachments: [], status: 'queued', tries: 0, signed: ev, dm,
+    attachments: [], status: 'queued', tries: 0, signed: ev, dm, conv, queuedAt: Date.now(), ...(up ? { upload: up } : {}),
   }
   await putOutbox(item)
   void flush()
@@ -212,7 +291,7 @@ export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string)
 export async function retry(localId: string) {
   const item = outboxItems().find((o) => o.localId === localId)
   if (item) await putOutbox({ ...item, status: 'queued', error: undefined })
-  void flush()
+  retryNow()
 }
 
 /** Why the belfry refused a call, in a sentence (its `error` codes, Belfry checkin.py). */
@@ -247,11 +326,12 @@ async function sendApi(item: OutboxItem): Promise<NostrEvent> {
   throw new Error(`timeout: the belfry answered ${r.status}`)
 }
 
-async function send(item: OutboxItem): Promise<NostrEvent> {
-  if (item.http) return sendApi(item)
+async function send(item: OutboxItem, step: (name: string) => void): Promise<NostrEvent> {
+  if (item.http) { step('calling the belfry'); return sendApi(item) }
   if (item.signed) {
     if (localOnly) return item.signed
-    await publish(item.target, item.signed)
+    if (item.upload && !item.upload.done) await uploadFirst(item, step)
+    await publish(item.target, item.signed, step)
     return item.signed
   }
   const d = await db()
@@ -260,21 +340,40 @@ async function send(item: OutboxItem): Promise<NostrEvent> {
   for (const a of item.attachments) {
     const blob = await d.get('blobs', a.blobKey)
     if (!blob) continue
-    const url = localOnly ? 'idb:' + a.blobKey : await upload(blob, a)
+    const mb = (n: number) => (n / 1e6).toFixed(1)
+    step(`uploading 0.0 of ${mb(blob.size)} MB`)
+    const url = localOnly ? 'idb:' + a.blobKey : await upload(blob, a, (done) => step(`uploading ${mb(done)} of ${mb(blob.size)} MB`))
     const x = localOnly ? '' : url.split('/').pop()!.split('.')[0]
     tags.push(['imeta', `url ${url}`, `m ${a.mime}`, `size ${a.size}`, ...(x ? [`x ${x}`] : []),
       ...(a.width ? [`dim ${a.width}x${a.height}`] : []), `alt ${a.name}`])
     content = content ? content + '\n' + url : url
   }
   const tpl: EventTemplate = { kind: item.kind, content, tags, created_at: item.created_at }
+  step('signing')
   const ev = await signer!.sign(tpl)
   if (localOnly) {
     synthesizeRelayEvents(ev)
     return ev
   }
-  await publish(item.target, ev)
+  await publish(item.target, ev, step)
   // the blob stays cached: the uploaded URL is served from it until the next reload
   return ev
+}
+
+/** A kind 15's encrypted file, uploaded before its wrap is published (dm-files.json): once the
+ *  storage took it, the item says so and the copy on this device goes. */
+async function uploadFirst(item: OutboxItem, step: (name: string) => void) {
+  const up = item.upload!
+  const d = await db()
+  const blob = await d.get('blobs', up.blobKey)
+  if (!blob) throw new Error('error: the file is no longer on this device')
+  const mb = (n: number) => (n / 1e6).toFixed(1)
+  step(`uploading 0.0 of ${mb(blob.size)} MB`)
+  await upload(blob, { blobKey: up.blobKey, name: 'file', mime: 'application/octet-stream', size: blob.size }, (done) => step(`uploading ${mb(done)} of ${mb(blob.size)} MB`))
+  const now = outboxItems().find((o) => o.localId === item.localId) ?? item
+  await putOutbox({ ...now, upload: { ...up, done: true } })
+  item.upload = { ...up, done: true }
+  await d.delete('blobs', up.blobKey).catch(() => {})
 }
 
 // ---- Blossom (BUD-02) ---------------------------------------------------------
@@ -345,7 +444,7 @@ export async function joinWithAccount(token: string): Promise<{ channel: string;
   return { channel: body.channel, already: !!body.already }
 }
 
-async function upload(blob: Blob, a: Attachment): Promise<string> {
+async function upload(blob: Blob, a: Attachment, progress?: (sent: number) => void): Promise<string> {
   const buf = new Uint8Array(await blob.arrayBuffer())
   const x = bytesToHex(sha256(buf))
   const auth = await signer!.sign({
@@ -354,14 +453,21 @@ async function upload(blob: Blob, a: Attachment): Promise<string> {
     created_at: Math.floor(Date.now() / 1000),
     tags: [['t', 'upload'], ['x', x], ['expiration', String(Math.floor(Date.now() / 1000) + 600)]],
   })
-  const res = await fetch(BELFRY.blossom + '/upload', {
-    method: 'PUT',
-    headers: { Authorization: 'Nostr ' + btoa(JSON.stringify(auth)), 'Content-Type': a.mime },
-    body: blob,
+  // XMLHttpRequest, not fetch: it says how much is sent ("uploading 2.2 of 4.8 MB")
+  return new Promise<string>((resolve, reject) => {
+    const q = new XMLHttpRequest()
+    q.open('PUT', BELFRY.blossom + '/upload')
+    q.setRequestHeader('Authorization', 'Nostr ' + btoa(JSON.stringify(auth)))
+    q.setRequestHeader('Content-Type', a.mime)
+    q.upload.onprogress = (e) => progress?.(e.loaded)
+    q.onload = () => {
+      if (q.status < 200 || q.status >= 300) { reject(new Error(`upload failed (${q.status} ${q.getResponseHeader('x-reason') ?? ''})`)); return }
+      try { resolve((JSON.parse(q.responseText) as { url: string }).url) } catch { reject(new Error('timeout: the upload answer could not be read')) }
+    }
+    q.onerror = () => reject(new Error('timeout: no connection for the upload'))
+    q.ontimeout = () => reject(new Error('timeout: the upload took too long'))
+    q.send(blob)
   })
-  if (!res.ok) throw new Error(`upload failed (${res.status} ${res.headers.get('x-reason') ?? ''})`)
-  const desc = (await res.json()) as { url: string }
-  return desc.url
 }
 
 // ---- relays ---------------------------------------------------------------------
@@ -370,73 +476,60 @@ const connGen: Partial<Record<Target, number>> = {}
 /** Which socket to TARGET this is (a new one each reconnect): sealedrt's knowledge is per socket. */
 export const connectionOf = (target: Target) => (relayAuthed(target) ? connGen[target] ?? 0 : -1)
 
-async function relay(target: Target): Promise<Relay> {
-  const existing = relays[target]
-  if (existing?.connected) return existing
+/** The manager's socket for TARGET (typing.ts sends and listens on it, outside the outbox). */
+export const sockFor = (target: Target) => sockOf(target)
+
+function sockOf(target: Target): Sock {
+  const have = socks[target]
+  if (have) return have
   const url = URLS[target]
-  const r = new Relay(url)
-  authed[target] = false // a new socket: not signed in until it says so
-  connGen[target] = (connGen[target] ?? 0) + 1 // answers given on an earlier socket say nothing about this one
-  r._onauth = () => {
-    setRelay(url, 'auth')
-    r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
-      .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = !replayed[target]; resubscribe(target) })
-      .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
-  }
-  r.onclose = () => {
-    if (relays[target] && relays[target] !== r) return // an older socket
-    authed[target] = false
-    setRelay(url, 'down')
-    delete relays[target]
-    setTimeout(() => void connect(target), backoff(target))
-  }
-  await r.connect()
-  relays[target] = r
-  attempts[target] = 0
-  setRelay(url, 'up')
-  return r
+  const so = sock(url)
+  socks[target] = so
+  so.listen({
+    open: () => {
+      authed[target] = false // a new socket: not signed in until it says so
+      connGen[target] = (connGen[target] ?? 0) + 1 // answers given on an earlier socket say nothing about this one
+      setRelay(url, 'up')
+      resubscribe(target) // catches up from the mark
+      void flush()
+    },
+    down: () => { authed[target] = false; setRelay(url, 'down') },
+    auth: (r) => {
+      setRelay(url, 'auth')
+      r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>)
+        .then(() => { setRelay(url, 'up'); authed[target] = true; replay[target] = !replayed[target]; resubscribe(target) })
+        .catch((e) => { setRelay(url, 'down'); noteRefusal(String(e?.message ?? e)) })
+    },
+  })
+  return so
 }
 
-const attempts: Record<Target, number> = { groups: 0, main: 0 }
-function backoff(t: Target) {
-  attempts[t]++
-  return Math.min(30_000, 800 * 2 ** attempts[t])
-}
+/** The open socket for TARGET (opened if needed). */
+const relay = (target: Target): Promise<Relay> => sockOf(target).get()
 
-/** PROMISE, or "timeout: …" after MS: a connection that drops mid-way never answers, and the
- *  outbox must then retry rather than wait forever. */
-function within<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-  let t: ReturnType<typeof setTimeout>
-  promise.catch(() => {}) // after a timeout it may still fail: nobody waits for it any more
-  return Promise.race([promise, new Promise<T>((_, rej) => { t = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms) })])
-    .finally(() => clearTimeout(t))
-}
-
-async function publish(target: Target, ev: NostrEvent) {
-  const r = await within(relay(target), 15000, 'no connection to the relay')
+async function publish(target: Target, ev: NostrEvent, step: (name: string) => void = () => {}) {
+  const so = sockOf(target)
+  step(so.connected ? 'checking the connection' : 'connecting')
+  // before a send: a socket quiet for over 10 s is checked first (conn.ts)
+  const r = await within(so.fresh(), 15000, 'no connection to the relay')
   try {
+    step('publishing')
     try {
       await within(r.publish(ev), 15000, 'the relay did not answer')
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (!msg.startsWith('auth-required')) throw e
+      step('signing in')
       await within(r.auth((t) => signer!.sign(t) as Promise<VerifiedEvent>), 15000, 'sign-in to the relay')
       // signed in only now: the live subscription had the public part only
       authed[target] = true; replay[target] = !replayed[target]; resubscribe(target)
+      step('publishing')
       await within(r.publish(ev), 15000, 'the relay did not answer')
     }
   } catch (e) {
-    // no answer on a socket that says it is open: it is dead (a proxy restart can leave it so).
-    // Drop it; onclose reconnects at once and the outbox tries again on the new one.
-    if (/timed out|timeout: the relay/.test(e instanceof Error ? e.message : String(e)) && relays[target] === r) {
-      // (close() by us skips the socket's onclose: reconnect and resubscribe here)
-      r.onclose = null
-      try { r.close() } catch { /* already closed */ }
-      delete relays[target]
-      setRelay(URLS[target], 'down')
-      attempts[target] = 0
-      void connect(target)
-    }
+    // a timeout on a socket that says it is open: it is dead (a proxy restart, a phone that slept).
+    // Drop it; the manager reconnects at once and the outbox tries again on the new one.
+    if (/timed out|timeout/i.test(e instanceof Error ? e.message : String(e)) && so.relay === r) so.drop('publish: no answer')
     throw e
   }
 }
@@ -526,7 +619,7 @@ export async function queryPaged(target: Target, filters: Filter[], timeoutMs = 
 /** Ask the relays again whether this key is in (after a request, an invite code or an approval). */
 export function recheckAccess() {
   for (const t of ['groups', 'main'] as Target[]) {
-    if (relays[t]?.connected) resubscribe(t)
+    if (socks[t]?.connected) resubscribe(t)
     else void connect(t)
   }
 }
@@ -558,7 +651,7 @@ function learnGroup(e: NostrEvent) {
 // signed in to that relay (NIP-42) on its current connection: only then does an empty answer mean
 // "it has nothing" (groupstate.ts), not "you may not see it yet"
 const authed: Partial<Record<Target, boolean>> = {}
-export const relayAuthed = (target: Target) => !!authed[target] && !!relays[target]?.connected
+export const relayAuthed = (target: Target) => !!authed[target] && !!socks[target]?.connected
 // The catch-up mark: up to when this device has everything the relay would show it signed in. It
 // moves only at an EOSE received after AUTH (an answer given before the sign-in is the public part
 // only, and its newer events must not hide the rest at the next reconnect or start). Per account
@@ -637,7 +730,7 @@ function filters(target: Target): Filter[] {
 }
 
 function resubscribe(target: Target) {
-  const r = relays[target]
+  const r = relayOf(target)
   if (!r) return
   subs[target]?.close()
   const fs = filters(target)
@@ -665,93 +758,48 @@ function resubscribe(target: Target) {
       if (target === 'groups') noteRefusal(reason)
       // the relay ended the live subscription for another reason (or we closed it to replace it):
       // without a new one nothing arrives until a reload, so open it again while the socket lives
-      if (subs[target] === sub && relays[target] === r && r.connected && status.access !== 'denied') {
-        setTimeout(() => { if (subs[target] === sub && relays[target] === r) resubscribe(target) }, 2000)
+      if (subs[target] === sub && relayOf(target) === r && r.connected && status.access !== 'denied') {
+        setTimeout(() => { if (subs[target] === sub && relayOf(target) === r) resubscribe(target) }, 2000)
       }
     },
   })
   const sub = subs[target]
 }
 
-/** Is the socket really alive? A phone that slept keeps a WebSocket that says "open" but is dead:
- *  nothing arrives and nothing says so. Ask the relay something tiny; no answer in 6 s means dead:
- *  drop it, and onclose reconnects and catches up (since = the latest event seen − 1 h). */
-const probing: Partial<Record<Target, boolean>> = {}
-function probe(target: Target) {
-  const r = relays[target]
-  if (!r?.connected || probing[target]) return
-  probing[target] = true
-  let answered = false
-  const end = () => { answered = true; try { s.close() } catch { /* closed */ } }
-  const s = r.subscribe([{ kinds: [39000], limit: 1 }], { oneose: end, onevent: () => {}, onclose: () => { answered = true } })
-  setTimeout(() => {
-    probing[target] = false
-    if (answered || relays[target] !== r) return
-    console.warn('relay did not answer, reconnecting', URLS[target])
-    try { r.close() } catch { /* already closed */ }
-    if (relays[target] === r) { delete relays[target]; setRelay(URLS[target], 'down'); void connect(target) }
-  }, 6000)
-}
-
 function noteRefusal(reason: string) {
   if (/^(restricted|blocked)|pass|member/i.test(reason)) setStatus({ access: 'denied', accessReason: reason })
 }
 
-const connecting: Partial<Record<Target, Promise<void>>> = {}
 function connect(target: Target): Promise<void> {
   if (localOnly || !signer) return Promise.resolve()
-  if (relays[target]?.connected) return Promise.resolve()
-  // offline: nothing to try; the 'online' event (or the watchdog) calls again
+  const so = sockOf(target)
+  so.wanted = true
+  if (so.connected) return Promise.resolve()
+  // offline: nothing to try; the 'online' event calls again
   if (!navigator.onLine) { setRelay(URLS[target], 'down'); return Promise.resolve() }
-  return (connecting[target] ??= (async () => {
-    try {
-      await relay(target)
-      resubscribe(target) // catches up from the last event seen (since = latest − 1 h)
-      void flush()
-    } catch {
-      setRelay(URLS[target], 'down')
-      setTimeout(() => void connect(target), backoff(target))
-    } finally {
-      delete connecting[target]
-    }
-  })())
+  return so.get().then(() => {}, () => { setRelay(URLS[target], 'down') }) // the manager retries (1 s, 2 s, 4 s … 30 s)
 }
 
-// Going offline and back online syncs by itself: the browser's online/offline events, the app
-// coming back to the foreground, and a watchdog every 15 s (the online flag can lie, and a
-// socket can die silently while a phone sleeps) all reconnect, catch up and send the outbox.
+// Going offline and back online syncs by itself: the connection manager (conn.ts) checks every
+// socket when the app comes back to the foreground or online, keeps them alive while visible and
+// reconnects; here the outbox is sent again and the online flag follows.
 let watching = false
-let ticks = 0
 function watchNetwork() {
   if (watching) return
   watching = true
-  const wake = () => {
+  watchConnections()
+  onWake(() => {
     if (!signer) return
-    attempts.groups = attempts.main = 0
+    if (status.online !== navigator.onLine) setStatus({ online: navigator.onLine })
     void connect('groups')
     void connect('main')
-    void flush()
-  }
-  window.addEventListener('online', () => { setStatus({ online: true }); wake() })
-  window.addEventListener('offline', () => {
-    setStatus({ online: false })
-    // the sockets are dead even if they don't know it yet: drop them, reconnect when back
-    for (const t of ['groups', 'main'] as Target[]) {
-      const r = relays[t]
-      delete relays[t]
-      if (r) { r.onclose = null; try { r.close() } catch { /* already closed */ } }
-      setRelay(URLS[t], 'down')
-    }
+    retryNow()
   })
-  // back in the foreground: the socket may have died while asleep (probe), reconnect if so
-  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wake(); probe('groups'); probe('main') } })
-  window.addEventListener('pageshow', () => { probe('groups'); probe('main') })
+  window.addEventListener('offline', () => setStatus({ online: false }))
   setInterval(() => {
     if (!signer) return
     if (status.online !== navigator.onLine) setStatus({ online: navigator.onLine })
-    if (!localOnly && navigator.onLine) for (const t of ['groups', 'main'] as Target[]) if (!relays[t]?.connected) void connect(t)
-    // every minute, check the open sockets still answer (a silent dead socket = no live updates)
-    if (!localOnly && navigator.onLine && document.visibilityState === 'visible' && ++ticks % 4 === 0) { probe('groups'); probe('main') }
+    if (!localOnly && navigator.onLine) for (const t of ['groups', 'main'] as Target[]) if (!socks[t]?.connected) void connect(t)
     if (outboxItems().some((o) => o.status !== 'failed')) void flush()
   }, 15_000)
 }
@@ -788,8 +836,7 @@ async function firstChannel() {
 export function stop() {
   for (const t of ['groups', 'main'] as Target[]) {
     subs[t]?.close()
-    relays[t]?.close()
-    delete relays[t]
+    socks[t]?.stop()
   }
   signer = null
 }
