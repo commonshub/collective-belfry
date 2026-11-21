@@ -44,7 +44,8 @@ export async function demoEvent(opts: { as?: DemoAs; today?: boolean; plain?: bo
   const start = new Date()
   if (today) start.setHours(Math.min(start.getHours(), 14), 0, 0, 0)
   else { start.setDate(start.getDate() + 5); start.setHours(10, 0, 0, 0) }
-  const end = new Date(+start + 6 * 3600e3)
+  // today's still on whenever a test runs (an event is past after its end): late in the day it lasts
+  const end = new Date(Math.max(+start + 6 * 3600e3, today ? Date.now() + 2 * 3600e3 : 0))
   const cover = photos ? await photo(130, '') : ''
   const holders = [...crowd.map((p) => p.pk), steward, ...(as === 'attendee' ? [me()] : [])]
   const ticketD = plain ? `${d}:free` : `${d}:std`
