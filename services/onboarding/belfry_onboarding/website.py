@@ -31,6 +31,9 @@
   (``["path", "<prefix>"]``, "scopes" below); only those change, the rest of the live site is
   kept by hash. Before anyone approves, ``announce`` posts in each proposal version's chat what
   publishing it would change (counts from the two manifests, fixed wording), once per version.
+- **Messages** (Xavier, 2026-11-21): every line the belfry posts here is folded: a short first
+  line, screenshots (API ``screenshots``, else the proposal's / button message's ``imeta``),
+  ``---``, the details; preview links are the short ``preview.<domain>/v/<code>`` (``short_code``).
 """
 
 from __future__ import annotations
@@ -41,6 +44,8 @@ import hashlib
 import json
 import logging
 import re
+import secrets
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -72,16 +77,90 @@ def domain(svc: Services) -> str:
     return svc.settings.nip05_domain
 
 
-def preview_url(svc: Services, pubkey: str, name: str = "") -> str:
+def long_preview_url(svc: Services, pubkey: str, name: str = "") -> str:
+    """The preview link that names the site: https://preview.<domain>/p/<npub>[@<name>]."""
     return f"https://preview.{domain(svc)}/p/{nostr.hex_to_npub(pubkey)}" + (
         f"@{name}" if name else ""
     )
 
 
-def parse_ref(text: str, dom: str = "") -> tuple[str, str] | None:
+def preview_url(svc: Services, pubkey: str, name: str = "") -> str:
+    """The short preview link the belfry writes: https://preview.<domain>/v/<code> (one code per
+    site, kept in the register); the long link when the register can't be written."""
+    try:
+        return f"https://preview.{domain(svc)}/v/{short_code(svc, pubkey, name)}"
+    except Exception as exc:  # noqa: BLE001 — a long link still works
+        log.warning("website: no short preview link: %r", exc)
+        return long_preview_url(svc, pubkey, name)
+
+
+# ── short preview links: preview.<domain>/v/<code> ──────────────────────────────────────────
+# Xavier, 2026-11-21: "/p/<npub>@<name>" is a long noisy link in #website. A code is 8 lowercase
+# base32 characters, made once per (pubkey, site name) and kept in the register param
+# ``belfry.preview_links`` ({code: [pubkey hex, name]}); the preview host serves /v/<code>
+# exactly like /p/<npub>@<name> (preview below) and parse_ref reads it back.
+PREVIEW_LINKS_PARAM = "belfry.preview_links"
+CODE = r"[a-z2-7]{8}"
+CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"
+MAX_LINKS = 5000  # the oldest codes go first beyond this
+_links_lock = threading.Lock()
+
+
+def _links(svc: Services) -> dict[str, list[str]]:
+    from .webthreads import _param
+
+    try:
+        got = json.loads(_param(svc, PREVIEW_LINKS_PARAM) or "{}")
+    except ValueError:
+        return {}
+    if not isinstance(got, dict):
+        return {}
+    return {
+        c: v
+        for c, v in got.items()
+        if isinstance(c, str)
+        and re.fullmatch(CODE, c)
+        and isinstance(v, list)
+        and len(v) == 2
+        and isinstance(v[0], str)
+        and re.fullmatch(r"[0-9a-f]{64}", v[0])
+        and isinstance(v[1], str)
+        and (v[1] == "" or re.fullmatch(NAME, v[1]))
+    }
+
+
+def short_code(svc: Services, pubkey: str, name: str = "") -> str:
+    """The code of that site's short preview link, made the first time it is asked for."""
+    from .webthreads import _set_param
+
+    with _links_lock:
+        links = _links(svc)
+        for code, v in links.items():
+            if v == [pubkey, name]:
+                return code
+        while True:
+            code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))
+            if code not in links:
+                break
+        links[code] = [pubkey, name]
+        while len(links) > MAX_LINKS:
+            links.pop(next(iter(links)))
+        _set_param(svc, PREVIEW_LINKS_PARAM, json.dumps(links))
+        return code
+
+
+def resolve_code(svc: Services, code: str) -> tuple[str, str] | None:
+    """(pubkey hex, site name) of a short preview link's code, or None."""
+    if not re.fullmatch(CODE, code or ""):
+        return None
+    got = _links(svc).get(code)
+    return (got[0], got[1]) if got else None
+
+
+def parse_ref(text: str, dom: str = "", svc: Services | None = None) -> tuple[str, str] | None:
     """The first nsite a text names: nsite:<npub>[/<name>], a preview link
-    (preview.<domain>/p/<npub>[@<name>]) or a gateway link (https://<npub>.<gateway>/).
-    Returns (pubkey hex, site name or "")."""
+    (preview.<domain>/p/<npub>[@<name>], or with ``svc`` the short preview.<domain>/v/<code>)
+    or a gateway link (https://<npub>.<gateway>/). Returns (pubkey hex, site name or "")."""
     pats = [
         rf"nsite:({NPUB})(?:/({NAME}))?",
         rf"https://preview\.[^/\s]+/p/({NPUB})(?:@({NAME}))?",
@@ -96,6 +175,13 @@ def parse_ref(text: str, dom: str = "") -> tuple[str, str] | None:
                 )
             except ValueError:
                 continue
+    if svc is not None:
+        # a short link, on this belfry's own preview host only
+        host = re.escape(f"preview.{dom or domain(svc)}")
+        for m in re.finditer(rf"https://{host}/v/({CODE})(?![A-Za-z0-9])", text or ""):
+            got = resolve_code(svc, m.group(1))
+            if got:
+                return got
     return None
 
 
@@ -167,7 +253,7 @@ def ensure_channel(svc: Services) -> dict[str, Any]:
     return {"made": [CHANNEL]}
 
 
-def changelog(svc: Services, text: str) -> None:
+def changelog(svc: Services, text: str, tags: list[list[str]] | None = None) -> None:
     """A line in #website, posted by the groups key; best effort. #website is made then, the first
     time there is something to say (no longer on every round: Xavier, 2026-11-17)."""
     from . import followers
@@ -186,7 +272,7 @@ def changelog(svc: Services, text: str) -> None:
                 {
                     "kind": 9,
                     "created_at": int(time.time()),
-                    "tags": [["h", CHANNEL], ["client", "belfry-website"]],
+                    "tags": [["h", CHANNEL], ["client", "belfry-website"], *(tags or [])],
                     "content": text,
                 }
             ),
@@ -331,13 +417,220 @@ def summary(change: Change, scope: list[str] | None) -> str:
     )
 
 
-def short_summary(change: Change, scope: list[str] | None, files: int) -> str:
-    counts = (
-        f"{len(change.added)} added, {len(change.changed)} changed, {len(change.removed)} removed"
+def counts(change: Change, scope: list[str] | None, files: int) -> str:
+    """'2 files: 1 added, 1 changed, 1 removed, only /ios/screenshots/' (the folded details)."""
+    text = (
+        f"{_files(files)}: {len(change.added)} added, {len(change.changed)} changed, "
+        f"{len(change.removed)} removed"
     )
-    if scope is None:
-        return f"{_files(files)}; {counts}"
-    return f"only {scope_words(scope)} ({_files(files)}: {counts})"
+    return text + (f", only {scope_words(scope)}" if scope else "")
+
+
+# ── the messages in #website: short, screenshots, then the details folded ────────────────────
+# Xavier, 2026-11-21 ("a wall of text with a long noisy preview link"): a line the belfry posts
+# about a version is a short first line (``**Website updated** by <admin>: <summary>``), the
+# screenshots' URLs (one per line, NIP-92 ``imeta`` tags on the event too), a line with only
+# ``---``, then the details (counts, whose version, Live / Preview links). Apps show the part
+# before ``---`` with "Show more" for the rest; older apps show it all.
+FOLD = "---"
+MAX_SHOTS = 6
+MAX_SUMMARY = 200
+MAX_ALT = 200
+IMAGE_TYPES = {
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
+    "gif": "image/gif",
+}
+SHOT_KEYS = {"url", "alt", "dim", "m"}
+DIM = re.compile(r"[1-9][0-9]{0,4}x[1-9][0-9]{0,4}")
+DEFAULT_ALT = "Screenshot of the website"
+INVALID_SCREENSHOTS = (
+    f"screenshots are at most {MAX_SHOTS} entries {{url, alt?, dim?, m?}}; each url is an image "
+    "on this belfry's Blossom server (https://blossom.<domain>/<sha256>.png) or the path of an "
+    "image in the version (/ios/screenshots/home.png); m is image/png, image/jpeg, image/webp or "
+    "image/gif; dim is <width>x<height>; alt is one line of at most "
+    f"{MAX_ALT} characters"
+)
+INVALID_SUMMARY = f"the summary is one line of at most {MAX_SUMMARY} characters"
+
+
+class ScreenshotsError(ValueError):
+    pass
+
+
+class SummaryError(ValueError):
+    pass
+
+
+def _one_line(value: Any, most: int) -> str | None:
+    """A stripped single line of at most ``most`` characters, None when empty; ValueError else."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("not text")
+    v = value.strip()
+    if not v:
+        return None
+    if len(v) > most or any(ord(ch) < 32 or ord(ch) == 127 or ch in "\u2028\u2029" for ch in v):
+        raise ValueError("not one short line")
+    return v
+
+
+def clean_summary(value: Any) -> str | None:
+    try:
+        return _one_line(value, MAX_SUMMARY)
+    except ValueError as exc:
+        raise SummaryError(INVALID_SUMMARY) from exc
+
+
+def blossom_base(svc: Services) -> str:
+    public = (getattr(svc.settings, "blossom_public_url", "") or "").strip().rstrip("/")
+    return public if public.startswith("https://") else f"https://blossom.{domain(svc)}"
+
+
+def _blossom_hosts(svc: Services) -> set[str]:
+    hosts = {f"blossom.{domain(svc)}".lower()}
+    m = re.fullmatch(r"https://([a-z0-9.-]+)", blossom_base(svc).lower())
+    if m:
+        hosts.add(m.group(1))
+    return hosts
+
+
+BLOB_URL = re.compile(r"https://([a-z0-9.-]+)/([0-9a-f]{64})(?:\.([a-z0-9]{1,5}))?")
+
+
+def _ext(path: str) -> str:
+    last = path.rsplit("/", 1)[-1]
+    return last.rsplit(".", 1)[-1].lower() if "." in last else ""
+
+
+def screenshot(svc: Services, entry: Any, allow_paths: bool = False) -> dict[str, str]:
+    """One screenshot, checked: {url, m, dim, alt} ("" when not known). With ``allow_paths``, a
+    path in the version (``/ios/screenshots/home.png``) stays a path, made a Blossom URL by
+    ``resolve_screenshots`` once the version's files are known. ScreenshotsError otherwise."""
+    if not isinstance(entry, dict) or not set(entry) <= SHOT_KEYS:
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    url = entry.get("url")
+    if not isinstance(url, str):
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    url = url.strip()
+    m = BLOB_URL.fullmatch(url)
+    if m and m.group(1) in _blossom_hosts(svc):
+        ext = m.group(3) or ""
+    elif allow_paths and url.startswith("/") and not url.endswith("/") and valid_path(url):
+        ext = _ext(url)
+        if not ext:
+            raise ScreenshotsError(INVALID_SCREENSHOTS)
+    else:
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    if ext and ext not in IMAGE_TYPES:
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    mime = entry.get("m")
+    if mime is not None and mime not in IMAGE_TYPES.values():
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    dim = entry.get("dim")
+    if dim is not None and not (isinstance(dim, str) and DIM.fullmatch(dim)):
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    try:
+        alt = _one_line(entry.get("alt"), MAX_ALT)
+    except ValueError as exc:
+        raise ScreenshotsError(INVALID_SCREENSHOTS) from exc
+    return {"url": url, "m": mime or IMAGE_TYPES.get(ext, ""), "dim": dim or "", "alt": alt or ""}
+
+
+def parse_screenshots(
+    svc: Services, value: Any, allow_paths: bool = False
+) -> list[dict[str, str]] | None:
+    """The API's / a caller's ``screenshots`` (None when not given); ScreenshotsError."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) > MAX_SHOTS:
+        raise ScreenshotsError(INVALID_SCREENSHOTS)
+    out: list[dict[str, str]] = []
+    for entry in value:
+        shot = screenshot(svc, entry, allow_paths)
+        if shot["url"] not in [s["url"] for s in out]:
+            out.append(shot)
+    return out
+
+
+def resolve_screenshots(
+    svc: Services, shots: list[dict[str, str]], site: dict[str, str]
+) -> list[dict[str, str]]:
+    """Paths in the version (``site``: path → sha256, the website after the publish) → the URL of
+    that file on the belfry's own Blossom (publish copies every file there)."""
+    out = []
+    for s in shots:
+        if s["url"].startswith("/"):
+            sha = site.get(s["url"])
+            if not sha:
+                raise ScreenshotsError(
+                    f"{INVALID_SCREENSHOTS} (a path must be a file of the website once published)"
+                )
+            s = {**s, "url": f"{blossom_base(svc)}/{sha}.{_ext(s['url'])}"}
+        out.append(s)
+    return out
+
+
+def summary_of(event: dict[str, Any] | None) -> str | None:
+    """A proposal's (or a button message's) ``["summary", …]`` tag, when it is one short line."""
+    try:
+        return clean_summary(_tagv(event or {}, "summary"))
+    except SummaryError:
+        return None
+
+
+def screenshots_of(svc: Services, event: dict[str, Any] | None) -> list[dict[str, str]]:
+    """The screenshots a proposal or message carries: its ``imeta`` tags, then image URLs on the
+    belfry's Blossom in its text; at most MAX_SHOTS, anything else left out."""
+    out: list[dict[str, str]] = []
+
+    def add(entry: dict[str, Any]) -> None:
+        if len(out) >= MAX_SHOTS:
+            return
+        try:
+            shot = screenshot(svc, entry)
+        except ScreenshotsError:
+            return
+        if shot["url"] not in [s["url"] for s in out]:
+            out.append(shot)
+
+    for t in (event or {}).get("tags", []):
+        if not (isinstance(t, list) and t and t[0] == "imeta"):
+            continue
+        entry: dict[str, Any] = {}
+        for item in t[1:]:
+            if isinstance(item, str) and " " in item:
+                k, v = item.split(" ", 1)
+                if k in SHOT_KEYS and k not in entry:
+                    entry[k] = v
+        if "url" in entry:
+            add(entry)
+    for m in BLOB_URL.finditer((event or {}).get("content") or ""):
+        if m.group(3) and m.group(3) in IMAGE_TYPES:
+            add({"url": m.group(0)})
+    return out
+
+
+def imeta_tag(shot: dict[str, str]) -> list[str]:
+    return [
+        "imeta",
+        f"url {shot['url']}",
+        *([f"m {shot['m']}"] if shot.get("m") else []),
+        *([f"dim {shot['dim']}"] if shot.get("dim") else []),
+        f"alt {shot.get('alt') or DEFAULT_ALT}",
+    ]
+
+
+def folded(
+    head: str, summary: str | None, shots: list[dict[str, str]], details: list[str]
+) -> tuple[str, list[list[str]]]:
+    """(content, imeta tags) of a message in the folded shape (see above)."""
+    first = head + (f": {summary}" if summary else "")
+    lines = [first, *[s["url"] for s in shots], FOLD, *[d for d in details if d]]
+    return "\n".join(lines), [imeta_tag(s) for s in shots]
 
 
 # ── fetching a version ──────────────────────────────────────────────────────────────────────
@@ -409,12 +702,28 @@ async def files_of(
 
 
 async def publish_from(
-    svc: Services, pubkey: str, name: str, admin: str, paths: list[str] | None = None
+    svc: Services,
+    pubkey: str,
+    name: str,
+    admin: str,
+    paths: list[str] | None = None,
+    *,
+    summary: str | None = None,
+    screenshots: list[dict[str, Any]] | None = None,
+    source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Copy that version as the website; with ``paths`` (a validated scope, parse_paths) only
-    those paths of the live website change."""
+    those paths of the live website change. Then the "Website updated" line in #website, with
+    ``summary`` (one line, ≤ MAX_SUMMARY) and ``screenshots`` (≤ MAX_SHOTS {url, alt?, dim?,
+    m?}: Blossom URLs of this belfry, or paths of images in the version) when given, else what
+    ``source`` (the proposal's 30023 version or the button's message) carries. A bad summary or
+    screenshot raises SummaryError / ScreenshotsError before anything is copied."""
     from . import community
 
+    summary = clean_summary(summary) if summary is not None else summary_of(source)
+    shots = parse_screenshots(svc, screenshots, allow_paths=True)
+    if shots is None:
+        shots = screenshots_of(svc, source)
     if homepage.parse_config(svc.settings).mode != "nsite":
         raise homepage.HomepageError(
             "The website isn't served from the belfry's nsite (HOMEPAGE): "
@@ -427,7 +736,8 @@ async def publish_from(
             "There is no website yet to change only part of: publish a whole site first."
         )
     files, _ = await files_of(svc, pubkey, name, scope)
-    change = diff(live or {}, {p: hashlib.sha256(b).hexdigest() for p, b in files.items()}, scope)
+    hashes = {p: hashlib.sha256(b).hexdigest() for p, b in files.items()}
+    change = diff(live or {}, hashes, scope)
     keep = change.kept if scope is not None else None
     if scope is not None:
         if len(change.kept) + len(files) > MAX_SITE_FILES:
@@ -436,25 +746,33 @@ async def publish_from(
             )
         if "/index.html" not in files and "/index.html" not in change.kept:
             raise homepage.HomepageError("The website would have no /index.html.")
-    author = (community.names_for(svc, [pubkey]) or {}).get(pubkey) or nostr.hex_to_npub(pubkey)[
-        :16
-    ] + "…"
+    shots = resolve_screenshots(svc, shots, {**(keep or {}), **hashes})
+    author = (community.names_for(svc, [pubkey]) or {}).get(pubkey) or community.UNKNOWN
     note = f"Website updated by {admin}, from {author}'s version" + (
         f", only {scope_words(scope)}." if scope else "."
     )
     out = await run_in_threadpool(homepage.publish, svc.settings, files, "", admin, note, keep)
-    changelog(
-        svc,
-        f"**Website updated** by {admin}, from {author}'s version "
-        f"({short_summary(change, scope, len(files))}): "
-        f"https://{domain(svc)} · preview: {preview_url(svc, pubkey, name)}",
+    preview = preview_url(svc, pubkey, name)
+    text, tags = folded(
+        f"**Website updated** by {admin}",
+        summary,
+        shots,
+        [
+            f"{counts(change, scope, len(files))}. Version by {author}.",
+            f"Live: https://{domain(svc)} · Preview: {preview}",
+        ],
     )
+    changelog(svc, text, tags=tags)
     return {
         "files": len(files),
         "paths": scope or [],
         "added": len(change.added),
         "changed": len(change.changed),
         "removed": len(change.removed),
+        "preview": preview,
+        "preview_long": long_preview_url(svc, pubkey, name),
+        "summary": summary or "",
+        "screenshots": [s["url"] for s in shots],
         **{k: v for k, v in (out or {}).items() if k in ("manifest", "uploaded")},
     }
 
@@ -504,7 +822,7 @@ def proposal_versions(svc: Services) -> tuple[list[dict[str, Any]], Any]:
             continue
         if _tagv(latest, "h") != group:
             continue
-        ref = parse_ref(_tagv(latest, "website"), domain(svc))
+        ref = parse_ref(_tagv(latest, "website"), domain(svc), svc)
         if ref is None:
             continue
         try:
@@ -570,6 +888,7 @@ def passed_proposals(svc: Services) -> list[dict[str, Any]]:
                 "title": p["title"],
                 "scope": p["scope"],
                 "bad_paths": p["bad_paths"],
+                "version": latest,
             }
         )
     return out
@@ -605,32 +924,65 @@ ANNOUNCE_MAX_AGE = 3 * 86400  # older versions (from before these notes) are nev
 UNREADABLE = "I couldn't read this version's preview, so I can't say what it would change."
 
 
-async def describe(svc: Services, ref: tuple[str, str], scope: list[str] | None) -> str:
-    """The note posted under a proposal version: what publishing it would change, from the two
-    manifests (hashes only). Raises HomepageError when the version's preview can't be read."""
+CANT = "⚠️ This can't be published"
+
+
+def _head(change: Change, scope: list[str] | None) -> str:
+    if change.none:
+        return "**This changes nothing**"
+    if scope is None:
+        return "**This replaces the whole website**"
+    return f"**This changes only {scope_words(scope)}**"
+
+
+async def describe(svc: Services, ref: tuple[str, str], scope: list[str] | None) -> tuple[str, str]:
+    """The note posted under a proposal version: (its short first line, the sentence that says
+    what publishing it would change, from the two manifests: hashes only). Raises HomepageError
+    when the version's preview can't be read."""
     proposed = await manifest_of(svc, ref[0], ref[1])
     live = await live_paths(svc)
     if scope is not None:
         if live is None:
-            return (
+            return CANT + " yet", (
                 f"This can't be published yet: it changes only {scope_words(scope)}, "
                 "and there is no website yet. Publish a whole site first."
             )
         change = diff(live, proposed, scope)
         if not any(in_scope(p, scope) for p in proposed):
-            return f"This version has no files in {scope_words(scope)}, so it can't be published."
+            return CANT, (
+                f"This version has no files in {scope_words(scope)}, so it can't be published."
+            )
         merged = {**change.kept, **{p: h for p, h in proposed.items() if in_scope(p, scope)}}
         if "/index.html" not in merged:
-            return "This can't be published: the website would have no /index.html."
-        return summary(change, scope)
+            return CANT, "This can't be published: the website would have no /index.html."
+        return _head(change, scope), summary(change, scope)
     if "/index.html" not in proposed:
-        return "This version can't be published: it has no /index.html."
+        return CANT, "This version can't be published: it has no /index.html."
     if live is None:
-        return f"This would be the first website: {_files(len(proposed))}."
-    return summary(diff(live, proposed, None), None)
+        return "**This would be the first website**", (
+            f"This would be the first website: {_files(len(proposed))}."
+        )
+    change = diff(live, proposed, None)
+    return _head(change, None), summary(change, None)
 
 
-def _post(svc: Services, group: str, text: str, got: Any = None) -> None:
+def note_for(svc: Services, p: dict[str, Any], head: str, body: str) -> tuple[str, list[list[str]]]:
+    """A proposal version's note in the folded shape: the short line (with the proposal's
+    summary when the version can be published), its screenshots, then the details and the
+    preview link."""
+    ok = not head.startswith("⚠️")
+    preview = preview_url(svc, *p["ref"]) if p.get("ref") else ""
+    return folded(
+        head,
+        summary_of(p.get("version")) if ok else None,
+        screenshots_of(svc, p.get("version")) if ok else [],
+        [body, f"Preview: {preview}" if preview else ""],
+    )
+
+
+def _post(
+    svc: Services, group: str, text: str, got: Any = None, tags: list[list[str]] | None = None
+) -> None:
     from . import followers
 
     got = got or followers._relay(svc)
@@ -643,7 +995,7 @@ def _post(svc: Services, group: str, text: str, got: Any = None) -> None:
                 {
                     "kind": 9,
                     "created_at": int(time.time()),
-                    "tags": [["h", group], ["client", "belfry-website"]],
+                    "tags": [["h", group], ["client", "belfry-website"], *(tags or [])],
                     "content": text,
                 }
             ),
@@ -668,18 +1020,19 @@ async def announce(svc: Services, found: list[dict[str, Any]] | None = None) -> 
             _add_to_param(svc, ANNOUNCED_PARAM, key)  # from before these notes: not now
             continue
         if p["bad_paths"]:
-            text = f"⚠️ This proposal can't be published: {INVALID_PATHS}."
+            head, body = "⚠️ This proposal can't be published", f"Not published: {INVALID_PATHS}."
         else:
             try:
-                text = await describe(svc, p["ref"], p["scope"])
+                head, body = await describe(svc, p["ref"], p["scope"])
             except Exception as exc:  # noqa: BLE001 — the preview may not be published yet
                 young = time.time() - p["version"].get("created_at", 0) < ANNOUNCE_GRACE
                 if young:
                     continue
                 log.info("website: proposal %s: preview not read: %r", key, exc)
-                text = UNREADABLE
+                head, body = "⚠️ " + UNREADABLE, ""
         _add_to_param(svc, ANNOUNCED_PARAM, key)
-        await run_in_threadpool(_post, svc, p["group"], text, got)
+        text, tags = note_for(svc, p, head, body)
+        await run_in_threadpool(_post, svc, p["group"], text, got, tags)
         n += 1
     return n
 
@@ -701,7 +1054,7 @@ async def watch(svc: Services, app: Any = None) -> int:
         try:
             if p.get("bad_paths"):
                 raise homepage.HomepageError(INVALID_PATHS)
-            await publish_from(svc, p["ref"][0], p["ref"][1], name, scope)
+            await publish_from(svc, p["ref"][0], p["ref"][1], name, scope, source=p.get("version"))
         except Exception as exc:  # noqa: BLE001 — said in the proposal's chat, retried on a new pass
             log.warning("website: proposal %s passed but not published: %r", p["key"], exc)
             why = (
@@ -769,7 +1122,7 @@ def register(app: FastAPI) -> None:
         except ValueError:
             data = None
         ref = (
-            parse_ref(str((data or {}).get("ref") or ""), domain(s))
+            await run_in_threadpool(parse_ref, str((data or {}).get("ref") or ""), domain(s), s)
             if isinstance(data, dict)
             else None
         )
@@ -781,11 +1134,23 @@ def register(app: FastAPI) -> None:
             scope = parse_paths(data.get("paths"))
         except PathsError as exc:
             raise ApiError(422, "invalid_paths", f"Not published: {exc}.") from exc
+        try:
+            summary = clean_summary(data.get("summary"))
+        except SummaryError as exc:
+            raise ApiError(422, "invalid_summary", f"Not published: {exc}.") from exc
+        try:
+            shots = parse_screenshots(s, data.get("screenshots"), allow_paths=True)
+        except ScreenshotsError as exc:
+            raise ApiError(422, "invalid_screenshots", f"Not published: {exc}.") from exc
         name = (s.odoo.read_one("res.partner", who["partner_id"], ["name"]) or {}).get(
             "name"
         ) or "an admin"
         try:
-            out = await publish_from(s, ref[0], ref[1], name, scope)
+            out = await publish_from(
+                s, ref[0], ref[1], name, scope, summary=summary, screenshots=shots
+            )
+        except ScreenshotsError as exc:  # a path that isn't a file of the version
+            raise ApiError(422, "invalid_screenshots", f"Not published: {exc}.") from exc
         except homepage.HomepageError as exc:
             raise ApiError(409, "not_published", str(exc)) from exc
         hp = getattr(request.app.state, "homepage", None)
@@ -794,19 +1159,38 @@ def register(app: FastAPI) -> None:
         return JSONResponse({"ok": True, **out}, headers={"Cache-Control": "no-store"})
 
 
+def _no_site() -> Response:
+    return Response(
+        "Open a preview link: https://preview.<domain>/p/<npub> (a site published as an nsite).",
+        status_code=404,
+        media_type="text/plain",
+    )
+
+
 async def preview(request: Request, svc: Services) -> Response:
     """preview.<domain>: /p/<npub>[@<name>] picks the site (cookie), every other path is that
     site's own (absolute links work)."""
     path = request.url.path
     m = re.fullmatch(rf"/p/({NPUB})(?:@({NAME}))?((?:/[A-Za-z0-9._-]+)*/?)", path)
-    if m:
+    chosen_site = (m.group(1) + (f"@{m.group(2)}" if m.group(2) else "")) if m else ""
+    land_path = m.group(3) if m else ""
+    if not m:
+        # the short link: /v/<code>[/<where to land>], exactly like the /p/ link it stands for
+        v = re.fullmatch(rf"/v/({CODE})((?:/[A-Za-z0-9._-]+)*/?)", path)
+        got = await run_in_threadpool(resolve_code, svc, v.group(1)) if v else None
+        if v and got is None:
+            return _no_site()
+        if got:
+            chosen_site = nostr.hex_to_npub(got[0]) + (f"@{got[1]}" if got[1] else "")
+            land_path = v.group(2)
+    if chosen_site:
         # the link may name where to land (…/p/<npub>@<name>/ios/screenshots/): a proposal for
         # one part of the site has no home page of its own
-        land = m.group(3) if m.group(3) and ".." not in m.group(3) else "/"
+        land = land_path if land_path and ".." not in land_path else "/"
         resp = RedirectResponse(land, status_code=302)
         resp.set_cookie(
             PREVIEW_COOKIE,
-            m.group(1) + (f"@{m.group(2)}" if m.group(2) else ""),
+            chosen_site,
             max_age=86400,
             secure=True,
             httponly=True,
@@ -816,12 +1200,7 @@ async def preview(request: Request, svc: Services) -> Response:
     chosen = request.cookies.get(PREVIEW_COOKIE, "")
     c = re.fullmatch(rf"({NPUB})(?:@({NAME}))?", chosen)
     if not c:
-        return Response(
-            "Open a preview link: https://preview.<domain>/p/<npub> (a site published as "
-            "an nsite).",
-            status_code=404,
-            media_type="text/plain",
-        )
+        return _no_site()
     # one Homepage per previewed site, kept: it asks the relays again by itself (MANIFEST_TTL),
     # and making a new one every minute left its HTTP client and connections open for good
     hp = _previews.pop(chosen, None)

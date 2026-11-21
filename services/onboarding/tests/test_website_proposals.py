@@ -91,7 +91,7 @@ def world(monkeypatch):
     monkeypatch.setattr(
         website,
         "parse_ref",
-        lambda text, dom="": (AUTHOR, "") if text.startswith("nsite:npub1") else None,
+        lambda text, dom="", svc=None: (AUTHOR, "") if text.startswith("nsite:npub1") else None,
     )
     # what a version would change (website.describe): no relays in tests
     monkeypatch.setattr(website, "manifest_of", lambda *a: _value({"/index.html": "1" * 64}))
@@ -128,7 +128,7 @@ def test_watch_publishes_once_and_says_so(world, monkeypatch):
     g.labels = [label("passed", 200)]
     calls: list[tuple] = []
 
-    async def publish(s, pk, name, admin, scope=None):
+    async def publish(s, pk, name, admin, scope=None, **k):
         calls.append((pk, name, admin))
         return {"files": 3}
 
@@ -145,7 +145,7 @@ def test_a_failed_publish_says_so_and_a_new_pass_retries(world, monkeypatch):
     g.labels = [label("passed", 200)]
     tries: list[int] = []
 
-    async def publish(s, pk, name, admin, scope=None):
+    async def publish(s, pk, name, admin, scope=None, **k):
         tries.append(1)
         if len(tries) == 1:
             raise OSError("blossom down")

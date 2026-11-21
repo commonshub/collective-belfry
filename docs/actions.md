@@ -106,7 +106,7 @@ A client that doesn't know the name of a `belfry:` action shows the button disab
 
 | Action | Who | What | Confirmation the client shows |
 |---|---|---|---|
-| `belfry:website-publish` | an admin of the belfry | Publishes the site the message points to as the website. The site is the message's first `["a", "35128:<pubkey>:<name>"]` tag, else the first preview link in its text. The message's own `["path", "<prefix>"]` tags (a folder `/ios/screenshots/` or one file `/android/index.html`, at most 10) limit the publish to those paths: the rest of the live website is kept as it is (skills/belfry-homepage). Answers `ok` + `closed`, "Published by <name>." or, with paths, "Published by <name>: only /ios/screenshots/." The usual "Website updated" line follows in #website. | "Publish this version as the website? Everyone will see it at https://<domain>." · Publish / Cancel |
+| `belfry:website-publish` | an admin of the belfry | Publishes the site the message points to as the website. The site is the message's first `["a", "35128:<pubkey>:<name>"]` tag, else the first preview link in its text. The message's own `["path", "<prefix>"]` tags (a folder `/ios/screenshots/` or one file `/android/index.html`, at most 10) limit the publish to those paths: the rest of the live website is kept as it is (skills/belfry-homepage). Answers `ok` + `closed`, "Published by <name>." or, with paths, "Published by <name>: only /ios/screenshots/." The usual "Website updated" line follows in #website, in the folded shape below, with the message's screenshots (its `imeta` tags, else image URLs on the belfry's Blossom in its text; at most 6) and its `["summary", "<one line, ≤ 200>"]` tag. | "Publish this version as the website? Everyone will see it at https://<domain>." · Publish / Cancel |
 | `belfry:offer-decide` | an admin of the belfry | Answers an offer in kind (docs/sales.md): the button's id says how much (`offer-50`, `offer-75`, `offer-100`) or no (`offer-no`); the offer is the message's `["offer", id]` tag, and the message must be that offer's own card. Posts the public reply in the thread and mails the requester their personal code. Answers `ok` + `closed`, "Approved by <name>: 75% off." / "Declined by <name>." | "Answer this offer? The answer is public in the thread; the code goes privately to them." · Answer / Cancel |
 
 | `belfry:request-close` | an admin of the belfry | Closes a plain request (docs/requests.md §4b): the message must be the opening message of a thread in the requests channel that asks for no pass (type enquiry, sponsoring, talk, workshop or meetup; also a thread started in the chat). Publishes the `belfry/inbox` label `closed` on it, by the groups key, with `["by", <the admin>]`. Answers `ok` + `closed`, "Closed by <name>." Reopening is the console's (or a label in the chat); the button stays finished. | "Close this request? It stays readable, and people can still comment." · Close / Cancel |
@@ -136,8 +136,31 @@ tags  ["h", "website"]
       ["a", "35128:<your pubkey hex>:website"]
       ["path", "/ios/screenshots/"]     (optional, one per path: only these change)
       ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"]
-content  which path it is for, what changed, the preview link, and that an admin can approve it
+      ["summary", "New onboarding screens"]   (one line, at most 200 characters)
+      ["imeta", "url https://blossom.<domain>/<sha256>.png", "m image/png", "dim 390x844", "alt …"]
+                                        (one per screenshot of a changed page, at most 6)
+content  which path it is for, what changed, the screenshot URLs, the preview link, and that
+         an admin can approve it
 ```
+
+**The lines the belfry posts in #website** ("Website updated" after a publish, and the note under
+each proposal version saying what it would change) have one shape: a short first line, the
+screenshots' URLs one per line (with one NIP-92 `imeta` tag each on the event), a line with only
+`---`, then the details. Apps show what comes before `---` and a "Show more" for the rest; older
+apps show everything. Example:
+
+```
+**Website updated** by Ada: New onboarding screens
+https://blossom.<domain>/<sha256>.png
+---
+2 files: 1 added, 1 changed, 1 removed, only /ios/screenshots/. Version by Bo.
+Live: https://<domain> · Preview: https://preview.<domain>/v/k3m9q2xa
+```
+
+Preview links the belfry writes are short: `https://preview.<domain>/v/<code>` (8 characters a–z,
+2–7, one per site, kept in the register as `belfry.preview_links`). It works like
+`/p/<npub>[@<name>]`, including a landing path (`/v/<code>/ios/screenshots/`), and both forms
+are accepted wherever a message or the API names a site.
 
 ## 6. Test vectors
 

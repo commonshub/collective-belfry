@@ -105,7 +105,7 @@ def world(monkeypatch):
     svc = SimpleNamespace(settings=SimpleNamespace(nip05_domain="belfry.test"))
     published: list[tuple] = []
 
-    async def publish_from(s, pubkey, name, admin, paths=None):
+    async def publish_from(s, pubkey, name, admin, paths=None, **k):
         published.append((pubkey, name, admin) + ((paths,) if paths else ()))
         return {"files": 3}
 
@@ -168,7 +168,7 @@ def test_no_target(world):
 def test_publish_failure_says_why(world, monkeypatch):
     svc, _ = world
 
-    async def boom(*a):
+    async def boom(*a, **k):
         raise homepage.HomepageError("That site has no /index.html.")
 
     monkeypatch.setattr(website, "publish_from", boom)

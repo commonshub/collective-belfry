@@ -176,8 +176,10 @@ class FakeSite:
 @pytest.fixture
 def pub(monkeypatch):
     svc = SimpleNamespace(
-        settings=SimpleNamespace(homepage="nsite", belfry_nsec="1" * 64, nip05_domain="b.test")
+        settings=SimpleNamespace(homepage="nsite", belfry_nsec="1" * 64, nip05_domain="b.test"),
+        odoo=SimpleNamespace(),
     )
+    webthreads._pending_mem.clear()
     state: dict = {"live": dict(LIVE), "logged": [], "published": {}}
     proposal = FakeSite(
         {
@@ -190,7 +192,9 @@ def pub(monkeypatch):
     monkeypatch.setattr(website, "site_of", lambda s, pk, name: proposal)
     monkeypatch.setattr(website, "live_paths", lambda s: _value(state["live"]))
     monkeypatch.setattr(community, "names_for", lambda s, keys: {AUTHOR: "Bo"})
-    monkeypatch.setattr(website, "changelog", lambda s, text: state["logged"].append(text))
+    monkeypatch.setattr(
+        website, "changelog", lambda s, text, tags=None: state["logged"].append(text)
+    )
 
     def publish(settings, files, title, by, note, keep=None):
         state["published"] = {"files": files, "keep": keep, "note": note}
@@ -216,8 +220,12 @@ def test_a_scoped_publish_merges_into_the_live_site(pub):
     assert got["note"] == "Website updated by Ada, from Bo's version, only /ios/screenshots/."
     assert out["paths"] == ["/ios/screenshots/"]
     assert (out["added"], out["changed"], out["removed"]) == (1, 1, 1)
-    assert "only /ios/screenshots/ (2 files: 1 added, 1 changed, 1 removed)" in state["logged"][-1]
-    assert state["logged"][-1].startswith("**Website updated** by Ada, from Bo's version")
+    code = website.short_code(svc, AUTHOR, "website")
+    assert state["logged"][-1] == (
+        "**Website updated** by Ada\n---\n"
+        "2 files: 1 added, 1 changed, 1 removed, only /ios/screenshots/. Version by Bo.\n"
+        f"Live: https://b.test · Preview: https://preview.b.test/v/{code}"
+    )
 
 
 def test_a_scoped_publish_needs_a_live_site_and_files_in_its_scope(pub):
@@ -243,7 +251,7 @@ def test_a_whole_site_publish_is_unchanged(pub):
     assert got["keep"] is None and set(got["files"]) == set(state["proposal"].files)
     assert got["note"] == "Website updated by Ada, from Bo's version."
     assert out["paths"] == [] and out["files"] == 3
-    assert "(3 files; 1 added, 2 changed, 3 removed)" in state["logged"][-1]
+    assert "\n---\n3 files: 1 added, 2 changed, 3 removed. Version by Bo.\n" in state["logged"][-1]
 
 
 # ── proposals: the note before approval, and publishing ─────────────────────────────────────
@@ -319,7 +327,9 @@ def props(monkeypatch):
     monkeypatch.setattr(community, "names_for", lambda s, keys: {ADMIN: "Ada"})
     monkeypatch.setattr(apps, "admin_pubkeys", lambda s: {ADMIN})
     monkeypatch.setattr(
-        website, "parse_ref", lambda text, dom="": (AUTHOR, "") if "nsite:" in text else None
+        website,
+        "parse_ref",
+        lambda text, dom="", svc=None: (AUTHOR, "") if "nsite:" in text else None,
     )
 
     async def manifest_of(s, pk, name):
@@ -334,7 +344,18 @@ def props(monkeypatch):
 
 
 def notes(g):
-    return [e["content"] for e in g.sent if ["h", "prop-x"] in e["tags"]]
+    """The details of each note (after its first line and the ``---``), without the preview."""
+    out = []
+    for e in g.sent:
+        if ["h", "prop-x"] not in e["tags"]:
+            continue
+        text = e["content"]
+        if "\n---\n" in text and not text.startswith("✅") and not text.startswith("⚠️ Couldn't"):
+            head, rest = text.split("\n---\n", 1)
+            body = [x for x in rest.split("\n") if not x.startswith("Preview: ")]
+            text = "\n".join(body) or head
+        out.append(text)
+    return out
 
 
 def test_each_version_says_what_it_would_change_once(props):
@@ -365,7 +386,8 @@ def test_notes_for_odd_versions(props):
     svc, g, state = props
     Main.versions = [version("bad", paths=["/ios/../secret/"])]
     asyncio.run(website.announce(svc))
-    assert notes(g)[-1].startswith("⚠️ This proposal can't be published: its path tags aren't")
+    assert notes(g)[-1].startswith("Not published: its path tags aren't")
+    assert g.sent[-1]["content"].startswith("⚠️ This proposal can't be published\n---\n")
     assert "secret" not in notes(g)[-1]
     state["live"] = None
     Main.versions = [version("first")]
@@ -384,7 +406,7 @@ def test_notes_for_odd_versions(props):
     assert asyncio.run(website.announce(svc)) == 0 and len(g.sent) == n
     Main.versions = [version("unread", at=int(time.time()) - website.ANNOUNCE_GRACE - 5)]
     asyncio.run(website.announce(svc))
-    assert notes(g)[-1] == website.UNREADABLE
+    assert notes(g)[-1] == "⚠️ " + website.UNREADABLE
     # versions from before these notes are never described
     Main.versions = [version("ancient", at=1000)]
     assert asyncio.run(website.announce(svc)) == 0
@@ -396,7 +418,7 @@ def test_a_passed_scoped_proposal_publishes_its_scope(props, monkeypatch):
     g.labels = [passed()]
     calls = []
 
-    async def publish(s, pk, name, admin, scope=None):
+    async def publish(s, pk, name, admin, scope=None, **k):
         calls.append(scope)
         return {"files": 1}
 
@@ -456,7 +478,7 @@ def test_api_takes_paths(rsvc, monkeypatch):  # noqa: F811
     monkeypatch.setattr(console, "admin_emails", lambda svc: {"admin@belfry.test"})
     calls = []
 
-    async def publish_from(s, pk, name, admin, paths=None):
+    async def publish_from(s, pk, name, admin, paths=None, **k):
         calls.append(paths)
         return {"files": 1, "paths": paths or []}
 

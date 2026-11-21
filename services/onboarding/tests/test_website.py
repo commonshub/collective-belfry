@@ -72,7 +72,7 @@ def test_only_admins_publish_and_every_update_is_logged(rsvc, monkeypatch):  # n
         ),
     )
     monkeypatch.setattr(website, "live_paths", lambda s: _async(None))
-    monkeypatch.setattr(website, "changelog", lambda svc, text: logged.append(text))
+    monkeypatch.setattr(website, "changelog", lambda svc, text, tags=None: logged.append(text))
     from belfry_onboarding import console
 
     admins: set[str] = set()
@@ -97,7 +97,12 @@ def test_only_admins_publish_and_every_update_is_logged(rsvc, monkeypatch):  # n
             and "Ada Admin" in published["note"]
         )
         assert logged and "Website updated" in logged[-1] and "Ada Admin" in logged[-1]
-        assert f"https://preview.belfry.test/p/{NPUB}" in logged[-1]
+        # the short preview link, made once for that site (website.short_code)
+        code = website.short_code(rsvc, AUTHOR, "")
+        assert f"Preview: https://preview.belfry.test/v/{code}" in logged[-1]
+        assert NPUB not in logged[-1]
+        assert r.json()["preview"] == f"https://preview.belfry.test/v/{code}"
+        assert r.json()["preview_long"] == f"https://preview.belfry.test/p/{NPUB}"
         time.sleep(1.1)
         bad = b'{"ref": "nothing to publish"}'
         assert (

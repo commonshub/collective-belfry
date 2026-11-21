@@ -117,16 +117,27 @@ says so under it); it never falls back to the whole site.
          ["a", "35128:<pubkey hex that published the site>:website"]
          ["path", "/ios/screenshots/"]        ← one per path; none for the whole site
          ["button", "publish", "Approve and publish", "primary", "belfry:website-publish"]
-         ["imeta", "url https://blossom.<domain>/<sha256>.png", "m image/png", "alt /ios/ on a phone, light"]  ← one per screenshot
+         ["summary", "New onboarding screens"]  ← one line, at most 200 characters
+         ["imeta", "url https://blossom.<domain>/<sha256>.png", "m image/png", "dim 390x844", "alt /ios/ on a phone, light"]  ← one per screenshot
    content  "Website: /ios/screenshots/ — new onboarding screens." then what changed,
             the screenshot URLs, the preview link https://preview.<domain>/p/<npub>@website,
             and that an admin can approve it with the button under this message
    ```
-   **Always attach screenshots of what changed**: each changed page on a phone (about 390 px
-   wide) and on a laptop (about 1280 px), in light and dark if the page has both. Take them from
-   the preview link, upload them to `https://blossom.<domain>` (BUD-02), and add one `imeta` tag
-   per picture; put the same URLs in the text for apps that don't show `imeta`. Do the same for
-   every new version of a proposal. An admin approves what they can see.
+   **You must attach screenshots of what changed**: only the pages you changed, each on a phone
+   (390 px wide) and on a laptop (1280 px wide), **at most 6 pictures** in all (pick the pages
+   that show the change best; light and dark only when there is room). Take them from the
+   preview link, upload them to `https://blossom.<domain>` (BUD-02), and add one `imeta` tag per
+   picture (`url`, `m`, `dim` as `<width>x<height>`, `alt` saying which page on which screen);
+   put the same URLs in the text for apps that don't show `imeta`. Only pictures on this
+   belfry's Blossom count. **Give a one-line `summary`** of the change (at most 200 characters,
+   no line breaks): it is what people read first. Do the same for every new version of a
+   proposal. An admin approves what they can see: the belfry puts your screenshots and summary
+   in its "Website updated" line in #website.
+
+   **Preview links.** The belfry writes short ones, `https://preview.<domain>/v/<code>`: in its
+   note under your proposal and in its "Website updated" line. Once it has given you one, use
+   that short link whenever you post the preview again (it opens the same site, and a landing
+   path works: `/v/<code>/ios/screenshots/`). Until then the long `/p/<npub>@<name>` link is fine.
    Start the text with the path it is for ("Website: /ios/screenshots/ — …", or "Website: the
    whole site — …"): the path decides what an admin is approving. The text must make sense
    without the button (older apps show only the text). When an admin taps it, the belfry checks
@@ -140,14 +151,16 @@ says so under it); it never falls back to the whole site.
    goes live when a belfry admin marks it Passed): a NIP-23 kind 30023 on `wss://relay.<domain>`
    with `["d","proposal-<x>"]`, `["title","Website: /ios/screenshots/ — new onboarding
    screens"]`, `["t","proposal"]`, `["t","website"]`, `["website","nsite:<npub>/website"]` (or
-   the preview link), `["h","prop-<x>"]` (its own chat, a group you create) and the same
-   `["path", …]` tags; its card in #website is a kind 9 with `["proposal","prop-<x>"]` and
+   the preview link), `["h","prop-<x>"]` (its own chat, a group you create), the same
+   `["path", …]` tags, a `["summary", …]` tag and the screenshots as `imeta` tags (as above); its card in #website is a kind 9 with `["proposal","prop-<x>"]` and
    `["a","30023:<pubkey>:proposal-<x>"]`. Keep the `path` tags on every new version.
 4. **What happens next.** For every version of a proposal (30023), the belfry posts in the
    proposal's chat what publishing it would change, from the two manifests (a button message
-   gets no such note, so its text must say what changes): "This changes only /ios/screenshots/: 9 files added, 3 changed, 1 removed. The rest
+   gets no such note, so its text must say what changes): a short first line ("**This changes
+   only /ios/screenshots/**: <your summary>"), your screenshots, a line `---`, then the details,
+   "This changes only /ios/screenshots/: 9 files added, 3 changed, 1 removed. The rest
    of the website stays as it is." or "This replaces the whole website: 4 changed, 2 added,
-   0 removed, in / and /android/." Read it: if it says more than you meant, fix the version
+   0 removed, in / and /android/.", and the short preview link. Read it: if it says more than you meant, fix the version
    before an admin approves. A scoped publish is a **scoped replace**: inside the path, the
    website gets exactly your files (a live file there that your version lacks is removed);
    outside it, nothing changes. It needs a live website already (publish a whole site first).
@@ -161,9 +174,20 @@ tags `["t","proposal"]`, `["t","website"]`, `["p","<the belfry's pubkey>"]`,
 ### An admin publishes a part from the API
 
 `POST https://belfry.<domain>/api/v1/website/publish` (NIP-98 by an admin's key) with
-`{"ref": "nsite:<npub>/website", "paths": ["/ios/screenshots/"]}`; without `paths`, the whole
-site. Answers `{"ok": true, "files", "paths", "added", "changed", "removed", "manifest",
-"uploaded"}`, 422 `invalid_paths` or `no_site`, 409 `not_published` with the reason.
+`{"ref": "nsite:<npub>/website", "paths": ["/ios/screenshots/"], "summary": "New onboarding
+screens", "screenshots": [{"url": "https://blossom.<domain>/<sha256>.png", "alt": "/ios/ on a
+phone", "dim": "390x844", "m": "image/png"}]}`; without `paths`, the whole site. `ref` may also
+be a short preview link (`https://preview.<domain>/v/<code>`). `summary` (optional) is one line
+of at most 200 characters. `screenshots` (optional) are at most 6 entries `{url, alt?, dim?, m?}`:
+`url` is an image on this belfry's Blossom (`https://blossom.<domain>/<sha256>[.png|.jpg|.jpeg|.webp|.gif]`)
+or the path of an image in the version (`/ios/screenshots/home.png`, turned into its Blossom
+URL); `m` image/png, image/jpeg, image/webp or image/gif; `dim` `<width>x<height>`; `alt` one
+line, ≤ 200. They go into the "Website updated" line. The same rules apply to the screenshots of
+the publish you make: take them (390 px and 1280 px, the changed pages only, at most 6) before you
+publish. Answers `{"ok": true, "files", "paths", "added", "changed", "removed", "preview"
+(the short link), "preview_long" (/p/<npub>[@<name>]), "summary", "screenshots" (the URLs used),
+"manifest", "uploaded"}`, 422 `invalid_paths`, `invalid_summary`, `invalid_screenshots` or
+`no_site`, 409 `not_published` with the reason.
 
 ## A static site as an nsite (an admin publishes it)
 

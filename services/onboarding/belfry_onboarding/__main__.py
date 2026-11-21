@@ -197,14 +197,20 @@ def homepage_cli(args: argparse.Namespace) -> int:
             result["serving"] = settings.homepage == "nsite"
             try:  # a line in #website: who updated the website (website.py)
                 from .app import build_services
-                from .website import changelog
+                from .website import changelog, folded
 
                 svc = build_services(settings)
-                changelog(
-                    svc,
-                    f"**Website updated** by {args.by or 'an admin'} from the server "
-                    f"({len(files)} files): https://{settings.nip05_domain}",
+                text, _ = folded(
+                    f"**Website updated** by {args.by or 'an admin'}",
+                    None,
+                    [],
+                    [
+                        f"{len(files)} file{'' if len(files) == 1 else 's'}, the whole site, "
+                        "from the server.",
+                        f"Live: https://{settings.nip05_domain}",
+                    ],
                 )
+                changelog(svc, text)
             except Exception as exc:  # noqa: BLE001 — the site is published either way
                 print(f"(changelog not posted: {exc})", file=sys.stderr)
         else:

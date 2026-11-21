@@ -560,7 +560,7 @@ def approve_website(svc: Services, proposal_id: str, approver: str) -> dict[str,
         {
             "kind": SNAPSHOT_KIND,
             "created_at": now,
-            "content": f"Website updated: proposed by {names.get(pubkey, pubkey[:8])}, approved by {approver}.",
+            "content": f"Website updated: proposed by {names.get(pubkey) or community.UNKNOWN}, approved by {approver}.",
             "tags": [
                 *[t for t in keep if t[0] == "path"],
                 ["x", agg, "aggregate"],
@@ -583,13 +583,20 @@ def approve_website(svc: Services, proposal_id: str, approver: str) -> dict[str,
         }
     )
     svc.relay.publish(reply, sign)
-    from .website import changelog
+    from . import website
 
-    changelog(
-        svc,
-        f"**Website updated**: proposed by {names.get(pubkey, pubkey[:8])}, approved by {approver} "
-        f"({len(paths)} files): https://{svc.settings.nip05_domain}",
+    text, tags = website.folded(
+        f"**Website updated** by {approver}",
+        website.summary_of(prop),
+        website.screenshots_of(svc, prop),
+        [
+            f"{website._files(len(paths))}, the whole site. "
+            f"Version by {names.get(pubkey) or community.UNKNOWN}.",
+            f"Live: https://{svc.settings.nip05_domain} · Preview: "
+            + website.preview_url(svc, pubkey, d if kind == "35128" else ""),
+        ],
     )
+    website.changelog(svc, text, tags=tags)
     return {"files": len(paths), "manifest": root["id"]}
 
 

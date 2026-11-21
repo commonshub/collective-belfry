@@ -167,7 +167,7 @@ def website_target(svc: Services, message: dict[str, Any]) -> tuple[str, str] | 
                 if parts[2] == "" or re.fullmatch(website.NAME, parts[2]):
                     return parts[1], parts[2]
             break  # only the first `a` tag counts
-    return website.parse_ref(message.get("content") or "", website.domain(svc))
+    return website.parse_ref(message.get("content") or "", website.domain(svc), svc)
 
 
 def _short(exc: Exception) -> str:
@@ -195,7 +195,8 @@ async def website_publish(p: Press) -> Result:
         return Result.error("failed", f"Couldn't publish: {website.INVALID_PATHS}.")
     name = await run_in_threadpool(_name, svc, p.press["pubkey"])
     try:
-        await website.publish_from(svc, target[0], target[1], name, scope)
+        # the message's imeta screenshots and ["summary", …] go into the "Website updated" line
+        await website.publish_from(svc, target[0], target[1], name, scope, source=p.message)
     except Exception as exc:  # noqa: BLE001 — said under the button
         log.warning("actions: website-publish failed: %r", exc)
         return Result.error("failed", f"Couldn't publish: {_short(exc)}.")
