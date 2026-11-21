@@ -700,7 +700,7 @@ export async function startFresh(): Promise<void> {
     const sk = randomBytes(32)
     const k = { lb: getPublicKey(sk), secret: bytesToHex(sk) }
     await addKeys([k]) // kept before anything names it
-    const sessions = await mySessions()
+    const sessions = await mySessions(0) // a fresh list: ready decides whether others seal to it at once
     const ready = !!sessions && C.mayCarryReady(sessions, [device!.pub])
     await sendRosterAndAnchor(null, { n: 1, lb: k.lb, devices: [device!.pub], ready })
     await sleepMs(500)
