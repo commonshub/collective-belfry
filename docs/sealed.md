@@ -69,7 +69,10 @@ taking the chain back: only a live session of the account (or the server) can ma
 removed device's session is revoked. Every device that publishes a roster publishes the anchor
 again together with it: the roster is signed locally, the anchor naming it is signed by the signer,
 and only then are both sent: the roster first, the anchor the moment the relay accepted the roster
-(an anchor naming a roster the relay refused would un-anchor the standing head). When the anchor cannot be signed,
+(an anchor naming a roster the relay refused would un-anchor the standing head). The anchor is a
+replaceable event: its `created_at` is max(now, the standing anchor's `created_at` + 1), never
+the bare clock — a relay keeps the lower id of two anchors in one second and discards an older
+one, so a device whose clock is behind another's would otherwise never land a change. When the anchor cannot be signed,
 neither is sent and the change is tried again later. A change counts as done only when the relay
 accepted both events; the device then reads its chain again from the relay and checks its roster is
 on the anchored path. When it is not (another branch was anchored, an event was refused), it does
@@ -194,7 +197,7 @@ Reactions, taking a reaction back, e-mail threads, conversation ids, read state:
 
 ### 5.1 The first device
 
-Members and admins only (never a guest session). No anchor for my account — known from an answer the relay gave AFTER authentication, complete to EOSE; never from a timeout or a pre-AUTH answer — and I am capable: make a letterbox, publish roster n = 1 with this
+Members and admins only (never a guest session). No anchor for my account — known from an answer the relay gave AFTER authentication, complete to EOSE (a CLOSED is not an answer; the REQ itself must have been sent after authentication); never from a timeout or a pre-AUTH answer — and I am capable: make a letterbox, publish roster n = 1 with this
 device, then the anchor, then its device name (§3.5). If an anchor appeared meanwhile (two devices at
 once), drop mine and go to 5.2.
 
