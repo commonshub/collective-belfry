@@ -258,7 +258,11 @@ and reads its wraps again from 0.
 
 A device that IS in the head but lacks the head letterbox's secret (a hand-over was lost) publishes
 its 8562 as well; a device of the head that holds the secret answers it with the keys at once,
-without a prompt (the device is already allowed), after checking its live chat session.
+without a prompt (the device is already allowed), after checking its live chat session. "In the
+head" means in the head THIS device holds (its pinned head, never an older roster an anchor points
+back to), and the request must be newer than the roster that added the device and than the last
+hand-over this device made to it (remembered across restarts). While it waits, the device shows
+"Waiting for another of your devices" in place of the composer of sealed conversations.
 
 ### 5.6 A device leaves
 
