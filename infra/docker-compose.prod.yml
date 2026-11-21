@@ -131,6 +131,14 @@ services:
   mail-in:
     # the mail server of the domain: MX <domain> → this host, port 25 open (belfry mail)
     ports: !override ["25:2525"]
+    networks:
+      # as the proxy above: port 25 goes to its edge address (IPv6), so a mail sent over IPv6
+      # keeps its sender's address; through Docker's userland proxy it was the bridge's
+      # (172.18.0.1) and SPF was never checked for IPv6 senders such as Google (OSV,
+      # 2026-11-21). default reaches onboarding.
+      edge:
+        gw_priority: 1
+      default:
     restart: unless-stopped
     volumes:
       - caddy-data:/caddy:ro
