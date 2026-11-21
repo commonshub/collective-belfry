@@ -39,6 +39,9 @@ export interface OutboxItem {
   queuedAt?: number
   /** The conversation a direct message belongs to: its order is kept within it (sync.ts). */
   conv?: string
+  /** An encrypted file to upload before this item is published (a kind 15's ciphertext, in
+   *  'blobs' under BLOBKEY): the upload is a step of the item; done once the storage took it. */
+  upload?: { blobKey: string; size: number; done?: boolean }
 }
 
 type Schema = {

@@ -152,4 +152,36 @@ console.log(bad ? `vectors: ${bad} failed` : 'vectors: all ok')
     check(`way-in username: ${c.name}`, line === c.line && (!c.offers || eq(l.offers, c.offers)), { line, offers: l.offers })
   }
 }
+// dm-files.json (belfry-android): kind 15 files in direct messages, against src/core/dmfiles.ts
+{
+  const dout = path.join(root, 'tools/vectors/.dmfiles.mjs')
+  await build({ entryPoints: [path.join(root, 'src/core/dmfiles.ts')], bundle: true, platform: 'node', format: 'esm', outfile: dout, logLevel: 'error' })
+  const F = await import(dout + '?' + Date.now())
+  const v = vec('dm-files.json')
+  const hx = (b) => Buffer.from(b).toString('hex'), uh = (s) => new Uint8Array(Buffer.from(s, 'hex'))
+  check('dm-files: the unreadable sentence', F.UNREADABLE === v.unreadable, F.UNREADABLE)
+  for (const c of v.crypto) {
+    const s = await F.encryptFile(uh(c.plain_hex), c.key, c.nonce)
+    check(`dm-files crypto: ${c.note}`, hx(s.cipher) === c.ciphertext_hex && s.x === c.x && s.ox === c.ox, { x: s.x, ox: s.ox })
+  }
+  const others = (r) => r.tags.filter((t) => t[0] === 'p').map((t) => t[1])
+  const meta = (r) => { const g = (k) => r.tags.find((t) => t[0] === k)?.[1]; return { mime: g('file-type'), size: Number(g('size')), dim: g('dim'), blurhash: g('blurhash'), thumb: g('thumb'), thumbNonce: g('thumb-nonce'), duration: g('duration') === undefined ? undefined : Number(g('duration')), group: g('group') } }
+  const sendCase = async (name, c) => {
+    const g = (k) => c.rumor.tags.find((t) => t[0] === k)?.[1]
+    const s = await F.encryptFile(uh(c.plain_hex), g('decryption-key'), g('decryption-nonce'))
+    const tags = F.fileTags(others(c.rumor), s, meta(c.rumor))
+    check(`dm-files send ${name}: ciphertext, tags in order`, hx(s.cipher) === c.ciphertext_hex && eq(tags, c.rumor.tags), { tags })
+    if (c.thumb) { const t = await F.encryptThumb(uh(c.thumb.plain_hex), g('decryption-key'), c.thumb.nonce); check(`dm-files send ${name}: thumbnail`, hx(t.cipher) === c.thumb.ciphertext_hex) }
+  }
+  for (const k of ['picture', 'file', 'audio']) await sendCase(k, v.send[k])
+  for (const [i, f] of v.send.group.files.entries()) await sendCase(`group ${i + 1}`, f)
+  for (const c of v.read) {
+    const r = await F.openFile(c.tags, uh(c.downloaded_hex), !!c.thumb)
+    const got = r.ok ? { ok: true, plain_hex: hx(r.plain), ...(c.expect.mime ? { mime: r.mime } : {}) } : { ok: false }
+    check(`dm-files read: ${c.note}`, eq(got, c.expect), got)
+  }
+  const bs = F.bubbles(v.bubbles.rumors).map((b) => ({ files: b.files.map((r) => r.id), caption: b.caption?.id ?? null }))
+  check('dm-files bubbles', eq(bs, v.bubbles.expect), bs)
+}
+
 process.exit(bad ? 1 : 0)

@@ -3,6 +3,8 @@ import { sha256 } from '@noble/hashes/sha256'
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils'
 import { BELFRY, TEST_RELAYS } from '../config'
 import { kvGet, kvSet } from './db'
+import { FILE_KIND, MAX_FILE, MAX_FILE_GUEST, UNREADABLE, encryptFile, fileLabel, fileRefOf, fileTags, openFile, tooLarge, type FileRef } from './dmfiles'
+import { isGuest } from './invite'
 import { addressOf, buildMail, parseMail, type Part } from './mime'
 import { displayName, profiles, realName } from './model'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
@@ -26,8 +28,13 @@ export interface Dm {
   from: string // pubkey, or the sender's address for e-mail
   mine: boolean
   at: number
-  kind: 14 | 4 | 1301
+  kind: 14 | 4 | 1301 | 15
   text: string
+  /** a kind 15: its tags (what opens its file, dmfiles.ts); FILE undefined when they are unusable */
+  fileTags?: string[][]
+  file?: FileRef
+  /** pictures sent together and their caption share one group (one bubble) */
+  group?: string
   subject?: string
   fromName?: string
   emailId?: string
@@ -212,7 +219,8 @@ function convOf(rumor: NostrEvent, bridgePk?: string): Conv {
 async function fromRumor(rumor: NostrEvent): Promise<Dm | null> {
   const b = await bridge()
   const base = { rid: rumor.id || getEventHash(rumor), conv: convOf(rumor, b), mine: rumor.pubkey === me(), at: rumor.created_at }
-  if (rumor.kind === 14) return { ...base, from: rumor.pubkey, kind: 14, text: rumor.content }
+  if (rumor.kind === 14) return { ...base, from: rumor.pubkey, kind: 14, text: rumor.content, ...(groupOf(rumor) ? { group: groupOf(rumor) } : {}) }
+  if (rumor.kind === FILE_KIND) return { ...base, from: rumor.pubkey, kind: 15, text: '', fileTags: rumor.tags, file: fileRefOf(rumor) ?? undefined, ...(groupOf(rumor) ? { group: groupOf(rumor) } : {}) }
   if (rumor.kind !== 1301) return null
   const bridged = rumor.pubkey === b && !!tag(rumor, 'mail-from')
   const d: Dm = {
@@ -362,14 +370,15 @@ async function giftWrap(rumor: NostrEvent, to: string): Promise<NostrEvent> {
 
 /** Wrap RUMOR for TO (and me) and put the wraps in the outbox: saved on this device, published
  *  when the relay answers, retried until it does (sync.ts). Never waits for the network. */
-async function deliver(rumor: NostrEvent, to: string[], self = true) {
+async function deliver(rumor: NostrEvent, to: string[], self = true, upload?: Blob) {
   const people = [...new Set([...to, ...(self ? [me()] : [])])]
   const conv = [...new Set([...to, me()])].sort().join(',') // its order is kept within the conversation (sync.ts)
   dmStep.set(rumor.id, 'encrypting')
   try {
     const wraps = await Promise.all(people.map((p) => giftWrap(rumor, p)))
     if (isLocalOnly()) { addEvents(wraps.filter((w) => w.tags[0][1] === me())) }
-    for (const w of wraps) await enqueueSigned('main', w, rumor.id, conv)
+    // a file's upload is a step of its first wrap; the others follow it in the conversation's queue
+    for (const [i, w] of wraps.entries()) await enqueueSigned('main', w, rumor.id, conv, i === 0 ? upload : undefined)
   } finally {
     dmStep.delete(rumor.id)
   }
@@ -473,11 +482,96 @@ export async function reactDm(d: Dm, emoji: string, mine?: DmReaction) {
   save()
 }
 
-function rumorOf(kind: number, tags: string[][], content: string): NostrEvent {
-  const r = { kind, pubkey: me(), created_at: Math.floor(Date.now() / 1000), tags, content } as NostrEvent
+function rumorOf(kind: number, tags: string[][], content: string, at = Math.floor(Date.now() / 1000)): NostrEvent {
+  const r = { kind, pubkey: me(), created_at: at, tags, content } as NostrEvent
   r.id = getEventHash(r)
   return r
 }
+
+const groupOf = (r: NostrEvent) => { const g = tag(r, 'group'); return g && /^[0-9a-f]{16}$/.test(g) ? g : undefined }
+
+// ---- files, pictures and recordings (kind 15, dmfiles.ts) ----------------------------------
+
+let lastAt = 0 // several files sent together: created_at strictly increasing (the outbox rule)
+const nextAt = () => (lastAt = Math.max(lastAt + 1, Math.floor(Date.now() / 1000)))
+/** what this device sent, shown from the file itself while it goes (and until a reload) */
+const localPlain = new Map<string, string>()
+/** files opened on this device: rid → blob: URL of the decrypted file (memory only) */
+const opened = new Map<string, Promise<string>>()
+
+/** Send FILES in CONV, each its own kind 15 (encrypted here, the ciphertext uploaded as a step of
+ *  the outbox item); CAPTION, when there is one, a kind 14 right after with the same group. */
+export async function sendDmFiles(conv: Conv, files: { file: File; duration?: number }[], caption = '') {
+  await load()
+  if (isMail(conv)) throw new Error('Files can’t be sent in an e-mail thread yet.')
+  const max = isGuest(me()) ? MAX_FILE_GUEST : MAX_FILE
+  if (files.some((f) => f.file.size > max)) throw new Error(tooLarge(max))
+  const to = peers(conv)
+  const others = to.filter((p) => p !== me())
+  const group = files.length > 1 || caption.trim() ? bytesToHex(crypto.getRandomValues(new Uint8Array(8))) : undefined
+  for (const { file, duration } of files) {
+    const plain = new Uint8Array(await file.arrayBuffer())
+    const sealed = await encryptFile(plain)
+    const mime = file.type || 'application/octet-stream'
+    const dim = mime.startsWith('image/') ? await dimsOf(file) : undefined
+    const tags = fileTags(others, sealed, { mime, size: plain.length, dim, duration, group })
+    const rumor = rumorOf(FILE_KIND, tags, `${BELFRY.blossom.replace(/\/+$/, '')}/${sealed.x}`, nextAt())
+    localPlain.set(rumor.id, URL.createObjectURL(file))
+    items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 15, text: '', fileTags: tags, file: fileRefOf(rumor) ?? undefined, ...(group ? { group } : {}), pending: true })
+    save()
+    if (isLocalOnly()) await kvSet('dmfile:' + sealed.x, bytesToHex(sealed.cipher)) // demo: the "storage"
+    try {
+      await deliver(rumor, to, true, new Blob([sealed.cipher as BlobPart], { type: 'application/octet-stream' }))
+    } catch (e) {
+      items.delete(rumor.id)
+      save()
+      throw e
+    }
+    if (isLocalOnly()) { const d = items.get(rumor.id); if (d) d.pending = false }
+  }
+  if (caption.trim()) {
+    const rumor = rumorOf(14, [...others.map((p) => ['p', p]), ['group', group!]], caption.trim(), nextAt())
+    items.set(rumor.id, { rid: rumor.id, conv, from: me(), mine: true, at: rumor.created_at, kind: 14, text: caption.trim(), group, pending: true })
+    save()
+    await deliver(rumor, to)
+    if (isLocalOnly()) { const d = items.get(rumor.id); if (d) d.pending = false }
+  }
+  save()
+}
+
+async function dimsOf(f: File): Promise<string | undefined> {
+  try { const b = await createImageBitmap(f); const d = `${b.width}x${b.height}`; b.close(); return d } catch { return undefined }
+}
+
+/** A kind 15's file as a blob: URL of its decrypted bytes (never a link to the ciphertext):
+ *  downloaded, x checked, decrypted, ox checked. Throws UNREADABLE when anything is wrong. */
+export function fileUrl(d: Dm): Promise<string> {
+  const mine = localPlain.get(d.rid)
+  if (mine) return Promise.resolve(mine)
+  let p = opened.get(d.rid)
+  if (!p) {
+    p = (async () => {
+      if (!d.file || !d.fileTags) throw new Error(UNREADABLE)
+      let bytes: Uint8Array | undefined
+      if (isLocalOnly()) { const h = await kvGet<string>('dmfile:' + d.file.x); bytes = h ? hexToBytes(h) : undefined }
+      else {
+        for (const u of [d.file.url, `${BELFRY.blossom.replace(/\/+$/, '')}/${d.file.x}`]) {
+          try { const r = await fetch(u); if (r.ok) { bytes = new Uint8Array(await r.arrayBuffer()); break } } catch { /* the next */ }
+        }
+      }
+      if (!bytes) throw new Error(UNREADABLE)
+      const o = await openFile(d.fileTags, bytes)
+      if (!o.ok) throw new Error(UNREADABLE)
+      return URL.createObjectURL(new Blob([o.plain as BlobPart], { type: o.mime }))
+    })()
+    p.catch(() => opened.delete(d.rid)) // a failed download is tried again next time it shows
+    opened.set(d.rid, p)
+  }
+  return p
+}
+
+/** One line for the list of conversations. */
+export const previewOf = (d: Dm) => (d.kind === 15 ? (d.file ? fileLabel(d.file.mime) : 'File') : d.text)
 
 /** Send TEXT in CONV: a NIP-17 message, or an e-mail through the belfry. */
 export async function sendDm(conv: Conv, text: string, subject?: string) {

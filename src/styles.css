@@ -1999,3 +1999,32 @@ a.buy .ico { width: 14px; height: 14px; }
 .diag-list li:first-child { border-top: 0; }
 .diag-list small { color: var(--muted); font-size: 13px; }
 .diag-list .diag-steps { font-variant-numeric: tabular-nums; }
+
+/* Pictures, files and recordings in direct messages (canvas v104, messages/attach-*) */
+.dm-files-bubble { display: flex; flex-direction: column; gap: 6px; max-width: min(320px, 78%); }
+.dm-files-body { display: flex; flex-direction: column; gap: 6px; }
+.dm-pic { display: block; position: relative; width: 100%; max-height: 360px; border-radius: 14px; overflow: hidden; background: var(--surface); }
+.dm-pic { padding: 0 !important; margin: 0; text-decoration: none; }
+.dm-pic img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; max-width: none; object-fit: cover; border-radius: 0; }
+.dm-pic.tile { aspect-ratio: 1 / 1; }
+.dm-pic-wait { display: block; width: 100%; height: 100%; min-height: 120px; background: var(--surface); }
+.dm-pic.bad, .dm-filecard.bad { padding: 12px 14px; font-size: 14px; color: var(--muted); border-radius: 14px; background: var(--surface); }
+.dm-more { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.45); color: #fff; font-size: 22px; font-weight: 700; }
+.dm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; border-radius: 14px; overflow: hidden; }
+.dm-grid .dm-pic { border-radius: 0; }
+.dm-grid.n3 .dm-pic:first-child { grid-column: 1 / 3; aspect-ratio: 2 / 1; }
+.dm-filecard { display: flex; align-items: center; gap: 10px; padding: 10px 12px; min-height: 52px; border-radius: 14px; background: var(--surface); color: var(--text); text-align: left; border: 0; font: inherit; cursor: pointer; }
+.dm-filecard .t { display: flex; flex-direction: column; min-width: 0; }
+.dm-filecard small { color: var(--muted); font-size: 13px; }
+.dm-filebadge { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 10px; background: #dc2626; color: #fff; font-size: 11px; font-weight: 700; }
+.dm-audio { display: flex; align-items: center; gap: 8px; }
+.dm-audio audio { max-width: 100%; height: 40px; }
+.dm-audio small, .dm-audio-wait { color: var(--muted); font-size: 13px; }
+.dm.mine .dm-filecard, .dm.mine .dm-pic.bad { background: rgba(255,255,255,.14); color: inherit; }
+.dm.mine .dm-filecard small { color: inherit; opacity: .8; }
+.composer .plus { flex: none; width: 40px; height: 40px; border-radius: 20px; border: 0; background: var(--surface); font-size: 20px; color: var(--text); cursor: pointer; }
+.comp-files { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 4px 8px; }
+.comp-file { position: relative; width: 56px; height: 56px; border-radius: 10px; overflow: hidden; background: var(--surface); display: inline-flex; align-items: center; justify-content: center; }
+.comp-file img { width: 100%; height: 100%; object-fit: cover; }
+.comp-file button { position: absolute; top: 2px; right: 2px; width: 22px; height: 22px; border-radius: 11px; border: 0; background: rgba(0,0,0,.6); color: #fff; font-size: 14px; line-height: 22px; padding: 0; cursor: pointer; }
+.rec-clock { font-size: 32px; font-variant-numeric: tabular-nums; text-align: center; margin: 8px 0 16px; }

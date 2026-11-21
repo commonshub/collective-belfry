@@ -228,7 +228,17 @@ async function sendOne(item: OutboxItem): Promise<'sent' | 'failed' | 'retry'> {
     }
     const next = { ...item, tries: item.tries + 1, status: permanent ? 'failed' as const : 'queued' as const, error: msg }
     await putOutbox(next)
-    if (permanent) { failListeners.forEach((f) => f(next)); return 'failed' }
+    if (permanent) {
+      failListeners.forEach((f) => f(next))
+      // the other copies of the same message (its gift wraps) can't go without this one: they fail
+      // with it (a refused upload, a refused wrap), and Retry puts them all back
+      if (item.dm) for (const o of outboxItems().filter((o) => o.dm === item.dm && o.localId !== item.localId && o.status === 'queued')) {
+        const f = { ...o, status: 'failed' as const, error: msg }
+        await putOutbox(f)
+        failListeners.forEach((l) => l(f))
+      }
+      return 'failed'
+    }
     return 'retry'
   }
 }
@@ -260,11 +270,13 @@ let demoShift = 0
 let demoHold = false
 if (typeof window !== 'undefined' && getBackend() === 'demo') (window as unknown as { __demoHold: (on: boolean) => void }).__demoHold = (on) => { demoHold = on; if (!on) void flush() }
 
-export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string, conv?: string) {
+export async function enqueueSigned(target: Target, ev: NostrEvent, dm?: string, conv?: string, upload?: Blob) {
   if (reading()) { askToJoin(); throw new Error(GUEST_MODE) }
+  let up: OutboxItem['upload']
+  if (upload) { const blobKey = newId(); await (await db()).put('blobs', upload, blobKey); up = { blobKey, size: upload.size } }
   const item: OutboxItem = {
     localId: 'local-' + newId(), target, kind: ev.kind, content: ev.content, tags: ev.tags, created_at: ev.created_at,
-    attachments: [], status: 'queued', tries: 0, signed: ev, dm, conv, queuedAt: Date.now(),
+    attachments: [], status: 'queued', tries: 0, signed: ev, dm, conv, queuedAt: Date.now(), ...(up ? { upload: up } : {}),
   }
   await putOutbox(item)
   void flush()
@@ -313,6 +325,7 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
   if (item.http) { step('calling the belfry'); return sendApi(item) }
   if (item.signed) {
     if (localOnly) return item.signed
+    if (item.upload && !item.upload.done) await uploadFirst(item, step)
     await publish(item.target, item.signed, step)
     return item.signed
   }
@@ -340,6 +353,22 @@ async function send(item: OutboxItem, step: (name: string) => void): Promise<Nos
   await publish(item.target, ev, step)
   // the blob stays cached: the uploaded URL is served from it until the next reload
   return ev
+}
+
+/** A kind 15's encrypted file, uploaded before its wrap is published (dm-files.json): once the
+ *  storage took it, the item says so and the copy on this device goes. */
+async function uploadFirst(item: OutboxItem, step: (name: string) => void) {
+  const up = item.upload!
+  const d = await db()
+  const blob = await d.get('blobs', up.blobKey)
+  if (!blob) throw new Error('error: the file is no longer on this device')
+  const mb = (n: number) => (n / 1e6).toFixed(1)
+  step(`uploading 0.0 of ${mb(blob.size)} MB`)
+  await upload(blob, { blobKey: up.blobKey, name: 'file', mime: 'application/octet-stream', size: blob.size }, (done) => step(`uploading ${mb(done)} of ${mb(blob.size)} MB`))
+  const now = outboxItems().find((o) => o.localId === item.localId) ?? item
+  await putOutbox({ ...now, upload: { ...up, done: true } })
+  item.upload = { ...up, done: true }
+  await d.delete('blobs', up.blobKey).catch(() => {})
 }
 
 // ---- Blossom (BUD-02) ---------------------------------------------------------

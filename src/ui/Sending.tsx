@@ -24,7 +24,7 @@ export function SendingLine({ since, step, onRetry, className }: { since: number
     const t = setTimeout(() => tick((n) => n + 1), (age < STILL_MS ? STILL_MS : NOT_YET_MS) - age + 50)
     return () => clearTimeout(t)
   }, [age])
-  if (!navigator.onLine) return <span className={className}>Saved · waiting for the connection</span>
+  if (!navigator.onLine) return <span className={className}>Waiting for the connection…</span>
   if (age < STILL_MS) return <span className={className}>Sending…</span>
   const said = peopleStep(step)
   if (age < NOT_YET_MS) return <span className={className}>Still sending…{said ? ` · ${said}` : ''}</span>

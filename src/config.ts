@@ -28,7 +28,7 @@ export const BELFRY = {
   shop: `https://shop.${DOMAIN}`, // invite pages and payment
   groupsRelay: env.VITE_GROUPS_RELAY || `wss://groups-relay.${DOMAIN}`, // NIP-29 (zooid)
   mainRelay: env.VITE_MAIN_RELAY || `wss://relay.${DOMAIN}`, // profiles, calendar (rnostr)
-  blossom: `https://blossom.${DOMAIN}`,
+  blossom: env.VITE_BLOSSOM || `https://blossom.${DOMAIN}`, // VITE_BLOSSOM: tests only (a local stub)
   bunkerRelay: `wss://bunker.${DOMAIN}`,
 }
 

@@ -119,10 +119,11 @@ export function RecordingBar({ groupId }: { groupId: string }) {
   const [open, setOpen] = useState<RecMeta | 'live' | null>(null)
   useEffect(() => { void recover().then(setLeft) }, [live?.id, open])
   useEffect(() => subscribe(() => { void unsent().then((l) => setLeft(l.filter((m) => m.state === 'stopped' && m.parts.some((n) => n > 0)))) }), [])
-  const first = left.find((m) => m.id !== live?.id)
+  // a direct message's recording (DmRecordSheet) is never offered in a channel
+  const first = left.find((m) => m.id !== live?.id && !m.groupId.startsWith('dm:'))
   return (
     <>
-      {live && <button className="rec-pill" onClick={() => setOpen('live')}><span className={live.state === 'recording' ? 'dot on' : 'dot'} />{live.state === 'paused' ? 'Paused' : 'Recording'} · {clock(elapsed())}</button>}
+      {live && !live.groupId.startsWith('dm:') && <button className="rec-pill" onClick={() => setOpen('live')}><span className={live.state === 'recording' ? 'dot on' : 'dot'} />{live.state === 'paused' ? 'Paused' : 'Recording'} · {clock(elapsed())}</button>}
       {!live && first && (
         <div className="rec-unsent" role="status">
           <span>🎙 An unsent recording · {clock(first.ms)} · {fmtDay(new Date(first.startedAt))}</span>

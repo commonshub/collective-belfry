@@ -6,6 +6,10 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
+import { previewOf, sendDmFiles } from '../core/dm'
+import { MAX_FILE, MAX_FILE_GUEST, bubbles, tooLarge } from '../core/dmfiles'
+import { isGuest } from '../core/invite'
+import { AttachSheet, DmRecordSheet, FilesBody } from './DmFiles'
 import { address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
@@ -49,7 +53,7 @@ export function MessagesList() {
             <Who conv={t.conv} size={36} />
             <span className="t">
               <b>{isMail(t.conv) ? threadName(t.conv) : convName(t.conv)}</b>
-              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(t.last.text).split('\n')[0]}</small>
+              <small>{isMail(t.conv) ? `${convName(t.conv)} · ` : ''}{t.last.mine ? 'You: ' : ''}{plainRefs(previewOf(t.last)).split('\n')[0]}</small>
             </span>
             <span className="dm-meta">
               <time>{fmtTime(t.last.at)}</time>
@@ -126,10 +130,12 @@ export function MessageThread({ conv }: { conv: Conv }) {
       <div className="scroll" ref={scroller}>
         <div className="messages dm-list">
           {list.length === 0 && <div className="empty">{mail ? `A new e-mail to ${addr}: its subject names the thread. It goes out from ${address() || 'your address here'}; answers land in the thread.` : 'No messages yet. Only you two can read them.'}</div>}
-          {list.map((d) => {
-            const dd = fmtDay(new Date(d.at * 1000))
+          {bubbles(list.map((d) => ({ id: d.rid, kind: d.kind, pubkey: d.from, created_at: d.at, group: d.group, d }))).map((b) => {
+            const first = b.files[0]?.d ?? b.caption!.d
+            const dd = fmtDay(new Date(b.at * 1000))
             const sep = dd !== day ? (day = dd) : ''
-            return <div key={d.rid} className={'dm-item' + (d.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}<DmItem d={d} head={mail ? title : ''} /></div>
+            return <div key={first.rid} className={'dm-item' + (first.mine ? ' mine' : '')}>{sep && <div className="day">{sep}</div>}
+              {b.files.length ? <FilesItem files={b.files.map((f) => f.d)} caption={b.caption?.d} /> : <DmItem d={first} head={mail ? title : ''} />}</div>
           })}
         </div>
       </div>
@@ -170,6 +176,32 @@ function DmItem({ d, head }: { d: Dm; head: string }) {
     <>
       <Bubble d={d} head={head} hold={hold} />
       {d.kind !== 1301 && <DmReactions d={d} picking={picking} setPicking={setPicking} />}
+    </>
+  )
+}
+
+/** Files sent together (one group, canvas v104 messages/attach-thread): the pictures and files,
+ *  the caption under them, the time and how the sending goes; reactions on the first file. */
+function FilesItem({ files, caption }: { files: Dm[]; caption?: Dm }) {
+  const [picking, setPicking] = useState(false)
+  const all = caption ? [...files, caption] : files
+  const d = files[0]
+  const state = all.find((x) => x.failed) ?? all.find((x) => x.pending || queueState(x).waiting) ?? d
+  return (
+    <>
+      <div className={'dm dm-files-bubble' + (d.mine ? ' mine' : '') + (state.pending ? ' pending' : '')}
+        onContextMenu={(e) => { if (d.pending || d.failed || (e.target as HTMLElement).closest('a, button, audio')) return; e.preventDefault(); setPicking(true) }}>
+        {!d.mine && peers(d.conv).length > 1 && <div className="dm-who">{displayName(d.from)}</div>}
+        <FilesBody files={files} />
+        {caption?.text && <RefText text={caption.text} className="dm-text" />}
+        <div className="dm-foot">
+          <time>{fmtTime(d.at)}</time>
+          {d.mine && (state.failed
+            ? <span className="dm-state failed">Not sent: {state.failed} · <button className="link" onClick={() => { for (const x of all) if (x.failed) void retryDm(x) }}>Retry</button></span>
+            : <DmState d={state} />)}
+        </div>
+      </div>
+      <DmReactions d={d} picking={picking} setPicking={setPicking} />
     </>
   )
 }
@@ -248,17 +280,39 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
   const [text, setText] = useState('')
   const [subject, setSubject] = useState('')
   const [error, setError] = useState('')
+  const [files, setFiles] = useState<File[]>([])
+  const [menu, setMenu] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [busy, setBusy] = useState(false)
   const ta = useRef<HTMLTextAreaElement>(null)
+  const canFiles = !isMail(conv)
+  const previews = useMemo(() => files.map((f) => (f.type.startsWith('image/') ? URL.createObjectURL(f) : '')), [files])
+  useEffect(() => () => previews.forEach((u) => u && URL.revokeObjectURL(u)), [previews])
   useLayoutEffect(() => {
     const el = ta.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 160) + 'px'
   }, [text])
+  const add = (more: File[]) => {
+    const max = isGuest(me()) ? MAX_FILE_GUEST : MAX_FILE
+    if (more.some((f) => f.size > max)) { setError(tooLarge(max)); more = more.filter((f) => f.size <= max) }
+    else setError('')
+    if (more.length) setFiles((now) => [...now, ...more])
+  }
   const send = async () => {
     const t = text.trim()
-    if (!t) return
-    setText(''); setError('')
+    if (busy || (!t && !files.length)) return
+    setError('')
+    if (files.length) {
+      // pictures and files, the text as their caption (canvas v104)
+      setBusy(true)
+      const sending = files
+      setFiles([]); setText('')
+      try { await sendDmFiles(conv, sending.map((file) => ({ file })), t) } catch (e) { setFiles(sending); setText(t); setError(e instanceof Error ? e.message : String(e)) } finally { setBusy(false) }
+      return
+    }
+    setText('')
     if (needsSubject && !subject.trim()) { setText(t); setError('Give it a subject: it names the thread.'); return }
     try {
       const target = await sendDm(conv, t, needsSubject ? subject : undefined)
@@ -269,14 +323,29 @@ function DmComposer({ conv, needsSubject }: { conv: Conv; needsSubject: boolean 
     }
   }
   return (
-    <div className="composer">
+    <div className="composer" onDragOver={(e) => { if (canFiles && e.dataTransfer.types.includes('Files')) e.preventDefault() }}
+      onDrop={(e) => { if (!canFiles || !e.dataTransfer.files.length) return; e.preventDefault(); add([...e.dataTransfer.files]) }}>
       {error && <div className="error" style={{ margin: '0 4px 6px' }}>{error}</div>}
       {needsSubject && <input className="input dm-subject-input" placeholder="Subject" value={subject} onChange={(e) => setSubject(e.target.value)} />}
+      {files.length > 0 && (
+        <div className="comp-files">
+          {files.map((f, i) => (
+            <span key={i} className="comp-file">
+              {previews[i] ? <img src={previews[i]} alt="" /> : <span className="dm-filebadge">{(f.name.split('.').pop() || 'file').slice(0, 4).toUpperCase()}</span>}
+              <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
       <div className="bar">
-        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? 'Write an e-mail' : 'Message'} value={text} onChange={(e) => setText(e.target.value)}
+        {canFiles && <button type="button" className="plus" aria-label="Add a picture, a file or a recording" onClick={() => setMenu(true)}>＋</button>}
+        <textarea ref={ta} rows={1} placeholder={isMail(conv) ? 'Write an e-mail' : files.length ? 'Add a caption' : 'Message'} value={text} onChange={(e) => setText(e.target.value)}
+          onPaste={(e) => { const pasted = canFiles ? [...e.clipboardData.files] : []; if (!pasted.length) return; if (!e.clipboardData.getData('text/plain')) e.preventDefault(); add(pasted) }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && matchMedia('(pointer: fine)').matches) { e.preventDefault(); void send() } }} />
-        <button className="send" aria-label="Send" disabled={!text.trim()} onClick={() => void send()}>↑</button>
+        <button className="send" aria-label="Send" aria-busy={busy || undefined} disabled={busy || (!text.trim() && !files.length)} onClick={() => void send()}>↑</button>
       </div>
+      {menu && <AttachSheet onFiles={add} onRecord={() => setRecording(true)} onClose={() => setMenu(false)} />}
+      {recording && <DmRecordSheet conv={conv} onClose={() => setRecording(false)} onSend={(file, seconds) => sendDmFiles(conv, [{ file, duration: seconds }])} />}
     </div>
   )
 }
