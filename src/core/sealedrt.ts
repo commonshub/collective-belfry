@@ -31,6 +31,7 @@ interface Pin {
   /** after a switch (§3.3): the devices of the head held before it; a device not among them is
    *  never answered without a prompt (§5.5), it goes through Allow (and is added here once allowed) */
   trusted?: string[]
+  switchAt?: number // when the switch was seen (s): only rosters after it vouch or drop
 }
 interface Fresh { root: string; at: number; shared: Conv[]; head?: string /* a switch: the new branch's head */ }
 /** What this device remembers (one kv entry, merged on every write). */
@@ -293,7 +294,8 @@ function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
     }
     if (switched) {
       s.fresh[pk] = { root: c.rosters[0].id, head: head.id, at: Date.now(), shared: [] }
-      q.trusted = [...new Set([...(q.trusted ?? before ?? [])])]
+      q.trusted = [...new Set([...(before ?? [])])]
+      q.switchAt = nowS()
     }
     q.head = head.id; q.heads[head.id] = head.lb; q.anchored = anchoredNow
   })
@@ -301,8 +303,26 @@ function notePin(pk: string, c: C.Chain, rosterEvents: NostrEvent[]) {
   if (switched && pk === me()) scheduleMyDevice(1000) // my own account: is this device in the new head?
 }
 
-/** §3.3/§5.5: after a switch, only devices of the head held before it (or allowed since) are answered without a prompt. */
-const trustedAfterSwitch = (pk: string, dev: string) => { const t = st.pins[pk]?.trusted; return !t || t.includes(dev) }
+/** §3.3/§5.5 (a6ac9a0): after a switch, only devices of the head held before it are answered without a
+ *  prompt. A device joins them when the person allows it here, or when a later roster of the followed
+ *  chain, signed by a trusted device, ADDS it (one that merely keeps it vouches for nothing: our own
+ *  devices publish rosters by themselves). A device a later roster drops leaves them, and comes back
+ *  untrusted even if it was once allowed. Only rosters after the switch count. No expiry. */
+function trustedAfterSwitch(pk: string, dev: string): boolean {
+  const q = st.pins[pk]
+  if (!q?.trusted) return true
+  const t = new Set(q.trusted)
+  const rs = chainOf(pk)?.rosters ?? []
+  for (let i = 1; i < rs.length; i++) {
+    const r = rs[i], before = rs[i - 1]
+    if (r.created_at <= (q.switchAt ?? 0)) continue
+    for (const d of before.devices) if (!r.devices.includes(d)) t.delete(d) // dropped: untrusted from now on
+    if (t.has(r.signer)) for (const d of r.devices) if (!before.devices.includes(d)) t.add(d) // added by a trusted device
+  }
+  const changed = t.size !== q.trusted.length || q.trusted.some((d) => !t.has(d))
+  if (changed) { q.trusted = [...t]; void commit((s) => { const p = s.pins[pk]; if (p) p.trusted = [...t] }) }
+  return t.has(dev)
+}
 function trustDevice(dev: string) { void commit((s) => { const q = s.pins[me()]; if (q?.trusted && !q.trusted.includes(dev)) q.trusted.push(dev) }) }
 
 /** The letterbox to seal to for PK: the head's, else the last head this device accepted (§6). */
@@ -688,6 +708,13 @@ function linkFor(username: string): string | undefined {
 export const dropLinkSecret = () => { try { sessionStorage.removeItem(LINK) } catch { /* private mode */ } }
 /** Tests against a local relay only (VITE_TEST_RELAYS): publish a device request now. */
 export const askNow = () => ask(0)
+/** Tests against a local relay only (VITE_TEST_RELAYS): a roster signed with this device's key (a
+ *  removed device's sibling roster, §3.3's switch case), published as is. */
+export async function testSignRoster(a: { n: number; prev: string; lb: string; devices: string[] }) {
+  const ev = C.makeRoster(device!.secret, { account: me(), ...a })
+  await publishNow('main', ev)
+  return ev.id
+}
 let myUsername = ''
 export const setSealedUsername = (u: string) => { myUsername = u.toLowerCase() }
 
