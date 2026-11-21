@@ -176,8 +176,18 @@ fi
 # takes Keycast's master.key over, so the keys imported from Keycast's database open
 # (docs/own-signer.md §6). Never replaced once it exists: the signer's database opens with no
 # other key.
+# Only where the signer is used (SIGNER=belfry, an install with --own-signer, or the migration's
+# import, which asks with BELFRY_SIGNER_SECRETS=1): a belfry on Keycast gets no second copy of
+# Keycast's master key on disk from a routine `belfry update`.
 SIGNER_MASTER_KEY="$SECRETS_DIR/signer_master_key"
-if [[ -s "$SIGNER_MASTER_KEY" ]]; then
+signer_wanted=0
+if [[ "${BELFRY_SIGNER_SECRETS:-}" == 1 || "${BELFRY_SIGNER:-}" == belfry ]] \
+   || grep -qE '^SIGNER="?belfry"?' "$ENV_FILE" 2>/dev/null; then
+  signer_wanted=1
+fi
+if [[ ! -s "$SIGNER_MASTER_KEY" && $signer_wanted -eq 0 ]]; then
+  :  # nothing: made when the signer is wanted
+elif [[ -s "$SIGNER_MASTER_KEY" ]]; then
   cmp -s "$SIGNER_MASTER_KEY" "$MASTER_KEY" \
     || echo "note: $SIGNER_MASTER_KEY differs from $MASTER_KEY; keeping both as they are."
 else
