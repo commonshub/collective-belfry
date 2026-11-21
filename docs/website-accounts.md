@@ -98,8 +98,10 @@ endpoints below such a key is a browser key like any other, as before.
 
 ```json
 {"name": "Kim Cook", "username": "guest-12", "nip05": "guest-12@<domain>",
- "picture": "https://…" , "about": "…", "tags": ["solar", "bread-making"],
- "slug": "kim-cook", "visibility": "villagers",
+ "picture": "https://…", "headline": "Baker at the village", "about": "…",
+ "tags": ["solar", "bread-making"],
+ "links": [{"url": "https://kim.example/bread", "label": "My bread"}],
+ "slug": "kim-cook", "visibility": "listed",
  "email": "kim@example.org", "role": "guest",
  "pubkey": "<64 hex>", "npub": "npub1…",
  "tickets": [{"event_link": "village-2027", "event_title": "The village",
@@ -117,6 +119,12 @@ endpoints below such a key is a browser key like any other, as before.
 - `name`, `picture`, `about`: the account's profile (kind 0; the community relay's for a
   member, the groups relay's for a guest), else the name on the account, else "Guest";
   `picture` / `about` `null` when not set. `username` / `nip05`: `null` when the signer has none.
+- `headline` (one line, `null` when not set) and `links` (`[{"url", "label"}]`, `label`
+  `null` when there is none; `[]` when none): kept where `tags` are (below): in a member's
+  `belfry:profile` event (content fields `headline`, `links`), on a guest's contact
+  (`belfry_headline`, `belfry_links` as JSON text). What doesn't follow the rules of
+  `POST /site/profile` (written by another app) is not shown: a headline that isn't one line
+  of 120 at most reads `null`, a link that isn't right is left out.
 - `tags`: the words they put on their profile, `[]` when none. For a **member or an admin**
   it is the list the chat shows and edits: the `tags` of their kind 30078 `d` =
   `belfry:profile` event on the community relay, read as the chat reads it (lowercased, at
@@ -140,7 +148,8 @@ are not in it: a member's tags are read from their own `belfry:profile` event, a
 `{"directory": true}` lists members and their agents only, so it carries no `tags`.
 
 **When a guest becomes a member** (an admin accepts their request, a member link, an admin
-role: `guests.became_member`), the contact's tags are carried into a `belfry:profile` event of
+role: `guests.became_member`), the contact's tags (and their headline and links, which go in
+only when the event has none) are carried into a `belfry:profile` event of
 theirs on the community relay, written through the signer the way `POST /site/profile` writes
 a member's: added after the tags an event of theirs already has (30 at most), the rest of that
 event kept; the contact's list is then emptied. Best effort, never in the way of the
@@ -148,7 +157,8 @@ membership: someone who holds their own key gets no event (the belfry can't sign
 and when the relay or the signer doesn't answer the tags stay on the contact, where nothing
 shows them for a member (they set them again in the chat or on the website).
 - `slug`: the name of their profile page (`null` for a member the signer has no username
-  for); `visibility`: `public` or `villagers`. Both: "Villagers: profile pages" below.
+  for); `visibility`: `listed`, `private` or `public` (never `villagers`: a stored
+  `villagers` reads `private`). Both: "Villagers: profile pages" below.
 - `email`: their own proven address, in full. This is the only answer that carries one.
 - `tickets`: the events whose group has the account admitted with a ticket now (at most 30,
   by start). `ticket`: the ticket's d. `ticket_url`: the ticket's own link (its QR,
@@ -167,12 +177,31 @@ because the relay did not answer.
 
 ### `POST /site/profile`
 
-`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "tags"?: ["…"],
-"slug"?: "…", "visibility"?: "public" | "villagers"}`, at least one, nothing else (but an
+`{"name"?: "…", "about"?: "…" | null, "picture"?: "https://…" | null, "headline"?: "…" | null,
+"tags"?: ["…"], "links"?: [{"url": "https://…", "label"?: "…"}], "slug"?: "…",
+"visibility"?: "listed" | "private" | "public"}`, at least one, nothing else (but an
 optional `"client_id"`: a retry is answered again, "Retries" below). `slug` and
 `visibility`: "Villagers: profile pages" below. `name`: 1–80 characters, one line, not a key or an e-mail address.
 `about`: at most 1000 characters. `picture`: an `https://` address, at most 500 characters.
 `null` or `""` takes `about` / `picture` out.
+
+`headline`: one line, at most 120 characters after trimming, no newline, tab or other control
+character; `null` or `""` takes it out. Otherwise 422 `invalid`, `"headline: one line of at
+most 120 characters."`.
+
+`links`: the whole list (`[]` empties it), at most 8, each `{"url", "label"?}` and no other
+key. `url`: `https://` with a host (letters, digits, `-` and dots; a port may follow), at most
+500 characters, no space or control character, no `user@` (or `user:password@`) before the
+host. `label`: optional, one line, at most 40 characters after trimming (`""` / `null`: no
+label). The same `url` twice is refused. Each is 422 `invalid`, nothing saved, with one of:
+
+- `"links: a list of at most 8 links."` (not a list, or 9 or more);
+- `"links: each link is {"url", "label"?}."` (not an object, no `url`, another key);
+- `"links: each url is an https:// address of at most 500 characters, with a host, without spaces or user@."`;
+- `"links: a label is one line of at most 40 characters."`;
+- `"links: the same url twice."`.
+
+Kept as given (the url is not rewritten), in the order sent.
 
 `tags`: the whole list (`[]` empties it), at most 30 (the chat's own limit), each 1–30 characters of `a-z`, `0-9`
 and `-`. The server trims and lowercases them and drops doubles; a `#`, a space inside, or
@@ -181,18 +210,23 @@ any other character is 422 `invalid` (nothing is saved). One exception: a tag th
 back as `GET /site/me` gave it, so the list can be edited without losing it.
 
 - **Member, admin:** the server reads their latest `belfry:profile` event (kind 30078) on the
-  community relay and publishes it again **through the signer** with only `tags` in its
-  content changed: `share`, `place`, any other field and the event's own tags are kept. No
-  event yet: one with `{"tags": […]}` and the `d` tag. When that relay can't be read: 503
-  `relay`, nothing written. The chat shows the new list at its next sync.
-- **Guest:** saved on the contact (see `tags` above).
+  community relay and publishes it again **through the signer** with only `tags`,
+  `headline` and / or `links` in its content changed (the ones sent; one event for all
+  three): `share`, `place`, any other field and the event's own tags are kept. A headline or
+  links taken out leave the content (no `"headline": null`). No event yet: one with
+  `{"tags": […]}` (and / or the others) and the `d` tag. When that relay can't be read: 503
+  `relay`, nothing written. The chat shows the new list at its next sync. Nothing is
+  published when nothing changes.
+- **Guest:** saved on the contact (`belfry_tags`; `belfry_headline`, `belfry_links` as JSON
+  text, emptied when taken out).
 
 The server publishes the account's kind 0 **through the signer**, the current one with these
 fields changed and everything else kept (`nip05`, fields this API doesn't know; `display_name`
 follows `name` when the profile has one): on the groups relay (where the website's names are
 read from, and the only relay a guest is on) and, for a member, on the community relay. A
 `name` also becomes the name on the contact. → `{"ok": true, "changed": true}`; `"changed":
-false` when nothing changes (no event). `changed` is true when the tags or the profile changed.
+false` when nothing changes (no event). `changed` is true when the tags, headline, links or
+the profile changed.
 
 Errors: 422 `invalid`; 409 `own_key` (they hold their own key: the belfry can't sign for
 them; also for `tags` alone, guest or member); 429 `too_many` (10 changes an hour per account); 503 `signer` / `unavailable`; 503 `relay`
@@ -281,12 +315,31 @@ Trimmed, lowercased, a leading `@` dropped.
 - A slug that is refused refuses the whole call: nothing else in it is saved.
 - The slug they have already: `"changed": false`.
 
-**Visibility.** `POST /site/profile {"visibility": "public" | "villagers"}` (422 `invalid`
-for anything else), members and guests alike; kept on the contact
-(`belfry_profile_visibility`). The default is `villagers` (`villagers.DEFAULT_VISIBILITY`).
+**Visibility** (three levels since 2026-11-21; before, `public` or `villagers`).
+`POST /site/profile {"visibility": "listed" | "private" | "public"}`, members and guests
+alike; kept on the contact (`belfry_profile_visibility`). `"villagers"` (what older site code
+sends) is accepted as `private` and stored as `private`; anything else is 422 `invalid`,
+`"visibility: listed, private or public."`. Answers always use the three words (a stored
+`villagers` reads `private`).
 
-A change of slug or visibility counts in the account's 10 profile changes an hour (429
-`too_many`, answered before anything is saved).
+| level | anyone | villagers and the owner |
+|---|---|---|
+| `listed` (the default) | name, picture, headline, slug, role | everything |
+| `private` | nothing (403 `villagers_only`) | everything |
+| `public` | everything | everything |
+
+"Everything" adds `about`, `tags` and `links`. **The default** (nothing stored) is `listed`
+(`villagers.DEFAULT_VISIBILITY`). **Everyone who was here before keeps what they were
+promised:** the first time this version runs, every contact in the register with nothing
+stored gets `private` (what the old default `villagers` meant), once: register param
+`belfry.profile_visibility_migrated` (the time it ran) keeps it from running again
+(`Register._profile_visibility_once`). People brought over by `register-import` are made
+`private` the same way. Contacts made after that have nothing stored and read `listed`. With
+Odoo as the register there are no profile pages (409 `unsupported`), so nothing is moved
+(the service logs it at start).
+
+A change of slug, visibility, headline or links counts in the account's 10 profile changes an
+hour (429 `too_many`, answered before anything is saved).
 
 ### `GET /villagers/<slug>`
 
@@ -294,14 +347,26 @@ NIP-98 **optional**. Signed by a site session it reads as that account; signed b
 account's own key (the chat's), as that account. A signature that is sent must be right: 401
 `unauthorized` otherwise.
 
+Everything (a villager, the owner, or a `public` profile):
+
 ```json
-{"slug": "kim-cook", "name": "Kim Cook", "picture": "https://…", "about": "…",
- "tags": ["solar", "bread-making"], "role": "guest", "visibility": "villagers", "self": false}
+{"slug": "kim-cook", "name": "Kim Cook", "picture": "https://…",
+ "headline": "Baker at the village", "about": "…", "tags": ["solar", "bread-making"],
+ "links": [{"url": "https://kim.example/bread", "label": "My bread"}],
+ "role": "guest", "visibility": "private", "self": false, "partial": false}
+```
+
+The public part of a `listed` profile, to someone who is not a villager (exactly these keys):
+
+```json
+{"slug": "kim-cook", "name": "Kim Cook", "picture": "https://…",
+ "headline": "Baker at the village", "role": "guest", "visibility": "listed", "partial": true}
 ```
 
 - `name`: the profile's (kind 0), else the name on the account, else "Somebody". `picture`,
-  `about`: `null` when not set. `tags`: as in `GET /site/me`. `role`: `admin` | `member` |
-  `guest`. `self`: the caller's own profile.
+  `about`, `headline`: `null` when not set. `tags`, `links`: as in `GET /site/me`. `role`:
+  `admin` | `member` | `guest`. `self`: the caller's own profile. `partial`: whether this is
+  only the public part.
 - Never an e-mail address, a key, an npub or a nip05.
 - `slug` is matched in lowercase. Only accounts with an active pass have a page.
 
@@ -311,34 +376,51 @@ minutes). An agent is not an account here, so not a villager.
 
 | the profile | unsigned, a key nobody knows, a guest without a ticket | a villager | its owner |
 |---|---|---|---|
-| `public` | 200 | 200 | 200 |
-| `villagers` | 403 `villagers_only` | 200 | 200 |
+| `public` | 200, everything | 200, everything | 200, everything |
+| `listed` | 200, `partial: true` | 200, everything | 200, everything |
+| `private` | 403 `villagers_only` | 200, everything | 200, everything |
 | no such slug | 403 `villagers_only` | 404 `unknown` | (none) |
 
 Someone who is not a villager gets the **same** 403 (`{"error": "villagers_only", "message":
-"…"}`, nothing else) for a villagers-only profile and for a name nobody has, so the two cannot
-be told apart. Admins are members, so they see every profile.
+"Only villagers see this profile."}`, nothing else) for a private profile and for a name
+nobody has, so the two cannot be told apart. Admins are members, so they see every profile.
 
 `Cache-Control`: `no-store` on every signed answer and every error; `public, max-age=60` on
-the unsigned answer of a public profile (so a profile made villagers-only may still be shown
-to the public for up to a minute by a cache). 429 `too_many`: 120 reads a minute per address
+the unsigned answer about a `public` or `listed` profile (so a profile made private, or a
+public one made listed, may still be shown as it was for up to a minute by a cache). Every
+answer carries `Vary: Authorization` (with `Origin` when CORS applies), so a kept unsigned
+answer is never given for a signed request, and a villager never gets the public part from
+a cache. 429 `too_many`: 120 reads a minute per address
 of the network (this endpoint and the list together). 409 `unsupported` without the belfry's
 own register.
 
 ### `GET /villagers`
 
-No signature needed. The **public** profiles only, also for a signed caller:
+No signature needed. The **public** and **listed** profiles (a `listed` one with its public
+part only), the same for a signed caller; `private` ones never:
 
 ```json
-{"villagers": [{"slug": "kim-cook", "name": "Kim Cook", "picture": null,
-  "tags": ["bread"], "role": "guest"}]}
+{"villagers": [
+  {"slug": "bob", "name": "Bob", "picture": null, "headline": "Builds roofs",
+   "role": "member", "partial": true},
+  {"slug": "kim-cook", "name": "Kim Cook", "picture": null, "headline": "Baker",
+   "tags": ["bread"], "links": [{"url": "https://kim.example/bread", "label": "My bread"}],
+   "role": "guest", "partial": false}]}
 ```
 
+Who is in it: accounts with an active pass that is not an agent's and a page (`GET
+/villagers/<slug>` answers for them): a member or admin with a username in the signer; a guest
+with a slug, or who chose `public` or `listed` on the website (their slug is made then).
+Guests whose slug is `guest-<n>` (no name yet) are left out, and a guest with nothing chosen
+and no slug yet (one who never used the website) is not given a page by the list. `about` is
+never in the list.
+
 Sorted by name (then slug), at most 500. Kept in memory for 60 seconds, and read again at once
-after a change made through `POST /site/profile` (name, picture, tags, slug, visibility). A
+after a change made through `POST /site/profile` (name, picture, headline, tags, links,
+slug, visibility). A
 change made elsewhere (a name or a username changed in the chat, a pass that ended) shows
 within the minute. `Cache-Control: public, max-age=60` (`no-store` when an `Authorization`
-header was sent). Accounts without a slug are left out.
+header was sent), `Vary: Authorization`. Accounts without a slug are left out.
 
 ### One page for every address under a folder (`_.html`)
 
