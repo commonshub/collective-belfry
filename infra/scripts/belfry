@@ -549,13 +549,31 @@ cmd_apply() {
   if own_signer && [[ ! -s "$SECRETS/signer_token" || ! -s "$SECRETS/signer_master_key" ]]; then
     infra/scripts/gen-secrets.sh >/dev/null
   fi
+  # a secret Compose mounts that this belfry does not have yet (added by a later version, e.g.
+  # belfry_nsec on an older install): gen-secrets.sh makes what is missing and keeps the rest
+  local missing
+  missing=$(compose --profile app config --format json 2>/dev/null | python3 -c '
+import json, os, sys
+c = json.load(sys.stdin)
+skip = {"apns_key", "fcm_service_account"}  # optional: an empty file below
+print(" ".join(sorted(k for k, v in (c.get("secrets") or {}).items()
+                      if k not in skip and (v or {}).get("file") and not os.path.exists(v["file"]))))' || true)
+  if [[ -n "$missing" ]]; then
+    say "Secrets missing for this version ($missing): making them (gen-secrets.sh keeps the others)"
+    infra/scripts/gen-secrets.sh >/dev/null
+  fi
   # secrets added after this belfry was installed: an empty file, so Compose can mount it
   local sec
   for sec in apns_key fcm_service_account; do
     [[ -e "$SECRETS/$sec" ]] || (umask 027; : > "$SECRETS/$sec")
   done
   say "Starting the stack"
-  if [[ "$(free_gb)" -lt 25 ]]; then
+  # decided once per apply: lean_build empties the build cache after each image, which frees
+  # enough disk that a second look would see "plenty" and rebuild everything again, in parallel
+  # (an 8 GB box froze on two Rust builds at once)
+  local lean=0
+  [[ "$(free_gb)" -lt 25 ]] && lean=1
+  if [[ $lean -eq 1 ]]; then
     lean_build
     compose up -d
   else
@@ -565,7 +583,8 @@ cmd_apply() {
   else say "Bootstrap (Odoo, Authentik, the signer, Stripe and Mollie when their keys are set)"; fi
   infra/scripts/bootstrap.sh
   say "The onboarding service and the apps"
-  if [[ "$(free_gb)" -lt 25 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
+  # lean: every image was built (or found) by lean_build above; never --build again
+  if [[ $lean -eq 1 ]]; then compose --profile app up -d; else compose --profile app up -d --build; fi
   compose --profile app restart onboarding
   restart_changed_mounts || true
   reload_proxy  # a running proxy keeps its old Caddyfile until told
@@ -583,12 +602,37 @@ cmd_status() {
   say "Public checks"
   local u code
   local login="https://login.$d/application/o/keycast/.well-known/openid-configuration"
-  # Belfry's own signer: no Authentik to ask; a name that resolves shows the signer answers
-  if own_signer; then login="https://$d/.well-known/nostr.json?name=_"; fi
+  # Belfry's own signer: no Authentik to ask; a member's username that resolves shows the
+  # signer answers (the name "_" is answered without asking it). The name: the first active
+  # account with one, read from the signer through the service.
+  if own_signer; then
+    local name
+    name=$(compose --profile app exec -T onboarding python -c '
+import httpx
+from belfry_onboarding.settings import Settings
+s = Settings()
+r = httpx.get(s.signer_url.rstrip("/") + "/accounts?status=active&limit=100",
+              headers={"Authorization": "Bearer " + s.signer_token}, timeout=10)
+r.raise_for_status()
+print(next((a["username"] for a in r.json().get("accounts", []) if a.get("username")), ""))' 2>/dev/null | tail -n1 || true)
+    if [[ "$name" =~ ^[a-z0-9][a-z0-9._-]{0,29}$ ]]; then
+      login="https://$d/.well-known/nostr.json?name=$name"
+    else
+      login="https://$d/.well-known/nostr.json?name=_ (no username read from the signer: is it up?)"
+    fi
+  fi
   for u in "https://$d/" "https://pass.$d/status/1" "$login" "https://$d/.well-known/belfry.json"; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "$u" || true)
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "${u%% *}" || true)
     printf '  %s  %s\n' "${code:-000}" "$u"
   done
+  if own_signer && [[ "$login" == *"name=$name" && -n "$name" ]]; then
+    # 200 alone is no answer: the name must come back with a key
+    if curl -s --max-time 10 "$login" | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("names", {}).get(sys.argv[1]) else 1)' "$name" 2>/dev/null; then
+      say "  the signer answers: $name@$d has a key"
+    else
+      say "  the signer does NOT answer for $name@$d (belfry logs signer)"
+    fi
+  fi
   say ""
   say "Configured"
   local smtp; smtp=$(env_get SMTP_HOST)

@@ -275,9 +275,14 @@ def session_ended(svc: Services, claims: dict[str, Any]) -> bool:
 
 
 def end_session(svc: Services, claims: dict[str, Any] | None) -> None:
+    """The console's session SID is over (a logout). Never raises: a table that can't be
+    written must not stop the logout itself (the cookie still goes); it is logged."""
     sid = str((claims or {}).get("sid") or "")
     if sid and stewards.own(svc):
-        store(svc).end(sid, int((claims or {}).get("exp") or _now() + 90 * 86400))
+        try:
+            store(svc).end(sid, int((claims or {}).get("exp") or _now() + 90 * 86400))
+        except Exception:  # noqa: BLE001
+            log.exception("appsignin: the end of session %s was not written down", sid[:8])
 
 
 # ── which apps are whose ────────────────────────────────────────────────────────────────────
@@ -474,16 +479,24 @@ def with_grants(svc: Services, partner: int, rows: list[dict[str, Any]]) -> list
 
 def session_revoked(svc: Services, partner: int, bunker: str | None = None) -> int:
     """A member's session was signed out (BUNKER: its bunker key; None: all of them): the
-    sign-ins of apps that stand on it end too. Returns how many."""
+    sign-ins of apps that stand on it end too. Returns how many. Never raises: the sign-out
+    that calls it has happened in the signer already and must be answered as done; a table
+    that can't be written is logged."""
     if not enabled(svc):
         return 0
-    st, now, n = store(svc), _now(), 0
-    for g in st.live_of(int(partner), now):
-        if (bunker is None or g["bunker"] == bunker) and st.revoke(g["id"], now):
-            n += 1
-            log.info(
-                "appsignin: grant %s of %s ended: its session was signed out", g["id"][:8], g["uri"]
-            )
+    n = 0
+    try:
+        st, now = store(svc), _now()
+        for g in st.live_of(int(partner), now):
+            if (bunker is None or g["bunker"] == bunker) and st.revoke(g["id"], now):
+                n += 1
+                log.info(
+                    "appsignin: grant %s of %s ended: its session was signed out",
+                    g["id"][:8],
+                    g["uri"],
+                )
+    except Exception:  # noqa: BLE001
+        log.exception("appsignin: the app sign-ins of partner %s were not all ended", partner)
     return n
 
 
@@ -627,14 +640,30 @@ def register(app: FastAPI) -> None:
     async def preflight(request: Request):
         return cors(request, Response(status_code=204))
 
+    async def guarded(request: Request, fn: Any, *args: Any) -> Any:
+        """FN in a thread; the signer or the register failing underneath (httpx, the signer's
+        own errors: no key held, no new accounts…) answers 502 signer_unavailable with the
+        CORS headers, never a bare 500 the app's browser can't read."""
+        try:
+            return await run_in_threadpool(fn, *args)
+        except SignInError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the reasons are the signer's, not the app's
+            log.warning("appsignin: %s failed: %s", request.url.path, type(exc).__name__)
+            raise SignInError(502, "signer_unavailable") from exc
+
     @app.post("/api/oauth/token", include_in_schema=False)
     async def token(request: Request):
         services = svc(request)
         if not enabled(services):
             return off()
         try:
-            result = await run_in_threadpool(
-                exchange, services, await body_of(request), request.headers.get("user-agent", "")
+            result = await guarded(
+                request,
+                exchange,
+                services,
+                await body_of(request),
+                request.headers.get("user-agent", ""),
             )
         except SignInError as exc:
             return fail(request, exc)
@@ -647,7 +676,7 @@ def register(app: FastAPI) -> None:
             return off()
         body = await body_of(request)
         try:
-            await run_in_threadpool(revoke, services, str(body.get("token") or ""))
+            await guarded(request, revoke, services, str(body.get("token") or ""))
         except SignInError as exc:
             return fail(request, exc)
         return cors(request, JSONResponse({}, headers=NO_STORE))
@@ -658,8 +687,8 @@ def register(app: FastAPI) -> None:
         if not enabled(services):
             return off()
         try:
-            result = await run_in_threadpool(
-                rpc, services, request.headers.get("authorization"), await body_of(request)
+            result = await guarded(
+                request, rpc, services, request.headers.get("authorization"), await body_of(request)
             )
         except SignInError as exc:
             return fail(request, exc)

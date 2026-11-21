@@ -668,3 +668,48 @@ def test_sessions_carry_their_apps_origin(web, odoo, signer, own):
     assert apps.origin_of("https://notes.example.org/cb?x=1") == "https://notes.example.org"
     assert apps.origin_of("http://localhost:5173/cb") == "http://localhost:5173"
     assert apps.origin_of("not an address") == ""
+
+
+def test_a_signer_or_register_failure_is_a_502_the_apps_browser_can_read(
+    web, odoo, signer, own, monkeypatch
+):
+    """Errors from underneath (httpx, the signer's own refusals) answer 502 signer_unavailable
+    with the CORS headers on /api/oauth/token and /api/nostr, never a bare 500."""
+    import httpx
+
+    from belfry_onboarding import appsignin
+
+    t = tokens_for(web, odoo, "bob@example.org", CALENDAR, "belfry-calendar")
+    origin = {**APPS, "Origin": "https://calendar.belfry.test"}
+
+    def down(*_a, **_k):
+        raise httpx.ConnectError("register down")
+
+    monkeypatch.setattr(appsignin, "check_live", down)
+    r = web.post(
+        "/api/nostr",
+        json={"method": "get_public_key", "params": []},
+        headers={**origin, "Authorization": f"Bearer {t['access_token']}"},
+    )
+    assert r.status_code == 502 and r.json()["error"] == "signer_unavailable"
+    assert r.headers["access-control-allow-origin"] == "https://calendar.belfry.test"
+    monkeypatch.setattr(appsignin, "refresh", down)
+    r = web.post(
+        "/api/oauth/token",
+        json={"grant_type": "refresh_token", "refresh_token": t["refresh_token"]},
+        headers=origin,
+    )
+    assert r.status_code == 502 and r.headers["access-control-allow-origin"]
+
+
+def test_a_table_that_cannot_be_written_never_stops_a_logout_or_a_revoke(own, monkeypatch):
+    import sqlite3
+
+    from belfry_onboarding import appsignin
+
+    def broken(_svc):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(appsignin, "store", broken)
+    appsignin.end_session(own, {"sid": "s" * 16, "exp": 2_000_000_000})  # logged, not raised
+    assert appsignin.session_revoked(own, 1, "ab" * 32) == 0

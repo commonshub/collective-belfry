@@ -129,24 +129,30 @@ def guest_holder(svc: Services, name: str) -> str:
     return ""
 
 
-def _free(svc: Services, name: str, mine: str) -> bool:
-    """Whether a guest whose account key is MINE may have NAME as their slug."""
+def _free(svc: Services, name: str, mine: str, own_default: str = "") -> bool:
+    """Whether a guest whose account key is MINE may have NAME as their slug. OWN_DEFAULT: the
+    ``guest-<n>`` this very guest starts with, which the reserved names (usernames.DEFAULT)
+    would otherwise refuse to the one it is meant for."""
     from . import usernames
 
-    return usernames.problem(name) is None and usernames.holder(svc, name) in ("", mine)
+    reason = usernames.problem(name)
+    if reason == "reserved" and own_default and name == own_default:
+        reason = None
+    return reason is None and usernames.holder(svc, name) in ("", mine)
 
 
 def _default(svc: Services, acct: dict[str, Any]) -> str:
     """A slug for a guest who has none: their name (then -2, -3…), ``guest-<n>`` without one."""
     from . import usernames
 
+    own_default = f"guest-{acct['partner']}"
     base = usernames.slug(acct["name"])
     if not base or base == "guest" or usernames.DEFAULT.fullmatch(base):
-        base = f"guest-{acct['partner']}"
+        base = own_default
     for n in range(1, 200):
         tail = "" if n == 1 else f"-{n}"
         name = base[: usernames.MAX - len(tail)].strip("-") + tail
-        if _free(svc, name, acct["pubkey"]):
+        if _free(svc, name, acct["pubkey"], own_default):
             return name
     return ""
 

@@ -167,6 +167,10 @@ def require(svc: Services, raw: Any, name: str = "", mine: str = "") -> str:
 
     wanted = clean(raw)
     reason = problem(wanted)
+    if reason == "reserved" and mine and DEFAULT.fullmatch(wanted) and holder(svc, wanted) == mine:
+        # the account's own name still is the one it started with ("osv-0007"): sending it back
+        # unchanged is no choice of a reserved name
+        return wanted
     if reason:
         exc = ApiError(422, "username_invalid", INVALID)
         exc.extra["reason"] = reason
@@ -191,6 +195,8 @@ def check(svc: Services, key: str, body: dict[str, Any]) -> dict[str, Any]:
         return {"suggested": found[0] if found else "", "suggestions": found}
     wanted = clean(raw)[:64]
     reason = problem(wanted)
+    if reason == "reserved" and DEFAULT.fullmatch(wanted) and holder(svc, wanted) == key:
+        reason = None  # the asking account's own starting name (see ``require``)
     if reason:
         return {
             "username": wanted,

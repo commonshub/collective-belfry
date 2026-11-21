@@ -99,6 +99,9 @@ def test_a_guest_gets_a_slug_from_their_name(vsite):
         pid = acct_of(rsvc, leo)["partner"]
         first = me(c, leo)["slug"]
         assert first.startswith("guest-") and first != got["username"]
+        # their own guest-<n>, never guest-<n>-2 (the reserved names are not refused to the
+        # one they are meant for)
+        assert first == f"guest-{pid}", first
         assert call(c, leo, "/site/profile", {"name": "Leo Lee"}).status_code == 200
         assert me(c, leo)["slug"] == "leo-lee"
         # …but a slug they chose stays when the name changes
