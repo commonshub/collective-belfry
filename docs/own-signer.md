@@ -468,21 +468,22 @@ And around the data:
   sessions, or a request gets two answers. Whether `relay_builder` accepts the signer's
   subscription (`#p` with hundreds of keys, several filters) is **not verified**; the loop was
   run against strfry only.
-- **Order**: backup; stop Keycast's writes; import accounts, usernames, statuses; import
-  sessions; compare counts and every public key with the register (`keycast_pubkey` of each
-  pass); switch the proxy's `nostr.json` and `SIGNER=belfry`; start; check one session of each
-  kind (web chat, iPhone, Android) signs without signing in again. Roll back = the old
-  settings and Keycast up again, which works as long as nothing was created on the signer in
-  between (new accounts there are derived keys and can be preloaded into Keycast; new sessions
-  cannot be carried back).
+- **Order** (as `migrate-to-own-signer.sh` does it, section 6b): backup; import and verify
+  while the belfry runs, as a rehearsal; then stop Keycast and the service; import once more
+  and verify (every public key against Keycast's and the register's `keycast_pubkey`, every
+  session); `SIGNER=belfry` and apply (the proxy sends `nostr.json` and the apps' sign-in to
+  the service); check one session of each kind (web chat, iPhone, Android) signs without
+  signing in again. Roll back = the old settings and Keycast up again; what was made on the
+  signer in between does not go back (new accounts there are derived keys and come out the
+  same in Keycast; new sessions cannot be carried back).
 - **The master key** is shared: `gen-secrets.sh` copies `infra/keycast/master.key` to
   `infra/secrets/signer_master_key` (and says so when the two differ); the custody seed is the
   same file.
 - **The switch itself**: `BELFRY_SIGNER=belfry BELFRY_SIGNER_MIGRATED=1 belfry config`, then
   `belfry apply` (which stops and removes Keycast's, Authentik's and Redis's containers and
   leaves their data); `migrate-to-own-signer.sh switch` does both. `belfry config` refuses the
-  switch on a belfry that has, or ever had, people without `BELFRY_SIGNER_MIGRATED=1`. Web sessions of `belfry.<domain>` and the pass page are
-  the service's own cookies and survive; **Authentik sessions end** (nobody uses them on a
+  switch on a belfry that has, or ever had, people without `BELFRY_SIGNER_MIGRATED=1`. Web
+  sessions of `belfry.<domain>` and the pass page are the service's own cookies and survive; **Authentik sessions end** (nobody uses them on a
   belfry with `PASS_SIGNIN=belfry`; an OSV-look belfry, `PASS_SIGNIN=authentik`, cannot switch:
   section 5, entry 6).
 - **Apps signed in through Keycast's OAuth** (the suite) hold Keycast refresh tokens, which
@@ -688,8 +689,10 @@ Not run, and why it matters:
 - `limits.rs`'s host parsing was held to Python 3.12's `urlsplit` through the vectors only.
 - Limits kept in memory (codes, flows) assume one process, as the rest of the service does.
 
-What was run in phase 3's first part: the Python suite (numbers at the end of this section's
-list), `bash -n` on `migrate-to-own-signer.sh` and `belfry` (shellcheck is not installed on the
+What was run in phase 3's first part: the full Python suite in both modes (default 1231
+passed, 1 skipped; `BELFRY_TEST_SIGNER=belfry` 1208 passed, 23 skipped, and 1 failed:
+`test_agents.py::test_a_guest_agent_becomes_its_members_own_and_leaves_with_them`, a known
+flake that passed three times alone in that mode), `bash -n` on `migrate-to-own-signer.sh` and `belfry` (shellcheck is not installed on the
 machine), and `docker compose config` on the merged files with `docker-compose.signer-import.yml`
 (the signer comes up with `BUNKER_RELAYS` empty next to Keycast, Authentik and Redis; the
 onboarding service keeps `SIGNER` unset and gains the signer's network and token; with the
