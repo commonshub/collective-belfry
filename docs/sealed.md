@@ -221,7 +221,11 @@ marks "Locked on this device" the conversations this device already knows whose 
 all have a ready chain, while this device is not in my head; a conversation that exists only as
 unopened wraps is not listed. The banner shows when this device is not in my head or holds a
 wrap whose `lb` is a letterbox of MY OWN chain (any roster of it) that it has no secret for. A
-wrap naming any other `lb` is dropped: anyone can write one. Only "this device is not in my head"
+wrap naming any other `lb` is dropped: anyone can write one — but only once my own chain is
+current on this connection (my anchor and rosters answered after authentication, to EOSE); until
+then it is kept, never marked seen: a message sealed to my newest letterbox can arrive before the
+roster that announces it. "My chain's letterboxes" are those of VALID rosters (the current chain
+and, after a fresh start, the previously pinned one), never of any event that merely names me. Only "this device is not in my head"
 hides messages or the composer.
 
 ### 5.4 Starting fresh
