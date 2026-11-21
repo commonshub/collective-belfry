@@ -27,7 +27,7 @@ from .clients.issuer import IssuerClient
 from .clients.keycast import KeycastClient
 from .clients.mint import MintClient
 from .clients.odoo import OdooApi, OdooError
-from .clients.signer import SignerClient
+from .clients.signer import KeyNotHeld, SignerClient
 from .clients.verifier import VerifierClient
 from .eudi import RegistryCerts
 from .git_members import GitMembers
@@ -465,18 +465,70 @@ def send_login_link(svc: Services, pass_id: int) -> str:
     return "sent"
 
 
+def _name_taken(exc: httpx.HTTPStatusError) -> bool:
+    """Whether a signer's 409 says "that username is somebody else's" (the own signer:
+    ``username_taken``; Keycast: "User with username … already exists")."""
+    if exc.response.status_code != 409:
+        return False
+    try:
+        data = exc.response.json()
+    except ValueError:
+        return False
+    return isinstance(data, dict) and "username" in str(data.get("error") or "").lower()
+
+
+def preload_account(
+    svc: Services,
+    partner_id: int,
+    username: str,
+    display_name: str,
+    key_version: int = 0,
+    pubkey: str | None = None,
+) -> dict[str, Any]:
+    """The signer's account of a person (``preload_user``: made when missing, never changed),
+    whatever became of the name asked for.
+
+    An account starts with the person's member number as its username, and a username is
+    unique. Somebody who chose "50" as theirs before member 50 joined must not stop member 50
+    from ever getting an account (usernames.problem refuses such names today; older ones
+    exist). So when the name is taken the account is made as ``member-<id>``, then as
+    ``member-<id>0<four digits>``: names nobody can choose (usernames.DEFAULT), which
+    ``usernames.give_default`` replaces with the person's own name right after."""
+    names = [username, f"member-{partner_id}", f"member-{partner_id}0{secrets.randbelow(10**4):04d}"]
+    for i, name in enumerate(dict.fromkeys(names)):
+        try:
+            return svc.keycast.preload_user(
+                vine_id=f"odoo-partner-{partner_id}",
+                username=name,
+                display_name=display_name,
+                key_version=key_version,
+                pubkey=pubkey,
+            )
+        except httpx.HTTPStatusError as exc:
+            if not _name_taken(exc) or i == len(names) - 1:
+                raise
+            log.warning(
+                "signer: the username %s is taken; the account of partner %s is made under "
+                "another",
+                name,
+                partner_id,
+            )
+    raise RuntimeError("unreachable")
+
+
 def _ensure_keycast_user(
     svc: Services, partner: dict[str, Any], member_number: str, own_pubkey: str | None = None
 ) -> tuple[str, str, str]:
     """Returns (pubkey hex, npub, user UCAN). The UCAN is used once for the profile, not stored.
     ``own_pubkey``: the participant joins with their own key, so the account gets no key of
     Belfry's (a keyless account, as for a self-custody participant)."""
-    result = svc.keycast.preload_user(
-        vine_id=f"odoo-partner-{partner['id']}",
-        username=member_number.lower(),
-        display_name=partner.get("name") or member_number,
-        key_version=int(partner.get("belfry_key_version") or 0),
-        pubkey=own_pubkey,
+    result = preload_account(
+        svc,
+        int(partner["id"]),
+        member_number.lower(),
+        partner.get("name") or member_number,
+        int(partner.get("belfry_key_version") or 0),
+        own_pubkey,
     )
     pubkey = result["pubkey"]
     svc.keycast.set_user_status(pubkey, "active")
@@ -605,13 +657,21 @@ def restore_keys(svc: Services) -> dict[str, Any]:
             continue
         expected = passes[0]["keycast_pubkey"]
         own = partner.get("belfry_key_custody") == "self"
-        result = svc.keycast.preload_user(
-            vine_id=f"odoo-partner-{partner['id']}",
-            username=number.lower(),
-            display_name=partner.get("name") or number,
-            key_version=int(partner.get("belfry_key_version") or 0),
-            pubkey=expected if own else None,
-        )
+        try:
+            result = preload_account(
+                svc,
+                int(partner["id"]),
+                number.lower(),
+                partner.get("name") or number,
+                int(partner.get("belfry_key_version") or 0),
+                expected if own else None,
+            )
+        except KeyNotHeld:
+            # the own signer made nothing: the key it would derive is not the register's
+            report[number] = "mismatch"
+            log.error("restore-keys: %s cannot be derived again (the register has %s…)",
+                      number, str(expected)[:8])
+            continue
         got = result["pubkey"]
         if got != expected:
             report[number] = "mismatch"

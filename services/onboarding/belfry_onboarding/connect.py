@@ -242,6 +242,11 @@ def redeem(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
     that connects with the URL's secret and drops it when nobody did within ten minutes
     (docs/own-signer.md §4): the app gets the URL in this very answer and connects at once;
     one that keeps the URL for later signs in again, which makes a new one."""
+    # what the request itself gets wrong is said before the code is spent: an app that sent a
+    # malformed client key can ask again with the same code
+    client = str(body.get("client_pubkey") or "").strip().lower()
+    if client and not (len(client) == 64 and all(ch in "0123456789abcdef" for ch in client)):
+        raise ConnectError(400, "invalid_request")
     with _lock:
         _sweep()
         c = CODES.pop(str(body.get("code", "")), None)
@@ -262,9 +267,6 @@ def redeem(svc: Services, body: dict[str, Any], ua: str = "") -> dict[str, Any]:
     if found is None or found[0] != c["pubkey"]:
         raise ConnectError(409, "own_key")
     scope = scope_of(svc, c["uri"])
-    client = str(body.get("client_pubkey") or "").strip().lower()
-    if client and not (len(client) == 64 and all(ch in "0123456789abcdef" for ch in client)):
-        raise ConnectError(400, "invalid_request")
     try:
         bunker = svc.keycast.create_bunker(
             found[1],

@@ -120,6 +120,13 @@ def test_the_own_signer_and_authentiks_sign_in_do_not_go_together(tmp_path):
     # with Keycast everything it needs must be there, as before
     with pytest.raises(ValueError, match="AUTHENTIK_TOKEN, KEYCAST_ADMIN_TOKEN"):
         stewards.check_settings(make(SIGNER="keycast"))
+    # … and exactly as before: the variables had to be set and could be empty (a box whose
+    # .env carries an empty token started then and starts now)
+    stewards.check_settings(
+        make(AUTHENTIK_TOKEN="", KEYCAST_ADMIN_TOKEN="", KEYCAST_SERVICE_TOKEN="")
+    )
+    with pytest.raises(ValueError, match="needs KEYCAST_SERVICE_TOKEN$"):
+        stewards.check_settings(make(AUTHENTIK_TOKEN="", KEYCAST_ADMIN_TOKEN="b"))
     stewards.check_settings(
         make(AUTHENTIK_TOKEN="a", KEYCAST_ADMIN_TOKEN="b", KEYCAST_SERVICE_TOKEN="c")
     )
@@ -346,6 +353,106 @@ def test_one_rule_set_for_the_signer_and_the_service():
         assert allowed is not case["refused"], case["name"]
 
 
+def test_more_limits_the_signer_does_not_have_yet():
+    """Vectors the service passes today and the signer (limits.rs) must pass next: app data
+    under the belfry's names, labels in its namespaces, decrypting only with consent."""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[3] / "services/signer/vectors/limits-next.json"
+    data = json.loads(path.read_text())
+    assert data["about"].startswith("PENDING FOR THE SIGNER")
+    hosts = remoteapps.Own(
+        data["own"]["domain"],
+        frozenset(data["own"]["api"]),
+        frozenset(data["own"]["relays"]),
+        frozenset(data["own"]["blossom"]),
+    )
+    assert len(data["cases"]) >= 20 and len(data["methods"]) >= 6
+    for case in data["cases"]:
+        allowed = remoteapps.allowed(None, True, "sign_event", case["event"], hosts)
+        assert allowed is not case["refused"], case["name"]
+    for case in data["methods"]:
+        allowed = remoteapps.allowed(None, case["decrypt"], case["method"], None, hosts)
+        assert allowed is not case["refused"], case["name"]
+
+
+def test_an_outside_app_does_not_read_or_write_the_belfrys_own(web, odoo, signer, own):
+    apps.decide(own, web.people["Ana"], APP, "Notes", True)
+    t = tokens_for(web, odoo, "bob@example.org", APP, "notes")
+    access, peer = t["access_token"], web.people["Ana"]["pubkey"]
+    for refused in (
+        event(30078, ["d", "belfry:sealed"]),
+        event(30078, ["d", "belfry:channel-order"]),
+        event(1985, ["L", "belfry/pin"], ["l", "pinned", "belfry/pin"], ["e", "0" * 64]),
+        event(1985, ["l", "passed", "belfry/proposal-status"]),
+    ):
+        assert call(web, access, "sign_event", [refused]).status_code == 403, refused
+    for fine in (
+        event(30078, ["d", "notes:settings"]),
+        event(1985, ["L", "com.example"], ["l", "good", "com.example"]),
+        event(5, ["e", "0" * 64]),
+    ):
+        assert call(web, access, "sign_event", [fine]).status_code == 200, fine
+    # it writes to people; reading what was written to the member needs their word, per app
+    assert call(web, access, "nip44_encrypt", [peer, "hello"]).status_code != 403
+    assert ("nip44_encrypt", web.people["Bob"]["pubkey"]) in signer.rpc  # reached the signer
+    for method in ("nip44_decrypt", "nip04_decrypt"):
+        r = call(web, access, method, [peer, "ciphertext"])
+        assert r.status_code == 403 and r.json()["error"] == "forbidden"
+    assert ("nip44_decrypt", web.people["Bob"]["pubkey"]) not in signer.rpc
+    grant = appsignin.store(own).by("access", appsignin.mark(own.settings, "access", access))
+    assert grant["decrypt"] == 0 and grant["scope"] == "outside"
+    # the belfry's own apps read, as the chat does
+    mine = tokens_for(web, odoo, "bob@example.org", CALENDAR, "belfry-calendar")
+    call(web, mine["access_token"], "nip44_decrypt", [peer, "ciphertext"])
+    assert ("nip44_decrypt", web.people["Bob"]["pubkey"]) in signer.rpc
+
+
+def test_a_malformed_client_key_does_not_spend_the_code(web, odoo, signer, own):
+    body = {
+        "grant_type": "authorization_code",
+        "code": code_for(web, odoo, "bob@example.org", CALENDAR, "belfry-calendar"),
+        "client_id": "belfry-calendar",
+        "redirect_uri": CALENDAR,
+        "code_verifier": VERIFIER,
+    }
+    r = web.post("/api/oauth/token", json={**body, "client_pubkey": "not-a-key"}, headers=APPS)
+    assert r.status_code == 400
+    assert web.post("/api/oauth/token", json=body, headers=APPS).status_code == 200  # still good
+
+
+def test_the_native_app_gets_its_silent_answer_at_its_own_address(web, odoo, own):
+    """prompt=none: an address in the registry (served here, approved, or the phone apps')
+    gets ``error=login_required`` at that address when nobody is signed in; any other address
+    gets a page and no redirect."""
+    native = "sh.belfry.app://connect"
+    r = authorize(web, prompt="none", redirect_uri=native)
+    assert r.status_code == 302
+    assert r.headers["location"].startswith(native + "?error=login_required")
+    r = authorize(web, prompt="none")  # APP: nobody approved it
+    assert r.status_code == 403 and "location" not in r.headers
+    apps.decide(own, web.people["Ana"], APP, "Notes", True)
+    r = authorize(web, prompt="none")
+    assert r.status_code == 302 and r.headers["location"].startswith(APP + "?error=login_required")
+
+
+def test_belfry_json_names_a_sign_in_page_that_exists(web, own):
+    doc = web.get("/.well-known/belfry.json", headers={"Host": "belfry.test"}).json()
+    assert doc["sign_in"]["login"] == "https://pass.belfry.test/me/login"  # no Authentik here
+    assert "keycast" in doc["sign_in"]  # the field stays: the apps' sign-in answers there
+
+
+def test_a_suspended_members_name_still_resolves_as_with_keycast(web, own, signer):
+    """Keycast answers nostr.json from ``users.username`` whatever the status (its
+    ``find_pubkey_by_username`` has no status in its WHERE, at fe9c646): a suspended account
+    keeps its name and its address keeps resolving. The own signer's names do the same."""
+    bob = web.people["Bob"]
+    own.keycast.set_username(f"acct:odoo-partner-{bob['partner']}", "bob")
+    own.keycast.set_user_status(bob["pubkey"], "suspended", "pass closed")
+    r = web.get("/.well-known/nostr.json", params={"name": "bob"}, headers={"Host": "belfry.test"})
+    assert r.status_code == 200 and r.json() == {"names": {"bob": bob["pubkey"]}}
+
+
 def test_refresh_tokens_work_once_and_a_copy_ends_the_sign_in(web, odoo, signer, own, monkeypatch):
     t = tokens_for(web, odoo, "bob@example.org", CALENDAR, "belfry-calendar")
 
@@ -390,15 +497,72 @@ def test_revoking_and_signing_out_end_it_on_the_server(web, odoo, signer, own):
     assert web.post("/api/oauth/revoke", json={"token": "unknown"}, headers=APPS).status_code == 200
     assert call(web, t["access_token"], "get_public_key", []).status_code == 401
     assert call(web, u["access_token"], "get_public_key", []).status_code == 200  # another device
-    # signed out in the signer (the Devices list): the token is worth nothing either
-    from belfry_onboarding import community
-
-    found = community.member_token(own, web.people["Bob"]["partner"])
-    for s in own.keycast.list_sessions(found[1]):
-        own.keycast.revoke_session(found[1], s["bunker_pubkey"])
+    # signed out by the member (the Devices list): the token is worth nothing either
+    bob = web.people["Bob"]["partner"]
+    for s in console.my_devices(own, bob):
+        console.revoke_device(own, bob, s["bunker_pubkey"])
+    assert console.my_devices(own, bob) == []
     assert call(web, u["access_token"], "get_public_key", []).status_code == 401
     body = {"grant_type": "refresh_token", "refresh_token": u["refresh_token"]}
     assert web.post("/api/oauth/token", json=body, headers=APPS).status_code == 400
+
+
+def test_an_app_that_only_signs_over_http_keeps_its_sign_in(web, odoo, signer, own):
+    """The wallet never sends a NIP-46 connect: the signer drops its unclaimed connection after
+    ten minutes. The sign-in is the table's: it still signs, the member still sees it among
+    their sessions and can sign it out."""
+    wallet = "https://wallet.belfry.test/oauth/callback"
+    t = tokens_for(web, odoo, "bob@example.org", wallet, "x")
+    bob = web.people["Bob"]["partner"]
+    before = console.my_devices(own, bob)
+    assert len(before) == 1  # one sign-in, one row: the signer's connection
+    assert signer.expire_unclaimed() == 1  # nobody connected within the window
+    from belfry_onboarding import community
+
+    found = community.member_token(own, bob)
+    assert own.keycast.list_sessions(found[1]) == []  # gone in the signer
+    r = call(web, t["access_token"], "sign_event", [event(1)])
+    assert r.status_code == 200 and r.json()["result"]["pubkey"] == web.people["Bob"]["pubkey"]
+    assert call(web, t["access_token"], "derive_secret", ["cashu-wallet-v1"]).status_code == 200
+    body = {"grant_type": "refresh_token", "refresh_token": t["refresh_token"]}
+    new = web.post("/api/oauth/token", json=body, headers=APPS)
+    assert new.status_code == 200, new.text
+    # still listed for the member, under the same id and name, and not twice
+    after = console.my_devices(own, bob)
+    assert [s["bunker_pubkey"] for s in after] == [before[0]["bunker_pubkey"]]
+    assert after[0]["application_name"] == before[0]["application_name"]
+    assert after[0]["created_at"].endswith("Z") and after[0]["client_pubkey"] is None
+    # and revocable from that list
+    console.revoke_device(own, bob, after[0]["bunker_pubkey"])
+    assert console.my_devices(own, bob) == []
+    assert call(web, new.json()["access_token"], "get_public_key", []).status_code == 401
+    body = {"grant_type": "refresh_token", "refresh_token": new.json()["refresh_token"]}
+    assert web.post("/api/oauth/token", json=body, headers=APPS).status_code == 400
+
+
+def test_signing_in_by_name_gives_an_outside_app_an_outside_session(web, odoo, signer, own):
+    """POST /api/v1/session (name@domain and a code, sessions.py): the signer's limits follow
+    the app as they do in the browser's sign-in; an admin's approval does not lift them."""
+    from .test_holder_invites import post
+
+    own.keycast.set_username(f"odoo-partner-{web.people['Bob']['partner']}", "bob")
+    apps.decide(own, web.people["Ana"], APP, "Notes", True)
+
+    def sign_in_by_name(app, **more):
+        key = PrivateKey()
+        with TestClient(create_app(own), base_url="https://pass.belfry.test") as c:
+            r = post(c, key, "/api/session", {"nip05": "bob@belfry.test", "app": app, **more})
+            assert r.status_code == 200, r.text
+            code = odoo.mailed_codes["bob@example.org"]
+            r = post(c, key, "/api/session/verify", {"code": code})
+            assert r.status_code == 200 and r.json()["state"] == "open", r.text
+        return key.public_key_xonly.format().hex()
+
+    key = sign_in_by_name(APP)
+    assert signer.bunkers[-1]["scope"] == "outside"
+    assert signer.bunkers[-1]["client_pubkey"] == key
+    sign_in_by_name("sh.belfry.app://connect", client="belfry-android")
+    assert signer.bunkers[-1]["scope"] == "own"  # the phone app is the belfry's own
 
 
 def test_a_member_who_left_or_an_app_no_longer_approved(web, odoo, signer, own):

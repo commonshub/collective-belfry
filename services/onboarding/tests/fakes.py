@@ -1198,6 +1198,9 @@ class FakeSigner(FakeKeycast):
                 pubkey = hashlib.sha256(seed).hexdigest()
             else:
                 pubkey = f"{len(self.users) + 1:064x}"
+            want = body.get("expect_pubkey")
+            if want and want != pubkey:
+                return self._err(409, "mismatch")  # nothing written
             u = {"pubkey": pubkey, "username": name, "own": bool(own)}
             self.users[vine_id] = u
             self.status[pubkey] = "active"
@@ -1345,6 +1348,16 @@ class FakeSigner(FakeKeycast):
                 **({"client_pubkey": client} if client else {"expires_at": self.CREATED + 600}),
             },
         )
+
+    def expire_unclaimed(self) -> int:
+        """Ten minutes later (``SIGNER_UNCLAIMED_SECONDS``): a connection made without a client
+        key that nobody connected to is gone, as in the signer (store.rs ``expire_unclaimed``)."""
+        n = 0
+        for b in self.bunkers:
+            if not b.get("revoked") and not b.get("client_pubkey"):
+                b["revoked"] = True
+                n += 1
+        return n
 
     def _s_connections(self, request: httpx.Request, acct: str) -> httpx.Response:
         u = self._user(acct)

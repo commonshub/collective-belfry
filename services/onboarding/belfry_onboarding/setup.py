@@ -298,12 +298,53 @@ def save_first_admin(settings: Any, data: dict[str, Any]) -> None:
 
 
 def has_admin(svc: Services) -> bool:
+    """Whether the first admin's place is taken. It is while any of these holds:
+
+    - ``first-admin.json`` exists;
+    - somebody is an admin (the stewards group, or the register's flag on a belfry with its
+      own signer), or the admins' home cannot be read;
+    - **the belfry has people** (signerguard.has_people: a pass that is active or was ever
+      given a key) and nobody reopened the setup on purpose. A belfry with members and no
+      admin on record is not a new belfry: it is one whose record is missing (the file lost in
+      a restore, the admins not yet copied out of Authentik during a move to the own signer),
+      and "first come, first served" would hand it to a stranger. ``belfry setup-reset`` is
+      the deliberate way to open it again: it writes ``"open": true`` into ``reset.json``,
+      which lasts until the next first admin is made.
+
+    A new belfry (no file, no admin, nobody with a pass) is open, as before."""
     if first_admin(svc.settings):
         return True
     try:
-        return bool(stewards.emails(svc))
+        if stewards.emails(svc):
+            return True
     except Exception:  # noqa: BLE001 — Authentik not answering: don't offer a second first admin
         return True
+    if reopened(svc.settings):
+        return False
+    from . import signerguard
+
+    try:
+        return signerguard.has_people(svc)
+    except Exception:  # noqa: BLE001 — the register not answering: not a new belfry for sure
+        return True
+
+
+def reopened(settings: Any) -> bool:
+    """``belfry setup-reset`` opened the setup again and nobody has claimed it since."""
+    folder = setup_dir(settings)
+    return folder is not None and read_json(folder / RESET_FILE).get("open") is True
+
+
+def _close_reopening(settings: Any) -> None:
+    folder = setup_dir(settings)
+    if folder is None or not (folder / RESET_FILE).exists():
+        return
+    data = read_json(folder / RESET_FILE)
+    if data.get("open") is True:
+        data["open"] = False
+        tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, folder / RESET_FILE)
 
 
 def open_for_anyone(svc: Services) -> bool:
@@ -363,6 +404,11 @@ def create_first_admin(
         raise ValueError("That is not an e-mail address.")
     if not USERNAME.fullmatch(username):
         raise ValueError("A username is 1 to 30 letters, digits, dots, dashes or underscores.")
+    from . import usernames
+
+    if usernames.DEFAULT.fullmatch(username):
+        # "7", "member-7", "osv-0007": what accounts are called before they have a name
+        raise ValueError("That name is kept for member numbers: choose another.")
     if not re.fullmatch(r"[0-9a-f]{64}", session_pubkey or ""):
         raise ValueError("The browser did not make a session key.")
     with claim_lock(svc.settings):
@@ -418,6 +464,7 @@ def _create_first_admin(
         "at": int(time.time()),
     }
     save_first_admin(svc.settings, data)
+    _close_reopening(svc.settings)  # a reset's "open again" ends with this claim
     log.info("setup: first admin %s (%s), session key %s", username, email, session_pubkey[:12])
     return {
         **data,
@@ -533,7 +580,9 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
     so setup cookies made before stop working. With ALL_ADMINS every other admin goes too
     (/setup only opens when nobody is admin). Returns what was done, and ``revert``: the settings
     the setup page changed during the claim (secrets: always cleared by the CLI; others: put back
-    to ``before``). Members the claimant invited stay. Idempotent: with no admin it does nothing.
+    to ``before``). Members the claimant invited stay. Idempotent: with no admin and an open
+    setup it does nothing. On a belfry that has members but no admin on record (``has_admin``
+    keeps /setup closed there) it opens the setup: ``closed_without_admin`` in the answer.
     """
     folder = setup_dir(svc.settings)
     if folder is None:
@@ -554,7 +603,13 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
         "open": not remaining,
         "dry_run": dry_run,
     }
-    if dry_run or not gone:
+    # nobody to remove, nobody is admin, and still closed: a belfry with members and no admin
+    # on record (has_admin). Opening it is this command's job too, and only this command's.
+    stuck = not gone and not remaining and has_admin(svc)
+    out["closed_without_admin"] = stuck
+    if stuck:
+        out["open"] = False
+    if dry_run or not (gone or stuck):
         return out
     if fa and fa.get("partner"):
         try:
@@ -572,14 +627,19 @@ def reset(svc: Services, all_admins: bool = False, dry_run: bool = False) -> dic
         if (folder / CHANGES_FILE).exists():
             os.replace(folder / CHANGES_FILE, folder / f"first-admin-changes.reset-{at}.json")
     tmp = folder / f".{RESET_FILE}.{secrets.token_hex(4)}"
-    tmp.write_text(json.dumps({"at": int(time.time()), "removed": gone}))
+    # "open": the setup is open again on purpose, although the belfry may have members
+    # (has_admin); it stays so until the next first admin is made
+    tmp.write_text(json.dumps({"at": int(time.time()), "removed": gone, "open": not remaining}))
     os.replace(tmp, folder / RESET_FILE)
     console._admins["at"] = 0.0
     with contextlib.suppress(Exception):
         from . import apps
 
         apps.forget()
-    log.warning("setup-reset: removed %s; /setup open: %s", ", ".join(gone), not remaining)
+    out["open"] = not remaining
+    log.warning(
+        "setup-reset: removed %s; /setup open: %s", ", ".join(gone) or "nobody", not remaining
+    )
     return out
 
 

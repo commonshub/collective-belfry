@@ -85,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
     rst.add_argument("--all-admins", action="store_true", help="remove every admin")
     rst.add_argument("--dry-run", action="store_true", help="only say what would be done")
     sub.add_parser("sales-status", help="whether this belfry can sell passes (no values)")
+    sub.add_parser(
+        "has-people",
+        help="yes or no: the register has, or ever had, a member (belfry config asks before "
+        "it lets the signer be switched)",
+    )
     pl = sub.add_parser(
         "pay-link",
         help="a signed belfry.<domain>/pay link (its description shows; belfry pay-link)",
@@ -157,6 +162,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import setup
 
         print(json.dumps(setup.reset(services, args.all_admins, args.dry_run)))
+        return 0
+    elif args.command == "has-people":
+        from . import signerguard
+
+        print("yes" if signerguard.has_people(services) else "no")
         return 0
     elif args.command == "usernames":
         from . import usernames

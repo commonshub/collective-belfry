@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     signer_url: str = Field(default="http://signer:8200", alias="SIGNER_URL")
     # The signer's API token (the secret signer_token); needed with SIGNER=belfry only.
     signer_token: str = Field(default="", alias="SIGNER_TOKEN")
+    # Only while the keys are derived again from the custody seed after the signer's volume was
+    # lost (restore-keys): lets the service start although the signer holds none of the members
+    # the register has (signerguard.check_start). Never for a migration from Keycast.
+    signer_recovering: bool = Field(default=False, alias="SIGNER_RECOVERING")
     keycast_url: str = Field(default="http://keycast:3000", alias="KEYCAST_URL")
     # needed with SIGNER=keycast only (stewards.check_settings)
     keycast_admin_token: str = Field(default="", alias="KEYCAST_ADMIN_TOKEN")

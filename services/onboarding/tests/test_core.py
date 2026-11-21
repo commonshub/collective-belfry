@@ -296,7 +296,9 @@ def test_refund_keeps_keycast_active_with_second_active_pass(services, odoo, key
     second = seed_paid_invoice(odoo, tier="full", partner_id=first["partner"])
     odoo.get("payment.transaction", second["transaction"])["provider_reference"] = "pi_456"
     assert core.activate_pass(services, second["invoice"]) == "activated"
-    assert keycast.preloads == 2 and len(keycast.users) == 1  # same partner, same key
+    # same partner, same key (the own signer's client reads an account that exists and asks
+    # for a new one only once)
+    assert keycast.preloads == (2 if AK else 1) and len(keycast.users) == 1
 
     refund_id = odoo.add(
         "payment.transaction",

@@ -181,7 +181,8 @@ if [[ -s "$SIGNER_MASTER_KEY" ]]; then
   cmp -s "$SIGNER_MASTER_KEY" "$MASTER_KEY" \
     || echo "note: $SIGNER_MASTER_KEY differs from $MASTER_KEY; keeping both as they are."
 else
-  install -m 640 "$MASTER_KEY" "$SIGNER_MASTER_KEY"
+  # 600, as the original: the signer runs as this file's owner (HOST_UID, like Keycast)
+  install -m 600 "$MASTER_KEY" "$SIGNER_MASTER_KEY"
   echo "wrote $SIGNER_MASTER_KEY (the same key as $MASTER_KEY)"
 fi
 

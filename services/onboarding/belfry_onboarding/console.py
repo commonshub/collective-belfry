@@ -407,7 +407,9 @@ def my_devices(svc: Services, partner: int) -> list[dict[str, Any]] | None:
     if found is None:
         return None
     try:
-        return list(svc.keycast.list_sessions(found[1]))
+        from . import appsignin
+
+        return appsignin.with_grants(svc, partner, list(svc.keycast.list_sessions(found[1])))
     except Exception as exc:  # noqa: BLE001 — the page still opens
         log.warning("console: sessions of partner %s unknown: %s", partner, exc)
         return []
@@ -421,6 +423,9 @@ def revoke_device(svc: Services, partner: int, bunker: str) -> None:
     found = community.member_token(svc, partner)
     if found is None:
         raise ValueError("Your key is your own: sign devices out in your signer.")
+    from . import appsignin
+
+    appsignin.session_revoked(svc, partner, bunker)
     svc.keycast.revoke_session(found[1], bunker)
 
 
