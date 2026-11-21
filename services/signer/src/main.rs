@@ -7,13 +7,14 @@
 //!
 //! | Variable | Meaning |
 //! | --- | --- |
-//! | `SIGNER_LISTEN` | address of the API, default `0.0.0.0:8200` |
+//! | `SIGNER_LISTEN` | address of the API, default `0.0.0.0:8200`. A host name is looked up once at start and the API listens on that address only: in Compose, the signer's alias on the network it shares with the onboarding service (`signer-api:8200`), so the bunker relay, on another network, cannot open the port |
 //! | `SIGNER_TOKEN_FILE` | the API's bearer token, default `/run/secrets/signer_token` |
 //! | `SIGNER_MASTER_KEY_FILE` | 32 bytes base64 that seal the keys at rest (Keycast's master.key format), default `/run/secrets/signer_master_key` |
 //! | `SIGNER_DB` | the SQLite file, default `/data/signer.sqlite3` |
 //! | `CUSTODY_SEED_FILE` | the custody seed (64 hex), read on every account creation |
 //! | `BUNKER_RELAYS` | relays the bunker listens on, comma-separated (`ws://bunker-relay:8080`) |
 //! | `BUNKER_PUBLIC_RELAYS` | the same relays as clients reach them, for bunker:// URLs |
+//! | `SIGNER_NO_NEW_ACCOUNTS` | `1`: no accounts are made (409 `no_new_accounts`) unless the caller names the key, whatever `POST /settings` says |
 //! | `SIGNER_UNCLAIMED_SECONDS` | how long a connection made without a client key waits for its first `connect`, default 600 |
 //! | `SIGNER_OWN_DOMAIN` | the belfry's domain: what an outside app's connection never signs for (`limits.rs`) |
 //! | `SIGNER_OWN_API_HOSTS`, `SIGNER_OWN_RELAY_HOSTS`, `SIGNER_OWN_BLOSSOM_HOSTS` | more of the belfry's own hosts or URLs, separated by commas or spaces |
@@ -116,6 +117,18 @@ fn main() {
         &env("SIGNER_OWN_RELAY_HOSTS", ""),
         &env("SIGNER_OWN_BLOSSOM_HOSTS", ""),
     );
+    signer.no_new_accounts_env = matches!(
+        env("SIGNER_NO_NEW_ACCOUNTS", "0").as_str(),
+        "1" | "true" | "yes"
+    );
+    match signer.accounts_closed() {
+        Ok(true) => tracing::warn!(
+            by_environment = signer.no_new_accounts_env,
+            "no new accounts are made (an import is under way): POST /settings lifts it"
+        ),
+        Ok(false) => {}
+        Err(e) => fail(format!("settings: {}", e.message())),
+    }
     if signer.own.domain.is_empty() {
         tracing::warn!(
             "no SIGNER_OWN_DOMAIN: connections of outside apps are not kept from the belfry's \
@@ -139,10 +152,16 @@ fn main() {
             signer: signer.clone(),
             token: Arc::new(token),
         });
+        // a host name here is the signer's own name on one network: the API listens on that
+        // interface only (a name that does not resolve stops the start: never on all of them)
         let listener = tokio::net::TcpListener::bind(&listen)
             .await
             .unwrap_or_else(|e| fail(format!("listen {listen}: {e}")));
-        tracing::info!(%listen, seed = signer.seed_state(), "belfry-signer up");
+        let bound = listener
+            .local_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_else(|_| listen.clone());
+        tracing::info!(%listen, %bound, seed = signer.seed_state(), "belfry-signer up");
         axum::serve(listener, app)
             .with_graceful_shutdown(async {
                 let _ = tokio::signal::ctrl_c().await;

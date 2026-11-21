@@ -1,8 +1,12 @@
-//! The internal HTTP API. Only the onboarding service calls it (Compose network `signer`, no
-//! published port), with the bearer token from `/run/secrets/signer_token`.
+//! The internal HTTP API. Only the onboarding service calls it (Compose network `signer-api`,
+//! which the bunker relay is not on; no published port), with the bearer token from
+//! `/run/secrets/signer_token`.
 //!
 //! ```text
 //! GET  /health                                  {status, seed, bunker}     (no token)
+//! GET  /settings                                                           -> {no_new_accounts, by_environment}
+//! POST /settings                                {no_new_accounts: bool}    -> the same
+//! GET  /accounts?status=&after=&limit=                                     -> {accounts, next, total, suspended}
 //! PUT  /accounts/{vine_id}                      {key_version?, own_pubkey?, expect_pubkey?, username?}
 //! GET  /accounts/{vine_id}
 //! POST /accounts/{vine_id}/status               {status: active|suspended}
@@ -13,34 +17,42 @@
 //! POST /accounts/{vine_id}/decrypt              {scheme, peer, text}       -> {result}
 //! POST /accounts/{vine_id}/derive               {purpose}                  -> {secret}
 //! POST /accounts/{vine_id}/export                                          -> {nsec}
-//! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?, scope?}
-//! GET  /accounts/{vine_id}/connections                                     -> [{id, app, ...}]
+//! POST /accounts/{vine_id}/connections          {app, label?, client_pubkey?, derive?, keep?, scope?,
+//!                                                decrypt?, origin?, kind?}
+//! GET  /accounts/{vine_id}/connections[?all=true]                          -> [{id, app, ...}]
 //! POST /accounts/{vine_id}/connections/revoke   {id | bunker_pubkey | app | all: true} -> {revoked}
+//! POST /accounts/{vine_id}/connections/consent  {id | bunker_pubkey, decrypt: bool} -> {decrypt}
 //! GET  /names/{username}                                                   -> {name, pubkey, vine_id}
 //! POST /pubkeys/{pubkey}/status                 {status}                   -> {updated}
 //! POST /import                                  {accounts: [{vine_id, pubkey, sealed}]}
 //! POST /import/connections                      {vine_id, connections: [{bunker_pubkey,
 //!                                                keycast_secret_hash, client_pubkey, app, label?,
-//!                                                scope?, created_at, last_used_at?, uses?,
-//!                                                revoked_at?}]} -> {imported, existing, revoked}
+//!                                                scope?, decrypt?, origin?, created_at,
+//!                                                last_used_at?, uses?, revoked_at?}]}
+//!                                                                          -> {imported, existing, revoked}
 //! ```
 //!
 //! sign, encrypt, decrypt and derive take an optional `connection` (the id behind an app's
-//! access token): it must be live, derive allows only that connection's purposes, and sign
-//! through a connection of scope `outside` keeps to the limits of `limits.rs` (403).
+//! access token): it must be live, derive allows only that connection's purposes, and through a
+//! connection of scope `outside` sign keeps to the limits of `limits.rs` and decrypt needs the
+//! connection's consent flag (403).
+//!
+//! A connection of `kind: "http"` is an app's sign-in that is used through this API: it stays
+//! when no NIP-46 client connects to it (only its secret ends at the deadline).
 //!
 //! `/import/connections` carries one account's Keycast sessions over, all or none
-//! (`Signer::import_connections`).
+//! (`Signer::import_connections`): at most 1000 rows and 1 MB a call (413 `too_large`).
 //!
-//! Errors are `{"error": <code>, "message"}` with 404 not_found, 503 seed_locked,
-//! 409 own_key / mismatch / client_key_taken / username_taken, 403 suspended / forbidden,
-//! 422 invalid, 401 unauthorized.
+//! Errors are `{"error": <code>, "message"}` with 404 not_found, 503 seed_locked /
+//! bunker_unavailable, 409 own_key / mismatch / client_key_taken / username_taken /
+//! no_new_accounts, 403 suspended / forbidden, 413 too_large, 422 invalid, 401 unauthorized.
 
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{DefaultBodyLimit, Path, RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -71,10 +83,13 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let status = match &self.0 {
             Error::NotFound => StatusCode::NOT_FOUND,
-            Error::SeedLocked => StatusCode::SERVICE_UNAVAILABLE,
-            Error::OwnKey | Error::Mismatch(_) | Error::ClientKeyTaken | Error::UsernameTaken => {
-                StatusCode::CONFLICT
-            }
+            Error::SeedLocked | Error::BunkerUnavailable => StatusCode::SERVICE_UNAVAILABLE,
+            Error::OwnKey
+            | Error::Mismatch(_)
+            | Error::ClientKeyTaken
+            | Error::UsernameTaken
+            | Error::NoNewAccounts => StatusCode::CONFLICT,
+            Error::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Error::Suspended | Error::Forbidden(_) => StatusCode::FORBIDDEN,
             Error::Invalid(_) => StatusCode::UNPROCESSABLE_ENTITY,
             Error::SeedMalformed | Error::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -160,6 +175,77 @@ async fn health(State(state): State<AppState>) -> Json<Value> {
         "seed": state.signer.seed_state(),
         "bunker": bunker,
     }))
+}
+
+/// One value of the query string (`key=value&…`; the values used here need no decoding).
+fn query_value(query: &Option<String>, key: &str) -> Option<String> {
+    query.as_deref()?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key && !v.is_empty()).then(|| v.to_string())
+    })
+}
+
+fn settings_json(signer: &Signer) -> Result<Value, Error> {
+    Ok(json!({
+        "no_new_accounts": signer.accounts_closed()?,
+        "by_environment": signer.no_new_accounts_env,
+    }))
+}
+
+async fn get_settings(State(state): State<AppState>, headers: HeaderMap) -> ApiResult {
+    guard!(state, headers);
+    Ok(Json(settings_json(&state.signer)?).into_response())
+}
+
+async fn post_settings(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    guard!(state, headers);
+    let closed = body
+        .get("no_new_accounts")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| Error::Invalid("no_new_accounts must be true or false".into()))?;
+    state.signer.close_accounts(closed)?;
+    Ok(Json(settings_json(&state.signer)?).into_response())
+}
+
+/// The most accounts one page of the list carries.
+const MAX_ACCOUNTS_PAGE: usize = 1000;
+
+/// Every account, or those with `status`, in the order of their ids: a page after `after`,
+/// and `next` (the id to ask after) while there is more. `total` and `suspended` count all.
+async fn list_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> ApiResult {
+    guard!(state, headers);
+    let status = query_value(&query, "status").filter(|s| s != "all");
+    let after = query_value(&query, "after").unwrap_or_default();
+    let limit = match query_value(&query, "limit") {
+        None => 500,
+        Some(n) => n
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=MAX_ACCOUNTS_PAGE).contains(n))
+            .ok_or_else(|| Error::Invalid(format!("limit must be 1 to {MAX_ACCOUNTS_PAGE}")))?,
+    };
+    let (rows, (total, suspended)) =
+        state
+            .signer
+            .list_accounts(status.as_deref(), &after, limit)?;
+    let next = (rows.len() == limit)
+        .then(|| rows.last().map(|a| a.vine_id.clone()))
+        .flatten();
+    Ok(Json(json!({
+        "accounts": rows.iter().map(account_json).collect::<Vec<_>>(),
+        "next": next,
+        "total": total,
+        "suspended": suspended,
+    }))
+    .into_response())
 }
 
 async fn put_account(
@@ -280,9 +366,14 @@ async fn crypt(
     encrypt: bool,
 ) -> ApiResult {
     guard!(state, headers);
-    let (keys, _) = state
+    let (keys, conn) = state
         .signer
         .keys_via(&vine_id, opt_text(&body, "connection").as_deref())?;
+    // through an outside app's connection: reading needs the member's consent, as over the
+    // bunker
+    if !encrypt && conn.as_ref().is_some_and(Signer::decrypt_refused) {
+        return Err(Error::Forbidden(limits::REFUSAL.into()).into());
+    }
     let scheme = Scheme::parse(&opt_text(&body, "scheme").unwrap_or_else(|| "nip44".into()))?;
     let (peer, input) = (text(&body, "peer")?, text(&body, "text")?);
     let result = if encrypt {
@@ -356,7 +447,20 @@ struct NewConnectionBody {
     /// `own` (the default) or `outside`: an outside app, held to the signing limits.
     #[serde(default)]
     scope: Option<Value>,
+    /// The member's consent to decrypt, for an outside app (default false). Anything but
+    /// true or false is refused by the body's parser, never read as a yes.
+    #[serde(default)]
+    decrypt: bool,
+    /// The address the session is opened from (the app's registered address).
+    #[serde(default)]
+    origin: Option<String>,
+    /// `nip46` (the default) or `http`: an app's sign-in that is used through the API.
+    #[serde(default)]
+    kind: Option<String>,
 }
+
+/// How long the API waits for the bunker's subscription to cover a connection it just made.
+const SUBSCRIBE_WAIT: Duration = Duration::from_millis(1500);
 
 async fn create_connection(
     State(state): State<AppState>,
@@ -387,24 +491,62 @@ async fn create_connection(
             keep: body.keep,
             client_pubkey: body.client_pubkey.as_deref().filter(|c| !c.is_empty()),
             scope,
+            decrypt: body.decrypt,
+            origin: body.origin.as_deref().unwrap_or(""),
+            kind: body.kind.as_deref(),
         },
     )?;
-    // the client may connect the moment it has the URL: the bunker listens for it first
-    state
-        .signer
-        .wait_subscribed(change, Duration::from_millis(1500))
-        .await;
+    // the client may connect the moment it has the URL: the bunker listens for it first.
+    // When it does not (the relay is away, the subscription failed), the URL is not handed
+    // out: the connection is taken back and the caller asks again. A sign-in over HTTP stands
+    // without the bunker, so it is answered all the same.
+    if let Err(e) = state.signer.wait_subscribed(change, SUBSCRIBE_WAIT).await {
+        if created.kind != crate::store::KIND_HTTP {
+            let _ = state.signer.revoke(&vine_id, Some(&created.id), None, None);
+            tracing::warn!(vine_id, id = %created.id, "connection taken back: the bunker is not listening");
+            return Err(e.into());
+        }
+    }
     Ok(Json(serde_json::to_value(created).unwrap_or(Value::Null)).into_response())
 }
 
+/// The account's live connections; with `?all=true` every one it ever had (`revoked_at` set
+/// on the revoked ones), for the migration's verify.
 async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(vine_id): Path<String>,
+    RawQuery(query): RawQuery,
 ) -> ApiResult {
     guard!(state, headers);
-    let rows = state.signer.connections(&vine_id)?;
+    let rows = match query_value(&query, "all").as_deref() {
+        None | Some("false") | Some("0") => state.signer.connections(&vine_id)?,
+        Some("true") | Some("1") => state.signer.all_connections(&vine_id)?,
+        Some(_) => return Err(Error::Invalid("all must be true or false".into()).into()),
+    };
     Ok(Json(serde_json::to_value(rows).unwrap_or(Value::Null)).into_response())
+}
+
+/// The member's consent to decrypt, on one live connection: the sign-in page (or a settings
+/// page) asks, the service tells the signer.
+async fn consent(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(vine_id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    guard!(state, headers);
+    let decrypt = body
+        .get("decrypt")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| Error::Invalid("decrypt must be true or false".into()))?;
+    state.signer.set_decrypt(
+        &vine_id,
+        opt_text(&body, "id").as_deref(),
+        opt_text(&body, "bunker_pubkey").as_deref(),
+        decrypt,
+    )?;
+    Ok(Json(json!({"decrypt": decrypt})).into_response())
 }
 
 async fn revoke_connections(
@@ -461,8 +603,11 @@ async fn import(
     Ok(Json(json!({"results": results})).into_response())
 }
 
-/// The most sessions one call carries (one account's).
-const MAX_IMPORTED_CONNECTIONS: usize = 5000;
+/// The most sessions one call carries (one account's), and the largest body of that call.
+/// The migration sends 400 rows or 256 kB a call (`migration.py`), so both leave room; a row
+/// is about 400 bytes.
+const MAX_IMPORTED_CONNECTIONS: usize = 1000;
+const MAX_IMPORT_BODY: usize = 1024 * 1024;
 
 fn session_of(i: usize, row: &Value) -> Result<KeycastSession, Error> {
     let bad = |what: &str| Error::Invalid(format!("connections[{i}]: {what}"));
@@ -481,6 +626,11 @@ fn session_of(i: usize, row: &Value) -> Result<KeycastSession, Error> {
         Some(Value::String(s)) => Ok(Some(s.clone())),
         Some(_) => Err(bad(&format!("{key} must be text or null"))),
     };
+    let opt_bool = |key: &str| match row.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(_) => Err(bad(&format!("{key} must be true or false"))),
+    };
     let opt_int = |key: &str| match row.get(key) {
         None | Some(Value::Null) => Ok(None),
         Some(v) => v
@@ -495,6 +645,8 @@ fn session_of(i: usize, row: &Value) -> Result<KeycastSession, Error> {
         app: need("app")?,
         label: opt_str("label")?.unwrap_or_default(),
         scope: opt_str("scope")?,
+        decrypt: opt_bool("decrypt")?,
+        origin: opt_str("origin")?.unwrap_or_default(),
         created_at: opt_int("created_at")?
             .ok_or_else(|| bad("created_at must be a whole number"))?,
         last_used_at: opt_int("last_used_at")?,
@@ -506,9 +658,19 @@ fn session_of(i: usize, row: &Value) -> Result<KeycastSession, Error> {
 async fn import_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Value>,
+    body: Result<Json<Value>, JsonRejection>,
 ) -> ApiResult {
     guard!(state, headers);
+    let Json(body) = body.map_err(|rejection| {
+        if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            Error::TooLarge(format!(
+                "at most {MAX_IMPORT_BODY} bytes and {MAX_IMPORTED_CONNECTIONS} connections a \
+                 call: send this account's sessions in smaller batches"
+            ))
+        } else {
+            Error::Invalid(rejection.body_text())
+        }
+    })?;
     let vine_id = text(&body, "vine_id")?;
     let rows = body
         .get("connections")
@@ -531,19 +693,23 @@ async fn import_connections(
         tokio::task::spawn_blocking(move || signer.import_connections(&vine_id, &sessions))
             .await
             .map_err(|e| Error::Internal(format!("import: {e}")))??;
-    // the carried sessions' apps are running: the bunker listens for them before the answer
-    state
-        .signer
-        .wait_subscribed(change, Duration::from_millis(1500))
-        .await;
+    // the carried sessions' apps are running: the bunker listens for them before the answer.
+    // The rows are written either way (asking again says "existing"): a bunker that is not
+    // listening shows in /health, not here.
+    let _ = state.signer.wait_subscribed(change, SUBSCRIBE_WAIT).await;
     Ok(Json(serde_json::to_value(counts).unwrap_or(Value::Null)).into_response())
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/settings", get(get_settings).post(post_settings))
         .route("/import", post(import))
-        .route("/import/connections", post(import_connections))
+        .route(
+            "/import/connections",
+            post(import_connections).layer(DefaultBodyLimit::max(MAX_IMPORT_BODY)),
+        )
+        .route("/accounts", get(list_accounts))
         .route("/accounts/{vine_id}", put(put_account).get(get_account))
         .route("/accounts/{vine_id}/status", post(set_status))
         .route("/accounts/{vine_id}/own-key", post(own_key))
@@ -563,6 +729,7 @@ pub fn router(state: AppState) -> Router {
             "/accounts/{vine_id}/connections/revoke",
             post(revoke_connections),
         )
+        .route("/accounts/{vine_id}/connections/consent", post(consent))
         .with_state(state)
 }
 
@@ -1181,6 +1348,8 @@ mod tests {
             bunker_sealed: vec![0],
             client_pubkey: None,
             scope: "own".into(),
+            decrypt: false,
+            origin: String::new(),
             created_at: 1,
             last_used_at: None,
             uses: 0,
@@ -1462,5 +1631,723 @@ mod tests {
             ),
             (Some("error"), Some("mismatch"))
         );
+    }
+
+    #[tokio::test]
+    async fn a_connection_carries_consent_an_origin_and_a_kind() {
+        let (app, signer) = app("carry-more");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        call(&app, "PUT", "/accounts/guest-2", "t0ken", json!({})).await;
+        let make = |body: Value| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/accounts/odoo-partner-1/connections",
+                    "t0ken",
+                    body,
+                )
+                .await
+            }
+        };
+        // defaults: no consent, no origin, a NIP-46 connection
+        let (s, plain) = make(json!({"app": "Notes", "scope": "outside"})).await;
+        assert_eq!(s, 200, "{plain}");
+        assert_eq!(
+            (
+                plain["decrypt"].as_bool(),
+                plain["origin"].as_str(),
+                plain["kind"].as_str()
+            ),
+            (Some(false), Some(""), Some("nip46"))
+        );
+        // consent is true or false, never something that looks like a yes
+        for decrypt in [json!("true"), json!(1), json!("yes")] {
+            let (s, _) =
+                make(json!({"app": "Notes", "scope": "outside", "decrypt": decrypt})).await;
+            assert_eq!(s, 422);
+        }
+        for (key, value) in [
+            ("kind", json!("smoke-signals")),
+            ("origin", json!("https://x.example/\u{7}")),
+            ("origin", json!("x".repeat(201))),
+        ] {
+            let mut body = json!({"app": "Notes"});
+            body[key] = value;
+            let (s, e) = make(body).await;
+            assert_eq!(
+                (s, e["error"].as_str()),
+                (422, Some("invalid")),
+                "{key}: {e}"
+            );
+        }
+        let (s, http) = make(json!({
+            "app": "Notes", "scope": "outside", "decrypt": true, "kind": "http",
+            "origin": "https://notes.example.org",
+        }))
+        .await;
+        assert_eq!(s, 200, "{http}");
+        let list = |path: &'static str| {
+            let app = app.clone();
+            async move { call(&app, "GET", path, "t0ken", Value::Null).await }
+        };
+        let (_, rows) = list("/accounts/odoo-partner-1/connections").await;
+        let row = &rows[0];
+        assert_eq!(row["id"], http["id"]);
+        assert_eq!(
+            (
+                row["decrypt"].as_bool(),
+                row["origin"].as_str(),
+                row["kind"].as_str(),
+                row["revoked_at"].clone()
+            ),
+            (
+                Some(true),
+                Some("https://notes.example.org"),
+                Some("http"),
+                Value::Null
+            )
+        );
+        // the API's decrypt through a connection keeps to the consent; encrypt does not need it
+        let peer = nostr::prelude::Keys::generate().public_key().to_hex();
+        let crypt = |op: &'static str, connection: &Value, text: String| {
+            let (app, connection, peer) = (app.clone(), connection["id"].clone(), peer.clone());
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    &format!("/accounts/odoo-partner-1/{op}"),
+                    "t0ken",
+                    json!({"peer": peer, "text": text, "connection": connection}),
+                )
+                .await
+            }
+        };
+        let (s, sealed) = crypt("encrypt", &plain, "psst".into()).await;
+        assert_eq!(s, 200, "{sealed}");
+        let sealed = sealed["result"].as_str().unwrap().to_string();
+        let (s, e) = crypt("decrypt", &plain, sealed.clone()).await;
+        assert_eq!((s, e["error"].as_str()), (403, Some("forbidden")));
+        assert_eq!(e["message"], "not allowed for this app");
+        let (s, r) = crypt("decrypt", &http, sealed.clone()).await;
+        assert_eq!((s, r["result"].as_str()), (200, Some("psst")));
+        // the member's word, given later and taken back
+        let consent = |vine_id: &'static str, body: Value| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    &format!("/accounts/{vine_id}/connections/consent"),
+                    "t0ken",
+                    body,
+                )
+                .await
+            }
+        };
+        let (s, r) = consent(
+            "odoo-partner-1",
+            json!({"id": plain["id"], "decrypt": true}),
+        )
+        .await;
+        assert_eq!((s, r["decrypt"].as_bool()), (200, Some(true)));
+        assert_eq!(crypt("decrypt", &plain, sealed.clone()).await.0, 200);
+        let by_key = json!({"bunker_pubkey": plain["bunker_pubkey"], "decrypt": false});
+        assert_eq!(consent("odoo-partner-1", by_key.clone()).await.0, 200);
+        assert_eq!(crypt("decrypt", &plain, sealed.clone()).await.0, 403);
+        // not another account's connection, not without saying which, not a maybe
+        assert_eq!(consent("guest-2", by_key).await.0, 404);
+        for body in [
+            json!({"decrypt": true}),
+            json!({"id": plain["id"], "decrypt": "true"}),
+            json!({"id": plain["id"]}),
+        ] {
+            let (s, e) = consent("odoo-partner-1", body).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        }
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections/consent",
+            "wrong",
+            json!({}),
+        )
+        .await;
+        assert_eq!(s, 401);
+
+        // the list of all rows: revoked ones too, said as such
+        call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections/revoke",
+            "t0ken",
+            json!({"id": plain["id"]}),
+        )
+        .await;
+        let (_, live) = list("/accounts/odoo-partner-1/connections").await;
+        assert_eq!(live.as_array().unwrap().len(), 1);
+        let (_, same) = list("/accounts/odoo-partner-1/connections?all=false").await;
+        assert_eq!(same, live);
+        let (s, all) = list("/accounts/odoo-partner-1/connections?all=true").await;
+        assert_eq!((s, all.as_array().unwrap().len()), (200, 2));
+        let gone = all
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == plain["id"])
+            .unwrap();
+        assert!(gone["revoked_at"].as_i64().unwrap() > 0);
+        for hidden in ["secret", "secret_hash", "bunker_sealed"] {
+            assert!(gone.get(hidden).is_none(), "{hidden}");
+        }
+        assert_eq!(
+            list("/accounts/odoo-partner-1/connections?all=maybe")
+                .await
+                .0,
+            422
+        );
+        assert_eq!(
+            list("/accounts/odoo-partner-9/connections?all=true")
+                .await
+                .0,
+            404
+        );
+        // a sign-in over HTTP nobody connected to stays past its deadline
+        signer
+            .store
+            .set_expires_at(http["id"].as_str().unwrap(), crate::store::now() - 1);
+        let (_, live) = list("/accounts/odoo-partner-1/connections").await;
+        assert_eq!(live.as_array().unwrap().len(), 1);
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/sign",
+            "t0ken",
+            json!({"event": {"kind": 1}, "connection": http["id"]}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/sign",
+            "t0ken",
+            json!({"event": {"kind": 30078, "tags": [["d", "belfry:read"]]}, "connection": http["id"]}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (403, Some("forbidden")));
+    }
+
+    #[tokio::test]
+    async fn imported_sessions_carry_consent_and_origin_and_revoked_ones_can_be_read() {
+        use crate::keys;
+        use nostr::prelude::Keys;
+        let (app, _) = app("carry-origin");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        let account = keys::derive_keys(&[7u8; 32], "odoo-partner-1", 0);
+        let hash = |n: u32| format!("$2b$10$N9qo8uLOickgx2ZMRZoMye{n:031}");
+        let row = |n: u32, more: Value| {
+            let mut r = json!({
+                "bunker_pubkey": keys::keycast_bunker_keys(&account, &hash(n)).public_key().to_hex(),
+                "keycast_secret_hash": hash(n),
+                "client_pubkey": Keys::generate().public_key().to_hex(),
+                "app": "Notes",
+                "scope": "outside",
+                "created_at": 1_700_000_000,
+            });
+            for (k, v) in more.as_object().unwrap() {
+                r[k] = v.clone();
+            }
+            r
+        };
+        let import = |rows: Value| {
+            let app = app.clone();
+            async move {
+                call(
+                    &app,
+                    "POST",
+                    "/import/connections",
+                    "t0ken",
+                    json!({"vine_id": "odoo-partner-1", "connections": rows}),
+                )
+                .await
+            }
+        };
+        for bad in [
+            json!({"decrypt": "yes"}),
+            json!({"origin": 5}),
+            json!({"origin": "x".repeat(201)}),
+        ] {
+            let (s, e) = import(json!([row(1, bad)])).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        }
+        let (s, r) = import(json!([
+            row(
+                1,
+                json!({"origin": "https://chat.belfry.test", "decrypt": true})
+            ),
+            row(2, json!({})),
+            row(
+                3,
+                json!({"revoked_at": 1_700_001_000, "origin": "https://old.example.org"})
+            ),
+        ]))
+        .await;
+        assert_eq!(s, 200, "{r}");
+        assert_eq!(r, json!({"imported": 2, "existing": 0, "revoked": 1}));
+        let (_, live) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(live.as_array().unwrap().len(), 2);
+        let (_, all) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections?all=true",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        let by_origin = |origin: &str| {
+            all.as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["origin"] == origin)
+                .cloned()
+                .unwrap()
+        };
+        let first = by_origin("https://chat.belfry.test");
+        assert_eq!(
+            (first["decrypt"].as_bool(), first["revoked_at"].clone()),
+            (Some(true), Value::Null)
+        );
+        assert_eq!(by_origin("")["decrypt"], false);
+        let old = by_origin("https://old.example.org");
+        assert_eq!(old["revoked_at"], 1_700_001_000);
+        assert_eq!(old["kind"], "nip46");
+    }
+
+    #[tokio::test]
+    async fn the_session_import_says_clearly_when_a_call_is_too_large() {
+        let (app, _) = app("too-large");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        let import = |body: Value| {
+            let app = app.clone();
+            async move { call(&app, "POST", "/import/connections", "t0ken", body).await }
+        };
+        // more than the route's megabyte: 413 with a reason, not a closed connection
+        let padding = "x".repeat(MAX_IMPORT_BODY);
+        let (s, e) =
+            import(json!({"vine_id": "odoo-partner-1", "connections": [], "pad": padding})).await;
+        assert_eq!((s, e["error"].as_str()), (413, Some("too_large")), "{e}");
+        assert!(e["message"].as_str().unwrap().contains("smaller batches"));
+        // just under it, with room for what the migration sends (400 rows, 256 kB): read
+        let padding = "x".repeat(MAX_IMPORT_BODY - 200);
+        let (s, r) =
+            import(json!({"vine_id": "odoo-partner-1", "connections": [], "pad": padding})).await;
+        assert_eq!((s, r["imported"].as_i64()), (200, Some(0)), "{r}");
+        const { assert!(MAX_IMPORT_BODY >= 4 * 256 * 1024 && MAX_IMPORTED_CONNECTIONS >= 2 * 400) };
+        // too many rows: said as such
+        let rows: Vec<Value> = (0..=MAX_IMPORTED_CONNECTIONS).map(|_| json!({})).collect();
+        let (s, e) = import(json!({"vine_id": "odoo-partner-1", "connections": rows})).await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        // a body that is not JSON: the API's own error shape too
+        let req = Request::builder()
+            .method("POST")
+            .uri("/import/connections")
+            .header("content-type", "application/json")
+            .header("authorization", "Bearer t0ken")
+            .body(Body::from("{not json"))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_eq!(resp.status().as_u16(), 422);
+        // the other routes keep the default limit: a larger account import still goes through
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/import",
+            "t0ken",
+            json!({"accounts": [], "pad": "x".repeat(MAX_IMPORT_BODY + 1000)}),
+        )
+        .await;
+        assert_eq!(s, 200);
+    }
+
+    #[tokio::test]
+    async fn no_new_accounts_while_the_switch_is_on() {
+        let (app, signer) = app("closed");
+        let (s, a) = call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        assert_eq!(s, 200);
+        let (s, st) = call(&app, "GET", "/settings", "t0ken", Value::Null).await;
+        assert_eq!(
+            (s, st),
+            (
+                200,
+                json!({"no_new_accounts": false, "by_environment": false})
+            )
+        );
+        assert_eq!(
+            call(&app, "GET", "/settings", "wrong", Value::Null).await.0,
+            401
+        );
+        for body in [
+            json!({}),
+            json!({"no_new_accounts": "true"}),
+            json!({"no_new_accounts": 1}),
+        ] {
+            let (s, e) = call(&app, "POST", "/settings", "t0ken", body).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")));
+        }
+        let (s, st) = call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"no_new_accounts": true}),
+        )
+        .await;
+        assert_eq!((s, st["no_new_accounts"].as_bool()), (200, Some(true)));
+
+        // an unknown account is not made: a distinct error, and nothing is written
+        let (s, e) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-2",
+            "t0ken",
+            json!({"username": "lina"}),
+        )
+        .await;
+        assert_eq!(
+            (s, e["error"].as_str()),
+            (409, Some("no_new_accounts")),
+            "{e}"
+        );
+        assert_eq!(
+            call(
+                &app,
+                "GET",
+                "/accounts/odoo-partner-2",
+                "t0ken",
+                Value::Null
+            )
+            .await
+            .0,
+            404
+        );
+        assert_eq!(
+            call(&app, "GET", "/names/lina", "t0ken", Value::Null)
+                .await
+                .0,
+            404
+        );
+        // the ones that exist answer as always, and sign
+        let (s, same) = call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        assert_eq!((s, &same["pubkey"]), (200, &a["pubkey"]));
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/sign",
+            "t0ken",
+            json!({"event": {"kind": 1}}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        // what the import does goes on: a member's own key, a sealed key, and an account whose
+        // key the caller names (it is made only if it comes out as that key)
+        let own = nostr::prelude::Keys::generate().public_key().to_hex();
+        let (s, o) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-3",
+            "t0ken",
+            json!({"own_pubkey": own}),
+        )
+        .await;
+        assert_eq!((s, o["custody"].as_str()), (200, Some("own")), "{o}");
+        let derived = crate::keys::derive_keys(&[7u8; 32], "odoo-partner-4", 0);
+        let (s, e) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-4",
+            "t0ken",
+            json!({"expect_pubkey": own}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("mismatch")));
+        let (s, d) = call(
+            &app,
+            "PUT",
+            "/accounts/odoo-partner-4",
+            "t0ken",
+            json!({"expect_pubkey": derived.public_key().to_hex()}),
+        )
+        .await;
+        assert_eq!((s, d["custody"].as_str()), (200, Some("derived")), "{d}");
+        let random = nostr::prelude::Keys::generate();
+        let (s, r) = call(
+            &app,
+            "POST",
+            "/import",
+            "t0ken",
+            json!({"accounts": [{
+                "vine_id": "guest-5",
+                "pubkey": random.public_key().to_hex(),
+                "sealed": hex::encode(signer.seal_legacy_for_tests(&random)),
+            }]}),
+        )
+        .await;
+        assert_eq!(
+            (s, r["results"][0]["result"].as_str()),
+            (200, Some("imported")),
+            "{r}"
+        );
+
+        // the list of accounts, by status and by page
+        call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-3/status",
+            "t0ken",
+            json!({"status": "suspended"}),
+        )
+        .await;
+        let ids = |v: &Value| {
+            v["accounts"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["vine_id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        let (s, all) = call(&app, "GET", "/accounts", "t0ken", Value::Null).await;
+        assert_eq!(s, 200);
+        assert_eq!(
+            ids(&all),
+            [
+                "guest-5",
+                "odoo-partner-1",
+                "odoo-partner-3",
+                "odoo-partner-4"
+            ]
+        );
+        assert_eq!(
+            (
+                all["total"].as_i64(),
+                all["suspended"].as_i64(),
+                all["next"].clone()
+            ),
+            (Some(4), Some(1), Value::Null)
+        );
+        assert!(all["accounts"][0].get("sealed").is_none());
+        assert_eq!(all["accounts"][0]["custody"], "imported");
+        let (_, sus) = call(
+            &app,
+            "GET",
+            "/accounts?status=suspended",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(ids(&sus), ["odoo-partner-3"]);
+        assert_eq!(sus["accounts"][0]["status"], "suspended");
+        let (_, act) = call(
+            &app,
+            "GET",
+            "/accounts?status=active&limit=2",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(ids(&act), ["guest-5", "odoo-partner-1"]);
+        assert_eq!(act["next"], "odoo-partner-1");
+        let (_, rest) = call(
+            &app,
+            "GET",
+            "/accounts?status=active&limit=2&after=odoo-partner-1",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert_eq!(ids(&rest), ["odoo-partner-4"]);
+        assert_eq!(rest["next"], Value::Null);
+        for bad in [
+            "/accounts?status=banned",
+            "/accounts?limit=0",
+            "/accounts?limit=5000",
+        ] {
+            let (s, e) = call(&app, "GET", bad, "t0ken", Value::Null).await;
+            assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{bad}");
+        }
+        assert_eq!(
+            call(&app, "GET", "/accounts", "wrong", Value::Null).await.0,
+            401
+        );
+
+        // lifted: accounts are made again
+        let (_, st) = call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"no_new_accounts": false}),
+        )
+        .await;
+        assert_eq!(st["no_new_accounts"], false);
+        let (s, _) = call(&app, "PUT", "/accounts/odoo-partner-2", "t0ken", json!({})).await;
+        assert_eq!(s, 200);
+    }
+
+    #[tokio::test]
+    async fn the_environment_closes_accounts_for_good() {
+        let mut signer = signer_with_seed(&tempdir("closed-env"));
+        signer.no_new_accounts_env = true;
+        let app = router(AppState {
+            signer: Arc::new(signer),
+            token: Arc::new("t0ken".into()),
+        });
+        let (_, st) = call(&app, "GET", "/settings", "t0ken", Value::Null).await;
+        assert_eq!(st, json!({"no_new_accounts": true, "by_environment": true}));
+        let (s, e) = call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        assert_eq!((s, e["error"].as_str()), (409, Some("no_new_accounts")));
+        // the API cannot open what the environment closes
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/settings",
+            "t0ken",
+            json!({"no_new_accounts": false}),
+        )
+        .await;
+        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        let (_, st) = call(&app, "GET", "/settings", "t0ken", Value::Null).await;
+        assert_eq!(st["no_new_accounts"], true);
+    }
+
+    #[tokio::test]
+    async fn a_connection_is_not_handed_out_while_the_bunker_is_not_listening() {
+        let (app, signer) = app("bunker-down");
+        call(&app, "PUT", "/accounts/odoo-partner-1", "t0ken", json!({})).await;
+        // the bunker is on and its relay is away (or the subscription failed): nothing covers
+        // a new connection
+        signer.bunker.enabled.store(true, Ordering::SeqCst);
+        let client = nostr::prelude::Keys::generate().public_key().to_hex();
+        let (s, e) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            json!({"app": "Chat", "client_pubkey": client}),
+        )
+        .await;
+        assert_eq!(
+            (s, e["error"].as_str()),
+            (503, Some("bunker_unavailable")),
+            "{e}"
+        );
+        assert!(e.get("bunker_url").is_none());
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        assert!(list.as_array().unwrap().is_empty(), "taken back: {list}");
+        // a sign-in over HTTP does not need the bunker
+        let (s, http) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            json!({"app": "Wallet", "kind": "http"}),
+        )
+        .await;
+        assert_eq!((s, http["kind"].as_str()), (200, Some("http")), "{http}");
+        // the bunker subscribes while the caller waits: handed out
+        let waiter = {
+            let (app, client) = (app.clone(), client.clone());
+            tokio::spawn(async move {
+                call(
+                    &app,
+                    "POST",
+                    "/accounts/odoo-partner-1/connections",
+                    "t0ken",
+                    json!({"app": "Chat", "client_pubkey": client}),
+                )
+                .await
+            })
+        };
+        for _ in 0..100 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let n = signer.bunker.changes();
+            signer.bunker.subscribed.send_replace(n);
+            if waiter.is_finished() {
+                break;
+            }
+        }
+        let (s, c) = waiter.await.unwrap();
+        assert_eq!(s, 200, "{c}");
+        assert!(c["bunker_url"].as_str().unwrap().starts_with("bunker://"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn two_first_calls_at_once_never_replace_a_key() {
+        let (app, signer) = app("race");
+        // sixteen requests at once for one new account, each naming another key as the
+        // member's own: one makes the account, the others hear that it is not theirs
+        let mut calls = Vec::new();
+        for _ in 0..16 {
+            let app = app.clone();
+            let own = nostr::prelude::Keys::generate().public_key().to_hex();
+            calls.push(tokio::spawn(async move {
+                let (s, r) = call(
+                    &app,
+                    "PUT",
+                    "/accounts/odoo-partner-1",
+                    "t0ken",
+                    json!({"own_pubkey": own}),
+                )
+                .await;
+                (s, r, own)
+            }));
+        }
+        let mut winners = Vec::new();
+        for c in calls {
+            let (s, r, own) = c.await.unwrap();
+            match s {
+                200 => {
+                    assert_eq!(r["pubkey"], own.as_str());
+                    winners.push(own);
+                }
+                409 => assert_eq!(r["error"], "mismatch"),
+                other => panic!("{other}: {r}"),
+            }
+        }
+        assert_eq!(winners.len(), 1, "one key, the first one's");
+        assert_eq!(signer.account("odoo-partner-1").unwrap().pubkey, winners[0]);
+        // the same with derived keys and plain threads: everyone gets the one account
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let signer = signer.clone();
+                std::thread::spawn(move || {
+                    signer
+                        .ensure_account("guest-7", 0, None, None, Some(&format!("guest-{i}")))
+                        .map(|a| (a.pubkey, a.username))
+                })
+            })
+            .collect();
+        let results: Vec<_> = handles
+            .into_iter()
+            .map(|h| h.join().unwrap().unwrap())
+            .collect();
+        assert!(results.iter().all(|r| r == &results[0]), "{results:?}");
+        let stored = signer.account("guest-7").unwrap();
+        assert_eq!((stored.pubkey, stored.username), results[0].clone());
     }
 }

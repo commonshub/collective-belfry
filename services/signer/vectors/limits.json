@@ -1,5 +1,5 @@
 {
- "about": "Which events a connection of an outside app is never given a signature for. One rule set: remoteapps.py (_forbidden with no perms, through allowed) and the signer (limits.rs) both pass these. `refused` is the answer to sign_event.",
+ "about": "What a connection of an outside app is never given. `cases`: sign_event templates and whether they are refused (remoteapps.py `allowed` with no perms; limits.rs `forbidden`). `methods`: the other methods, where `decrypt` is the connection's consent flag (remoteapps.py `allowed`; limits.rs `method_refused`). One rule set in two places, both held to this file: services/onboarding/tests/test_own_mode.py and services/signer/src/limits.rs.",
  "own": {
   "domain": "belfry.test",
   "api": [
@@ -656,6 +656,436 @@
     "tags": []
    },
    "refused": true
+  },
+  {
+   "name": "app data of its own",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "notes:settings"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "app data without a name",
+   "event": {
+    "kind": 30078,
+    "tags": [],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "the sealed conversations' anchor",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "belfry:sealed"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "the read state",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "belfry:read"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "the channel order",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "belfry:channel-order"
+     ],
+     [
+      "h",
+      "general"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a device's name",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "belfry:device:abababababababababababababababababababababababababababababababab"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a belfry name in capitals",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "Belfry:profile"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a belfry name after a space",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      " belfry:inbox"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a second d tag names the belfry",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "notes"
+     ],
+     [
+      "d",
+      "belfry:web:general"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a name that only contains belfry:",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "my-belfry:notes"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a drop box link is not a belfry: name",
+   "event": {
+    "kind": 30078,
+    "tags": [
+     [
+      "d",
+      "drop:abc"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a label of its own",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "com.example"
+     ],
+     [
+      "l",
+      "good",
+      "com.example"
+     ],
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a label without a namespace",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "l",
+      "good"
+     ],
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a pin",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "belfry/pin"
+     ],
+     [
+      "l",
+      "pinned",
+      "belfry/pin"
+     ],
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a proposal's status",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "belfry/proposal-status"
+     ],
+     [
+      "l",
+      "passed",
+      "belfry/proposal-status"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a button press",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "belfry/action"
+     ],
+     [
+      "l",
+      "ok",
+      "belfry/action"
+     ],
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a belfry namespace on the l tag only",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "l",
+      "checked-in",
+      "belfry/ticket"
+     ],
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a belfry namespace in capitals",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "Belfry/vouch"
+     ],
+     [
+      "l",
+      "vouch",
+      "Belfry/vouch"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "the bare namespace belfry",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "belfry"
+     ],
+     [
+      "l",
+      "x",
+      "belfry"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": true
+  },
+  {
+   "name": "a namespace that only starts like it",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "belfryish/pin"
+     ],
+     [
+      "l",
+      "pinned",
+      "belfryish/pin"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "the topic list's label (#t)",
+   "event": {
+    "kind": 1985,
+    "tags": [
+     [
+      "L",
+      "#t"
+     ],
+     [
+      "l",
+      "garden",
+      "#t"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a deletion",
+   "event": {
+    "kind": 5,
+    "tags": [
+     [
+      "e",
+      "0000000000000000000000000000000000000000000000000000000000000000"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  },
+  {
+   "name": "a deletion of an address",
+   "event": {
+    "kind": 5,
+    "tags": [
+     [
+      "a",
+      "30078:abababababababababababababababababababababababababababababababab:belfry:read"
+     ]
+    ],
+    "content": ""
+   },
+   "refused": false
+  }
+ ],
+ "methods": [
+  {
+   "name": "encrypting needs no consent",
+   "method": "nip44_encrypt",
+   "decrypt": false,
+   "refused": false
+  },
+  {
+   "name": "nip04 encrypting needs no consent",
+   "method": "nip04_encrypt",
+   "decrypt": false,
+   "refused": false
+  },
+  {
+   "name": "decrypting without the member's word",
+   "method": "nip44_decrypt",
+   "decrypt": false,
+   "refused": true
+  },
+  {
+   "name": "nip04 decrypting without the member's word",
+   "method": "nip04_decrypt",
+   "decrypt": false,
+   "refused": true
+  },
+  {
+   "name": "decrypting with it",
+   "method": "nip44_decrypt",
+   "decrypt": true,
+   "refused": false
+  },
+  {
+   "name": "nip04 decrypting with it",
+   "method": "nip04_decrypt",
+   "decrypt": true,
+   "refused": false
+  },
+  {
+   "name": "the public key is never refused",
+   "method": "get_public_key",
+   "decrypt": false,
+   "refused": false
   }
  ]
 }
