@@ -272,7 +272,11 @@ cmd_config() {
       fi
       pairs+=(SIGNER "$BELFRY_SIGNER")
       # no Authentik with Belfry's own signer: its own e-mail and code sign-in
-      if [[ "$BELFRY_SIGNER" == belfry ]]; then pairs+=(PASS_SIGNIN belfry); fi
+      if [[ "$BELFRY_SIGNER" == belfry ]]; then
+        pairs+=(PASS_SIGNIN belfry)
+        # its token and master key (a copy of Keycast's), made only once the signer is wanted
+        [[ -s infra/secrets/signer_master_key ]] || BELFRY_SIGNER_SECRETS=1 infra/scripts/gen-secrets.sh >/dev/null
+      fi
     fi
   fi
   if [[ -n "${BELFRY_SIGNER_RECOVERING:-}" ]]; then

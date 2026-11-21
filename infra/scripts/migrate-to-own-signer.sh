@@ -380,7 +380,7 @@ cmd_backup() {
 start_import_signer() {
   if [[ ! -s "$SECRETS/signer_token" || ! -s "$SECRETS/signer_master_key" ]]; then
     say "Making the signer's token and its master key (a copy of Keycast's)."
-    "$INFRA/scripts/gen-secrets.sh" >/dev/null
+    BELFRY_SIGNER_SECRETS=1 "$INFRA/scripts/gen-secrets.sh" >/dev/null
   fi
   cmp -s "$INFRA/keycast/master.key" "$SECRETS/signer_master_key" \
     || die "infra/secrets/signer_master_key is not Keycast's master.key: stop here"

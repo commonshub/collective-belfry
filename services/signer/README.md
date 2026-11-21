@@ -62,7 +62,8 @@ again Keycast's (patch 0011; the salt keeps its name so wallets keep their token
 
 A member who holds their own key has an account with `custody = own`: the signer keeps no key
 and refuses to sign (409 `own_key`). Moving there is a call of its own
-(`POST /accounts/{vine_id}/own-key`): it drops the held key and revokes every connection;
+(`POST /accounts/{vine_id}/own-key`): it puts the held key away (sealed, in `archived_keys`:
+never dropped; the answer's `archived_keys` counts them) and revokes every connection;
 because Belfry can recompute a derived key, self-custody always means a new key (the held key
 is refused).
 
@@ -247,16 +248,22 @@ call, one transaction, all or nothing:
   signer's SHA-256, so there is nothing to carry. The caller leaves those out;
 - a row with `revoked_at` comes in **revoked** (its bunker key is derived, checked and sealed
   like the others; it never answers), so its client key stays linked to the account;
-- a bunker key the formula does not give: 422 `invalid`, the message starts with
-  `connections[<index>]:`; so does every other fault of a row;
+- a bunker key the formula does not give: that row is **skipped** (its index in `skipped`,
+  listed by `GET /import/skipped` until an import carries it); the account's other rows go in.
+  Every other fault of a row is 422 `invalid`, the message starting with `connections[<index>]:`;
 - a client key linked to another account: 409 `client_key_taken`;
 - a bunker key the account already has a connection for: left exactly as it is and counted
-  as `existing` (importing twice is safe); one that another account has: 409 `mismatch`;
+  as `existing` (importing twice is safe), **unless no new accounts are made** (the
+  migration's window, where only the import writes connections): then it is brought to what
+  the row says (name, scope, origin, revoked or live, client key; use counts never go down)
+  and counted as `updated`; a row that gives up its client key (another account keeps it) is
+  `released` and frees it for that account. One that another account has: 409 `mismatch`;
 - an account whose member holds their own key: 409 `own_key`; no such account: 404;
 - a suspended account's sessions are carried (they answer when it is active again).
 
-The answer is `{imported, existing, revoked}`: live rows written, rows already there, revoked
-rows written. Before answering, the signer waits (1.5 s at most) for the bunker's relay
+The answer is `{imported, existing, revoked, updated, released, skipped}`: live rows written,
+rows already there, revoked rows written, rows brought up to date, client keys released, and
+the indexes of rows left out. Before answering, the signer waits (1.5 s at most) for the bunker's relay
 subscription to cover the new bunker keys (the rows are written either way: a bunker that is
 not listening shows in `/health`). `GET /accounts/{vine_id}/connections?all=true` reads them
 back, the revoked ones too. Keycast's `expires_at` is not carried (an expired
@@ -295,7 +302,8 @@ who is here: the seed's state and the bunker's.
 | `POST /accounts/{vine_id}/connections/revoke` | `{id}` or `{bunker_pubkey}` or `{app}` or `{all: true}` | `{revoked}` |
 | `POST /accounts/{vine_id}/connections/consent` | `{id}` or `{bunker_pubkey}`, and `decrypt: true\|false` | `{decrypt}`; 404 when the account has no such live connection |
 | `POST /import` | `{accounts: [{vine_id, pubkey, sealed}]}` | per account `derived`, `imported`, `exists` (same key) or `error` (`mismatch` when the account exists with another key) |
-| `POST /import/connections` | `{vine_id, connections: [{bunker_pubkey, keycast_secret_hash, client_pubkey, app, label?, scope?, decrypt?, origin?, created_at, last_used_at?, uses?, revoked_at?}]}` | `{imported, existing, revoked}`; all or nothing; 422 `invalid` naming the row, 409 `client_key_taken` / `own_key` / `mismatch`, 404, 413 `too_large` ("Carrying Keycast's sessions over") |
+| `POST /import/connections` | `{vine_id, connections: [{bunker_pubkey, keycast_secret_hash, client_pubkey, app, label?, scope?, decrypt?, origin?, created_at, last_used_at?, uses?, revoked_at?}]}` | `{imported, existing, revoked, updated, released, skipped}`; all or nothing (but for skipped rows); 422 `invalid` naming the row, 409 `client_key_taken` / `own_key` / `mismatch`, 404, 413 `too_large` ("Carrying Keycast's sessions over") |
+| `GET /import/skipped` | | `{skipped: [{vine_id, bunker_pubkey, at}]}`: rows imports left out because their bunker key does not derive |
 
 `connection` (the id behind an app's access token) must be live and the account's, else 403
 `forbidden`. Errors are `{"error", "message"}`: 401 `unauthorized`, 404 `not_found`, 503
