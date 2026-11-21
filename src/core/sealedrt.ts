@@ -19,7 +19,7 @@ import { BELFRY } from '../config'
 import { kvDel, kvDelPrefix, kvGet, kvPrefix, kvSet } from './db'
 import * as C from './sealedcore'
 import { addEvents, all, outboxItems, putOutbox, subscribe, touch } from './store'
-import { connectionOf, queryPaged, setPagedMainFilters, currentSigner, enqueue, enqueueSigned, flush, isLocalOnly, me, onEose, onOutbox, publishNow, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setExtraMainFilters, signedFetch } from './sync'
+import { connectionOf, queryPaged, setPagedMainFilters, currentSigner, enqueue, enqueueSigned, flush, isLocalOnly, me, onEose, onOutbox, publishNow, queryComplete, relayAuthed, replayWraps, setBeforeFlush, setHoldBack, setExtraMainFilters, signedFetch } from './sync'
 
 type Conv = string
 
@@ -175,6 +175,8 @@ export async function startSealed(clientSecret: string) {
     // read whole, page by page, after each answer (the live subscription gets at most a page per filter)
     setPagedMainFilters(() => device ? [{ kinds: [C.ROSTER], '#p': [me()] }, { kinds: [C.ANCHOR], authors: [me()] }, { kinds: [1059], '#p': [device.pub] }] as Filter[] : [])
     setBeforeFlush(beforeFlush)
+    // a device out of my head never sends a sealed wrap: what was queued stays (shown locked)
+    setHoldBack((o) => !!o.dm && !!o.signed && o.signed.kind === C.WRAP && !!C.wrapLb(o.signed) && notInHead())
     onOutbox((item) => { if (item.dm && packs.has(item.dm)) void dropPack(item.dm) }, () => {})
     // the relay answered after AUTH: what was waiting for an answer runs (my own path, held messages)
     onEose((t) => { if (t === 'main' && relayAuthed('main')) { if (pathDue) scheduleMyDevice(0); decidable() } })
@@ -370,6 +372,9 @@ export function deviceIn(): boolean {
 }
 
 /** §5.3: "Locked on this device" (and no composer) only when this device is not in my head. */
+/** A sealed conversation while this device is out of my head: no composer (encryption-locked-thread),
+ *  and what was typed or queued before is held, never sent from here. */
+export const outOfHead = (conv: Conv) => active() && notInHead() && sealedSet().has(conv)
 export const lockedConv = (conv: Conv) => active() && notInHead() && peopleOf(conv).every(readyChain)
 /** The banner: this device isn't in my head, or it holds a wrap whose lb is one of MY chain's
  *  letterboxes and lacks its secret (a made-up lb pins nothing). */
@@ -468,7 +473,8 @@ export class NoHead extends Error {}
 /** The wraps of a sealed message: one per participant's head letterbox and one to mine, sealed by
  *  this device (no signer call). NoHead when a letterbox is unknown; an Error when too big. */
 export function sealWraps(rumor: C.Rumor, to: string[]): NostrEvent[] {
-  if (!device) throw new NoHead('')
+  // not in my head (removed, or my account started fresh elsewhere): nobody would accept it; held
+  if (!device || notInHead()) throw new NoHead('')
   const r = C.withId(rumor)
   if (!C.fits(r)) throw new Error(TOO_LONG)
   return [...new Set([...to, me()])].map((p) => {
@@ -1062,8 +1068,10 @@ async function resealQueued() {
  *  (when not answered in the last minute; 3 s at most), then the wraps re-sealed when a head moved. */
 async function beforeFlush() {
   if (!active()) return
-  const to = queuedRecipients()
-  if (!to.length) return
+  const queued = queuedRecipients()
+  if (!queued.length) return
+  // mine too: a device that left my head (while offline) must know before anything sealed goes
+  const to = [...new Set([me(), ...queued])]
   const stale = to.filter((p) => !answeredRecently(p, 60e3) && Date.now() - (triedAt.get(p) ?? 0) > 15e3)
   if (stale.length) await fetchChains(stale)
   await resealQueued()

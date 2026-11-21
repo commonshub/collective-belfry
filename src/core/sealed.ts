@@ -130,6 +130,11 @@ export const theirDevices = (pk: string): TheirDevices | undefined => (real() ? 
 export const deviceLines = (conv: Conv) => (real() ? realLines(conv) : state.lines.get(conv) ?? [])
 /** §5.5: in my head without the head key: the composer of a sealed conversation waits. */
 export const waitingForSibling = (conv: Conv) => real() && R.inHeadNoKey() && R.isSealedConv(conv)
+/** A sealed conversation while this device is out of my head (real only): no composer, nothing sent. */
+export const outOfHead = (conv: Conv) => real() && R.outOfHead(conv)
+/** board messages/encryption-locked-thread: the grey line in place of the composer (and the mark
+ *  of a message held because of it) */
+export const LOCKED_LINE = 'You can write here once this device is allowed.'
 export const lockedHere = (conv: Conv) => (real() ? R.lockedConv(conv) : state.lockedHere.has(conv))
 export const anyLockedHere = () => (real() ? R.showBanner() : state.lockedHere.size > 0)
 export const sharedBy = (rid: string) => (real() ? R.sharedByOf(rid) : state.shared.get(rid))
