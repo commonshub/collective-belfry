@@ -154,7 +154,7 @@ roster are ignored. Other people never receive the names.
 
 Everything is NIP-17 / NIP-59 as today, with three differences.
 
-Rumor: unchanged (`kind 14`, `1301`, `7`, `5`; `pubkey` = the account; unsigned; id computed).
+Rumor: unchanged (`kind 14`, `15`, `1301`, `7`, `5`; `pubkey` = the account; unsigned; id computed). Kind 15 is a file (vectors/dm-files.json in belfry-android: AES-256-GCM on the device, ciphertext on Blossom, key and nonce in the rumor's tags): in a sealed conversation it is sealed by the device exactly like kind 14, decided before the upload, held on the device while the conversation is undecided, and never sent the old way into a sealed conversation (added 2026-11-21, as built on web, iOS and Android).
 
 Seal, kind 13:
 - `pubkey` = the sending **device**, signed with the device key, `tags: []`, `created_at` backdated as today;
@@ -352,7 +352,7 @@ content = {"v":1,"rumors":[ <rumor objects of the conversation, oldest first> ]}
 
 Each rumor keeps its own `pubkey`, tags and id, so the receiver computes its conversation as usual.
 
-Only kinds 14, 7 and 5 are shared and taken (never an e-mail). The 8564's `p` must be the receiver. A rumor the receiver already holds is left as it is, and one that later arrives sealed in the normal way loses its "shared" mark. Only the conversation's sealed messages are shared (older ones are still opened by the person's
+Only kinds 14, 7 and 5 are shared and taken (never an e-mail, and in v1 never a file, kind 15: a person who started fresh gets the conversation's text again, not its pictures and files). The 8564's `p` must be the receiver. A rumor the receiver already holds is left as it is, and one that later arrives sealed in the normal way loses its "shared" mark. Only the conversation's sealed messages are shared (older ones are still opened by the person's
 signer). At most 200 rumors per wrap (in practice the size decides), and the 8564 rumor itself (its whole JSON, as UTF-8 bytes, the shared rumors escaped inside its content) at most 40 000 bytes, whichever comes first (NIP-44 carries
 65 535 bytes, and the wrap holds the seal's base64 of the padded rumor); several wraps for more.
 A single rumor larger than that is left out. The same ceiling holds for any sealed rumor (§4):
