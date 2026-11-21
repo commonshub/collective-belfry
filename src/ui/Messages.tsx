@@ -6,7 +6,7 @@ import { Markdown } from './markdown'
 import { RefText } from './Topics'
 import { RefPreview } from './Refs'
 import { endRef } from '../core/refs'
-import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
+import { cancelHeld, heldFailure, heldFor, heldSince, isHeld, address, attachmentsOf, dmReactions, reactDm, baseSubject, checkReports, convFor, LookupFailed, convName, isMail, isNewMail, mailAddress, markRead, peers, queueState, report, retryDm, sendDm, thread, threadName, threads, type Conv, type Dm } from '../core/dm'
 import { EmojiSheet, ReactionChips } from './Reactions'
 import { displayName, plainRefs, profiles } from '../core/model'
 import { useVersion } from '../core/store'
@@ -82,7 +82,8 @@ function NewMessage({ onClose }: { onClose: () => void }) {
     <Sheet title="New message" onClose={onClose}>
       <Form onSubmit={async (e) => {
         e.preventDefault()
-        const c = await convFor(to, people)
+        let c: Conv | null
+        try { c = await convFor(to, people) } catch (err) { setError(err instanceof LookupFailed ? err.message : 'Something went wrong. Try again.'); return }
         if (c) open(c)
         else setError('Type a member’s name, or an e-mail address.')
       }}>

@@ -712,6 +712,9 @@ export async function checkReports() {
   save()
 }
 
+/** convFor: the member lookup of this belfry's domain didn't answer (nothing opened, the input kept). */
+export class LookupFailed extends Error {}
+
 /** Where a new conversation goes: a member (name, name@this-domain, npub) or an e-mail address. */
 export async function convFor(input: string, candidates: { pubkey: string; name: string; nip05?: string }[]): Promise<Conv | null> {
   const v = input.trim().toLowerCase()
@@ -721,11 +724,18 @@ export async function convFor(input: string, candidates: { pubkey: string; name:
   const m = /^([^@\s]+)@([^@\s]+\.[^@\s]+)$/.exec(v)
   if (!m) return null
   if (m[2] === BELFRY.domain) {
+    // a member of this belfry is never written to by e-mail because the lookup failed: only a
+    // definite answer without that name goes on as an e-mail (an alias of the domain)
+    let names: Record<string, unknown> | undefined
     try {
       const r = await fetch(`https://${m[2]}/.well-known/nostr.json?name=${encodeURIComponent(m[1])}`)
-      const pk = ((await r.json()) as { names?: Record<string, string> }).names?.[m[1]]
-      if (pk) return 'n:' + pk
-    } catch { /* fall back to e-mail */ }
+      if (!r.ok) throw new Error(String(r.status))
+      const j = (await r.json()) as { names?: unknown }
+      if (!j || typeof j !== 'object' || (j.names !== undefined && (typeof j.names !== 'object' || j.names === null))) throw new Error('bad answer')
+      names = (j.names ?? {}) as Record<string, unknown>
+    } catch { throw new LookupFailed(`${BELFRY.domain} didn’t answer, so we can’t tell if ${m[1]} is a member. Try again in a moment.`) }
+    const pk = names[m[1]]
+    if (typeof pk === 'string' && /^[0-9a-f]{64}$/.test(pk)) return 'n:' + pk
   }
   return 'm:' + v
 }

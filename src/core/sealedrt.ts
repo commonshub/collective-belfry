@@ -229,7 +229,7 @@ export function chainOf(pk: string): C.Chain | null {
 
 /** People for whom this device holds a complete answer of the relay (after AUTH, to EOSE, on a
  *  live connection): when; and when last asked at all (a back-off when the relay doesn't answer). */
-const answeredAt = new Map<string, { at: number; conn: number }>()
+const answeredAt = new Map<string, { at: number; conn: number; from: number }>() // from: when that read was asked
 const triedAt = new Map<string, number>()
 const KNOW = 10 * 60e3 // §6: knowledge lasts 10 minutes
 const known = (pk: string) => { const a = answeredAt.get(pk); return !!a && relayAuthed('main') && a.conn === connectionOf('main') && Date.now() - a.at < KNOW }
@@ -239,14 +239,16 @@ const answeredRecently = (pk: string, ms: number) => { const a = answeredAt.get(
  *  WAIT ms, then what is known. True when it answered completely after AUTH. */
 async function fetchChains(people: string[], waitMs = 3000, totalMs?: number): Promise<boolean> {
   if (!people.length) return true
-  for (const p of people) triedAt.set(p, Date.now())
+  const from = Date.now()
+  for (const p of people) triedAt.set(p, from)
   const conn = connectionOf('main')
   const got = await queryPaged('main', [{ kinds: [C.ANCHOR], authors: people, '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': people }] as Filter[], waitMs, 100, totalMs)
   if (got === null) return false
   addEvents(got)
   if (conn < 0 || connectionOf('main') !== conn) return false // asked before AUTH, or the socket changed
-  for (const p of people) answeredAt.set(p, { at: Date.now(), conn })
+  for (const p of people) answeredAt.set(p, { at: Date.now(), conn, from })
   decidable()
+  if (people.includes(me()) && unknownLbAt.size) replayWraps() // wraps to a letterbox my older read didn't have: judged again
   return true
 }
 
@@ -390,6 +392,9 @@ export const canRemove = () => deviceIn()
 
 export type Opened = { ok: true; rumor: C.Rumor; seal: NostrEvent } | { ok: false; retry: boolean }
 
+/** wraps to an lb none of my chain's letterboxes: wrap id → when first found (dropped only after a
+ *  complete read of my chain asked after that; a throttled or skipped re-read keeps them) */
+const unknownLbAt = new Map<string, number>()
 const KEEP = 30 * 86400 // §4: a wrap waiting for its author's chain is kept 30 days, then given up
 /** wraps waiting for their author's chain: wrap id → (author, the head it was tried against) */
 const waiting = new Map<string, { author: string; head: string }>()
@@ -413,7 +418,15 @@ export async function openDm(wrap: NostrEvent, belfry?: string): Promise<Opened>
     const mine = myLbs()
     // anyone can name an lb: not one of mine is dropped, but only once my own chain was answered
     // on this connection (a message sealed to my newest letterbox can come before its roster)
-    if (mine && !mine.has(lb)) { if (known(me())) return { ok: false, retry: false }; void loadChain(me()); return { ok: false, retry: true } }
+    if (mine && !mine.has(lb)) {
+      const first = unknownLbAt.get(wrap.id) ?? Date.now()
+      unknownLbAt.set(wrap.id, first)
+      const a = answeredAt.get(me())
+      if (known(me()) && a && a.from >= first) { unknownLbAt.delete(wrap.id); return { ok: false, retry: false } }
+      void loadChain(me())
+      return { ok: false, retry: true }
+    }
+    unknownLbAt.delete(wrap.id)
     missingLbs.add(lb)
     return { ok: false, retry: true }
   }
@@ -520,7 +533,7 @@ async function onAnchoredPath(id: string): Promise<boolean> {
   const got = await queryPaged('main', [{ kinds: [C.ANCHOR], authors: [me()], '#d': [C.ANCHOR_D] }, { kinds: [C.ROSTER], '#p': [me()] }] as Filter[])
   if (!got || conn < 0 || connectionOf('main') !== conn) throw new NotDone('no answer')
   addEvents(got)
-  answeredAt.set(me(), { at: Date.now(), conn })
+  answeredAt.set(me(), { at: Date.now(), conn, from: Date.now() })
   const anchor = C.newestAnchor(got, me())
   if (!anchor) return false
   const c = C.validChain(anchor, got.filter((e) => e.kind === C.ROSTER))
@@ -700,6 +713,9 @@ let asking: Asking | undefined
 const doneRequests = new Set<string>()
 const KV_ANSWERED = 'sealed:answered:', KV_HANDED = 'sealed:handed:'
 const handedAt = new Map<string, number>() // device → my last hand-over to it (s), across restarts
+/** requests that couldn't be decided now (session not listed or not live yet): asked again after a minute */
+const requestLater = new Map<string, number>()
+const notNow = (id: string) => { requestLater.set(id, Date.now()) }
 function requestDone(id: string) { doneRequests.add(id); void kvSet(KV_ANSWERED + id, { id, at: Date.now() }).catch(() => {}) }
 export const pendingAsk = () => asking
 let linked: string | undefined // Link a phone: the device that came in by scanning my code
@@ -729,6 +745,7 @@ async function onStore() {
   const head = C.headOf(c)
   for (const r of all().filter((e) => e.kind === C.REQUEST && e.tags.some((t) => t[0] === 'p' && t[1] === me())).sort((a, b) => b.created_at - a.created_at)) {
     if (doneRequests.has(r.id) || asking?.id === r.id) continue
+    if (Date.now() - (requestLater.get(r.id) ?? 0) < 60e3) continue
     const pin = st.pins[me()] ?? null
     const inBoth = anchoredEnd(c).devices.includes(r.pubkey) && C.headOf(c).devices.includes(r.pubkey)
     if (inBoth && (!pin?.trusted || pin.trusted.includes(r.pubkey))) {
@@ -737,22 +754,31 @@ async function onStore() {
       // answered at once, no prompt, when live and its request is newer than the roster that added
       // it and than my last hand-over to it
       if (!C.validEvent(r as unknown)) { requestDone(r.id); continue }
-      let rows = await mySessions(30e3)
-      if (rows && !rows.some((x) => x.client_pubkey === r.pubkey && x.chat === true)) rows = await mySessions(0) // a session newer than the cache
-      if (!rows) continue
+      const rows = await mySessions(0) // §5.5: "live" from a fresh list, never a cached one
+      if (!rows) { notNow(r.id); continue }
       const live = [...liveChat(rows)]
-      if (!live.includes(r.pubkey)) { doneRequests.add(r.id); continue } // not live now: ignored for this run only
-      if (!C.answerWithoutPrompt(c, pin, r.pubkey, live, r.created_at, undefined, handedAt.get(r.pubkey) ?? null)) { requestDone(r.id); continue } // too old
+      if (!live.includes(r.pubkey)) { notNow(r.id); continue } // not live now (or not listed yet): asked again later
+      const handed = handedAt.get(r.pubkey) ?? null
+      if (!C.answerWithoutPrompt(c, pin, r.pubkey, live, r.created_at, undefined, handed)) {
+        // remembered only when final: the request is older than the roster that added the device or
+        // than my last hand-over to it; otherwise (my pin not caught up yet…) asked again later
+        const added = c.added.get(r.pubkey)?.created_at
+        if ((added !== undefined && r.created_at <= added) || (handed != null && r.created_at <= handed)) requestDone(r.id)
+        else notNow(r.id)
+        continue
+      }
+      if (!keyOf(head.lb)) { notNow(r.id); continue } // this device lacks the head key right now: never a partial hand-over
       if (await handAllKeys(r.pubkey)) requestDone(r.id)
+      else notNow(r.id)
       continue
     }
     // in the head but not trusted after a switch: the person decides (the Allow card below)
     if (!C.validEvent(r as unknown)) { requestDone(r.id); continue }
     let sessions = await mySessions(30e3)
     if (sessions && !sessions.some((s) => s.client_pubkey === r.pubkey && s.chat === true)) sessions = await mySessions(0) // a session newer than the cache
-    if (!sessions) continue // can't tell now: next time
+    if (!sessions) { notNow(r.id); continue } // can't tell now: next time
     const row = sessions.find((s) => s.client_pubkey === r.pubkey && s.chat === true)
-    if (!row) { doneRequests.add(r.id); continue } // not a live chat session of mine: ignored for this run (not remembered)
+    if (!row) { notNow(r.id); continue } // not listed (yet): asked again later, never remembered
     const fresh = shownCodes.filter((x) => Date.now() - x.at < 15 * 60e3)
     if (fresh.some((x) => C.linkOk(x.secret, r))) {
       try { await allow(r.pubkey); requestDone(r.id); linked = row.device || row.application_name || 'Your new device' } catch { /* not done: next time */ }
