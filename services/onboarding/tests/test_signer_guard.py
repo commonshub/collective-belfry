@@ -238,7 +238,9 @@ def test_setup_reset_opens_such_a_belfry_on_purpose(fresh, folder, authentik, od
     assert not setup.open_for_anyone(svc)
 
 
-def test_a_reset_file_from_before_never_opens_anything(fresh, folder, odoo):
+def test_a_reset_file_from_before_keeps_the_setup_as_it_was(fresh, folder, odoo):
+    """A reset.json written by the older code (no "open" key) leaves the setup open to the next
+    first admin, as it did then; that admin closes it."""
     svc = fresh.app.state.services
     csrf = open_wizard(fresh)
     assert make_first_admin(fresh, folder, csrf, pk(PrivateKey())).status_code == 200
@@ -247,15 +249,23 @@ def test_a_reset_file_from_before_never_opens_anything(fresh, folder, odoo):
         console.set_admin(svc, email, False)
     console._admins["at"] = 0.0
     (folder / setup.RESET_FILE).write_text(json.dumps({"at": 1, "removed": ["x@example.org"]}))
+    assert setup.reopened(svc.settings) and setup.open_for_anyone(svc)
+    setup._close_reopening(svc.settings)
+    assert json.loads((folder / setup.RESET_FILE).read_text())["open"] is False
     assert not setup.reopened(svc.settings) and not setup.open_for_anyone(svc)
 
 
 # ── usernames ───────────────────────────────────────────────────────────────────────────────
 def test_nobody_chooses_a_name_accounts_start_with():
-    for name in ("50", "0007", "member-12", "guest-12", "osv-0007", "ab-12"):
+    for name in ("50", "0007", "member-12", "guest-12", "guest-3", "osv-0007", "osv-0001"):
         assert usernames.problem(name) == "reserved", name
-    for name in ("lina", "lina-2", "member", "guest", "m50", "50cent", "member-x"):
+    for name in ("lina", "lina-2", "lina-10", "max-42", "bob-42", "ab-12", "member", "guest"):
         assert usernames.problem(name) is None, name
+    for name in ("m50", "50cent", "member-x", "anna-12345"):
+        assert usernames.problem(name) is None, name
+    # what the belfry suggests or gives by default is never a reserved name
+    for base in ("Lina", "Max", "OSV"):
+        assert not usernames.DEFAULT.fullmatch(usernames.slug(base))
     with pytest.raises(ValueError, match="member numbers"):
         setup.create_first_admin(None, "a@example.org", "7", "ab" * 32)  # type: ignore[arg-type]
 

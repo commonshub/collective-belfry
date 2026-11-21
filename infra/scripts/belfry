@@ -41,6 +41,9 @@
 #                                    Belfry's own signer, and with it no Keycast, no Authentik and
 #                                    no Redis (docs/own-signer.md). Only for a belfry without
 #                                    members yet, or after its migration (BELFRY_SIGNER_MIGRATED=1)
+#   BELFRY_SIGNER_RECOVERING         1 while a lost signer volume is rebuilt from the custody seed
+#                                    (docs/own-signer.md §6, "Recovering a lost signer volume");
+#                                    0 again once the service started and the keys were checked
 #   BELFRY_GIT_REPO                  code shown at /git: nostr://<npub>/<relay>/<repo> or https://
 #   BELFRY_MAIL_FROM                 sender address; its domain must allow the mail provider
 #   BELFRY_RESEND_API_KEY            secret: mail through Resend (SMTP smtp.resend.com:587)
@@ -271,6 +274,10 @@ cmd_config() {
       # no Authentik with Belfry's own signer: its own e-mail and code sign-in
       if [[ "$BELFRY_SIGNER" == belfry ]]; then pairs+=(PASS_SIGNIN belfry); fi
     fi
+  fi
+  if [[ -n "${BELFRY_SIGNER_RECOVERING:-}" ]]; then
+    [[ "$BELFRY_SIGNER_RECOVERING" =~ ^[01]$ ]] || die "BELFRY_SIGNER_RECOVERING is 0 or 1"
+    pairs+=(SIGNER_RECOVERING "$BELFRY_SIGNER_RECOVERING")
   fi
   if [[ -n "${BELFRY_EXTRA_APPS+set}" ]]; then  # may be empty: none added
     local a

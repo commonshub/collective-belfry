@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         help="move from Keycast to Belfry's own signer: plan (read-only), import, verify; the "
         "rows of Keycast's database as JSON on stdin (infra/scripts/migrate-to-own-signer.sh)",
     )
-    mig.add_argument("phase", choices=["plan", "import", "verify", "open"])
+    mig.add_argument("phase", choices=["plan", "import", "verify", "open", "carry-back"])
     mig.add_argument(
         "--exclude",
         action="append",
@@ -104,6 +104,22 @@ def main(argv: list[str] | None = None) -> int:
         metavar="N",
         help="exactly N live sessions are signed out because another account keeps their "
         "client key: seen and accepted",
+    )
+    mig.add_argument(
+        "--accept-unverified",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N connected sessions that Keycast does not verify are left out: seen "
+        "and accepted (read Keycast's validate_client first)",
+    )
+    mig.add_argument(
+        "--accept-skipped-rows",
+        type=int,
+        default=0,
+        metavar="N",
+        help="exactly N sessions whose bunker key does not derive are left out: seen and "
+        "accepted (their devices sign in again)",
     )
     mig.add_argument(
         "--accept-missing-stewards",

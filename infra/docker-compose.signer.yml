@@ -123,6 +123,10 @@ services:
     environment:
       SIGNER: belfry
       SIGNER_URL: http://signer-api:8200
+      # 1 only while the signer's volume is being rebuilt from the custody seed (docs/own-signer.md
+      # §6, "Recovering a lost signer volume"): the start check lets a signer holding none of the
+      # members through; every account is still made only with the register's key
+      SIGNER_RECOVERING: ${SIGNER_RECOVERING:-0}
       # no Authentik: the belfry's own e-mail and code sign-in (the service refuses to start
       # with anything else next to SIGNER=belfry)
       PASS_SIGNIN: belfry

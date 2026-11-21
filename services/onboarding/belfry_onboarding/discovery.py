@@ -514,8 +514,12 @@ def register(app: FastAPI) -> None:
             raise ApiError(422, "invalid", "bunker_pubkey: 64 hex characters")
         from . import appsignin
 
-        # the app's sign-in first: it ends even when the signer does not answer
-        await run_in_threadpool(appsignin.session_revoked, services, partner, bunker)
+        # the app's sign-in first: it ends even when the signer does not answer; and its
+        # store failing never stops the sign-out itself
+        try:
+            await run_in_threadpool(appsignin.session_revoked, services, partner, bunker)
+        except Exception as exc:  # noqa: BLE001 — the signer's revoke below is what counts
+            log.warning("sessions: the apps' sign-ins of a signed-out session not ended: %s", exc)
         await run_in_threadpool(services.keycast.revoke_session, token, bunker)
         return JSONResponse({"state": "revoked"})
 

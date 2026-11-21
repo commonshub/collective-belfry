@@ -51,6 +51,22 @@ def _m2o(value: Any) -> int | None:
     return int(value) if value else None
 
 
+def own_key_person(svc: Services, partner_id: int) -> bool:
+    """Whether the person's newest pass with a key names it as their own (an agent with its own
+    key, someone who joined with theirs): the signer holds no key for them and must not be
+    asked to make one (community.member_token)."""
+    rows = svc.odoo.search_read(
+        "belfry.pass",
+        [["partner_id", "=", int(partner_id)], ["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey", "own_pubkey"],
+    )
+    if not rows:
+        return False
+    newest = max(rows, key=lambda r: int(r.get("id") or 0))
+    own = str(newest.get("own_pubkey") or "").lower()
+    return bool(own) and own == str(newest.get("keycast_pubkey") or "").lower()
+
+
 def register_key(svc: Services, vine_id: str) -> str | None:
     """The key the register has for the person behind VINE_ID (the newest of their passes that
     carries one), or None: a person the belfry has not given a key yet. Raises when the
@@ -89,17 +105,28 @@ def has_people(svc: Services) -> bool:
 
 
 def members(svc: Services) -> list[dict[str, Any]]:
-    """Every person whose key the signer is expected to hold: ``{"partner", "vine_id",
-    "pubkey", "custody"}``, one row per person (their newest pass with a key), by partner."""
+    """Every person with a key in the register: ``{"partner", "vine_id", "pubkey", "custody",
+    "own"}``, one row per person (their newest pass with a key), by partner.
+
+    ``own``: that pass names the same key as the person's own (``own_pubkey``): an agent that
+    joined with its key (register._agent_pass, accept_agent_guest), or a person who joined
+    with theirs. Agents have **no signer account at all** (Keycast never had one for them);
+    people who joined with their own key have a keyless one. Either way the signer holds no key
+    for them, and nobody may make one."""
     rows = svc.odoo.search_read(
-        "belfry.pass", [["keycast_pubkey", "!=", False]], ["keycast_pubkey", "partner_id", "state"]
+        "belfry.pass",
+        [["keycast_pubkey", "!=", False]],
+        ["keycast_pubkey", "own_pubkey", "partner_id", "state"],
     )
-    newest: dict[int, tuple[int, str]] = {}
+    newest: dict[int, tuple[int, str, bool]] = {}
     for r in rows:
         partner = _m2o(r.get("partner_id"))
         key = str(r.get("keycast_pubkey") or "").lower()
+        own = str(r.get("own_pubkey") or "").lower() == key
         if partner and HEX.fullmatch(key):
-            newest[partner] = max(newest.get(partner, (0, "")), (int(r.get("id") or 0), key))
+            newest[partner] = max(
+                newest.get(partner, (0, "", False)), (int(r.get("id") or 0), key, own)
+            )
     if not newest:
         return []
     custody = {
@@ -112,6 +139,10 @@ def members(svc: Services) -> list[dict[str, Any]]:
             "vine_id": f"odoo-partner-{partner}",
             "pubkey": newest[partner][1],
             "custody": "self" if custody.get(partner) == "self" else "belfry",
+            "own": newest[partner][2] or custody.get(partner) == "self",
+            # the pass itself names the key as the person's own (agents, people who joined
+            # with their key): never a key of Belfry's, whatever Keycast holds
+            "own_pass": newest[partner][2],
         }
         for partner in sorted(newest)
     ]
@@ -142,7 +173,8 @@ def check_start(svc: Services) -> dict[str, Any]:
         out["skipped"] = "the signer's client cannot look accounts up"
         return out
     try:
-        people = [m for m in members(svc) if m["custody"] != "self"]
+        # people whose key the signer holds (agents and own keys have none to look up)
+        people = [m for m in members(svc) if m["custody"] != "self" and not m["own"]]
     except Exception as exc:  # noqa: BLE001 — the register is down: the service says so itself
         log.warning("signer guard: the register could not be read at start: %s", exc)
         out["skipped"] = "register"

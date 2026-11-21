@@ -74,6 +74,11 @@ class MigrationError(RuntimeError):
     """The migration cannot go on (a source that does not answer, rows that make no sense)."""
 
 
+def shorten_keys(text: str) -> str:
+    """Any 64-hex key in TEXT shortened as logs show it."""
+    return re.sub(r"\b[0-9a-f]{64}\b", lambda m: short(m.group(0)), text)
+
+
 def mask(email: str) -> str:
     """An e-mail address as reports show it: ``a•••@example.org``."""
     local, _, domain = str(email or "").partition("@")
@@ -88,8 +93,12 @@ class Account:
     username: str
     status: str  # active | suspended (Keycast's banned is kept as suspended)
     sealed: str  # hex of Keycast's encrypted key; "": the member holds their own key
-    kind: str = "member"  # member | guest | agent | own_key | no_vine_id
+    kind: str = "member"  # member | guest | agent | own_key | no_vine_id | phantom
     excluded: bool = False
+    # an account Keycast made for a person who holds their own key (an agent: register's pass
+    # names the agent's own key, Keycast minted a derived one when something asked for the
+    # partner's token): not carried, the signer must not hold that key
+    phantom: bool = False
 
     @property
     def own(self) -> bool:
@@ -109,7 +118,10 @@ class Session:
     last_used_at: int | None
     uses: int
     revoked_at: int | None
-    scope: str = "outside"
+    scope: str = "own"
+    # the scope was not known from the row (an origin that is neither the belfry's own nor an
+    # approved outside app's): carried as own and counted
+    guessed: bool = False
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -130,6 +142,10 @@ class Plan:
     register: dict[str, str]  # vine_id -> the key the register has
     now: int
     digest: str
+    # vine_id -> "self" | "belfry": the register's belfry_key_custody
+    custody: dict[str, str] = field(default_factory=dict)
+    # people of the register with their own key and no Keycast account (agents): vine_id -> key
+    no_account: dict[str, str] = field(default_factory=dict)
 
     def by_user(self) -> dict[str, list[Session]]:
         out: dict[str, list[Session]] = {}
@@ -138,7 +154,7 @@ class Plan:
         return out
 
     def included(self) -> list[Account]:
-        return [a for a in self.accounts if not a.excluded]
+        return [a for a in self.accounts if not a.excluded and not a.phantom]
 
 
 def _int(value: Any) -> int | None:
@@ -206,29 +222,53 @@ def classify(row: dict[str, Any], now: int) -> tuple[str, str, int | None]:
     return "served", connected, None
 
 
-def own_names(svc: Any) -> set[str]:
-    """The names the belfry itself gives signer sessions (the chat, the phone apps, a ticket
-    buyer's browser, the first admin's)."""
+def outside_origins(svc: Any) -> set[str] | None:
+    """The origins of the outside apps an admin approved (apps.state), as Keycast stores them
+    (``redirect_origin``: scheme, host and port of the app's redirect URI). None when the
+    approvals cannot be read (the community relay does not answer)."""
     from . import apps
 
-    return {*apps.chat_names(svc), "Tickets", "Setup page (first session)"}
+    try:
+        state = apps.state(svc)
+    except Exception as exc:  # noqa: BLE001 — every unknown origin is then guessed own
+        log.warning("migration: the apps' approvals could not be read: %s", exc)
+        return None
+    return {
+        apps.origin_of(uri) for uri, a in state.items() if a.get("approved") and apps.origin_of(uri)
+    }
 
 
-def scope_of(svc: Any, client_id: str, origin: str, names: set[str]) -> str:
-    """``own`` for a session of one of the belfry's own apps, ``outside`` for any other; when
-    in doubt ``outside`` (the app can sign in again, with the limits of an outside app)."""
-    from . import appsignin, device
-    from .appshome import app_url
+def scope_of(svc: Any, origin: str, approved: set[str] | None) -> tuple[str, bool]:
+    """(scope, guessed) of a Keycast session, from its ``redirect_origin`` (patched Keycast at
+    fe9c646, read in the source):
 
-    origin = (origin or "").strip().rstrip("/")
-    chat = app_url(svc.settings, "chat").rstrip("/")
-    name, _ = device.split(client_id)
-    if name in names and origin in ("", chat):
-        return "own"
-    if origin:
-        if origin == chat or appsignin.suite_name(svc, origin + "/"):
-            return "own"
-    return "outside"
+    - ``""``: ``POST /api/user/bunker/create`` without an origin (auth.rs:1812), which is every
+      session the onboarding service makes (clients/keycast.create_bunker never sends one): the
+      chat's e-mail sign-in, the phone apps' native sign-in, guests, tickets, site sessions,
+      the setup page. **own**.
+    - ``https://<host>`` with the belfry's domain or a host under it: the OAuth flow of one of
+      its own apps (the chat on chat.<domain>, earlier on the apex, the suite). **own**.
+    - the origin of an outside app an admin approved: **outside**.
+    - anything else (``nostrconnect://<client>`` of nostr-login, an https origin nobody
+      approved, approvals that could not be read): **own, guessed** and counted. A chat session
+      carried as outside would lock its member out of their sealed history; an outside app
+      keeping own powers is the lesser harm, and the report lists how many."""
+    origin = (origin or "").strip().rstrip("/").lower()
+    if not origin:
+        return "own", False
+    from . import apps
+
+    if origin in {o.lower() for o in apps.NATIVE_APPS}:
+        return "own", False
+    domain = str(getattr(svc.settings, "nip05_domain", "") or "").lower().strip(".")
+    host = ""
+    if origin.startswith("https://"):
+        host = origin[len("https://") :].split("/", 1)[0].split(":", 1)[0]
+    if domain and host and (host == domain or host.endswith("." + domain)):
+        return "own", False
+    if approved is not None and origin in {o.lower().rstrip("/") for o in approved}:
+        return "outside", False
+    return "own", True
 
 
 def _app(client_id: str, notes: list[str]) -> str:
@@ -286,6 +326,9 @@ def plan(
     except Exception as exc:  # noqa: BLE001
         raise MigrationError(f"the register could not be read: {type(exc).__name__}") from exc
     register = {m["vine_id"]: m["pubkey"] for m in people}
+    custody = {m["vine_id"]: m["custody"] for m in people}
+    own_people = {m["vine_id"] for m in people if m.get("own")}
+    own_pass = {m["vine_id"] for m in people if m.get("own_pass")}
 
     accounts: dict[str, Account] = {}
     vines: dict[str, str] = {}
@@ -340,6 +383,20 @@ def plan(
                 problem("username_twice", vine_id=vine, username=username)
             names[username] = pubkey
         have = register.get(vine)
+        if have and have != pubkey and vine in own_pass and not a.own:
+            # Keycast holds a key for a person who has their own (an agent: something asked for
+            # the partner's token and Keycast minted one). Nobody signs in on it; it is not
+            # carried, and the signer must never hold it.
+            a.kind, a.phantom = "phantom", True
+            continue
+        if have and have == pubkey and (custody.get(vine) == "self") != a.own:
+            # the register and Keycast disagree about who holds the key
+            problem(
+                "register_custody",
+                vine_id=vine,
+                keycast="own" if a.own else "held",
+                register=custody.get(vine),
+            )
         if have and have != pubkey:
             problem(
                 "register_has_another_key",
@@ -347,12 +404,21 @@ def plan(
                 keycast=short(pubkey),
                 register=short(have),
             )
+    no_account: dict[str, str] = {}
     for vine, key in register.items():
-        if vine not in vines:
-            # a person the register expects in the signer and Keycast does not have
-            problem("member_not_in_keycast", vine_id=vine, register=short(key))
+        if vine in vines:
+            if accounts[vines[vine]].phantom:
+                no_account[vine] = key
+            continue
+        if vine in own_people:
+            # an agent (or someone) with their own key that Keycast never had an account for
+            # (register._agent_pass, accept_agent_guest): nothing to carry, not a problem
+            no_account[vine] = key
+            continue
+        # a person the register expects in the signer and Keycast does not have
+        problem("member_not_in_keycast", vine_id=vine, register=short(key))
 
-    own = own_names(svc)
+    approved = outside_origins(svc)
     sessions: list[Session] = []
     bunkers: dict[str, str] = {}
     for row in doc.get("sessions") or []:
@@ -378,9 +444,11 @@ def plan(
             revoked_at=revoked_at,
             notes=notes,
         )
-        s.scope = scope_of(svc, str(row.get("client_id") or ""), s.origin, own)
+        s.scope, s.guessed = scope_of(svc, s.origin, approved)
         sessions.append(s)
-        if acct.excluded or not s.carried:
+        if acct.phantom and s.live:
+            problem("phantom_with_sessions", vine_id=acct.vine_id, bunker=short(bunker))
+        if acct.excluded or acct.phantom or not s.carried:
             continue
         if not bunker or not s.secret_hash:
             problem("session_without_bunker_key", vine_id=acct.vine_id)
@@ -397,13 +465,17 @@ def plan(
 
     # one client key, one identity
     lost: list[dict[str, Any]] = []
+
+    def out(a: Account) -> bool:
+        return a.excluded or a.phantom
+
     owners = key_owners(
-        {k: a for k, a in accounts.items() if not a.excluded},
-        [s for s in sessions if not accounts[s.user].excluded],
+        {k: a for k, a in accounts.items() if not out(a)},
+        [s for s in sessions if not out(accounts[s.user])],
     )
     for s in sessions:
         acct = accounts[s.user]
-        if acct.excluded or not s.carried or not s.client:
+        if out(acct) or not s.carried or not s.client:
             continue
         if owners.get(s.client) == s.user:
             continue
@@ -434,6 +506,8 @@ def plan(
         register=register,
         now=now,
         digest=source_digest(doc),
+        custody=custody,
+        no_account=no_account,
     )
 
 
@@ -461,10 +535,13 @@ def counts(p: Plan) -> dict[str, Any]:
         kinds[a.kind] = kinds.get(a.kind, 0) + 1
     states: dict[str, int] = {}
     scopes = {"own": 0, "outside": 0}
+    guessed = 0
     for s in p.sessions:
         states[s.state] = states.get(s.state, 0) + 1
         if s.live:
             scopes[s.scope] += 1
+        if s.carried and s.guessed:
+            guessed += 1
     inc = p.included()
     return {
         "accounts": len(p.accounts),
@@ -476,6 +553,8 @@ def counts(p: Plan) -> dict[str, Any]:
         "sessions": len(p.sessions),
         "sessions_by_state": dict(sorted(states.items())),
         "live_by_scope": scopes,
+        "scope_guessed": guessed,
+        "own_key_no_account": len(p.no_account),
         "lost": len(p.lost),
         "problems": len(p.problems),
     }
@@ -512,8 +591,10 @@ class SignerAdmin:
         except ValueError:
             return f"http {r.status_code}"
         if isinstance(data, dict):
-            # the signer's messages name vine ids, row indexes and public keys: no secrets
-            return f"{data.get('error') or r.status_code}: {str(data.get('message') or '')[:200]}"
+            # the signer's messages name vine ids, row indexes and public keys (no secrets):
+            # the keys are shortened like everywhere else in the reports
+            text = shorten_keys(str(data.get("message") or ""))[:200]
+            return f"{data.get('error') or r.status_code}: {text}"
         return f"http {r.status_code}"
 
     def health(self) -> dict[str, Any]:
@@ -540,6 +621,31 @@ class SignerAdmin:
         """An account for a member who holds their own key. "" or what was refused."""
         r = self._call("PUT", self._path(vine_id), {"own_pubkey": pubkey})
         return "" if r.status_code == 200 else self._error(r)
+
+    def move_own(self, vine_id: str, pubkey: str) -> dict[str, Any]:
+        """``POST …/own-key``: the account's key is the member's own from now on (Keycast says
+        so). A held key it replaces is archived by the signer, never dropped. The account, or
+        ``{"error"}``."""
+        r = self._call("POST", self._path(vine_id) + "/own-key", {"pubkey": pubkey})
+        if r.status_code != 200:
+            return {"error": self._error(r)}
+        return dict(r.json())
+
+    def revoke(self, vine_id: str, bunker_pubkey: str) -> str:
+        """Revokes the account's connection with this bunker key. "" or what was refused."""
+        r = self._call(
+            "POST", self._path(vine_id) + "/connections/revoke", {"bunker_pubkey": bunker_pubkey}
+        )
+        return "" if r.status_code == 200 else self._error(r)
+
+    def import_skipped(self) -> list[dict[str, Any]] | None:
+        """The sessions imports left out because their bunker key does not derive, or None from
+        a signer that does not list them."""
+        r = self._call("GET", "/import/skipped")
+        if r.status_code == 404:
+            return None
+        r.raise_for_status()
+        return list(r.json().get("skipped") or [])
 
     def set_username(self, vine_id: str, username: str) -> str:
         r = self._call("PUT", self._path(vine_id) + "/username", {"username": username})
@@ -628,9 +734,26 @@ def connection_row(s: Session) -> dict[str, Any]:
 
 # ── import ──────────────────────────────────────────────────────────────────────────────────
 def run_import(p: Plan, signer: Any) -> dict[str, Any]:
-    """The plan into the signer. Refuses to start while the plan has problems. Every step is
-    safe to repeat: an account, a name, a state or a session that is there already stays as it
-    is. Returns counts and ``errors`` (each names an account by its vine id)."""
+    """The plan into the signer, as a **sync**: run again, it brings the signer to what Keycast
+    holds now. Refuses to start while the plan has problems. Returns counts and ``errors``
+    (each names an account by its vine id).
+
+    Between the first import and the switch the belfry runs on Keycast and people sign out,
+    take their own key, move to a new one, or a shared client key changes hands. The import
+    closes the signer's "no new accounts" switch before it writes, and while it is closed the
+    signer treats the import's rows as the truth for rows it has (``POST /import/connections``
+    updates them: revoked or live, client key, name, scope, origin). On top of that:
+
+    - an account Keycast now shows with the member's own key (or a new own key) is moved to it
+      (``POST …/own-key``): a key the signer held is archived sealed, never dropped, and the
+      report lists the account (``custody_moved``);
+    - a held key the signer has that is not Keycast's key is an error, never an overwrite;
+    - sessions run in two passes: first the rows that carry no client key (one that went to
+      another account is released), then all of them, so a key that changed hands is free when
+      the account that keeps it is written;
+    - a live session in the signer that Keycast no longer has at all (deleted) is revoked;
+    - a row whose bunker key the formula does not give is skipped and listed (``skipped``),
+      the account's other rows go in."""
     if p.problems:
         raise MigrationError(
             f"{len(p.problems)} problems in what Keycast holds: nothing was imported "
@@ -638,9 +761,18 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
         )
     out: dict[str, Any] = {
         "accounts": {"derived": 0, "imported": 0, "exists": 0, "own_key": 0},
+        "custody_moved": [],
         "usernames": 0,
         "suspended": 0,
-        "sessions": {"imported": 0, "existing": 0, "revoked": 0},
+        "sessions": {
+            "imported": 0,
+            "existing": 0,
+            "revoked": 0,
+            "updated": 0,
+            "released": 0,
+            "revoked_gone": 0,
+        },
+        "skipped": [],
         "errors": [],
     }
     errors: list[dict[str, Any]] = out["errors"]
@@ -661,17 +793,42 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
                     {
                         "step": "key",
                         "vine_id": res.get("vine_id"),
-                        "error": f"{res.get('error')}: {str(res.get('message') or '')[:200]}",
+                        "error": f"{res.get('error')}: "
+                        + shorten_keys(str(res.get("message") or ""))[:200],
                     }
                 )
     for a in accounts:
-        if a.own:
-            refused = signer.put_own(a.vine_id, a.pubkey)
-            if refused:
+        if not a.own:
+            continue
+        have = signer.account(a.vine_id)
+        if have is not None and (
+            str(have.get("pubkey") or "").lower() != a.pubkey
+            or str(have.get("custody") or "") != "own"
+        ):
+            # Keycast: the member took their own key (or moved to a new one) since the first
+            # import. The signer follows; a key it held is archived, sealed.
+            moved = signer.move_own(a.vine_id, a.pubkey)
+            if "error" in moved:
                 failed.add(a.vine_id)
-                errors.append({"step": "own_key", "vine_id": a.vine_id, "error": refused})
-            else:
-                out["accounts"]["own_key"] += 1
+                errors.append({"step": "own_key", "vine_id": a.vine_id, "error": moved["error"]})
+                continue
+            out["custody_moved"].append(
+                {
+                    "vine_id": a.vine_id,
+                    "from": str(have.get("custody") or ""),
+                    "from_key": short(have.get("pubkey")),
+                    "to_key": short(a.pubkey),
+                    "archived_keys": int(moved.get("archived_keys") or 0),
+                }
+            )
+            out["accounts"]["own_key"] += 1
+            continue
+        refused = signer.put_own(a.vine_id, a.pubkey)
+        if refused:
+            failed.add(a.vine_id)
+            errors.append({"step": "own_key", "vine_id": a.vine_id, "error": refused})
+        else:
+            out["accounts"]["own_key"] += 1
     for a in accounts:
         if a.vine_id in failed:
             continue
@@ -693,20 +850,66 @@ def run_import(p: Plan, signer: Any) -> dict[str, Any]:
             elif a.status != "active":
                 out["suspended"] += 1
     by_user = p.by_user()
-    # accounts that keep a client key first, then the rest: with the keys' owners settled in
-    # the plan no order can fail, and this one would still be right if a rule were missed
-    for a in sorted(accounts, key=lambda a: (a.status != "active", a.vine_id)):
-        if a.vine_id in failed or a.own:
-            continue
-        rows = [connection_row(s) for s in by_user.get(a.pubkey, []) if s.carried]
-        for run in batches(rows, SESSION_BATCH):
-            res = signer.import_connections(a.vine_id, run)
+    order = [
+        a
+        for a in sorted(accounts, key=lambda a: (a.status != "active", a.vine_id))
+        if a.vine_id not in failed and not a.own
+    ]
+    sess = out["sessions"]
+    stopped: set[str] = set()
+
+    def send(a: Account, sessions: list[Session]) -> int:
+        """One account's rows in batches; how many were sent without an error."""
+        sent = 0
+        for run in batches_of(sessions, SESSION_BATCH):
+            res = signer.import_connections(a.vine_id, [connection_row(s) for s in run])
             if "error" in res:
                 errors.append({"step": "sessions", "vine_id": a.vine_id, "error": res["error"]})
-                break
-            for k in out["sessions"]:
-                out["sessions"][k] += int(res.get(k) or 0)
+                stopped.add(a.vine_id)
+                return sent
+            for k in ("imported", "existing", "revoked", "updated", "released"):
+                sess[k] += int(res.get(k) or 0)
+            for i in res.get("skipped") or []:
+                if isinstance(i, int) and 0 <= i < len(run):
+                    out["skipped"].append(
+                        {"vine_id": a.vine_id, "bunker": short(run[i].bunker), "app": run[i].app}
+                    )
+            sent += len(run)
+        return sent
+
+    # pass 1: rows without a client key (a key that went to another account is released here)
+    for a in order:
+        keyless = [s for s in by_user.get(a.pubkey, []) if s.carried and not s.client]
+        if keyless:
+            sess["existing"] -= send(a, keyless)  # pass 2 sends them again: "there already"
+    # pass 2: every carried row
+    for a in order:
+        if a.vine_id in stopped:
+            continue
+        rows = [s for s in by_user.get(a.pubkey, []) if s.carried]
+        send(a, rows)
+        if a.vine_id in stopped:
+            continue
+        # a live session the signer has that Keycast no longer has at all: revoked
+        known = {s.bunker for s in rows}
+        for c in signer.connections(a.vine_id):
+            bunker = str(c.get("bunker_pubkey") or "")
+            if bunker and bunker not in known:
+                refused = signer.revoke(a.vine_id, bunker)
+                if refused:
+                    errors.append({"step": "revoke", "vine_id": a.vine_id, "error": refused})
+                else:
+                    sess["revoked_gone"] += 1
     return out
+
+
+def batches_of(sessions: list[Session], most: int) -> Iterable[list[Session]]:
+    """SESSIONS in runs that :func:`batches` would make of their rows."""
+    rows = [connection_row(s) for s in sessions]
+    i = 0
+    for run in batches(rows, most):
+        yield sessions[i : i + len(run)]
+        i += len(run)
 
 
 def import_stewards(svc: Any, authentik: Any) -> dict[str, Any]:
@@ -725,26 +928,47 @@ def verify(
     accept_lost: int = 0,
     accept_missing_stewards: int = 0,
     keys_only: bool = False,
+    accept_unverified: int = 0,
+    accept_skipped: int = 0,
 ) -> dict[str, Any]:
     """Everything a migration carries, compared: for every account the signer's key, Keycast's
-    and the register's; custody, username and state; for every carried session its bunker key
-    and client key among the signer's live connections; the admins. Returns the report:
-    ``ok`` is true only when ``mismatches`` is empty. Reads only.
+    and the register's; custody (Keycast, the signer and the register's belfry_key_custody),
+    username and state; for every carried session its bunker key, client key and scope among
+    the signer's connections; the admins. Both sides are read on their own: no Keycast rows on
+    a belfry whose register has people is a failure, and the account counts compared come from
+    Keycast and from the signer's own list. Returns the report: ``ok`` is true only when
+    ``mismatches`` is empty. Reads only.
+
+    Blocking unless accepted by their exact number: sessions lost to a shared client key
+    (ACCEPT_LOST), connected sessions Keycast does not verify (ACCEPT_UNVERIFIED: if Keycast
+    served them after all, those members would be signed out), rows whose bunker key does not
+    derive and were left out (ACCEPT_SKIPPED), admins without a person (ACCEPT_MISSING_STEWARDS).
 
     KEYS_ONLY is for a belfry that already runs on its signer: people have signed in and out,
     joined, been renamed since, and Keycast's rows are a picture of the past. What must hold
-    for ever is checked (every account Keycast had is in the signer with the same key and the
-    same custody, and so is every person of the register); usernames, states, sessions and
-    admins are not, and a member Keycast never had is not a problem."""
+    for ever is checked (every account Keycast had is in the signer with the same key, or with
+    the member's own key the register knows they moved to, and so is every person of the
+    register); usernames, states, sessions and admins are not, and a member Keycast never had
+    is not a problem."""
     mismatches: list[dict[str, Any]] = []
 
     def miss(kind: str, **more: Any) -> None:
         mismatches.append({"mismatch": kind, **more})
 
+    # after the switch: people joined (not in Keycast), or took their own key in the signer
+    # (the register follows; checked per account below against the signer)
+    skip_problems = (
+        {"member_not_in_keycast", "register_custody", "register_has_another_key"}
+        if keys_only
+        else set()
+    )
     for prob in p.problems:
-        if keys_only and prob.get("problem") == "member_not_in_keycast":
-            continue  # joined after the switch
+        if prob.get("problem") in skip_problems:
+            continue  # joined, or moved to their own key, after the switch
         miss("problem", **prob)
+    if p.register and not p.accounts:
+        # the query read nothing (wrong tenant, an empty copy): never "nothing to compare"
+        miss("keycast_empty", register=len(p.register))
     if keys_only:
         pass
     elif len(p.lost) != int(accept_lost or 0):
@@ -752,16 +976,43 @@ def verify(
             miss("session_lost", **lost)
         if not p.lost:
             miss("accept_lost_does_not_match", accepted=int(accept_lost), lost=0)
+    included = p.included()
+    inc_keys = {a.pubkey for a in included}
+    unverified = [s for s in p.sessions if s.state == "unverified" and s.user in inc_keys]
+    if not keys_only and len(unverified) != int(accept_unverified or 0):
+        miss(
+            "unverified_sessions",
+            count=len(unverified),
+            accepted=int(accept_unverified or 0),
+            vine_ids=sorted({_acct(p, s.user).vine_id for s in unverified})[:50],
+        )
+    listed_skipped = signer.import_skipped() if hasattr(signer, "import_skipped") else None
+    skipped_bunkers = {str(r.get("bunker_pubkey") or "") for r in listed_skipped or []}
+    skipped_rows = [
+        s for s in p.sessions if s.carried and s.user in inc_keys and s.bunker in skipped_bunkers
+    ]
+    if not keys_only and len(skipped_rows) != int(accept_skipped or 0):
+        for s in skipped_rows:
+            miss(
+                "session_skipped",
+                vine_id=_acct(p, s.user).vine_id,
+                bunker=short(s.bunker),
+                app=s.app,
+            )
+        if not skipped_rows:
+            miss("accept_skipped_does_not_match", accepted=int(accept_skipped), skipped=0)
     checked = {
         "accounts": 0,
         "keys_equal": 0,
         "usernames": 0,
         "live_sessions": 0,
         "revoked_sessions": 0,
+        "own_key_no_account": 0,
     }
     unreadable = 0  # revoked rows of a signer that cannot list them
+    found = 0  # Keycast's accounts the signer has
     by_user = p.by_user()
-    for a in p.included():
+    for a in included:
         if not a.vine_id:
             continue  # a problem already
         checked["accounts"] += 1
@@ -769,16 +1020,28 @@ def verify(
         if have is None:
             miss("account_not_imported", vine_id=a.vine_id, keycast=short(a.pubkey))
             continue
+        found += 1
         got = str(have.get("pubkey") or "").lower()
         reg = p.register.get(a.vine_id)
-        if got != a.pubkey:
+        got_own = str(have.get("custody") or "") == "own"
+        reg_self = p.custody.get(a.vine_id) == "self"
+        # after the switch a member may take their own key in the signer: the register follows
+        moved = keys_only and got_own and reg_self and reg == got and got != a.pubkey
+        if got != a.pubkey and not moved:
             miss("signer_key", vine_id=a.vine_id, keycast=short(a.pubkey), signer=short(got))
-        if reg and reg != a.pubkey:
+        if reg and reg != a.pubkey and not moved:
             miss("register_key", vine_id=a.vine_id, keycast=short(a.pubkey), register=short(reg))
-        if got == a.pubkey and (not reg or reg == a.pubkey):
+        if (got == a.pubkey or moved) and (not reg or reg == got):
             checked["keys_equal"] += 1
-        if (str(have.get("custody") or "") == "own") != a.own:
+        if got_own != (a.own or moved):
             miss("custody", vine_id=a.vine_id, signer=str(have.get("custody")))
+        if a.vine_id in p.custody and got_own != reg_self:
+            miss(
+                "register_custody",
+                vine_id=a.vine_id,
+                signer=str(have.get("custody")),
+                register=p.custody.get(a.vine_id),
+            )
         if keys_only:
             continue
         if str(have.get("username") or "") != a.username:
@@ -787,12 +1050,11 @@ def verify(
             checked["usernames"] += 1
         if str(have.get("status") or "") != a.status:
             miss("status", vine_id=a.vine_id, keycast=a.status, signer=str(have.get("status")))
-        want = {s.bunker: s for s in by_user.get(a.pubkey, []) if s.live and not a.own}
+        mine = [s for s in by_user.get(a.pubkey, []) if s.bunker not in skipped_bunkers]
+        want = {s.bunker: s for s in mine if s.live and not a.own}
         live = {str(c.get("bunker_pubkey") or ""): c for c in signer.connections(a.vine_id)}
         # the revoked and expired rows came in revoked: their client keys stay this account's
-        gone = {
-            s.bunker: s for s in by_user.get(a.pubkey, []) if s.carried and not s.live and not a.own
-        }
+        gone = {s.bunker: s for s in mine if s.carried and not s.live and not a.own}
         rows = signer.connections(a.vine_id, all=True) if gone else []
         listed = {str(c.get("bunker_pubkey") or ""): c for c in rows}
         if gone and not any("revoked_at" in c for c in rows) and rows:
@@ -814,35 +1076,72 @@ def verify(
                 miss("session_missing", vine_id=a.vine_id, bunker=short(bunker), app=s.app)
             elif str(c.get("client_pubkey") or "").lower() != s.client:
                 miss("session_client_key", vine_id=a.vine_id, bunker=short(bunker))
+            elif "scope" in c and str(c.get("scope") or "") != s.scope:
+                miss(
+                    "session_scope",
+                    vine_id=a.vine_id,
+                    bunker=short(bunker),
+                    keycast=s.scope,
+                    signer=str(c.get("scope")),
+                )
             else:
                 checked["live_sessions"] += 1
         for bunker in live.keys() - want.keys():
             # nothing may be live in the signer that Keycast did not serve (a session made on
             # the signer before the switch, or a revoked row that came in live)
             miss("session_unexpected", vine_id=a.vine_id, bunker=short(bunker))
+    # people with their own key and no Keycast account (agents): the signer holds no key for
+    # them, either no account or a keyless one with that same key
+    for vine, key in sorted(p.no_account.items()):
+        have = signer.account(vine)
+        if have is None or (
+            str(have.get("custody") or "") == "own" and str(have.get("pubkey") or "").lower() == key
+        ):
+            checked["own_key_no_account"] += 1
+        else:
+            miss(
+                "own_key_account",
+                vine_id=vine,
+                register=short(key),
+                signer=short(have.get("pubkey")),
+                custody=str(have.get("custody")),
+            )
     # nothing in the signer that Keycast did not have (before the switch: nothing may have
     # made an account there but the import; after it, people join, so keys only)
     listing = signer.list_accounts() if hasattr(signer, "list_accounts") else None
+    known = {a.vine_id for a in included if a.vine_id}
     if listing is not None and not keys_only:
-        known = {a.vine_id for a in p.accounts if a.vine_id}
         for acct in listing:
             vine = str(acct.get("vine_id") or "")
-            if vine not in known:
+            if vine not in known and vine not in p.no_account:
                 miss("account_unexpected", vine_id=vine, signer=short(acct.get("pubkey")))
+    custody_counts: dict[str, int] = {}
+    for acct in listing or []:
+        k = str(acct.get("custody") or "unknown")
+        custody_counts[k] = custody_counts.get(k, 0) + 1
     if listing is not None:
         checked["signer_accounts"] = len(listing)
+        # counts from the two sides: Keycast's carried accounts, the signer's own list
+        in_list = sum(1 for acct in listing if str(acct.get("vine_id") or "") in known)
+        if in_list != len(known) or (not keys_only and found != len(known)):
+            miss("account_count", keycast=len(known), signer_listed=in_list, signer_found=found)
     for vine, key in p.register.items():
+        if vine in p.no_account:
+            continue
         have = signer.account(vine)
         if have is None:
             miss("member_not_in_signer", vine_id=vine, register=short(key))
         elif str(have.get("pubkey") or "").lower() != key:
             miss("member_key", vine_id=vine, register=short(key), signer=short(have.get("pubkey")))
-    report: dict[str, Any] = {"checked": checked, "keys_only": bool(keys_only)}
+    # "imported" keys (random, from before the seed) live only in signer-data and its backups:
+    # cleanup asks for a backup that holds them (migrate-to-own-signer.sh)
+    report: dict[str, Any] = {
+        "checked": checked,
+        "keys_only": bool(keys_only),
+        "signer_custody": custody_counts,
+    }
     if authentik is not None and not keys_only:
         report["stewards"] = _verify_stewards(svc, authentik, miss, accept_missing_stewards)
-    want_accounts = sum(1 for a in p.included() if a.vine_id)
-    if checked["accounts"] != want_accounts:
-        miss("account_count", keycast=want_accounts, checked=checked["accounts"])
     report.update(
         {
             "at": int(time.time()),
@@ -850,6 +1149,18 @@ def verify(
             "counts": counts(p),
             "lost": p.lost,
             "accepted_lost": int(accept_lost or 0),
+            "unverified": len(unverified),
+            "accepted_unverified": int(accept_unverified or 0),
+            "skipped": [
+                {"vine_id": _acct(p, s.user).vine_id, "bunker": short(s.bunker), "app": s.app}
+                for s in skipped_rows
+            ],
+            "accepted_skipped": int(accept_skipped or 0),
+            "scope_guessed": [
+                {"vine_id": _acct(p, s.user).vine_id, "bunker": short(s.bunker), "app": s.app}
+                for s in p.sessions
+                if s.carried and s.guessed and s.user in inc_keys
+            ][:200],
             "mismatches": mismatches,
             "ok": not mismatches,
             "not_verifiable": {
@@ -857,6 +1168,8 @@ def verify(
                 "revoked_sessions": unreadable,
                 # whether the signer could list its accounts (GET /accounts)
                 "accounts_list": listing is None,
+                # whether the signer could list the rows imports skipped (GET /import/skipped)
+                "skipped_list": listed_skipped is None,
             },
         }
     )
@@ -899,6 +1212,37 @@ def _verify_stewards(svc: Any, authentik: Any, miss: Any, accept_missing: int) -
     }
 
 
+# ── rollback ────────────────────────────────────────────────────────────────────────────────
+def carry_back(p: Plan, signer: Any) -> dict[str, Any]:
+    """What a rollback writes back into Keycast so that it does not undo what happened on the
+    signer since the switch: ``{"revoke": [[bunker_pubkey, revoked_at]], "suspend":
+    [pubkey]}``: sessions Keycast still has live that the signer has revoked, and accounts
+    Keycast has active that the signer has suspended. Full keys: this goes down a pipe into
+    the SQL of migrate-to-own-signer.sh, never to a report. Sessions opened on the signer
+    after the switch cannot go back (Keycast has no row for them); reactivations are not
+    carried back (a suspension Keycast still has stays)."""
+    revoke: list[list[Any]] = []
+    suspend: list[str] = []
+    by_user = p.by_user()
+    for a in p.included():
+        if not a.vine_id or a.own:
+            continue
+        have = signer.account(a.vine_id)
+        if have is None:
+            continue
+        if a.status == "active" and str(have.get("status") or "") == "suspended":
+            suspend.append(a.pubkey)
+        live_in_keycast = {s.bunker for s in by_user.get(a.pubkey, []) if s.live}
+        if not live_in_keycast:
+            continue
+        for c in signer.connections(a.vine_id, all=True):
+            bunker = str(c.get("bunker_pubkey") or "").lower()
+            at = c.get("revoked_at")
+            if bunker in live_in_keycast and at and HEX.fullmatch(bunker):
+                revoke.append([bunker, int(at)])
+    return {"revoke": revoke, "suspend": suspend}
+
+
 # ── the command line ────────────────────────────────────────────────────────────────────────
 def summary(c: dict[str, Any]) -> list[str]:
     kinds = ", ".join(f"{n} {k}" for k, n in c["by_kind"].items()) or "none"
@@ -909,8 +1253,11 @@ def summary(c: dict[str, Any]) -> list[str]:
         f"people with a key in the register: {c['register_members']}",
         f"sessions: {c['sessions']} ({states})",
         f"live sessions carried: {c['live_by_scope']['own']} of the belfry's own apps, "
-        f"{c['live_by_scope']['outside']} of outside apps; lost to a shared client key: "
-        f"{c['lost']}",
+        f"{c['live_by_scope']['outside']} of outside apps; scope guessed (carried as own): "
+        f"{c['scope_guessed']}; lost to a shared client key: {c['lost']}",
+        f"people with their own key and no Keycast account (agents; nothing to carry): "
+        f"{c['own_key_no_account']}; Keycast accounts of theirs left behind: "
+        f"{c['by_kind'].get('phantom', 0)}",
         f"problems: {c['problems']}",
     ]
 
@@ -986,8 +1333,13 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             say(f"usernames set: {res['usernames']}; suspended: {res['suspended']}")
             say(
                 f"sessions: {s['imported']} live written, {s['revoked']} revoked written, "
-                f"{s['existing']} there already"
+                f"{s['existing']} there already, {s['updated']} brought to Keycast's state "
+                f"({s['released']} client keys handed to the account that keeps them), "
+                f"{s['revoked_gone']} revoked because Keycast no longer has them; "
+                f"{len(res['skipped'])} left out (bunker key does not derive)"
             )
+            for m in res["custody_moved"][:50]:
+                say("  moved to the member's own key: " + json.dumps(m, sort_keys=True))
             if authentik is not None:
                 st = res["stewards"]
                 say(
@@ -999,6 +1351,15 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             json.dump({"counts": c, "result": res, "digest": p.digest}, out)
             out.write("\n")
             return 1 if res["errors"] else 0
+        if args.phase == "carry-back":
+            back = carry_back(p, signer)
+            say(
+                f"to carry back to Keycast: {len(back['revoke'])} sessions signed out and "
+                f"{len(back['suspend'])} accounts suspended on the signer since the switch"
+            )
+            json.dump(back, out)
+            out.write("\n")
+            return 0
         report = verify(
             p,
             signer,
@@ -1007,6 +1368,8 @@ def cli(args: Any, svc: Any, settings: Any, stdin: Any, out: Any, err: Any) -> i
             args.accept_lost_sessions,
             args.accept_missing_stewards,
             keys_only=bool(getattr(args, "keys_only", False)),
+            accept_unverified=int(getattr(args, "accept_unverified", 0) or 0),
+            accept_skipped=int(getattr(args, "accept_skipped_rows", 0) or 0),
         )
     except MigrationError as exc:
         say(f"signer-migrate: {exc}")
