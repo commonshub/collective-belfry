@@ -334,7 +334,7 @@ mod tests {
         let v: Value = serde_json::from_str(VECTORS).unwrap();
         let own = vector_own();
         let cases = v["cases"].as_array().unwrap();
-        assert_eq!(cases.len(), 73);
+        assert_eq!(cases.len(), 78);
         for case in cases {
             assert_eq!(
                 forbidden(&case["event"], &own),

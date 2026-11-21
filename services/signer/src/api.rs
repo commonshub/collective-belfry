@@ -151,6 +151,19 @@ fn opt_text(body: &Value, key: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// The connection a request signs or crypts through: absent or null = none (the onboarding
+/// service acting for the member). Anything else must be a non-empty string: an empty or
+/// non-string value is refused (422), never read as "no connection", which has no limits.
+fn connection_of(body: &Value) -> Result<Option<String>, ApiError> {
+    match body.get("connection") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if !s.is_empty() => Ok(Some(s.clone())),
+        Some(_) => Err(ApiError(Error::Invalid(
+            "connection must be a connection id".into(),
+        ))),
+    }
+}
+
 fn account_json(a: &crate::store::Account) -> Value {
     json!({
         "vine_id": a.vine_id,
@@ -376,7 +389,7 @@ async fn sign(
     guard!(state, headers);
     let (keys, conn) = state
         .signer
-        .keys_via(&vine_id, opt_text(&body, "connection").as_deref())?;
+        .keys_via(&vine_id, connection_of(&body)?.as_deref())?;
     let template = body.get("event").cloned().unwrap_or(Value::Null);
     // through an outside app's connection: the same limits as over the bunker
     if conn.is_some_and(|c| c.scope == SCOPE_OUTSIDE)
@@ -398,7 +411,7 @@ async fn crypt(
     guard!(state, headers);
     let (keys, conn) = state
         .signer
-        .keys_via(&vine_id, opt_text(&body, "connection").as_deref())?;
+        .keys_via(&vine_id, connection_of(&body)?.as_deref())?;
     // through an outside app's connection: reading needs the member's consent, as over the
     // bunker
     if !encrypt && conn.as_ref().is_some_and(Signer::decrypt_refused) {
@@ -443,7 +456,7 @@ async fn derive(
     guard!(state, headers);
     let (keys, conn) = state
         .signer
-        .keys_via(&vine_id, opt_text(&body, "connection").as_deref())?;
+        .keys_via(&vine_id, connection_of(&body)?.as_deref())?;
     let purpose = text(&body, "purpose")?;
     // through an app's connection only the purposes that app was given
     if conn.is_some_and(|c| !c.derive.contains(&purpose)) {
@@ -536,6 +549,10 @@ async fn create_connection(
             tracing::warn!(vine_id, id = %created.id, "connection taken back: the bunker is not listening");
             return Err(e.into());
         }
+    }
+    // only now that the new one is heard (or needs no bunker): the older ones of the app go
+    if let Some(keep) = body.keep {
+        state.signer.prune(&vine_id, &body.app, keep)?;
     }
     Ok(Json(serde_json::to_value(created).unwrap_or(Value::Null)).into_response())
 }
@@ -896,6 +913,18 @@ mod tests {
         )
         .await;
         assert_eq!(s, 200);
+        // an empty or non-text connection fails closed: never read as "no connection"
+        for bad in [json!(""), json!(5), json!(true), json!({"id": cid.clone()})] {
+            let (s, _) = call(
+                &app,
+                "POST",
+                "/accounts/odoo-partner-1/sign",
+                "t0ken",
+                json!({"event": {"kind": 1}, "connection": bad}),
+            )
+            .await;
+            assert_eq!(s, 422, "connection {bad}");
+        }
         let (_, r) = call(
             &app,
             "POST",
@@ -2349,6 +2378,41 @@ mod tests {
         )
         .await;
         assert_eq!((s, http["kind"].as_str()), (200, Some("http")), "{http}");
+        // `keep` prunes only once the new one is heard: a refused connection leaves the older
+        // ones of the app as they were
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            json!({"app": "Wallet", "kind": "http"}),
+        )
+        .await;
+        assert_eq!(s, 200);
+        let (s, _) = call(
+            &app,
+            "POST",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            json!({"app": "Wallet", "keep": 1}),
+        )
+        .await;
+        assert_eq!(s, 503);
+        let (_, list) = call(
+            &app,
+            "GET",
+            "/accounts/odoo-partner-1/connections",
+            "t0ken",
+            Value::Null,
+        )
+        .await;
+        let wallets = list
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c["app"] == "Wallet")
+            .count();
+        assert_eq!(wallets, 2, "nothing pruned for a connection not handed out: {list}");
         // the bunker subscribes while the caller waits: handed out
         let waiter = {
             let (app, client) = (app.clone(), client.clone());

@@ -733,13 +733,16 @@ impl Signer {
         }
         // A key the seed reproduces is a derived key; anything else must be kept sealed.
         // Versions above 8 do not occur: a version only rises when a key is replaced.
-        let derived_version = keys::read_seed(self.seed_path.as_deref())
-            .ok()
-            .and_then(|seed| {
-                (0..=8u32).find(|v| {
-                    keys::derive_keys(&seed, vine_id, *v).public_key() == keys.public_key()
-                })
-            });
+        // With a seed configured but locked the answer is unknown: refused (503 seed_locked),
+        // never written down as "imported", version 0 (the key would then be kept sealed as if
+        // the seed could not make it). No seed configured at all: every key is one to keep.
+        let derived_version = match keys::read_seed(self.seed_path.as_deref()) {
+            Ok(seed) => (0..=8u32)
+                .find(|v| keys::derive_keys(&seed, vine_id, *v).public_key() == keys.public_key()),
+            Err(_) if self.seed_path.is_none() => None,
+            Err(keys::SeedError::Locked) => return Err(Error::SeedLocked),
+            Err(keys::SeedError::Malformed) => return Err(Error::SeedMalformed),
+        };
         let (custody, version) = match derived_version {
             Some(v) => (Custody::Derived, v),
             None => (Custody::Imported, 0),
@@ -942,7 +945,7 @@ impl Signer {
         keep: Option<usize>,
         client_pubkey: Option<&str>,
     ) -> Result<(NewBunker, u64)> {
-        self.create_scoped(
+        let made = self.create_scoped(
             vine_id,
             &ConnectionSpec {
                 app,
@@ -952,7 +955,20 @@ impl Signer {
                 client_pubkey,
                 ..Default::default()
             },
-        )
+        )?;
+        if let Some(keep) = keep {
+            self.prune(vine_id, app, keep)?;
+        }
+        Ok(made)
+    }
+
+    /// Revokes all but the newest `keep` live connections of this app of the account (the
+    /// `keep` of a new connection, applied once the new one is heard).
+    pub fn prune(&self, vine_id: &str, app: &str, keep: usize) -> Result<()> {
+        if self.store.prune_connections(vine_id, app, keep.max(1))? > 0 {
+            self.changed();
+        }
+        Ok(())
     }
 
     /// `create_connection` with a scope: `outside` for an outside app, whose `sign_event` is
@@ -1020,9 +1036,9 @@ impl Signer {
             );
             return Err(Error::ClientKeyTaken);
         }
-        if let Some(keep) = keep {
-            self.store.prune_connections(vine_id, app, keep.max(1))?;
-        }
+        // `keep` is applied by the caller once the new connection is heard (`prune`): pruned
+        // first, a bunker that then fails to listen would leave the member with neither
+        let _ = keep;
         let change = self.changed();
         let mut url = format!("bunker://{}?", bunker.public_key().to_hex());
         for relay in &self.public_relays {
@@ -1612,6 +1628,33 @@ pub mod tests {
             )
             .is_err());
         assert_eq!(s.keys("guest-6").unwrap().public_key(), random.public_key());
+    }
+
+    #[test]
+    fn an_import_with_the_seed_locked_is_refused_not_labelled_imported() {
+        let dir = tempdir("locked");
+        let s = signer_with_seed(&dir);
+        std::fs::remove_file(dir.join("custody-seed")).unwrap(); // locked: the file is gone
+        let derived = keys::derive_keys(&[7u8; 32], "odoo-partner-5", 1);
+        assert!(matches!(
+            s.import_sealed(
+                "odoo-partner-5",
+                &derived.public_key().to_hex(),
+                &s.seal_legacy_for_tests(&derived)
+            ),
+            Err(Error::SeedLocked)
+        ));
+        assert!(matches!(s.account("odoo-partner-5"), Err(Error::NotFound))); // nothing written
+        std::fs::write(dir.join("custody-seed"), "07".repeat(32)).unwrap();
+        assert_eq!(
+            s.import_sealed(
+                "odoo-partner-5",
+                &derived.public_key().to_hex(),
+                &s.seal_legacy_for_tests(&derived)
+            )
+            .unwrap(),
+            "derived"
+        );
     }
 
     #[test]

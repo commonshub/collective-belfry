@@ -26,7 +26,7 @@
 
 use std::collections::{HashSet, VecDeque};
 use std::future::Future;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -46,6 +46,8 @@ use crate::store::{self, Bind, ConnectionRow};
 
 /// Requests answered at the same time.
 const CONCURRENCY: usize = 16;
+/// Requests waiting for one of the CONCURRENCY places; more are dropped.
+const QUEUED: usize = 1024;
 /// Bunker keys per filter, and the most keys asked for by name: with more live connections
 /// the bunker reads every kind-24133 event again and drops the ones that are not for it.
 const KEYS_PER_FILTER: usize = 500;
@@ -236,7 +238,11 @@ pub fn handle(
 /// the connection's rate limit, or cannot be read. A request for a bunker key the signer does
 /// not have is dropped on the store lookup alone: before its signature is checked and before
 /// anything is decrypted. The order matters: the signature first, then freshness and the
-/// repeat check, and only then the rate limit of the sender the signature proved.
+/// repeat check, and only then the rate limit of the sender the signature proved. An id is
+/// recorded as answered only once the request passed the rate limit: a flood over the limit
+/// then cannot push recorded ids out of the list (which would let a recorded request be
+/// replayed while it is still fresh), and a replay of a known id is dropped before it counts
+/// against the connection's limit.
 pub fn respond(signer: &Signer, event: &Event) -> Option<Event> {
     if event.kind != Kind::NostrConnect {
         return None;
@@ -253,12 +259,16 @@ pub fn respond(signer: &Signer, event: &Event) -> Option<Event> {
         tracing::debug!(connection = %conn.id, stamped, "bunker request not from now: dropped");
         return None;
     }
-    if !signer.seen.first(event.id, now) {
+    if signer.seen.contains(event.id, now) {
         return None;
     }
     let is_client = conn.client_pubkey.as_deref() == Some(event.pubkey.to_hex().as_str());
     if !signer.limiter.allow(&conn.id, is_client) {
         tracing::debug!(connection = %conn.id, is_client, "bunker request over the rate limit: dropped");
+        return None;
+    }
+    // the gate itself: of two copies arriving at once only one gets past here
+    if !signer.seen.first(event.id, now) {
         return None;
     }
     let bunker = match signer.bunker_keys(&conn) {
@@ -311,6 +321,18 @@ impl Seen {
             keep,
             ttl,
         }
+    }
+
+    /// Whether `id` was recorded and is still remembered (`now`: seconds); records nothing.
+    pub fn contains(&self, id: EventId, now: i64) -> bool {
+        let inner = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        inner.0.contains(&id)
+            && inner
+                .1
+                .iter()
+                .rev()
+                .find(|(seen, _)| *seen == id)
+                .is_some_and(|(_, at)| at + self.ttl > now)
     }
 
     /// True the first time `id` is seen (`now`: seconds).
@@ -542,6 +564,7 @@ async fn session(signer: Arc<Signer>, relays: Vec<String>) -> &'static str {
         );
     }
     let limit = Arc::new(Semaphore::new(CONCURRENCY));
+    let waiting = Arc::new(AtomicUsize::new(0));
     let mut tick = tokio::time::interval(Duration::from_secs(5));
     loop {
         tokio::select! {
@@ -557,13 +580,24 @@ async fn session(signer: Arc<Signer>, relays: Vec<String>) -> &'static str {
                     continue;
                 }
                 signer.bunker.last_event_at.store(store::now(), Ordering::SeqCst);
-                // at most CONCURRENCY at once: the rest wait here, in the order they came
-                let Ok(permit) = limit.clone().acquire_owned().await else {
-                    return "the request limit was closed";
-                };
-                let (signer, client) = (signer.clone(), client.clone());
+                // at most CONCURRENCY at once. The permit is taken inside the task: waiting
+                // for one here would stall this loop (and with it the resubscription that a
+                // new connection waits for) while CONCURRENCY requests are in flight. The
+                // tasks that wait are bounded too: beyond QUEUED a request is dropped (its
+                // client asks again).
+                if waiting.load(Ordering::SeqCst) >= QUEUED {
+                    tracing::warn!("bunker requests queue full: one dropped");
+                    continue;
+                }
+                waiting.fetch_add(1, Ordering::SeqCst);
+                let (signer, client, limit, waiting) =
+                    (signer.clone(), client.clone(), limit.clone(), waiting.clone());
                 tokio::spawn(async move {
-                    let _permit = permit;
+                    let permit = limit.acquire_owned().await;
+                    waiting.fetch_sub(1, Ordering::SeqCst);
+                    let Ok(_permit) = permit else {
+                        return;
+                    };
                     match tokio::task::spawn_blocking(move || respond(&signer, &event)).await {
                         Ok(Some(answer)) => {
                             if let Err(e) = client.send_event(&answer).await {
@@ -1133,6 +1167,20 @@ mod tests {
         assert!(ping(&client, 2).is_some() && ping(&client, 3).is_some());
         assert!(ping(&client, 4).is_some());
         assert!(ping(&client, 5).is_none());
+        // a request dropped over the limit is not recorded as answered: a flood cannot push
+        // recorded ids out of the list
+        let over = request(&bunker_pk, &client, json!({"id": "over", "method": "ping"}));
+        assert!(respond(&s, &over).is_none());
+        assert!(!s.seen.contains(over.id, store::now()));
+    }
+
+    #[test]
+    fn contains_records_nothing() {
+        let seen = Seen::new(10, 100);
+        let id = EventId::from_slice(&[7; 32]).unwrap();
+        assert!(!seen.contains(id, 0));
+        assert!(seen.first(id, 0));
+        assert!(seen.contains(id, 99) && !seen.contains(id, 100));
     }
 
     #[test]
