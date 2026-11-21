@@ -244,6 +244,14 @@ pub struct ImportCounts {
     pub existing: usize,
     /// Revoked sessions written (as revoked rows: their client keys stay taken).
     pub revoked: usize,
+    /// Rows that were there and were brought to what the import says (only while the signer
+    /// makes no new accounts: the migration's window, where the import is the only writer).
+    pub updated: usize,
+    /// Of those, rows whose client key went to another account.
+    pub released: usize,
+    /// Indexes of rows whose bunker key the formula does not give: left out (the rest of the
+    /// account is carried) and listed by `GET /import/skipped`.
+    pub skipped: Vec<usize>,
 }
 
 /// `own` when none is given; anything but `own` and `outside` is refused.
@@ -1025,6 +1033,7 @@ impl Signer {
             .open_for(sealed, &account_aad(vine_id), &account.pubkey)
             .map_err(|e| Error::Internal(format!("{vine_id}: {e}")))?;
         let mut rows = Vec::with_capacity(sessions.len());
+        let (mut skipped, mut skipped_keys) = (Vec::new(), Vec::new());
         for (i, s) in sessions.iter().enumerate() {
             let at = |e: Error| Error::Invalid(format!("connections[{i}]: {}", e.message()));
             let bad = |what: &str| Error::Invalid(format!("connections[{i}]: {what}"));
@@ -1055,9 +1064,15 @@ impl Signer {
             }
             let bunker = keys::keycast_bunker_keys(&keys, &s.keycast_secret_hash);
             if bunker.public_key().to_hex() != bunker_pubkey {
-                return Err(bad(&format!(
-                    "the bunker key derived from keycast_secret_hash is not {bunker_pubkey}"
-                )));
+                // this row only: the account and its other sessions are still carried
+                tracing::warn!(
+                    vine_id,
+                    row = i,
+                    "session left out: its bunker key does not derive"
+                );
+                skipped.push(i);
+                skipped_keys.push(bunker_pubkey);
+                continue;
             }
             let id = random_hex(16);
             rows.push(ImportedConnection {
@@ -1080,23 +1095,44 @@ impl Signer {
                 revoked_at: s.revoked_at,
             });
         }
-        match self.store.import_connections(vine_id, &rows)? {
+        // the migration's window: nothing but the import writes connections, so its rows are
+        // the truth for the ones that are there already (a sign-out in Keycast since the first
+        // import, a client key that went to another account, a scope corrected)
+        let sync = self.accounts_closed()?;
+        match self
+            .store
+            .import_connections(vine_id, &rows, sync, &skipped_keys)?
+        {
             Imported::Done {
                 imported,
                 existing,
                 revoked,
+                updated,
+                released,
             } => {
-                let change = if imported > 0 {
+                let change = if imported > 0 || updated > 0 {
                     self.changed()
                 } else {
                     self.bunker.changes()
                 };
-                tracing::info!(vine_id, imported, existing, revoked, "sessions imported");
+                tracing::info!(
+                    vine_id,
+                    imported,
+                    existing,
+                    revoked,
+                    updated,
+                    released,
+                    skipped = skipped.len(),
+                    "sessions imported"
+                );
                 Ok((
                     ImportCounts {
                         imported,
                         existing,
                         revoked,
+                        updated,
+                        released,
+                        skipped,
                     },
                     change,
                 ))
@@ -1113,6 +1149,17 @@ impl Signer {
                 "connections[{i}]: this bunker key is a connection of another account"
             ))),
         }
+    }
+
+    /// The sessions imports left out (their bunker key does not derive): (vine_id,
+    /// bunker_pubkey, at).
+    pub fn import_skipped(&self) -> Result<Vec<(String, String, i64)>> {
+        Ok(self.store.import_skipped()?)
+    }
+
+    /// How many held keys of the account were archived when its custody changed.
+    pub fn archived_keys(&self, vine_id: &str) -> Result<i64> {
+        Ok(self.store.archived_keys(vine_id)?)
     }
 
     /// Binds a connection to the client that presented its secret in `connect`.

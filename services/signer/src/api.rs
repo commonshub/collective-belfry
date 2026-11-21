@@ -298,7 +298,10 @@ async fn own_key(
     let a = state
         .signer
         .move_to_own_key(&vine_id, &text(&body, "pubkey")?)?;
-    Ok(Json(account_json(&a)).into_response())
+    let mut out = account_json(&a);
+    // the held keys this account had, kept sealed (never dropped silently)
+    out["archived_keys"] = json!(state.signer.archived_keys(&vine_id)?);
+    Ok(Json(out).into_response())
 }
 
 async fn set_username(
@@ -572,6 +575,17 @@ async fn revoke_connections(
     Ok(Json(json!({"revoked": n})).into_response())
 }
 
+async fn import_skipped(State(state): State<AppState>, headers: HeaderMap) -> ApiResult {
+    guard!(state, headers);
+    let rows: Vec<Value> = state
+        .signer
+        .import_skipped()?
+        .into_iter()
+        .map(|(vine_id, bunker, at)| json!({"vine_id": vine_id, "bunker_pubkey": bunker, "at": at}))
+        .collect();
+    Ok(Json(json!({"skipped": rows})).into_response())
+}
+
 async fn import(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -709,6 +723,7 @@ pub fn router(state: AppState) -> Router {
             "/import/connections",
             post(import_connections).layer(DefaultBodyLimit::max(MAX_IMPORT_BODY)),
         )
+        .route("/import/skipped", get(import_skipped))
         .route("/accounts", get(list_accounts))
         .route("/accounts/{vine_id}", put(put_account).get(get_account))
         .route("/accounts/{vine_id}/status", post(set_status))
@@ -1150,15 +1165,11 @@ mod tests {
         let (s, _) = call(&app, "POST", "/import/connections", "wrong", json!({})).await;
         assert_eq!(s, 401);
 
-        // a bunker key the formula does not give: the row is named, nothing is written
+        // a bunker key the formula does not give: that row is left out and named
         let mut wrong = row(2, Some(&laptop));
         wrong["keycast_secret_hash"] = json!(hash(9));
-        let (s, e) = import("odoo-partner-1", json!([row(1, Some(&phone)), wrong])).await;
-        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
-        assert!(e["message"]
-            .as_str()
-            .unwrap()
-            .starts_with("connections[1]:"));
+        let (s, r) = import("odoo-partner-1", json!([wrong])).await;
+        assert_eq!((s, r["skipped"].clone()), (200, json!([0])), "{r}");
         assert!(listed().await.as_array().unwrap().is_empty());
         // a live session nobody connected to has nothing to carry; odd fields are refused
         let mut bad_scope = row(1, Some(&phone));
@@ -1189,7 +1200,10 @@ mod tests {
         ]);
         let (s, r) = import("odoo-partner-1", rows.clone()).await;
         assert_eq!(s, 200, "{r}");
-        assert_eq!(r, json!({"imported": 2, "existing": 0, "revoked": 2}));
+        assert_eq!(
+            r,
+            json!({"imported": 2, "existing": 0, "revoked": 2, "updated": 0, "released": 0, "skipped": []})
+        );
         assert_eq!(signer.bunker.changes(), 1, "the bunker subscribes again");
         let mut live = vec![
             bunker(1).public_key().to_hex(),
@@ -1276,7 +1290,10 @@ mod tests {
         again[0]["revoked_at"] = json!(1_700_002_000);
         let (s, r) = import("odoo-partner-1", again).await;
         assert_eq!(s, 200);
-        assert_eq!(r, json!({"imported": 0, "existing": 4, "revoked": 0}));
+        assert_eq!(
+            r,
+            json!({"imported": 0, "existing": 4, "revoked": 0, "updated": 0, "released": 0, "skipped": []})
+        );
         assert_eq!(signer.bunker.changes(), 1);
         let list = listed().await;
         assert_eq!(list.as_array().unwrap().len(), 2);
@@ -1291,7 +1308,10 @@ mod tests {
             json!([row(1, Some(&phone)), row(5, Some(&phone))]),
         )
         .await;
-        assert_eq!(r, json!({"imported": 1, "existing": 1, "revoked": 0}));
+        assert_eq!(
+            r,
+            json!({"imported": 1, "existing": 1, "revoked": 0, "updated": 0, "released": 0, "skipped": []})
+        );
 
         // one client key, one identity: the revoked session's key stays the first account's
         let (s, e) = call(
@@ -1358,13 +1378,28 @@ mod tests {
         assert_eq!(
             signer
                 .store
-                .import_connections("guest-2", &[stray])
+                .import_connections("guest-2", &[stray], false, &[])
                 .unwrap(),
             Imported::OtherAccount(0)
         );
-        // an account whose key Keycast held under another account's name derives nothing
-        let (s, e) = import("guest-2", json!([row(6, Some(&tablet))])).await;
-        assert_eq!((s, e["error"].as_str()), (422, Some("invalid")), "{e}");
+        // an account whose key Keycast held under another account's name derives nothing:
+        // that row is left out and listed, the account's other rows still go in
+        let (s, r) = import(
+            "guest-2",
+            json!([
+                row(6, Some(&Keys::generate())),
+                guest_row(4, &Keys::generate(), json!(1_700_001_500))
+            ]),
+        )
+        .await;
+        assert_eq!(
+            (s, r["skipped"].clone(), r["revoked"].as_i64()),
+            (200, json!([0]), Some(1)),
+            "{r}"
+        );
+        let (_, listed) = call(&app, "GET", "/import/skipped", "t0ken", Value::Null).await;
+        assert_eq!(listed["skipped"].as_array().unwrap().len(), 1, "{listed}");
+        assert_eq!(listed["skipped"][0]["vine_id"], "guest-2");
 
         // a suspended account's sessions are carried; an own key has none; unknown: 404
         call(
@@ -1393,7 +1428,10 @@ mod tests {
         let (s, r) = import("odoo-partner-1", json!([])).await;
         assert_eq!(
             (s, r),
-            (200, json!({"imported": 0, "existing": 0, "revoked": 0}))
+            (
+                200,
+                json!({"imported": 0, "existing": 0, "revoked": 0, "updated": 0, "released": 0, "skipped": []})
+            )
         );
         let (s, e) = call(
             &app,
@@ -1895,7 +1933,10 @@ mod tests {
         ]))
         .await;
         assert_eq!(s, 200, "{r}");
-        assert_eq!(r, json!({"imported": 2, "existing": 0, "revoked": 1}));
+        assert_eq!(
+            r,
+            json!({"imported": 2, "existing": 0, "revoked": 1, "updated": 0, "released": 0, "skipped": []})
+        );
         let (_, live) = call(
             &app,
             "GET",
