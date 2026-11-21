@@ -286,7 +286,8 @@ hand-over this device made to it (remembered across restarts). While it waits, t
   nothing: never publish a new letterbox whose secret was handed to nobody); each device rewrites its name (§3.5) when it sees the new head.
   A user's removal revokes the session FIRST and changes nothing when that fails (a removed device
   with a live session could still have an anchor signed); keys go only to devices that stay AND have
-  a live session.
+  a live session AND, after a switch (§3.3), are trusted on this device: a new letterbox's secret is
+  never handed to a device this device would not answer without a prompt.
 - Signing out: the device revokes its session as today and wipes its keys. The others do the above.
 
 ## 6. When a conversation is sealed
